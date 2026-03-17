@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <index version="1" name="STEMwerk-reaper">
-  <category name="STEMwerk">
+  <category name="">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1" author="flarkAUDIO" time="1773758687">
+      <version name="2.2.1" author="flarkAUDIO" time="1773759345">
         <changelog><![CDATA[
 - ReaPack index entry for v2.2.1
 ]]></changelog>
