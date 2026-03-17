@@ -2,12 +2,15 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1" author="flarkAUDIO" time="1773758411">
+      <version name="2.2.1" author="flarkAUDIO" time="1773758569">
         <changelog><![CDATA[
 - ReaPack index entry for v2.2.1
 ]]></changelog>
         <source file="STEMwerk.lua" type="script" main="main">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk.lua</source>
         <source file="STEMwerk-SETUP.lua" type="script">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk-SETUP.lua</source>
+        <source file="STEMwerk_First_Run_Setup.lua" type="script">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk_First_Run_Setup.lua</source>
+        <source file="STEMwerk_Runtime_Setup.lua" type="script">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk_Runtime_Setup.lua</source>
+        <source file="STEMwerk_Repair_Install.lua" type="script">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk_Repair_Install.lua</source>
         <source file="STEMwerk_AI_Separate.lua" type="script">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk_AI_Separate.lua</source>
         <source file="STEMwerk_Setup_Toolbar.lua" type="script">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
         <source file="STEMwerk_Enable_Debug.lua" type="script">https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/scripts/reaper/STEMwerk_Enable_Debug.lua</source>
