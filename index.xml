@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<index version="1">
+  <repository name="STEMwerk-reaper" url="https://github.com/flarkflarkflark/STEMwerk-reaper">
+    <description>Local-first stem separation scripts and helpers for REAPER.</description>
+    <author>flarkAUDIO</author>
+    <package name="STEMwerk-reaper" type="script">
+      <description>STEMwerk stem separation scripts for REAPER.</description>
+      <version name="2.2.1" author="flarkAUDIO" time="1773756901">
+        <changelog><![CDATA[
+- ReaPack index entry for v2.2.1
+]]></changelog>
+        <source file="scripts/reaper/STEMwerk.lua" type="script" main="true" />
+        <source file="scripts/reaper/STEMwerk-SETUP.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_First_Run_Setup.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Runtime_Setup.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Repair_Install.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_AI_Separate.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Setup_Toolbar.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Enable_Debug.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Disable_Debug.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Set_PythonPath.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Set_FFmpegPath.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_All_Stems.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Vocals_Only.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Drums_Only.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Bass_Only.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_Karaoke.lua" type="script" />
+        <source file="scripts/reaper/STEMwerk_separate.lua" type="script" />
+        <source file="scripts/reaper/audio_separator_process.py" type="file" />
+      </version>
+    </package>
+  </repository>
+</index>
