@@ -20,7 +20,9 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 - Sound designers and educators building isolated parts
 - Anyone who wants a fast, offline stem workflow
 
-## Quick installation
+## Installation
+
+### Option 1 — Manual
 1. Install a 64-bit Python 3.x and ensure it is on your PATH.
 2. Clone or download this repository.
 3. In REAPER: Actions -> Show action list -> ReaScript: Load ReaScript...
@@ -29,9 +31,12 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
 
-## Install via ReaPack
+### Option 2 — ReaPack
 Import this repository URL into ReaPack:
-https://github.com/flarkflarkflark/STEMwerk-reaper/raw/main/index.xml
+
+```
+https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
+```
 
 ## REAPER workflows
 - New tracks: Create dedicated stem tracks, optionally grouped in a folder
