@@ -87,4 +87,7 @@ Toolbar + Icons + Toolbarscripts:
 
 ## Future
 
+- **Timeline Alignment / Trim Silence:** Trim the input to the AI-engine to the actual `AudioAccessor` boundaries within a time selection. Currently, if a time selection is larger than the media item, the engine processes the extra silence, which wastes GPU time.
+- **Sample Rate Mismatches / Drift:** Investigate potential sub-sample timing drifts when items with different sample rates than the REAPER project are processed via a time selection.
+- **Padding Clicks / Fades:** When items are padded with silence to match a longer time selection, apply a micro-fade to prevent DC-offset clicks at the zero-crossing.
 - (After installers exist) Add “novice mode” UX: guided install outside REAPER, minimal prompts, clear GPU choice

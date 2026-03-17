@@ -1,5 +1,5 @@
 #define MyAppName "STEMwerk"
-#define MyAppPublisher "flarkAUDIO"
+#define MyAppPublisher "flarkAUDIO <flarkaudio@pm.me>"
 #define MyAppURL "https://github.com/flarkflarkflark/STEMwerk"
 
 ; Version comes from env in CI (fallback to 0.0.0 locally)

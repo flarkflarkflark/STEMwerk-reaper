@@ -1,5 +1,5 @@
 -- @description Stemwerk: Setup Toolbar
--- @author flarkAUDIO
+-- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.0.0
 -- @changelog
 --   Adds/refreshes STEMwerk scripts in the Action List and guides toolbar setup.
@@ -19,6 +19,8 @@ local scriptDir = getScriptDir()
 local scriptFiles = {
     "STEMwerk.lua",
     "STEMwerk-SETUP.lua",
+    "STEMwerk_First_Run_Setup.lua",
+    "STEMwerk_Repair_Install.lua",
     "STEMwerk_Karaoke.lua",
     "STEMwerk_Vocals_Only.lua",
     "STEMwerk_Drums_Only.lua",

@@ -14,12 +14,14 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from stemwerk_core import StemSeparator, get_available_devices
+from stemwerk_core import StemSeparator, get_available_devices, select_device
 from stemwerk_core import devices as core_devices
 
 
@@ -106,6 +108,96 @@ def _get_device_skips() -> List[Dict[str, str]]:
     return [dict(item) for item in skips]
 
 
+def _get_skip_ids() -> Set[str]:
+    ids: Set[str] = set()
+    for s in _get_device_skips():
+        sid = s.get("id", "")
+        if sid:
+            ids.add(sid)
+    return ids
+
+
+def _prefer_linux_amd_device(devices: List[Dict[str, str]], skip_ids: Set[str]) -> Optional[Dict[str, str]]:
+    if not devices:
+        return None
+    candidates = [d for d in devices if d.get("id") not in skip_ids]
+    if not candidates:
+        return None
+
+    def score(dev: Dict[str, str]) -> int:
+        name = (dev.get("name") or "").lower()
+        sc = 0
+        if "radeon rx" in name or " rx " in name or name.startswith("rx "):
+            sc += 3
+        if "radeon" in name and "graphics" not in name:
+            sc += 1
+        if "graphics" in name and "rx" not in name:
+            sc -= 1
+        if "780m" in name:
+            sc -= 2
+        return sc
+
+    return max(candidates, key=score)
+
+
+def _clean_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    for key in ("HIP_VISIBLE_DEVICES", "HSA_OVERRIDE_GFX_VERSION", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
+        env.pop(key, None)
+    return env
+
+
+def _run_cmd_lines(cmd: List[str]) -> List[str]:
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, env=_clean_env())
+    except Exception:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _filter_rocm_lines(lines: List[str]) -> List[str]:
+    keep: List[str] = []
+    for line in lines:
+        if re.search(r"(Marketing Name|Name:|gfx\d+|Device Type|Vendor Name)", line):
+            keep.append(line.strip())
+    return keep
+
+
+def _get_rocm_host_lines() -> List[str]:
+    lines: List[str] = []
+    if shutil.which("rocminfo"):
+        lines.extend(_filter_rocm_lines(_run_cmd_lines(["rocminfo"])))
+    if shutil.which("rocm-smi"):
+        smi = _run_cmd_lines(["rocm-smi"])
+        for line in smi:
+            if "GPU" in line or "gfx" in line or "Device" in line:
+                lines.append(line)
+    seen: Set[str] = set()
+    out: List[str] = []
+    for line in lines:
+        if line not in seen:
+            out.append(line)
+            seen.add(line)
+    return out
+
+
+def _emit_env_diagnostics() -> None:
+    keys = [
+        "ROCM_PATH",
+        "LD_LIBRARY_PATH",
+        "HIP_VISIBLE_DEVICES",
+        "HSA_OVERRIDE_GFX_VERSION",
+        "ROCR_VISIBLE_DEVICES",
+        "CUDA_VISIBLE_DEVICES",
+    ]
+    for key in keys:
+        val = os.environ.get(key)
+        if val is not None and val != "":
+            print(f"STEMWERK_ENV\t{key}={val}")
+        else:
+            print(f"STEMWERK_ENV\t{key}=")
+
+
 def _build_env_json() -> Dict[str, object]:
     env: Dict[str, object] = {
         "platform": platform.system(),
@@ -183,6 +275,56 @@ def _build_env_json() -> Dict[str, object]:
     return env
 
 
+def _log_device_diagnostics(devices: List[Dict[str, str]], env: Dict[str, object]) -> None:
+    try:
+        ids = [d.get("id", "") for d in devices]
+        print(f"STEMWERK_DIAG devices={ids}", file=sys.stderr)
+    except Exception:
+        pass
+
+    try:
+        print(
+            "STEMWERK_DIAG cuda_available="
+            + str(env.get("cuda_available"))
+            + " cuda_count="
+            + str(env.get("cuda_count")),
+            file=sys.stderr,
+        )
+    except Exception:
+        pass
+
+    try:
+        if env.get("cuda_available"):
+            import torch
+
+            for i in range(torch.cuda.device_count()):
+                print(f"STEMWERK_DIAG cuda_device_{i}={torch.cuda.get_device_name(i)}", file=sys.stderr)
+    except Exception:
+        pass
+
+    try:
+        if env.get("cuda_available"):
+            import torch
+
+            for i in range(torch.cuda.device_count()):
+                try:
+                    props = torch.cuda.get_device_properties(i)
+                    info = {
+                        "name": props.name,
+                        "total_memory": getattr(props, "total_memory", None),
+                        "multi_processor_count": getattr(props, "multi_processor_count", None),
+                        "major": getattr(props, "major", None),
+                        "minor": getattr(props, "minor", None),
+                        "gcn_arch": getattr(props, "gcnArchName", None),
+                        "pci_bus_id": getattr(props, "pciBusID", None),
+                    }
+                    print(f"STEMWERK_DIAG cuda_props_{i}={info}", file=sys.stderr)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def list_devices_machine(skip_devices: Optional[Set[str]] = None):
     """Machine-readable dump for REAPER/Lua UIs (no JSON parser needed on Lua side)."""
     devices = get_available_devices()
@@ -190,17 +332,86 @@ def list_devices_machine(skip_devices: Optional[Set[str]] = None):
         devices = [d for d in devices if d.get("id") not in skip_devices]
 
     print("STEMWERK_DEVICES_BEGIN")
+    print("STEMWERK_ENV_BEGIN")
+    _emit_env_diagnostics()
+    print("STEMWERK_ENV_END")
+    print("STEMWERK_HOST_VISIBLE_BEGIN")
     for d in devices:
         print(f"STEMWERK_DEVICE\t{d.get('id','')}\t{d.get('name','')}\t{d.get('type','')}")
 
-    for s in _get_device_skips():
+    skips = _get_device_skips()
+    skip_ids = set()
+    for s in skips:
         sid = s.get("id", "")
         sname = s.get("name", "")
         reason = s.get("reason", "")
         reason = str(reason).replace("\t", " ")
         print(f"STEMWERK_DEVICE_SKIPPED\t{sid}\t{sname}\t{reason}")
+        if sid:
+            skip_ids.add(sid)
+
+    preferred = None
+    if sys.platform.startswith("linux"):
+        preferred = _prefer_linux_amd_device(devices, skip_ids)
+    if preferred:
+        print(f"STEMWERK_SELECTED_DEVICE\t{preferred.get('id','')}\t{preferred.get('name','')}")
+    else:
+        try:
+            dev_id, dev_name = select_device("auto")
+            print(f"STEMWERK_SELECTED_DEVICE\t{dev_id}\t{dev_name}")
+        except Exception:
+            pass
+
+    if devices:
+        print("STEMWERK_USABLE_BEGIN")
+        for d in devices:
+            print(f"STEMWERK_USABLE_GPU\t{d.get('id','')}\t{d.get('name','')}\t{d.get('type','')}")
+        print("STEMWERK_USABLE_END")
+
+    host_lines = _get_rocm_host_lines()
+    for line in host_lines:
+        print(f"STEMWERK_HOST_GPU\t{line}")
+    print("STEMWERK_HOST_VISIBLE_END")
 
     env = _build_env_json()
+    print("STEMWERK_TORCH_VISIBLE_BEGIN")
+    try:
+        print(
+            "STEMWERK_TORCH_INFO\tver="
+            + str(env.get("torch"))
+            + "\thip="
+            + str(env.get("torch_hip"))
+            + "\tcuda_available="
+            + str(env.get("cuda_available"))
+            + "\tcuda_count="
+            + str(env.get("cuda_count")),
+        )
+    except Exception:
+        pass
+    try:
+        if env.get("cuda_available"):
+            import torch
+
+            for i in range(torch.cuda.device_count()):
+                print(f"STEMWERK_TORCH_GPU\tcuda:{i}\t{torch.cuda.get_device_name(i)}")
+                try:
+                    props = torch.cuda.get_device_properties(i)
+                    info = {
+                        "name": props.name,
+                        "total_memory": getattr(props, "total_memory", None),
+                        "multi_processor_count": getattr(props, "multi_processor_count", None),
+                        "major": getattr(props, "major", None),
+                        "minor": getattr(props, "minor", None),
+                        "gcn_arch": getattr(props, "gcnArchName", None),
+                        "pci_bus_id": getattr(props, "pciBusID", None),
+                    }
+                    print(f"STEMWERK_TORCH_PROP\tcuda:{i}\t{info}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    print("STEMWERK_TORCH_VISIBLE_END")
+    _log_device_diagnostics(devices, env)
     print("STEMWERK_ENV_JSON " + json.dumps(env, ensure_ascii=False))
     print("STEMWERK_DEVICES_END")
 
@@ -311,8 +522,29 @@ def main():
 
     stems = _split_list(args.stems)
 
+    resolved_device = device_preference
+    if device_preference == "auto":
+        preferred = None
+        if sys.platform.startswith("linux"):
+            preferred = _prefer_linux_amd_device(get_available_devices(), _get_skip_ids())
+        if preferred:
+            resolved_device = preferred.get("id") or "auto"
+            print(
+                f"STEMWERK_DIAG auto_selected_preferred={resolved_device} ({preferred.get('name','')})",
+                file=sys.stderr,
+            )
+        else:
+            try:
+                dev_id, dev_name = select_device("auto")
+                print(f"STEMWERK_DIAG auto_selected={dev_id} ({dev_name})", file=sys.stderr)
+                resolved_device = dev_id
+            except Exception:
+                resolved_device = "auto"
+    else:
+        print(f"STEMWERK_DIAG requested_device={device_preference}", file=sys.stderr)
+
     try:
-        sep = StemSeparator(model=args.model, device=device_preference)
+        sep = StemSeparator(model=args.model, device=resolved_device)
 
         def reaper_progress(pct: float, msg: str):
             emit_progress(pct, msg)

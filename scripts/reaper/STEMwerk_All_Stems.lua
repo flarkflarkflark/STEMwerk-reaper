@@ -1,5 +1,5 @@
 -- @description Stemwerk: All Stems
--- @author flarkAUDIO
+-- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.0.0
 -- @changelog
 --   Quick preset: all stems.

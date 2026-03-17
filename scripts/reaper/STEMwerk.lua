@@ -2,7 +2,7 @@
 function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
--- @author flarkAUDIO
+-- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.2.0
 -- @changelog
 --   2026-03-13: Release v2.2.0: Major UI Polish & Engine Refactor.
@@ -80,6 +80,14 @@ local function getExtStateValue(key)
     end
     return nil
 end
+
+local function setExtStateValue(key, value)
+    if reaper and reaper.SetExtState then
+        reaper.SetExtState(EXT_SECTION, tostring(key), tostring(value), true)
+    end
+end
+
+local SW_SETUP = dofile(script_path .. "STEMwerk_Runtime_Setup.lua")
 
 local function isAbsolutePath(p)
     if not p or p == "" then return false end
@@ -428,9 +436,16 @@ function canRunFfmpeg()
         local cmd = quoteArg(p) .. " -version"
         local rc, out = execProcess(cmd, 8000)
         if rc == 0 then
-            FFMPEG_PATH = p
+            local store = p
+            if not isAbsolutePath(store) then
+                local resolved = resolveCommandPath(store)
+                if resolved then
+                    store = resolved
+                end
+            end
+            FFMPEG_PATH = store
             if reaper and reaper.SetExtState then
-                reaper.SetExtState(EXT_SECTION, "ffmpegPath", tostring(p), true)
+                reaper.SetExtState(EXT_SECTION, "ffmpegPath", tostring(store), true)
             end
             return true
         end
@@ -440,7 +455,7 @@ function canRunFfmpeg()
     local override = getExtStateValue("ffmpegPath")
     if override then
         local resolved = override
-        if not isAbsolutePath(resolved) then
+        if (not isAbsolutePath(resolved)) and resolved:find("[/\\]") then
             resolved = script_path .. resolved
         end
         if DEBUG_MODE then
@@ -463,6 +478,41 @@ function canRunFfmpeg()
         return true
     end
 
+    local runtime = getRuntimePaths()
+    local runtimeCandidates = {}
+    if OS == "Windows" then
+        table.insert(runtimeCandidates, runtime.runtimeBin .. "\\ffmpeg.exe")
+        table.insert(runtimeCandidates, runtime.runtimeFfmpeg .. "\\bin\\ffmpeg.exe")
+    else
+        table.insert(runtimeCandidates, runtime.runtimeBin .. "/ffmpeg")
+        table.insert(runtimeCandidates, runtime.runtimeFfmpeg .. "/bin/ffmpeg")
+    end
+    for _, p in ipairs(runtimeCandidates) do
+        if tryPath(p) then return true end
+    end
+
+    if OS == "macOS" then
+        local candidates = {
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/opt/homebrew/opt/ffmpeg/bin/ffmpeg",
+            "/usr/local/opt/ffmpeg/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+        }
+        for _, p in ipairs(candidates) do
+            if tryPath(p) then return true end
+        end
+    elseif OS ~= "Windows" then
+        local candidates = {
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+            "/snap/bin/ffmpeg",
+        }
+        for _, p in ipairs(candidates) do
+            if tryPath(p) then return true end
+        end
+    end
+
     if tryPath("ffmpeg") then
         return true
     end
@@ -470,7 +520,7 @@ function canRunFfmpeg()
     if OS ~= "Windows" then
         local ok = os.execute("ffmpeg -version >/dev/null 2>&1")
         if ok == true or ok == 0 then
-            FFMPEG_PATH = "ffmpeg"
+            FFMPEG_PATH = resolveCommandPath("ffmpeg") or "ffmpeg"
             return true
         end
         return false
@@ -658,7 +708,8 @@ end
 
 local function debugCudaProbe()
     if not DEBUG_MODE then return end
-    local py = getExtStateValue("pythonPath") or "/var/home/bazzite/.STEMwerk/.venv/bin/python"
+    local runtime = getRuntimePaths()
+    local py = getExtStateValue("pythonPath") or runtime.venvPython
     if not isAbsolutePath(py) then
         py = script_path .. py
     end
@@ -730,6 +781,19 @@ local function getHome()
     end
 end
 
+-- Runtime/setup helper functions are now delegated to a dedicated module.
+local ensureWritableDir
+local getRuntimeBase
+local getRuntimePaths
+local resolveCommandPath
+local persistPythonPath
+local canImportAudioSeparator
+local safeDofile
+local isPythonAvailable
+local runFirstRunSetup
+local verifyRuntimeAfterBootstrap
+local ensureDependenciesInteractive
+
 -- Shorten vendor-prefixed GPU names for UI (e.g. "AMD Radeon RX 9070" -> "RX 9070").
 local function sanitizeFriendlyName(name)
     if not name then return name end
@@ -768,7 +832,7 @@ local function findPython()
     local override = getExtStateValue("pythonPath")
     if override then
         local resolved = override
-        if not isAbsolutePath(resolved) then
+        if (not isAbsolutePath(resolved)) and resolved:find("[/\\]") then
             -- Allow relative overrides (relative to this script folder)
             resolved = script_path .. resolved
         end
@@ -777,6 +841,13 @@ local function findPython()
         if isAbsolutePath(resolved) and fileExists(resolved) then
             debugLog("pythonPath override exists, accepting: " .. tostring(resolved))
             return resolved
+        end
+
+        if not isAbsolutePath(resolved) then
+            local resolvedCmd = resolveCommandPath(resolved)
+            if resolvedCmd and fileExists(resolvedCmd) and canRunPython(resolvedCmd) then
+                return resolvedCmd
+            end
         end
 
         -- Otherwise fall back to attempting to run the command to verify it.
@@ -813,8 +884,10 @@ local function findPython()
 
     local paths = {}
     local home = getHome()
+    local runtime = getRuntimePaths()
 
     if OS == "Windows" then
+        table.insert(paths, runtime.venvPython)
         -- Conda (recommended on Windows): if REAPER was started from an activated env,
         -- CONDA_PREFIX points to it.
         local condaPrefix = os.getenv("CONDA_PREFIX") or ""
@@ -853,12 +926,19 @@ local function findPython()
     else
         -- Linux/macOS paths - check venvs first
         -- Prefer workspace venv: <repo>/.venv (two levels up from scripts/reaper/)
+        table.insert(paths, runtime.venvPython)
         table.insert(paths, script_path .. "../../.venv/bin/python")
         table.insert(paths, script_path .. ".venv/bin/python")
         table.insert(paths, home .. "/.STEMwerk/.venv/bin/python")
         table.insert(paths, script_path .. "../.venv/bin/python")
         -- Homebrew on macOS
         if OS == "macOS" then
+            table.insert(paths, "/opt/homebrew/opt/python@3.11/libexec/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.11/libexec/bin/python3")
+            table.insert(paths, "/opt/homebrew/opt/python@3.12/libexec/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.12/libexec/bin/python3")
+            table.insert(paths, "/opt/homebrew/bin/python3.11")
+            table.insert(paths, "/usr/local/bin/python3.11")
             table.insert(paths, "/opt/homebrew/bin/python3")
             table.insert(paths, "/usr/local/bin/python3")
             table.insert(paths, "/usr/local/opt/python@3.11/bin/python3")
@@ -866,14 +946,23 @@ local function findPython()
         end
         -- User local and system paths
         table.insert(paths, home .. "/.local/bin/python3")
+        table.insert(paths, "/usr/local/bin/python3.11")
+        table.insert(paths, "/usr/bin/python3.11")
+        table.insert(paths, "/usr/local/bin/python3.12")
+        table.insert(paths, "/usr/bin/python3.12")
         table.insert(paths, "/usr/local/bin/python3")
         table.insert(paths, "/usr/bin/python3")
+        table.insert(paths, "/snap/bin/python3")
         table.insert(paths, "python3")
         table.insert(paths, "python")
     end
 
     for _, p in ipairs(paths) do
         if p == "python" or p == "python3" then
+            local resolved = resolveCommandPath(p)
+            if resolved and fileExists(resolved) and canRunPython(resolved) then
+                return resolved
+            end
             if canRunPython(p) then return p end
         else
             if fileExists(p) and canRunPython(p) then return p end
@@ -908,17 +997,85 @@ local function findSeparatorScript()
     return script_path .. "audio_separator_process.py"
 end
 
-local PYTHON_PATH = findPython()
-local SEPARATOR_SCRIPT = findSeparatorScript()
+local PYTHON_PATH
+local SEPARATOR_SCRIPT
+
+local BOOTSTRAP_ACTIVE = false
+local DEP_STATUS = { state = "unknown", detail = nil, prompted = false, updatedAt = nil }
+
+local function setDepState(state, detail)
+    DEP_STATUS.state = state or "unknown"
+    DEP_STATUS.detail = detail
+    DEP_STATUS.updatedAt = os.time()
+    DEP_STATUS.prompted = DEP_STATUS.prompted or false
+end
+
+SW_SETUP.configure({
+    OS = OS,
+    PATH_SEP = PATH_SEP,
+    script_path = script_path,
+    debugLog = debugLog,
+    logExecResult = SW_LOG.logExecResult,
+    fileExists = fileExists,
+    getHome = getHome,
+    getExtStateValue = getExtStateValue,
+    setExtStateValue = setExtStateValue,
+    isAbsolutePath = isAbsolutePath,
+    quoteArg = quoteArg,
+    execProcess = execProcess,
+    canRunPython = canRunPython,
+    canRunFfmpeg = canRunFfmpeg,
+    findPython = findPython,
+    findSeparatorScript = findSeparatorScript,
+    setPythonPath = function(path)
+        PYTHON_PATH = path
+    end,
+    setSeparatorScript = function(path)
+        SEPARATOR_SCRIPT = path
+    end,
+    getPythonPath = function()
+        return PYTHON_PATH
+    end,
+    getDepState = function()
+        return DEP_STATUS
+    end,
+    setDepState = setDepState,
+    getBootstrapActive = function()
+        return BOOTSTRAP_ACTIVE
+    end,
+    setBootstrapActive = function(active)
+        BOOTSTRAP_ACTIVE = active and true or false
+    end,
+    showMessageBox = function(title, text, type)
+        if reaper and reaper.ShowMessageBox then
+            return reaper.ShowMessageBox(tostring(text), tostring(title), type or 0)
+        end
+        return 0
+    end,
+    SW_LOG = SW_LOG,
+})
+
+ensureWritableDir = SW_SETUP.ensureWritableDir
+getRuntimeBase = SW_SETUP.getRuntimeBase
+getRuntimePaths = SW_SETUP.getRuntimePaths
+resolveCommandPath = SW_SETUP.resolveCommandPath
+canImportAudioSeparator = SW_SETUP.canImportAudioSeparator
+safeDofile = SW_SETUP.safeDofile
+isPythonAvailable = SW_SETUP.isPythonAvailable
+runFirstRunSetup = SW_SETUP.runFirstRunSetup
+verifyRuntimeAfterBootstrap = SW_SETUP.verifyRuntimeAfterBootstrap
+ensureDependenciesInteractive = SW_SETUP.ensureDependenciesInteractive
+persistPythonPath = SW_SETUP.persistPythonPath
+readCapabilities = SW_SETUP.readCapabilities
+
+PYTHON_PATH = findPython()
+SEPARATOR_SCRIPT = findSeparatorScript()
 
 debugLog("Detected Python: " .. tostring(PYTHON_PATH))
 debugLog("Detected separator script: " .. tostring(SEPARATOR_SCRIPT))
 
 -- Persist the chosen Python path into REAPER ExtState so the launcher uses it
-if reaper and reaper.SetExtState then
-    reaper.SetExtState(EXT_SECTION, "pythonPath", tostring(PYTHON_PATH), true)
-    debugLog("Persisted pythonPath to ExtState: " .. tostring(PYTHON_PATH))
-end
+persistPythonPath(PYTHON_PATH)
 
 -- Stem configuration (with selection state)
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
@@ -1371,6 +1528,23 @@ function startRuntimeDeviceProbeAsync(force)
         return false
     end
 
+    if not force and type(readCapabilities) == "function" then
+        local cap = readCapabilities()
+        if cap and cap.raw and cap.raw:find("STEMWERK_DEVICES_BEGIN") then
+            local devices, envJson, skipNote = parseDeviceListFromPythonOutput(cap.raw)
+            if devices then
+                local backendReason = cap.kv and cap.kv.BACKEND_REASON or ""
+                if backendReason and backendReason ~= "" then
+                    skipNote = (skipNote and (skipNote .. "\n\n") or "") .. "Backend: " .. tostring(backendReason)
+                end
+                RUNTIME_DEVICE_SKIP_NOTE = skipNote
+                applyRuntimeDevicesFromParsed(devices, envJson, os.time())
+                debugLog("=== Device probe: loaded from capabilities ===")
+                return false
+            end
+        end
+    end
+
     local function getTempDirEarly()
         if OS == "Windows" then
             return os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
@@ -1557,6 +1731,25 @@ local function refreshRuntimeDevices(force)
     local now = os.time()
     if not force and RUNTIME_DEVICES and (now - (RUNTIME_DEVICE_LAST_PROBE or 0) < 10) then
         return
+    end
+
+    if not force and type(readCapabilities) == "function" then
+        local cap = readCapabilities()
+        if cap and cap.raw and cap.raw:find("STEMWERK_DEVICES_BEGIN") then
+            local devices, envJson, skipNote = parseDeviceListFromPythonOutput(cap.raw)
+            if devices then
+                local backendReason = cap.kv and cap.kv.BACKEND_REASON or ""
+                if backendReason and backendReason ~= "" then
+                    skipNote = (skipNote and (skipNote .. "\n\n") or "") .. "Backend: " .. tostring(backendReason)
+                end
+                RUNTIME_DEVICE_SKIP_NOTE = skipNote
+                applyRuntimeDevicesFromParsed(devices, envJson, os.time())
+                if cap.kv and cap.kv.PROFILE then
+                    debugLog("Capabilities profile=" .. tostring(cap.kv.PROFILE) .. " backend=" .. tostring(cap.kv.BACKEND))
+                end
+                return
+            end
+        end
     end
 
     debugLog("=== Device probe: refreshRuntimeDevices() ===")
@@ -2632,6 +2825,78 @@ local function hasTimeSelection()
     return false
 end
 
+-- Audibility helpers (mute/solo filtering)
+local AUDIBILITY = {}
+
+function AUDIBILITY.anySoloActive()
+    local n = reaper.CountTracks(0) or 0
+    for t = 0, n - 1 do
+        local tr = reaper.GetTrack(0, t)
+        if tr and (reaper.GetMediaTrackInfo_Value(tr, "I_SOLO") or 0) > 0 then
+            return true
+        end
+    end
+    return false
+end
+
+function AUDIBILITY.isTrackMuted(track)
+    return track and (reaper.GetMediaTrackInfo_Value(track, "B_MUTE") or 0) > 0.5
+end
+
+function AUDIBILITY.isTrackSoloed(track)
+    return track and (reaper.GetMediaTrackInfo_Value(track, "I_SOLO") or 0) > 0
+end
+
+function AUDIBILITY.isTrackAudible(track, soloActive)
+    if not track or not reaper.ValidatePtr(track, "MediaTrack*") then return false end
+    if AUDIBILITY.isTrackMuted(track) then return false end
+    if soloActive then
+        return AUDIBILITY.isTrackSoloed(track)
+    end
+    return true
+end
+
+function AUDIBILITY.isItemMuted(item)
+    return item and (reaper.GetMediaItemInfo_Value(item, "B_MUTE") or 0) > 0.5
+end
+
+function AUDIBILITY.isItemAudible(item, soloActive)
+    if not item or not reaper.ValidatePtr(item, "MediaItem*") then return false end
+    local track = reaper.GetMediaItem_Track(item)
+    if not AUDIBILITY.isTrackAudible(track, soloActive) then return false end
+    if AUDIBILITY.isItemMuted(item) then return false end
+    return true
+end
+
+function AUDIBILITY.filterTracks(tracks, soloActive)
+    local out = {}
+    for _, tr in ipairs(tracks or {}) do
+        if AUDIBILITY.isTrackAudible(tr, soloActive) then
+            out[#out + 1] = tr
+        end
+    end
+    return out
+end
+
+function AUDIBILITY.filterItems(items, soloActive)
+    local out = {}
+    for _, it in ipairs(items or {}) do
+        if AUDIBILITY.isItemAudible(it, soloActive) then
+            out[#out + 1] = it
+        end
+    end
+    return out
+end
+
+-- Use processing-time solo state if available (keeps filtering consistent during a run).
+PROCESS_AUDIBILITY_SOLO_ACTIVE = nil
+local function getProcessingSoloActive()
+    if PROCESS_AUDIBILITY_SOLO_ACTIVE ~= nil then
+        return PROCESS_AUDIBILITY_SOLO_ACTIVE
+    end
+    return AUDIBILITY.anySoloActive()
+end
+
 -- Message window state (for errors, warnings, info)
 local messageWindowState = {
     title = "",
@@ -2645,6 +2910,10 @@ local messageWindowState = {
 -- Forward declarations (functions defined later in file)
 local main
 local showMessage
+local drawHelpQuickStartHeader
+local drawHelpReaperHeader
+local getRuntimeModeLabel
+local buildFooterLines
 
 -- STEM colors for window borders (used by all windows)
 local STEM_BORDER_COLORS = {
@@ -7168,7 +7437,7 @@ local function drawArtGallery()
         if SETTINGS.visualFX then
             local artAreaY = UI(40)
             local artAreaH = h - artAreaY - UI(50)
-            drawProceduralArtInternal(0, artAreaY, w, artAreaH, time * 0.6, 0, false, 0.22)
+            drawProceduralArtInternal(0, artAreaY, w, artAreaH, time * 0.6, 0, true, 0.22)
         end
 
         -- Update audio reactivity
@@ -7242,38 +7511,12 @@ local function drawArtGallery()
             end
         end
 
-        -- Title (theme-aware) - positioned like Welcome tab
-        gfx.setfont(1, "Arial", PS(28), string.byte('b'))
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        local qsTitle = T("help_quickstart_title")
-        local qtW = gfx.measurestr(qsTitle)
-        gfx.x = (w - qtW) / 2 + textOffsetX
-        gfx.y = contentY + PS(15)
-        gfx.drawstr(qsTitle)
+        drawHelpQuickStartHeader(w, contentY, textOffsetX, PS)
 
-        -- Subtitle (theme-aware)
-        gfx.setfont(1, "Arial", PS(14))
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        local subText = T("help_quickstart_sub")
-        local subW = gfx.measurestr(subText)
-        gfx.x = (w - subW) / 2 + textOffsetX
-        gfx.y = contentY + PS(50)
-        gfx.drawstr(subText)
-
-        -- Add a legibility background panel for the steps area
         local panelX = PS(30) + textOffsetX
         local panelY = contentY + PS(70) + textOffsetY
         local panelW = w - PS(60)
         local panelH = h - panelY - UI(60)
-        
-        if isDarkMode then
-            gfx.set(0, 0, 0, 0.6) -- Dark overlay
-        else
-            gfx.set(1, 1, 1, 0.75) -- Light overlay
-        end
-        gfx.rect(panelX, panelY, panelW, panelH, 1)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.25)
-        gfx.rect(panelX, panelY, panelW, panelH, 0)
 
         -- Steps - LARGER with more detail (all translated)
         local steps = {
@@ -7317,11 +7560,7 @@ local function drawArtGallery()
 
             -- Step description (forced contrast)
             gfx.setfont(1, "Arial", PS(13))
-            if isDarkMode then
-                gfx.set(0.9, 0.9, 0.9, 1)
-            else
-                gfx.set(0.1, 0.1, 0.1, 1)
-            end
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.x = circleX + circleR + PS(20)
             gfx.y = circleY + PS(4)
             gfx.drawstr(step.desc)
@@ -7735,14 +7974,7 @@ local function drawArtGallery()
         if SETTINGS.visualFX then
             local artAreaY = UI(40)
             local artAreaH = h - artAreaY - UI(50)
-            drawProceduralArt(0, artAreaY, w, artAreaH, time, 0, false)
-            -- Dim the art a touch so text stays readable.
-            if SETTINGS.darkMode then
-                gfx.set(0, 0, 0, 0.5)
-            else
-                gfx.set(1, 1, 1, 0.5)
-            end
-            gfx.rect(0, artAreaY, w, artAreaH, 1)
+            drawProceduralArt(0, artAreaY, w, artAreaH, time, 0, true)
         end
 
         -- Click for new art (same area rules as Gallery)
@@ -7760,47 +7992,31 @@ local function drawArtGallery()
             end
         end
 
-        -- Draw header
-        gfx.setfont(1, "Arial", PS(26), string.byte('b'))
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        local repTitle = T("help_reaper_title")
-        local repW = gfx.measurestr(repTitle)
-        gfx.x = (w - repW) / 2 + textOffsetX
-        gfx.y = contentY + PS(10) + textOffsetY
-        gfx.drawstr(repTitle)
+        drawHelpReaperHeader(w, contentY, textOffsetX, textOffsetY, PS)
 
-        gfx.setfont(1, "Arial", PS(13))
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        local repSub = T("help_reaper_sub")
-        local repSubW = gfx.measurestr(repSub)
-        gfx.x = (w - repSubW) / 2 + textOffsetX
-        gfx.y = contentY + PS(40) + textOffsetY
-        gfx.drawstr(repSub)
-
-        -- Add a legibility background panel for the content area
-        local panelPad = PS(20)
         local panelX = PS(30) + textOffsetX
         local panelY = contentY + PS(70) + textOffsetY
         local panelW = w - PS(60)
         local panelH = h - panelY - UI(60)
-        
-        -- Subtle theme-aware overlay
-        if isDarkMode then
-            gfx.set(0, 0, 0, 0.65) -- Darker overlay for dark mode
-        else
-            gfx.set(1, 1, 1, 0.82) -- Lighter, thicker overlay for light mode
-        end
-        gfx.rect(panelX, panelY, panelW, panelH, 1)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.3)
-        gfx.rect(panelX, panelY, panelW, panelH, 0)
 
         local sectionX = panelX + PS(15)
         local sectionY = panelY + PS(15)
         local maxW = panelW - PS(30)
 
+        local reaperHelpFallbacks = {
+            help_reaper_selection_title = "Selection & Items",
+            help_reaper_selection_body = "STEMwerk uses selected items or tracks. If nothing is selected, make a time selection.",
+            help_reaper_temp_title = "Temp Files",
+            help_reaper_temp_body = "Temporary audio is stored during processing. You can keep or delete it in the Output options.",
+            help_reaper_logs_title = "Logs",
+            help_reaper_logs_body = "Processing logs are saved in the runtime state folder for troubleshooting.",
+            help_reaper_cleanup_title = "Cleanup",
+            help_reaper_cleanup_body = "Cleanup options control what happens to the original items and temporary files.",
+        }
+
         local function drawHelpSection(titleKey, bodyKey)
-            local title = T(titleKey)
-            local body = T(bodyKey)
+            local title = getLangText(titleKey, reaperHelpFallbacks[titleKey])
+            local body = getLangText(bodyKey, reaperHelpFallbacks[bodyKey] or "")
             gfx.setfont(1, "Arial", PS(16), string.byte('b'))
             gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
             gfx.x = sectionX
@@ -7808,15 +8024,9 @@ local function drawArtGallery()
             gfx.drawstr(title)
             sectionY = sectionY + PS(20)
 
-            -- Force high-contrast text colors for help body
-            if isDarkMode then
-                gfx.set(0.9, 0.9, 0.9, 1) -- Near white
-            else
-                gfx.set(0.1, 0.1, 0.1, 1) -- Near black
-            end
-            
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.setfont(1, "Arial", PS(12))
-            local lines = _wrapTextToWidth(body, maxW)
+            local lines = _wrapTextToWidth(body or "", maxW)
             for _, ln in ipairs(lines) do
                 gfx.x = sectionX
                 gfx.y = sectionY
@@ -9159,6 +9369,7 @@ local function drawTooltip()
     -- Rich tooltip for STEMwerk button
     if GUI.richTooltip then
         gfx.setfont(1, "Arial", S(10))
+        local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
         local padding = S(8)
         local lineH = S(14)
 
@@ -9233,11 +9444,26 @@ local function drawTooltip()
             effectiveTargets = selTrackCount > 0 and selTrackCount or (selItemCount > 0 and 1 or 0)
         end
 
-        local trackUnit = trPlural(effectiveTargets, "footer_track", "footer_tracks")
-        local itemUnit = trPlural(selItemCount, "footer_item", "footer_items")
+        local function trSafeTooltip(key, fallback)
+            local v = T(key)
+            if not v or v == "" or v == key or v == key:gsub("_", " ") then
+                return fallback
+            end
+            return v
+        end
+
+        local function trPluralTooltip(count, singularKey, pluralKey, singularFallback, pluralFallback)
+            if (count or 0) == 1 then
+                return trSafeTooltip(singularKey, singularFallback or singularKey)
+            end
+            return trSafeTooltip(pluralKey, pluralFallback or pluralKey)
+        end
+
+        local trackUnit = trPluralTooltip(effectiveTargets, "footer_track", "footer_tracks", "track", "tracks")
+        local itemUnit = trPluralTooltip(selItemCount, "footer_item", "footer_items", "item", "items")
         local selectionText
         if viaTimeSelection then
-            selectionText = string.format("%d %s %s", effectiveTargets, trackUnit, T("footer_via_time_selection") or "(via time selection)")
+            selectionText = string.format("%d %s %s", effectiveTargets, trackUnit, trSafeTooltip("footer_via_time_selection", "(via time selection)"))
         else
             selectionText = string.format("%d %s, %d %s", selTrackCount, trackUnit, selItemCount, itemUnit)
         end
@@ -10911,12 +11137,40 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         end
     end
 
+    local function isAmdGpuName(name)
+        local n = string.lower(tostring(name or ""))
+        if n == "" then return false end
+        return n:find("amd", 1, true) or n:find("radeon", 1, true) or n:find("gfx", 1, true)
+    end
+
     local function deviceBackendPrefix(dev)
         if not dev or not dev.id then return nil end
         local id = tostring(dev.id)
         if dev.type == "directml" or id:match("^directml") then return "DML" end
-        if dev.type == "cuda" or id:match("^cuda") then return "CUDA" end
+        if dev.type == "cuda" or id:match("^cuda") then
+            if OS == "Linux" then
+                local nm = dev.fullName or dev.name or ""
+                if isAmdGpuName(nm) then
+                    return "ROCm"
+                end
+            end
+            return "CUDA"
+        end
         return nil
+    end
+
+    local function rocmShortName(base)
+        if not base or base == "" then return base end
+        local b = tostring(base)
+        local rx = b:match("RX%s*%d+")
+        if rx then return rx end
+        local rad = b:match("Radeon%s+RX%s*%d+") or b:match("Radeon%s+[%w%-]+")
+        if rad then return rad end
+        local amd = b:match("AMD%s+Radeon%s+[%w%-]+")
+        if amd then
+            return amd:gsub("^AMD%s+", "")
+        end
+        return b
     end
 
     local function buildDeviceUiLabel(dev)
@@ -10936,6 +11190,13 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
             base = "GPU" .. tostring(idx)
         end
         local prefix = deviceBackendPrefix(dev)
+        if prefix == "ROCm" then
+            local short = rocmShortName(base)
+            if short and short ~= "" then
+                return short
+            end
+            return base ~= "" and base or (dev.name or dev.id)
+        end
         if prefix then
             return prefix .. " " .. base
         end
@@ -11108,6 +11369,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         deviceY = deviceY + S(22)
     end
 
+
     -- Device header tooltip: show accurate probe status depending on runtime results.
     local headerTip = nil
     if RUNTIME_DEVICES and #RUNTIME_DEVICES > 0 then
@@ -11140,20 +11402,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     end
 end
 
--- Main dialog loop
-local function dialogLoop()
-    -- Try to make window resizable (needs to be called after window is visible)
-    makeWindowResizable()
-
-    -- Non-blocking device probe: update device list as soon as the async probe completes.
-    pollRuntimeDeviceProbe()
-    if DEBUG_MODE and RUNTIME_DEVICE_PROBE_DEBUG == "async_running" and not GUI._probeLoggedOnce then
-        GUI._probeLoggedOnce = true
-        perfMark("dialogLoop(): running while device probe async (UI should remain responsive)")
-    end
-
-    -- One-shot focus handoff: keep main dialog visible but give keyboard focus back to REAPER
-    -- so the user can press T to switch takes immediately.
+function GUI._updateFocusHandoff()
     if focusReaperAfterMainOpenOnce then
         focusReaperAfterMainOpenOnce = false
         local mainHwnd = reaper.GetMainHwnd()
@@ -11161,8 +11410,9 @@ local function dialogLoop()
             reaper.JS_Window_SetFocus(mainHwnd)
         end
     end
+end
 
-    -- Save window position continuously (for when window loses focus)
+function GUI._updateDialogPosition()
     local updatedPos = false
     if reaper.JS_Window_GetRect then
         local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
@@ -11177,77 +11427,500 @@ local function dialogLoop()
     if not updatedPos then
         updateDialogPosFromGfx()
     end
+end
 
-    -- Check if settings changed and save periodically (throttled to avoid excessive writes)
+function GUI._throttleSaveSettings()
     if not GUI.lastSaveTime then GUI.lastSaveTime = 0 end
     local now = os.clock()
     if now - GUI.lastSaveTime > 0.5 then  -- Save at most every 0.5 seconds
         saveSettings()
         GUI.lastSaveTime = now
     end
+end
 
-    -- Update scale based on current window size
-    updateScale()
-
-    -- --- Modal dialog overlay (used for simple in-dialog warnings like "no stems selected") ---
-    -- This avoids switching gfx windows (and competing defer loops) from inside dialogLoop().
-    if GUI.modal then
-        drawMainDialogModalOverlay()
-        reaper.defer(dialogLoop)
-        return
-    end
-
-    -- Check if selection was lost - switch to "Start" message
-    -- Use a counter to require sustained deselection (prevents race conditions)
-    -- IMPORTANT: If we're in timeSelectionMode, don't auto-close (time selection was stored at start)
+function GUI._handleNoSelection()
     local hasSel = hasAnySelection() or timeSelectionMode
     if not hasSel then
         GUI.noSelectionFrames = (GUI.noSelectionFrames or 0) + 1
-        -- Require 10+ frames (~0.3 sec) of no selection before closing
         if GUI.noSelectionFrames > 10 then
             gfx.quit()
-            -- Clear auto-selection tracking (user already deselected everything)
             autoSelectedItems = {}
             autoSelectionTracks = {}
             GUI.noSelectionFrames = 0
-            -- Show "Start" with monitoring enabled
             reaper.defer(function() main() end)
-            return
+            return true
         end
     else
-        -- Selection exists, reset counter
         GUI.noSelectionFrames = 0
     end
+    return false
+end
 
-    -- === PROCEDURAL ART BACKGROUND WITH CAMERA CONTROLS ===
+drawHelpQuickStartHeader = function(w, contentY, textOffsetX, PS)
+    local function PX(val) return (PS and PS(val)) or val end
+    gfx.setfont(1, "Arial", PX(28), string.byte('b'))
+    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    local qsTitle = getLangText("help_quickstart_title", "Quick Start")
+    local qtW = gfx.measurestr(qsTitle)
+    gfx.x = (w - qtW) / 2 + textOffsetX
+    gfx.y = contentY + PX(15)
+    gfx.drawstr(qsTitle)
 
-    -- Reset UI click tracking for this frame
-    GUI.uiClickedThisFrame = false
+    gfx.setfont(1, "Arial", PX(14))
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local subText = getLangText("help_quickstart_sub", "A fast guide to getting stems in REAPER.")
+    local subW = gfx.measurestr(subText)
+    gfx.x = (w - subW) / 2 + textOffsetX
+    gfx.y = contentY + PX(50)
+    gfx.drawstr(subText)
+end
 
-    -- Initialize art if not yet done
-    if proceduralArt.seed == 0 then
-        generateNewArt()
+drawHelpReaperHeader = function(w, contentY, textOffsetX, textOffsetY, PS)
+    local function PX(val) return (PS and PS(val)) or val end
+    gfx.setfont(1, "Arial", PX(26), string.byte('b'))
+    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    local repTitle = getLangText("help_reaper_title", "REAPER")
+    local repW = gfx.measurestr(repTitle)
+    gfx.x = (w - repW) / 2 + textOffsetX
+    gfx.y = contentY + PX(10) + textOffsetY
+    gfx.drawstr(repTitle)
+
+    gfx.setfont(1, "Arial", PX(13))
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local repSub = getLangText("help_reaper_sub", "Selection, temp files, and cleanup")
+    local repSubW = gfx.measurestr(repSub)
+    gfx.x = (w - repSubW) / 2 + textOffsetX
+    gfx.y = contentY + PX(40) + textOffsetY
+    gfx.drawstr(repSub)
+end
+
+getRuntimeModeLabel = function(queue)
+    local runtimeMode = (queue and queue.sequentialMode) and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
+    local runtimeNote = ""
+    if SETTINGS.parallelProcessing and (queue and queue.sequentialMode) then
+        local reason = (queue.sequentialReason or queue.sequentialReasonText or "")
+        if reason ~= "" then
+            runtimeNote = " (" .. tostring(reason) .. ")"
+        else
+            runtimeNote = " (fallback)"
+        end
+    end
+    return runtimeMode, runtimeNote
+end
+
+local function resolveTimeSelectionTargets()
+    local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    if startTime >= endTime then return nil end
+
+    local soloActive = getProcessingSoloActive()
+    local selItemCount = reaper.CountSelectedMediaItems(0) or 0
+    local selTrackCount = reaper.CountSelectedTracks(0) or 0
+    local mode = "all_items"
+    local items = {}
+    local trackItems = {}
+    local rawOverlap = 0
+
+    local function addItem(item, track)
+        if not item or not track then return end
+        local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+        local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+        local iEnd = iPos + iLen
+        if iPos < endTime and iEnd > startTime then
+            rawOverlap = rawOverlap + 1
+            if AUDIBILITY.isItemAudible(item, soloActive) then
+                local overlapStart = math.max(iPos, startTime)
+                local overlapEnd = math.min(iEnd, endTime)
+                local overlapLen = math.max(0, overlapEnd - overlapStart)
+                items[#items + 1] = { item = item, track = track, start = overlapStart, ["end"] = overlapEnd, len = overlapLen }
+                if not trackItems[track] then
+                    trackItems[track] = {}
+                end
+                trackItems[track][#trackItems[track] + 1] = { item = item, track = track, start = overlapStart, ["end"] = overlapEnd, len = overlapLen }
+            end
+        end
     end
 
-    -- Update animation time
-    proceduralArt.time = proceduralArt.time + 0.016  -- ~60fps
+    if selItemCount > 0 then
+        mode = "selected_items"
+        for i = 0, selItemCount - 1 do
+            local item = reaper.GetSelectedMediaItem(0, i)
+            if item and reaper.ValidatePtr(item, "MediaItem*") then
+                local track = reaper.GetMediaItem_Track(item)
+                addItem(item, track)
+            end
+        end
+    elseif selTrackCount > 0 then
+        mode = "selected_tracks"
+        for t = 0, selTrackCount - 1 do
+            local track = reaper.GetSelectedTrack(0, t)
+            if track and reaper.ValidatePtr(track, "MediaTrack*") then
+                local numItems = reaper.CountTrackMediaItems(track)
+                for i = 0, numItems - 1 do
+                    local item = reaper.GetTrackMediaItem(track, i)
+                    addItem(item, track)
+                end
+            end
+        end
+    else
+        mode = "all_items"
+        local numTracks = reaper.CountTracks(0)
+        for t = 0, numTracks - 1 do
+            local track = reaper.GetTrack(0, t)
+            if track and reaper.ValidatePtr(track, "MediaTrack*") then
+                local numItems = reaper.CountTrackMediaItems(track)
+                for i = 0, numItems - 1 do
+                    local item = reaper.GetTrackMediaItem(track, i)
+                    addItem(item, track)
+                end
+            end
+        end
+    end
 
-    -- Smooth camera interpolation
-    local smoothing = 0.15
-    mainDialogArt.zoom = mainDialogArt.zoom + (mainDialogArt.targetZoom - mainDialogArt.zoom) * smoothing
-    mainDialogArt.panX = mainDialogArt.panX + (mainDialogArt.targetPanX - mainDialogArt.panX) * smoothing
-    mainDialogArt.panY = mainDialogArt.panY + (mainDialogArt.targetPanY - mainDialogArt.panY) * smoothing
-    mainDialogArt.rotation = mainDialogArt.rotation + (mainDialogArt.targetRotation - mainDialogArt.rotation) * smoothing
+    local trackList = {}
+    for tr in pairs(trackItems) do
+        trackList[#trackList + 1] = tr
+    end
 
-    -- Get mouse state early for background interaction
-    local mx, my = gfx.mouse_x, gfx.mouse_y
-    local mouseDown = gfx.mouse_cap & 1 == 1
-    local rightMouseDown = gfx.mouse_cap & 2 == 2
-    local mouseWheel = gfx.mouse_wheel
-    local w, h = gfx.w, gfx.h
+    return {
+        startTime = startTime,
+        endTime = endTime,
+        mode = mode,
+        items = items,
+        trackItems = trackItems,
+        trackList = trackList,
+        trackCount = #trackList,
+        rawOverlap = rawOverlap,
+    }
+end
 
-    -- Precompute top-right control hitboxes early so background RMB rotation doesn't steal UI right-clicks.
-    -- (Needed because the language badge uses RMB to toggle tooltips.)
+buildFooterLines = function()
+    local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+    local rawSelTrackCount = reaper.CountSelectedTracks(0) or 0
+    local rawSelItemCount = reaper.CountSelectedMediaItems(0) or 0
+
+    local selectionMode, timeSelectionMode = nil, nil
+    if type(resolveSelectionMode) == "function" then
+        local mode, timeMode = resolveSelectionMode()
+        selectionMode, timeSelectionMode = mode, timeMode
+    end
+
+    local soloActiveFooter = getProcessingSoloActive()
+
+    local selTrackCount = 0
+    for t = 0, rawSelTrackCount - 1 do
+        local tr = reaper.GetSelectedTrack(0, t)
+        if tr and AUDIBILITY.isTrackAudible(tr, soloActiveFooter) then
+            selTrackCount = selTrackCount + 1
+        end
+    end
+
+    local currentTimeStart, currentTimeEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    local hasTimeSel = currentTimeEnd > currentTimeStart
+
+    local selItemCount = 0
+    local selItemDur = 0
+    local selItemTrackSet = {}
+    for i = 0, rawSelItemCount - 1 do
+        local it = reaper.GetSelectedMediaItem(0, i)
+        local tr = it and reaper.GetMediaItem_Track(it)
+        if it and tr and AUDIBILITY.isTrackAudible(tr, soloActiveFooter) and AUDIBILITY.isItemAudible(it, soloActiveFooter) then
+            local inTimeSel = true
+            if hasTimeSel then
+                local ipos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
+                local iend = ipos + reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
+                inTimeSel = (ipos < currentTimeEnd and iend > currentTimeStart)
+            end
+            if inTimeSel then
+                selItemCount = selItemCount + 1
+                selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
+                selItemTrackSet[tr] = true
+            end
+        end
+    end
+    local selItemTrackCount = 0
+    for _ in pairs(selItemTrackSet) do selItemTrackCount = selItemTrackCount + 1 end
+
+    local trackLabel = selTrackCount == 1 and "track" or "tracks"
+    local itemLabel = selItemCount == 1 and "item" or "items"
+
+    local function formatDuration(seconds)
+        if not seconds or seconds <= 0 then return nil end
+        local mins = math.floor(seconds / 60)
+        local secs = seconds - (mins * 60)
+        if mins > 0 then
+            return string.format("%d:%04.1f", mins, secs)
+        end
+        return string.format("%.1fs", secs)
+    end
+
+    local timeSelText = nil
+    if hasTimeSel then
+        timeSelectionStart = currentTimeStart
+        timeSelectionEnd = currentTimeEnd
+        timeSelectionMode = true
+        local duration = currentTimeEnd - currentTimeStart
+        timeSelText = formatDuration(duration)
+    else
+        timeSelectionMode = false
+    end
+
+    local useTimeSel = hasTimeSel and rawSelTrackCount == 0 and rawSelItemCount == 0
+    local timeSelResolved = nil
+    if hasTimeSel then
+        timeSelResolved = resolveTimeSelectionTargets()
+    end
+    local timeSelItemCount = timeSelResolved and #timeSelResolved.items or 0
+    local timeSelTrackCount = timeSelResolved and timeSelResolved.trackCount or 0
+    if useTimeSel then
+        timeSelTrackCount = timeSelResolved and timeSelResolved.trackCount or timeSelTrackCount
+    end
+    local timeSelTargetCount = timeSelItemCount
+    local timeSelTargetIsItem = true
+    if timeSelItemCount == 0 then
+        timeSelTargetCount = timeSelTrackCount
+        timeSelTargetIsItem = false
+    end
+
+    local autoItemCount = 0
+    local autoItemDur = 0
+    if not useTimeSel and rawSelItemCount == 0 and rawSelTrackCount > 0 then
+        for t = 0, rawSelTrackCount - 1 do
+            local track = reaper.GetSelectedTrack(0, t)
+            if track and AUDIBILITY.isTrackAudible(track, soloActiveFooter) then
+                local numItems = reaper.CountTrackMediaItems(track)
+                for i = 0, numItems - 1 do
+                    local item = reaper.GetTrackMediaItem(track, i)
+                    if item and AUDIBILITY.isItemAudible(item, soloActiveFooter) then
+                        autoItemCount = autoItemCount + 1
+                        autoItemDur = autoItemDur + (reaper.GetMediaItemInfo_Value(item, "D_LENGTH") or 0)
+                    end
+                end
+            end
+        end
+    end
+
+    local selectedStemCount = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+            selectedStemCount = selectedStemCount + 1
+        end
+    end
+
+    local effectiveSrcTracks = selTrackCount > 0 and selTrackCount or (timeSelText and 1 or 0)
+    local effectiveSrcItems = selItemCount > 0 and selItemCount or (timeSelText and 1 or 0)
+
+    local outTrackCount = SETTINGS.createNewTracks and (effectiveSrcTracks * selectedStemCount) or 0
+    local outItemCount = effectiveSrcItems * selectedStemCount
+
+    local function trSingularPlural(n, keySingular, keyPlural)
+        if (n or 0) == 1 then return T(keySingular) else return T(keyPlural) end
+    end
+
+    local function trSafe(key, fallback)
+        local v = T(key)
+        if not v or v == "" then return fallback end
+        if v == key or v == key:gsub("_", " ") then return fallback end
+        return v
+    end
+
+    local function previewOutputSummary()
+        local summary = {
+            targetCount = 0,
+            targetIsItem = false,
+            outputStems = 0,
+        }
+        if selectedStemCount <= 0 then
+            return summary
+        end
+
+        local useTimeSelNow = useTimeSel
+        if timeSelectionMode == "time_selection" or selectionMode == "time_selection" then
+            useTimeSelNow = true
+        end
+
+        if useTimeSelNow then
+            summary.targetIsItem = (timeSelTargetIsItem and timeSelTargetCount > 0) or false
+            summary.targetCount = timeSelTargetCount
+            summary.outputStems = timeSelItemCount * selectedStemCount
+            return summary
+        end
+
+        if rawSelItemCount > 0 then
+            local trackSet = {}
+            local audibleItems = 0
+            for i = 0, rawSelItemCount - 1 do
+                local it = reaper.GetSelectedMediaItem(0, i)
+                local tr = it and reaper.GetMediaItem_Track(it)
+                if it and tr and AUDIBILITY.isItemAudible(it, soloActiveFooter) then
+                    audibleItems = audibleItems + 1
+                    trackSet[tr] = true
+                end
+            end
+            local trackCount = 0
+            for _ in pairs(trackSet) do trackCount = trackCount + 1 end
+            if SETTINGS.createNewTracks then
+                summary.targetIsItem = false
+                summary.targetCount = trackCount
+                summary.outputStems = trackCount * selectedStemCount
+            else
+                summary.targetIsItem = true
+                summary.targetCount = audibleItems
+                summary.outputStems = audibleItems * selectedStemCount
+            end
+            return summary
+        end
+
+        if rawSelTrackCount > 0 then
+            if SETTINGS.createNewTracks then
+                summary.targetIsItem = false
+                summary.targetCount = selTrackCount
+                summary.outputStems = selTrackCount * selectedStemCount
+            else
+                summary.targetIsItem = true
+                summary.targetCount = autoItemCount
+                summary.outputStems = autoItemCount * selectedStemCount
+            end
+            return summary
+        end
+
+        return summary
+    end
+
+    local summary = previewOutputSummary()
+    local effectiveTargets = summary.targetCount
+    local viaTimeSelection = useTimeSel
+    if timeSelectionMode == "time_selection" or selectionMode == "time_selection" then
+        viaTimeSelection = true
+    end
+
+    local trackUnit = trSingularPlural(effectiveTargets, "footer_track", "footer_tracks")
+    local itemUnit = trSingularPlural(selItemCount, "footer_item", "footer_items")
+    local selLine
+    local targetPrefix = trSafe("footer_target_prefix", "Target:")
+
+    if viaTimeSelection then
+        local unit = summary.targetIsItem and trSingularPlural(effectiveTargets, "footer_item", "footer_items") or trackUnit
+        selLine = string.format("%s %d %s %s, %s %s", targetPrefix, effectiveTargets, unit, trSafe("footer_via_time_selection", "(via time selection)"), timeSelText, trSafe("footer_time_selection", "time selection"))
+    else
+        selLine = string.format("%s %d %s, %d %s", trSafe("selected", "Selected"), selTrackCount, trackUnit, selItemCount, itemUnit)
+    end
+
+    local stemsPerTrack = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected and (not stem.sixStemOnly or is6Stem) then stemsPerTrack = stemsPerTrack + 1 end
+    end
+
+    local outLine
+    local locLine
+    local locationPrefix = trSafe("footer_location_prefix", trSafe("target", "Location:"))
+    local outputLabel = trSafe("output", "Output")
+    local fromWord = trSafe("footer_from", "from")
+
+    local function stemUnit(n)
+        if (n or 0) == 1 then return trSafe("stem", "stem") end
+        return trSafe("stems", "stems")
+    end
+
+    if stemsPerTrack == 0 then
+        outLine = "[!] " .. (T("no_stems_selected") or "No Stems Selected")
+        locLine = T("please_select_stem") or "Please select stems in the center column."
+    else
+        if viaTimeSelection then
+            local totalOutputStems = summary.outputStems
+            outLine = string.format("%s %d %s %s %s", outputLabel, totalOutputStems, stemUnit(totalOutputStems), fromWord, trSafe("footer_time_selection", "time selection"))
+            if timeSelText and timeSelText ~= "" then
+                outLine = outLine .. " · " .. timeSelText
+            end
+        elseif SETTINGS.createNewTracks then
+            local trackCountOut = summary.targetCount
+            local totalOutputStems = summary.outputStems
+            local trackUnitOut = trSingularPlural(trackCountOut, "footer_track", "footer_tracks")
+            outLine = string.format("%s %d %s %s %d %s", outputLabel, totalOutputStems, stemUnit(totalOutputStems), fromWord, trackCountOut, trackUnitOut)
+        else
+            local itemCountOut = summary.targetCount
+            local itemDurOut = selItemDur
+            if itemCountOut == 0 and autoItemCount > 0 then
+                itemCountOut = autoItemCount
+                itemDurOut = autoItemDur
+            end
+            local totalOutputStems = summary.outputStems
+            local itemUnitOut = trSingularPlural(itemCountOut, "footer_item", "footer_items")
+            outLine = string.format("%s %d %s %s %d %s", outputLabel, totalOutputStems, stemUnit(totalOutputStems), fromWord, itemCountOut, itemUnitOut)
+            local itemDurText = formatDuration(itemDurOut)
+            if itemDurText and itemDurText ~= "" then
+                outLine = outLine .. " · " .. itemDurText
+            end
+        end
+
+        local selectedNames = {}
+        for _, stem in ipairs(STEMS) do
+            if stem.selected and (not stem.sixStemOnly or is6Stem) then
+                table.insert(selectedNames, T(stem.name:lower()))
+            end
+        end
+        local namesStr = table.concat(selectedNames, ", ")
+
+        if SETTINGS.createNewTracks then
+            local baseLoc
+            if viaTimeSelection and summary.targetIsItem and effectiveTargets > 1 then
+                baseLoc = trSafe("footer_per_item_folders", "Per-item stem folders")
+            else
+                baseLoc = effectiveTargets > 1 and (trSafe("footer_per_track_folders", "Per-track stem folders")) or trSafe("footer_location_new_folder", "New folder")
+            end
+            locLine = string.format("%s %s (%d: %s)", locationPrefix, baseLoc, stemsPerTrack, namesStr)
+        elseif SETTINGS.outputMode == "in-place" or not SETTINGS.createNewTracks then
+            locLine = string.format("%s %s (%d: %s)", locationPrefix, trSafe("in_place", "In-place"), stemsPerTrack, namesStr)
+        else
+            locLine = string.format("%s %s", locationPrefix, trSafe("footer_location_new_tracks", "New tracks"))
+        end
+    end
+
+    local isWarning = (stemsPerTrack == 0)
+    return { selLine = selLine, outLine = outLine, locLine = locLine, isWarning = isWarning }
+end
+
+function renderHelpTabs(ctx)
+    if not ctx then return end
+    local S = ctx.S
+    local w = ctx.w or gfx.w
+    local time = ctx.time or os.clock()
+    local logoY = S(12)
+
+    gfx.setfont(1, "Arial", S(24), string.byte('b'))
+    local logoStartX, _, logoTotalWidth, logoH = drawWavingStemwerkLogo({
+        w = w,
+        y = logoY,
+        fontSize = S(24),
+        time = time,
+        amp = S(2),
+        speed = 3,
+        phase = 0.5,
+        alphaStem = 1,
+        alphaRest = 0.9,
+    })
+
+    local mx, my = ctx.mx, ctx.my
+    local logoHover = mx >= logoStartX and mx <= logoStartX + logoTotalWidth and my >= logoY and my <= logoY + logoH
+    if logoHover then
+        setTooltip(logoStartX, logoY, logoTotalWidth, logoH, T("tooltip_logo_help"))
+        if gfx.mouse_cap & 1 == 1 and not GUI.logoWasClicked then
+            GUI.logoWasClicked = true
+        elseif gfx.mouse_cap & 1 == 0 and GUI.logoWasClicked then
+            GUI.logoWasClicked = false
+            GUI.result = "help"
+        end
+    end
+
+    if not ctx.contentTop then
+        ctx.contentTop = S(45)
+    end
+end
+
+function prepareDialogTopRightControls(ctx)
+    if not ctx then return end
+    local S = ctx.S
+    local w = ctx.w
+    local mx, my = ctx.mx, ctx.my
     local iconScale = 0.66
     local themeSize = math.max(S(12), math.floor(S(20) * iconScale + 0.5))
     local themeX = w - themeSize - S(10)
@@ -11265,116 +11938,51 @@ local function dialogLoop()
     local fxY = themeY + themeSize + S(3)
     local fxHover = mx >= fxX - S(2) and mx <= fxX + fxSize + S(2) and my >= fxY - S(2) and my <= fxY + fxSize + S(2)
 
-    local uiRightClickBlock = themeHover or langHover or fxHover
-
     local controlsLeft = langX - S(10)
     local controlsBottom = fxY + fxSize + S(6)
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
     local controlsOpacity = updateControlsOpacity(GUI, mouseInControls)
 
-    -- === MOUSE INTERACTION FOR BACKGROUND ART ===
+    ctx.ui = {
+        iconScale = iconScale,
+        themeSize = themeSize,
+        themeX = themeX,
+        themeY = themeY,
+        themeHover = themeHover,
+        langW = langW,
+        langH = langH,
+        langX = langX,
+        langY = langY,
+        langHover = langHover,
+        fxSize = fxSize,
+        fxX = fxX,
+        fxY = fxY,
+        fxHover = fxHover,
+        controlsOpacity = controlsOpacity,
+        uiRightClickBlock = themeHover or langHover or fxHover,
+    }
+end
 
-    -- Mousewheel zoom
-    if mouseWheel ~= 0 then
-        local zoomDelta = mouseWheel > 0 and 0.15 or -0.15
-        mainDialogArt.targetZoom = math.max(0.3, math.min(5.0, mainDialogArt.targetZoom + zoomDelta))
-        gfx.mouse_wheel = 0  -- Consume the wheel event
-    end
+function renderTopRightControls(ctx)
+    local ui = ctx and ctx.ui
+    if not ui then return end
 
-    -- Right-click drag for rotation
-    -- Ignore RMB rotation when hovering UI controls (language/theme/FX), so those RMB actions are reliable.
-    if rightMouseDown and not uiRightClickBlock then
-        if not mainDialogArt.wasRightMouseDown then
-            -- Start rotation
-            mainDialogArt.isRotating = true
-            mainDialogArt.rotateStartX = mx
-            mainDialogArt.rotateStartAngle = mainDialogArt.targetRotation
-        elseif mainDialogArt.isRotating then
-            -- Continue rotation
-            local deltaX = mx - mainDialogArt.rotateStartX
-            mainDialogArt.targetRotation = mainDialogArt.rotateStartAngle + deltaX * 0.01
-        end
-    else
-        mainDialogArt.isRotating = false
-    end
+    local S = ctx.S
+    local mouseDown = ctx.mouseDown
+    local rightMouseDown = ctx.rightMouseDown
+    local controlsOpacity = ui.controlsOpacity
+    local themeSize, themeX, themeY, themeHover = ui.themeSize, ui.themeX, ui.themeY, ui.themeHover
+    local langW, langH, langX, langY, langHover = ui.langW, ui.langH, ui.langX, ui.langY, ui.langHover
+    local fxSize, fxX, fxY, fxHover = ui.fxSize, ui.fxX, ui.fxY, ui.fxHover
 
-    -- Left-click: drag for panning OR click+release for next animation
-    if mouseDown then
-        if not mainDialogArt.wasMouseDown then
-            -- Mouse just pressed - record start position for drag/click detection
-            mainDialogArt.clickStartX = mx
-            mainDialogArt.clickStartY = my
-            mainDialogArt.clickStartTime = os.clock()
-            mainDialogArt.wasDrag = false
-            mainDialogArt.dragStartPanX = mainDialogArt.targetPanX
-            mainDialogArt.dragStartPanY = mainDialogArt.targetPanY
-        else
-            -- Mouse held - check if dragging
-            local dragDist = math.sqrt((mx - mainDialogArt.clickStartX)^2 + (my - mainDialogArt.clickStartY)^2)
-            if dragDist > 5 then
-                -- This is a drag, not a click
-                mainDialogArt.wasDrag = true
-                mainDialogArt.isDragging = true
-                mainDialogArt.targetPanX = mainDialogArt.dragStartPanX + (mx - mainDialogArt.clickStartX)
-                mainDialogArt.targetPanY = mainDialogArt.dragStartPanY + (my - mainDialogArt.clickStartY)
-            end
-        end
-    else
-        -- Mouse released
-        if mainDialogArt.wasMouseDown and not mainDialogArt.wasDrag then
-            -- This was a click (not a drag) - but only trigger new art if clicking on background
-            -- Check if not clicking on any UI element (we'll check this after UI is drawn)
-            local clickDuration = os.clock() - (mainDialogArt.clickStartTime or 0)
-            if clickDuration < 0.3 then
-                -- Quick click - mark for potential new art (will be processed at end of frame)
-                mainDialogArt.pendingNewArt = true
-                mainDialogArt.pendingNewArtX = mainDialogArt.clickStartX
-                mainDialogArt.pendingNewArtY = mainDialogArt.clickStartY
-            end
-        end
-        mainDialogArt.isDragging = false
-    end
-
-    -- Draw full-window background first - pure black/white
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 1)
-    else
-        gfx.set(1, 1, 1, 1)
-    end
-    gfx.rect(0, 0, w, h, 1)
-
-    -- Draw procedural art spanning entire window (no box)
-    -- Zoom/pan/rotation affect internal art rendering via modified parameters
-    local artCenterX = w / 2 + mainDialogArt.panX
-    local artCenterY = h / 2 + mainDialogArt.panY
-    local artRadius = math.max(w, h) * mainDialogArt.zoom
-
-    -- Draw art at full window, skipBackground=true (we already drew pure bg)
-    drawProceduralArt(0, 0, w, h, proceduralArt.time, mainDialogArt.rotation, true)
-
-    -- Semi-transparent overlay for UI readability - pure black/white
-    if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
-    else
-        gfx.set(1, 1, 1, 0.5)
-    end
-    gfx.rect(0, 0, w, h, 1)
-
-    -- Theme toggle button (sun/moon icon)
-    -- NOTE: themeX/themeY/themeSize/themeHover already computed early (used to block RMB art-rotation)
-
-    -- Draw theme toggle (circle with rays for sun, crescent for moon)
-    if SETTINGS.darkMode then
-        -- Moon icon (crescent)
         gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)  -- Pure black for moon overlay
+        gfx.set(0, 0, 0, 1 * controlsOpacity)
         gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
     else
-        -- Sun icon
         gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
         gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        -- Rays
         gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
         for i = 0, 7 do
             local angle = i * math.pi / 4
@@ -11386,7 +11994,6 @@ local function dialogLoop()
         end
     end
 
-    -- Handle theme toggle click and tooltip
     if themeHover and controlsOpacity > 0.3 then
         local themeTip = getThemeToggleTooltip()
         setTooltip(themeX, themeY, themeSize, themeSize, themeTip)
@@ -11396,14 +12003,10 @@ local function dialogLoop()
         if mouseDown and not GUI.wasMouseDown then
             SETTINGS.darkMode = not SETTINGS.darkMode
             updateTheme()
-            saveSettings()  -- Persist theme change
+            saveSettings()
         end
     end
 
-    -- Language toggle button (small text showing current language)
-    -- NOTE: langX/langY/langW/langH/langHover already computed early (used to block RMB art-rotation)
-
-    -- Draw language indicator
     gfx.setfont(1, "Arial", S(9), string.byte('b'))
     local langCode = string.upper(SETTINGS.language or "EN")
     local langTextW = gfx.measurestr(langCode)
@@ -11417,7 +12020,6 @@ local function dialogLoop()
     gfx.y = langY
     gfx.drawstr(langCode)
 
-    -- Handle language toggle click
     if langHover and controlsOpacity > 0.3 then
         setTooltip(langX, langY, langW, langH, T("tooltip_change_language"))
         if rightMouseDown and not mainDialogArt.wasRightMouseDown then
@@ -11425,7 +12027,6 @@ local function dialogLoop()
             saveSettings()
         end
         if mouseDown and not GUI.wasMouseDown then
-            -- Cycle through languages: en -> nl -> de -> en
             local langs = {"en", "nl", "de"}
             local currentIdx = 1
             for i, l in ipairs(langs) do
@@ -11436,9 +12037,6 @@ local function dialogLoop()
             saveSettings()
         end
     end
-
-    -- === FX TOGGLE (below theme icon) ===
-    -- NOTE: fxX/fxY/fxSize/fxHover already computed early (used to block RMB art-rotation)
 
     local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
     if SETTINGS.visualFX then
@@ -11469,71 +12067,173 @@ local function dialogLoop()
             saveSettings()
         end
     end
+end
 
-    -- === LOGO: Centered "STEMwerk" at top ===
-    local logoY = S(12)
-    local time = os.clock()
-    gfx.setfont(1, "Arial", S(24), string.byte('b'))
-    local logoStartX, _, logoTotalWidth, logoH = drawWavingStemwerkLogo({
-        w = gfx.w,
-        y = logoY,
-        fontSize = S(24),
-        time = time,
-        amp = S(2),
-        speed = 3,
-        phase = 0.5,
-        alphaStem = 1,
-        alphaRest = 0.9,
-    })
+function renderDialogBackground(ctx)
+    if not ctx then return end
+    GUI.uiClickedThisFrame = false
 
-    -- Logo click detection and tooltip
-    local mx, my = gfx.mouse_x, gfx.mouse_y
-    local logoHover = mx >= logoStartX and mx <= logoStartX + logoTotalWidth and my >= logoY and my <= logoY + logoH
-    if logoHover then
-        setTooltip(logoStartX, logoY, logoTotalWidth, logoH, T("tooltip_logo_help"))
-        -- Check for click
-        if gfx.mouse_cap & 1 == 1 and not GUI.logoWasClicked then
-            GUI.logoWasClicked = true
-        elseif gfx.mouse_cap & 1 == 0 and GUI.logoWasClicked then
-            GUI.logoWasClicked = false
-            -- Set flag to show help (handled after dialog loop exits)
-            GUI.result = "help"
-        end
+    if proceduralArt.seed == 0 then
+        generateNewArt()
+    end
+    proceduralArt.time = (proceduralArt.time or 0) + 0.016
+
+    local smoothing = 0.15
+    mainDialogArt.zoom = mainDialogArt.zoom + (mainDialogArt.targetZoom - mainDialogArt.zoom) * smoothing
+    mainDialogArt.panX = mainDialogArt.panX + (mainDialogArt.targetPanX - mainDialogArt.panX) * smoothing
+    mainDialogArt.panY = mainDialogArt.panY + (mainDialogArt.targetPanY - mainDialogArt.panY) * smoothing
+    mainDialogArt.rotation = mainDialogArt.rotation + (mainDialogArt.targetRotation - mainDialogArt.rotation) * smoothing
+
+    prepareDialogTopRightControls(ctx)
+
+    if ctx.mouseWheel ~= 0 then
+        local zoomDelta = ctx.mouseWheel > 0 and 0.15 or -0.15
+        mainDialogArt.targetZoom = math.max(0.3, math.min(5.0, mainDialogArt.targetZoom + zoomDelta))
+        gfx.mouse_wheel = 0
     end
 
-    -- Content starts below logo
-    local contentTop = S(45)
+    local uiRightClickBlock = ctx.ui and ctx.ui.uiRightClickBlock
+    if ctx.rightMouseDown and not uiRightClickBlock then
+        if not mainDialogArt.wasRightMouseDown then
+            mainDialogArt.isRotating = true
+            mainDialogArt.rotateStartX = ctx.mx
+            mainDialogArt.rotateStartAngle = mainDialogArt.targetRotation
+        elseif mainDialogArt.isRotating then
+            local deltaX = ctx.mx - mainDialogArt.rotateStartX
+            mainDialogArt.targetRotation = mainDialogArt.rotateStartAngle + deltaX * 0.01
+        end
+    else
+        mainDialogArt.isRotating = false
+    end
 
-    -- Base font for the main window (controls).
+    if ctx.mouseDown then
+        if not mainDialogArt.wasMouseDown then
+            mainDialogArt.clickStartX = ctx.mx
+            mainDialogArt.clickStartY = ctx.my
+            mainDialogArt.clickStartTime = os.clock()
+            mainDialogArt.wasDrag = false
+            mainDialogArt.dragStartPanX = mainDialogArt.targetPanX
+            mainDialogArt.dragStartPanY = mainDialogArt.targetPanY
+        else
+            local dx = ctx.mx - mainDialogArt.clickStartX
+            local dy = ctx.my - mainDialogArt.clickStartY
+            local dragDist = math.sqrt(dx * dx + dy * dy)
+            if dragDist > 5 then
+                mainDialogArt.wasDrag = true
+                mainDialogArt.isDragging = true
+                mainDialogArt.targetPanX = mainDialogArt.dragStartPanX + dx
+                mainDialogArt.targetPanY = mainDialogArt.dragStartPanY + dy
+            end
+        end
+    else
+        if mainDialogArt.wasMouseDown and not mainDialogArt.wasDrag then
+            local clickDuration = os.clock() - (mainDialogArt.clickStartTime or 0)
+            if clickDuration < 0.3 then
+                mainDialogArt.pendingNewArt = true
+                mainDialogArt.pendingNewArtX = mainDialogArt.clickStartX
+                mainDialogArt.pendingNewArtY = mainDialogArt.clickStartY
+            end
+        end
+        mainDialogArt.isDragging = false
+    end
+
+    if SETTINGS.darkMode then
+        gfx.set(0, 0, 0, 1)
+    else
+        gfx.set(1, 1, 1, 1)
+    end
+    gfx.rect(0, 0, ctx.w, ctx.h, 1)
+
+    drawProceduralArt(0, 0, ctx.w, ctx.h, proceduralArt.time, mainDialogArt.rotation, true)
+
+    if SETTINGS.darkMode then
+        gfx.set(0, 0, 0, 0.5)
+    else
+        gfx.set(1, 1, 1, 0.5)
+    end
+    gfx.rect(0, 0, ctx.w, ctx.h, 1)
+
+    renderTopRightControls(ctx)
+end
+
+function renderProcessingHeader(ctx)
+    local proc = ctx and ctx.proc
+    if not proc then return end
+
+    local S = ctx.S
+    local x, y, w = proc.x, proc.y, proc.w
+    local btnH = proc.btnH
+    local headerFont = proc.headerFont
+    local btnFont = proc.btnFont
+
+    y = y + S(8)
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    drawColumnHeader(T("processing_mode") or "Processing:", x, w, headerFont, y)
     gfx.setfont(1, "Arial", S(13))
-    local mainHeaderFont = S(10) -- uniform column headers (Presets/Stems/Model/Device/Output) - balanced size
+    y = y + S(20)
+    local modeLabel = SETTINGS.parallelProcessing and (T("parallel") or "Parallel") or (T("sequential") or "Sequential")
+    if drawRadio(x, y, true, modeLabel, nil, w, nil, nil, btnFont) then
+        SETTINGS.parallelProcessing = not SETTINGS.parallelProcessing
+        saveSettings()
+    end
+    local modeTip = SETTINGS.parallelProcessing and T("tooltip_parallel") or T("tooltip_sequential")
+    setTooltip(x, y, w, btnH, modeTip)
 
-    -- Determine 6-stem mode early (needed for stem display)
-    local is6Stem = (SETTINGS.model == "htdemucs_6s")
+    y = y + S(28)
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local tempHeaderY = y
+    drawColumnHeader(T("temp_files") or "Temp files:", x, w, headerFont, tempHeaderY)
+    gfx.setfont(1, "Arial", S(13))
 
-    -- Column positions (5 columns)
+    y = tempHeaderY + S(20)
+    local keepLabel = T("temp_files_keep") or "Keep"
+    local deleteLabel = T("temp_files_delete") or "Delete"
+    local tempLabel = SETTINGS.keepTempFiles and keepLabel or deleteLabel
+    local tempR, tempG, tempB
+    if SETTINGS.keepTempFiles then
+        tempR = THEME.accent[1] * 255
+        tempG = THEME.accent[2] * 255
+        tempB = THEME.accent[3] * 255
+    else
+        tempR, tempG, tempB = 255, 120, 120
+    end
+    if drawCheckbox(x, y, true, tempLabel, tempR, tempG, tempB, w, btnFont) then
+        SETTINGS.keepTempFiles = not SETTINGS.keepTempFiles
+    end
+    local tempTip = SETTINGS.keepTempFiles and T("tooltip_keep_temp_files") or T("tooltip_delete_temp_files")
+    setTooltip(x, y, w, btnH, tempTip)
+
+    proc.y = y
+end
+
+function renderMainColumns(ctx)
+    if not ctx then return end
+    local S = ctx.S
+    local contentTop = ctx.contentTop or S(45)
+    local is6Stem = ctx.is6Stem
+
+    gfx.setfont(1, "Arial", S(13))
+    local mainHeaderFont = S(10)
+
     local gutter = S(10)
-
     local presetsW = S(58)
     local stemsW = S(58)
     local modelColW = S(70)
     local deviceColW = S(58)
     local outputColW = S(70)
 
-    local col1X = S(10)  -- Presets
-    local col2X = col1X + presetsW + gutter  -- Stems
-    local col3X = col2X + stemsW + gutter  -- Model
-    local col4X = col3X + modelColW + gutter  -- Device
-    local col5X = col4X + deviceColW + gutter  -- Output
+    local col1X = S(10)
+    local col2X = col1X + presetsW + gutter
+    local col3X = col2X + stemsW + gutter
+    local col4X = col3X + modelColW + gutter
+    local col5X = col4X + deviceColW + gutter
 
     local colW = presetsW
     local btnH = S(20)
 
-    -- === COLUMN 1: Presets ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("presets"), col1X, presetsW, mainHeaderFont, contentTop)
 
-    -- Uniform per column: preset button labels share a stable font size (and always fit).
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll = (T("all_stems") or "All") .. " (A)"
     local presetLabelVocals = (T("vocals") or "Vocals") .. " (V)"
@@ -11548,24 +12248,19 @@ local function dialogLoop()
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
     local presetsColFontSize = getUniformFontSizeCached("main_presets_col", presetLabels, colW)
-    -- Use one consistent button label font size across ALL columns (matches Presets).
-    -- Other columns can still shrink per-button via fitTextToBox when needed.
     local commonBtnFontSize = presetsColFontSize
 
     local presetY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
 
-    -- Combo presets first (most common use cases)
     if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, {80, 80, 90}, commonBtnFontSize) then applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
     if drawButton(col1X, presetY, colW, btnH, presetLabelAll, false, {80, 80, 90}, commonBtnFontSize) then applyPresetAll() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
 
-    -- Separator
     presetY = presetY + S(28)
 
-    -- Stem presets (colored by stem)
     if drawButton(col1X, presetY, colW, btnH, presetLabelVocals, false, {255, 100, 100}, commonBtnFontSize) then applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
@@ -11579,7 +12274,6 @@ local function dialogLoop()
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
-    -- Piano and Guitar only show for 6-stem model
     if is6Stem then
         if drawButton(col1X, presetY, colW, btnH, presetLabelPiano, false, {255, 120, 200}, commonBtnFontSize) then applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
@@ -11589,13 +12283,11 @@ local function dialogLoop()
         presetY = presetY + S(22)
     end
 
-    -- === COLUMN 2: Stems ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(is6Stem and T("stems_6") or T("stems"), col2X, stemsW, mainHeaderFont, contentTop)
 
     local stemY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
-    -- Map stem names to translation keys
     local stemTooltipKeys = {
         Vocals = "tooltip_stem_vocals",
         Drums = "tooltip_stem_drums",
@@ -11604,7 +12296,6 @@ local function dialogLoop()
         Guitar = "tooltip_stem_guitar",
         Piano = "tooltip_stem_piano"
     }
-    -- Uniform per column: stem labels share a stable font size and always fit the button.
     local stemLabels = {}
     for _, st in ipairs(STEMS) do
         if not st.sixStemOnly or is6Stem then
@@ -11613,7 +12304,7 @@ local function dialogLoop()
             stemLabels[#stemLabels + 1] = tostring(dn) .. " (" .. st.key .. ")"
         end
     end
-    local stemsColFontSize = getUniformFontSizeCached("main_stems_col", stemLabels, colW)
+    getUniformFontSizeCached("main_stems_col", stemLabels, colW)
 
     for i, stem in ipairs(STEMS) do
         if not stem.sixStemOnly or is6Stem then
@@ -11629,25 +12320,20 @@ local function dialogLoop()
         end
     end
 
-    -- === COLUMN 3: Model ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("model"), col3X, modelColW, mainHeaderFont, contentTop)
     gfx.setfont(1, "Arial", S(13))
 
-    -- Fixed width for all Model column boxes
     local modelBoxW = modelColW
-
-    -- Keep box label sizes consistent within the Model column (all languages).
     local modelLabels = {}
     for i = 1, #MODELS do
         modelLabels[#modelLabels + 1] = MODELS[i].name
     end
     modelLabels[#modelLabels + 1] = T("parallel")
     modelLabels[#modelLabels + 1] = T("sequential")
-    local modelColFontSize = getUniformFontSizeCached("main_model_col", modelLabels, modelBoxW)
+    getUniformFontSizeCached("main_model_col", modelLabels, modelBoxW)
 
     local modelY = contentTop + S(20)
-    -- Map model id to translation key
     local modelDescKeys = {
         htdemucs = "model_fast_desc",
         htdemucs_ft = "model_quality_desc",
@@ -11659,12 +12345,10 @@ local function dialogLoop()
             SETTINGS.model = model.id
             if prevModel ~= SETTINGS.model then
                 if tostring(SETTINGS.model or "") == "htdemucs_6s" then
-                    -- Switching to 6-stem: select all six stems by default.
                     for _, st in ipairs(STEMS) do
                         st.selected = true
                     end
                 else
-                    -- Switching away from 6-stem: clear 6-stem-only selections (Guitar/Piano).
                     for _, st in ipairs(STEMS) do
                         if st.sixStemOnly then st.selected = false end
                     end
@@ -11677,58 +12361,25 @@ local function dialogLoop()
         modelY = modelY + S(22)
     end
 
-    -- Processing mode (single toggle button: Parallel ↔ Sequential)
-    modelY = modelY + S(8)
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    drawColumnHeader(T("processing_mode") or "Processing:", col3X, modelBoxW, mainHeaderFont, modelY)
-    gfx.setfont(1, "Arial", S(13))
-    modelY = modelY + S(20)
-    local modeLabel = SETTINGS.parallelProcessing and (T("parallel") or "Parallel") or (T("sequential") or "Sequential")
-    -- Use theme accent (same blue as Device Auto selection).
-    if drawRadio(col3X, modelY, true, modeLabel, nil, modelBoxW, nil, nil, commonBtnFontSize) then
-        SETTINGS.parallelProcessing = not SETTINGS.parallelProcessing
-        saveSettings()
-    end
-    local modeTip = SETTINGS.parallelProcessing and T("tooltip_parallel") or T("tooltip_sequential")
-    setTooltip(col3X, modelY, modelBoxW, btnH, modeTip)
+    ctx.proc = {
+        x = col3X,
+        y = modelY,
+        w = modelBoxW,
+        btnH = btnH,
+        headerFont = mainHeaderFont,
+        btnFont = commonBtnFontSize,
+    }
+    renderProcessingHeader(ctx)
+    ctx.proc = nil
 
-    -- Temp files settings (under Model column)
-    modelY = modelY + S(28)
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    local tempHeaderY = modelY
-    drawColumnHeader(T("temp_files") or "Temp files:", col3X, modelBoxW, mainHeaderFont, tempHeaderY)
-    gfx.setfont(1, "Arial", S(13))
-
-    modelY = tempHeaderY + S(20)
-    local keepLabel = T("temp_files_keep") or "Keep"
-    local deleteLabel = T("temp_files_delete") or "Delete"
-    local tempLabel = SETTINGS.keepTempFiles and keepLabel or deleteLabel
-    local tempR, tempG, tempB
-    if SETTINGS.keepTempFiles then
-        tempR = THEME.accent[1] * 255
-        tempG = THEME.accent[2] * 255
-        tempB = THEME.accent[3] * 255
-    else
-        tempR, tempG, tempB = 255, 120, 120
-    end
-    if drawCheckbox(col3X, modelY, true, tempLabel, tempR, tempG, tempB, modelBoxW, commonBtnFontSize) then
-        SETTINGS.keepTempFiles = not SETTINGS.keepTempFiles
-    end
-    local tempTip = SETTINGS.keepTempFiles and T("tooltip_keep_temp_files") or T("tooltip_delete_temp_files")
-    setTooltip(col3X, modelY, modelBoxW, btnH, tempTip)
-
-    -- === COLUMN 4: Device ===
     drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFontSize, mainHeaderFont)
 
-    -- === COLUMN 5: Output ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("output"), col5X, outputColW, mainHeaderFont, contentTop)
     gfx.setfont(1, "Arial", S(13))
 
-    -- Fixed width for all Output column boxes
     local outBoxW = outputColW
 
-    -- Count selected stems for plural labels
     local stemCount = 0
     for _, stem in ipairs(STEMS) do
         if stem.selected and (not stem.sixStemOnly or is6Stem) then
@@ -11739,12 +12390,10 @@ local function dialogLoop()
     local newTracksLabel = stemPlural and T("new_tracks") or T("new_track")
     local inPlaceLabel = T("in_place")
 
-    -- Use a single uniform font size across all Output radios.
     local outBoxH = S(20)
     local iconSize = math.max(6, outBoxH * 0.52)
     local reservedLeftForIcon = S(5) + iconSize + S(8)
-    local outputBoxFontSize = getUniformFontSizeCached("main_output_col", {
-        -- Include BOTH forms so font size doesn't change when stem count flips singular/plural.
+    getUniformFontSizeCached("main_output_col", {
         T("new_track"),
         T("new_tracks"),
         inPlaceLabel,
@@ -11772,7 +12421,6 @@ local function dialogLoop()
     end
     setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
 
-    -- Options
     if SETTINGS.createNewTracks then
         local posR = THEME.accent[1] * 255
         local posG = THEME.accent[2] * 255
@@ -11821,7 +12469,6 @@ local function dialogLoop()
         end
         setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_track"))
 
-        -- Selection-level options (only if time selection exists)
         local hasTimeSel = hasTimeSelection()
         if hasTimeSel then
             outY = outY + S(22)
@@ -11846,7 +12493,6 @@ local function dialogLoop()
             setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_selection"))
         end
 
-        -- Direct tool: if selected multi-take items exist, allow Explode now (without running STEMwerk)
         local selectedMultiTakeCount = getSelectedMultiTakeCountRespectingTimeSelection()
         if (selectedMultiTakeCount or 0) > 0 then
             local t = os.clock() or 0
@@ -11883,14 +12529,11 @@ local function dialogLoop()
             setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_direct_explode_in_order"))
         end
     else
-        -- In-place post-processing options
         outY = outY + S(28)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         drawColumnHeader(T("after"), col5X, outBoxW, mainHeaderFont, outY)
         gfx.setfont(1, "Arial", S(13))
 
-        -- Direct-tool detection: if selected multi-take items exist (and overlap time selection if present),
-        -- pulse-highlight Explode options.
         local selectedMultiTakeCount = getSelectedMultiTakeCountRespectingTimeSelection()
         local pulseMult = 0
         if selectedMultiTakeCount > 0 then
@@ -11931,13 +12574,15 @@ local function dialogLoop()
         end
         setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_explode_in_order"))
     end
+end
 
-    -- Footer buttons + status bar
-    local btnW = S(80)
+function renderFooter(ctx)
+    if not ctx then return end
+    local S = ctx.S
+    local w, h = ctx.w, ctx.h
     local btnH = S(20)
-    local stemBtnW = S(70)  -- Same width as Cancel button
+    local stemBtnW = S(70)
 
-    -- Status bar (3 lines): each line in its own translucent block, pinned to bottom
     local statusFontSize = S(9)
     local statusPadX = S(10)
     local statusBlockPadY = S(1)
@@ -11949,94 +12594,19 @@ local function dialogLoop()
     local statusLineH = gfx.texth
     local statusBlockH = statusLineH + statusBlockPadY * 2
     local statusBarH = statusBlockH * 3 + statusBlockGap * 2
-    local statusBarY = gfx.h - statusBarH
+    local statusBarY = h - statusBarH
 
-    -- Buttons sit above the status bar
-    local buttonsGapToStatus = S(10)
-    local footerRow4Y = statusBarY - buttonsGapToStatus - btnH
-
-    local selTrackCount = reaper.CountSelectedTracks(0)
-    local selItemCount = reaper.CountSelectedMediaItems(0)
-
-    -- For time selection mode: count items that overlap with time selection
-    -- This gives a better estimate of output when items aren't explicitly selected
-    local currentTimeStart, currentTimeEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
-    local hasTimeSel = currentTimeEnd > currentTimeStart
-
-    -- Count items overlapping time selection on selected tracks
-    -- This works even when items aren't explicitly selected
-    local timeSelItemCount = 0
-    if hasTimeSel and selTrackCount > 0 then
-        for t = 0, selTrackCount - 1 do
-            local track = reaper.GetSelectedTrack(0, t)
-            if track then
-                local numItems = reaper.CountTrackMediaItems(track)
-                for i = 0, numItems - 1 do
-                    local item = reaper.GetTrackMediaItem(track, i)
-                    local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                    local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                    local iEnd = iPos + iLen
-                    if iPos < currentTimeEnd and iEnd > currentTimeStart then
-                        timeSelItemCount = timeSelItemCount + 1
-                    end
-                end
-            end
-        end
-    end
-
-    -- Use the larger of explicit selection or time selection overlap count
-    if hasTimeSel and timeSelItemCount > selItemCount then
-        selItemCount = timeSelItemCount
-    end
-
-    local trackLabel = selTrackCount == 1 and "track" or "tracks"
-    local itemLabel = selItemCount == 1 and "item" or "items"
-
-    -- Format time selection duration
-    local timeSelText = nil
-    if hasTimeSel then
-        -- Update stored values for processing
-        timeSelectionStart = currentTimeStart
-        timeSelectionEnd = currentTimeEnd
-        timeSelectionMode = true
-        local duration = currentTimeEnd - currentTimeStart
-        local mins = math.floor(duration / 60)
-        local secs = duration - (mins * 60)
-        if mins > 0 then
-            timeSelText = string.format("%d:%04.1f", mins, secs)
-        else
-            timeSelText = string.format("%.1fs", secs)
-        end
-    else
-        -- No time selection currently
-        timeSelectionMode = false
-    end
-
-    -- Count selected stems for output calculation
-    local selectedStemCount = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then
-            selectedStemCount = selectedStemCount + 1
-        end
-    end
-
-    -- Calculate expected output (be smart about time selection if items=0)
-    local effectiveSrcTracks = selTrackCount > 0 and selTrackCount or (timeSelText and 1 or 0)
-    local effectiveSrcItems = selItemCount > 0 and selItemCount or (timeSelText and 1 or 0)
-    
-    local outTrackCount = SETTINGS.createNewTracks and (effectiveSrcTracks * selectedStemCount) or 0
-    local outItemCount = effectiveSrcItems * selectedStemCount
-
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-
-    local function trSingularPlural(n, keySingular, keyPlural)
-        if (n or 0) == 1 then return T(keySingular) else return T(keyPlural) end
-    end
+    local footerRow4Y = statusBarY - S(10) - btnH
+    local footerLines = buildFooterLines()
+    local selLine = footerLines.selLine or ""
+    local outLine = footerLines.outLine or ""
+    local locLine = footerLines.locLine or ""
+    local isWarning = footerLines.isWarning
 
     local function drawCenteredStatusLine(y, text)
-        local availableW = gfx.w - statusPadX * 2
+        local availableW = w - statusPadX * 2
         local baseFontSize = statusFontSize
-        local minFontSize = baseFontSize -- stable: only truncate, do not scale
+        local minFontSize = baseFontSize
 
         gfx.setfont(1, "Arial", baseFontSize)
         local labelText, tw, _ = fitTextToBox(text, availableW, baseFontSize, minFontSize)
@@ -12045,103 +12615,14 @@ local function dialogLoop()
         gfx.drawstr(labelText)
     end
 
-    -- Compose status lines (translated)
-    -- 1. Selection line (Targeting)
-    local effectiveTargets = 0
-    local viaTimeSelection = false
-    local start_time, end_time = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
-    
-    if start_time ~= end_time and (selTrackCount == 0 and selItemCount == 0) then
-        viaTimeSelection = true
-        for i = 0, reaper.CountTracks(0) - 1 do
-            local track = reaper.GetTrack(0, i)
-            local itemCount = reaper.CountTrackMediaItems(track)
-            local hasItemInSelection = false
-            for j = 0, itemCount - 1 do
-                local item = reaper.GetTrackMediaItem(track, j)
-                local pos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                local length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                if pos < end_time and pos + length > start_time then
-                    hasItemInSelection = true
-                    break
-                end
-            end
-            if hasItemInSelection then effectiveTargets = effectiveTargets + 1 end
-        end
-    else
-        effectiveTargets = selTrackCount > 0 and selTrackCount or (selItemCount > 0 and 1 or 0)
-    end
-
-    local trackUnit = trSingularPlural(effectiveTargets, "footer_track", "footer_tracks")
-    local itemUnit = trSingularPlural(selItemCount, "footer_item", "footer_items")
-    local selLine
-    local targetPrefix = T("footer_target_prefix") or "Target:"
-    
-    if viaTimeSelection then
-        selLine = string.format("%s %d %s %s, %s %s", targetPrefix, effectiveTargets, trackUnit, T("footer_via_time_selection") or "(via time selection)", timeSelText, T("footer_time_selection"))
-    else
-        selLine = string.format("%s %d %s, %d %s", T("selected"), selTrackCount, trackUnit, selItemCount, itemUnit)
-        if timeSelText then
-            selLine = selLine .. string.format(", %s %s", timeSelText, T("footer_time_selection"))
-        end
-    end
-
-    -- 2. Output line
-    local stemsPerTrack = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then stemsPerTrack = stemsPerTrack + 1 end
-    end
-    
-    local totalOutputStems = effectiveTargets * stemsPerTrack
-    local outLine
-    local locLine
-    local locationPrefix = T("target") or "Location:"
-
-    if stemsPerTrack == 0 then
-        -- Pro-active warning in footer
-        outLine = "[!] " .. (T("no_stems_selected") or "No Stems Selected")
-        locLine = T("please_select_stem") or "Please select stems in the center column."
-    else
-        -- Normal output calculation
-        if SETTINGS.createNewTracks then
-            outLine = string.format("%s %s", T("output"), 
-                string.format(T("footer_output_calc") or "%d stems (%d x %d tracks)", totalOutputStems, stemsPerTrack, effectiveTargets))
-        else
-            -- In-place / Takes mode
-            local takeUnit = trPlural(stemsPerTrack, "footer_take", "footer_takes")
-            outLine = string.format("%s %d %s per track (%d total)", 
-                T("output"), stemsPerTrack, takeUnit, totalOutputStems)
-        end
-
-        -- 3. Location line
-        local selectedNames = {}
-        for _, stem in ipairs(STEMS) do
-            if stem.selected and (not stem.sixStemOnly or is6Stem) then
-                table.insert(selectedNames, T(stem.name:lower()))
-            end
-        end
-        local namesStr = table.concat(selectedNames, ", ")
-
-        if SETTINGS.createNewTracks then
-            local baseLoc = effectiveTargets > 1 and (T("footer_per_track_folders") or "Per-track stem folders") or T("footer_location_new_folder")
-            locLine = string.format("%s %s (%d: %s)", locationPrefix, baseLoc, stemsPerTrack, namesStr)
-        elseif SETTINGS.outputMode == "in-place" or not SETTINGS.createNewTracks then
-            locLine = string.format("%s %s (%d: %s)", locationPrefix, T("in_place") or "In-place", stemsPerTrack, namesStr)
-        else
-            locLine = string.format("%s %s", locationPrefix, T("footer_location_new_tracks"))
-        end
-    end
-
-
-    -- Draw 3 separate translucent blocks (theme-aware)
-    local function drawStatusBlock(blockY, text, isWarning)
+    local function drawStatusBlock(blockY, text, warn)
         gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], statusBlockAlpha)
-        gfx.rect(0, blockY, gfx.w, statusBlockH, 1)
+        gfx.rect(0, blockY, w, statusBlockH, 1)
         gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
-        gfx.rect(0, blockY, gfx.w, statusBlockH, 0)
-        
-        if isWarning then
-            gfx.set(1, 0.3, 0.3, 1) -- Red for warning
+        gfx.rect(0, blockY, w, statusBlockH, 0)
+
+        if warn then
+            gfx.set(1, 0.3, 0.3, 1)
         else
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         end
@@ -12151,46 +12632,39 @@ local function dialogLoop()
     local block1Y = statusBarY
     local block2Y = block1Y + statusBlockH + statusBlockGap
     local block3Y = block2Y + statusBlockH + statusBlockGap
-    
-    local isWarning = (stemsPerTrack == 0)
+
     drawStatusBlock(block1Y, selLine, false)
     drawStatusBlock(block2Y, outLine, isWarning)
     drawStatusBlock(block3Y, locLine, isWarning)
 
-    -- Row 4: Buttons layout (Close left, STEMwerk right)
     local footerMarginX = S(10)
-    local stemBtnX = gfx.w - footerMarginX - stemBtnW
-    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local stemBtnX = w - footerMarginX - stemBtnW
+    local mx, my = ctx.mx, ctx.my
     local stemBtnHover = mx >= stemBtnX and mx <= stemBtnX + stemBtnW and my >= footerRow4Y and my <= footerRow4Y + btnH
     local stemBtnColor = stemBtnHover and THEME.buttonPrimaryHover or THEME.buttonPrimary
 
-    -- Draw button background
     drawGlossyPill(stemBtnX, footerRow4Y, stemBtnW, btnH, stemBtnColor[1], stemBtnColor[2], stemBtnColor[3])
 
-    -- Draw "STEMwerk" with colored STEM letters
     gfx.setfont(1, "Arial", S(13), string.byte('b'))
     local textY = footerRow4Y + (btnH - gfx.texth) / 2
 
-    -- Calculate total width to center
     local letters = {"S", "T", "E", "M", "w", "e", "r", "k"}
     local letterWidths = {}
     local totalWidth = 0
     for i, letter in ipairs(letters) do
-        local w, _ = gfx.measurestr(letter)
-        letterWidths[i] = w
-        totalWidth = totalWidth + w
+        local lw = gfx.measurestr(letter)
+        letterWidths[i] = lw
+        totalWidth = totalWidth + lw
     end
     local textX = stemBtnX + (stemBtnW - totalWidth) / 2
 
-    -- STEM colors (Vocals, Drums, Bass, Other)
     local stemColors = {
-        {255/255, 100/255, 100/255},  -- S = Vocals (red)
-        {100/255, 200/255, 255/255},  -- T = Drums (blue)
-        {150/255, 100/255, 255/255},  -- E = Bass (purple)
-        {100/255, 255/255, 150/255},  -- M = Other (green)
+        {255/255, 100/255, 100/255},
+        {100/255, 200/255, 255/255},
+        {150/255, 100/255, 255/255},
+        {100/255, 255/255, 150/255},
     }
 
-    -- Thin outline for readability (like Close button)
     local offsets = {
         {1, 1}, {-1, 1}, {1, -1}, {-1, -1},
     }
@@ -12208,10 +12682,8 @@ local function dialogLoop()
 
     for i, letter in ipairs(letters) do
         if i <= 4 then
-            -- Colored STEM letters
             gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
         else
-            -- White "werk"
             gfx.set(1, 1, 1, 1)
         end
         gfx.x = textX
@@ -12220,11 +12692,9 @@ local function dialogLoop()
         textX = textX + letterWidths[i]
     end
 
-    -- Rich tooltip for STEMwerk button (shows output stems + target with colors)
     setRichTooltip(stemBtnX, footerRow4Y, stemBtnW, btnH)
 
-    -- Handle STEMwerk click
-    if stemBtnHover and GUI.wasMouseDown and (gfx.mouse_cap & 1 == 0) then
+    if stemBtnHover and GUI.wasMouseDown and not ctx.mouseDown then
         local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
         local validSelected = false
         for _, stem in ipairs(STEMS) do
@@ -12246,17 +12716,14 @@ local function dialogLoop()
         end
     end
 
-    -- Close button (red, like Start window)
     local closeBtnX = footerMarginX
-    local closeBtnW = outBoxW
+    local closeBtnW = stemBtnW
     local closeBtnHover = mx >= closeBtnX and mx <= closeBtnX + closeBtnW and my >= footerRow4Y and my <= footerRow4Y + btnH
 
-    -- Red button color
     local closeR, closeG, closeB = 0.7, 0.2, 0.2
     if closeBtnHover then
         closeR, closeG, closeB = 0.9, 0.3, 0.3
     end
-    -- Draw rounded (pill-shaped) button
     drawGlossyPill(closeBtnX, footerRow4Y, closeBtnW, btnH, closeR, closeG, closeB)
 
     gfx.setfont(1, "Arial", S(13), string.byte('b'))
@@ -12275,21 +12742,23 @@ local function dialogLoop()
     gfx.x, gfx.y = closeTextX, closeTextY
     gfx.drawstr(closeText)
 
-    -- Handle Close button click
-    if closeBtnHover and GUI.wasMouseDown and (gfx.mouse_cap & 1 == 0) then
+    if closeBtnHover and GUI.wasMouseDown and not ctx.mouseDown then
         GUI.result = false
     end
     setTooltip(closeBtnX, footerRow4Y, closeBtnW, btnH, T("tooltip_close"))
 
-    GUI.wasMouseDown = (gfx.mouse_cap & 1 == 1)
+    GUI.wasMouseDown = ctx.mouseDown
+end
 
-    -- Handle keyboard
+function handleDialogKeyboard(ctx)
     local char = gfx.getchar()
-    if char == 27 then  -- ESC
+    ctx.char = char
+
+    if char == 27 then
         GUI.result = false
-    elseif char == 26161 then  -- F1 key - open help
+    elseif char == 26161 then
         GUI.result = "help"
-    elseif char == 13 or char == 32 then  -- Enter or Space
+    elseif char == 13 or char == 32 then
         local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
         local validSelected = false
         for _, stem in ipairs(STEMS) do
@@ -12308,45 +12777,47 @@ local function dialogLoop()
             }
             GUI.modalWasMouseDown = false
         end
-    elseif char == 49 then STEMS[1].selected = not STEMS[1].selected  -- 1: Vocals
-    elseif char == 50 then STEMS[2].selected = not STEMS[2].selected  -- 2: Drums
-    elseif char == 51 then STEMS[3].selected = not STEMS[3].selected  -- 3: Bass
-    elseif char == 52 then STEMS[4].selected = not STEMS[4].selected  -- 4: Other
-    elseif char == 53 and SETTINGS.model == "htdemucs_6s" then STEMS[5].selected = not STEMS[5].selected  -- 5: Guitar (6-stem only)
-    elseif char == 54 and SETTINGS.model == "htdemucs_6s" then STEMS[6].selected = not STEMS[6].selected  -- 6: Piano (6-stem only)
-    -- Preset shortcuts: first letter of preset name
-    elseif char == 118 or char == 86 then applyPresetVocalsOnly()  -- V: Vocals
-    elseif char == 100 or char == 68 then applyPresetDrumsOnly()  -- D: Drums
-    elseif char == 98 or char == 66 then applyPresetBassOnly()  -- B: Bass
-    elseif char == 111 or char == 79 then applyPresetOtherOnly()  -- O: Other
-    elseif char == 112 or char == 80 then applyPresetPianoOnly()  -- P: Piano (6-stem only)
-    elseif char == 103 or char == 71 then applyPresetGuitarOnly()  -- G: Guitar (6-stem only)
-    elseif char == 107 or char == 75 then applyPresetKaraoke()  -- K: Karaoke
-    elseif char == 105 or char == 73 then applyPresetKaraoke()  -- I: Instrumental (alias for Karaoke)
-    elseif char == 97 or char == 65 then applyPresetAll()  -- A: All
-    -- Model shortcuts: F=Fast, Q=Quality, S=6-stem
+    elseif char == 49 then STEMS[1].selected = not STEMS[1].selected
+    elseif char == 50 then STEMS[2].selected = not STEMS[2].selected
+    elseif char == 51 then STEMS[3].selected = not STEMS[3].selected
+    elseif char == 52 then STEMS[4].selected = not STEMS[4].selected
+    elseif char == 53 and SETTINGS.model == "htdemucs_6s" then STEMS[5].selected = not STEMS[5].selected
+    elseif char == 54 and SETTINGS.model == "htdemucs_6s" then STEMS[6].selected = not STEMS[6].selected
+    elseif char == 118 or char == 86 then applyPresetVocalsOnly()
+    elseif char == 100 or char == 68 then applyPresetDrumsOnly()
+    elseif char == 98 or char == 66 then applyPresetBassOnly()
+    elseif char == 111 or char == 79 then applyPresetOtherOnly()
+    elseif char == 112 or char == 80 then applyPresetPianoOnly()
+    elseif char == 103 or char == 71 then applyPresetGuitarOnly()
+    elseif char == 107 or char == 75 then applyPresetKaraoke()
+    elseif char == 105 or char == 73 then applyPresetKaraoke()
+    elseif char == 97 or char == 65 then applyPresetAll()
     elseif char == 102 or char == 70 then
-        SETTINGS.model = "htdemucs"  -- F: Fast
+        SETTINGS.model = "htdemucs"
         for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
         saveSettings()
     elseif char == 113 or char == 81 then
-        SETTINGS.model = "htdemucs_ft"  -- Q: Quality
+        SETTINGS.model = "htdemucs_ft"
         for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
         saveSettings()
     elseif char == 115 or char == 83 then
-        SETTINGS.model = "htdemucs_6s"  -- S: 6-stem
+        SETTINGS.model = "htdemucs_6s"
         saveSettings()
-    elseif char == 43 or char == 61 then  -- + or = to grow window
+    elseif char == 43 or char == 61 then
         local newW = math.min(GUI.maxW, gfx.w + 76)
         local newH = math.min(GUI.maxH, gfx.h + 68)
         gfx.init(SCRIPT_NAME, newW, newH)
-    elseif char == 45 then  -- - to shrink window
+    elseif char == 45 then
         local newW = math.max(GUI.minW, gfx.w - 76)
         local newH = math.max(GUI.minH, gfx.h - 68)
         gfx.init(SCRIPT_NAME, newW, newH)
     end
+end
 
-    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
+function renderFlarkLogo(ctx)
+    local S = ctx.S
+    local w = ctx.w
+
     gfx.setfont(1, "Arial", S(10))
     local flarkPart = "flark"
     local flarkPartW = gfx.measurestr(flarkPart)
@@ -12354,8 +12825,8 @@ local function dialogLoop()
     local audioPart = "AUDIO"
     local audioPartW = gfx.measurestr(audioPart)
     local totalLogoW = flarkPartW + audioPartW
-    local logoStartX = (gfx.w - totalLogoW) / 2
-    -- Orange text, 50% translucent
+    local logoStartX = (w - totalLogoW) / 2
+
     gfx.set(1.0, 0.5, 0.1, 0.5)
     gfx.setfont(1, "Arial", S(10))
     gfx.x = logoStartX
@@ -12365,105 +12836,139 @@ local function dialogLoop()
     gfx.x = logoStartX + flarkPartW
     gfx.y = S(3)
     gfx.drawstr(audioPart)
+end
 
-    -- === PROCESS PENDING NEW ART CLICK ===
-    -- Only trigger new art if click was on background (not on any UI element)
-    if mainDialogArt.pendingNewArt then
-        mainDialogArt.pendingNewArt = false
-        -- Only generate new art if mouse was NOT over any UI element
-        if not GUI.uiClickedThisFrame then
-            generateNewArt()
-            -- Note: Pan and zoom are preserved when switching art
-        end
-    end
-
-    -- Track mouse state for next frame (must be at END so edge-detection for UI RMB works).
-    mainDialogArt.wasMouseDown = mouseDown
-    mainDialogArt.wasRightMouseDown = rightMouseDown
-
-    -- Draw tooltip on top of everything
-    drawTooltip()
-
-    gfx.update()
-
+function finalizeDialogLoop(ctx)
+    local char = (ctx and ctx.char) or -1
     if GUI.result == nil and char ~= -1 then
         reaper.defer(dialogLoop)
-    else
-        -- Save dialog position before closing for progress window positioning
-        captureWindowGeometry(SCRIPT_NAME)
-        -- Always save settings (including position) when dialog closes
-        -- Snapshot current REAPER selection BEFORE starting processing.
-        -- Rationale: clicking a gfx window can sometimes cause REAPER to temporarily report
-        -- no selected items/tracks (or users can change selection between frames). If we
-        -- then re-fetch selection inside the deferred workflow we can end up bouncing back
-        -- to the Start screen ("Please select...") right after pressing Process.
-        if GUI.result and GUI.result ~= "help" then
-            local ts0, ts1 = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
-            local snap = {
-                timeStart = ts0,
-                timeEnd = ts1,
-                items = {},
-                tracks = {},
-            }
-            local nItems = reaper.CountSelectedMediaItems(0) or 0
-            for i = 0, nItems - 1 do
-                local it = reaper.GetSelectedMediaItem(0, i)
-                if it and reaper.ValidatePtr(it, "MediaItem*") then
-                    snap.items[#snap.items + 1] = it
-                end
+        return
+    end
+
+    captureWindowGeometry(SCRIPT_NAME)
+    if GUI.result and GUI.result ~= "help" then
+        local ts0, ts1 = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+        local snap = {
+            timeStart = ts0,
+            timeEnd = ts1,
+            items = {},
+            tracks = {},
+        }
+        local nItems = reaper.CountSelectedMediaItems(0) or 0
+        for i = 0, nItems - 1 do
+            local it = reaper.GetSelectedMediaItem(0, i)
+            if it and reaper.ValidatePtr(it, "MediaItem*") then
+                snap.items[#snap.items + 1] = it
             end
-            local nTracks = reaper.CountSelectedTracks(0) or 0
-            for i = 0, nTracks - 1 do
-                local tr = reaper.GetSelectedTrack(0, i)
-                if tr and reaper.ValidatePtr(tr, "MediaTrack*") then
-                    snap.tracks[#snap.tracks + 1] = tr
-                end
-            end
-            PROCESS_SELECTION_SNAPSHOT = snap
-            debugLog(string.format(
-                "Process click: snap selection time=(%.6f..%.6f) items=%d tracks=%d",
-                tonumber(ts0) or -1, tonumber(ts1) or -1, #snap.items, #snap.tracks
-            ))
         end
-        saveSettings()
-        gfx.quit()
-        if GUI.result == "help" then
-            -- Show art gallery (help window) - track that it came from dialog
-            helpState.openedFrom = "dialog"
-            reaper.defer(function() showArtGallery() end)
-        elseif GUI.result then
-            reaper.defer(function()
-                local ok, err = xpcall(runSeparationWorkflow, function(e)
-                    return tostring(e) .. "\n" .. debug.traceback("", 2)
-                end)
-                if not ok then
-                    debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
-                    isProcessingActive = false
-                    showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG_LOG_PATH), "error")
-                end
+        local nTracks = reaper.CountSelectedTracks(0) or 0
+        for i = 0, nTracks - 1 do
+            local tr = reaper.GetSelectedTrack(0, i)
+            if tr and reaper.ValidatePtr(tr, "MediaTrack*") then
+                snap.tracks[#snap.tracks + 1] = tr
+            end
+        end
+        PROCESS_SELECTION_SNAPSHOT = snap
+        debugLog(string.format(
+            "Process click: snap selection time=(%.6f..%.6f) items=%d tracks=%d",
+            tonumber(ts0) or -1, tonumber(ts1) or -1, #snap.items, #snap.tracks
+        ))
+    end
+    saveSettings()
+    gfx.quit()
+    if GUI.result == "help" then
+        helpState.openedFrom = "dialog"
+        reaper.defer(function() showArtGallery() end)
+    elseif GUI.result then
+        reaper.defer(function()
+            local ok, err = xpcall(runSeparationWorkflow, function(e)
+                return tostring(e) .. "\n" .. debug.traceback("", 2)
             end)
-        else
-            -- User cancelled: restore original selection state if items were auto-selected
-            if #autoSelectedItems > 0 then
-                for _, item in ipairs(autoSelectedItems) do
-                    if reaper.ValidatePtr(item, "MediaItem*") then
-                        reaper.SetMediaItemSelected(item, false)
-                    end
-                end
-                autoSelectedItems = {}
+            if not ok then
+                debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
+                isProcessingActive = false
+                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG_LOG_PATH), "error")
             end
-            -- Also deselect the tracks that triggered auto-selection
-            if #autoSelectionTracks > 0 then
-                for _, track in ipairs(autoSelectionTracks) do
-                    if reaper.ValidatePtr(track, "MediaTrack*") then
-                        reaper.SetTrackSelected(track, false)
-                    end
+        end)
+    else
+        if #autoSelectedItems > 0 then
+            for _, item in ipairs(autoSelectedItems) do
+                if reaper.ValidatePtr(item, "MediaItem*") then
+                    reaper.SetMediaItemSelected(item, false)
                 end
-                autoSelectionTracks = {}
             end
-            reaper.UpdateArrange()
+            autoSelectedItems = {}
+        end
+        if #autoSelectionTracks > 0 then
+            for _, track in ipairs(autoSelectionTracks) do
+                if reaper.ValidatePtr(track, "MediaTrack*") then
+                    reaper.SetTrackSelected(track, false)
+                end
+            end
+            autoSelectionTracks = {}
+        end
+        reaper.UpdateArrange()
+    end
+end
+
+function dialogLoop()
+    makeWindowResizable()
+    pollRuntimeDeviceProbe()
+    if DEBUG_MODE and RUNTIME_DEVICE_PROBE_DEBUG == "async_running" and not GUI._probeLoggedOnce then
+        GUI._probeLoggedOnce = true
+        perfMark("dialogLoop(): running while device probe async (UI should remain responsive)")
+    end
+
+    if GUI._updateFocusHandoff then GUI._updateFocusHandoff() end
+    if GUI._updateDialogPosition then GUI._updateDialogPosition() end
+    if GUI._throttleSaveSettings then GUI._throttleSaveSettings() end
+
+    updateScale()
+
+    if GUI.modal then
+        drawMainDialogModalOverlay()
+        reaper.defer(dialogLoop)
+        return
+    end
+
+    if GUI._handleNoSelection and GUI._handleNoSelection() then
+        return
+    end
+
+    local ctx = {
+        S = S,
+        w = gfx.w,
+        h = gfx.h,
+        mx = gfx.mouse_x,
+        my = gfx.mouse_y,
+        mouseDown = (gfx.mouse_cap & 1) == 1,
+        rightMouseDown = (gfx.mouse_cap & 2) == 2,
+        mouseWheel = gfx.mouse_wheel,
+        time = os.clock(),
+    }
+    ctx.is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+
+    renderDialogBackground(ctx)
+    renderHelpTabs(ctx)
+    renderMainColumns(ctx)
+    renderFooter(ctx)
+    handleDialogKeyboard(ctx)
+    renderFlarkLogo(ctx)
+
+    if mainDialogArt.pendingNewArt then
+        mainDialogArt.pendingNewArt = false
+        if not GUI.uiClickedThisFrame then
+            generateNewArt()
         end
     end
+
+    mainDialogArt.wasMouseDown = ctx.mouseDown
+    mainDialogArt.wasRightMouseDown = ctx.rightMouseDown
+
+    drawTooltip()
+    gfx.update()
+
+    finalizeDialogLoop(ctx)
 end
 
 -- Show stem selection dialog
@@ -12891,94 +13396,34 @@ end
 
 -- Render time selection to a temporary WAV file
 local function renderTimeSelectionToWav(outputPath)
-    local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
-    if startTime >= endTime then return nil, "No time selection" end
+    timeSelectionResolvedItems = nil
+    local res = resolveTimeSelectionTargets()
+    if not res then return nil, "No time selection" end
 
-    -- Find all selected items overlapping the time selection
-    local numTracks = reaper.CountTracks(0)
-    if numTracks == 0 then return nil, "No tracks in project" end
+    local startTime, endTime = res.startTime, res.endTime
+    local noAudibleOverlapMsg = T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible."
+    local selectedItems = res.items or {}
+    local foundItem = selectedItems[1] and selectedItems[1].item or nil
 
-    local selectedItems = {}
-    local foundItem = nil  -- First found item for return value
-
-    for t = 0, numTracks - 1 do
-        local track = reaper.GetTrack(0, t)
-        local numItems = reaper.CountTrackMediaItems(track)
-        for i = 0, numItems - 1 do
-            local item = reaper.GetTrackMediaItem(track, i)
-            local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-            local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-            local iEnd = iPos + iLen
-            -- Check if item overlaps time selection AND is selected
-            if iPos < endTime and iEnd > startTime then
-                if reaper.IsMediaItemSelected(item) then
-                    table.insert(selectedItems, {item = item, track = track})
-                    if not foundItem then foundItem = item end
-                end
-            end
+    if #selectedItems == 0 then
+        if (res.rawOverlap or 0) > 0 then
+            return nil, noAudibleOverlapMsg
         end
+        if res.mode == "selected_items" then
+            return nil, "No selected items overlap the time selection"
+        elseif res.mode == "selected_tracks" then
+            if not SETTINGS.createNewTracks then
+                return nil, "No items on selected tracks overlap time selection"
+            end
+            return nil, "No items selected on tracks"
+        end
+        return nil, "No items overlap the time selection"
     end
 
-    -- If no items selected but tracks are selected, find items on those tracks that overlap the time selection
-    if #selectedItems == 0 then
-        local selTrackCount = reaper.CountSelectedTracks(0)
-        local selItemCount = reaper.CountSelectedMediaItems(0)
-
-        -- If tracks are selected (even when creating new tracks), auto-find overlapping items on those tracks
-        if selTrackCount > 0 and selItemCount == 0 then
-            debugLog("In-place mode: finding items on selected tracks overlapping time selection")
-            for t = 0, selTrackCount - 1 do
-                local track = reaper.GetSelectedTrack(0, t)
-                local numItems = reaper.CountTrackMediaItems(track)
-                for i = 0, numItems - 1 do
-                    local item = reaper.GetTrackMediaItem(track, i)
-                    local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                    local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                    local iEnd = iPos + iLen
-                    -- Check if item overlaps time selection
-                    if iPos < endTime and iEnd > startTime then
-                        table.insert(selectedItems, {item = item, track = track})
-                        if not foundItem then foundItem = item end
-                        debugLog("Found overlapping item on selected track at pos " .. iPos)
-                    end
-                end
-            end
-        end
-
-        -- No items/tracks selected - find ALL items that overlap the time selection
-        if #selectedItems == 0 and selTrackCount == 0 and selItemCount == 0 then
-            debugLog("No selection - finding all items overlapping time selection")
-            for t = 0, numTracks - 1 do
-                local track = reaper.GetTrack(0, t)
-                local numItems = reaper.CountTrackMediaItems(track)
-                for i = 0, numItems - 1 do
-                    local item = reaper.GetTrackMediaItem(track, i)
-                    local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                    local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                    local iEnd = iPos + iLen
-                    -- Check if item overlaps time selection
-                    if iPos < endTime and iEnd > startTime then
-                        table.insert(selectedItems, {item = item, track = track})
-                        if not foundItem then foundItem = item end
-                        debugLog("Found overlapping item at pos " .. iPos)
-                    end
-                end
-            end
-        end
-
-        -- Still no items found - show appropriate error
-        if #selectedItems == 0 then
-            if selTrackCount == 0 and selItemCount == 0 then
-                return nil, "No items overlap the time selection"
-            elseif selTrackCount == 0 then
-                return nil, "No tracks selected (select tracks with items)"
-            elseif selItemCount == 0 and not SETTINGS.createNewTracks then
-                return nil, "No items on selected tracks overlap time selection"
-            elseif selItemCount == 0 then
-                return nil, "No items selected on tracks"
-            else
-                return nil, "No selected items overlap the time selection"
-            end
+    timeSelectionResolvedItems = {}
+    for _, entry in ipairs(selectedItems) do
+        if entry.item then
+            timeSelectionResolvedItems[#timeSelectionResolvedItems + 1] = entry.item
         end
     end
 
@@ -13023,25 +13468,22 @@ local function renderTimeSelectionToWav(outputPath)
     end
 
     -- Multiple items selected - group by track
-    local trackItems = {}  -- track -> list of items
-    for _, itemData in ipairs(selectedItems) do
-        if not trackItems[itemData.track] then
-            trackItems[itemData.track] = {}
-        end
-        table.insert(trackItems[itemData.track], itemData.item)
-    end
-
-    -- Count tracks
-    local trackCount = 0
-    local trackList = {}
-    for track in pairs(trackItems) do
-        trackCount = trackCount + 1
-        table.insert(trackList, track)
-    end
+    local trackItems = res.trackItems or {}
+    local trackList = res.trackList or {}
+    local trackCount = res.trackCount or #trackList
 
     if trackCount > 1 then
         -- Multiple tracks - return special marker to indicate multi-track mode
         return nil, "MULTI_TRACK", nil, trackList, trackItems
+    end
+
+    if trackCount == 1 then
+        local onlyTrack = trackList[1]
+        local itemsOnTrack = (onlyTrack and trackItems[onlyTrack]) or {}
+        if #itemsOnTrack > 1 then
+            -- Multiple items on a single track: handle as per-item jobs
+            return nil, "MULTI_ITEM", nil, trackList, trackItems
+        end
     end
 
     -- All items are on the same track - use the first one
@@ -13087,37 +13529,52 @@ end
 function renderTrackTimeSelectionToWav(track, outputPath)
     local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     if startTime >= endTime then return nil, "No time selection" end
+    local soloActive = getProcessingSoloActive()
+    if not AUDIBILITY.isTrackAudible(track, soloActive) then
+        return nil, "Track muted or not solo-audible"
+    end
 
     -- Find ALL items on this track overlapping time selection
     -- (prefer selected items, but include all overlapping if none selected)
     local numItems = reaper.CountTrackMediaItems(track)
     local foundItem = nil
     local allFoundItems = {}
-    local hasSelectedItems = false
+    local rawSelectedOverlap = 0
+    local rawAnyOverlap = 0
+    local noAudibleOverlapMsg = T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible."
 
-    -- First pass: look for selected items
+    -- First pass: look for selected items (raw overlap + eligible)
     for i = 0, numItems - 1 do
         local item = reaper.GetTrackMediaItem(track, i)
         local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
         local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
         local iEnd = iPos + iLen
-        if iPos < endTime and iEnd > startTime and reaper.IsMediaItemSelected(item) then
-            hasSelectedItems = true
-            if not foundItem then
-                foundItem = item
+        if iPos < endTime and iEnd > startTime then
+            rawAnyOverlap = rawAnyOverlap + 1
+            if reaper.IsMediaItemSelected(item) then
+                rawSelectedOverlap = rawSelectedOverlap + 1
+                if AUDIBILITY.isItemAudible(item, soloActive) then
+                    if not foundItem then
+                        foundItem = item
+                    end
+                    table.insert(allFoundItems, item)
+                end
             end
-            table.insert(allFoundItems, item)
         end
     end
 
-    -- Second pass: if no selected items, find ANY overlapping items
-    if not foundItem then
+    if not foundItem and rawSelectedOverlap > 0 then
+        return nil, noAudibleOverlapMsg
+    end
+
+    -- Second pass: if no selected items overlap, find ANY overlapping items
+    if rawSelectedOverlap == 0 then
         for i = 0, numItems - 1 do
             local item = reaper.GetTrackMediaItem(track, i)
             local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
             local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
             local iEnd = iPos + iLen
-            if iPos < endTime and iEnd > startTime then
+            if AUDIBILITY.isItemAudible(item, soloActive) and iPos < endTime and iEnd > startTime then
                 if not foundItem then
                     foundItem = item
                 end
@@ -13126,7 +13583,10 @@ function renderTrackTimeSelectionToWav(track, outputPath)
         end
     end
 
-    if not foundItem then return nil, "No items on track overlap time selection" end
+    if not foundItem then
+        if rawAnyOverlap > 0 then return nil, noAudibleOverlapMsg end
+        return nil, "No items on track overlap time selection"
+    end
 
     local take = reaper.GetActiveTake(foundItem)
     if not take then return nil, "No active take" end
@@ -13150,6 +13610,10 @@ end
 -- Used when items are selected but no time selection exists
 function renderTrackSelectedItemsToWav(track, outputPath)
     -- Find ALL selected items on this track
+    local soloActive = getProcessingSoloActive()
+    if not AUDIBILITY.isTrackAudible(track, soloActive) then
+        return nil, "Track muted or not solo-audible"
+    end
     local numItems = reaper.CountTrackMediaItems(track)
     local foundItem = nil
     local allFoundItems = {}
@@ -13158,7 +13622,7 @@ function renderTrackSelectedItemsToWav(track, outputPath)
 
     for i = 0, numItems - 1 do
         local item = reaper.GetTrackMediaItem(track, i)
-        if reaper.IsMediaItemSelected(item) then
+        if AUDIBILITY.isItemAudible(item, soloActive) and reaper.IsMediaItemSelected(item) then
             local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
             local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
             local iEnd = iPos + iLen
@@ -14168,7 +14632,7 @@ local function drawProgressWindow()
     local activeDeviceStr = ""
     local activeDevice = SETTINGS.device or "auto"
     if activeDevice ~= "auto" then
-        activeDeviceStr = (T("footer_using_device") or "Using: %s"):format(tostring(activeDevice)) .. " | "
+        activeDeviceStr = ""
     end
     hintText = activeDeviceStr .. hintText
     local statusFontSize = PS(10)
@@ -14223,8 +14687,13 @@ local function drawProgressWindow()
     gfx.update()
 end
 
+-- Refactor flow helpers into module-like namespaces to reduce top-level locals.
+local WORKFLOW = {}
+local HELPERS = {}
+local UI = {}
+
 -- Read latest progress from stdout file
-local function updateProgressFromFile()
+function WORKFLOW.updateProgressFromFile()
     local f = io.open(progressState.stdoutFile, "r")
     if not f then return end
 
@@ -14244,7 +14713,7 @@ local function updateProgressFromFile()
 end
 
 -- Check if separation process is done (check for done.txt marker file)
-local function checkSeparationDone()
+function WORKFLOW.checkSeparationDone()
     -- Check for done marker file
     local doneFile = io.open(progressState.outputDir .. PATH_SEP .. "done.txt", "r")
     if doneFile then
@@ -14255,11 +14724,8 @@ local function checkSeparationDone()
     return progressState.percent >= 100
 end
 
--- Background process handle
-local bgProcess = nil
-
 -- Best-effort: kill a Windows process tree from a pid file
-local function killWindowsProcessFromPidFile(pidFile)
+function HELPERS.killWindowsProcessFromPidFile(pidFile)
     if OS ~= "Windows" then return false end
     if not pidFile or pidFile == "" then return false end
     local f = io.open(pidFile, "r")
@@ -14280,7 +14746,7 @@ local function killWindowsProcessFromPidFile(pidFile)
 end
 
 -- Best-effort: kill a Unix process from a pid file
-local function killUnixProcessFromPidFile(pidFile)
+function HELPERS.killUnixProcessFromPidFile(pidFile)
     if OS == "Windows" then return false end
     if not pidFile or pidFile == "" then return false end
     local f = io.open(pidFile, "r")
@@ -14296,11 +14762,11 @@ local function killUnixProcessFromPidFile(pidFile)
 end
 
 -- Cross-platform kill wrapper
-local function killProcessFromPidFile(pidFile)
+function HELPERS.killProcessFromPidFile(pidFile)
     if OS == "Windows" then
-        return killWindowsProcessFromPidFile(pidFile)
+        return HELPERS.killWindowsProcessFromPidFile(pidFile)
     end
-    return killUnixProcessFromPidFile(pidFile)
+        return HELPERS.killUnixProcessFromPidFile(pidFile)
 end
 
 function SW_LOG.writeExitCode(path, code)
@@ -14337,7 +14803,7 @@ function SW_LOG.readFileSnippet(path, maxChars)
 end
 
 -- Start separation process in background (Windows)
-local function startSeparationProcess(inputFile, outputDir, model)
+function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
     local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
     local doneFile = outputDir .. PATH_SEP .. "done.txt"
@@ -14414,7 +14880,9 @@ local function startSeparationProcess(inputFile, outputDir, model)
     end
 
     if not pythonAvailable then
-        local msg = "Python not found at: " .. tostring(PYTHON_PATH)
+        local msg =
+            "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
+            .. "Run STEMwerk_First_Run_Setup.lua to repair the runtime."
         debugLog(msg)
         SW_LOG.logExecResult("preflight: python missing", -1, msg)
         local lf = io.open(logFile, "w")
@@ -14429,7 +14897,7 @@ local function startSeparationProcess(inputFile, outputDir, model)
         local msg =
             "NumPy compatibility issue.\n\n"
             .. tostring(numpyErr or "Unknown error") .. "\n\n"
-            .. "Fix (PowerShell):\n"
+            .. "Fix (command):\n"
             .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
         debugLog(msg)
         SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
@@ -14444,29 +14912,9 @@ local function startSeparationProcess(inputFile, outputDir, model)
         return false
     end
     if not canRunFfmpeg() then
-        local msg = "FFmpeg is niet gevonden op uw systeem.\n\n" ..
-                    "STEMwerk heeft FFmpeg nodig om audio te verwerken.\n\n" ..
-                    "JA: Start de automatische FFmpeg setup\n" ..
-                    "NEE: Ga naar de downloadpagina (handmatig)\n" ..
-                    "CANCEL: Sluiten"
-        
-        local choice = reaper.ShowMessageBox(msg, "FFmpeg Ontbreekt", 3)
-        if choice == 6 then -- Yes
-            local setupScript = script_path .. "STEMwerk_Set_FFmpegPath.lua"
-            if fileExists(setupScript) then
-                dofile(setupScript)
-                -- After setup, check again
-                if canRunFfmpeg() then
-                    reaper.ShowMessageBox("FFmpeg is nu correct ingesteld! U kunt STEMwerk opnieuw starten.", "Succes", 0)
-                end
-            else
-                reaper.ShowMessageBox("FOUT: Kon " .. setupScript .. " niet vinden.", "Fout", 0)
-            end
-        elseif choice == 7 then -- No
-            local url = "https://www.gyan.dev/ffmpeg/builds/"
-            if package.config:sub(1,1) == "\\" then os.execute('start "" "' .. url .. '"') else os.execute('open "' .. url .. '"') end
+        if not ensureDependenciesInteractive() then
+            return false
         end
-        return false
     end
     if not fileExists(SEPARATOR_SCRIPT) then
         local msg = "Separator script not found at: " .. tostring(SEPARATOR_SCRIPT)
@@ -14652,8 +15100,8 @@ local function startSeparationProcess(inputFile, outputDir, model)
 end
 
 -- Progress loop with UI
-local function progressLoop()
-    updateProgressFromFile()
+function WORKFLOW.progressLoop()
+    WORKFLOW.updateProgressFromFile()
     drawProgressWindow()
 
     local char = gfx.getchar()
@@ -14672,7 +15120,7 @@ local function progressLoop()
         saveSettings()
 
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
-        killProcessFromPidFile(progressState.pidFile)
+        HELPERS.killProcessFromPidFile(progressState.pidFile)
 
         gfx.quit()
 
@@ -14688,7 +15136,7 @@ local function progressLoop()
         return
     end
 
-    if checkSeparationDone() then
+    if WORKFLOW.checkSeparationDone() then
         -- Done!
         progressState.running = false
 
@@ -14697,7 +15145,7 @@ local function progressLoop()
         saveSettings()
 
         gfx.quit()
-        finishSeparation()
+        WORKFLOW.finishSeparationCallback()
         return
     end
 
@@ -14715,11 +15163,11 @@ local function progressLoop()
         return
     end
 
-    reaper.defer(progressLoop)
+    reaper.defer(WORKFLOW.progressLoop)
 end
 
 -- Finish separation after progress completes
-local function finishSeparationCallback()
+function WORKFLOW.finishSeparationCallback()
     -- Small delay to ensure files are written
     local checkCount = 0
     local function checkFiles()
@@ -14763,16 +15211,16 @@ local function finishSeparationCallback()
 end
 
 -- Store callback reference
-finishSeparation = finishSeparationCallback
+finishSeparation = WORKFLOW.finishSeparationCallback
 
 -- Run separation with progress UI
-local function runSeparationWithProgress(inputFile, outputDir, model)
+function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     -- Load settings to get current theme
     loadSettings()
     updateTheme()
 
     -- Start the process
-    local ok = startSeparationProcess(inputFile, outputDir, model)
+    local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     if ok == false then
         isProcessingActive = false
         return
@@ -14803,11 +15251,11 @@ local function runSeparationWithProgress(inputFile, outputDir, model)
     progressState.running = true
 
     -- Start progress loop
-    reaper.defer(progressLoop)
+    reaper.defer(WORKFLOW.progressLoop)
 end
 
 -- Legacy synchronous separation (fallback)
-local function runSeparation(inputFile, outputDir, model)
+function WORKFLOW.runSeparation(inputFile, outputDir, model)
     local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
     local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
 
@@ -14861,7 +15309,33 @@ end
 
 -- Replace only a portion of an item with stems (for time selection mode)
 -- Splits the item at selection boundaries and replaces only the selected portion
-local function replaceInPlacePartial(item, stemPaths, selStart, selEnd)
+function getItemDisplayNameForTakes(item)
+    if not item or not reaper.ValidatePtr(item, "MediaItem*") then return "Item" end
+    local take = reaper.GetActiveTake(item)
+    if take then
+        local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+        if takeName and takeName ~= "" then
+            return takeName
+        end
+        local source = reaper.GetMediaItemTake_Source(take)
+        if source then
+            local sourcePath = reaper.GetMediaSourceFileName(source, "")
+            if sourcePath and sourcePath ~= "" then
+                return sourcePath:match("([^/\\]+)$") or sourcePath
+            end
+        end
+    end
+    local track = reaper.GetMediaItem_Track(item)
+    if track then
+        local _, trackName = reaper.GetTrackName(track)
+        if trackName and trackName ~= "" then
+            return trackName
+        end
+    end
+    return "Item"
+end
+
+function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameBase)
     local track = reaper.GetMediaItem_Track(item)
     local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
     local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
@@ -14912,28 +15386,37 @@ local function replaceInPlacePartial(item, stemPaths, selStart, selEnd)
 
     -- Create stem items at the selection position
     local items = {}
-    local stemColors = {}  -- Store colors for later take coloring
+    local stemEntries = {}
     for _, stem in ipairs(STEMS) do
         if stem.selected then
             local stemPath = stemPaths[stem.name:lower()]
             if stemPath then
-                local newItem = reaper.AddMediaItemToTrack(track)
-                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selStart)
-                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
-
-                local take = reaper.AddTakeToMediaItem(newItem)
-                local source = reaper.PCM_Source_CreateFromFile(stemPath)
-                reaper.SetMediaItemTake_Source(take, source)
-                reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
-                -- Ensure take volume is at unity (1.0 = 0dB)
-                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
-
-                local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
-
-                items[#items + 1] = { item = newItem, take = take, color = stemColor, name = stem.name }
+                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
             end
         end
+    end
+    local totalStems = #stemEntries
+    local baseName = nameBase or getItemDisplayNameForTakes(item)
+    local stemColors = {}  -- Store colors for later take coloring
+    for idx, entry in ipairs(stemEntries) do
+        local stem = entry.stem
+        local stemPath = entry.path
+        local newItem = reaper.AddMediaItemToTrack(track)
+        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selStart)
+        reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
+
+        local take = reaper.AddTakeToMediaItem(newItem)
+        local source = reaper.PCM_Source_CreateFromFile(stemPath)
+        reaper.SetMediaItemTake_Source(take, source)
+        local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
+        reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
+        -- Ensure take volume is at unity (1.0 = 0dB)
+        reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+
+        local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+        reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
+
+        items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
     end
 
     -- Merge into takes on the first item
@@ -14979,33 +15462,42 @@ local function replaceInPlacePartial(item, stemPaths, selStart, selEnd)
 end
 
 -- Replace item in-place with stems as takes
-local function replaceInPlace(item, stemPaths, itemPos, itemLen)
+function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
     local track = reaper.GetMediaItem_Track(item)
     reaper.Undo_BeginBlock()
     reaper.DeleteTrackMediaItem(track, item)
 
     local items = {}
+    local stemEntries = {}
     for _, stem in ipairs(STEMS) do
         if stem.selected then
             local stemPath = stemPaths[stem.name:lower()]
             if stemPath then
-                local newItem = reaper.AddMediaItemToTrack(track)
-                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
-                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
-
-                local take = reaper.AddTakeToMediaItem(newItem)
-                local source = reaper.PCM_Source_CreateFromFile(stemPath)
-                reaper.SetMediaItemTake_Source(take, source)
-                reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
-                -- Ensure take volume is at unity (1.0 = 0dB)
-                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
-
-                local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
-
-                items[#items + 1] = { item = newItem, take = take, color = stemColor, name = stem.name }
+                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
             end
         end
+    end
+    local totalStems = #stemEntries
+    local baseName = nameBase or getItemDisplayNameForTakes(item)
+    for idx, entry in ipairs(stemEntries) do
+        local stem = entry.stem
+        local stemPath = entry.path
+        local newItem = reaper.AddMediaItemToTrack(track)
+        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+        reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+
+        local take = reaper.AddTakeToMediaItem(newItem)
+        local source = reaper.PCM_Source_CreateFromFile(stemPath)
+        reaper.SetMediaItemTake_Source(take, source)
+        local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
+        reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
+        -- Ensure take volume is at unity (1.0 = 0dB)
+        reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+
+        local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+        reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
+
+        items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
     end
 
     -- Merge into takes
@@ -15050,7 +15542,7 @@ end
 
 -- Post-processing: explode takes created by in-place output
 -- mode: "none", "explode_new_tracks", "explode_in_place", "explode_in_order"
-explodeTakesFromItem = function(item, mode, skipUndo)
+explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
     mode = tostring(mode or "none")
     if mode == "none" then return 0 end
     if not item or not reaper.ValidatePtr(item, "MediaItem*") then return 0 end
@@ -15068,6 +15560,35 @@ explodeTakesFromItem = function(item, mode, skipUndo)
     local created = 0
     if not skipUndo then
         reaper.Undo_BeginBlock()
+    end
+
+    local function extractStemNameFromTakeLabel(takeName)
+        if not takeName or takeName == "" then return nil end
+        local stem = takeName:match("^Take%s+%d+/%d+:%s+.+%s%-%s+(.+)$")
+        return stem or takeName
+    end
+
+    local function extractBaseNameFromTakeLabel(takeName)
+        if not takeName or takeName == "" then return nil end
+        return takeName:match("^Take%s+%d+/%d+:%s+(.+)%s%-%s+.+$")
+    end
+
+    local baseName = nameBase
+    if not baseName or baseName == "" then
+        for t = 0, takeCount - 1 do
+            local take = reaper.GetTake(item, t)
+            if take then
+                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                local parsed = extractBaseNameFromTakeLabel(takeName)
+                if parsed and parsed ~= "" then
+                    baseName = parsed
+                    break
+                end
+            end
+        end
+    end
+    if not baseName or baseName == "" then
+        baseName = getItemDisplayNameForTakes(item)
     end
 
     if mode == "explode_new_tracks" then
@@ -15114,7 +15635,7 @@ explodeTakesFromItem = function(item, mode, skipUndo)
         reaper.DeleteTrackMediaItem(track, item)
 
     elseif mode == "explode_in_place" or mode == "explode_in_order" then
-        -- Collect original take names so we can create a combined "Exploded A + B + C" label
+        -- Collect original stem names so we can create a combined "Exploded A + B + C" label
         local explodedNames = {}
         local newTakes = {}
         local newItems = {}
@@ -15123,7 +15644,8 @@ explodeTakesFromItem = function(item, mode, skipUndo)
             if take then
                 local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
                 if not takeName or takeName == "" then takeName = "Take " .. tostring(t + 1) end
-                table.insert(explodedNames, takeName)
+                local stemName = extractStemNameFromTakeLabel(takeName)
+                table.insert(explodedNames, stemName)
                 local takeColor = reaper.GetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR")
 
                 local newItem = reaper.AddMediaItemToTrack(track)
@@ -15154,8 +15676,8 @@ explodeTakesFromItem = function(item, mode, skipUndo)
         end
         -- Name all created takes/items with a combined exploded label so Arrange shows it
         if #newTakes > 0 and #explodedNames > 0 then
-            local combined = table.concat(explodedNames, " + ")
-            local combinedName = "Exploded " .. combined
+        local combined = table.concat(explodedNames, " + ")
+        local combinedName = baseName .. " - Exploded " .. combined
             for idx, nt in ipairs(newTakes) do
                 if reaper.GetSetMediaItemTakeInfo_String then
                     reaper.GetSetMediaItemTakeInfo_String(nt, "P_NAME", combinedName, true)
@@ -15187,14 +15709,23 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
     local track = reaper.GetMediaItem_Track(item)
     local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
     local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
-    if trackName == "" then trackName = "Item" end
+    if trackName == "" then trackName = "Track " .. math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")) end
 
     local take = reaper.GetActiveTake(item)
-    local sourceName = trackName
+    local sourceTrackName = trackName
+    local sourceItemName = trackName
     if take then
         local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
         if takeName and takeName ~= "" then
-            sourceName = takeName:match("([^/\\]+)%.[^.]*$") or takeName
+            sourceItemName = takeName:match("([^/\\]+)%.[^.]*$") or takeName
+        else
+            local source = reaper.GetMediaItemTake_Source(take)
+            if source then
+                local sourcePath = reaper.GetMediaSourceFileName(source, "")
+                if sourcePath and sourcePath ~= "" then
+                    sourceItemName = sourcePath:match("([^/\\]+)%.[^.]*$") or sourcePath
+                end
+            end
         end
     end
 
@@ -15209,7 +15740,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
     if SETTINGS.createFolder then
         reaper.InsertTrackAtIndex(trackIdx, true)
         folderTrack = reaper.GetTrack(0, trackIdx)
-        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceName .. " - Stems", true)
+        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
         reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
         reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
         ensureTrackHeight(folderTrack)
@@ -15225,7 +15756,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
                 local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
                 ensureTrackHeight(newTrack)
 
-                local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceName) or (sourceName .. " - " .. stem.name)
+                local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
                 reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
 
                 local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
@@ -15237,7 +15768,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
 
                 local newTake = reaper.AddTakeToMediaItem(newItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
-                local newTakeName = sourceName .. " - " .. stem.name
+                local newTakeName = sourceItemName .. " - " .. stem.name
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", newTakeName, true)
                 reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
 
@@ -15343,6 +15874,9 @@ itemPos = 0
 itemLen = 0
 -- timeSelectionMode, timeSelectionStart, timeSelectionEnd declared at top of file
 timeSelectionSourceItem = nil  -- The item found in time selection (for in-place replacement)
+timeSelectionItemMap = nil     -- Track -> items for per-item time selection jobs
+timeSelectionResolvedItems = nil -- Audible time-selection items for createNewTracks
+lastNoAudibleOverlap = false   -- Flag for audibility-filtered empty selection
 itemSubSelection = false  -- true when we rendered only a portion of the selected item
 itemSubSelStart = 0
 itemSubSelEnd = 0
@@ -15351,23 +15885,28 @@ itemSubSelEnd = 0
 -- If selectedOnly is true, only returns items that are also selected
 function getItemsInTimeRange(startTime, endTime, selectedOnly)
     local items = {}
+    local soloActive = getProcessingSoloActive()
     local numTracks = reaper.CountTracks(0)
     for t = 0, numTracks - 1 do
         local track = reaper.GetTrack(0, t)
-        local numItems = reaper.CountTrackMediaItems(track)
-        for i = 0, numItems - 1 do
-            local item = reaper.GetTrackMediaItem(track, i)
-            local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-            local itemEnd = itemStart + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-            -- Check if item overlaps with time range
-            if itemStart < endTime and itemEnd > startTime then
-                -- If selectedOnly, check if item is selected
-                if selectedOnly then
-                    if reaper.IsMediaItemSelected(item) then
-                        table.insert(items, item)
+        if AUDIBILITY.isTrackAudible(track, soloActive) then
+            local numItems = reaper.CountTrackMediaItems(track)
+            for i = 0, numItems - 1 do
+                local item = reaper.GetTrackMediaItem(track, i)
+                local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                local itemEnd = itemStart + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                -- Check if item overlaps with time range
+                if itemStart < endTime and itemEnd > startTime then
+                    if AUDIBILITY.isItemAudible(item, soloActive) then
+                        -- If selectedOnly, check if item is selected
+                        if selectedOnly then
+                            if reaper.IsMediaItemSelected(item) then
+                                table.insert(items, item)
+                            end
+                        else
+                            table.insert(items, item)
+                        end
                     end
-                else
-                    table.insert(items, item)
                 end
             end
         end
@@ -15379,6 +15918,8 @@ end
 function getItemsInTimeRangeOnTrack(track, startTime, endTime, selectedOnly)
     local items = {}
     if not track or not reaper.ValidatePtr(track, "MediaTrack*") then return items end
+    local soloActive = getProcessingSoloActive()
+    if not AUDIBILITY.isTrackAudible(track, soloActive) then return items end
     local numItems = reaper.CountTrackMediaItems(track)
     for i = 0, numItems - 1 do
         local item = reaper.GetTrackMediaItem(track, i)
@@ -15386,12 +15927,14 @@ function getItemsInTimeRangeOnTrack(track, startTime, endTime, selectedOnly)
             local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
             local itemEnd = itemStart + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
             if itemStart < endTime and itemEnd > startTime then
-                if selectedOnly then
-                    if reaper.IsMediaItemSelected(item) then
+                if AUDIBILITY.isItemAudible(item, soloActive) then
+                    if selectedOnly then
+                        if reaper.IsMediaItemSelected(item) then
+                            items[#items + 1] = item
+                        end
+                    else
                         items[#items + 1] = item
                     end
-                else
-                    items[#items + 1] = item
                 end
             end
         end
@@ -15401,13 +15944,53 @@ end
 
 -- Auto semantics: if any selected items overlap, operate on selected; otherwise operate on all overlapping.
 function getItemsInTimeRangeAuto(startTime, endTime, sourceTrack)
+    local function countSelectedOverlapOnTrack(track)
+        local count = 0
+        local numItems = reaper.CountTrackMediaItems(track)
+        for i = 0, numItems - 1 do
+            local item = reaper.GetTrackMediaItem(track, i)
+            if item and reaper.ValidatePtr(item, "MediaItem*") and reaper.IsMediaItemSelected(item) then
+                local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                local itemEnd = itemStart + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                if itemStart < endTime and itemEnd > startTime then
+                    count = count + 1
+                end
+            end
+        end
+        return count
+    end
+
+    local function countSelectedOverlapGlobal()
+        local count = 0
+        local selCount = reaper.CountSelectedMediaItems(0) or 0
+        for i = 0, selCount - 1 do
+            local item = reaper.GetSelectedMediaItem(0, i)
+            if item and reaper.ValidatePtr(item, "MediaItem*") then
+                local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                local itemEnd = itemStart + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                if itemStart < endTime and itemEnd > startTime then
+                    count = count + 1
+                end
+            end
+        end
+        return count
+    end
+
     if sourceTrack and reaper.ValidatePtr(sourceTrack, "MediaTrack*") then
+        local soloActive = getProcessingSoloActive()
+        if not AUDIBILITY.isTrackAudible(sourceTrack, soloActive) then
+            return {}
+        end
+        local rawSelectedOverlap = countSelectedOverlapOnTrack(sourceTrack)
         local sel = getItemsInTimeRangeOnTrack(sourceTrack, startTime, endTime, true)
         if #sel > 0 then return sel end
+        if rawSelectedOverlap > 0 then return {} end
         return getItemsInTimeRangeOnTrack(sourceTrack, startTime, endTime, false)
     end
+    local rawSelectedOverlap = countSelectedOverlapGlobal()
     local sel = getItemsInTimeRange(startTime, endTime, true)
     if #sel > 0 then return sel end
+    if rawSelectedOverlap > 0 then return {} end
     return getItemsInTimeRange(startTime, endTime, false)
 end
 
@@ -15472,45 +16055,98 @@ function deleteSelectionInItems(startTime, endTime)
 end
 
 -- Create new tracks for stems from time selection (no original item)
-function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
+function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack)
     reaper.Undo_BeginBlock()
-
+    lastNoAudibleOverlap = false
+    -- Track/folder identity must stay track-based in all workflows.
+    useItemNameForTrack = false
+    local soloActive = getProcessingSoloActive()
+    local function trackAudible(track)
+        return AUDIBILITY.isTrackAudible(track, soloActive)
+    end
+    local function itemAudible(item)
+        return AUDIBILITY.isItemAudible(item, soloActive)
+    end
     -- If there is a time-selection and selected items overlap it, create a set
     -- of stem tracks directly under each source track for each such selected item.
     local itemsToProcess = {}
+    if itemsOverride and #itemsOverride > 0 then
+        local startSel = selPos
+        local endSel = selPos + selLen
+        local rawAnyOverlap = 0
+        for _, entry in ipairs(itemsOverride) do
+            local it = entry
+            local nameOverride = nil
+            if type(entry) == "table" and entry.item then
+                it = entry.item
+                nameOverride = entry.sourceItemName or entry.sourceItemDisplayName
+            end
+            if it and reaper.ValidatePtr(it, "MediaItem*") then
+                local ipos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
+                local ilen = reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
+                local iend = ipos + ilen
+                if ipos < endSel and iend > startSel then
+                    rawAnyOverlap = rawAnyOverlap + 1
+                    if itemAudible(it) then
+                        local p = math.max(ipos, startSel)
+                        local e = math.min(iend, endSel)
+                        local l = math.max(0, e - p)
+                        if l > 0.0005 then
+                            table.insert(itemsToProcess, {item = it, pos = p, len = l, sourceItemName = nameOverride})
+                        end
+                    end
+                end
+            end
+        end
+        if #itemsToProcess == 0 and rawAnyOverlap > 0 then
+            lastNoAudibleOverlap = true
+            reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
+            return 0
+        end
     -- Prefer items on the provided sourceTrack (this function is called per-job).
-    if sourceTrack and reaper.ValidatePtr(sourceTrack, "MediaTrack*") then
+    elseif sourceTrack and reaper.ValidatePtr(sourceTrack, "MediaTrack*") then
+        if not trackAudible(sourceTrack) then
+            lastNoAudibleOverlap = true
+            reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
+            return 0
+        end
         local startSel = selPos
         local endSel = selPos + selLen
         local numItems = reaper.CountTrackMediaItems(sourceTrack)
-        local foundSelected = false
-        -- First pass: selected items on this track that overlap selection
+        local rawSelectedOverlap = 0
+        local rawAnyOverlap = 0
+        -- First pass: selected items on this track that overlap selection (raw + eligible)
         for i = 0, numItems - 1 do
             local it = reaper.GetTrackMediaItem(sourceTrack, i)
             if it and reaper.ValidatePtr(it, "MediaItem*") then
                 local ipos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
                 local ilen = reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
                 local iend = ipos + ilen
-                if ipos < endSel and iend > startSel and reaper.IsMediaItemSelected(it) then
-                    foundSelected = true
-                    local p = math.max(ipos, startSel)
-                    local e = math.min(iend, endSel)
-                    local l = math.max(0, e - p)
-                    if l > 0.0005 then
-                        table.insert(itemsToProcess, {item = it, pos = p, len = l})
+                if ipos < endSel and iend > startSel then
+                    rawAnyOverlap = rawAnyOverlap + 1
+                    if reaper.IsMediaItemSelected(it) then
+                        rawSelectedOverlap = rawSelectedOverlap + 1
+                        if itemAudible(it) then
+                            local p = math.max(ipos, startSel)
+                            local e = math.min(iend, endSel)
+                            local l = math.max(0, e - p)
+                            if l > 0.0005 then
+                                table.insert(itemsToProcess, {item = it, pos = p, len = l})
+                            end
+                        end
                     end
                 end
             end
         end
-        -- Second pass: if no selected items, include ANY overlapping items on this track
-        if not foundSelected then
+        -- Second pass: if no selected items overlap, include ANY overlapping items on this track
+        if rawSelectedOverlap == 0 then
             for i = 0, numItems - 1 do
                 local it = reaper.GetTrackMediaItem(sourceTrack, i)
                 if it and reaper.ValidatePtr(it, "MediaItem*") then
                     local ipos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
                     local ilen = reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
                     local iend = ipos + ilen
-                    if ipos < endSel and iend > startSel then
+                    if ipos < endSel and iend > startSel and itemAudible(it) then
                         local p = math.max(ipos, startSel)
                         local e = math.min(iend, endSel)
                         local l = math.max(0, e - p)
@@ -15521,8 +16157,14 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
                 end
             end
         end
+        if #itemsToProcess == 0 and rawAnyOverlap > 0 then
+            lastNoAudibleOverlap = true
+            reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
+            return 0
+        end
     else
         -- Fallback: global selected items overlapping selection
+        local rawSelectedOverlap = 0
         for i = 0, reaper.CountSelectedMediaItems(0)-1 do
             local it = reaper.GetSelectedMediaItem(0, i)
             if it and reaper.ValidatePtr(it, "MediaItem*") then
@@ -15531,9 +16173,17 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
                 local iend = ipos + ilen
                 local selEnd = selPos + selLen
                 if not (iend <= selPos or ipos >= selEnd) then
-                    table.insert(itemsToProcess, {item = it, pos = ipos, len = ilen})
+                    rawSelectedOverlap = rawSelectedOverlap + 1
+                    if itemAudible(it) then
+                        table.insert(itemsToProcess, {item = it, pos = ipos, len = ilen})
+                    end
                 end
             end
+        end
+        if #itemsToProcess == 0 and rawSelectedOverlap > 0 then
+            lastNoAudibleOverlap = true
+            reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
+            return 0
         end
     end
 
@@ -15541,6 +16191,11 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
     if #itemsToProcess == 0 then
         -- Fall back to creating tracks at selection position under provided sourceTrack
         local refTrack = sourceTrack or reaper.GetSelectedTrack(0, 0) or reaper.GetTrack(0, 0)
+        if refTrack and not trackAudible(refTrack) then
+            reaper.UpdateArrange()
+            reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
+            return 0
+        end
         local trackIdx = 0
         if refTrack then trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(refTrack, "IP_TRACKNUMBER")) end
 
@@ -15613,14 +16268,23 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
         local _, tn = reaper.GetTrackName(track)
         if tn and tn ~= "" then sourceTrackName = tn end
         
-        local sourceItemName = sourceTrackName
+        local sourceItemName = info.sourceItemName or sourceTrackName
         local take = reaper.GetActiveTake(item)
-        if take then
+        if take and not info.sourceItemName then
             local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
             if takeName and takeName ~= "" then
                 sourceItemName = takeName:match("([^/\\]+)%.[^.]*$") or takeName
+            else
+                local source = reaper.GetMediaItemTake_Source(take)
+                if source then
+                    local sourcePath = reaper.GetMediaSourceFileName(source, "")
+                    if sourcePath and sourcePath ~= "" then
+                        sourceItemName = sourcePath:match("([^/\\]+)%.[^.]*$") or sourcePath
+                    end
+                end
             end
         end
+        local nameBase = (useItemNameForTrack and sourceItemName) or sourceTrackName
 
         local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
 
@@ -15628,7 +16292,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
         if SETTINGS.createFolder then
             reaper.InsertTrackAtIndex(trackIdx, true)
             folderTrack = reaper.GetTrack(0, trackIdx)
-            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
+            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", nameBase .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
             ensureTrackHeight(folderTrack)
@@ -15646,7 +16310,11 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
                     reaper.InsertTrackAtIndex(trackIdx + createdForThisItem, true)
                     local newTrack = reaper.GetTrack(0, trackIdx + createdForThisItem)
                 ensureTrackHeight(newTrack)
-                    local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
+                    local newTakeName = sourceItemName .. " - " .. stem.name
+                    local newTrackName = selectedCount == 1 and (stem.name .. " - " .. nameBase) or (nameBase .. " - " .. stem.name)
+                    if info.sourceItemName then
+                        newTrackName = sourceTrackName .. " - " .. newTakeName
+                    end
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
                     reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
@@ -15656,8 +16324,11 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack)
                     reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", ilen)
                     local newTake = reaper.AddTakeToMediaItem(newItem)
                     reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
-                    local newTakeName = sourceItemName .. " - " .. stem.name
-                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", newTakeName, true)
+                    local takeLabel = newTakeName
+                    if info.sourceItemName then
+                        takeLabel = sourceTrackName .. " - " .. newTakeName
+                    end
+                    reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeLabel, true)
                     reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
 
                     createdForThisItem = createdForThisItem + 1
@@ -15689,48 +16360,62 @@ function processStemsResult(stems)
     local mainItem
     local resultMsg
     local resultData = nil
+    local noAudibleOverlapMsg = T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible."
 
     if timeSelectionMode then
         -- Time selection mode: respect user's setting
         if SETTINGS.createNewTracks then
             -- In multi-track mode, use the source track from the queue (for auto item selection & mute/delete semantics).
             local sourceTrack = multiTrackQueue.active and multiTrackQueue.currentSourceTrack or nil
-            -- Handle mute/delete options BEFORE creating stems (so new stems aren't affected)
             local actionMsg = ""
+
+            local itemsOverride = timeSelectionResolvedItems
+            if itemsOverride and #itemsOverride > 1 then
+                itemsOverride = { itemsOverride[1] }
+            end
+
+            -- Create stems first so the selection-based cleanup doesn't disturb placement
+            count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
+            if lastNoAudibleOverlap and count == 0 then
+                showMessage("No audible targets", noAudibleOverlapMsg, "info", true)
+                return
+            end
+
+            local hasCleanupTimeSel = (timeSelectionStart and timeSelectionEnd and timeSelectionEnd > timeSelectionStart) or false
+
+            local function getCleanupItems()
+                if itemsOverride and #itemsOverride > 0 then
+                    return itemsOverride
+                end
+                return getItemsInTimeRangeAuto(timeSelectionStart, timeSelectionEnd, sourceTrack)
+            end
+
             if SETTINGS.muteOriginal then
-                -- Mute items overlapping the selection:
-                -- - If any selected items overlap, mute selected ones (legacy behavior)
-                -- - Otherwise, mute all overlapping items on the source track (or project-wide if no source track)
-                local items = getItemsInTimeRangeAuto(timeSelectionStart, timeSelectionEnd, sourceTrack)
+                local items = getCleanupItems()
                 for _, item in ipairs(items) do
                     reaper.SetMediaItemInfo_Value(item, "B_MUTE", 1)
                 end
                 local itemWord = #items == 1 and "item" or "items"
                 actionMsg = "\n" .. #items .. " " .. itemWord .. " muted."
-            elseif SETTINGS.muteSelection then
-                -- Mute selection portion (auto semantics: selected-overlapping if any else all overlapping)
-                local items = getItemsInTimeRangeAuto(timeSelectionStart, timeSelectionEnd, sourceTrack)
+            elseif SETTINGS.muteSelection and hasCleanupTimeSel then
+                local items = getCleanupItems()
                 local itemCount = muteSelectionInItemsFromList(items, timeSelectionStart, timeSelectionEnd)
                 local itemWord = itemCount == 1 and "item" or "items"
                 actionMsg = "\nSelection muted in " .. itemCount .. " " .. itemWord .. "."
             elseif SETTINGS.deleteOriginal then
-                -- Delete items overlapping the selection (auto semantics)
-                local items = getItemsInTimeRangeAuto(timeSelectionStart, timeSelectionEnd, sourceTrack)
+                local items = getCleanupItems()
                 for i = #items, 1, -1 do
                     local item = items[i]
                     reaper.DeleteTrackMediaItem(reaper.GetMediaItem_Track(item), item)
                 end
                 local itemWord = #items == 1 and "item" or "items"
                 actionMsg = "\n" .. #items .. " " .. itemWord .. " deleted."
-            elseif SETTINGS.deleteSelection then
-                -- Delete selection portion (auto semantics)
-                local items = getItemsInTimeRangeAuto(timeSelectionStart, timeSelectionEnd, sourceTrack)
+            elseif SETTINGS.deleteSelection and hasCleanupTimeSel then
+                local items = getCleanupItems()
                 local itemCount = deleteSelectionInItemsFromList(items, timeSelectionStart, timeSelectionEnd)
                 local itemWord = itemCount == 1 and "item" or "items"
                 actionMsg = "\nSelection deleted from " .. itemCount .. " " .. itemWord .. "."
             end
-            -- Now create stems (after mute/delete so they're not affected)
-            count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack)
             local trackWord = count == 1 and "track" or "tracks"
             -- In multi-track mode, show which track we're on
             local trackInfo = ""
@@ -15743,7 +16428,7 @@ function processStemsResult(stems)
             -- In-place mode: replace only the selected portion of the item
             if timeSelectionSourceItem then
                 -- Use partial replacement - splits the item and replaces only the selected part
-                count, mainItem = replaceInPlacePartial(timeSelectionSourceItem, stems, timeSelectionStart, timeSelectionEnd)
+                count, mainItem = WORKFLOW.replaceInPlacePartial(timeSelectionSourceItem, stems, timeSelectionStart, timeSelectionEnd)
                 local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
                 if exploded > 0 then
                     resultMsg = "Selection replaced and takes exploded."
@@ -15774,7 +16459,15 @@ function processStemsResult(stems)
             else
                 -- Fallback: create new tracks if no source item
                 local sourceTrack = multiTrackQueue.active and multiTrackQueue.currentSourceTrack or nil
-                count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack)
+                local itemsOverride = timeSelectionResolvedItems
+                if itemsOverride and #itemsOverride > 1 then
+                    itemsOverride = { itemsOverride[1] }
+                end
+                count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
+                if lastNoAudibleOverlap and count == 0 then
+                    showMessage("No audible targets", noAudibleOverlapMsg, "info", true)
+                    return
+                end
                 local trackWord = count == 1 and "track" or "tracks"
                 resultMsg = count .. " stem " .. trackWord .. " created from time selection."
                 resultData = { kind = "single", mainKey = "result_time_selection_created", count = count }
@@ -15795,7 +16488,7 @@ function processStemsResult(stems)
         -- Check if we processed a sub-selection of the item
         if itemSubSelection then
             -- Use partial replacement - splits the item and replaces only the selected part
-            count, mainItem = replaceInPlacePartial(selectedItem, stems, itemSubSelStart, itemSubSelEnd)
+            count, mainItem = WORKFLOW.replaceInPlacePartial(selectedItem, stems, itemSubSelStart, itemSubSelEnd)
             local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
             if exploded > 0 then
                 resultMsg = "Selection replaced and takes exploded."
@@ -15812,7 +16505,7 @@ function processStemsResult(stems)
                 resultData = { kind = "single", mainKey = (count == 1) and "result_selection_replaced_single" or "result_selection_replaced_takes_hint" }
             end
         else
-            count, mainItem = replaceInPlace(selectedItem, stems, itemPos, itemLen)
+            count, mainItem = WORKFLOW.replaceInPlace(selectedItem, stems, itemPos, itemLen)
             local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
             if exploded > 0 then
                 resultMsg = "Stems created and takes exploded."
@@ -16153,41 +16846,23 @@ end
 -- Run multi-track separation (parallel or sequential based on setting)
 runSingleTrackSeparation = function(trackList)
     if not canRunFfmpeg() then
-        local installCmd = "winget install --id Gyan.FFmpeg -e"
-        local msg =
-            "FFmpeg not found on PATH.\n\n"
-            .. "STEMwerk requires FFmpeg for the separator backend.\n\n"
-            .. "If FFmpeg is installed but not on PATH, run:\n"
-            .. "  STEMwerk_Set_FFmpegPath.lua\n\n"
-            .. "Install (PowerShell):\n"
-            .. "  " .. installCmd .. "\n\n"
-            .. "Or download from:\n"
-            .. "  https://www.gyan.dev/ffmpeg/builds/\n\n"
-            .. "Restart REAPER after installing."
-        if reaper and reaper.CF_SetClipboard then
-            reaper.CF_SetClipboard(installCmd)
-            msg = msg .. "\n\n(Install command copied to clipboard.)"
+        if not ensureDependenciesInteractive() then
+            if reaper and reaper.defer then
+                reaper.defer(function() showStemSelectionDialog() end)
+            end
+            isProcessingActive = false
+            if multiTrackQueue then
+                multiTrackQueue.active = false
+            end
+            return
         end
-        debugLog(msg)
-        SW_LOG.logExecResult("preflight: ffmpeg missing", -1, msg)
-        if reaper and reaper.ShowMessageBox then
-            reaper.ShowMessageBox(msg, "Missing Dependency", 0)
-        end
-        if reaper and reaper.defer then
-            reaper.defer(function() showStemSelectionDialog() end)
-        end
-        isProcessingActive = false
-        if multiTrackQueue then
-            multiTrackQueue.active = false
-        end
-        return
     end
     local numpyOk, numpyErr = checkNumpyCompat(PYTHON_PATH)
     if not numpyOk then
         local msg =
             "NumPy compatibility issue.\n\n"
             .. tostring(numpyErr or "Unknown error") .. "\n\n"
-            .. "Fix (PowerShell):\n"
+            .. "Fix (command):\n"
             .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
         debugLog(msg)
         SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
@@ -16208,15 +16883,73 @@ runSingleTrackSeparation = function(trackList)
     makeDir(baseTempDir)
 
     -- Check if we have a time selection
-    local hasTimeSel = hasTimeSelection()
+    local hasTimeSel = (timeSelectionMode and timeSelectionStart and timeSelectionEnd and timeSelectionEnd > timeSelectionStart)
+
+    local is6Stem = (SETTINGS.model == "htdemucs_6s")
+    local selectedStemCount = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+            selectedStemCount = selectedStemCount + 1
+        end
+    end
 
     -- In-place mode with no time selection: process each item separately
     -- This ensures each item gets its own stems as takes
     local inPlaceMultiItem = not SETTINGS.createNewTracks and not hasTimeSel
 
+    local perItemMap = timeSelectionItemMap
+    timeSelectionItemMap = nil
+
+    local soloActive = getProcessingSoloActive()
+    local function trackAudible(track)
+        return AUDIBILITY.isTrackAudible(track, soloActive)
+    end
+
+    local function normalizeItemName(name)
+        if not name or name == "" then return nil end
+        return name:match("([^/\\]+)%.[^.]*$") or name
+    end
+
+    local function getItemNameFields(item, fallbackTrackName)
+        local take = reaper.GetActiveTake(item)
+        local takeName = nil
+        if take then
+            local _, tn = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+            if tn and tn ~= "" then
+                takeName = tn
+            end
+        end
+        local sourceName = nil
+        if take and not takeName then
+            local source = reaper.GetMediaItemTake_Source(take)
+            if source then
+                local sourcePath = reaper.GetMediaSourceFileName(source, "")
+                if sourcePath and sourcePath ~= "" then
+                    sourceName = sourcePath:match("([^/\\]+)$") or sourcePath
+                end
+            end
+        end
+        local baseName = normalizeItemName(takeName) or normalizeItemName(sourceName)
+        local displayName = baseName or fallbackTrackName or "Item"
+        return baseName or displayName, displayName
+    end
+
+    local filteredTrackList = AUDIBILITY.filterTracks(trackList, soloActive)
+    if #filteredTrackList ~= (trackList and #trackList or 0) then
+        debugLog("Audibility filter: tracks=" .. tostring(trackList and #trackList or 0) .. " -> " .. tostring(#filteredTrackList) .. " (solo=" .. tostring(soloActive) .. ")")
+    end
+    trackList = filteredTrackList
+    if #trackList == 0 then
+        isProcessingActive = false
+        showMessage("No audible targets", "All candidate tracks/items are muted or not solo-audible.", "info", true)
+        return
+    end
+
     -- Prepare all tracks: extract audio
     local trackJobs = {}
     local jobIndex = 0
+    local perItemCandidates = 0
+    local perItemEligible = 0
 
     local function getJobUIColor(track, fallbackIdx)
         -- Returns {r,g,b} in 0..1 for UI tinting. Uses the track's custom color when set.
@@ -16245,13 +16978,74 @@ runSingleTrackSeparation = function(trackList)
         local _, trackName = reaper.GetTrackName(track)
         if trackName == "" then trackName = "Track " .. math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")) end
 
-        if inPlaceMultiItem then
+        if perItemMap and hasTimeSel and perItemMap[track] then
+            -- Time selection + per-item jobs for this track (new tracks OR in-place)
+            local entries = perItemMap[track] or {}
+            perItemCandidates = perItemCandidates + #entries
+            local eligibleEntries = {}
+            for _, entry in ipairs(entries) do
+                local item = entry and entry.item or nil
+                if item and reaper.ValidatePtr(item, "MediaItem*") and AUDIBILITY.isItemAudible(item, soloActive) then
+                    table.insert(eligibleEntries, entry)
+                end
+            end
+
+            perItemEligible = perItemEligible + #eligibleEntries
+            for itemIdx, entry in ipairs(eligibleEntries) do
+                local item = entry.item
+                jobIndex = jobIndex + 1
+                local itemDir = baseTempDir .. PATH_SEP .. "item_" .. jobIndex
+                makeDir(itemDir)
+                local inputFile = itemDir .. PATH_SEP .. "input.wav"
+
+                local extracted, err, renderStart, renderLen = renderItemToWav(item, inputFile)
+                if extracted then
+                    local sourceItemName, sourceItemDisplayName = getItemNameFields(item, trackName)
+                    local itemName = sourceItemDisplayName
+                    local audioDuration = renderLen or 0
+                    if audioDuration <= 0 then
+                        local fallbackLen = entry.len or 0
+                        if fallbackLen > 0 then
+                            audioDuration = fallbackLen
+                        else
+                            local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                            local itemEnd = itemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                            audioDuration = math.max(0, math.min(timeSelectionEnd, itemEnd) - math.max(timeSelectionStart, itemPos))
+                        end
+                    end
+
+                    table.insert(trackJobs, {
+                        track = track,
+                        trackName = trackName .. " [" .. itemIdx .. "/" .. #eligibleEntries .. "]",
+                        uiColor = getJobUIColor(track, jobIndex),
+                        trackDir = itemDir,
+                        inputFile = inputFile,
+                        sourceItem = item,
+                        sourceItems = {item},
+                        itemNames = itemName,
+                        sourceTrackName = trackName,
+                        sourceItemName = sourceItemName,
+                        sourceItemDisplayName = sourceItemDisplayName,
+                        itemCount = 1,
+                        expectedItemCount = 1,
+                        expectedStemCount = selectedStemCount,
+                        selPos = renderStart or entry.start,
+                        selLen = renderLen or entry.len,
+                        index = jobIndex,
+                        audioDuration = audioDuration,
+                        perItem = true,
+                    })
+                else
+                    debugLog("Per-item extract failed: " .. tostring(err))
+                end
+            end
+        elseif inPlaceMultiItem then
             -- In-place mode: create a separate job for EACH selected item on the track
             local numItems = reaper.CountTrackMediaItems(track)
             local selectedItems = {}
             for j = 0, numItems - 1 do
                 local item = reaper.GetTrackMediaItem(track, j)
-                if reaper.IsMediaItemSelected(item) then
+                if reaper.IsMediaItemSelected(item) and AUDIBILITY.isItemAudible(item, soloActive) then
                     table.insert(selectedItems, item)
                 end
             end
@@ -16264,23 +17058,8 @@ runSingleTrackSeparation = function(trackList)
 
                 local extracted, err = renderSingleItemToWav(item, inputFile)
                 if extracted then
-                    -- Get item name for display
-                    local itemName = "Unknown"
-                    local take = reaper.GetActiveTake(item)
-                    if take then
-                        local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
-                        if takeName and takeName ~= "" then
-                            itemName = takeName
-                        else
-                            local source = reaper.GetMediaItemTake_Source(take)
-                            if source then
-                                local sourcePath = reaper.GetMediaSourceFileName(source, "")
-                                if sourcePath and sourcePath ~= "" then
-                                    itemName = sourcePath:match("([^/\\]+)$") or sourcePath
-                                end
-                            end
-                        end
-                    end
+                    local sourceItemName, sourceItemDisplayName = getItemNameFields(item, trackName)
+                    local itemName = sourceItemDisplayName
 
                     -- Get audio duration without spawning ffprobe/CMD
                     local audioDuration = reaper.GetMediaItemInfo_Value(item, "D_LENGTH") or 0
@@ -16294,7 +17073,12 @@ runSingleTrackSeparation = function(trackList)
                         sourceItem = item,
                         sourceItems = {item},  -- Only this one item
                         itemNames = itemName,
+                        sourceTrackName = trackName,
+                        sourceItemName = sourceItemName,
+                        sourceItemDisplayName = sourceItemDisplayName,
                         itemCount = 1,
+                        expectedItemCount = 1,
+                        expectedStemCount = selectedStemCount,
                         index = jobIndex,
                         audioDuration = audioDuration,
                     })
@@ -16317,6 +17101,7 @@ runSingleTrackSeparation = function(trackList)
             if extracted then
                 -- Get media item name(s) for display
                 local itemNames = {}
+                local itemNameSet = {}
                 local items = allSourceItems or {sourceItem}
                 for _, item in ipairs(items) do
                     if item and reaper.ValidatePtr(item, "MediaItem*") then
@@ -16324,7 +17109,10 @@ runSingleTrackSeparation = function(trackList)
                         if take then
                             local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
                             if takeName and takeName ~= "" then
-                                table.insert(itemNames, takeName)
+                                if not itemNameSet[takeName] then
+                                    table.insert(itemNames, takeName)
+                                    itemNameSet[takeName] = true
+                                end
                             else
                                 -- Try to get source filename
                                 local source = reaper.GetMediaItemTake_Source(take)
@@ -16332,7 +17120,10 @@ runSingleTrackSeparation = function(trackList)
                                     local sourcePath = reaper.GetMediaSourceFileName(source, "")
                                     if sourcePath and sourcePath ~= "" then
                                         local fileName = sourcePath:match("([^/\\]+)$") or sourcePath
-                                        table.insert(itemNames, fileName)
+                                        if not itemNameSet[fileName] then
+                                            table.insert(itemNames, fileName)
+                                            itemNameSet[fileName] = true
+                                        end
                                     end
                                 end
                             end
@@ -16350,6 +17141,8 @@ runSingleTrackSeparation = function(trackList)
                     audioDuration = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH") or 0
                 end
 
+                local expectedItemCount = (hasTimeSel and SETTINGS.createNewTracks and items and #items > 0) and #items or 1
+                local expectedStemCount = selectedStemCount * expectedItemCount
                 table.insert(trackJobs, {
                     track = track,
                     trackName = trackName,
@@ -16360,11 +17153,19 @@ runSingleTrackSeparation = function(trackList)
                     sourceItems = allSourceItems or {sourceItem},  -- All items for mute/delete
                     itemNames = itemNamesStr,
                     itemCount = #items,
+                    expectedItemCount = expectedItemCount,
+                    expectedStemCount = expectedStemCount,
                     index = jobIndex,
                     audioDuration = audioDuration,  -- Duration in seconds
                 })
             end
         end
+    end
+
+    if perItemMap and perItemCandidates > 0 and perItemEligible == 0 then
+        isProcessingActive = false
+        showMessage("No audible targets", T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible.", "info", true)
+        return
     end
 
     if #trackJobs == 0 then
@@ -16380,6 +17181,15 @@ runSingleTrackSeparation = function(trackList)
     multiTrackQueue.completedCount = 0
     multiTrackQueue.baseTempDir = baseTempDir
     multiTrackQueue.active = true
+    multiTrackQueue.selectedStemCount = selectedStemCount
+    local expectedItemsTotal = 0
+    local expectedStemsTotal = 0
+    for _, job in ipairs(trackJobs) do
+        expectedItemsTotal = expectedItemsTotal + (job.expectedItemCount or 1)
+        expectedStemsTotal = expectedStemsTotal + (job.expectedStemCount or selectedStemCount or 0)
+    end
+    multiTrackQueue.expectedItemCount = expectedItemsTotal
+    multiTrackQueue.expectedStemCount = expectedStemsTotal
     -- Default: follow user's parallel/sequential preference.
     -- However, on Windows CPU-only (device=cpu/auto), parallel multi-job runs can be MUCH slower
     -- because each job loads the model separately and they compete for CPU/RAM/disk.
@@ -16482,7 +17292,9 @@ startSeparationProcessForJob = function(job, segmentSize)
         pythonAvailable = canRunPython(PYTHON_PATH)
     end
     if not pythonAvailable then
-        local msg = "Python not found at: " .. tostring(PYTHON_PATH)
+        local msg =
+            "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
+            .. "Run STEMwerk_First_Run_Setup.lua to repair the runtime."
         debugLog(msg)
         SW_LOG.logExecResult("preflight: python missing", -1, msg)
         local lf = io.open(logFile, "w")
@@ -16848,6 +17660,15 @@ function drawMultiTrackProgressWindow()
     -- Title / branding
     gfx.setfont(1, "Arial", PS(16), string.byte('b'))
     local modeStr = multiTrackQueue.sequentialMode and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
+    local modeNote = ""
+    if multiTrackQueue.sequentialMode and SETTINGS.parallelProcessing then
+        local reason = multiTrackQueue.forceSequentialReason or ""
+        if reason ~= "" then
+            modeNote = " (" .. tostring(reason) .. ")"
+        else
+            modeNote = " (fallback)"
+        end
+    end
     local titleX = PS(20)
     local titleY = PS(25)
 
@@ -16874,7 +17695,18 @@ function drawMultiTrackProgressWindow()
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.x = titleX + prefixW + logoW
     gfx.y = titleY
-    gfx.drawstr(string.format(" - %s (%d tracks)", modeStr, #multiTrackQueue.jobs))
+    local runtimeMode, runtimeNote = getRuntimeModeLabel(multiTrackQueue)
+    local anyPerItem = false
+    for _, job in ipairs(multiTrackQueue.jobs) do
+        if job.perItem then anyPerItem = true; break end
+    end
+    local function jobUnitLabel(count)
+        if anyPerItem then
+            return (count == 1) and (T("footer_item") or "item") or (T("footer_items") or "items")
+        end
+        return (count == 1) and (T("footer_track") or "track") or (T("footer_tracks") or "tracks")
+    end
+    gfx.drawstr(string.format(" - %s (%d %s)%s", runtimeMode, #multiTrackQueue.jobs, jobUnitLabel(#multiTrackQueue.jobs), runtimeNote))
 
     -- Language toggle (left of theme toggle)
     local langW = PS(20)
@@ -17431,10 +18263,25 @@ function drawMultiTrackProgressWindow()
     for _, stem in ipairs(STEMS) do
         if stem.selected then selectedStemCount = selectedStemCount + 1 end
     end
-    local expectedStems = numJobs * selectedStemCount
+    local expectedStems = multiTrackQueue.expectedStemCount
+    if not expectedStems or expectedStems <= 0 then
+        expectedStems = numJobs * selectedStemCount
+    end
 
     -- Line 1: Status overview
-    local statusFmt = T("mt_status_line") or "Tracks: %d/%d | Audio: %.1fs/%.1fs | Stems: %d expected"
+    local function trSafeProgress(key, fallback)
+        local v = T(key)
+        if not v or v == "" or v == key or v == key:gsub("_", " ") then
+            return fallback
+        end
+        return v
+    end
+    local statusFmt
+    if anyPerItem then
+        statusFmt = trSafeProgress("mt_status_line_items", "Items: %d/%d | Audio: %.1fs/%.1fs | Stems: %d expected")
+    else
+        statusFmt = trSafeProgress("mt_status_line", "Tracks: %d/%d | Audio: %.1fs/%.1fs | Stems: %d expected")
+    end
     
     -- Show the duration of the current/last selection as the reference point, not the cumulative batch time
     local displayTotalDur = numJobs > 0 and (multiTrackQueue.jobs[1].audioDuration or 0) or totalAudioDur
@@ -17501,18 +18348,6 @@ function drawMultiTrackProgressWindow()
     
     -- Fix misleading GPU reporting
     local modeSuffix = ""
-    local reason = multiTrackQueue.forceSequentialReason or ""
-    if reason ~= "" and not reason:match("No GPU") and not reason:match("no GPU") then
-        modeSuffix = " (forced: " .. tostring(reason) .. ")"
-    end
-
-    -- Add active device info
-    local activeDeviceStr = ""
-    if multiTrackQueue.currentJobDevice then
-        activeDeviceStr = " | " .. (T("footer_using_device") or "Using: %s"):format(tostring(multiTrackQueue.currentJobDevice))
-    elseif SETTINGS.device and SETTINGS.device ~= "auto" then
-        activeDeviceStr = " | " .. (T("footer_using_device") or "Using: %s"):format(tostring(SETTINGS.device))
-    end
     
     local totalMins = math.floor(globalElapsed / 60)
     local totalSecs = math.floor(globalElapsed % 60)
@@ -17528,11 +18363,10 @@ function drawMultiTrackProgressWindow()
     end
     
     local modelDisplay = (SETTINGS.model == "htdemucs_ft") and "Quality" or (is6Stem and "6-Stem" or "Fast")
-    local hintText = string.format("%s: %d:%02d%s | %s: %s%s | %s%s%s | %s", 
+    local hintText = string.format("%s: %d:%02d%s | %s: %s%s | %s | %s", 
         mtTime, totalMins, totalSecs, etaText, 
         mtSeg, segSize, modeStr,
-        modelDisplay,
-        modeSuffix, activeDeviceStr, mtCancel)
+        modelDisplay, mtCancel)
 
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], statusBlockAlpha)
     gfx.rect(0, statusBlockY, gfx.w, statusBlockH, 1)
@@ -17612,7 +18446,7 @@ function multiTrackProgressLoop()
         -- Best-effort kill of all running workers so cancel is immediate and doesn't slow next run
         if multiTrackQueue.jobs then
             for _, job in ipairs(multiTrackQueue.jobs) do
-                killProcessFromPidFile(job.pidFile)
+                HELPERS.killProcessFromPidFile(job.pidFile)
             end
         end
 
@@ -17671,157 +18505,34 @@ end
 processAllStemsResult = function()
     reaper.Undo_BeginBlock()
 
-    -- Handle mute/delete options FIRST (before creating stems)
-    local actionMsg = ""
     local actionCount = 0
     local actionData = nil
-
-    -- Collect all source items from all jobs
-    local allItems = {}
-    for _, job in ipairs(multiTrackQueue.jobs) do
-        if job.sourceItems then
-            for _, item in ipairs(job.sourceItems) do
-                table.insert(allItems, item)
-            end
-        elseif job.sourceItem then
-            table.insert(allItems, job.sourceItem)
-        end
-    end
 
     -- Skip item-level processing if deleteOriginalTrack is set (tracks will be deleted after stems created)
     -- Also skip muteSelection/deleteSelection for in-place + time selection mode
     -- (the selection portion will be replaced by stems, splitting is done there)
     local applyCleanup = SETTINGS.createNewTracks
     local skipSelectionProcessing = timeSelectionMode and not SETTINGS.createNewTracks
+    local hasCleanupTimeSel = (timeSelectionStart and timeSelectionEnd and timeSelectionEnd > timeSelectionStart) or false
 
-    if applyCleanup and SETTINGS.deleteOriginalTrack then
-        -- Do nothing here - track deletion happens after stems are created
-    elseif applyCleanup and SETTINGS.muteOriginal and not skipSelectionProcessing then
-        -- Mute all source items from all jobs
-        for _, item in ipairs(allItems) do
-            if reaper.ValidatePtr(item, "MediaItem*") then
-                reaper.SetMediaItemInfo_Value(item, "B_MUTE", 1)
-                actionCount = actionCount + 1
-            end
-        end
-        local itemWord = actionCount == 1 and (T("footer_item") or "item") or (T("footer_items") or "items")
-        actionMsg = "\n" .. string.format(T("result_action_muted") or "%d %s muted.", actionCount, itemWord)
-        actionData = { kind = "items", key = "result_action_muted", count = actionCount }
-    elseif applyCleanup and SETTINGS.muteSelection and not skipSelectionProcessing then
-        -- Mute selection portion of all source items
-        -- Process in reverse order to avoid item index shifting issues
-        for i = #allItems, 1, -1 do
-            local item = allItems[i]
-            if reaper.ValidatePtr(item, "MediaItem*") then
-                local itemTrack = reaper.GetMediaItem_Track(item)
-                if itemTrack then
-                    local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                    local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                    local itemEnd = itemPos + itemLen
-
-                    -- Only process if item overlaps time selection
-                    if itemPos < timeSelectionEnd and itemEnd > timeSelectionStart then
-                        -- Split at selection boundaries if needed
-                        local splitStart = math.max(itemPos, timeSelectionStart)
-                        local splitEnd = math.min(itemEnd, timeSelectionEnd)
-
-                        -- Split at start of selection (if not at item start)
-                        local middleItem = item
-                        if splitStart > itemPos + 0.001 then
-                            middleItem = reaper.SplitMediaItem(item, splitStart)
-                        end
-
-                        -- Split at end of selection (if not at item end)
-                        if middleItem then
-                            -- Get middleItem's actual end position after first split
-                            local middlePos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
-                            local middleLen = reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
-                            local middleEnd = middlePos + middleLen
-
-                            if splitEnd < middleEnd - 0.001 then
-                                reaper.SplitMediaItem(middleItem, splitEnd)
-                            end
-                        end
-
-                        -- Mute the middle part (now 'middleItem' is the selection portion)
-                        if middleItem then
-                            reaper.SetMediaItemInfo_Value(middleItem, "B_MUTE", 1)
-                            actionCount = actionCount + 1
-                        end
+    local function collectUniqueJobItems()
+        local items = {}
+        local seen = {}
+        for _, job in ipairs(multiTrackQueue.jobs or {}) do
+            local list = job.sourceItems or (job.sourceItem and { job.sourceItem }) or {}
+            for _, item in ipairs(list) do
+                if item and reaper.ValidatePtr(item, "MediaItem*") then
+                    local key = tostring(item)
+                    if not seen[key] then
+                        seen[key] = true
+                        items[#items + 1] = item
                     end
                 end
             end
         end
-        local itemWord = actionCount == 1 and (T("footer_item") or "item") or (T("footer_items") or "items")
-        actionMsg = "\n" .. string.format(T("result_action_selection_muted") or "Selection muted in %d %s.", actionCount, itemWord)
-        actionData = { kind = "items", key = "result_action_selection_muted", count = actionCount }
-    elseif applyCleanup and SETTINGS.deleteOriginal then
-        -- Delete all source items from all jobs
-        -- Process in reverse order to avoid index shifting issues
-        for i = #allItems, 1, -1 do
-            local item = allItems[i]
-            if reaper.ValidatePtr(item, "MediaItem*") then
-                local itemTrack = reaper.GetMediaItem_Track(item)
-                if itemTrack then
-                    reaper.DeleteTrackMediaItem(itemTrack, item)
-                    actionCount = actionCount + 1
-                end
-            end
-        end
-        local itemWord = actionCount == 1 and (T("footer_item") or "item") or (T("footer_items") or "items")
-        actionMsg = "\n" .. string.format(T("result_action_deleted") or "%d %s deleted.", actionCount, itemWord)
-        actionData = { kind = "items", key = "result_action_deleted", count = actionCount }
-    elseif applyCleanup and SETTINGS.deleteSelection and not skipSelectionProcessing then
-        -- Delete selection portion of all source items
-        -- Process in reverse order to avoid item index shifting issues
-        for i = #allItems, 1, -1 do
-            local item = allItems[i]
-            if reaper.ValidatePtr(item, "MediaItem*") then
-                local itemTrack = reaper.GetMediaItem_Track(item)
-                if itemTrack then
-                    local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                    local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                    local itemEnd = itemPos + itemLen
-
-                    -- Only process if item overlaps time selection
-                    if itemPos < timeSelectionEnd and itemEnd > timeSelectionStart then
-                        local splitStart = math.max(itemPos, timeSelectionStart)
-                        local splitEnd = math.min(itemEnd, timeSelectionEnd)
-
-                        -- Split at start of selection (if not at item start)
-                        local middleItem = item
-                        if splitStart > itemPos + 0.001 then
-                            middleItem = reaper.SplitMediaItem(item, splitStart)
-                        end
-
-                        -- Split at end of selection (if not at item end)
-                        if middleItem then
-                            -- Get middleItem's actual end position after first split
-                            local middlePos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
-                            local middleLen = reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
-                            local middleEnd = middlePos + middleLen
-
-                            if splitEnd < middleEnd - 0.001 then
-                                reaper.SplitMediaItem(middleItem, splitEnd)
-                            end
-                        end
-
-                        -- Delete the middle part
-                        if middleItem then
-                            local middleTrack = reaper.GetMediaItem_Track(middleItem)
-                            if middleTrack then
-                                reaper.DeleteTrackMediaItem(middleTrack, middleItem)
-                                actionCount = actionCount + 1
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        local itemWord = actionCount == 1 and (T("footer_item") or "item") or (T("footer_items") or "items")
-        actionMsg = "\n" .. string.format(T("result_action_selection_deleted") or "Selection deleted from %d %s.", actionCount, itemWord)
-        actionData = { kind = "items", key = "result_action_selection_deleted", count = actionCount }
+        return items
     end
+    local allItems = collectUniqueJobItems()
 
     -- Now create stems for each job
     local totalStemsCreated = 0
@@ -17884,7 +18595,19 @@ processAllStemsResult = function()
                     debugLog("  Time selection mode: using global sel pos=" .. jobSelPos .. ", len=" .. jobSelLen)
                 end
                 debugLog("  Calling createStemTracksForSelection..")
-                local count = createStemTracksForSelection(stems, jobSelPos, jobSelLen, job.track)
+                local itemsOverride = nil
+                if job and job.perItem and job.sourceItems then
+                    itemsOverride = {}
+                    for _, it in ipairs(job.sourceItems) do
+                        itemsOverride[#itemsOverride + 1] = {
+                            item = it,
+                            sourceItemName = job.sourceItemName,
+                            sourceItemDisplayName = job.sourceItemDisplayName,
+                        }
+                    end
+                end
+                local useItemNameForTrack = (job and job.perItem) or false
+                local count = createStemTracksForSelection(stems, jobSelPos, jobSelLen, job.track, itemsOverride, useItemNameForTrack)
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
                 if count > 0 and job.track and reaper.ValidatePtr(job.track, "MediaTrack*") then
@@ -17895,42 +18618,64 @@ processAllStemsResult = function()
                 debugLog("  In-place mode: processing source item..")
                 local sourceItem = job.sourceItem
                 if sourceItem and reaper.ValidatePtr(sourceItem, "MediaItem*") then
-                    -- Bij time selection: split het item eerst bij de selectie grenzen
-                    -- zodat we alleen het selectie-deel vervangen, niet het hele item
-                    if timeSelectionMode and timeSelectionStart and timeSelectionEnd then
+                    if job.perItem and job.selPos and job.selLen and job.selLen > 0 then
+                        local selStart = job.selPos
+                        local selEnd = job.selPos + job.selLen
+                        debugLog("  Per-item time selection: replacing selection at " .. selStart .. " len=" .. job.selLen)
+                        local nameBase = job.sourceItemName or job.sourceItemDisplayName or getItemDisplayNameForTakes(sourceItem)
+                        local count, mainItem = WORKFLOW.replaceInPlacePartial(sourceItem, stems, selStart, selEnd, nameBase)
+                        debugLog("  Replaced with " .. count .. " stems as takes")
+                        local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes, nil, nameBase)
+                        if exploded > 0 then
+                            debugLog("  Post: exploded takes (" .. tostring(SETTINGS.postProcessTakes) .. ") => " .. tostring(exploded) .. " items")
+                        else
+                            if mainItem and reaper.ValidatePtr(mainItem, "MediaItem*") then
+                                local takeCount = reaper.CountTakes(mainItem) or 0
+                                if takeCount > 1 then
+                                    addPostProcessCandidate(mainItem)
+                                    focusReaperAfterMainOpenOnce = true
+                                end
+                            end
+                        end
+                        totalStemsCreated = totalStemsCreated + count
+                    else
+                        -- Bij time selection: split het item eerst bij de selectie grenzen
+                        -- zodat we alleen het selectie-deel vervangen, niet het hele item
+                        if timeSelectionMode and timeSelectionStart and timeSelectionEnd then
+                            local srcItemPos = reaper.GetMediaItemInfo_Value(sourceItem, "D_POSITION")
+                            local srcItemLen = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH")
+                            local srcItemEnd = srcItemPos + srcItemLen
+
+                            debugLog("  Time selection mode: splitting item at selection boundaries")
+                            debugLog("  Item: " .. srcItemPos .. " to " .. srcItemEnd)
+                            debugLog("  Selection: " .. timeSelectionStart .. " to " .. timeSelectionEnd)
+
+                            -- Split bij start van selectie (als selectie niet aan begin item is)
+                            local selectionItem = sourceItem
+                            if timeSelectionStart > srcItemPos + 0.001 then
+                                selectionItem = reaper.SplitMediaItem(sourceItem, timeSelectionStart)
+                                debugLog("  Split at start: " .. timeSelectionStart)
+                            end
+
+                            -- Split bij einde van selectie (als selectie niet aan einde item is)
+                            if selectionItem and timeSelectionEnd < srcItemEnd - 0.001 then
+                                reaper.SplitMediaItem(selectionItem, timeSelectionEnd)
+                                debugLog("  Split at end: " .. timeSelectionEnd)
+                            end
+
+                            -- Gebruik het selectie-item voor replacement
+                            if selectionItem then
+                                sourceItem = selectionItem
+                            end
+                        end
+
                         local srcItemPos = reaper.GetMediaItemInfo_Value(sourceItem, "D_POSITION")
                         local srcItemLen = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH")
-                        local srcItemEnd = srcItemPos + srcItemLen
-
-                        debugLog("  Time selection mode: splitting item at selection boundaries")
-                        debugLog("  Item: " .. srcItemPos .. " to " .. srcItemEnd)
-                        debugLog("  Selection: " .. timeSelectionStart .. " to " .. timeSelectionEnd)
-
-                        -- Split bij start van selectie (als selectie niet aan begin item is)
-                        local selectionItem = sourceItem
-                        if timeSelectionStart > srcItemPos + 0.001 then
-                            selectionItem = reaper.SplitMediaItem(sourceItem, timeSelectionStart)
-                            debugLog("  Split at start: " .. timeSelectionStart)
-                        end
-
-                        -- Split bij einde van selectie (als selectie niet aan einde item is)
-                        if selectionItem and timeSelectionEnd < srcItemEnd - 0.001 then
-                            reaper.SplitMediaItem(selectionItem, timeSelectionEnd)
-                            debugLog("  Split at end: " .. timeSelectionEnd)
-                        end
-
-                        -- Gebruik het selectie-item voor replacement
-                        if selectionItem then
-                            sourceItem = selectionItem
-                        end
-                    end
-
-                    local srcItemPos = reaper.GetMediaItemInfo_Value(sourceItem, "D_POSITION")
-                    local srcItemLen = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH")
-                    debugLog("  Replacing item at pos=" .. srcItemPos .. ", len=" .. srcItemLen)
-                    local count, mainItem = replaceInPlace(sourceItem, stems, srcItemPos, srcItemLen)
+                        local nameBase = job.sourceItemName or job.sourceItemDisplayName or getItemDisplayNameForTakes(sourceItem)
+                        debugLog("  Replacing item at pos=" .. srcItemPos .. ", len=" .. srcItemLen)
+                        local count, mainItem = WORKFLOW.replaceInPlace(sourceItem, stems, srcItemPos, srcItemLen, nameBase)
                     debugLog("  Replaced with " .. count .. " stems as takes")
-                    local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
+                    local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes, nil, nameBase)
                     if exploded > 0 then
                         debugLog("  Post: exploded takes (" .. tostring(SETTINGS.postProcessTakes) .. ") => " .. tostring(exploded) .. " items")
                     else
@@ -17943,6 +18688,7 @@ processAllStemsResult = function()
                         end
                     end
                     totalStemsCreated = totalStemsCreated + count
+                    end
                 else
                     debugLog("  ERROR: No valid source item for in-place replacement")
                 end
@@ -17995,6 +18741,100 @@ processAllStemsResult = function()
         isProcessingActive = false
         showMessage("Separation Failed", msg, "error", true)
         return
+    end
+
+    -- Handle delete/mute options AFTER stems are created (so placement isn't disturbed)
+    if applyCleanup and not SETTINGS.deleteOriginalTrack then
+        if SETTINGS.muteOriginal and not skipSelectionProcessing then
+            for _, item in ipairs(allItems) do
+                if reaper.ValidatePtr(item, "MediaItem*") then
+                    reaper.SetMediaItemInfo_Value(item, "B_MUTE", 1)
+                    actionCount = actionCount + 1
+                end
+            end
+            actionData = { kind = "items", key = "result_action_muted", count = actionCount }
+        elseif SETTINGS.muteSelection and not skipSelectionProcessing and hasCleanupTimeSel then
+            for i = #allItems, 1, -1 do
+                local item = allItems[i]
+                if reaper.ValidatePtr(item, "MediaItem*") then
+                    local itemTrack = reaper.GetMediaItem_Track(item)
+                    if itemTrack then
+                        local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                        local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                        local itemEnd = itemPos + itemLen
+                        if itemPos < timeSelectionEnd and itemEnd > timeSelectionStart then
+                            local splitStart = math.max(itemPos, timeSelectionStart)
+                            local splitEnd = math.min(itemEnd, timeSelectionEnd)
+                            local middleItem = item
+                            if splitStart > itemPos + 0.001 then
+                                middleItem = reaper.SplitMediaItem(item, splitStart)
+                            end
+                            if middleItem then
+                                local middlePos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
+                                local middleLen = reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
+                                local middleEnd = middlePos + middleLen
+                                if splitEnd < middleEnd - 0.001 then
+                                    reaper.SplitMediaItem(middleItem, splitEnd)
+                                end
+                            end
+                            if middleItem then
+                                reaper.SetMediaItemInfo_Value(middleItem, "B_MUTE", 1)
+                                actionCount = actionCount + 1
+                            end
+                        end
+                    end
+                end
+            end
+            actionData = { kind = "items", key = "result_action_selection_muted", count = actionCount }
+        elseif SETTINGS.deleteOriginal then
+            for i = #allItems, 1, -1 do
+                local item = allItems[i]
+                if reaper.ValidatePtr(item, "MediaItem*") then
+                    local itemTrack = reaper.GetMediaItem_Track(item)
+                    if itemTrack then
+                        reaper.DeleteTrackMediaItem(itemTrack, item)
+                        actionCount = actionCount + 1
+                    end
+                end
+            end
+            actionData = { kind = "items", key = "result_action_deleted", count = actionCount }
+        elseif SETTINGS.deleteSelection and not skipSelectionProcessing and hasCleanupTimeSel then
+            for i = #allItems, 1, -1 do
+                local item = allItems[i]
+                if reaper.ValidatePtr(item, "MediaItem*") then
+                    local itemTrack = reaper.GetMediaItem_Track(item)
+                    if itemTrack then
+                        local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                        local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                        local itemEnd = itemPos + itemLen
+                        if itemPos < timeSelectionEnd and itemEnd > timeSelectionStart then
+                            local splitStart = math.max(itemPos, timeSelectionStart)
+                            local splitEnd = math.min(itemEnd, timeSelectionEnd)
+                            local middleItem = item
+                            if splitStart > itemPos + 0.001 then
+                                middleItem = reaper.SplitMediaItem(item, splitStart)
+                            end
+                            if middleItem then
+                                local middlePos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
+                                local middleLen = reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
+                                local middleEnd = middlePos + middleLen
+                                if splitEnd < middleEnd - 0.001 then
+                                    reaper.SplitMediaItem(middleItem, splitEnd)
+                                end
+                            end
+                            if middleItem then
+                                local middleTrack = reaper.GetMediaItem_Track(middleItem)
+                                if middleTrack then
+                                    reaper.DeleteTrackMediaItem(middleTrack, middleItem)
+                                    actionCount = actionCount + 1
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            actionData = { kind = "items", key = "result_action_selection_deleted", count = actionCount }
+        end
     end
 
     -- Handle deleteOriginalTrack AFTER stems are created (deletes entire source tracks)
@@ -18139,6 +18979,11 @@ function runSeparationWorkflow()
     isProcessingActive = true
     debugLog("=== runSeparationWorkflow started ===")
 
+    if not ensureDependenciesInteractive() then
+        isProcessingActive = false
+        return
+    end
+
     -- Capture time selection ONCE to avoid flicker/race conditions (some systems briefly report equal start/end).
     local ts0, ts1 = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     local hasTimeSel = ((ts1 or 0) - (ts0 or 0)) > 0.000001
@@ -18243,26 +19088,66 @@ function runSeparationWorkflow()
     savedPlaybackState = reaper.GetPlayState()
     debugLog("Saved playback state: " .. tostring(savedPlaybackState))
 
+    -- Capture solo state once for this run (used by audibility filtering)
+    PROCESS_AUDIBILITY_SOLO_ACTIVE = AUDIBILITY.anySoloActive()
+    debugLog("Audibility solo active: " .. tostring(PROCESS_AUDIBILITY_SOLO_ACTIVE))
+
     -- Re-fetch the current selection at processing time (user may have changed it)
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
     timeSelectionMode = false
     debugLog("Selected item: " .. tostring(selectedItem))
 
+    local soloActiveWorkflow = getProcessingSoloActive()
+    local function trackAudibleWorkflow(track)
+        return AUDIBILITY.isTrackAudible(track, soloActiveWorkflow)
+    end
+    local function isItemMutedWorkflow(item)
+        return AUDIBILITY.isItemMuted(item)
+    end
+
     -- If no items selected but tracks are selected, auto-select all items on those tracks.
     -- This intentionally ignores any time selection.
     if not selectedItem and reaper.CountSelectedTracks(0) > 0 then
         debugLog("No items/time selection, but tracks selected - auto-selecting items on tracks")
+        local anyAudibleTrack = false
         for t = 0, reaper.CountSelectedTracks(0) - 1 do
             local track = reaper.GetSelectedTrack(0, t)
-            local numItems = reaper.CountTrackMediaItems(track)
-            for i = 0, numItems - 1 do
-                local item = reaper.GetTrackMediaItem(track, i)
-                reaper.SetMediaItemSelected(item, true)
+            if trackAudibleWorkflow(track) then
+                anyAudibleTrack = true
+                local numItems = reaper.CountTrackMediaItems(track)
+                for i = 0, numItems - 1 do
+                    local item = reaper.GetTrackMediaItem(track, i)
+                    if not isItemMutedWorkflow(item) then
+                        reaper.SetMediaItemSelected(item, true)
+                    end
+                end
             end
+        end
+        if not anyAudibleTrack then
+            showMessage("No audible tracks", "All selected tracks are muted or not solo-audible.", "info", true)
+            isProcessingActive = false
+            return
         end
     adjustTrackLayout()
         selectedItem = reaper.GetSelectedMediaItem(0, 0)
         debugLog("After auto-select, selected item: " .. tostring(selectedItem))
+    end
+
+    if selectedItem and reaper.ValidatePtr(selectedItem, "MediaItem*") then
+        local tr = reaper.GetMediaItem_Track(selectedItem)
+        if not (tr and trackAudibleWorkflow(tr)) or isItemMutedWorkflow(selectedItem) then
+            local found = nil
+            local cnt = reaper.CountSelectedMediaItems(0) or 0
+            for i = 0, cnt - 1 do
+                local it = reaper.GetSelectedMediaItem(0, i)
+                local itr = it and reaper.GetMediaItem_Track(it)
+                if it and itr and trackAudibleWorkflow(itr) and not isItemMutedWorkflow(it) then
+                    found = it
+                    break
+                end
+            end
+            selectedItem = found
+        end
     end
 
     local selTrackCount = reaper.CountSelectedTracks(0) or 0
@@ -18302,6 +19187,7 @@ function runSeparationWorkflow()
     local extracted, err, sourceItem, trackList, trackItems
     if timeSelectionMode then
         debugLog("Rendering time selection to WAV..")
+        timeSelectionItemMap = nil
         extracted, err, sourceItem, trackList, trackItems = renderTimeSelectionToWav(WORKFLOW_TEMP_INPUT)
         debugLog("Render result: extracted=" .. tostring(extracted) .. ", err=" .. tostring(err))
 
@@ -18313,6 +19199,18 @@ function runSeparationWorkflow()
             -- If multi-track setup failed before activating the queue, unlock so user can retry
             if not multiTrackQueue.active then
                 debugLog("Multi-track setup did not activate queue; resetting processing guard")
+                isProcessingActive = false
+            end
+            return
+        end
+
+        -- Check for per-item time selection mode (single track, multiple items)
+        if err == "MULTI_ITEM" and trackList and #trackList == 1 and trackItems then
+            debugLog("Multi-item time selection on single track: using per-item jobs")
+            timeSelectionItemMap = trackItems
+            runSingleTrackSeparation(trackList)
+            if not multiTrackQueue.active then
+                debugLog("Multi-item setup did not activate queue; resetting processing guard")
                 isProcessingActive = false
             end
             return
@@ -18450,7 +19348,7 @@ function runSeparationWorkflow()
         progressState.uiColor = getTrackUIColor(uiTrack)
     end
     -- Start separation with progress UI (async)
-    runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, SETTINGS.model)
+    WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, SETTINGS.model)
     debugLog("runSeparationWithProgress called")
 end
 
@@ -18513,6 +19411,10 @@ main = function()
     -- Load settings first (needed for window position in error messages)
     loadSettings()
     perfMark("loadSettings() done")
+
+    if not ensureDependenciesInteractive() then
+        return
+    end
 
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
     timeSelectionMode = false

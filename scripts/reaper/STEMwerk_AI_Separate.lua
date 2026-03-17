@@ -1,5 +1,5 @@
 -- @description STEMwerk (compat wrapper)
--- @author flarkAUDIO
+-- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.0.0
 -- @changelog
 --   Wrapper: old script name kept for backwards compatibility.

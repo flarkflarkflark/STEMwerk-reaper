@@ -32,11 +32,21 @@ fi
 
 mkdir -p "${dest}"
 
-cp -v "${src_dir}/STEMwerk.lua" "${dest}/STEMwerk.lua"
-cp -v "${src_dir}/audio_separator_process.py" "${dest}/audio_separator_process.py"
+mapfile -t sync_files <<'EOF'
+STEMwerk.lua
+audio_separator_process.py
+STEMwerk_First_Run_Setup.lua
+STEMwerk_Runtime_Setup.lua
+STEMwerk_Bootstrap_Linux.sh
+STEMwerk_Bootstrap_macOS.sh
+STEMwerk_Bootstrap_Windows.ps1
+EOF
+
+for file in "${sync_files[@]}"; do
+  cp -v "${src_dir}/${file}" "${dest}/${file}"
+done
 
 echo
 echo "Synced STEMwerk scripts to: ${dest}"
 echo "Restart REAPER (or re-run the script) to pick up changes."
-
 

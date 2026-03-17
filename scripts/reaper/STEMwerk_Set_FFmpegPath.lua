@@ -1,7 +1,20 @@
--- STEMwerk: Smart FFmpeg Setup
--- Automatically finds FFmpeg or guides the user through installation.
+-- STEMwerk: Set FFmpeg Path (cross-platform)
+-- Automatically finds FFmpeg or guides the user through setup.
 
 local section = "STEMwerk"
+
+local function getOS()
+    local ros = ""
+    if reaper and reaper.GetOS then
+        ros = tostring(reaper.GetOS() or "")
+    end
+    if ros:match("Win") then return "Windows" end
+    if ros:match("OSX") or ros:match("macOS") then return "macOS" end
+    return "Linux"
+end
+
+local OS = getOS()
+local PATH_SEP = OS == "Windows" and "\\" or "/"
 
 local function fileExists(path)
     if not path or path == "" then return false end
@@ -10,81 +23,142 @@ local function fileExists(path)
     return false
 end
 
-local function findFfmpeg()
-    -- 1. Try 'where' command (Windows)
-    local f = io.popen("where ffmpeg 2>nul")
-    if f then
-        local res = f:read("*l")
-        f:close()
-        if res and fileExists(res) then return res end
+local function getHome()
+    if OS == "Windows" then
+        return os.getenv("USERPROFILE") or "C:\\Users\\Default"
     end
-    
-    -- 2. Check common installation paths
-    local appdata = os.getenv("LOCALAPPDATA") or ""
-    local programFiles = os.getenv("ProgramFiles") or "C:\\Program Files"
-    
-    local common = {
-        programFiles .. "\\ffmpeg\\bin\\ffmpeg.exe",
-        "C:\\ffmpeg\\bin\\ffmpeg.exe",
-        appdata .. "\\Microsoft\\WinGet\\Links\\ffmpeg.exe",
-        "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe"
-    }
-    
-    for _, p in ipairs(common) do
+    return os.getenv("HOME") or "/tmp"
+end
+
+local function getRuntimeBase()
+    local override = reaper and reaper.GetExtState and reaper.GetExtState(section, "runtimeBase") or ""
+    if override ~= "" then
+        return override
+    end
+    local home = getHome()
+    if OS == "Windows" then
+        local localAppData = os.getenv("LOCALAPPDATA") or ""
+        if localAppData ~= "" then return localAppData .. "\\STEMwerk" end
+        return home .. "\\Documents\\STEMwerk"
+    elseif OS == "macOS" then
+        return "/Users/Shared/STEMwerk"
+    else
+        local xdg = os.getenv("XDG_DATA_HOME") or ""
+        if xdg ~= "" then return xdg .. "/STEMwerk" end
+        return home .. "/.local/share/STEMwerk"
+    end
+end
+
+local function findFfmpeg()
+    local runtimeBase = getRuntimeBase()
+    local runtimeCandidates = {}
+    if OS == "Windows" then
+        table.insert(runtimeCandidates, runtimeBase .. "\\runtime\\bin\\ffmpeg.exe")
+        table.insert(runtimeCandidates, runtimeBase .. "\\runtime\\ffmpeg\\bin\\ffmpeg.exe")
+    else
+        table.insert(runtimeCandidates, runtimeBase .. "/runtime/bin/ffmpeg")
+        table.insert(runtimeCandidates, runtimeBase .. "/runtime/ffmpeg/bin/ffmpeg")
+    end
+
+    if OS == "Windows" then
+        local f = io.popen("where ffmpeg 2>nul")
+        if f then
+            local res = f:read("*l")
+            f:close()
+            if res and fileExists(res) then return res end
+        end
+    else
+        local f = io.popen("command -v ffmpeg 2>/dev/null")
+        if f then
+            local res = f:read("*l")
+            f:close()
+            if res and fileExists(res) then return res end
+        end
+    end
+
+    local candidates = {}
+    for _, p in ipairs(runtimeCandidates) do
+        table.insert(candidates, p)
+    end
+
+    if OS == "Windows" then
+        local appdata = os.getenv("LOCALAPPDATA") or ""
+        local programFiles = os.getenv("ProgramFiles") or "C:\\Program Files"
+        table.insert(candidates, programFiles .. "\\ffmpeg\\bin\\ffmpeg.exe")
+        table.insert(candidates, "C:\\ffmpeg\\bin\\ffmpeg.exe")
+        table.insert(candidates, appdata .. "\\Microsoft\\WinGet\\Links\\ffmpeg.exe")
+        table.insert(candidates, "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe")
+    elseif OS == "macOS" then
+        table.insert(candidates, "/opt/homebrew/bin/ffmpeg")
+        table.insert(candidates, "/usr/local/bin/ffmpeg")
+        table.insert(candidates, "/opt/homebrew/opt/ffmpeg/bin/ffmpeg")
+        table.insert(candidates, "/usr/local/opt/ffmpeg/bin/ffmpeg")
+        table.insert(candidates, "/usr/bin/ffmpeg")
+    else
+        table.insert(candidates, "/usr/local/bin/ffmpeg")
+        table.insert(candidates, "/usr/bin/ffmpeg")
+        table.insert(candidates, "/snap/bin/ffmpeg")
+    end
+
+    for _, p in ipairs(candidates) do
         if fileExists(p) then return p end
     end
     return nil
 end
 
 local function openDownloadPage()
-    local url = "https://www.gyan.dev/ffmpeg/builds/"
-    if package.config:sub(1,1) == "\\" then -- Windows
+    local url = (OS == "Windows")
+        and "https://www.gyan.dev/ffmpeg/builds/"
+        or "https://ffmpeg.org/download.html"
+    if OS == "Windows" then
         os.execute('start "" "' .. url .. '"')
-    else
+    elseif OS == "macOS" then
         os.execute('open "' .. url .. '"')
+    else
+        os.execute('xdg-open "' .. url .. '"')
     end
 end
 
 local function main()
     local found = findFfmpeg()
-    
+    local exeLabel = (OS == "Windows") and "ffmpeg.exe" or "ffmpeg"
+
     if found then
-        local msg = "FFmpeg is automatisch gevonden op:\n\n" .. found .. "\n\nWilt u dit pad gebruiken voor STEMwerk?"
-        local res = reaper.ShowMessageBox(msg, "FFmpeg Gevonden", 4) -- 4 = Yes/No
-        if res == 6 then -- Yes
+        local msg = "FFmpeg is gevonden op:\n\n" .. found .. "\n\nWilt u dit pad gebruiken voor STEMwerk?"
+        local res = reaper.ShowMessageBox(msg, "FFmpeg Gevonden", 4)
+        if res == 6 then
             reaper.SetExtState(section, "ffmpegPath", found, true)
             reaper.ShowMessageBox("Succes! FFmpeg is nu ingesteld.", "STEMwerk", 0)
             return
         end
     end
 
-    -- Not found or user said No
-    local msg = "FFmpeg kon niet worden gevonden op uw systeem.\n\n" ..
-                "Wat wilt u doen?\n\n" ..
-                "JA: Handmatig het pad naar ffmpeg.exe opzoeken\n" ..
-                "NEE: FFmpeg downloaden via de website (opent browser)\n" ..
-                "CANCEL: Niets doen"
-    
-    local choice = reaper.ShowMessageBox(msg, "STEMwerk - FFmpeg Setup", 3) -- 3 = Yes/No/Cancel
+    local msg = "FFmpeg kon niet automatisch worden gevonden.\n\n"
+        .. "Wat wilt u doen?\n\n"
+        .. "JA: Handmatig het pad naar " .. exeLabel .. " opgeven\n"
+        .. "NEE: Open de downloadpagina\n"
+        .. "CANCEL: Niets doen"
 
-    if choice == 6 then -- Yes (Manual)
+    local choice = reaper.ShowMessageBox(msg, "STEMwerk - FFmpeg Setup", 3)
+    if choice == 6 then
         local current = reaper.GetExtState(section, "ffmpegPath")
-        if current == "" then current = "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe" end
-        
-        local ok, input = reaper.GetUserInputs("Pad naar ffmpeg.exe", 1, "Bestandspad:,extrawidth=200", current)
+        if current == "" then
+            current = (OS == "Windows") and "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe" or "/usr/local/bin/ffmpeg"
+        end
+        local ok, input = reaper.GetUserInputs("Pad naar " .. exeLabel, 1, "Bestandspad:,extrawidth=200", current)
         if ok and input ~= "" then
-            input = input:gsub('"', '') -- Remove quotes if user copied path with quotes
+            input = input:gsub('"', "")
             if fileExists(input) then
                 reaper.SetExtState(section, "ffmpegPath", input, true)
                 reaper.ShowMessageBox("Succes! Pad opgeslagen:\n" .. input, "STEMwerk", 0)
             else
-                reaper.ShowMessageBox("FOUT: Het bestand bestaat niet op de opgegeven locatie.\n\nZorg dat u naar het .exe bestand verwijst.", "Fout", 0)
-                main() -- Retry
+                reaper.ShowMessageBox("FOUT: Het bestand bestaat niet op de opgegeven locatie.", "Fout", 0)
+                main()
             end
         end
-    elseif choice == 7 then -- No (Download)
+    elseif choice == 7 then
         openDownloadPage()
-        reaper.ShowMessageBox("De downloadpagina is geopend in uw browser.\n\n1. Download een 'release build' (bijv. ffmpeg-release-essentials.7z)\n2. Pak het uit\n3. Start dit script opnieuw om het pad naar 'bin/ffmpeg.exe' op te geven.", "Handleiding", 0)
+        reaper.ShowMessageBox("De downloadpagina is geopend in uw browser.", "STEMwerk", 0)
     end
 end
 

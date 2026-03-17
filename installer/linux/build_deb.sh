@@ -33,7 +33,7 @@ Version: $VERSION
 Section: sound
 Priority: optional
 Architecture: $ARCH
-Maintainer: flarkAUDIO <noreply@example.com>
+Maintainer: flarkAUDIO <flarkaudio@pm.me>
 Homepage: https://github.com/flarkflarkflark/STEMwerk
 Description: STEMwerk REAPER scripts and helpers
  Installs the STEMwerk REAPER scripts and helper files.
