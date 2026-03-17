@@ -1,6 +1,6 @@
 -- @description Stemwerk: Setup Toolbar
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.0.0
+-- @version 2.2.1
 -- @changelog
 --   Adds/refreshes STEMwerk scripts in the Action List and guides toolbar setup.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

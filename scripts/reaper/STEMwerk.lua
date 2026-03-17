@@ -3,9 +3,9 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.0
+-- @version 2.2.1
 -- @changelog
---   2026-03-13: Release v2.2.0: Major UI Polish & Engine Refactor.
+--   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
 --   2026-03-13: Comprehensive UI synchronization: footers and tooltips now accurately mirror button states (In-place/Takes).
 --   2026-03-13: Improved target reporting: footer now detects tracks via time selection across multiple tracks.
 --   2026-03-13: Fixed misleading GPU status reporting in progress windows; added active device info.
@@ -53,7 +53,7 @@ function clearDebugLog() end
 --   ## License
 --   MIT License - https://opensource.org/licenses/MIT
 
-local SCRIPT_NAME = "STEMwerk (v2.2.0)"
+local SCRIPT_NAME = "STEMwerk (v2.2.1)"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
 -- STEMwerk.lua
 
