@@ -14,11 +14,11 @@ if [[ -z "${STEMWERK_VERSION:-}" && -f "$ROOT_DIR/VERSION" ]]; then
 fi
 
 rm -rf "$OUT_DIR" "$STAGE"
-mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk"
+mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper"
 
 # Copy only what we need
 rsync -a --delete \
-  "$ROOT_DIR/scripts/reaper" \
+  "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
   "$ROOT_DIR/docs" \
   "$ROOT_DIR/README.md" \
@@ -26,7 +26,7 @@ rsync -a --delete \
   "$ROOT_DIR/TODO.md" \
   "$ROOT_DIR/INTEGRATION.md" \
   "$ROOT_DIR/TESTING.md" \
-  "$STAGE/Users/Shared/STEMwerk/"
+  "$STAGE/Users/Shared/STEMwerk-reaper/"
 
 # Ensure pkg scripts are executable
 chmod +x "$SCRIPTS_DIR/postinstall" 2>/dev/null || true

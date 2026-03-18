@@ -9,6 +9,6 @@ source=("stemwerk-${pkgver}.tar.gz")
 sha256sums=('@SHA256@')
 
 package() {
-  install -dm755 "${pkgdir}/usr/share/stemwerk"
-  cp -a "${srcdir}/stemwerk-${pkgver}/"* "${pkgdir}/usr/share/stemwerk/"
+  install -dm755 "${pkgdir}/usr/share/stemwerk-reaper"
+  cp -a "${srcdir}/stemwerk-${pkgver}/"* "${pkgdir}/usr/share/stemwerk-reaper/"
 }

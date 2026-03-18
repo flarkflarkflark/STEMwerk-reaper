@@ -17,7 +17,44 @@ local function fileExists(path)
     return false
 end
 
-local scriptDir = getScriptDir()
+local rawScriptDir = getScriptDir()
+local PATH_HELPER = nil
+local helperOk, helperMod = pcall(dofile, rawScriptDir .. "STEMwerk_Path_Helper.lua")
+if helperOk and type(helperMod) == "table" then
+    PATH_HELPER = helperMod
+end
+local INSTALL = PATH_HELPER and PATH_HELPER.resolveInstallRoot(rawScriptDir) or {
+    ok = true,
+    root = rawScriptDir,
+    scriptsDir = rawScriptDir,
+    actual = rawScriptDir,
+    canonicalMismatch = false,
+    canonical = "",
+}
+
+if INSTALL.ok and INSTALL.canonicalMismatch and INSTALL.canonical ~= "" then
+    reaper.ShowMessageBox(
+        "STEMwerk Setup",
+        "STEMwerk is not installed in the canonical REAPER Scripts path.\n\n"
+            .. "Preferred:\n" .. tostring(INSTALL.canonical or "(unknown)") .. "\n\n"
+            .. "Current runtime install:\n" .. tostring(INSTALL.root or rawScriptDir) .. "\n\n"
+            .. "Setup continues using the current location.",
+        "STEMwerk Setup",
+        0
+    )
+elseif not INSTALL.ok then
+    reaper.ShowMessageBox(
+        "STEMwerk is not installed in the REAPER Scripts folder.\n\nExpected:\n"
+            .. tostring(INSTALL.canonical or "(unknown)")
+            .. "\n\nCurrent script location:\n" .. tostring(rawScriptDir)
+            .. "\n\nReinstall STEMwerk and run STEMwerk_First_Run_Setup.lua from REAPER.",
+        "STEMwerk Setup",
+        0
+    )
+    return
+end
+
+local scriptDir = INSTALL.scriptsDir or rawScriptDir
 local setupScript = scriptDir .. "STEMwerk_First_Run_Setup.lua"
 
 if fileExists(setupScript) then

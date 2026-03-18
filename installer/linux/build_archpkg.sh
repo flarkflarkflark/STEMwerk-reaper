@@ -20,7 +20,7 @@ SRC_DIR="$BUILD_DIR/stemwerk-$VERSION"
 mkdir -p "$SRC_DIR"
 
 rsync -a --delete \
-  "$ROOT_DIR/scripts/reaper" \
+  "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \

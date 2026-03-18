@@ -1,0 +1,4 @@
+STEMwerk installed.
+
+Important:
+Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.

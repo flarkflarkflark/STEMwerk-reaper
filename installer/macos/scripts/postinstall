@@ -4,7 +4,7 @@ set -euo pipefail
 # Postinstall runs as root. We copy STEMwerk into the *active user's* REAPER Scripts folder
 # so non-technical testers don't need to hunt paths or run scripts.
 
-SRC="/Users/Shared/STEMwerk"
+SRC="/Users/Shared/STEMwerk-reaper"
 
 if [[ ! -d "$SRC" ]]; then
   echo "STEMwerk postinstall: source folder not found: $SRC"
@@ -25,7 +25,7 @@ if [[ -z "$HOME_DIR" || ! -d "$HOME_DIR" ]]; then
 fi
 
 REAPER_SCRIPTS_DIR="$HOME_DIR/Library/Application Support/REAPER/Scripts"
-TARGET="$REAPER_SCRIPTS_DIR/STEMwerk"
+TARGET="$REAPER_SCRIPTS_DIR/STEMwerk-reaper"
 
 mkdir -p "$REAPER_SCRIPTS_DIR"
 
@@ -36,10 +36,15 @@ rsync -a --delete "$SRC/" "$TARGET/"
 chown -R "$CONSOLE_USER":staff "$TARGET" 2>/dev/null || true
 
 echo "STEMwerk postinstall: copied to $TARGET"
+echo "Next step: Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua."
 
 # Best-effort: reveal folder in Finder for convenience (won't fail CI if no GUI).
 if command -v open >/dev/null 2>&1; then
   sudo -u "$CONSOLE_USER" open "$TARGET" >/dev/null 2>&1 || true
+fi
+
+if command -v osascript >/dev/null 2>&1; then
+  sudo -u "$CONSOLE_USER" osascript -e 'display dialog "Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua." with title "STEMwerk Installer" buttons {"OK"}' >/dev/null 2>&1 || true
 fi
 
 

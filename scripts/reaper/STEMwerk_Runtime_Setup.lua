@@ -1,6 +1,57 @@
 local M = {}
 
 local C = {}
+local PATH_HELPER = nil
+local INSTALL_CACHE = nil
+
+local function getPathHelper()
+    if PATH_HELPER then return PATH_HELPER end
+    local base = C.script_path or ""
+    if base == "" then return nil end
+    local ok, helper = pcall(dofile, base .. "STEMwerk_Path_Helper.lua")
+    if ok and type(helper) == "table" then
+        PATH_HELPER = helper
+        return PATH_HELPER
+    end
+    return nil
+end
+
+local function resolveInstallRoot()
+    if INSTALL_CACHE then return INSTALL_CACHE end
+    local helper = getPathHelper()
+    local script_path = C.script_path or ""
+    if helper and script_path ~= "" then
+        INSTALL_CACHE = helper.resolveInstallRoot(script_path, { os = C.OS })
+    else
+        INSTALL_CACHE = {
+            ok = true,
+            root = script_path,
+            scriptsDir = script_path,
+            canonical = "",
+        }
+    end
+    return INSTALL_CACHE
+end
+
+local function showInstallMismatch(install)
+    if type(C.showMessageBox) ~= "function" then return end
+    if not install then return end
+    local text = ""
+    if install.canonicalMismatch and install.canonical ~= "" then
+        text = "STEMwerk is not installed in the canonical REAPER Scripts path.\n\n"
+            .. "Preferred:\n" .. tostring(install.canonical or "(unknown)") .. "\n\n"
+            .. "Current runtime install:\n" .. tostring(install.root or "(unknown)") .. "\n\n"
+            .. "Setup continues using the current install location."
+    else
+        text = "STEMwerk runtime location could not be resolved from script path.\n\n"
+            .. "Reinstall STEMwerk and run STEMwerk_First_Run_Setup.lua from REAPER."
+    end
+    C.showMessageBox(
+        "STEMwerk Setup",
+        text,
+        0
+    )
+end
 
 function M.configure(context)
     if type(context) ~= "table" then
@@ -390,11 +441,21 @@ function M.isPythonAvailable(path)
 end
 
 function M.runFirstRunSetup()
-    local script_path = C.script_path or ""
-    local setupScript = script_path .. "STEMwerk_First_Run_Setup.lua"
+    local install = resolveInstallRoot()
+    if not install.ok then
+        showInstallMismatch(install)
+        return false
+    end
+
+    local scriptsDir = install.scriptsDir or (C.script_path or "")
+    if install.canonicalMismatch then
+        showInstallMismatch(install)
+    end
+
+    local setupScript = scriptsDir .. "STEMwerk_First_Run_Setup.lua"
 
     if not fileExists(setupScript) then
-        setupScript = script_path .. "STEMwerk-SETUP.lua"
+        setupScript = scriptsDir .. "STEMwerk-SETUP.lua"
     end
 
     if not fileExists(setupScript) then
@@ -465,6 +526,24 @@ function M.ensureDependenciesInteractive()
     if state.state == "running" then
         return false
     end
+    local helper = getPathHelper()
+    if helper then
+        local runtime = M.getRuntimePaths()
+        local guardPath = helper.getBootstrapGuardPath(runtime.runtimeState, C.PATH_SEP or "/")
+        local guard = helper.readEnvFile(guardPath)
+        if guard.STATUS == "failed" then
+            setDepState("failed", "bootstrap_guard:" .. tostring(guard.REASON or "failed"))
+            if type(C.showMessageBox) == "function" then
+                C.showMessageBox(
+                    "STEMwerk Setup",
+                    "Previous bootstrap failed.\n\nReason: " .. tostring(guard.REASON or "unknown") .. "\n\n"
+                        .. "Fix the install and run STEMwerk_First_Run_Setup.lua manually in REAPER.",
+                    0
+                )
+            end
+            return false
+        end
+    end
 
     local canRunFfmpeg = C.canRunFfmpeg
     local pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
@@ -506,7 +585,8 @@ function M.ensureDependenciesInteractive()
     local runtime = M.getRuntimePaths()
     local msg =
         "STEMwerk mist enkele onderdelen:\n\n- " .. table.concat(missing, "\n- ") ..
-        "\n\nSTEMwerk kan dit automatisch repareren en een vaste runtime aanmaken op:\n" .. tostring(runtime.base) ..
+        "\n\nRun STEMwerk_First_Run_Setup.lua in REAPER before using STEMwerk.lua.\n\n" ..
+        "STEMwerk kan dit automatisch repareren en een vaste runtime aanmaken op:\n" .. tostring(runtime.base) ..
         "\n\nAutomatische setup starten?"
 
     if state.prompted then

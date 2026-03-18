@@ -29,6 +29,51 @@ local function getScriptDir()
     return (info and info.source and info.source:match("@?(.*[/\\])")) or ""
 end
 
+local RAW_SCRIPT_DIR = getScriptDir()
+local PATH_HELPER = nil
+local helperOk, helperMod = pcall(dofile, RAW_SCRIPT_DIR .. "STEMwerk_Path_Helper.lua")
+if helperOk and type(helperMod) == "table" then
+    PATH_HELPER = helperMod
+end
+local INSTALL = PATH_HELPER and PATH_HELPER.resolveInstallRoot(RAW_SCRIPT_DIR, { os = OS }) or {
+    ok = true,
+    root = RAW_SCRIPT_DIR,
+    actual = RAW_SCRIPT_DIR,
+    scriptsDir = RAW_SCRIPT_DIR,
+    canonicalMismatch = false,
+    canonical = "",
+}
+
+local function warnInstallMismatch()
+    if not INSTALL.ok then
+        return
+    end
+    if not INSTALL.canonicalMismatch or INSTALL.canonical == "" then
+        return
+    end
+    msgBox(
+        "STEMwerk Setup",
+        "STEMwerk is not installed in the canonical REAPER Scripts path.\n\n"
+            .. "Preferred:\n" .. tostring(INSTALL.canonical or "(unknown)") .. "\n\n"
+            .. "Current runtime install:\n" .. tostring(INSTALL.root or RAW_SCRIPT_DIR) .. "\n\n"
+            .. "Setup uses this actual location for bootstrap resolution.",
+        0
+    )
+end
+
+if not INSTALL.ok then
+    msgBox(
+        "STEMwerk Setup",
+        "STEMwerk runtime location could not be resolved.\n\nReinstall STEMwerk and run STEMwerk_First_Run_Setup.lua from REAPER.",
+        0
+    )
+    return
+end
+
+local INSTALL_ROOT = INSTALL.root or RAW_SCRIPT_DIR
+local SCRIPT_DIR = INSTALL.scriptsDir or RAW_SCRIPT_DIR
+warnInstallMismatch()
+
 local function quoteArg(s)
     s = tostring(s)
     if s:find('"') then
@@ -697,55 +742,89 @@ local function waitForBootstrapState(stateFile, logFile, runtimeState)
 end
 
 local function runBootstrap(runtime)
-    local scriptDir = getScriptDir()
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.log"
     ensureDir(runtime.runtimeState)
 
-    local scriptPath
+    local scriptPath = PATH_HELPER.getBootstrapScriptPath(INSTALL_ROOT, OS, PATH_SEP)
     local cmd
     if OS == "Windows" then
-        scriptPath = scriptDir .. "STEMwerk_Bootstrap_Windows.ps1"
         cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File '
             .. quoteArg(scriptPath)
             .. " -RuntimeBase " .. quoteArg(runtime.base)
             .. " -StateFile " .. quoteArg(stateFile)
             .. " -LogFile " .. quoteArg(logFile)
     elseif OS == "macOS" then
-        scriptPath = scriptDir .. "STEMwerk_Bootstrap_macOS.sh"
         cmd = '/bin/sh ' .. quoteArg(scriptPath)
             .. " --runtime-base " .. quoteArg(runtime.base)
             .. " --state-file " .. quoteArg(stateFile)
             .. " --log-file " .. quoteArg(logFile)
     else
-        scriptPath = scriptDir .. "STEMwerk_Bootstrap_Linux.sh"
         cmd = '/bin/sh ' .. quoteArg(scriptPath)
             .. " --runtime-base " .. quoteArg(runtime.base)
             .. " --state-file " .. quoteArg(stateFile)
             .. " --log-file " .. quoteArg(logFile)
     end
 
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     if not fileExists(scriptPath) then
+        PATH_HELPER.writeEnvFile(guardPath, {
+            STATUS = "failed",
+            REASON = "missing_bootstrap",
+            SCRIPT_PATH = scriptPath,
+            UPDATED_AT = os.time(),
+        })
         msgBox("STEMwerk Setup", "Bootstrap script missing:\n\n" .. tostring(scriptPath), 0)
         return false, stateFile, logFile
     end
+
+    PATH_HELPER.writeEnvFile(guardPath, {
+        STATUS = "running",
+        REASON = "launching",
+        SCRIPT_PATH = scriptPath,
+        UPDATED_AT = os.time(),
+    })
 
     if OS == "Linux" then
         local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
         local background = cmd .. " </dev/null >" .. quoteArg(logFile) .. " 2>&1 & echo $! > " .. quoteArg(pidFile)
         local launchRc = select(1, exec(background, 1800000))
         if launchRc ~= 0 then
+            PATH_HELPER.writeEnvFile(guardPath, {
+                STATUS = "failed",
+                REASON = "launch_failed",
+                SCRIPT_PATH = scriptPath,
+                UPDATED_AT = os.time(),
+            })
             return false, stateFile, logFile
         end
         local final, status = waitForBootstrapState(stateFile, logFile, runtime.runtimeState)
+        PATH_HELPER.writeEnvFile(guardPath, {
+            STATUS = final and "ok" or "failed",
+            REASON = final and "completed" or "bootstrap_failed",
+            SCRIPT_PATH = scriptPath,
+            UPDATED_AT = os.time(),
+        })
         return final, stateFile, logFile, status
     end
 
     local rc = select(1, exec(cmd, 1800000))
     if rc == 0 then
         local state = parseStateFile(stateFile)
+        PATH_HELPER.writeEnvFile(guardPath, {
+            STATUS = "ok",
+            REASON = "completed",
+            SCRIPT_PATH = scriptPath,
+            UPDATED_AT = os.time(),
+        })
         return true, stateFile, logFile, state
     end
+    PATH_HELPER.writeEnvFile(guardPath, {
+        STATUS = "failed",
+        REASON = "launch_failed",
+        SCRIPT_PATH = scriptPath,
+        UPDATED_AT = os.time(),
+    })
     return false, stateFile, logFile, parseStateFile(stateFile)
 end
 
@@ -1261,11 +1340,11 @@ local function linuxSetupTick()
 end
 
 local function startLinuxSetup(runtime, separatorScript)
-    local scriptDir = getScriptDir()
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     ensureDir(runtime.runtimeState)
 
     os.remove(stateFile)
@@ -1283,9 +1362,15 @@ local function startLinuxSetup(runtime, separatorScript)
         sf:close()
     end
 
-    local scriptPath = scriptDir .. "STEMwerk_Bootstrap_Linux.sh"
-    local launcherPath = scriptDir .. "STEMwerk_Bootstrap_Linux_Launcher.sh"
+    local scriptPath = PATH_HELPER.getBootstrapScriptPath(INSTALL_ROOT, OS, PATH_SEP)
+    local launcherPath = PATH_HELPER.getBootstrapLauncherPath(INSTALL_ROOT, OS, PATH_SEP)
     if not fileExists(scriptPath) then
+        PATH_HELPER.writeEnvFile(guardPath, {
+            STATUS = "failed",
+            REASON = "missing_bootstrap",
+            SCRIPT_PATH = scriptPath,
+            UPDATED_AT = os.time(),
+        })
         msgBox("STEMwerk Setup", "Bootstrap script missing:\n\n" .. tostring(scriptPath), 0)
         return
     end
@@ -1307,6 +1392,12 @@ local function startLinuxSetup(runtime, separatorScript)
             .. " </dev/null >" .. quoteArg(logFile) .. " 2>&1 & echo $! > " .. quoteArg(pidFile)
     end
 
+    PATH_HELPER.writeEnvFile(guardPath, {
+        STATUS = "running",
+        REASON = "launching",
+        SCRIPT_PATH = scriptPath,
+        UPDATED_AT = os.time(),
+    })
     exec(cmd, 20000)
     gfx.init("STEMwerk Setup [LINUX LIVE TEST]", 1100, 760, 0, 120, 80)
     LINUX_SETUP = {
@@ -1329,16 +1420,16 @@ local function startLinuxSetup(runtime, separatorScript)
 end
 
 local function main()
-    local scriptDir = getScriptDir()
     local runtime = getRuntimePaths()
     setExt("runtimeBase", runtime.base)
-    local separatorScript = scriptDir .. "audio_separator_process.py"
+    local separatorScript = SCRIPT_DIR .. "audio_separator_process.py"
     if fileExists(separatorScript) then
         setExt("separatorScript", separatorScript)
     end
 
     local intro =
-        "STEMwerk will check and repair components if needed:\n\n"
+        "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
+        .. "STEMwerk will check and repair components if needed:\n\n"
         .. "- Python runtime\n"
         .. "- FFmpeg\n"
         .. "- STEMwerk venv in:\n  " .. runtime.base .. "\n\n"

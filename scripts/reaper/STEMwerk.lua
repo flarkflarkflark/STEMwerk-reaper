@@ -17,9 +17,6 @@ function clearDebugLog() end
 --   2025-12-26: Glossy UI buttons + text shadow, KITT LED FX tweaks, playhead stays put while playing.
 --   v2.0.0: i18n support + UI polish + device selection
 --   v1.0.0: Initial release
--- @provides
---   [main] .
---   [nomain] audio_separator_process.py
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
 -- @about
 --   # STEMwerk - Stem Separation
@@ -62,6 +59,15 @@ local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for c
 local script_path = info.source:match("@?(.*[/\\])")
 if not script_path then script_path = "" end
 local repo_root = script_path:match("(.*/)") or ""
+
+local PATH_HELPER = nil
+local INSTALL_CACHE = nil
+do
+    local ok, helper = pcall(dofile, script_path .. "STEMwerk_Path_Helper.lua")
+    if ok and type(helper) == "table" then
+        PATH_HELPER = helper
+    end
+end
 
 -- Lua module search paths uitbreiden
 package.path =
@@ -772,6 +778,18 @@ end
 local OS = getOS()
 local PATH_SEP = OS == "Windows" and "\\" or "/"
 
+local function getInstallScriptsDir()
+    if PATH_HELPER then
+        if not INSTALL_CACHE then
+            INSTALL_CACHE = PATH_HELPER.resolveInstallRoot(script_path, { os = OS })
+        end
+        if INSTALL_CACHE and INSTALL_CACHE.scriptsDir and INSTALL_CACHE.scriptsDir ~= "" then
+            return INSTALL_CACHE.scriptsDir
+        end
+    end
+    return script_path
+end
+
 -- Get home directory (cross-platform)
 local function getHome()
     if OS == "Windows" then
@@ -986,10 +1004,10 @@ local function findSeparatorScript()
         debugLog("separatorScript override not found: " .. tostring(resolved))
     end
 
-    local home = getHome()
+    local scriptsDir = getInstallScriptsDir()
     local paths = {
+        scriptsDir .. "audio_separator_process.py",
         script_path .. "audio_separator_process.py",
-        home .. PATH_SEP .. "Documents" .. PATH_SEP .. "STEMwerk" .. PATH_SEP .. "scripts" .. PATH_SEP .. "reaper" .. PATH_SEP .. "audio_separator_process.py",
     }
     for _, p in ipairs(paths) do
         if fileExists(p) then return p end

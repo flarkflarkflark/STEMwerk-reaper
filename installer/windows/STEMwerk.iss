@@ -25,7 +25,7 @@ WizardImageFile=..\assets\stemwerk-wizard.bmp
 #if FileExists('..\assets\stemwerk-wizard-small.bmp')
 WizardSmallImageFile=..\assets\stemwerk-wizard-small.bmp
 #endif
-DefaultDirName={userdocs}\STEMwerk
+DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
 DisableProgramGroupPage=yes
 OutputDir=dist
@@ -33,25 +33,15 @@ OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+InfoAfterFile=after_install.txt
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 ; Core files needed to run in REAPER
-Source: "..\..\scripts\reaper\*"; DestDir: "{app}\scripts\reaper"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\i18n\*"; DestDir: "{app}\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
-
-; Non-nerd friendly: also install into the default REAPER Scripts folder (per-user).
-; This makes STEMwerk immediately loadable from REAPER without manual copying.
-Source: "..\..\scripts\reaper\*"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk\scripts\reaper"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "..\..\i18n\*"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "..\..\docs\*"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk\docs"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "..\..\README.md"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk"; Flags: ignoreversion
-Source: "..\..\LICENSE"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk"; Flags: ignoreversion
-Source: "..\..\TODO.md"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk"; Flags: ignoreversion
-Source: "..\..\INTEGRATION.md"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk"; Flags: ignoreversion
-Source: "..\..\TESTING.md"; DestDir: "{userappdata}\REAPER\Scripts\STEMwerk"; Flags: ignoreversion
 
 ; Helpful docs
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion

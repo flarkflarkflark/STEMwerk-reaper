@@ -21,7 +21,7 @@ mkdir -p "$OUT_DIR" \
 
 # Copy only what we need
 rsync -a --delete \
-  "$ROOT_DIR/scripts/reaper" \
+  "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \
@@ -58,17 +58,18 @@ set -euo pipefail
 
 APPDIR="${APPDIR:-$(cd "$(dirname "$0")" && pwd)}"
 SRC="$APPDIR/usr/share/stemwerk"
-DEST="$HOME/STEMwerk"
+REAPER_SCRIPTS="$HOME/.config/REAPER/Scripts"
+DEST="$REAPER_SCRIPTS/STEMwerk-reaper"
 
-mkdir -p "$DEST"
+mkdir -p "$REAPER_SCRIPTS"
 rsync -a --delete "$SRC/" "$DEST/"
 
 echo "STEMwerk files copied to: $DEST"
 echo ""
 echo "Next steps:"
 echo "1) In REAPER, open Actions -> Load ReaScript..."
-echo "2) Add: $DEST/scripts/reaper/STEMwerk.lua"
-echo "3) Optional: run $DEST/scripts/reaper/sync_to_reaper.sh (Linux) to copy into ~/.config/REAPER/Scripts/"
+echo "2) Add: $DEST/STEMwerk_First_Run_Setup.lua (run this first)"
+echo "3) Add: $DEST/STEMwerk.lua"
 echo ""
 echo "Docs:"
 echo "- $DEST/README.md"
@@ -121,5 +122,3 @@ popd >/dev/null
 
 mv -f "$BUILD_DIR/STEMwerk-$VERSION-x86_64.AppImage" "$OUT_DIR/"
 echo "Built: $OUT_DIR/STEMwerk-$VERSION-x86_64.AppImage"
-
-

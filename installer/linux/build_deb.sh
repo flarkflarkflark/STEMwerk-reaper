@@ -14,18 +14,18 @@ if [[ -z "${STEMWERK_VERSION:-}" && -f "$ROOT_DIR/VERSION" ]]; then
 fi
 
 rm -rf "$OUT_DIR" "$BUILD_DIR"
-mkdir -p "$OUT_DIR" "$PKG_ROOT/DEBIAN" "$PKG_ROOT/usr/share/stemwerk"
+mkdir -p "$OUT_DIR" "$PKG_ROOT/DEBIAN" "$PKG_ROOT/usr/share/stemwerk-reaper"
 
 # Copy only what we need
 rsync -a --delete \
-  "$ROOT_DIR/scripts/reaper" \
+  "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \
   "$ROOT_DIR/TODO.md" \
   "$ROOT_DIR/INTEGRATION.md" \
   "$ROOT_DIR/TESTING.md" \
-  "$PKG_ROOT/usr/share/stemwerk/"
+  "$PKG_ROOT/usr/share/stemwerk-reaper/"
 
 cat > "$PKG_ROOT/DEBIAN/control" <<EOF
 Package: stemwerk
