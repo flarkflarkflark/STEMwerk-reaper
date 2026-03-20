@@ -52,6 +52,7 @@ function clearDebugLog() end
 
 local SCRIPT_NAME = "STEMwerk (v2.2.1)"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
+local DEBUG = { enabled = false, logPath = nil }
 -- STEMwerk.lua
 
 -- repo root bepalen (werkt ook als Reaper het via een symlink laadt)
@@ -60,12 +61,11 @@ local script_path = info.source:match("@?(.*[/\\])")
 if not script_path then script_path = "" end
 local repo_root = script_path:match("(.*/)") or ""
 
-local PATH_HELPER = nil
-local INSTALL_CACHE = nil
+local PATH_STATE = { helper = nil, installCache = nil }
 do
     local ok, helper = pcall(dofile, script_path .. "STEMwerk_Path_Helper.lua")
     if ok and type(helper) == "table" then
-        PATH_HELPER = helper
+        PATH_STATE.helper = helper
     end
 end
 
@@ -435,7 +435,7 @@ end
 
 FFMPEG_PATH = nil
 
-function canRunFfmpeg()
+function canRunFfmpeg(path)
     local function tryPath(p)
         if not p or p == "" then return false end
         if isAbsolutePath(p) and not fileExists(p) then return false end
@@ -458,13 +458,19 @@ function canRunFfmpeg()
         return false
     end
 
+    if path and path ~= "" then
+        if tryPath(path) then
+            return true
+        end
+    end
+
     local override = getExtStateValue("ffmpegPath")
     if override then
         local resolved = override
         if (not isAbsolutePath(resolved)) and resolved:find("[/\\]") then
             resolved = script_path .. resolved
         end
-        if DEBUG_MODE then
+        if DEBUG.enabled then
             debugLog("canRunFfmpeg: override=" .. tostring(resolved))
         end
         -- Trust a valid absolute path without ExecProcess (avoids capture quirks).
@@ -577,7 +583,7 @@ function canRunFfmpeg()
         local baseTemp = (SW_LOG and SW_LOG.getTempBase and SW_LOG.getTempBase()) or os.getenv("TEMP") or os.getenv("TMP") or "C:\\Windows\\Temp"
         local outPath = baseTemp .. "\\STEMwerk_dir_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)) .. ".txt"
         local cmd = 'cmd.exe /S /C dir /b /ad ' .. quoteArg(pattern) .. ' > ' .. quoteArg(outPath)
-        if DEBUG_MODE then
+        if DEBUG.enabled then
             debugLog("canRunFfmpeg: dir cmd=" .. tostring(cmd))
         end
         execHidden(cmd)
@@ -678,13 +684,13 @@ end
 -- Enable by setting:
 --   - Environment variable: STEMWERK_DEBUG=1
 --   - REAPER ExtState: section "STEMwerk" key "debugMode" or "debug" to "1"
-local function _isTruthy(v)
+function DEBUG.isTruthy(v)
     v = tostring(v or ""):lower()
     return v == "1" or v == "true" or v == "yes" or v == "on"
 end
 
-local function _getDebugMode()
-    if _isTruthy(os.getenv("STEMWERK_DEBUG")) then
+function DEBUG.getDebugMode()
+    if DEBUG.isTruthy(os.getenv("STEMWERK_DEBUG")) then
         return true
     end
     if reaper and reaper.GetExtState then
@@ -696,16 +702,16 @@ local function _getDebugMode()
     return false
 end
 
-local DEBUG_MODE = _getDebugMode()
-local DEBUG_LOG_PATH = nil  -- Set during init
+DEBUG.enabled = DEBUG.getDebugMode()
+DEBUG.logPath = nil  -- Set during init
 
 local function debugLog(msg)
-    if not DEBUG_MODE then return end
-    if not DEBUG_LOG_PATH then
+    if not DEBUG.enabled then return end
+    if not DEBUG.logPath then
         local tempDir = getFlatpakTempBase() or os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or "/tmp"
-        DEBUG_LOG_PATH = tempDir .. (package.config:sub(1,1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
+        DEBUG.logPath = tempDir .. (package.config:sub(1,1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
     end
-    local f = io.open(DEBUG_LOG_PATH, "a")
+    local f = io.open(DEBUG.logPath, "a")
     if f then
         f:write(os.date("[%Y-%m-%d %H:%M:%S] ") .. tostring(msg) .. "\n")
         f:close()
@@ -713,7 +719,7 @@ local function debugLog(msg)
 end
 
 local function debugCudaProbe()
-    if not DEBUG_MODE then return end
+    if not DEBUG.enabled then return end
     local runtime = getRuntimePaths()
     local py = getExtStateValue("pythonPath") or runtime.venvPython
     if not isAbsolutePath(py) then
@@ -735,10 +741,10 @@ end
 
 -- Clear debug log on script start
 local function clearDebugLog()
-    if not DEBUG_MODE then return end
+    if not DEBUG.enabled then return end
     local tempDir = getFlatpakTempBase() or os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or "/tmp"
-    DEBUG_LOG_PATH = tempDir .. (package.config:sub(1,1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
-    local f = io.open(DEBUG_LOG_PATH, "w")
+    DEBUG.logPath = tempDir .. (package.config:sub(1,1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
+    local f = io.open(DEBUG.logPath, "w")
     if f then
         f:write("=== STEMwerk Debug Log ===\n")
         f:write("Started: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n\n")
@@ -750,10 +756,10 @@ clearDebugLog()
 debugLog("Script loaded")
 debugCudaProbe()
 
--- Lightweight performance markers (only when DEBUG_MODE is enabled).
+-- Lightweight performance markers (only when DEBUG.enabled is enabled).
 PERF_T0 = os.clock()
 function perfMark(label)
-    if not DEBUG_MODE then return end
+    if not DEBUG.enabled then return end
     debugLog(string.format("PERF +%.3fs %s", os.clock() - PERF_T0, tostring(label)))
 end
 
@@ -779,12 +785,12 @@ local OS = getOS()
 local PATH_SEP = OS == "Windows" and "\\" or "/"
 
 local function getInstallScriptsDir()
-    if PATH_HELPER then
-        if not INSTALL_CACHE then
-            INSTALL_CACHE = PATH_HELPER.resolveInstallRoot(script_path, { os = OS })
+    if PATH_STATE.helper then
+        if not PATH_STATE.installCache then
+            PATH_STATE.installCache = PATH_STATE.helper.resolveInstallRoot(script_path, { os = OS })
         end
-        if INSTALL_CACHE and INSTALL_CACHE.scriptsDir and INSTALL_CACHE.scriptsDir ~= "" then
-            return INSTALL_CACHE.scriptsDir
+        if PATH_STATE.installCache and PATH_STATE.installCache.scriptsDir and PATH_STATE.installCache.scriptsDir ~= "" then
+            return PATH_STATE.installCache.scriptsDir
         end
     end
     return script_path
@@ -1088,6 +1094,12 @@ readCapabilities = SW_SETUP.readCapabilities
 
 PYTHON_PATH = findPython()
 SEPARATOR_SCRIPT = findSeparatorScript()
+if type(SW_SETUP.resolveRuntimePythonPath) == "function" then
+    local resolvedPython = SW_SETUP.resolveRuntimePythonPath()
+    if resolvedPython and resolvedPython ~= "" then
+        PYTHON_PATH = resolvedPython
+    end
+end
 
 debugLog("Detected Python: " .. tostring(PYTHON_PATH))
 debugLog("Detected separator script: " .. tostring(SEPARATOR_SCRIPT))
@@ -2440,7 +2452,7 @@ function getThemeToggleTooltip()
     local switchTip = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
     local presetLabel = getLangText("theme_preset", "Theme")
     local presetName = getThemePresetLabel()
-    local cycleHint = getLangText("tooltip_theme_cycle", "RMB to cycle preset")
+    local cycleHint = getLangText("tooltip_theme_cycle", "Right-click to cycle preset")
     return string.format("%s  %s: %s (%s)", switchTip, presetLabel, presetName, cycleHint)
 end
 
@@ -2576,24 +2588,29 @@ local function loadSettings()
     local tooltips = reaper.GetExtState(EXT_SECTION, "tooltips")
     if tooltips ~= "" then SETTINGS.tooltips = (tooltips == "1") end
 
-    -- Load window position into globals for all windows to use
-    local savedPos = reaper.GetExtState(EXT_SECTION, "window_pos_main")
-    if savedPos == "" then savedPos = reaper.GetExtState(EXT_SECTION, "window_pos") end
-    if savedPos ~= "" then
-        local sx, sy, sw, sh = savedPos:match("([^,]+),([^,]+),([^,]+),([^,]+)")
-        if sx and sy then
-            lastDialogX = tonumber(sx)
-            lastDialogY = tonumber(sy)
-            lastDialogW = tonumber(sw) or 590
-            lastDialogH = tonumber(sh) or 600
+    -- Load window position into globals only once (startup fallback).
+    if not (GUI and GUI.windowPosLoaded) then
+        local savedPos = reaper.GetExtState(EXT_SECTION, "window_pos_main")
+        if savedPos == "" then savedPos = reaper.GetExtState(EXT_SECTION, "window_pos") end
+        if savedPos ~= "" then
+            local sx, sy, sw, sh = savedPos:match("([^,]+),([^,]+),([^,]+),([^,]+)")
+            if sx and sy then
+                lastDialogX = tonumber(sx)
+                lastDialogY = tonumber(sy)
+                lastDialogW = tonumber(sw) or 840
+                lastDialogH = tonumber(sh) or 600
 
-            -- Also update GUI table if it exists
-            if GUI then
-                GUI.savedX = lastDialogX
-                GUI.savedY = lastDialogY
-                GUI.savedW = lastDialogW
-                GUI.savedH = lastDialogH
+                -- Also update GUI table if it exists
+                if GUI then
+                    GUI.savedX = lastDialogX
+                    GUI.savedY = lastDialogY
+                    GUI.savedW = lastDialogW
+                    GUI.savedH = lastDialogH
+                end
             end
+        end
+        if GUI then
+            GUI.windowPosLoaded = true
         end
     end
 
@@ -2813,6 +2830,47 @@ local function clampToScreen(winX, winY, winW, winH, refX, refY)
     winY = math.min(screenBottom - winH - margin, winY)
 
     return winX, winY
+end
+
+GUI.getLiveGeometry = function(defaultW, defaultH)
+    local winW = (lastDialogW and lastDialogW > 0) and lastDialogW or (defaultW or 840)
+    local winH = (lastDialogH and lastDialogH > 0) and lastDialogH or (defaultH or 600)
+    local winX, winY = lastDialogX, lastDialogY
+    if not winX or not winY then
+        local mouseX, mouseY = reaper.GetMousePosition()
+        winX = mouseX - winW / 2
+        winY = mouseY - winH / 2
+        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
+    end
+    return winW, winH, winX, winY
+end
+
+GUI.applyLiveGeometry = function(defaultW, defaultH)
+    local winW, winH, winX, winY = GUI.getLiveGeometry(defaultW, defaultH)
+    lastDialogX, lastDialogY, lastDialogW, lastDialogH = winX, winY, winW, winH
+    return winW, winH, winX, winY
+end
+
+GUI.snapshotMainGeometry = function()
+    if lastDialogX and lastDialogY and lastDialogW and lastDialogH then
+        GUI.mainSnapshot = {
+            x = lastDialogX,
+            y = lastDialogY,
+            w = lastDialogW,
+            h = lastDialogH,
+        }
+    else
+        GUI.mainSnapshot = nil
+    end
+end
+
+GUI.restoreMainSnapshot = function()
+    if GUI.mainSnapshot then
+        lastDialogX = GUI.mainSnapshot.x
+        lastDialogY = GUI.mainSnapshot.y
+        lastDialogW = GUI.mainSnapshot.w
+        lastDialogH = GUI.mainSnapshot.h
+    end
 end
 
 -- Check if there's a valid time selection
@@ -3591,6 +3649,9 @@ local function drawProceduralArtInternal(x, y, w, h, time, rotation, skipBackgro
 
     -- Rainbow color cycling (psychedelic!)
     local function rainbowShift(baseColor, phase)
+        if not baseColor or not baseColor[1] then
+            baseColor = colors[1]
+        end
         local r = baseColor[1] + math.sin(phase) * 0.3
         local g = baseColor[2] + math.sin(phase + 2.1) * 0.3
         local b = baseColor[3] + math.sin(phase + 4.2) * 0.3
@@ -4622,7 +4683,7 @@ local function drawProceduralArtInternal(x, y, w, h, time, rotation, skipBackgro
         local loops = 3 + (variation % 3)
         for loop = 1, loops do
             local loopPhase = (loop / loops) * math.pi * 2
-            local col = colors[loop]
+            local col = colors[((loop - 1) % #colors) + 1]
             local prevX, prevY
             for t = 0, math.pi * 2, 0.02 do
                 -- Figure-8 / infinity shape
@@ -8405,6 +8466,10 @@ persistWindowPos = function()
     if lastDialogX and lastDialogY and saveW and saveH then
         local posStr = string.format("%d,%d,%d,%d", math.floor(lastDialogX), math.floor(lastDialogY), math.floor(saveW), math.floor(saveH))
         reaper.SetExtState(EXT_SECTION, "window_pos", posStr, true)
+        reaper.SetExtState(EXT_SECTION, "window_pos_main", posStr, true)
+        if GUI then
+            GUI.windowPosLoaded = true
+        end
 
         -- Cleanup old individual keys
         reaper.DeleteExtState(EXT_SECTION, "windowX", true)
@@ -8589,21 +8654,7 @@ local function showArtGallery()
     artGalleryState.isDragging = false
     artGalleryState.lastMouseWheel = 0
 
-    -- Use same size and position as last dialog
-    local winW = lastDialogW or 380
-    local winH = lastDialogH or 340
-    local winX, winY
-
-    if lastDialogX and lastDialogY then
-        winX = lastDialogX
-        winY = lastDialogY
-    else
-        -- Fallback to mouse position
-        local mouseX, mouseY = reaper.GetMousePosition()
-        winX = mouseX - winW / 2
-        winY = mouseY - winH / 2
-    end
-
+    local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
     gfx.init("STEMwerk Art Gallery", winW, winH, 0, winX, winY)
     helpState.hwnd = nil
     if reaper.JS_Window_Find then
@@ -9206,10 +9257,11 @@ local function messageWindowLoop()
         saveSettings()
         gfx.quit()
         messageWindowState.monitorSelection = false
-        -- Return focus to REAPER main window
-        local mainHwnd = reaper.GetMainHwnd()
-        if mainHwnd and reaper.JS_Window_SetFocus then
-            reaper.JS_Window_SetFocus(mainHwnd)
+        if messageWindowState.monitorSelection then
+            local mainHwnd = reaper.GetMainHwnd()
+            if mainHwnd and reaper.JS_Window_SetFocus then
+                reaper.JS_Window_SetFocus(mainHwnd)
+            end
         end
         return
     elseif result == "artgallery" then
@@ -9250,23 +9302,7 @@ showMessage = function(title, message, icon, monitorSelection)
     messageWindowState.startTime = os.clock()
     messageWindowState.monitorSelection = monitorSelection or false
 
-    -- Use same default size as main dialog (840x600)
-    local winW = lastDialogW or 840
-    local winH = lastDialogH or 600
-    local winX, winY
-
-    -- Use last dialog position if available (exact position, no clamping)
-    if lastDialogX and lastDialogY then
-        winX = lastDialogX
-        winY = lastDialogY
-    else
-        -- Fallback to mouse position with clamping
-        local mouseX, mouseY = reaper.GetMousePosition()
-        winX = mouseX - winW / 2
-        winY = mouseY - winH / 2
-        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
-    end
-
+    local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
     gfx.init("STEMwerk", winW, winH, 0, winX, winY)
 
     -- In selection-monitoring mode, don't steal focus from REAPER.
@@ -11423,10 +11459,6 @@ end
 function GUI._updateFocusHandoff()
     if focusReaperAfterMainOpenOnce then
         focusReaperAfterMainOpenOnce = false
-        local mainHwnd = reaper.GetMainHwnd()
-        if mainHwnd and reaper.JS_Window_SetFocus then
-            reaper.JS_Window_SetFocus(mainHwnd)
-        end
     end
 end
 
@@ -11457,7 +11489,7 @@ function GUI._throttleSaveSettings()
 end
 
 function GUI._handleNoSelection()
-    local hasSel = hasAnySelection() or timeSelectionMode
+    local hasSel = hasAnySelection()
     if not hasSel then
         GUI.noSelectionFrames = (GUI.noSelectionFrames or 0) + 1
         if GUI.noSelectionFrames > 10 then
@@ -11465,7 +11497,9 @@ function GUI._handleNoSelection()
             autoSelectedItems = {}
             autoSelectionTracks = {}
             GUI.noSelectionFrames = 0
-            reaper.defer(function() main() end)
+            reaper.defer(function()
+                showMessage("Start", "Select audio in REAPER", "info", true)
+            end)
             return true
         end
     else
@@ -11814,13 +11848,30 @@ buildFooterLines = function()
     local trackUnit = trSingularPlural(effectiveTargets, "footer_track", "footer_tracks")
     local itemUnit = trSingularPlural(selItemCount, "footer_item", "footer_items")
     local selLine
-    local targetPrefix = trSafe("footer_target_prefix", "Target:")
+
+    local function trFmt(key, fallback, ...)
+        local tpl = trSafe(key, fallback)
+        return string.format(tpl, ...)
+    end
 
     if viaTimeSelection then
         local unit = summary.targetIsItem and trSingularPlural(effectiveTargets, "footer_item", "footer_items") or trackUnit
-        selLine = string.format("%s %d %s %s, %s %s", targetPrefix, effectiveTargets, unit, trSafe("footer_via_time_selection", "(via time selection)"), timeSelText, trSafe("footer_time_selection", "time selection"))
+        selLine = trFmt(
+            "footer_line_target_time",
+            "Target: %d %s (via time selection), %s time selection",
+            effectiveTargets,
+            unit,
+            timeSelText or ""
+        )
     else
-        selLine = string.format("%s %d %s, %d %s", trSafe("selected", "Selected"), selTrackCount, trackUnit, selItemCount, itemUnit)
+        selLine = trFmt(
+            "footer_line_selected",
+            "Selected: %d %s, %d %s",
+            selTrackCount,
+            trackUnit,
+            selItemCount,
+            itemUnit
+        )
     end
 
     local stemsPerTrack = 0
@@ -11830,10 +11881,6 @@ buildFooterLines = function()
 
     local outLine
     local locLine
-    local locationPrefix = trSafe("footer_location_prefix", trSafe("target", "Location:"))
-    local outputLabel = trSafe("output", "Output")
-    local fromWord = trSafe("footer_from", "from")
-
     local function stemUnit(n)
         if (n or 0) == 1 then return trSafe("stem", "stem") end
         return trSafe("stems", "stems")
@@ -11845,7 +11892,12 @@ buildFooterLines = function()
     else
         if viaTimeSelection then
             local totalOutputStems = summary.outputStems
-            outLine = string.format("%s %d %s %s %s", outputLabel, totalOutputStems, stemUnit(totalOutputStems), fromWord, trSafe("footer_time_selection", "time selection"))
+            outLine = trFmt(
+                "footer_line_output_time",
+                "Output: %d %s from time selection",
+                totalOutputStems,
+                stemUnit(totalOutputStems)
+            )
             if timeSelText and timeSelText ~= "" then
                 outLine = outLine .. " · " .. timeSelText
             end
@@ -11853,7 +11905,14 @@ buildFooterLines = function()
             local trackCountOut = summary.targetCount
             local totalOutputStems = summary.outputStems
             local trackUnitOut = trSingularPlural(trackCountOut, "footer_track", "footer_tracks")
-            outLine = string.format("%s %d %s %s %d %s", outputLabel, totalOutputStems, stemUnit(totalOutputStems), fromWord, trackCountOut, trackUnitOut)
+            outLine = trFmt(
+                "footer_line_output_tracks",
+                "Output: %d %s from %d %s",
+                totalOutputStems,
+                stemUnit(totalOutputStems),
+                trackCountOut,
+                trackUnitOut
+            )
         else
             local itemCountOut = summary.targetCount
             local itemDurOut = selItemDur
@@ -11863,7 +11922,14 @@ buildFooterLines = function()
             end
             local totalOutputStems = summary.outputStems
             local itemUnitOut = trSingularPlural(itemCountOut, "footer_item", "footer_items")
-            outLine = string.format("%s %d %s %s %d %s", outputLabel, totalOutputStems, stemUnit(totalOutputStems), fromWord, itemCountOut, itemUnitOut)
+            outLine = trFmt(
+                "footer_line_output_items",
+                "Output: %d %s from %d %s",
+                totalOutputStems,
+                stemUnit(totalOutputStems),
+                itemCountOut,
+                itemUnitOut
+            )
             local itemDurText = formatDuration(itemDurOut)
             if itemDurText and itemDurText ~= "" then
                 outLine = outLine .. " · " .. itemDurText
@@ -11885,11 +11951,27 @@ buildFooterLines = function()
             else
                 baseLoc = effectiveTargets > 1 and (trSafe("footer_per_track_folders", "Per-track stem folders")) or trSafe("footer_location_new_folder", "New folder")
             end
-            locLine = string.format("%s %s (%d: %s)", locationPrefix, baseLoc, stemsPerTrack, namesStr)
+            locLine = trFmt(
+                "footer_line_location_details",
+                "Location: %s (%d: %s)",
+                baseLoc,
+                stemsPerTrack,
+                namesStr
+            )
         elseif SETTINGS.outputMode == "in-place" or not SETTINGS.createNewTracks then
-            locLine = string.format("%s %s (%d: %s)", locationPrefix, trSafe("in_place", "In-place"), stemsPerTrack, namesStr)
+            locLine = trFmt(
+                "footer_line_location_details",
+                "Location: %s (%d: %s)",
+                trSafe("in_place", "In-place"),
+                stemsPerTrack,
+                namesStr
+            )
         else
-            locLine = string.format("%s %s", locationPrefix, trSafe("footer_location_new_tracks", "New tracks"))
+            locLine = trFmt(
+                "footer_line_location_simple",
+                "Location: %s",
+                trSafe("footer_location_new_tracks", "New tracks")
+            )
         end
     end
 
@@ -12905,7 +12987,7 @@ function finalizeDialogLoop(ctx)
             if not ok then
                 debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
                 isProcessingActive = false
-                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG_LOG_PATH), "error")
+                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG.logPath), "error")
             end
         end)
     else
@@ -12932,7 +13014,7 @@ end
 function dialogLoop()
     makeWindowResizable()
     pollRuntimeDeviceProbe()
-    if DEBUG_MODE and RUNTIME_DEVICE_PROBE_DEBUG == "async_running" and not GUI._probeLoggedOnce then
+    if DEBUG.enabled and RUNTIME_DEVICE_PROBE_DEBUG == "async_running" and not GUI._probeLoggedOnce then
         GUI._probeLoggedOnce = true
         perfMark("dialogLoop(): running while device probe async (UI should remain responsive)")
     end
@@ -13000,34 +13082,7 @@ showStemSelectionDialog = function()
     startRuntimeDeviceProbeAsync(true)
     perfMark("showStemSelectionDialog(): async device probe started")
 
-    -- Main dialog size matches "Select audio" to prevent shrinking (840x600)
-    local dialogW = lastDialogW or 840
-    local dialogH = lastDialogH or 600
-
-    local posX, posY
-
-    -- Use saved position if available, otherwise center on screen
-    if lastDialogX and lastDialogY then
-        posX = lastDialogX
-        posY = lastDialogY
-    else
-        -- No saved position - center on screen
-        local sw, sh = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false) -- dummy to get context
-        local screenW, screenH = 1920, 1080 -- Fallback defaults
-        if reaper.JS_Window_GetRect then
-            local _, _, _, rw, rh = reaper.JS_Window_GetRect(reaper.GetMainHwnd())
-            if rw then screenW, screenH = rw, rh end
-        end
-        posX = (screenW - dialogW) / 2
-        posY = (screenH - dialogH) / 2
-    end
-
-    -- Update globals
-    lastDialogX = posX
-    lastDialogY = posY
-    lastDialogW = dialogW
-    lastDialogH = dialogH
-
+    local dialogW, dialogH, posX, posY = GUI.applyLiveGeometry(840, 600)
     gfx.init(SCRIPT_NAME, dialogW, dialogH, 0, posX, posY)
     perfMark("showStemSelectionDialog(): gfx.init done (window visible)")
 
@@ -15142,12 +15197,6 @@ function WORKFLOW.progressLoop()
 
         gfx.quit()
 
-        -- Return focus to REAPER ASAP
-        local mainHwnd = reaper.GetMainHwnd()
-        if mainHwnd and reaper.JS_Window_SetFocus then
-            reaper.JS_Window_SetFocus(mainHwnd)
-        end
-
         -- After cancel, go back to the start/selection monitoring window.
         -- This lets the user quickly pick a new item/time selection without reopening the full dialog.
         showMessage("Cancelled", T("separation_cancelled"), "info", true)
@@ -15237,6 +15286,10 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     loadSettings()
     updateTheme()
 
+    -- Capture main window geometry and snapshot for cancel -> main restore
+    captureWindowGeometry(SCRIPT_NAME)
+    GUI.snapshotMainGeometry()
+
     -- Start the process
     local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     if ok == false then
@@ -15244,26 +15297,7 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
         return
     end
 
-    -- Use same size as main dialog (scaled proportionally for progress content)
-    local winW = lastDialogW or 380
-    local winH = lastDialogH or 340
-    local winX, winY
-
-    -- Use last dialog position if available, otherwise use mouse position.
-    -- IMPORTANT: if we have a saved position, do not clamp/adjust it here;
-    -- users expect the Processing window to open in the exact same spot as the app/start windows.
-    if lastDialogX and lastDialogY then
-        winX = lastDialogX
-        winY = lastDialogY
-    else
-        -- Fallback to mouse position
-        local mouseX, mouseY = reaper.GetMousePosition()
-        winX = mouseX - winW / 2
-        winY = mouseY - winH / 2
-        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
-    end
-
-    -- Open progress window
+    local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
     gfx.init("STEMwerk - Processing..", winW, winH, 0, winX, winY)
     progressWindowResizableSet = false  -- Reset so we try to make it resizable
     progressState.running = true
@@ -16786,11 +16820,6 @@ function resultWindowLoop()
         -- Ensure the user immediately sees what was created/changed in REAPER (no extra click required).
         -- Some systems don't redraw the arrange view until the next interaction.
         adjustTrackLayout()
-        -- Geef focus terug aan REAPER main window
-        local mainHwnd = reaper.GetMainHwnd()
-        if mainHwnd and reaper.JS_Window_SetFocus then
-            reaper.JS_Window_SetFocus(mainHwnd)
-        end
         -- Reopen main dialog (if there's still a selection)
         skipExistingWindowCheckOnce = true
         reaper.defer(function() main() end)
@@ -16824,39 +16853,13 @@ function showResultWindow(selectedStems, message)
 
     -- Intentionally do not change playhead position or playback state.
 
-    -- Return focus to REAPER main window so user can interact
-    local mainHwnd = reaper.GetMainHwnd()
-    if mainHwnd and reaper.JS_Window_SetFocus then
-        reaper.JS_Window_SetFocus(mainHwnd)
-    end
-
-    -- Use same default size as main dialog (840x600)
-    local winW = lastDialogW or 840
-    local winH = lastDialogH or 600
-    local winX, winY
-
-    -- Use last dialog position if available (exact position, no clamping)
-    if lastDialogX and lastDialogY then
-        winX = lastDialogX
-        winY = lastDialogY
-    else
-        -- Fallback to mouse position with clamping
-        local mouseX, mouseY = reaper.GetMousePosition()
-        winX = mouseX - winW / 2
-        winY = mouseY - winH / 2
-        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
-    end
-
+    local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
     gfx.init("STEMwerk - Complete", winW, winH, 0, winX, winY)
 
     -- Best-effort: force an arrange repaint while the Complete window is open.
     -- This makes the processing result visible immediately (without needing to close the window).
     reaper.defer(function()
         adjustTrackLayout()
-        local mh = reaper.GetMainHwnd()
-        if mh and reaper.JS_Window_SetFocus then
-            reaper.JS_Window_SetFocus(mh)
-        end
     end)
     reaper.defer(resultWindowLoop)
 end
@@ -18468,10 +18471,6 @@ function multiTrackProgressLoop()
             end
         end
 
-        local mainHwnd = reaper.GetMainHwnd()
-        if mainHwnd and reaper.JS_Window_SetFocus then
-            reaper.JS_Window_SetFocus(mainHwnd)
-        end
         showMessage("Cancelled", "Multi-track separation was cancelled.", "info", true)
         return
     end
@@ -18496,22 +18495,9 @@ showMultiTrackProgressWindow = function()
     loadSettings()
     updateTheme()
 
-    -- Use saved dialog size/position like other windows
-    -- Increased height for stats display (5 lines of info + track bars)
-    local winW = lastDialogW or 480
-    local winH = lastDialogH or 460
-
-    local winX, winY
-    if lastDialogX and lastDialogY then
-        winX = lastDialogX
-        winY = lastDialogY
-    else
-        local mouseX, mouseY = reaper.GetMousePosition()
-        winX = mouseX - winW / 2
-        winY = mouseY - winH / 2
-        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
-    end
-
+    captureWindowGeometry(SCRIPT_NAME)
+    GUI.snapshotMainGeometry()
+    local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
     gfx.init("STEMwerk - Multi-Track Progress", winW, winH, 0, winX, winY)
     reaper.defer(multiTrackProgressLoop)
 end
@@ -19488,7 +19474,7 @@ main = function()
             if not ok then
                 debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
                 isProcessingActive = false
-                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG_LOG_PATH), "error")
+                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG.logPath), "error")
             end
         end)
     else

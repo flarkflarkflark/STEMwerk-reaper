@@ -37,7 +37,7 @@ if [ -z "${RUNTIME_BASE}" ]; then
   exit 1
 fi
 
-mkdir -p "${RUNTIME_BASE}/runtime/state" "${RUNTIME_BASE}/runtime/bin" "${RUNTIME_BASE}/runtime/ffmpeg" "${RUNTIME_BASE}/runtime/python"
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 STATUS="ok"
 STATUS_REASON=""
@@ -105,21 +105,10 @@ else
     "${VENV_PY}" -m pip install "numpy<2.4" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
 
     log "Installing stemwerk-core"
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-    ROOT_PARENT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
     CORE_PATH=""
-    for p in \
-      "/mnt/PRODUCTION/GIT/STEMwerk-core" \
-      "${ROOT_PARENT}/STEMwerk-core" \
-      "${ROOT_DIR}/../STEMwerk-core" \
-      "${ROOT_DIR}/stemwerk-core"
-    do
-      if [ -f "${p}/pyproject.toml" ] && [ -d "${p}/src/stemwerk_core" ]; then
-        CORE_PATH="${p}"
-        break
-      fi
-    done
+    if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -f "${STEMWERK_CORE_PATH}/pyproject.toml" ] && [ -d "${STEMWERK_CORE_PATH}/src/stemwerk_core" ]; then
+      CORE_PATH="${STEMWERK_CORE_PATH}"
+    fi
 
     if [ -n "${CORE_PATH}" ]; then
       log "Installing stemwerk-core from ${CORE_PATH}"
@@ -135,8 +124,8 @@ else
 fi
 
 for p in \
-  "${RUNTIME_BASE}/runtime/bin/ffmpeg" \
-  "${RUNTIME_BASE}/runtime/ffmpeg/bin/ffmpeg" \
+  "${RUNTIME_BASE}/bin/ffmpeg" \
+  "${RUNTIME_BASE}/ffmpeg/bin/ffmpeg" \
   "/opt/homebrew/bin/ffmpeg" \
   "/usr/local/bin/ffmpeg" \
   "/opt/homebrew/opt/ffmpeg/bin/ffmpeg" \
@@ -177,6 +166,8 @@ if [ -n "${STATE_FILE}" ]; then
     [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
     [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
     [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
+    [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
+    [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
   } > "${STATE_FILE}"
 fi
 

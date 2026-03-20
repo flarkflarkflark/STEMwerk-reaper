@@ -39,9 +39,9 @@ local function getRuntimeBase()
     if OS == "Windows" then
         local localAppData = os.getenv("LOCALAPPDATA") or ""
         if localAppData ~= "" then return localAppData .. "\\STEMwerk" end
-        return home .. "\\Documents\\STEMwerk"
+        return home .. "\\STEMwerk"
     elseif OS == "macOS" then
-        return "/Users/Shared/STEMwerk"
+        return home .. "/Library/Application Support/STEMwerk"
     else
         local xdg = os.getenv("XDG_DATA_HOME") or ""
         if xdg ~= "" then return xdg .. "/STEMwerk" end
@@ -49,33 +49,28 @@ local function getRuntimeBase()
     end
 end
 
+local function isWindowsFfmpegShimPath(path)
+    if OS ~= "Windows" then return false end
+    if not path or path == "" then return false end
+    local p = tostring(path):lower()
+    return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
+        or p:find("\\windowsapps\\ffmpeg", 1, true)
+        or p:find("/microsoft/winget/links/ffmpeg.exe", 1, true)
+        or p:find("/windowsapps/ffmpeg", 1, true)
+end
+
 local function findFfmpeg()
     local runtimeBase = getRuntimeBase()
     local runtimeCandidates = {}
     if OS == "Windows" then
-        table.insert(runtimeCandidates, runtimeBase .. "\\runtime\\bin\\ffmpeg.exe")
-        table.insert(runtimeCandidates, runtimeBase .. "\\runtime\\ffmpeg\\bin\\ffmpeg.exe")
+        table.insert(runtimeCandidates, runtimeBase .. "\\bin\\ffmpeg.exe")
+        table.insert(runtimeCandidates, runtimeBase .. "\\ffmpeg\\bin\\ffmpeg.exe")
     else
-        table.insert(runtimeCandidates, runtimeBase .. "/runtime/bin/ffmpeg")
-        table.insert(runtimeCandidates, runtimeBase .. "/runtime/ffmpeg/bin/ffmpeg")
+        table.insert(runtimeCandidates, runtimeBase .. "/bin/ffmpeg")
+        table.insert(runtimeCandidates, runtimeBase .. "/ffmpeg/bin/ffmpeg")
     end
 
     if OS == "Windows" then
-        local f = io.popen("where ffmpeg 2>nul")
-        if f then
-            local res = f:read("*l")
-            f:close()
-            if res and fileExists(res) then return res end
-        end
-    else
-        local f = io.popen("command -v ffmpeg 2>/dev/null")
-        if f then
-            local res = f:read("*l")
-            f:close()
-            if res and fileExists(res) then return res end
-        end
-    end
-
     local candidates = {}
     for _, p in ipairs(runtimeCandidates) do
         table.insert(candidates, p)
@@ -86,7 +81,6 @@ local function findFfmpeg()
         local programFiles = os.getenv("ProgramFiles") or "C:\\Program Files"
         table.insert(candidates, programFiles .. "\\ffmpeg\\bin\\ffmpeg.exe")
         table.insert(candidates, "C:\\ffmpeg\\bin\\ffmpeg.exe")
-        table.insert(candidates, appdata .. "\\Microsoft\\WinGet\\Links\\ffmpeg.exe")
         table.insert(candidates, "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe")
     elseif OS == "macOS" then
         table.insert(candidates, "/opt/homebrew/bin/ffmpeg")
@@ -101,7 +95,23 @@ local function findFfmpeg()
     end
 
     for _, p in ipairs(candidates) do
-        if fileExists(p) then return p end
+        if fileExists(p) and not isWindowsFfmpegShimPath(p) then return p end
+    end
+
+    if OS == "Windows" then
+        local f = io.popen("where ffmpeg 2>nul")
+        if f then
+            local res = f:read("*l")
+            f:close()
+            if res and fileExists(res) and not isWindowsFfmpegShimPath(res) then return res end
+        end
+    else
+        local f = io.popen("command -v ffmpeg 2>/dev/null")
+        if f then
+            local res = f:read("*l")
+            f:close()
+            if res and fileExists(res) then return res end
+        end
     end
     return nil
 end

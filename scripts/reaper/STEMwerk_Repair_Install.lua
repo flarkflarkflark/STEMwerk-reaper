@@ -1,4 +1,4 @@
--- @description STEMwerk: Repair Install
+-- @description STEMwerk: Repair Install (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.2.1
 -- @changelog
@@ -17,6 +17,10 @@ local function fileExists(path)
     return false
 end
 
+local function msgBox(title, text, type)
+    return reaper.ShowMessageBox(tostring(text), tostring(title), type or 0)
+end
+
 local rawScriptDir = getScriptDir()
 local PATH_HELPER = nil
 local helperOk, helperMod = pcall(dofile, rawScriptDir .. "STEMwerk_Path_Helper.lua")
@@ -33,22 +37,22 @@ local INSTALL = PATH_HELPER and PATH_HELPER.resolveInstallRoot(rawScriptDir) or 
 }
 
 if INSTALL.ok and INSTALL.canonicalMismatch and INSTALL.canonical ~= "" then
-    reaper.ShowMessageBox(
+    msgBox(
         "STEMwerk Setup",
         "STEMwerk is not installed in the canonical REAPER Scripts path.\n\n"
             .. "Preferred:\n" .. tostring(INSTALL.canonical or "(unknown)") .. "\n\n"
             .. "Current runtime install:\n" .. tostring(INSTALL.root or rawScriptDir) .. "\n\n"
-            .. "Repair continues using the current location.",
-        "STEMwerk Repair",
+            .. "Repair continues using the current location.\n"
+            .. "Run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.",
         0
     )
 elseif not INSTALL.ok then
-    reaper.ShowMessageBox(
+    msgBox(
+        "STEMwerk Repair",
         "STEMwerk is not installed in the REAPER Scripts folder.\n\nExpected:\n"
             .. tostring(INSTALL.canonical or "(unknown)")
             .. "\n\nCurrent script location:\n" .. tostring(rawScriptDir)
             .. "\n\nReinstall STEMwerk and run STEMwerk_First_Run_Setup.lua from REAPER.",
-        "STEMwerk Repair",
         0
     )
     return
@@ -60,9 +64,9 @@ local setupScript = scriptDir .. "STEMwerk_First_Run_Setup.lua"
 if fileExists(setupScript) then
     dofile(setupScript)
 else
-    reaper.ShowMessageBox(
-        "Missing setup script:\n\n" .. tostring(setupScript) .. "\n\nReinstall STEMwerk.",
+    msgBox(
         "STEMwerk Repair",
+        "Missing setup script:\n\n" .. tostring(setupScript) .. "\n\nReinstall STEMwerk.",
         0
     )
 end

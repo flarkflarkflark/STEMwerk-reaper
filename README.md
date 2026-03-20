@@ -22,7 +22,28 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 
 ## Installation
 
-### Option 1 — Manual
+### Installed users
+
+If you installed STEMwerk through ReaPack, the scripts are placed under:
+
+- `<REAPER resource path>/Scripts/STEMwerk-reaper/` (commonly shown as `Scripts/STEMwerk-reaper/` in ReaPack)
+
+Use this order:
+
+1. Open REAPER.
+2. Run `STEMwerk_First_Run_Setup.lua` once.
+3. After setup completes, run `STEMwerk.lua`.
+
+You can re-run `STEMwerk_First_Run_Setup.lua` later if dependencies need repair.
+
+### Option 1 — ReaPack
+Install by URL in ReaPack:
+
+```
+https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
+```
+
+### Option 2 — Manual / Developer
 1. Install a 64-bit Python 3.x and ensure it is on your PATH.
 2. Clone or download this repository.
 3. In REAPER: Actions -> Show action list -> ReaScript: Load ReaScript...
@@ -31,12 +52,19 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
 
-### Option 2 — ReaPack
-Import this repository URL into ReaPack:
+ReaPack installs put `STEMwerk-SETUP.lua` and `STEMwerk_First_Run_Setup.lua` into `Scripts/STEMwerk-reaper/`.
 
-```
-https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
-```
+### REAPER Action List: which scripts to use
+To avoid confusion, only these are meant for normal use:
+- `STEMwerk: First Run Setup` (`STEMwerk-SETUP.lua`) — run once after install, or if STEMwerk says components are missing.
+- `STEMwerk.lua` — the main UI.
+- `STEMwerk: Karaoke`, `STEMwerk: Vocals Only`, `STEMwerk: Drums Only`, `STEMwerk: Bass Only`, `STEMwerk: All Stems` — optional presets.
+
+Internal/troubleshooting (not for regular use):
+- `STEMwerk: First Run Setup (internal)` — invoked by the setup wrapper.
+- `STEMwerk: Repair Install (internal)` — fallback wrapper used by support.
+
+Note: REAPER does not auto-register scripts in the Action List. Use Actions → ReaScript → Load ReaScript… or run `STEMwerk_Setup_Toolbar.lua` to register the standard actions.
 
 ## REAPER workflows
 - New tracks: Create dedicated stem tracks, optionally grouped in a folder

@@ -28,9 +28,9 @@ local function getRuntimeBase()
   if osName == "Windows" then
     local localAppData = os.getenv("LOCALAPPDATA") or ""
     if localAppData ~= "" then return localAppData .. "\\STEMwerk" end
-    return home .. "\\Documents\\STEMwerk"
+    return home .. "\\STEMwerk"
   elseif osName == "macOS" then
-    return "/Users/Shared/STEMwerk"
+    return home .. "/Library/Application Support/STEMwerk"
   end
   local xdg = os.getenv("XDG_DATA_HOME") or ""
   if xdg ~= "" then return xdg .. "/STEMwerk" end

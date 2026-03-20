@@ -122,6 +122,145 @@ local function commandPathLooksUsable(path)
     return (type(C.isAbsolutePath) ~= "function" or C.isAbsolutePath(path)) and fileExists(path)
 end
 
+local function isWindowsFfmpegShimPath(path)
+    if (C.OS or "Windows") ~= "Windows" then return false end
+    if not path or path == "" then return false end
+    local p = tostring(path):lower()
+    return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
+        or p:find("\\windowsapps\\ffmpeg", 1, true)
+        or p:find("/microsoft/winget/links/ffmpeg.exe", 1, true)
+        or p:find("/windowsapps/ffmpeg", 1, true)
+end
+
+local function readBootstrapEnvFfmpeg(runtime)
+    if not runtime or not runtime.base then return "" end
+    local PATH_SEP = C.PATH_SEP or "/"
+    local stateDir = runtime.runtimeState or (runtime.base .. PATH_SEP .. "state")
+    local stateFile = stateDir .. PATH_SEP .. "bootstrap.env"
+    local f = io.open(stateFile, "r")
+    if not f then return "" end
+    for line in f:lines() do
+        local k, v = line:match("^([A-Z0-9_]+)%s*=%s*(.*)$")
+        if k == "FFMPEG_PATH" and v and v ~= "" then
+            f:close()
+            return v:gsub("\r", "")
+        end
+    end
+    f:close()
+    return ""
+end
+
+local function isWindowsStorePythonPath(path)
+    if (C.OS or "Windows") ~= "Windows" then return false end
+    if not path or path == "" then return false end
+    local p = tostring(path):lower()
+    return p:find("\\microsoft\\windowsapps\\python", 1, true)
+        or p:find("/microsoft/windowsapps/python", 1, true)
+end
+
+local function readBootstrapEnvPython(runtime)
+    if not runtime or not runtime.base then return "" end
+    local PATH_SEP = C.PATH_SEP or "/"
+    local stateDir = runtime.runtimeState or (runtime.base .. PATH_SEP .. "state")
+    local stateFile = stateDir .. PATH_SEP .. "bootstrap.env"
+    local f = io.open(stateFile, "r")
+    if not f then return "" end
+    local py = ""
+    local venv = ""
+    for line in f:lines() do
+        local k, v = line:match("^([A-Z0-9_]+)%s*=%s*(.*)$")
+        if k == "PYTHON_PATH" and v and v ~= "" then
+            py = v:gsub("\r", "")
+        elseif k == "VENV_PYTHON" and v and v ~= "" then
+            venv = v:gsub("\r", "")
+        end
+    end
+    f:close()
+    if py ~= "" then return py end
+    if venv ~= "" then return venv end
+    return ""
+end
+
+local function resolveWindowsPythonPath(runtime)
+    local bootstrapPy = readBootstrapEnvPython(runtime)
+    if bootstrapPy ~= "" and not isWindowsStorePythonPath(bootstrapPy) and fileExists(bootstrapPy) then
+        return bootstrapPy
+    end
+
+    if runtime and runtime.venvPython and fileExists(runtime.venvPython) and not isWindowsStorePythonPath(runtime.venvPython) then
+        return runtime.venvPython
+    end
+
+    local extPath = type(C.getExtStateValue) == "function" and C.getExtStateValue("pythonPath") or nil
+    if extPath and extPath ~= "" and not isWindowsStorePythonPath(extPath) and fileExists(extPath) then
+        return extPath
+    end
+
+    local h = io.popen("where python 2>nul")
+    if not h then return "" end
+    local out = h:read("*a") or ""
+    h:close()
+    for line in out:gmatch("[^\r\n]+") do
+        local p = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if p ~= "" and fileExists(p) and not isWindowsStorePythonPath(p) then
+            return p
+        end
+    end
+    return ""
+end
+
+local function resolveRuntimeFfmpeg(runtime)
+    if not runtime or not runtime.base then return "" end
+    local PATH_SEP = C.PATH_SEP or "/"
+    local base = runtime.base
+    local candidates = {
+        base .. PATH_SEP .. "ffmpeg" .. PATH_SEP .. "bin" .. PATH_SEP .. "ffmpeg.exe",
+        base .. PATH_SEP .. "ffmpeg" .. PATH_SEP .. "ffmpeg.exe",
+        base .. PATH_SEP .. "bin" .. PATH_SEP .. "ffmpeg.exe",
+    }
+    for _, p in ipairs(candidates) do
+        if fileExists(p) and not isWindowsFfmpegShimPath(p) then
+            return p
+        end
+    end
+    return ""
+end
+
+local function resolveWindowsFfmpegPath(runtime)
+    local runtimePath = resolveRuntimeFfmpeg(runtime)
+    if runtimePath ~= "" then return runtimePath end
+
+    local bootstrapPath = readBootstrapEnvFfmpeg(runtime)
+    if bootstrapPath ~= "" and not isWindowsFfmpegShimPath(bootstrapPath) and fileExists(bootstrapPath) then
+        return bootstrapPath
+    end
+
+    local extPath = type(C.getExtStateValue) == "function" and C.getExtStateValue("ffmpegPath") or nil
+    if extPath and isWindowsFfmpegShimPath(extPath) then
+        if type(C.setExtStateValue) == "function" then
+            C.setExtStateValue("ffmpegPath", "")
+        end
+        extPath = nil
+    end
+    if extPath and extPath ~= "" and fileExists(extPath) then
+        return extPath
+    end
+    if (C.OS or "Windows") == "Windows" then
+        local h = io.popen("where ffmpeg 2>nul")
+        if h then
+            local out = h:read("*a") or ""
+            h:close()
+            for line in out:gmatch("[^\r\n]+") do
+                local p = line:gsub("^%s+", ""):gsub("%s+$", "")
+                if p ~= "" and fileExists(p) and not isWindowsFfmpegShimPath(p) then
+                    return p
+                end
+            end
+        end
+    end
+    return ""
+end
+
 local function canRunCommand(path, arg, expectedPattern, timeoutMs)
     if not path or path == "" then return false end
     if type(C.isAbsolutePath) == "function" and C.isAbsolutePath(path) and not fileExists(path) then
@@ -232,18 +371,13 @@ function M.getRuntimeBase()
 
     if OS == "Windows" then
         local localAppData = os.getenv("LOCALAPPDATA") or ""
-        local appData = os.getenv("APPDATA") or ""
         if localAppData ~= "" then table.insert(candidates, localAppData .. "\\STEMwerk") end
-        if appData ~= "" then table.insert(candidates, appData .. "\\STEMwerk") end
-        table.insert(candidates, home .. "\\Documents\\STEMwerk")
     elseif OS == "macOS" then
-        table.insert(candidates, "/Users/Shared/STEMwerk")
         table.insert(candidates, home .. "/Library/Application Support/STEMwerk")
     else
         local xdg = os.getenv("XDG_DATA_HOME") or ""
         if xdg ~= "" then table.insert(candidates, xdg .. "/STEMwerk") end
         table.insert(candidates, home .. "/.local/share/STEMwerk")
-        table.insert(candidates, home .. "/.STEMwerk")
     end
 
     for _, base in ipairs(candidates) do
@@ -262,16 +396,20 @@ function M.getRuntimePaths()
     local base = M.getRuntimeBase()
     local PATH_SEP = C.PATH_SEP or "/"
     local OS = C.OS or "Linux"
-    local runtimeRoot = base .. PATH_SEP .. "runtime"
+    local runtimeRoot = base
+    local runtimeState = base .. PATH_SEP .. "state"
+    local runtimeLogs = base .. PATH_SEP .. "logs"
+    local runtimeCache = base .. PATH_SEP .. "cache"
     local venvDir = base .. PATH_SEP .. ".venv"
-
     return {
         base = base,
         runtimeRoot = runtimeRoot,
-        runtimeBin = runtimeRoot .. PATH_SEP .. "bin",
-        runtimePython = runtimeRoot .. PATH_SEP .. "python",
-        runtimeFfmpeg = runtimeRoot .. PATH_SEP .. "ffmpeg",
-        runtimeState = runtimeRoot .. PATH_SEP .. "state",
+        runtimeBin = base .. PATH_SEP .. "bin",
+        runtimePython = base .. PATH_SEP .. "python",
+        runtimeFfmpeg = base .. PATH_SEP .. "ffmpeg",
+        runtimeState = runtimeState,
+        runtimeLogs = runtimeLogs,
+        runtimeCache = runtimeCache,
         venvDir = venvDir,
         venvPython = OS == "Windows" and (venvDir .. "\\Scripts\\python.exe") or (venvDir .. "/bin/python"),
     }
@@ -477,7 +615,18 @@ end
 function M.verifyRuntimeAfterBootstrap()
     local runtime = M.getRuntimePaths()
     local errors = {}
-    local pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
+    local pythonPath
+    if (C.OS or "Windows") == "Windows" then
+        pythonPath = resolveWindowsPythonPath(runtime)
+    else
+        pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
+        if (not pythonPath or pythonPath == "") and runtime.venvPython then
+            pythonPath = runtime.venvPython
+        end
+    end
+    if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
+        C.setPythonPath(pythonPath)
+    end
     local canRunFfmpeg = C.canRunFfmpeg
 
     local pythonOk = M.isPythonAvailable(pythonPath)
@@ -492,7 +641,7 @@ function M.verifyRuntimeAfterBootstrap()
     local ffmpegPath = nil
     local ffmpegOk = false
     if type(canRunFfmpeg) == "function" then
-        local ffmpegPath = type(C.getExtStateValue) == "function" and C.getExtStateValue("ffmpegPath") or nil
+        ffmpegPath = resolveWindowsFfmpegPath(runtime)
         if ffmpegPath and ffmpegPath ~= "" then
             ffmpegOk = canRunFfmpeg(ffmpegPath)
         else
@@ -514,6 +663,18 @@ function M.verifyRuntimeAfterBootstrap()
         logExec("runtime_verify_failed", -1, table.concat(errors, ","))
     end
     return (#errors == 0), errors
+end
+
+function M.resolveRuntimePythonPath()
+    local runtime = M.getRuntimePaths()
+    if (C.OS or "Windows") == "Windows" then
+        return resolveWindowsPythonPath(runtime)
+    end
+    local pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
+    if (not pythonPath or pythonPath == "") and runtime.venvPython then
+        pythonPath = runtime.venvPython
+    end
+    return pythonPath or ""
 end
 
 function M.ensureDependenciesInteractive()
@@ -545,12 +706,40 @@ function M.ensureDependenciesInteractive()
         end
     end
 
+    local caps = M.readCapabilities()
+    if caps and caps.kv and caps.kv.VERIFICATION == "ok" and (caps.kv.BOOTSTRAP_STATUS == "" or caps.kv.BOOTSTRAP_STATUS == "ok") then
+        local pyOk = (caps.kv.PYTHON_PATH and caps.kv.PYTHON_PATH ~= "" and fileExists(caps.kv.PYTHON_PATH)) or false
+        local ffOk = (caps.kv.FFMPEG_PATH and caps.kv.FFMPEG_PATH ~= "" and fileExists(caps.kv.FFMPEG_PATH)) or false
+        if pyOk and ffOk then
+            if type(C.setPythonPath) == "function" then
+                C.setPythonPath(caps.kv.PYTHON_PATH)
+            end
+            if type(C.setExtStateValue) == "function" then
+                C.setExtStateValue("ffmpegPath", caps.kv.FFMPEG_PATH)
+            end
+            setDepState("ok")
+            return true
+        end
+    end
+
+    local runtime = M.getRuntimePaths()
     local canRunFfmpeg = C.canRunFfmpeg
-    local pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
+    local pythonPath
+    if (C.OS or "Windows") == "Windows" then
+        pythonPath = resolveWindowsPythonPath(runtime)
+    else
+        pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
+        if (not pythonPath or pythonPath == "") and runtime.venvPython then
+            pythonPath = runtime.venvPython
+        end
+    end
+    if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
+        C.setPythonPath(pythonPath)
+    end
     local pythonOk = M.isPythonAvailable(pythonPath)
     local ffmpegOk = false
     if type(canRunFfmpeg) == "function" then
-        local ffmpegPath = type(C.getExtStateValue) == "function" and C.getExtStateValue("ffmpegPath") or nil
+        local ffmpegPath = resolveWindowsFfmpegPath(runtime)
         if ffmpegPath and ffmpegPath ~= "" then
             ffmpegOk = canRunFfmpeg(ffmpegPath)
         else
@@ -566,6 +755,12 @@ function M.ensureDependenciesInteractive()
     end
 
     if pythonOk and ffmpegOk and audioOk then
+        setDepState("ok")
+        return true
+    end
+
+    local runtimeOk, runtimeErrors = M.verifyRuntimeAfterBootstrap()
+    if runtimeOk then
         setDepState("ok")
         return true
     end

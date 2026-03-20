@@ -1,4 +1,4 @@
--- @description STEMwerk: First Run Setup
+-- @description STEMwerk: First Run Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.2.1
 -- @changelog
@@ -6,6 +6,8 @@
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
 
 local EXT_SECTION = "STEMwerk"
+local BOOTSTRAP_GUARD_STALE_SECONDS = 600
+local BOOTSTRAP_GUARD_STARTUP_GRACE_SECONDS = 8
 
 local function msgBox(title, text, type)
     return reaper.ShowMessageBox(tostring(text), tostring(title), type or 0)
@@ -163,16 +165,10 @@ local function getRuntimeBase()
     local candidates = {}
     if OS == "Windows" then
         local localAppData = os.getenv("LOCALAPPDATA") or ""
-        local appData = os.getenv("APPDATA") or ""
         if localAppData ~= "" then
             table.insert(candidates, localAppData .. "\\STEMwerk")
         end
-        if appData ~= "" then
-            table.insert(candidates, appData .. "\\STEMwerk")
-        end
-        table.insert(candidates, home .. "\\Documents\\STEMwerk")
     elseif OS == "macOS" then
-        table.insert(candidates, "/Users/Shared/STEMwerk")
         table.insert(candidates, home .. "/Library/Application Support/STEMwerk")
     else
         local xdg = os.getenv("XDG_DATA_HOME") or ""
@@ -180,7 +176,6 @@ local function getRuntimeBase()
             table.insert(candidates, xdg .. "/STEMwerk")
         end
         table.insert(candidates, home .. "/.local/share/STEMwerk")
-        table.insert(candidates, home .. "/.STEMwerk")
     end
     for _, base in ipairs(candidates) do
         if ensureWritableDir(base) then
@@ -192,13 +187,17 @@ end
 
 local function getRuntimePaths()
     local base = getRuntimeBase()
-    local runtimeRoot = base .. PATH_SEP .. "runtime"
-    local runtimeState = runtimeRoot .. PATH_SEP .. "state"
+    local runtimeRoot = base
+    local runtimeState = base .. PATH_SEP .. "state"
+    local runtimeLogs = base .. PATH_SEP .. "logs"
+    local runtimeCache = base .. PATH_SEP .. "cache"
     local venvDir = base .. PATH_SEP .. ".venv"
     return {
         base = base,
         runtimeRoot = runtimeRoot,
         runtimeState = runtimeState,
+        runtimeLogs = runtimeLogs,
+        runtimeCache = runtimeCache,
         venvDir = venvDir,
         venvPython = OS == "Windows" and (venvDir .. "\\Scripts\\python.exe") or (venvDir .. "/bin/python"),
     }
@@ -224,12 +223,42 @@ local function setExt(key, value)
     end
 end
 
+local function getExt(key)
+    if reaper and reaper.GetExtState then
+        return tostring(reaper.GetExtState(EXT_SECTION, key) or "")
+    end
+    return ""
+end
+
 local function trim(s)
     if s == nil then return "" end
     local t = tostring(s)
     t = t:gsub("^%s+", "")
     t = t:gsub("%s+$", "")
     return t
+end
+
+local function prettyBackendReason(reason)
+    if not reason or reason == "" then return "" end
+    local parts = {}
+    local seen = {}
+    for raw in tostring(reason):gmatch("[^;]+") do
+        local part = trim(raw)
+        local lower = part:lower()
+        if lower == "device_probe_failed" then
+            part = "No compatible GPU detected; using CPU"
+        elseif lower == "backend_install_failed" then
+            part = "Backend install failed; using CPU"
+        elseif lower == "backend_force_cpu" then
+            part = "CPU fallback forced"
+        end
+        local key = part:lower()
+        if key ~= "" and not seen[key] then
+            seen[key] = true
+            parts[#parts + 1] = part
+        end
+    end
+    return table.concat(parts, "; ")
 end
 
 local function stripQuotes(s)
@@ -399,6 +428,63 @@ local function wrapLine(line, maxLen)
     end
     if s ~= "" then out[#out + 1] = s end
     return out
+end
+
+local function drawStemwerkTitleWindows(y, fontSize)
+    local x = 18
+    local letters = { "S", "T", "E", "M" }
+    local colors = {
+        { 255, 100, 100 },
+        { 100, 200, 255 },
+        { 150, 100, 255 },
+        { 100, 255, 150 },
+    }
+    gfx.setfont(1, "Arial", fontSize)
+    local xPos = x
+    for i = 1, #letters do
+        local c = colors[i]
+        gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
+        gfx.x = xPos
+        gfx.y = y
+        gfx.drawstr(letters[i])
+        xPos = xPos + gfx.measurestr(letters[i])
+    end
+    gfx.set(1, 1, 1, 1)
+    gfx.x = xPos
+    gfx.y = y
+    gfx.drawstr("werk Setup [Windows]")
+end
+
+local function drawStemwerkInline(x, y, fontSize, prefix, suffix)
+    local letters = { "S", "T", "E", "M" }
+    local colors = {
+        { 255, 100, 100 },
+        { 100, 200, 255 },
+        { 150, 100, 255 },
+        { 100, 255, 150 },
+    }
+    gfx.setfont(1, "Arial", fontSize)
+    gfx.set(1, 1, 1, 1)
+    gfx.x = x
+    gfx.y = y
+    if prefix and prefix ~= "" then
+        gfx.drawstr(prefix)
+        x = x + gfx.measurestr(prefix)
+    end
+    for i = 1, #letters do
+        local c = colors[i]
+        gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
+        gfx.x = x
+        gfx.y = y
+        gfx.drawstr(letters[i])
+        x = x + gfx.measurestr(letters[i])
+    end
+    gfx.set(1, 1, 1, 1)
+    if suffix and suffix ~= "" then
+        gfx.x = x
+        gfx.y = y
+        gfx.drawstr(suffix)
+    end
 end
 
 local function probeRuntimeDevices(pythonPath, separatorScript)
@@ -610,11 +696,156 @@ local function updateBootstrapEnv(path, kv)
     return true
 end
 
+local readBootstrapPid
+local writeBootstrapGuard
+local isProcessAlive
+local safePerformPostBootstrap
+
+local function psSingleQuote(value)
+    local quoted = tostring(value or "")
+    quoted = quoted:gsub("'", "''")
+    return "'" .. quoted .. "'"
+end
+
+local function readBootstrapGuard(path)
+    if not PATH_HELPER or not path or path == "" then
+        return {}
+    end
+    local ok, data = pcall(PATH_HELPER.readEnvFile, path)
+    if ok and type(data) == "table" then
+        return data
+    end
+    return {}
+end
+
+local function inspectBootstrapGuard(guardPath, pidFile)
+    local guard = readBootstrapGuard(guardPath)
+    if guard.STATUS ~= "running" then
+        return "idle", guard, nil, false
+    end
+
+    local pid = readBootstrapPid(pidFile)
+    if not pid and guard.PID and guard.PID ~= "" then
+        pid = tonumber(guard.PID) or tonumber(trim(guard.PID))
+    end
+    local pidAlive = pid and isProcessAlive(pid) or false
+    if pid and pidAlive then
+        return "running", guard, pid, true
+    end
+    if pid and not pidAlive then
+        return "stale", guard, pid, false
+    end
+
+    local updatedAt = tonumber(guard.UPDATED_AT) or 0
+    local age = updatedAt > 0 and (os.time() - updatedAt) or (BOOTSTRAP_GUARD_STALE_SECONDS + 1)
+    if age <= BOOTSTRAP_GUARD_STARTUP_GRACE_SECONDS then
+        return "starting", guard, pid, false
+    end
+
+    return "stale", guard, pid, false
+end
+
+local function isBootstrapBusy(guardPath, pidFile)
+    local state, guard, pid = inspectBootstrapGuard(guardPath, pidFile)
+    if state == "running" or state == "starting" then
+        return true, tostring(guard.SCRIPT_PATH or ""), pid
+    end
+    if state == "stale" then
+        return false, tostring(guard.SCRIPT_PATH or ""), pid, "stale"
+    end
+    return false, "", nil, "idle"
+end
+
+local function recoverStaleBootstrapGuard(guardPath, pidFile)
+    local state, guard = inspectBootstrapGuard(guardPath, pidFile)
+    if state ~= "stale" then
+        return false
+    end
+    writeBootstrapGuard(
+        guardPath,
+        "failed",
+        "stale_bootstrap_run",
+        tostring(guard.SCRIPT_PATH or "")
+    )
+    return true
+end
+
+local function isWindowsProcessAlive(pid)
+    if not pid then
+        return false
+    end
+    local cmd = "tasklist /FI " .. quoteArg("PID eq " .. tostring(pid)) .. " /NH /FO CSV 2>nul"
+    local h = io.popen(cmd)
+    if not h then
+        return false
+    end
+    local output = h:read("*a") or ""
+    h:close()
+    return output:find("," .. tostring(pid) .. ",", 1, true) ~= nil
+        or output:find(',"' .. tostring(pid) .. '",', 1, true) ~= nil
+end
+
+isProcessAlive = function(pid)
+    if OS == "Windows" then
+        return isWindowsProcessAlive(pid)
+    end
+    local ok = os.execute("kill -0 " .. tostring(pid) .. " >/dev/null 2>&1")
+    return (ok == true or ok == 0)
+end
+
+readBootstrapPid = function(pidFile)
+    local f = io.open(pidFile, "r")
+    if not f then
+        return nil
+    end
+    local pidText = trim(f:read("*a") or "")
+    f:close()
+    local pid = tonumber(pidText)
+    if pid then
+        return pid
+    end
+    return nil
+end
+
+writeBootstrapGuard = function(guardPath, status, reason, scriptPath, pid)
+    if not PATH_HELPER then return end
+    PATH_HELPER.writeEnvFile(guardPath, {
+        STATUS = status,
+        REASON = reason,
+        SCRIPT_PATH = scriptPath or "",
+        UPDATED_AT = os.time(),
+        PID = pid and tostring(pid) or "",
+    })
+end
+
 local function showStatusWindow(stateFile, logFile, finalMessage)
     if not gfx then
         if finalMessage then
             msgBox("STEMwerk Setup", finalMessage, finalMessage:find("failed") and 16 or 0)
         end
+        return
+    end
+
+    if OS == "Windows" then
+        local state = parseStateFile(stateFile)
+        local msg = finalMessage
+        if not msg or msg == "" then
+            local lines = {
+                "Setup status: " .. tostring(state.STATUS or "unknown"),
+            }
+            if state.STATUS_REASON and state.STATUS_REASON ~= "" then
+                lines[#lines + 1] = "Reason: " .. tostring(state.STATUS_REASON)
+            end
+            if state.PYTHON_PATH or state.VENV_PYTHON then
+                lines[#lines + 1] = "Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or "")
+            end
+            if state.FFMPEG_PATH then
+                lines[#lines + 1] = "FFmpeg: " .. tostring(state.FFMPEG_PATH or "")
+            end
+            lines[#lines + 1] = "Log: " .. tostring(logFile or "")
+            msg = table.concat(lines, "\n")
+        end
+        msgBox("STEMwerk Setup", msg, (msg:find("failed") and 16) or 0)
         return
     end
 
@@ -637,7 +868,7 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
         idx = (idx % #spinner) + 1
 
         gfx.set(0, 0, 0, 0)
-        gfx.setfont(1, "Arial", 14)
+        gfx.setfont(1, "Arial", 16)
         gfx.x = 20
         gfx.y = 20
         if finalMessage then
@@ -646,28 +877,28 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
             shownMessage = (state.STATUS == "ok") and "Bootstrap completed." or "Bootstrapping..."
         end
         gfx.drawstr(shownMessage .. " [" .. spin .. "]")
-        gfx.y = gfx.y + 28
+        gfx.y = gfx.y + 30
         gfx.drawstr(stateLine)
         if reasonLine ~= "" then
-            gfx.y = gfx.y + 20
+            gfx.y = gfx.y + 22
             gfx.drawstr(reasonLine)
         end
-        gfx.y = gfx.y + 24
+        gfx.y = gfx.y + 26
         gfx.drawstr(pythonLine)
-        gfx.y = gfx.y + 20
+        gfx.y = gfx.y + 22
         gfx.drawstr(ffmpegLine)
-        gfx.y = gfx.y + 24
+        gfx.y = gfx.y + 26
         gfx.drawstr("Log: " .. tostring(logFile))
-        gfx.y = gfx.y + 20
+        gfx.y = gfx.y + 22
         gfx.drawstr("Recent log lines:")
-        gfx.y = gfx.y + 18
+        gfx.y = gfx.y + 20
 
         for _, line in ipairs(lines) do
             local wrapped = wrapLine(line, 106)
             for _, wl in ipairs(wrapped) do
                 gfx.drawstr(wl)
-                gfx.y = gfx.y + 16
-            end
+                gfx.y = gfx.y + 18
+        end
         end
 
         if finalMessage and os.time() - finishedAt > 0 then
@@ -715,16 +946,10 @@ local function waitForBootstrapState(stateFile, logFile, runtimeState)
             done = true
             break
         end
-        local f = io.open(pidFile, "r")
-        local pid = nil
-        if f then
-            local pidText = trim(f:read("*a") or "")
-            pid = tonumber(pidText)
-            f:close()
-        end
+        local pid = readBootstrapPid(pidFile)
         if pid then
-            local ok = os.execute("kill -0 " .. pid .. " >/dev/null 2>&1")
-            if not (ok == true or ok == 0) then
+            local ok = isProcessAlive(pid)
+            if not ok then
                 done = true
                 break
             end
@@ -743,18 +968,20 @@ end
 
 local function runBootstrap(runtime)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
-    local logFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.log"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     ensureDir(runtime.runtimeState)
+    ensureDir(runtime.runtimeLogs)
+
+    if OS == "Windows" then
+        return false, stateFile, logFile, {
+            STATUS = "disabled",
+            STATUS_REASON = "windows_installer_only",
+        }
+    end
 
     local scriptPath = PATH_HELPER.getBootstrapScriptPath(INSTALL_ROOT, OS, PATH_SEP)
     local cmd
-    if OS == "Windows" then
-        cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File '
-            .. quoteArg(scriptPath)
-            .. " -RuntimeBase " .. quoteArg(runtime.base)
-            .. " -StateFile " .. quoteArg(stateFile)
-            .. " -LogFile " .. quoteArg(logFile)
-    elseif OS == "macOS" then
+    if OS == "macOS" then
         cmd = '/bin/sh ' .. quoteArg(scriptPath)
             .. " --runtime-base " .. quoteArg(runtime.base)
             .. " --state-file " .. quoteArg(stateFile)
@@ -828,6 +1055,235 @@ local function runBootstrap(runtime)
     return false, stateFile, logFile, parseStateFile(stateFile)
 end
 
+local function launchWindowsBootstrap(runtime, stateFile, logFile, scriptPath)
+    -- Windows REAPER-side bootstrap is disabled; installer handles heavy setup.
+    return false
+end
+
+local WINDOWS_SETUP = nil
+
+local function windowsDrawStatus(state, logLines, pidAlive, pid)
+    local w, h = gfx.w, gfx.h
+    gfx.set(0, 0, 0, 1)
+    gfx.rect(0, 0, w, h, 1)
+    gfx.set(1, 1, 1, 1)
+
+    local y = 16
+    drawStemwerkTitleWindows(y, 26)
+    y = y + 30
+
+    gfx.setfont(1, "Arial", 18)
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr("Windows bootstrap in progress")
+    y = y + 24
+    gfx.setfont(1, "Arial", 18)
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr("Phase: " .. ((state.STATUS == "running" or state.STATUS == "" or not state.STATUS) and "Bootstrapping" or "Finalizing"))
+    y = y + 22
+
+    local statusLine = "Status: " .. tostring(state.STATUS or "running")
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr(statusLine)
+    y = y + 20
+    if state.STATUS_REASON and state.STATUS_REASON ~= "" then
+        gfx.x = 18
+        gfx.y = y
+        gfx.drawstr("Reason: " .. tostring(state.STATUS_REASON))
+        y = y + 20
+    end
+
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr("Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or ""))
+    y = y + 20
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr("FFmpeg: " .. tostring(state.FFMPEG_PATH or ""))
+    y = y + 20
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr("PID: " .. tostring(pid or "") .. " (alive: " .. tostring(pidAlive) .. ")")
+    y = y + 20
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr("Log: " .. tostring(WINDOWS_SETUP.logFile))
+    y = y + 20
+    gfx.x = 18
+    gfx.y = y
+    gfx.drawstr("Recent log lines (newest last):")
+    y = y + 20
+
+    gfx.setfont(1, "Courier New", 16)
+    for _, line in ipairs(logLines) do
+        local wrapped = wrapLine(line, 120)
+        for _, wl in ipairs(wrapped) do
+            gfx.x = 18
+            gfx.y = y
+            gfx.drawstr(wl)
+            y = y + 18
+        end
+    end
+end
+
+local function drawWindowsFinal(finalLines, finalSuccess)
+    local w, h = gfx.w, gfx.h
+    gfx.set(0, 0, 0, 1)
+    gfx.rect(0, 0, w, h, 1)
+    gfx.set(1, 1, 1, 1)
+
+    local y = 18
+    drawStemwerkTitleWindows(y, 26)
+    y = y + 30
+    gfx.setfont(1, "Arial Bold", 28)
+    gfx.x = 18
+    gfx.y = y
+    if finalSuccess then
+        gfx.set(0.2, 0.9, 0.2, 1)
+        gfx.drawstr("Setup complete.")
+    else
+        gfx.set(1.0, 0.4, 0.1, 1)
+        gfx.drawstr("Setup was not completely successful.")
+    end
+    gfx.set(1, 1, 1, 1)
+    y = y + 34
+
+    gfx.setfont(1, "Arial", 18)
+    local startIdx = 1
+    if finalSuccess and finalLines and finalLines[1] == "Setup complete." then
+        startIdx = 2
+    elseif (not finalSuccess) and finalLines and finalLines[1] == "Setup was not completely successful." then
+        startIdx = 2
+    end
+    for i = startIdx, #(finalLines or {}) do
+        local line = finalLines[i]
+        if finalSuccess and line == "You can start STEMwerk now." then
+            gfx.setfont(1, "Arial Bold", 20)
+            drawStemwerkInline(18, y, 20, "You can start ", " now.")
+            y = y + 26
+            gfx.setfont(1, "Arial", 18)
+        else
+            local wrapped = wrapLine(line, 120)
+            for _, wl in ipairs(wrapped) do
+                gfx.x = 18
+                gfx.y = y
+                gfx.drawstr(wl)
+                y = y + 18
+            end
+        end
+    end
+
+    gfx.setfont(1, "Arial", 14)
+    gfx.x = 18
+    gfx.y = h - 28
+    gfx.drawstr("Press Esc or close this window to continue.")
+end
+
+local function finalizeWindowsSetup(result)
+    if not WINDOWS_SETUP or not result then return end
+    WINDOWS_SETUP.finalized = true
+    local finalMessage = (type(result) == "table" and type(result.finalMessage) == "table") and result.finalMessage or {
+        "Setup was not completely successful.",
+        "Reason: invalid result payload."
+    }
+    WINDOWS_SETUP.finalMessage = finalMessage
+    WINDOWS_SETUP.finalSuccess = result.success == true
+    WINDOWS_SETUP.summaryText = table.concat(finalMessage, "\n")
+    writeBootstrapGuard(
+        WINDOWS_SETUP.guardPath,
+        WINDOWS_SETUP.finalSuccess and "ok" or "failed",
+        WINDOWS_SETUP.finalSuccess and "completed" or "bootstrap_failed",
+        WINDOWS_SETUP.bootstrapScript,
+        readBootstrapPid(WINDOWS_SETUP.pidFile)
+    )
+end
+
+local function windowsSetupTick()
+    if not WINDOWS_SETUP or not gfx then return end
+
+    local state = parseStateFile(WINDOWS_SETUP.stateFile)
+    local logLines = readTail(WINDOWS_SETUP.logFile, 32)
+    local pid = readBootstrapPid(WINDOWS_SETUP.pidFile)
+    local pidAlive = false
+    if pid then
+        pidAlive = isWindowsProcessAlive(pid)
+    end
+
+    if not WINDOWS_SETUP.finalized then
+        local status = state.STATUS or ""
+        local elapsed = os.time() - (WINDOWS_SETUP.startedAt or os.time())
+        if status ~= "" and status ~= "running" then
+            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, status == "ok", state, WINDOWS_SETUP.separatorScript)
+            finalizeWindowsSetup(result)
+        elseif status == "launch_failed" then
+            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, state, WINDOWS_SETUP.separatorScript)
+            finalizeWindowsSetup(result)
+        elseif pid == nil and (status == "" or status == "running") and elapsed >= 5 then
+            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, state, WINDOWS_SETUP.separatorScript)
+            finalizeWindowsSetup(result)
+        elseif pid ~= nil and not pidAlive and (status == "" or status == "running") and elapsed >= 5 then
+            local stateDead = parseStateFile(WINDOWS_SETUP.stateFile)
+            if stateDead.STATUS == "" or stateDead.STATUS == nil then
+                stateDead.STATUS = "pid_dead"
+                stateDead.STATUS_REASON = "bootstrap_process_exited"
+            end
+            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, stateDead, WINDOWS_SETUP.separatorScript)
+            finalizeWindowsSetup(result)
+        elseif elapsed >= 1800 then
+            local stateTimeout = parseStateFile(WINDOWS_SETUP.stateFile)
+            if stateTimeout.STATUS == "" or stateTimeout.STATUS == nil then
+                stateTimeout.STATUS = "timeout"
+                stateTimeout.STATUS_REASON = "bootstrap_timeout"
+            end
+            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, stateTimeout, WINDOWS_SETUP.separatorScript)
+            finalizeWindowsSetup(result)
+        end
+    end
+
+    if WINDOWS_SETUP.finalized then
+        drawWindowsFinal(WINDOWS_SETUP.finalMessage, WINDOWS_SETUP.finalSuccess)
+    else
+        windowsDrawStatus(state, logLines, pidAlive, pid)
+    end
+
+    gfx.update()
+    local key = gfx.getchar()
+    if key == 27 or key == -1 then
+        if not WINDOWS_SETUP.finalized then
+            writeBootstrapGuard(WINDOWS_SETUP.guardPath, "failed", "user_closed", WINDOWS_SETUP.bootstrapScript)
+            if WINDOWS_SETUP.summaryText == "" then
+                local result = safePerformPostBootstrap(
+                    WINDOWS_SETUP.runtime,
+                    WINDOWS_SETUP.stateFile,
+                    WINDOWS_SETUP.logFile,
+                    false,
+                    parseStateFile(WINDOWS_SETUP.stateFile),
+                    WINDOWS_SETUP.separatorScript
+                )
+                finalizeWindowsSetup(result)
+            end
+        end
+        gfx.quit()
+        WINDOWS_SETUP = nil
+        return
+    end
+
+    reaper.defer(windowsSetupTick)
+end
+
+local function startWindowsSetup(runtime, separatorScript)
+    msgBox(
+        "STEMwerk Setup",
+        "On Windows, setup runs in the installer.\n\n"
+            .. "This REAPER script only verifies/repairs and will not launch bootstrap installers.\n\n"
+            .. "Please re-run the Windows installer if setup is incomplete.",
+        0
+    )
+    return
+end
+
 local function verifyRuntimePaths(state)
     state = state or {}
     local resolved = {
@@ -883,7 +1339,10 @@ local function verifyRuntimePaths(state)
 end
 
 local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
-    local state = bootstrapState or parseStateFile(stateFile)
+    local state = type(bootstrapState) == "table" and bootstrapState or parseStateFile(stateFile)
+    if type(state) ~= "table" then
+        state = {}
+    end
 
     if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
         setExt("pythonPath", state.PYTHON_PATH)
@@ -931,6 +1390,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             backendReason = state.BACKEND_REASON
         end
     end
+    local backendReasonLabel = prettyBackendReason(backendReason)
     local backendNote = state.BACKEND_NOTE and tostring(state.BACKEND_NOTE) or ""
     local profile = profileForBackend(backend)
 
@@ -995,8 +1455,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         finalMessage[#finalMessage + 1] = "FFmpeg path: " .. tostring(verification.ffmpegPath)
         finalMessage[#finalMessage + 1] = "Profile: " .. tostring(profile)
         finalMessage[#finalMessage + 1] = "Backend: " .. tostring(backend)
-        if backendReason and backendReason ~= "" then
-            finalMessage[#finalMessage + 1] = "Backend reason: " .. tostring(backendReason)
+        if backendReasonLabel and backendReasonLabel ~= "" then
+            finalMessage[#finalMessage + 1] = "Backend reason: " .. tostring(backendReasonLabel)
         end
         if backendNote and backendNote ~= "" then
             finalMessage[#finalMessage + 1] = "Note: " .. tostring(backendNote)
@@ -1007,7 +1467,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         finalMessage[#finalMessage + 1] = "Capabilities: " .. tostring(capPath)
         finalMessage[#finalMessage + 1] = "Log: " .. tostring(logFile)
         finalMessage[#finalMessage + 1] = ""
-        finalMessage[#finalMessage + 1] = "You can start STEMwerk again."
+        finalMessage[#finalMessage + 1] = "You can start STEMwerk now."
         return { success = true, finalMessage = finalMessage }
     end
 
@@ -1030,8 +1490,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     finalMessage[#finalMessage + 1] = "FFmpeg path: " .. tostring(verification.ffmpegPath)
     finalMessage[#finalMessage + 1] = "Profile: " .. tostring(profile)
     finalMessage[#finalMessage + 1] = "Backend: " .. tostring(backend)
-    if backendReason and backendReason ~= "" then
-        finalMessage[#finalMessage + 1] = "Backend reason: " .. tostring(backendReason)
+    if backendReasonLabel and backendReasonLabel ~= "" then
+        finalMessage[#finalMessage + 1] = "Backend reason: " .. tostring(backendReasonLabel)
     end
     if backendNote and backendNote ~= "" then
         finalMessage[#finalMessage + 1] = "Note: " .. tostring(backendNote)
@@ -1044,6 +1504,431 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     finalMessage[#finalMessage + 1] = ""
     finalMessage[#finalMessage + 1] = "You can run setup again or fix paths manually."
     return { success = false, finalMessage = finalMessage }
+end
+
+safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+    local ok, result = pcall(performPostBootstrap, runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+    if ok and type(result) == "table" then
+        return result
+    end
+    local state = type(bootstrapState) == "table" and bootstrapState or parseStateFile(stateFile)
+    if type(state) ~= "table" then
+        state = {}
+    end
+    local lf = io.open(logFile, "a")
+    if lf then
+        lf:write("WARN: performPostBootstrap failed, falling back to hard fail path.\n")
+        if not ok and type(result) == "string" then
+            lf:write("WARN: " .. tostring(result) .. "\n")
+        end
+        lf:close()
+    end
+    return {
+        success = false,
+        finalMessage = {
+            "Setup was not completely successful.",
+            "",
+            "Status: " .. tostring(state.STATUS or "unknown"),
+            "Reason: postbootstrap_failed",
+            "",
+            "An internal setup reporting step failed.",
+            "Please run STEMwerk_First_Run_Setup.lua again.",
+        },
+    }
+end
+
+local function appendLogLine(logFile, line)
+    if not logFile or logFile == "" then return end
+    local lf = io.open(logFile, "a")
+    if not lf then return end
+    lf:write(tostring(line or "") .. "\n")
+    lf:close()
+end
+
+local function runPipInstall(pythonPath, package, logFile)
+    if not pythonPath or pythonPath == "" or not package or package == "" then return false end
+    local cmd = quoteArg(pythonPath) .. " -m pip install " .. package
+    if logFile and logFile ~= "" then
+        cmd = cmd .. " >> " .. quoteArg(logFile) .. " 2>&1"
+    end
+    local rc = select(1, exec(cmd, 180000))
+    return rc == 0
+end
+
+local function summarizeInstallerState(state)
+    local lines = {}
+    if state and next(state) ~= nil then
+        lines[#lines + 1] = "Installer status: " .. tostring(state.STATUS or "unknown")
+        if state.STATUS_REASON and state.STATUS_REASON ~= "" then
+            lines[#lines + 1] = "Installer reason: " .. tostring(state.STATUS_REASON)
+        end
+        if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
+            lines[#lines + 1] = "Python: " .. tostring(state.PYTHON_PATH)
+        end
+        if state.FFMPEG_PATH and state.FFMPEG_PATH ~= "" and not isWindowsFfmpegShimPath(state.FFMPEG_PATH) then
+            lines[#lines + 1] = "FFmpeg: " .. tostring(state.FFMPEG_PATH)
+        end
+    else
+        lines[#lines + 1] = "Installer state not found."
+    end
+    return lines
+end
+
+local function isWindowsStorePythonPath(path)
+    if not path or path == "" then return false end
+    local p = tostring(path):lower()
+    return p:find("\\microsoft\\windowsapps\\python", 1, true)
+        or p:find("/microsoft/windowsapps/python", 1, true)
+end
+
+local function isWindowsFfmpegShimPath(path)
+    if not path or path == "" then return false end
+    local p = tostring(path):lower()
+    return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
+        or p:find("\\windowsapps\\ffmpeg", 1, true)
+        or p:find("/microsoft/winget/links/ffmpeg.exe", 1, true)
+        or p:find("/windowsapps/ffmpeg", 1, true)
+end
+
+local function findWindowsPythonFallback()
+    local h = io.popen("where python 2>nul")
+    if not h then return "" end
+    local out = h:read("*a") or ""
+    h:close()
+    for line in out:gmatch("[^\r\n]+") do
+        local p = trim(line)
+        if p ~= "" and fileExists(p) and not isWindowsStorePythonPath(p) then
+            return p
+        end
+    end
+    return ""
+end
+
+local function findWindowsRuntimeFfmpeg(runtime)
+    local candidates = {
+        runtime.base .. "\\ffmpeg\\bin\\ffmpeg.exe",
+        runtime.base .. "\\ffmpeg\\ffmpeg.exe",
+        runtime.base .. "\\bin\\ffmpeg.exe",
+    }
+    for _, p in ipairs(candidates) do
+        if fileExists(p) then
+            return p
+        end
+    end
+    return ""
+end
+
+local function findWindowsFfmpegFallback(runtime)
+    local runtimePath = findWindowsRuntimeFfmpeg(runtime)
+    if runtimePath ~= "" then
+        return runtimePath
+    end
+    local h = io.popen("where ffmpeg 2>nul")
+    if not h then return "" end
+    local out = h:read("*a") or ""
+    h:close()
+    for line in out:gmatch("[^\r\n]+") do
+        local p = trim(line)
+        if p ~= "" and fileExists(p) and not isWindowsFfmpegShimPath(p) then
+            return p
+        end
+    end
+    return ""
+end
+local function isValidFfmpegPath(path)
+    return path ~= "" and fileExists(path) and not isWindowsFfmpegShimPath(path)
+end
+
+local WINDOWS_VERIFY = nil
+
+local function drawWindowsVerify()
+    if not WINDOWS_VERIFY or not gfx then return end
+    local w, h = gfx.w, gfx.h
+    gfx.set(0, 0, 0, 1)
+    gfx.rect(0, 0, w, h, 1)
+    gfx.set(1, 1, 1, 1)
+
+    local y = 16
+    drawStemwerkTitleWindows(y, 24)
+    y = y + 30
+
+    gfx.setfont(1, "Arial", 18)
+    gfx.x = 18
+    gfx.y = y
+    if WINDOWS_VERIFY.finalized and WINDOWS_VERIFY.finalSuccess then
+        gfx.set(0.2, 0.9, 0.2, 1)
+    else
+        gfx.set(1, 1, 1, 1)
+    end
+    gfx.drawstr(WINDOWS_VERIFY.title or "Verifying runtime...")
+    gfx.set(1, 1, 1, 1)
+    y = y + 24
+
+    gfx.setfont(1, "Arial", 16)
+    for _, line in ipairs(WINDOWS_VERIFY.statusLines or {}) do
+        local wrapped = wrapLine(line, 120)
+        for _, wl in ipairs(wrapped) do
+            gfx.x = 18
+            gfx.y = y
+            gfx.drawstr(wl)
+            y = y + 18
+        end
+    end
+
+    if WINDOWS_VERIFY.finalized then
+        gfx.setfont(1, "Arial", 14)
+        gfx.x = 18
+        gfx.y = h - 28
+        gfx.drawstr("Press Esc or close this window to continue.")
+    end
+end
+
+local function finalizeWindowsVerify(success, lines)
+    if not WINDOWS_VERIFY then return end
+    WINDOWS_VERIFY.finalized = true
+    WINDOWS_VERIFY.finalSuccess = success == true
+    if success and lines and lines[1] == "Setup complete." then
+        table.remove(lines, 1)
+    end
+    WINDOWS_VERIFY.statusLines = lines or WINDOWS_VERIFY.statusLines
+    WINDOWS_VERIFY.title = success and "Setup complete." or "Setup needs attention."
+end
+
+local function windowsVerifyTick()
+    if not WINDOWS_VERIFY or not gfx then return end
+
+    drawWindowsVerify()
+    gfx.update()
+
+    local key = gfx.getchar()
+    if key == 27 or key == -1 then
+        gfx.quit()
+        WINDOWS_VERIFY = nil
+        return
+    end
+
+    if WINDOWS_VERIFY.finalized then
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    -- First frame drawn; begin stepwise checks on subsequent ticks
+    local step = WINDOWS_VERIFY.step or 0
+    if step == 0 then
+        WINDOWS_VERIFY.step = 1
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    local runtime = WINDOWS_VERIFY.runtime
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+
+    if step == 1 then
+        WINDOWS_VERIFY.statusLines = { "Reading installer state..." }
+        WINDOWS_VERIFY.state = parseStateFile(stateFile)
+        WINDOWS_VERIFY.hasState = (WINDOWS_VERIFY.state and next(WINDOWS_VERIFY.state) ~= nil)
+        WINDOWS_VERIFY.step = 2
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    if step == 2 then
+        WINDOWS_VERIFY.statusLines = { "Resolving Python path..." }
+        local state = WINDOWS_VERIFY.state or {}
+        local pythonPath = resolvePath((state.PYTHON_PATH and state.PYTHON_PATH ~= "" and state.PYTHON_PATH)
+            or (state.VENV_PYTHON and state.VENV_PYTHON ~= "" and state.VENV_PYTHON)
+            or runtime.venvPython)
+        if pythonPath == "" or isWindowsStorePythonPath(pythonPath) then
+            pythonPath = resolvePath(findWindowsPythonFallback())
+        end
+        WINDOWS_VERIFY.pythonPath = pythonPath
+        WINDOWS_VERIFY.step = 3
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    if step == 3 then
+        WINDOWS_VERIFY.statusLines = { "Resolving FFmpeg path..." }
+        local state = WINDOWS_VERIFY.state or {}
+        local ffmpegPath = ""
+        local shimFound = ""
+
+        -- 1) local runtime FFmpeg
+        ffmpegPath = resolvePath(findWindowsRuntimeFfmpeg(runtime))
+        if not isValidFfmpegPath(ffmpegPath) then
+            ffmpegPath = ""
+        end
+
+        -- 2) bootstrap.env FFMPEG_PATH
+        local statePath = resolvePath(state.FFMPEG_PATH or "")
+        if statePath ~= "" and isWindowsFfmpegShimPath(statePath) then
+            shimFound = statePath
+            statePath = ""
+            state.FFMPEG_PATH = ""
+            updateBootstrapEnv(stateFile, { FFMPEG_PATH = "" })
+        end
+        if ffmpegPath == "" and isValidFfmpegPath(statePath) then
+            ffmpegPath = statePath
+        end
+
+        -- 3) manual override (ExtState)
+        local extPath = resolvePath(getExt("ffmpegPath"))
+        if extPath ~= "" and isWindowsFfmpegShimPath(extPath) then
+            if shimFound == "" then shimFound = extPath end
+            extPath = ""
+            setExt("ffmpegPath", "")
+        end
+        if ffmpegPath == "" and isValidFfmpegPath(extPath) then
+            ffmpegPath = extPath
+        end
+
+        -- 4) PATH fallback (non-shim only)
+        if ffmpegPath == "" then
+            ffmpegPath = resolvePath(findWindowsFfmpegFallback(runtime))
+            if ffmpegPath ~= "" and isWindowsFfmpegShimPath(ffmpegPath) then
+                if shimFound == "" then shimFound = ffmpegPath end
+                ffmpegPath = ""
+            end
+        end
+
+        if shimFound ~= "" then
+            WINDOWS_VERIFY.ffmpegShim = shimFound
+        end
+        if ffmpegPath == "" and shimFound ~= "" then
+            state.STATUS = "missing_ffmpeg"
+            state.STATUS_REASON = "ffmpeg_shim_path"
+            updateBootstrapEnv(stateFile, {
+                STATUS = "missing_ffmpeg",
+                STATUS_REASON = "ffmpeg_shim_path",
+                FFMPEG_PATH = "",
+            })
+        end
+
+        WINDOWS_VERIFY.ffmpegPath = ffmpegPath
+        WINDOWS_VERIFY.step = 4
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    if step == 4 then
+        WINDOWS_VERIFY.statusLines = { "Checking Python..." }
+        local pythonOk = WINDOWS_VERIFY.pythonPath ~= "" and fileExists(WINDOWS_VERIFY.pythonPath)
+            and canRunPython(WINDOWS_VERIFY.pythonPath)
+        WINDOWS_VERIFY.pythonOk = pythonOk
+        WINDOWS_VERIFY.step = 5
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    if step == 5 then
+        WINDOWS_VERIFY.statusLines = { "Checking FFmpeg..." }
+        local ffmpegOk = WINDOWS_VERIFY.ffmpegPath ~= "" and fileExists(WINDOWS_VERIFY.ffmpegPath)
+            and canRunFfmpeg(WINDOWS_VERIFY.ffmpegPath)
+        WINDOWS_VERIFY.ffmpegOk = ffmpegOk
+        WINDOWS_VERIFY.step = 6
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    if step == 6 then
+        WINDOWS_VERIFY.statusLines = { "Checking stemwerk-core..." }
+        local coreOk = false
+        if WINDOWS_VERIFY.pythonOk then
+            coreOk = canImportStemwerkCore(WINDOWS_VERIFY.pythonPath)
+        end
+        WINDOWS_VERIFY.coreOk = coreOk
+        WINDOWS_VERIFY.step = 7
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    if step == 7 then
+        WINDOWS_VERIFY.statusLines = { "Checking audio-separator..." }
+        local sepOk = false
+        if WINDOWS_VERIFY.pythonOk then
+            sepOk = canImportAudioSeparator(WINDOWS_VERIFY.pythonPath)
+        end
+        WINDOWS_VERIFY.sepOk = sepOk
+        WINDOWS_VERIFY.step = 8
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+
+    if step == 8 then
+        local state = WINDOWS_VERIFY.state or {}
+        local lines = {}
+        local ok = WINDOWS_VERIFY.pythonOk and WINDOWS_VERIFY.ffmpegOk and WINDOWS_VERIFY.coreOk and WINDOWS_VERIFY.sepOk
+        if WINDOWS_VERIFY.hasState and state.INSTALLER == "1" and (state.STATUS == "ok" or state.STATUS == "") and ok then
+            state.STATUS = "ok"
+            state.STATUS_REASON = ""
+            state.PYTHON_PATH = WINDOWS_VERIFY.pythonPath
+            state.FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath
+            updateBootstrapEnv(stateFile, {
+                STATUS = "ok",
+                STATUS_REASON = "",
+                PYTHON_PATH = WINDOWS_VERIFY.pythonPath,
+                FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath,
+            })
+            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript)
+            finalizeWindowsVerify(true, result.finalMessage)
+            reaper.defer(windowsVerifyTick)
+            return
+        end
+
+        lines[#lines + 1] = "STEMwerk runtime is not ready yet."
+        lines[#lines + 1] = ""
+        for _, line in ipairs(summarizeInstallerState(state)) do
+            lines[#lines + 1] = line
+        end
+        if WINDOWS_VERIFY.ffmpegShim and WINDOWS_VERIFY.ffmpegShim ~= "" then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = "Detected unsupported Windows FFmpeg shim:"
+            lines[#lines + 1] = "  " .. tostring(WINDOWS_VERIFY.ffmpegShim)
+        end
+        lines[#lines + 1] = ""
+        if not WINDOWS_VERIFY.pythonOk then
+            lines[#lines + 1] = "Python is missing or unusable."
+            lines[#lines + 1] = "Install Python 3.11 (64-bit) from python.org, then re-run setup."
+        elseif not WINDOWS_VERIFY.ffmpegOk then
+            lines[#lines + 1] = "FFmpeg is missing."
+            lines[#lines + 1] = "Install FFmpeg or re-run the installer, then re-run setup."
+            if WINDOWS_VERIFY.ffmpegShim and WINDOWS_VERIFY.ffmpegShim ~= "" then
+                lines[#lines + 1] = "Windows shim paths (WinGet/WindowsApps) are not supported."
+            end
+        elseif not WINDOWS_VERIFY.coreOk or not WINDOWS_VERIFY.sepOk then
+            lines[#lines + 1] = "Dependencies are incomplete."
+            lines[#lines + 1] = "Re-run the installer to repair the runtime."
+        else
+            lines[#lines + 1] = "Repair could not complete."
+            lines[#lines + 1] = "Re-run the installer or check the log for details."
+        end
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "Log: " .. tostring(logFile)
+        finalizeWindowsVerify(false, lines)
+        reaper.defer(windowsVerifyTick)
+        return
+    end
+end
+
+local function windowsVerifyStart(runtime, separatorScript)
+    ensureDir(runtime.runtimeState)
+    ensureDir(runtime.runtimeLogs)
+    gfx.init("STEMwerk Setup [Windows]", 900, 620, 0, 140, 100)
+    WINDOWS_VERIFY = {
+        runtime = runtime,
+        separatorScript = separatorScript,
+        step = 0,
+        statusLines = { "Starting verification..." },
+        title = "Verifying runtime...",
+        finalized = false,
+        finalSuccess = false,
+    }
+    reaper.defer(windowsVerifyTick)
+end
+
+local function windowsVerifyRepair(runtime, separatorScript)
+    windowsVerifyStart(runtime, separatorScript)
 end
 
 local LINUX_SETUP = nil
@@ -1282,7 +2167,7 @@ local function linuxSetupTick()
     if not LINUX_SETUP.finalized then
         local status = state.STATUS or ""
         if status ~= "" and status ~= "running" then
-            local result = performPostBootstrap(LINUX_SETUP.runtime, LINUX_SETUP.stateFile, LINUX_SETUP.logFile, status == "ok", state, LINUX_SETUP.separatorScript)
+            local result = safePerformPostBootstrap(LINUX_SETUP.runtime, LINUX_SETUP.stateFile, LINUX_SETUP.logFile, status == "ok", state, LINUX_SETUP.separatorScript)
             LINUX_SETUP.finalized = true
             LINUX_SETUP.finalMessage = result.finalMessage
             LINUX_SETUP.finalSuccess = result.success
@@ -1290,7 +2175,7 @@ local function linuxSetupTick()
         elseif not pidAlive and (status == "" or status == "running") then
             local elapsed = os.time() - (LINUX_SETUP.startedAt or os.time())
             if LINUX_SETUP.pidSeen or elapsed >= 5 then
-                local result = performPostBootstrap(LINUX_SETUP.runtime, LINUX_SETUP.stateFile, LINUX_SETUP.logFile, status == "ok", state, LINUX_SETUP.separatorScript)
+                local result = safePerformPostBootstrap(LINUX_SETUP.runtime, LINUX_SETUP.stateFile, LINUX_SETUP.logFile, status == "ok", state, LINUX_SETUP.separatorScript)
                 LINUX_SETUP.finalized = true
                 LINUX_SETUP.finalMessage = result.finalMessage
                 LINUX_SETUP.finalSuccess = result.success
@@ -1341,11 +2226,12 @@ end
 
 local function startLinuxSetup(runtime, separatorScript)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
-    local logFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.log"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     ensureDir(runtime.runtimeState)
+    ensureDir(runtime.runtimeLogs)
 
     os.remove(stateFile)
     os.remove(capFile)
@@ -1437,13 +2323,18 @@ local function main()
     local ok = (msgBox("STEMwerk Setup", intro, 4) == 6)
     if not ok then return end
 
+    if OS == "Windows" then
+        windowsVerifyRepair(runtime, separatorScript)
+        return
+    end
+
     if OS == "Linux" then
         startLinuxSetup(runtime, separatorScript)
         return
     end
 
     local bootstrapSuccess, stateFile, logFile, bootstrapState = runBootstrap(runtime)
-    local result = performPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+    local result = safePerformPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
     showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
 end
 

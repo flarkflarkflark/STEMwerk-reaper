@@ -19,8 +19,6 @@ local scriptDir = getScriptDir()
 local scriptFiles = {
     "STEMwerk.lua",
     "STEMwerk-SETUP.lua",
-    "STEMwerk_First_Run_Setup.lua",
-    "STEMwerk_Repair_Install.lua",
     "STEMwerk_Karaoke.lua",
     "STEMwerk_Vocals_Only.lua",
     "STEMwerk_Drums_Only.lua",
@@ -38,6 +36,6 @@ end
 
 msgBox(
     "Stemwerk: Setup Toolbar",
-    "Scripts are ready.\n\nTo add toolbar buttons:\n1) Open Actions → Show action list\n2) Filter for 'Stemwerk:'\n3) Select a script (e.g. 'Stemwerk: Karaoke')\n4) Add it to a toolbar (right-click toolbar → Customize)\n\nTip: Run 'Stemwerk: Installation & Setup' first if separation fails.",
+    "Scripts are ready.\n\nTo add toolbar buttons:\n1) Open Actions → Show action list\n2) Filter for 'STEMwerk:'\n3) Select a script (e.g. 'STEMwerk: Karaoke')\n4) Add it to a toolbar (right-click toolbar → Customize)\n\nTip: Run 'STEMwerk: First Run Setup' if separation fails or components are missing.",
     0
 )

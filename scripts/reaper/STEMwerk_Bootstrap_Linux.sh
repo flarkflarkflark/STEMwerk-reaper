@@ -63,7 +63,7 @@ if command -v rocm-smi >/dev/null 2>&1; then
   env -u HIP_VISIBLE_DEVICES -u HSA_OVERRIDE_GFX_VERSION -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES \
     rocm-smi 2>/dev/null | head -n 40 | while read -r line; do log_step "rocm-smi: ${line}"; done
 fi
-mkdir -p "${RUNTIME_BASE}/runtime/state" "${RUNTIME_BASE}/runtime/bin" "${RUNTIME_BASE}/runtime/ffmpeg" "${RUNTIME_BASE}/runtime/python"
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 STATUS="ok"
 STATUS_REASON=""
@@ -432,21 +432,10 @@ PY
     "${VENV_PY}" -m pip install "numpy<2.4" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
 
     log_stage "Installing STEMwerk-core"
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-    ROOT_PARENT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
     CORE_PATH=""
-    for p in \
-      "/mnt/PRODUCTION/GIT/STEMwerk-core" \
-      "${ROOT_PARENT}/STEMwerk-core" \
-      "${ROOT_DIR}/../STEMwerk-core" \
-      "${ROOT_DIR}/stemwerk-core"
-    do
-      if [ -f "${p}/pyproject.toml" ] && [ -d "${p}/src/stemwerk_core" ]; then
-        CORE_PATH="${p}"
-        break
-      fi
-    done
+    if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -f "${STEMWERK_CORE_PATH}/pyproject.toml" ] && [ -d "${STEMWERK_CORE_PATH}/src/stemwerk_core" ]; then
+      CORE_PATH="${STEMWERK_CORE_PATH}"
+    fi
 
     core_install_rc=0
     if [ -n "${CORE_PATH}" ]; then
@@ -519,8 +508,8 @@ fi
 
 log_stage "Checking/installing FFmpeg"
 for p in \
-  "${RUNTIME_BASE}/runtime/bin/ffmpeg" \
-  "${RUNTIME_BASE}/runtime/ffmpeg/bin/ffmpeg" \
+  "${RUNTIME_BASE}/bin/ffmpeg" \
+  "${RUNTIME_BASE}/ffmpeg/bin/ffmpeg" \
   "/usr/local/bin/ffmpeg" \
   "/usr/bin/ffmpeg" \
   "/snap/bin/ffmpeg"
@@ -653,6 +642,8 @@ if [ -n "${STATE_FILE}" ]; then
     echo "PYTHON_PATH=${PYTHON_PATH}"
     [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
     [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
+    [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
+    [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
   } > "${STATE_FILE}"
 fi
 
