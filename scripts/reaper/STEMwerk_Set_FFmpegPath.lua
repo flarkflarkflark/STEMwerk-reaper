@@ -134,20 +134,20 @@ local function main()
     local exeLabel = (OS == "Windows") and "ffmpeg.exe" or "ffmpeg"
 
     if found then
-        local msg = "FFmpeg is gevonden op:\n\n" .. found .. "\n\nWilt u dit pad gebruiken voor STEMwerk?"
-        local res = reaper.ShowMessageBox(msg, "FFmpeg Gevonden", 4)
+        local msg = "FFmpeg was found at:\n\n" .. found .. "\n\nUse this path for STEMwerk?"
+        local res = reaper.ShowMessageBox(msg, "FFmpeg Found", 4)
         if res == 6 then
             reaper.SetExtState(section, "ffmpegPath", found, true)
-            reaper.ShowMessageBox("Succes! FFmpeg is nu ingesteld.", "STEMwerk", 0)
+            reaper.ShowMessageBox("Success! FFmpeg is now configured.", "STEMwerk", 0)
             return
         end
     end
 
-    local msg = "FFmpeg kon niet automatisch worden gevonden.\n\n"
-        .. "Wat wilt u doen?\n\n"
-        .. "JA: Handmatig het pad naar " .. exeLabel .. " opgeven\n"
-        .. "NEE: Open de downloadpagina\n"
-        .. "CANCEL: Niets doen"
+    local msg = "FFmpeg could not be found automatically.\n\n"
+        .. "What would you like to do?\n\n"
+        .. "YES: Enter the path to " .. exeLabel .. " manually\n"
+        .. "NO: Open the download page\n"
+        .. "CANCEL: Do nothing"
 
     local choice = reaper.ShowMessageBox(msg, "STEMwerk - FFmpeg Setup", 3)
     if choice == 6 then
@@ -155,20 +155,20 @@ local function main()
         if current == "" then
             current = (OS == "Windows") and "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe" or "/usr/local/bin/ffmpeg"
         end
-        local ok, input = reaper.GetUserInputs("Pad naar " .. exeLabel, 1, "Bestandspad:,extrawidth=200", current)
+        local ok, input = reaper.GetUserInputs("Path to " .. exeLabel, 1, "File path:,extrawidth=200", current)
         if ok and input ~= "" then
             input = input:gsub('"', "")
             if fileExists(input) then
                 reaper.SetExtState(section, "ffmpegPath", input, true)
-                reaper.ShowMessageBox("Succes! Pad opgeslagen:\n" .. input, "STEMwerk", 0)
+                reaper.ShowMessageBox("Success! Path saved:\n" .. input, "STEMwerk", 0)
             else
-                reaper.ShowMessageBox("FOUT: Het bestand bestaat niet op de opgegeven locatie.", "Fout", 0)
+                reaper.ShowMessageBox("ERROR: The file does not exist at the specified location.", "Error", 0)
                 main()
             end
         end
     elseif choice == 7 then
         openDownloadPage()
-        reaper.ShowMessageBox("De downloadpagina is geopend in uw browser.", "STEMwerk", 0)
+        reaper.ShowMessageBox("The download page was opened in your browser.", "STEMwerk", 0)
     end
 end
 

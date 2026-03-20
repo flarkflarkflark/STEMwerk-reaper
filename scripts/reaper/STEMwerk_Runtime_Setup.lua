@@ -779,10 +779,10 @@ function M.ensureDependenciesInteractive()
 
     local runtime = M.getRuntimePaths()
     local msg =
-        "STEMwerk mist enkele onderdelen:\n\n- " .. table.concat(missing, "\n- ") ..
+        "STEMwerk is missing components:\n\n- " .. table.concat(missing, "\n- ") ..
         "\n\nRun STEMwerk_First_Run_Setup.lua in REAPER before using STEMwerk.lua.\n\n" ..
-        "STEMwerk kan dit automatisch repareren en een vaste runtime aanmaken op:\n" .. tostring(runtime.base) ..
-        "\n\nAutomatische setup starten?"
+        "STEMwerk can repair this automatically and create a fixed runtime at:\n" .. tostring(runtime.base) ..
+        "\n\nStart automatic setup?"
 
     if state.prompted then
         return false
@@ -826,11 +826,11 @@ function M.ensureDependenciesInteractive()
     if not runtimeOk then
         setDepState("failed", table.concat(errors, ","))
         C.showMessageBox(
-            "Automatische setup kon niet alles oplossen.\n\n" ..
+            "Automatic setup could not fix everything.\n\n" ..
             "Status: " .. tostring(state.detail or "unknown") .. "\n\n" ..
-            "U kunt de repair opnieuw starten via:\n" ..
+            "You can rerun repair via:\n" ..
             "  STEMwerk_First_Run_Setup.lua\n\n" ..
-            "Controleer daarna opnieuw.",
+            "Please check again after that.",
             "STEMwerk Setup",
             0
         )

@@ -115,6 +115,7 @@ function M.resolveInstallRoot(scriptDir, opts)
     local hasActual = actual ~= ""
     local root
     local status = "ok"
+    local nestedReaPack = false
     if not hasActual and canonical ~= "" then
         root = canonical
         status = "fallback"
@@ -126,7 +127,14 @@ function M.resolveInstallRoot(scriptDir, opts)
     if canonical ~= "" and hasActual then
         canonicalMismatch = not M.pathEquals(root, canonical, osName)
         if canonicalMismatch then
-            status = "noncanonical"
+            local nested = M.joinPath(sep, canonical, "STEMwerk-reaper")
+            if M.pathEquals(root, nested, osName) then
+                canonicalMismatch = false
+                nestedReaPack = true
+                status = "reapack_nested"
+            else
+                status = "noncanonical"
+            end
         end
     end
     local ok = hasActual
@@ -140,6 +148,7 @@ function M.resolveInstallRoot(scriptDir, opts)
         root = root,
         scriptsDir = scriptsDir,
         canonicalMismatch = canonicalMismatch,
+        nestedReaPack = nestedReaPack,
         status = status,
     }
 end
