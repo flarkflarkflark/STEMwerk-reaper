@@ -2,7 +2,7 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1" author="flarkAUDIO" time="1774006521">
+      <version name="2.2.1.1" author="flarkAUDIO" time="1774016517">
         <changelog><![CDATA[
 - Windows installer/runtime setup verbeterd (live feedback + log)
 - FFmpeg shim-detectie en lokale runtime-install gefixt
@@ -12,6 +12,7 @@
 - Selectie-monitoring tussen select-audio en main verbeterd
 - i18n/footer/tooltip consistency verbeterd
 - STEMwerk.lua compile/load issue opgelost
+- ReaPack install path fix (force reinstall)
 ]]></changelog>
         <source file="STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
