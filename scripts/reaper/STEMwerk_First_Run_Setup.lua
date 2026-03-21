@@ -1555,6 +1555,15 @@ local function runPipInstall(pythonPath, package, logFile)
     return rc == 0
 end
 
+local function isWindowsFfmpegShimPath(path)
+    if not path or path == "" then return false end
+    local p = tostring(path):lower()
+    return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
+        or p:find("\\windowsapps\\ffmpeg", 1, true)
+        or p:find("/microsoft/winget/links/ffmpeg.exe", 1, true)
+        or p:find("/windowsapps/ffmpeg", 1, true)
+end
+
 local function summarizeInstallerState(state)
     local lines = {}
     if state and next(state) ~= nil then
@@ -1579,15 +1588,6 @@ local function isWindowsStorePythonPath(path)
     local p = tostring(path):lower()
     return p:find("\\microsoft\\windowsapps\\python", 1, true)
         or p:find("/microsoft/windowsapps/python", 1, true)
-end
-
-local function isWindowsFfmpegShimPath(path)
-    if not path or path == "" then return false end
-    local p = tostring(path):lower()
-    return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
-        or p:find("\\windowsapps\\ffmpeg", 1, true)
-        or p:find("/microsoft/winget/links/ffmpeg.exe", 1, true)
-        or p:find("/windowsapps/ffmpeg", 1, true)
 end
 
 local function findWindowsPythonFallback()
