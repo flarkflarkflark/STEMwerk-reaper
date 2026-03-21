@@ -22,28 +22,19 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 
 ## Installation
 
-### Installed users
+### Recommended (Installer)
+1. Download the latest installer for your platform (Windows/macOS/Linux).
+2. Run the installer.
+3. Open REAPER and run `STEMwerk_First_Run_Setup.lua` once.
+4. After setup completes, run `STEMwerk.lua` from the REAPER Action List.
 
-If you installed STEMwerk through ReaPack, the scripts are placed under:
-
-- `<REAPER resource path>/Scripts/STEMwerk-reaper/` (commonly shown as `Scripts/STEMwerk-reaper/` in ReaPack)
-
-Use this order:
-
-1. Open REAPER.
-2. Run `STEMwerk_First_Run_Setup.lua` once.
-3. After setup completes, run `STEMwerk.lua`.
+This step prepares the runtime environment (Python, FFmpeg, and dependencies).
 
 You can re-run `STEMwerk_First_Run_Setup.lua` later if dependencies need repair.
 
-### Option 1 — ReaPack
-Install by URL in ReaPack:
+Note: First-time setup downloads can take a while and may require several gigabytes of free disk space. On Windows, keeping roughly 4–8 GB free is a safe baseline.
 
-```
-https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
-```
-
-### Option 2 — Manual / Developer
+### Manual / Developer (Advanced)
 1. Install a 64-bit Python 3.x and ensure it is on your PATH.
 2. Clone or download this repository.
 3. In REAPER: Actions -> Show action list -> ReaScript: Load ReaScript...
@@ -51,8 +42,6 @@ https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
 5. Then run `scripts/reaper/STEMwerk.lua`.
 
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
-
-ReaPack installs put `STEMwerk-SETUP.lua` and `STEMwerk_First_Run_Setup.lua` into `Scripts/STEMwerk-reaper/`.
 
 ### REAPER Action List: which scripts to use
 To avoid confusion, only these are meant for normal use:
