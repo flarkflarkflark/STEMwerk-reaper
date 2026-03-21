@@ -17,7 +17,7 @@ fi
 # Keep the semantic meaning but make it RPM-safe.
 RPM_VERSION="${VERSION//-/.}"
 
-rm -rf "$BUILD_DIR" "$OUT_DIR"
+rm -rf "$BUILD_DIR"
 mkdir -p "$OUT_DIR" \
   "$RPMTOP/BUILD" "$RPMTOP/RPMS" "$RPMTOP/SOURCES" "$RPMTOP/SPECS" "$RPMTOP/SRPMS"
 
