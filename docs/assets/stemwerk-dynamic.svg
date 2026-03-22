@@ -28,25 +28,25 @@
       <animate attributeName="y" values="230;205;230" dur="2.4s" repeatCount="indefinite" begin="0.6s"/>
     </text>
 
-    <text x="620" y="220" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="620" y="220" fill="#111111" stroke="#f3f3f3" stroke-width="5" paint-order="stroke fill">
       w
       <animate attributeName="y" values="220;200;220" dur="2.4s" repeatCount="indefinite" begin="0.8s"/>
     </text>
-    <text x="805" y="205" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="760" y="205" fill="#111111" stroke="#f3f3f3" stroke-width="5" paint-order="stroke fill">
       e
       <animate attributeName="y" values="205;225;205" dur="2.4s" repeatCount="indefinite" begin="1s"/>
     </text>
-    <text x="920" y="195" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="860" y="195" fill="#111111" stroke="#f3f3f3" stroke-width="5" paint-order="stroke fill">
       r
       <animate attributeName="y" values="195;215;195" dur="2.4s" repeatCount="indefinite" begin="1.2s"/>
     </text>
-    <text x="1010" y="210" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="960" y="210" fill="#111111" stroke="#f3f3f3" stroke-width="5" paint-order="stroke fill">
       k
       <animate attributeName="y" values="210;190;210" dur="2.4s" repeatCount="indefinite" begin="1.4s"/>
     </text>
   </g>
 
   <g font-family="Arial, Helvetica, sans-serif" font-size="42">
-    <text x="600" y="310" text-anchor="middle" fill="#ff8a1f" stroke="#1a1a1a" stroke-width="3" paint-order="stroke fill">flarkAUDIO</text>
+    <text x="600" y="310" text-anchor="middle" fill="#ff8a1f">flarkAUDIO</text>
   </g>
 </svg>
