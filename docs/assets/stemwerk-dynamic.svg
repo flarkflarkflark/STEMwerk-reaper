@@ -32,7 +32,7 @@
       w
       <animate attributeName="y" values="220;200;220" dur="2.4s" repeatCount="indefinite" begin="0.8s"/>
     </text>
-    <text x="770" y="205" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="790" y="205" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
       e
       <animate attributeName="y" values="205;225;205" dur="2.4s" repeatCount="indefinite" begin="1s"/>
     </text>
