@@ -4,3 +4,8 @@
 Thumbs.db
 reaper-theme.ini
 desktop.ini
+installer/linux/dist/
+installer/linux/build/
+installer/linux/build-*/
+installer/macos/dist/
+installer/macos/build/

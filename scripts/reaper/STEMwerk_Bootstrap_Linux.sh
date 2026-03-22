@@ -33,12 +33,42 @@ log_step() {
   log " - $*"
 }
 
+write_state() {
+  if [ -n "${STATE_FILE}" ]; then
+    {
+      echo "STATUS=${STATUS}"
+      [ -n "${STATUS_REASON}" ] && echo "STATUS_REASON=${STATUS_REASON}"
+      [ -n "${STEP_INDEX}" ] && echo "STEP_INDEX=${STEP_INDEX}"
+      [ -n "${STEP_TOTAL}" ] && echo "STEP_TOTAL=${STEP_TOTAL}"
+      [ -n "${STEP_LABEL}" ] && echo "STEP_LABEL=${STEP_LABEL}"
+      [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
+      [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
+      [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
+      [ -n "${BACKEND_NOTE}" ] && echo "BACKEND_NOTE=${BACKEND_NOTE}"
+      echo "PYTHON_PATH=${PYTHON_PATH}"
+      [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
+      [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
+      [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
+      [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
+    } > "${STATE_FILE}"
+  fi
+}
+
 set_status() {
   if [ "${STATUS}" = "ok" ]; then
     STATUS="$1"
     STATUS_REASON="$2"
     log "STATUS=${STATUS} REASON=${STATUS_REASON}"
+    write_state
   fi
+}
+
+set_progress() {
+  STEP_INDEX="$1"
+  STEP_TOTAL="$2"
+  STEP_LABEL="$3"
+  log "STEP ${STEP_INDEX}/${STEP_TOTAL}: ${STEP_LABEL}"
+  write_state
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -79,6 +109,11 @@ BACKEND="cpu"
 BACKEND_REASON=""
 BACKEND_NOTE=""
 CONSTRAINTS_FILE=""
+STEP_INDEX=""
+STEP_TOTAL="4"
+STEP_LABEL=""
+
+set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 
 GPU_MODE=0
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -120,6 +155,7 @@ elif [ "${ROCM_MODE}" -eq 1 ]; then
   BACKEND="rocm"
 fi
 
+set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
 log_step "Checking Python"
 is_pyenv_shim() {
   case "$1" in
@@ -409,7 +445,8 @@ print(getattr(torch, "__version__", ""))
 PY
 )"
     if [ -n "${TORCH_VER}" ]; then
-      CONSTRAINTS_FILE="${RUNTIME_BASE}/runtime/state/pip_constraints.txt"
+      CONSTRAINTS_FILE="${RUNTIME_BASE}/state/pip_constraints.txt"
+      mkdir -p "${RUNTIME_BASE}/state"
       log_step "Pinned torch version for downstream installs: ${TORCH_VER}"
       {
         echo "torch==${TORCH_VER}"
@@ -506,6 +543,7 @@ PY
   fi
 fi
 
+set_progress "3" "${STEP_TOTAL}" "Checking FFmpeg"
 log_stage "Checking/installing FFmpeg"
 for p in \
   "${RUNTIME_BASE}/bin/ffmpeg" \
@@ -552,6 +590,8 @@ fi
 if [ -z "${FFMPEG}" ] || ! "${FFMPEG}" -version >/dev/null 2>&1; then
   FINAL_OK=0
 fi
+
+set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
 
 if [ -n "${PYTHON}" ] && [ -n "${VENV_PY}" ]; then
   log_step "Final verification"
@@ -632,19 +672,7 @@ fi
 
 if [ -n "${STATE_FILE}" ]; then
   log_stage "Writing bootstrap.env"
-  {
-    echo "STATUS=${STATUS}"
-    [ -n "${STATUS_REASON}" ] && echo "STATUS_REASON=${STATUS_REASON}"
-    [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
-    [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
-    [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
-    [ -n "${BACKEND_NOTE}" ] && echo "BACKEND_NOTE=${BACKEND_NOTE}"
-    echo "PYTHON_PATH=${PYTHON_PATH}"
-    [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
-    [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
-    [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
-    [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
-  } > "${STATE_FILE}"
+  write_state
 fi
 
 if [ "${STATUS}" != "ok" ]; then

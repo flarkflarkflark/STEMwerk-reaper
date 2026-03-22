@@ -24,12 +24,41 @@ log() {
   fi
 }
 
+write_state() {
+  if [ -n "${STATE_FILE}" ]; then
+    {
+      echo "STATUS=${STATUS}"
+      [ -n "${STATUS_REASON}" ] && echo "STATUS_REASON=${STATUS_REASON}"
+      [ -n "${STEP_INDEX}" ] && echo "STEP_INDEX=${STEP_INDEX}"
+      [ -n "${STEP_TOTAL}" ] && echo "STEP_TOTAL=${STEP_TOTAL}"
+      [ -n "${STEP_LABEL}" ] && echo "STEP_LABEL=${STEP_LABEL}"
+      [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
+      [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
+      [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
+      [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
+      [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
+      [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
+      [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
+      [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
+    } > "${STATE_FILE}"
+  fi
+}
+
 set_status() {
   if [ "${STATUS}" = "ok" ]; then
     STATUS="$1"
     STATUS_REASON="$2"
     log "STATUS=${STATUS} REASON=${STATUS_REASON}"
+    write_state
   fi
+}
+
+set_progress() {
+  STEP_INDEX="$1"
+  STEP_TOTAL="$2"
+  STEP_LABEL="$3"
+  log "STEP ${STEP_INDEX}/${STEP_TOTAL}: ${STEP_LABEL}"
+  write_state
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -49,6 +78,11 @@ PACKAGE="audio-separator==0.14.5"
 PROFILE="mac-cpu"
 BACKEND="cpu"
 BACKEND_REASON=""
+STEP_INDEX=""
+STEP_TOTAL="4"
+STEP_LABEL=""
+
+set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 
 for p in \
   "${RUNTIME_BASE}/.venv/bin/python" \
@@ -91,6 +125,8 @@ if [ -z "${PYTHON}" ] && [ -n "${BREW}" ]; then
   fi
 fi
 
+set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
+
 if [ -z "${PYTHON}" ]; then
   set_status "missing_python" "python_not_found"
 else
@@ -122,6 +158,8 @@ else
       "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "audio_separator_install_failed"
   fi
 fi
+
+set_progress "3" "${STEP_TOTAL}" "Checking FFmpeg"
 
 for p in \
   "${RUNTIME_BASE}/bin/ffmpeg" \
@@ -156,19 +194,10 @@ if [ -z "${FFMPEG}" ]; then
   set_status "missing_ffmpeg" "ffmpeg_not_found"
 fi
 
+set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
+
 if [ -n "${STATE_FILE}" ]; then
-  {
-    echo "STATUS=${STATUS}"
-    [ -n "${STATUS_REASON}" ] && echo "STATUS_REASON=${STATUS_REASON}"
-    [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
-    [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
-    [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
-    [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
-    [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
-    [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
-    [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
-    [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
-  } > "${STATE_FILE}"
+  write_state
 fi
 
 if [ "${STATUS}" != "ok" ]; then

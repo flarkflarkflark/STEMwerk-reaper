@@ -13,7 +13,7 @@ if [[ -z "${STEMWERK_VERSION:-}" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
 fi
 
-rm -rf "$OUT_DIR" "$BUILD_DIR"
+rm -rf "$BUILD_DIR"
 mkdir -p "$OUT_DIR" "$PKG_ROOT/DEBIAN" "$PKG_ROOT/usr/share/stemwerk-reaper"
 
 # Copy only what we need

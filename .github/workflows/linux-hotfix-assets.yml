@@ -1,0 +1,88 @@
+name: Linux Hotfix Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build from (branch, tag, or commit). Defaults to the current ref.
+        required: false
+        default: ""
+      release_tag:
+        description: Existing release tag to validate against and optionally upload to (for example v2.2.1).
+        required: true
+      targets:
+        description: Linux targets to rebuild (all, deb, rpm, appimage, arch).
+        required: true
+        default: all
+      upload_to_release:
+        description: Upload rebuilt Linux assets to the existing GitHub release.
+        required: true
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-hotfix:
+    runs-on: ubuntu-latest
+    env:
+      STEMWERK_VERSION_FILE: VERSION
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref != '' && github.event.inputs.ref || github.ref }}
+
+      - name: Validate release tag matches VERSION
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < "${STEMWERK_VERSION_FILE}")"
+          RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+          if [[ "$RELEASE_TAG" != v* ]]; then
+            RELEASE_TAG="v$RELEASE_TAG"
+          fi
+          if [[ "${RELEASE_TAG#v}" != "$VERSION" ]]; then
+            echo "ERROR: release tag $RELEASE_TAG does not match VERSION=$VERSION" >&2
+            exit 1
+          fi
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux build deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rsync dpkg-dev rpm curl zstd file
+
+      - name: Rebuild selected Linux artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash installer/linux/rebuild_linux_artifacts.sh "${{ github.event.inputs.targets }}"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-hotfix-${{ steps.version.outputs.version }}
+          path: |
+            installer/linux/dist/*.deb
+            installer/linux/dist/*.rpm
+            installer/linux/dist/*.AppImage
+            installer/linux/dist/*.pkg.tar.zst
+            installer/linux/dist/*linux-build-manifest.txt
+          if-no-files-found: error
+
+      - name: Upload release assets
+        if: ${{ github.event.inputs.upload_to_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.release_tag }}
+          files: |
+            installer/linux/dist/*.deb
+            installer/linux/dist/*.rpm
+            installer/linux/dist/*.AppImage
+            installer/linux/dist/*.pkg.tar.zst
+            installer/linux/dist/*linux-build-manifest.txt

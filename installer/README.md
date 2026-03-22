@@ -53,3 +53,20 @@ The REAPER Lua scripts live under `scripts/reaper/` inside the installed folder.
 ### Linux (Arch)
 - Requires Docker (build runs inside `archlinux:latest`)
 - `STEMWERK_VERSION=$(cat VERSION) bash installer/linux/build_archpkg.sh`
+
+### Linux (all release artifacts)
+- Rebuild only the Linux release assets and write a manifest with hashes:
+- `STEMWERK_VERSION=$(cat VERSION) bash installer/linux/rebuild_linux_artifacts.sh all`
+- Or target a subset:
+- `STEMWERK_VERSION=$(cat VERSION) bash installer/linux/rebuild_linux_artifacts.sh appimage rpm`
+
+## Build hygiene
+
+- `installer/linux/build*`, `installer/linux/dist`, `installer/macos/build`, and `installer/macos/dist` are generated output and should not be committed.
+- The authoritative packaging input is `scripts/reaper/` plus the installer definitions under `installer/`.
+- For Linux release replacements, rebuild from source instead of editing generated `build-*` folders.
+
+## Hotfix notes
+
+- Linux release replacement steps for `v2.2.1` are documented in `docs/RELEASE_2.2.1_LINUX_HOTFIX.md`.
+- Non-Windows status UI recommendations are documented in `docs/NON_WINDOWS_STATUS_UI_PROPOSAL.md`.

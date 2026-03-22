@@ -13,6 +13,19 @@ local function msgBox(title, text, type)
     return reaper.ShowMessageBox(tostring(text), tostring(title), type or 0)
 end
 
+local function openActionList()
+    if reaper and reaper.Main_OnCommand then
+        reaper.Main_OnCommand(40605, 0)
+        return true
+    end
+    msgBox(
+        "STEMwerk Setup",
+        "Open the REAPER Action List via: Actions -> Show action list",
+        0
+    )
+    return false
+end
+
 local function getOS()
     local ros = ""
     if reaper and reaper.GetOS then
@@ -259,6 +272,26 @@ local function prettyBackendReason(reason)
         end
     end
     return table.concat(parts, "; ")
+end
+
+local function formatStepStatus(state)
+    local stepIndex = trim(state.STEP_INDEX or "")
+    local stepTotal = trim(state.STEP_TOTAL or "")
+    local stepLabel = trim(state.STEP_LABEL or "")
+    if stepIndex == "" and stepTotal == "" and stepLabel == "" then return "" end
+
+    local prefix = ""
+    if stepIndex ~= "" and stepTotal ~= "" then
+        prefix = "Step " .. stepIndex .. "/" .. stepTotal
+    elseif stepIndex ~= "" then
+        prefix = "Step " .. stepIndex
+    end
+
+    if prefix ~= "" and stepLabel ~= "" then
+        return prefix .. ": " .. stepLabel
+    end
+    if prefix ~= "" then return prefix end
+    return stepLabel
 end
 
 local function stripQuotes(s)
@@ -862,6 +895,7 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
         local lines = readTail(logFile, 16)
         local stateLine = "Status: " .. (state.STATUS and tostring(state.STATUS) or "running")
         local reasonLine = state.STATUS_REASON and ("Reason: " .. tostring(state.STATUS_REASON)) or ""
+        local stepLine = formatStepStatus(state)
         local pythonLine = "Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or "")
         local ffmpegLine = "FFmpeg: " .. tostring(state.FFMPEG_PATH or "")
         local spin = spinner[idx]
@@ -882,6 +916,10 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
         if reasonLine ~= "" then
             gfx.y = gfx.y + 22
             gfx.drawstr(reasonLine)
+        end
+        if stepLine ~= "" then
+            gfx.y = gfx.y + 22
+            gfx.drawstr(stepLine)
         end
         gfx.y = gfx.y + 26
         gfx.drawstr(pythonLine)
@@ -1142,7 +1180,15 @@ local function drawWindowsFinal(finalLines, finalSuccess)
     gfx.y = y
     if finalSuccess then
         gfx.set(0.2, 0.9, 0.2, 1)
-        gfx.drawstr("Setup complete.")
+        local headline = "Setup complete — run STEMwerk.lua from the REAPER Action List"
+        local wrapped = wrapLine(headline, 90)
+        for _, wl in ipairs(wrapped) do
+            gfx.drawstr(wl)
+            y = y + 26
+            gfx.x = 18
+            gfx.y = y
+        end
+        y = y - 26
     else
         gfx.set(1.0, 0.4, 0.1, 1)
         gfx.drawstr("Setup was not completely successful.")
@@ -1152,26 +1198,19 @@ local function drawWindowsFinal(finalLines, finalSuccess)
 
     gfx.setfont(1, "Arial", 18)
     local startIdx = 1
-    if finalSuccess and finalLines and finalLines[1] == "Setup complete." then
+    if finalSuccess and finalLines and finalLines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
         startIdx = 2
     elseif (not finalSuccess) and finalLines and finalLines[1] == "Setup was not completely successful." then
         startIdx = 2
     end
     for i = startIdx, #(finalLines or {}) do
         local line = finalLines[i]
-        if finalSuccess and line == "You can start STEMwerk now." then
-            gfx.setfont(1, "Arial Bold", 20)
-            drawStemwerkInline(18, y, 20, "You can start ", " now.")
-            y = y + 26
-            gfx.setfont(1, "Arial", 18)
-        else
-            local wrapped = wrapLine(line, 120)
-            for _, wl in ipairs(wrapped) do
-                gfx.x = 18
-                gfx.y = y
-                gfx.drawstr(wl)
-                y = y + 18
-            end
+        local wrapped = wrapLine(line, 120)
+        for _, wl in ipairs(wrapped) do
+            gfx.x = 18
+            gfx.y = y
+            gfx.drawstr(wl)
+            y = y + 18
         end
     end
 
@@ -1179,6 +1218,19 @@ local function drawWindowsFinal(finalLines, finalSuccess)
     gfx.x = 18
     gfx.y = h - 28
     gfx.drawstr("Press Esc or close this window to continue.")
+
+    if WINDOWS_SETUP and finalSuccess then
+        local btnW = 200
+        local btnH = 26
+        local btnY = h - 64
+        WINDOWS_SETUP.buttons = {
+            { label = "Open Action List", x = 18, y = btnY, w = btnW, h = btnH, action = "open_action_list" },
+        }
+        gfx.setfont(1, "Arial", 13)
+        for _, b in ipairs(WINDOWS_SETUP.buttons) do
+            drawButton(b.label, b.x, b.y, b.w, b.h)
+        end
+    end
 end
 
 local function finalizeWindowsSetup(result)
@@ -1249,6 +1301,22 @@ local function windowsSetupTick()
     end
 
     gfx.update()
+    if WINDOWS_SETUP and WINDOWS_SETUP.finalized and WINDOWS_SETUP.buttons then
+        local cap = gfx.mouse_cap
+        local last = WINDOWS_SETUP.lastMouseCap or 0
+        local clicked = (cap & 1) == 1 and (last & 1) == 0
+        WINDOWS_SETUP.lastMouseCap = cap
+        if clicked then
+            for _, b in ipairs(WINDOWS_SETUP.buttons) do
+                if isMouseIn(b.x, b.y, b.w, b.h) then
+                    if b.action == "open_action_list" then
+                        openActionList()
+                    end
+                    break
+                end
+            end
+        end
+    end
     local key = gfx.getchar()
     if key == 27 or key == -1 then
         if not WINDOWS_SETUP.finalized then
@@ -1449,7 +1517,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     end
 
     if (bootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) then
-        finalMessage[#finalMessage + 1] = "Setup complete."
+        finalMessage[#finalMessage + 1] = "Setup complete — run STEMwerk.lua from the REAPER Action List"
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)
         finalMessage[#finalMessage + 1] = "FFmpeg path: " .. tostring(verification.ffmpegPath)
@@ -1467,7 +1535,6 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         finalMessage[#finalMessage + 1] = "Capabilities: " .. tostring(capPath)
         finalMessage[#finalMessage + 1] = "Log: " .. tostring(logFile)
         finalMessage[#finalMessage + 1] = ""
-        finalMessage[#finalMessage + 1] = "You can start STEMwerk now."
         return { success = true, finalMessage = finalMessage }
     end
 
@@ -1687,7 +1754,7 @@ local function finalizeWindowsVerify(success, lines)
     if not WINDOWS_VERIFY then return end
     WINDOWS_VERIFY.finalized = true
     WINDOWS_VERIFY.finalSuccess = success == true
-    if success and lines and lines[1] == "Setup complete." then
+    if success and lines and lines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
         table.remove(lines, 1)
     end
     WINDOWS_VERIFY.statusLines = lines or WINDOWS_VERIFY.statusLines
@@ -2040,6 +2107,14 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
         y = y + 18
     end
 
+    local stepLine = formatStepStatus(state)
+    if stepLine ~= "" then
+        gfx.x = 18
+        gfx.y = y
+        gfx.drawstr(stepLine)
+        y = y + 18
+    end
+
     gfx.x = 18
     gfx.y = y
     gfx.drawstr("Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or ""))
@@ -2095,7 +2170,15 @@ local function linuxDrawFinal(finalLines, finalSuccess)
     gfx.y = y
     if finalSuccess then
         gfx.set(0.2, 0.9, 0.2, 1)
-        gfx.drawstr("Setup complete.")
+        local headline = "Setup complete — run STEMwerk.lua from the REAPER Action List"
+        local wrapped = wrapLine(headline, 110)
+        for _, wl in ipairs(wrapped) do
+            gfx.drawstr(wl)
+            y = y + 26
+            gfx.x = 18
+            gfx.y = y
+        end
+        y = y - 26
     else
         gfx.set(1.0, 0.4, 0.1, 1)
         gfx.drawstr("Setup was not completely successful.")
@@ -2105,7 +2188,7 @@ local function linuxDrawFinal(finalLines, finalSuccess)
 
     gfx.setfont(1, "Arial", 15)
     local startIdx = 1
-    if finalSuccess and finalLines and finalLines[1] == "Setup complete." then
+    if finalSuccess and finalLines and finalLines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
         startIdx = 2
     elseif (not finalSuccess) and finalLines and finalLines[1] == "Setup was not completely successful." then
         startIdx = 2
@@ -2140,6 +2223,7 @@ local function linuxDrawFinal(finalLines, finalSuccess)
         local btnY2 = btnY - (btnH + 8)
         LINUX_SETUP.buttons[#LINUX_SETUP.buttons + 1] = { label = "Open Log", x = x, y = btnY2, w = btnW, h = btnH, action = "open_log" }
         LINUX_SETUP.buttons[#LINUX_SETUP.buttons + 1] = { label = "Open Capabilities", x = x + (btnW + gap), y = btnY2, w = btnW, h = btnH, action = "open_cap" }
+        LINUX_SETUP.buttons[#LINUX_SETUP.buttons + 1] = { label = "Open Action List", x = x + 2 * (btnW + gap), y = btnY2, w = btnW, h = btnH, action = "open_action_list" }
 
         gfx.setfont(1, "Arial", 13)
         for _, b in ipairs(LINUX_SETUP.buttons) do
@@ -2209,6 +2293,8 @@ local function linuxSetupTick()
                         openPath(LINUX_SETUP.logFile)
                     elseif b.action == "open_cap" then
                         openPath(LINUX_SETUP.capFile)
+                    elseif b.action == "open_action_list" then
+                        openActionList()
                     end
                     break
                 end

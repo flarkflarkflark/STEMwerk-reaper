@@ -32,6 +32,9 @@ set_status() {
     {
       echo "STATUS=$1"
       [ -n "${2:-}" ] && echo "STATUS_REASON=$2"
+      [ -n "${3:-}" ] && echo "STEP_INDEX=$3"
+      [ -n "${4:-}" ] && echo "STEP_TOTAL=$4"
+      [ -n "${5:-}" ] && echo "STEP_LABEL=$5"
     } > "${STATE_FILE}"
   fi
 }
@@ -42,15 +45,17 @@ log "Bootstrap script: ${BOOTSTRAP_SCRIPT}"
 log "State file: ${STATE_FILE}"
 log "PID file: ${PID_FILE}"
 
+set_status "running" "launcher_started" "1" "4" "Launching bootstrap"
+
 if [ -z "${BOOTSTRAP_SCRIPT}" ] || [ ! -f "${BOOTSTRAP_SCRIPT}" ]; then
   log "Launcher error: bootstrap script missing"
-  set_status "bootstrap_launch_failed" "bootstrap_script_missing"
+  set_status "bootstrap_launch_failed" "bootstrap_script_missing" "1" "4" "Launching bootstrap"
   exit 1
 fi
 
 if [ -z "${PID_FILE}" ]; then
   log "Launcher error: pid file missing"
-  set_status "bootstrap_launch_failed" "pidfile_missing"
+  set_status "bootstrap_launch_failed" "pidfile_missing" "1" "4" "Launching bootstrap"
   exit 1
 fi
 
@@ -62,13 +67,13 @@ fi
 CHILD_PID=$!
 if [ -z "${CHILD_PID}" ]; then
   log "Launcher error: failed to start bootstrap"
-  set_status "bootstrap_launch_failed" "spawn_failed"
+  set_status "bootstrap_launch_failed" "spawn_failed" "1" "4" "Launching bootstrap"
   exit 1
 fi
 
 echo "${CHILD_PID}" > "${PID_FILE}" 2>/dev/null || {
   log "Launcher error: failed to write pid file"
-  set_status "bootstrap_launch_failed" "pidfile_write_failed"
+  set_status "bootstrap_launch_failed" "pidfile_write_failed" "1" "4" "Launching bootstrap"
   exit 1
 }
 
