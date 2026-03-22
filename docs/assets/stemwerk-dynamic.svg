@@ -40,7 +40,7 @@
       r
       <animate attributeName="y" values="195;215;195" dur="2.4s" repeatCount="indefinite" begin="1.2s"/>
     </text>
-    <text x="880" y="210" fill="#111111" stroke="#f3f3f3" stroke-width="5" paint-order="stroke fill">
+    <text x="850" y="210" fill="#111111" stroke="#f3f3f3" stroke-width="5" paint-order="stroke fill">
       k
       <animate attributeName="y" values="210;190;210" dur="2.4s" repeatCount="indefinite" begin="1.4s"/>
     </text>
