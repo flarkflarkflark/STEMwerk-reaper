@@ -1,4 +1,6 @@
-# STEMwerk-reaper
+<p align="center">
+	<img src="docs/assets/stemwerk-dynamic.svg" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
+</p>
 
 Local-first AI stem separation for REAPER. Split vocals, drums, bass, and more directly inside your DAW with GPU acceleration where available.
 
