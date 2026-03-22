@@ -1,6 +1,9 @@
 #!/bin/sh
 set -u
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
+
 RUNTIME_BASE=""
 STATE_FILE=""
 LOG_FILE=""
@@ -59,6 +62,44 @@ set_progress() {
   STEP_LABEL="$3"
   log "STEP ${STEP_INDEX}/${STEP_TOTAL}: ${STEP_LABEL}"
   write_state
+}
+
+resolve_core_target() {
+  CORE_TARGET=""
+  CORE_TARGET_DESC=""
+  CORE_SUPPORTS_EXTRAS=0
+
+  if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -e "${STEMWERK_CORE_PATH}" ]; then
+    if [ -f "${STEMWERK_CORE_PATH}/pyproject.toml" ] && [ -d "${STEMWERK_CORE_PATH}/src/stemwerk_core" ]; then
+      CORE_TARGET="${STEMWERK_CORE_PATH}"
+      CORE_TARGET_DESC="STEMWERK_CORE_PATH source"
+      CORE_SUPPORTS_EXTRAS=1
+      return 0
+    fi
+    case "${STEMWERK_CORE_PATH}" in
+      *.whl|*.zip|*.tar.gz)
+        CORE_TARGET="${STEMWERK_CORE_PATH}"
+        CORE_TARGET_DESC="STEMWERK_CORE_PATH artifact"
+        CORE_SUPPORTS_EXTRAS=0
+        return 0
+        ;;
+    esac
+    log "STEMWERK_CORE_PATH is set but invalid: ${STEMWERK_CORE_PATH}"
+  fi
+
+  CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
+  if [ -d "${CORE_BUNDLE_DIR}" ]; then
+    for pattern in "${CORE_BUNDLE_DIR}"/*.whl "${CORE_BUNDLE_DIR}"/*.tar.gz "${CORE_BUNDLE_DIR}"/*.zip; do
+      if [ -f "${pattern}" ]; then
+        CORE_TARGET="${pattern}"
+        CORE_TARGET_DESC="bundled artifact"
+        CORE_SUPPORTS_EXTRAS=0
+        return 0
+      fi
+    done
+  fi
+
+  return 1
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -141,17 +182,14 @@ else
     "${VENV_PY}" -m pip install "numpy<2.4" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
 
     log "Installing stemwerk-core"
-    CORE_PATH=""
-    if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -f "${STEMWERK_CORE_PATH}/pyproject.toml" ] && [ -d "${STEMWERK_CORE_PATH}/src/stemwerk_core" ]; then
-      CORE_PATH="${STEMWERK_CORE_PATH}"
-    fi
-
-    if [ -n "${CORE_PATH}" ]; then
-      log "Installing stemwerk-core from ${CORE_PATH}"
-      "${VENV_PY}" -m pip install "${CORE_PATH}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "stemwerk_core_install_failed"
+    resolve_core_target || true
+    if [ -n "${CORE_TARGET:-}" ]; then
+      log "Installing stemwerk-core from ${CORE_TARGET_DESC}: ${CORE_TARGET}"
+      "${VENV_PY}" -m pip install "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "stemwerk_core_install_failed"
     else
-      log "Local stemwerk-core not found, trying pip install"
-      "${VENV_PY}" -m pip install "stemwerk-core" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "stemwerk_core_missing"
+      log "stemwerk-core bundle missing from installer payload"
+      log "Expected bundle directory: ${CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
+      set_status "deps_failed" "stemwerk_core_install_failed"
     fi
 
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \

@@ -1,6 +1,9 @@
 #!/bin/sh
 set -u
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
+
 RUNTIME_BASE=""
 STATE_FILE=""
 LOG_FILE=""
@@ -69,6 +72,44 @@ set_progress() {
   STEP_LABEL="$3"
   log "STEP ${STEP_INDEX}/${STEP_TOTAL}: ${STEP_LABEL}"
   write_state
+}
+
+resolve_core_target() {
+  CORE_TARGET=""
+  CORE_TARGET_DESC=""
+  CORE_SUPPORTS_EXTRAS=0
+
+  if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -e "${STEMWERK_CORE_PATH}" ]; then
+    if [ -f "${STEMWERK_CORE_PATH}/pyproject.toml" ] && [ -d "${STEMWERK_CORE_PATH}/src/stemwerk_core" ]; then
+      CORE_TARGET="${STEMWERK_CORE_PATH}"
+      CORE_TARGET_DESC="STEMWERK_CORE_PATH source"
+      CORE_SUPPORTS_EXTRAS=1
+      return 0
+    fi
+    case "${STEMWERK_CORE_PATH}" in
+      *.whl|*.zip|*.tar.gz)
+        CORE_TARGET="${STEMWERK_CORE_PATH}"
+        CORE_TARGET_DESC="STEMWERK_CORE_PATH artifact"
+        CORE_SUPPORTS_EXTRAS=0
+        return 0
+        ;;
+    esac
+    log_step "STEMWERK_CORE_PATH is set but invalid: ${STEMWERK_CORE_PATH}"
+  fi
+
+  CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
+  if [ -d "${CORE_BUNDLE_DIR}" ]; then
+    for pattern in "${CORE_BUNDLE_DIR}"/*.whl "${CORE_BUNDLE_DIR}"/*.tar.gz "${CORE_BUNDLE_DIR}"/*.zip; do
+      if [ -f "${pattern}" ]; then
+        CORE_TARGET="${pattern}"
+        CORE_TARGET_DESC="bundled artifact"
+        CORE_SUPPORTS_EXTRAS=0
+        return 0
+      fi
+    done
+  fi
+
+  return 1
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -469,50 +510,37 @@ PY
     "${VENV_PY}" -m pip install "numpy<2.4" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
 
     log_stage "Installing STEMwerk-core"
-    CORE_PATH=""
-    if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -f "${STEMWERK_CORE_PATH}/pyproject.toml" ] && [ -d "${STEMWERK_CORE_PATH}/src/stemwerk_core" ]; then
-      CORE_PATH="${STEMWERK_CORE_PATH}"
-    fi
-
     core_install_rc=0
-    if [ -n "${CORE_PATH}" ]; then
-      log_step "Installing stemwerk-core from ${CORE_PATH}"
+    resolve_core_target || true
+    if [ -n "${CORE_TARGET:-}" ]; then
+      INSTALL_TARGET="${CORE_TARGET}"
+      if [ "${CORE_SUPPORTS_EXTRAS:-0}" -eq 1 ] && [ -n "${CORE_EXTRA}" ]; then
+        INSTALL_TARGET="${CORE_TARGET}${CORE_EXTRA}"
+      fi
+      log_step "Installing stemwerk-core from ${CORE_TARGET_DESC}: ${INSTALL_TARGET}"
       if [ -n "${CONSTRAINTS_FILE}" ]; then
         log_step "Installing stemwerk-core with constraints (torch pinned)"
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${CORE_PATH}${CORE_EXTRA}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
+        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${INSTALL_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       else
-        "${VENV_PY}" -m pip install "${CORE_PATH}${CORE_EXTRA}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
+        "${VENV_PY}" -m pip install "${INSTALL_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       fi
     else
-      log_step "Local stemwerk-core not found, trying pip install"
-      if [ -n "${CONSTRAINTS_FILE}" ]; then
-        log_step "Installing stemwerk-core with constraints (torch pinned)"
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "stemwerk-core${CORE_EXTRA}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
-      else
-        "${VENV_PY}" -m pip install "stemwerk-core${CORE_EXTRA}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
-      fi
+      log_step "stemwerk-core bundle missing from installer payload"
+      log_step "Expected bundle directory: ${CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
+      core_install_rc=1
     fi
 
-    if [ "${core_install_rc}" -ne 0 ] && [ -n "${CORE_EXTRA}" ]; then
+    if [ "${core_install_rc}" -ne 0 ] && [ -n "${CORE_EXTRA}" ] && [ "${CORE_SUPPORTS_EXTRAS:-0}" -eq 1 ] && [ -n "${CORE_TARGET:-}" ]; then
       log_step "GPU/ROCm core install failed; falling back to CPU packages"
       CORE_EXTRA=""
       PROFILE="linux-cpu"
       BACKEND="cpu"
       BACKEND_REASON="backend_install_failed"
-      if [ -n "${CORE_PATH}" ]; then
-        if [ -n "${CONSTRAINTS_FILE}" ]; then
-          log_step "Installing stemwerk-core with constraints (torch pinned)"
-          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${CORE_PATH}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
-        else
-          "${VENV_PY}" -m pip install "${CORE_PATH}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
-        fi
+      if [ -n "${CONSTRAINTS_FILE}" ]; then
+        log_step "Installing stemwerk-core with constraints (torch pinned)"
+        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       else
-        if [ -n "${CONSTRAINTS_FILE}" ]; then
-          log_step "Installing stemwerk-core with constraints (torch pinned)"
-          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "stemwerk-core" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
-        else
-          "${VENV_PY}" -m pip install "stemwerk-core" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
-        fi
+        "${VENV_PY}" -m pip install "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       fi
     fi
     if [ "${core_install_rc}" -ne 0 ]; then
