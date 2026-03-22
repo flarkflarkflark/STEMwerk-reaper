@@ -32,15 +32,15 @@
       w
       <animate attributeName="y" values="220;200;220" dur="2.4s" repeatCount="indefinite" begin="0.8s"/>
     </text>
-    <text x="750" y="205" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="770" y="205" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
       e
       <animate attributeName="y" values="205;225;205" dur="2.4s" repeatCount="indefinite" begin="1s"/>
     </text>
-    <text x="850" y="195" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="920" y="195" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
       r
       <animate attributeName="y" values="195;215;195" dur="2.4s" repeatCount="indefinite" begin="1.2s"/>
     </text>
-    <text x="930" y="210" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
+    <text x="1010" y="210" fill="#111111" stroke="#f3f3f3" stroke-width="7" paint-order="stroke fill">
       k
       <animate attributeName="y" values="210;190;210" dur="2.4s" repeatCount="indefinite" begin="1.4s"/>
     </text>
