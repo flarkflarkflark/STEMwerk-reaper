@@ -1407,9 +1407,19 @@ local function verifyRuntimePaths(state)
 end
 
 local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
-    local state = type(bootstrapState) == "table" and bootstrapState or parseStateFile(stateFile)
-    if type(state) ~= "table" then
-        state = {}
+    local state = {}
+    if type(bootstrapState) == "table" then
+        for k, v in pairs(bootstrapState) do
+            state[k] = v
+        end
+    end
+    local latestState = parseStateFile(stateFile)
+    if type(latestState) == "table" then
+        for k, v in pairs(latestState) do
+            if v ~= nil and v ~= "" then
+                state[k] = v
+            end
+        end
     end
 
     if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
