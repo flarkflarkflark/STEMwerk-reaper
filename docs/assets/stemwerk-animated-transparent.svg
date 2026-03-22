@@ -7,34 +7,66 @@
   </defs>
 
   <g font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="180" filter="url(#softShadow)">
+    <text x="95" y="210" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      S
+      <animate attributeName="y" values="210;198;210" dur="2.4s" repeatCount="indefinite" begin="0s"/>
+    </text>
     <text x="95" y="210" fill="#ff6464" stroke="#111111" stroke-width="4" paint-order="stroke fill">
       S
       <animate attributeName="y" values="210;198;210" dur="2.4s" repeatCount="indefinite" begin="0s"/>
+    </text>
+    <text x="210" y="198" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      T
+      <animate attributeName="y" values="198;210;198" dur="2.4s" repeatCount="indefinite" begin="0.2s"/>
     </text>
     <text x="210" y="198" fill="#64c8ff" stroke="#111111" stroke-width="4" paint-order="stroke fill">
       T
       <animate attributeName="y" values="198;210;198" dur="2.4s" repeatCount="indefinite" begin="0.2s"/>
     </text>
+    <text x="330" y="216" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      E
+      <animate attributeName="y" values="216;202;216" dur="2.4s" repeatCount="indefinite" begin="0.4s"/>
+    </text>
     <text x="330" y="216" fill="#9664ff" stroke="#111111" stroke-width="4" paint-order="stroke fill">
       E
       <animate attributeName="y" values="216;202;216" dur="2.4s" repeatCount="indefinite" begin="0.4s"/>
+    </text>
+    <text x="480" y="234" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      M
+      <animate attributeName="y" values="234;216;234" dur="2.4s" repeatCount="indefinite" begin="0.6s"/>
     </text>
     <text x="480" y="234" fill="#64ff96" stroke="#111111" stroke-width="4" paint-order="stroke fill">
       M
       <animate attributeName="y" values="234;216;234" dur="2.4s" repeatCount="indefinite" begin="0.6s"/>
     </text>
 
+    <text x="675" y="225" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      w
+      <animate attributeName="y" values="225;210;225" dur="2.4s" repeatCount="indefinite" begin="0.8s"/>
+    </text>
     <text x="675" y="225" fill="#111111" stroke="#050505" stroke-width="4" paint-order="stroke fill">
       w
       <animate attributeName="y" values="225;210;225" dur="2.4s" repeatCount="indefinite" begin="0.8s"/>
+    </text>
+    <text x="820" y="210" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      e
+      <animate attributeName="y" values="210;224;210" dur="2.4s" repeatCount="indefinite" begin="1s"/>
     </text>
     <text x="820" y="210" fill="#111111" stroke="#050505" stroke-width="4" paint-order="stroke fill">
       e
       <animate attributeName="y" values="210;224;210" dur="2.4s" repeatCount="indefinite" begin="1s"/>
     </text>
+    <text x="925" y="198" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      r
+      <animate attributeName="y" values="198;212;198" dur="2.4s" repeatCount="indefinite" begin="1.2s"/>
+    </text>
     <text x="925" y="198" fill="#111111" stroke="#050505" stroke-width="4" paint-order="stroke fill">
       r
       <animate attributeName="y" values="198;212;198" dur="2.4s" repeatCount="indefinite" begin="1.2s"/>
+    </text>
+    <text x="1005" y="210" fill="none" stroke="#ffffff" stroke-width="8" paint-order="stroke fill">
+      k
+      <animate attributeName="y" values="210;196;210" dur="2.4s" repeatCount="indefinite" begin="1.4s"/>
     </text>
     <text x="1005" y="210" fill="#111111" stroke="#050505" stroke-width="4" paint-order="stroke fill">
       k
@@ -43,6 +75,7 @@
   </g>
 
   <g font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="42" filter="url(#softShadow)">
+    <text x="600" y="312" text-anchor="middle" fill="none" stroke="#ffffff" stroke-width="6" paint-order="stroke fill">flarkAUDIO</text>
     <text x="600" y="312" text-anchor="middle" fill="#ff8a1f" stroke="#111111" stroke-width="3" paint-order="stroke fill">flarkAUDIO</text>
   </g>
 </svg>
