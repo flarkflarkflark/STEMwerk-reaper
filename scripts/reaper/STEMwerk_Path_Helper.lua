@@ -94,6 +94,12 @@ function M.getCanonicalInstallRoot(osName, sep)
     return M.joinPath(sep, rp, "Scripts", "STEMwerk-reaper")
 end
 
+function M.getReaPackInstallRoot(osName, sep)
+    local rp = M.getReaperResourcePath(osName, sep)
+    if rp == "" then return "" end
+    return M.joinPath(sep, rp, "Scripts", "STEMwerk", "STEMwerk-reaper")
+end
+
 function M.deriveInstallRootFromScriptDir(scriptDir, osName, sep)
     local clean = M.stripTrailingSep(scriptDir)
     if clean == "" then return "" end
@@ -111,6 +117,7 @@ function M.resolveInstallRoot(scriptDir, opts)
     local osName = opts.os or M.getOS()
     local sep = M.pathSep(osName)
     local canonical = M.getCanonicalInstallRoot(osName, sep)
+    local reapack = M.getReaPackInstallRoot(osName, sep)
     local actual = M.deriveInstallRootFromScriptDir(scriptDir, osName, sep)
     local hasActual = actual ~= ""
     local root
@@ -126,6 +133,7 @@ function M.resolveInstallRoot(scriptDir, opts)
     local canonicalMismatch = false
     if canonical ~= "" and hasActual then
         canonicalMismatch = not M.pathEquals(root, canonical, osName)
+            and not M.pathEquals(root, reapack, osName)
         if canonicalMismatch then
             local nested = M.joinPath(sep, canonical, "STEMwerk-reaper")
             if M.pathEquals(root, nested, osName) then
@@ -135,6 +143,8 @@ function M.resolveInstallRoot(scriptDir, opts)
             else
                 status = "noncanonical"
             end
+        elseif M.pathEquals(root, reapack, osName) then
+            status = "reapack_repo_layout"
         end
     end
     local ok = hasActual
@@ -144,6 +154,7 @@ function M.resolveInstallRoot(scriptDir, opts)
         os = osName,
         sep = sep,
         canonical = canonical,
+        reapack = reapack,
         actual = actual,
         root = root,
         scriptsDir = scriptsDir,
