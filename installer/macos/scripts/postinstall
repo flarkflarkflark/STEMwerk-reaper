@@ -44,6 +44,7 @@ if command -v open >/dev/null 2>&1; then
 fi
 
 if command -v osascript >/dev/null 2>&1; then
+  sudo -u "$CONSOLE_USER" osascript -e 'display dialog "Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua." with title "STEMwerk Installer" buttons {"OK"} with icon POSIX file "/Users/Shared/STEMwerk-reaper/stemwerk.svg"' >/dev/null 2>&1 || \
   sudo -u "$CONSOLE_USER" osascript -e 'display dialog "Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua." with title "STEMwerk Installer" buttons {"OK"}' >/dev/null 2>&1 || true
 fi
 

@@ -20,6 +20,7 @@ mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper"
 rsync -a --delete \
   "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
+  "$ROOT_DIR/installer/assets/stemwerk.svg" \
   "$ROOT_DIR/docs" \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \

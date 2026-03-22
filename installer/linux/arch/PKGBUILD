@@ -5,6 +5,7 @@ pkgdesc="STEMwerk REAPER scripts and helpers"
 arch=('any')
 url="https://github.com/flarkflarkflark/STEMwerk"
 license=('MIT')
+install=stemwerk.install
 source=("stemwerk-${pkgver}.tar.gz")
 sha256sums=('@SHA256@')
 

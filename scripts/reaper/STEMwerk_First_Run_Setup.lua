@@ -1422,6 +1422,19 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
+    if (not state.PYTHON_PATH or state.PYTHON_PATH == "") and (not state.VENV_PYTHON or state.VENV_PYTHON == "") then
+        local extPythonPath = getExt("pythonPath")
+        if extPythonPath ~= "" then
+            state.PYTHON_PATH = extPythonPath
+        end
+    end
+    if not state.FFMPEG_PATH or state.FFMPEG_PATH == "" then
+        local extFfmpegPath = getExt("ffmpegPath")
+        if extFfmpegPath ~= "" then
+            state.FFMPEG_PATH = extFfmpegPath
+        end
+    end
+
     if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
         setExt("pythonPath", state.PYTHON_PATH)
     elseif state.VENV_PYTHON and state.VENV_PYTHON ~= "" then
@@ -1433,6 +1446,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
 
     local verification = verifyRuntimePaths(state)
     local errors = verification.errors
+    local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0
+    local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk
+
+    if verifiedRuntimeOk and state.STATUS ~= "ok" then
+        appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
+        state.STATUS = "ok"
+        state.STATUS_REASON = ""
+    end
+
     local finalMessage = {}
     local failureClass = nil
 
@@ -1480,7 +1502,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     end
     local audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
     local coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
-    local verificationStatus = (bootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) and "ok" or "failed"
+    local verificationStatus = (effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) and "ok" or "failed"
 
     ensureDir(runtime.runtimeState)
     local capPath = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
@@ -1526,7 +1548,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if (bootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) then
+    if (effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) then
         finalMessage[#finalMessage + 1] = "Setup complete — run STEMwerk.lua from the REAPER Action List"
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)
@@ -2083,7 +2105,7 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
     gfx.setfont(1, "Arial", 22)
     gfx.x = 18
     gfx.y = y
-    gfx.drawstr("STEMwerk Setup [LINUX LIVE TEST]")
+    gfx.drawstr("STEMwerk Setup [Linux]")
     y = y + 30
 
     gfx.setfont(1, "Arial", 16)
@@ -2168,7 +2190,7 @@ local function linuxDrawFinal(finalLines, finalSuccess)
     gfx.setfont(1, "Arial", 22)
     gfx.x = 18
     gfx.y = y
-    gfx.drawstr("STEMwerk Setup [LINUX LIVE TEST]")
+    gfx.drawstr("STEMwerk Setup [Linux]")
     y = y + 30
     gfx.setfont(1, "Arial", 16)
     gfx.x = 18
@@ -2381,7 +2403,7 @@ local function startLinuxSetup(runtime, separatorScript)
         UPDATED_AT = os.time(),
     })
     exec(cmd, 20000)
-    gfx.init("STEMwerk Setup [LINUX LIVE TEST]", 1100, 760, 0, 120, 80)
+    gfx.init("STEMwerk Setup [Linux]", 1100, 760, 0, 120, 80)
     LINUX_SETUP = {
         runtime = runtime,
         separatorScript = separatorScript,

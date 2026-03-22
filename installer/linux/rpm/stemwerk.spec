@@ -21,6 +21,23 @@ rm -rf %{buildroot}
 mkdir -p %{buildroot}/usr/share/stemwerk-reaper
 cp -a * %{buildroot}/usr/share/stemwerk-reaper/
 
+%post
+echo
+echo "STEMwerk installed to /usr/share/stemwerk-reaper"
+echo "Next step: Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua."
+echo
+if [ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]; then
+	if command -v zenity >/dev/null 2>&1; then
+		MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
+		zenity --info --width=520 --title="STEMwerk Installer" --window-icon="/usr/share/stemwerk-reaper/stemwerk.svg" --text="$MESSAGE" >/dev/null 2>&1 || :
+	elif command -v kdialog >/dev/null 2>&1; then
+		MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
+		kdialog --msgbox "$MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || :
+	elif command -v notify-send >/dev/null 2>&1; then
+		notify-send -i "/usr/share/stemwerk-reaper/stemwerk.svg" "STEMwerk Installer" "STEMwerk installed to /usr/share/stemwerk-reaper. Open REAPER and run STEMwerk_First_Run_Setup.lua." >/dev/null 2>&1 || :
+	fi
+fi
+
 %files
 /usr/share/stemwerk-reaper
 

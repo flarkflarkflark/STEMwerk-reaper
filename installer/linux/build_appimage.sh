@@ -23,6 +23,7 @@ mkdir -p "$OUT_DIR" \
 rsync -a --delete \
   "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
+  "$ROOT_DIR/installer/assets/stemwerk.svg" \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \
   "$ROOT_DIR/TODO.md" \
@@ -47,7 +48,7 @@ Name=STEMwerk Installer
 Exec=stemwerk-installer
 Icon=stemwerk
 Categories=AudioVideo;Audio;
-Terminal=true
+Terminal=false
 EOF
 
 # AppRun: minimal "portable installer" behavior for testers.
@@ -60,9 +61,66 @@ APPDIR="${APPDIR:-$(cd "$(dirname "$0")" && pwd)}"
 SRC="$APPDIR/usr/share/stemwerk"
 REAPER_SCRIPTS="$HOME/.config/REAPER/Scripts"
 DEST="$REAPER_SCRIPTS/STEMwerk-reaper"
+STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/STEMwerk"
+LOG_DIR="$STATE_DIR/logs"
+LOG_FILE="$LOG_DIR/appimage-installer.log"
+ICON_FILE="$SRC/stemwerk.svg"
 
-mkdir -p "$REAPER_SCRIPTS"
-rsync -a --delete "$SRC/" "$DEST/"
+show_dialog() {
+  local title="$1"
+  local body="$2"
+  local kind="${3:-info}"
+
+  if command -v zenity >/dev/null 2>&1; then
+    if [[ "$kind" == "error" ]]; then
+      zenity --error --width=520 --title="$title" --window-icon="$ICON_FILE" --text="$body" >/dev/null 2>&1 && return 0
+    else
+      zenity --info --width=520 --title="$title" --window-icon="$ICON_FILE" --text="$body" >/dev/null 2>&1 && return 0
+    fi
+  fi
+
+  if command -v kdialog >/dev/null 2>&1; then
+    if [[ "$kind" == "error" ]]; then
+      kdialog --error "$body" --title "$title" >/dev/null 2>&1 && return 0
+    else
+      kdialog --msgbox "$body" --title "$title" >/dev/null 2>&1 && return 0
+    fi
+  fi
+
+  if command -v xmessage >/dev/null 2>&1; then
+    xmessage -center "$title\n\n$body" >/dev/null 2>&1 && return 0
+  fi
+
+  if command -v notify-send >/dev/null 2>&1; then
+    if [[ "$kind" == "error" ]]; then
+      notify-send -u critical -i "$ICON_FILE" "$title" "$body" >/dev/null 2>&1 && return 0
+    else
+      notify-send -i "$ICON_FILE" "$title" "$body" >/dev/null 2>&1 && return 0
+    fi
+  fi
+
+  return 1
+}
+
+mkdir -p "$REAPER_SCRIPTS" "$LOG_DIR"
+
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] STEMwerk AppImage installer started"
+  echo "Source: $SRC"
+  echo "Destination: $DEST"
+  rsync -a --delete "$SRC/" "$DEST/"
+  echo "Copy finished successfully"
+} >"$LOG_FILE" 2>&1 || {
+  MESSAGE=$(printf 'STEMwerk kon de bestanden niet kopieren naar:\n%s\n\nBekijk het log:\n%s' "$DEST" "$LOG_FILE")
+  printf '%b\n' "$MESSAGE" >&2
+  show_dialog "STEMwerk Installer" "$MESSAGE" error || true
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$LOG_FILE" >/dev/null 2>&1 || true
+  fi
+  exit 1
+}
+
+MESSAGE=$(printf 'STEMwerk-bestanden zijn gekopieerd naar:\n%s\n\nVolgende stap:\n1. Open REAPER\n2. Run STEMwerk_First_Run_Setup.lua\n3. Daarna kun je STEMwerk.lua gebruiken\n\nLog:\n%s' "$DEST" "$LOG_FILE")
 
 echo "STEMwerk files copied to: $DEST"
 echo ""
@@ -74,6 +132,8 @@ echo ""
 echo "Docs:"
 echo "- $DEST/README.md"
 echo "- $DEST/docs (if present)"
+
+show_dialog "STEMwerk Installer" "$MESSAGE" info || true
 EOF
 chmod +x "$APPDIR/AppRun"
 

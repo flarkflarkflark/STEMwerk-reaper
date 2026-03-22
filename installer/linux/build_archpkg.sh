@@ -22,6 +22,7 @@ mkdir -p "$SRC_DIR"
 rsync -a --delete \
   "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
+  "$ROOT_DIR/installer/assets/stemwerk.svg" \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \
   "$ROOT_DIR/TODO.md" \
@@ -37,6 +38,8 @@ sed \
   -e "s/@VERSION@/$VERSION/g" \
   -e "s/@SHA256@/$SHA256/g" \
   "$ROOT_DIR/installer/linux/arch/PKGBUILD" > "$WORK_DIR/PKGBUILD"
+
+cp -f "$ROOT_DIR/installer/linux/arch/stemwerk.install" "$WORK_DIR/stemwerk.install"
 
 # Build inside an Arch container (makepkg is Arch-specific)
 # NOTE: Ubuntu GitHub runners have Docker available by default.
