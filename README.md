@@ -44,6 +44,12 @@ Note: First-time setup downloads can take a while and may require several gigaby
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
 
 ### ReaPack
+Import this repository URL into ReaPack:
+
+```text
+https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
+```
+
 - ReaPack installs STEMwerk under `REAPER/Scripts/STEMwerk-reaper/`, the same folder layout used by the installers.
 - Older ReaPack layouts are still accepted by the runtime scripts as a fallback, so existing installs keep working.
 - After installing or updating via ReaPack, run `STEMwerk_First_Run_Setup.lua` once.
