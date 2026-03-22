@@ -64,38 +64,37 @@ DEST="$REAPER_SCRIPTS/STEMwerk-reaper"
 STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/STEMwerk"
 LOG_DIR="$STATE_DIR/logs"
 LOG_FILE="$LOG_DIR/appimage-installer.log"
-ICON_FILE="$SRC/stemwerk.svg"
-
 show_dialog() {
   local title="$1"
-  local body="$2"
-  local kind="${3:-info}"
+  local rich_body="$2"
+  local plain_body="$3"
+  local kind="${4:-info}"
 
   if command -v zenity >/dev/null 2>&1; then
     if [[ "$kind" == "error" ]]; then
-      zenity --error --width=520 --title="$title" --window-icon="$ICON_FILE" --text="$body" >/dev/null 2>&1 && return 0
+      zenity --error --width=520 --title="$title" --text="$plain_body" >/dev/null 2>&1 && return 0
     else
-      zenity --info --width=520 --title="$title" --window-icon="$ICON_FILE" --text="$body" >/dev/null 2>&1 && return 0
+      zenity --info --width=520 --title="$title" --text="$rich_body" >/dev/null 2>&1 && return 0
     fi
   fi
 
   if command -v kdialog >/dev/null 2>&1; then
     if [[ "$kind" == "error" ]]; then
-      kdialog --error "$body" --title "$title" >/dev/null 2>&1 && return 0
+      kdialog --error "$plain_body" --title "$title" >/dev/null 2>&1 && return 0
     else
-      kdialog --msgbox "$body" --title "$title" >/dev/null 2>&1 && return 0
+      kdialog --msgbox "$rich_body" --title "$title" >/dev/null 2>&1 && return 0
     fi
   fi
 
   if command -v xmessage >/dev/null 2>&1; then
-    xmessage -center "$title\n\n$body" >/dev/null 2>&1 && return 0
+    xmessage -center "$title\n\n$plain_body" >/dev/null 2>&1 && return 0
   fi
 
   if command -v notify-send >/dev/null 2>&1; then
     if [[ "$kind" == "error" ]]; then
-      notify-send -u critical -i "$ICON_FILE" "$title" "$body" >/dev/null 2>&1 && return 0
+      notify-send -u critical "$title" "$plain_body" >/dev/null 2>&1 && return 0
     else
-      notify-send -i "$ICON_FILE" "$title" "$body" >/dev/null 2>&1 && return 0
+      notify-send "$title" "$plain_body" >/dev/null 2>&1 && return 0
     fi
   fi
 
@@ -113,14 +112,15 @@ mkdir -p "$REAPER_SCRIPTS" "$LOG_DIR"
 } >"$LOG_FILE" 2>&1 || {
   MESSAGE=$(printf 'STEMwerk kon de bestanden niet kopieren naar:\n%s\n\nBekijk het log:\n%s' "$DEST" "$LOG_FILE")
   printf '%b\n' "$MESSAGE" >&2
-  show_dialog "STEMwerk Installer" "$MESSAGE" error || true
+  show_dialog "STEMwerk Installer" "$MESSAGE" "$MESSAGE" error || true
   if command -v xdg-open >/dev/null 2>&1; then
     xdg-open "$LOG_FILE" >/dev/null 2>&1 || true
   fi
   exit 1
 }
 
-MESSAGE=$(printf 'STEMwerk-bestanden zijn gekopieerd naar:\n%s\n\nVolgende stap:\n1. Open REAPER\n2. Run STEMwerk_First_Run_Setup.lua\n3. Daarna kun je STEMwerk.lua gebruiken\n\nLog:\n%s' "$DEST" "$LOG_FILE")
+PLAIN_MESSAGE=$(printf 'STEMwerk-bestanden zijn gekopieerd naar:\n%s\n\nVolgende stap:\n1. Open REAPER\n2. Run STEMwerk_First_Run_Setup.lua\n3. Daarna kun je STEMwerk.lua gebruiken\n\nLog:\n%s' "$DEST" "$LOG_FILE")
+RICH_MESSAGE=$(printf '<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>\n\nSTEMwerk-bestanden zijn gekopieerd naar:\n%s\n\n<b>Volgende stap</b>\n1. Open REAPER\n2. Run STEMwerk_First_Run_Setup.lua\n3. Daarna kun je STEMwerk.lua gebruiken\n\nLog:\n%s' "$DEST" "$LOG_FILE")
 
 echo "STEMwerk files copied to: $DEST"
 echo ""
@@ -133,7 +133,7 @@ echo "Docs:"
 echo "- $DEST/README.md"
 echo "- $DEST/docs (if present)"
 
-show_dialog "STEMwerk Installer" "$MESSAGE" info || true
+show_dialog "STEMwerk Installer" "$RICH_MESSAGE" "$PLAIN_MESSAGE" info || true
 EOF
 chmod +x "$APPDIR/AppRun"
 

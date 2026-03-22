@@ -26,15 +26,26 @@ echo
 echo "STEMwerk installed to /usr/share/stemwerk-reaper"
 echo "Next step: Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua."
 echo
+PLAIN_MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
 if [ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]; then
 	if command -v zenity >/dev/null 2>&1; then
-		MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
-		zenity --info --width=520 --title="STEMwerk Installer" --window-icon="/usr/share/stemwerk-reaper/stemwerk.svg" --text="$MESSAGE" >/dev/null 2>&1 || :
+		RICH_MESSAGE='<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>
+
+STEMwerk is installed to /usr/share/stemwerk-reaper
+
+<b>Next step</b>
+Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.'
+		zenity --info --width=520 --title="STEMwerk Installer" --text="$RICH_MESSAGE" >/dev/null 2>&1 || :
 	elif command -v kdialog >/dev/null 2>&1; then
-		MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
-		kdialog --msgbox "$MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || :
+		RICH_MESSAGE='<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>
+
+STEMwerk is installed to /usr/share/stemwerk-reaper
+
+<b>Next step</b>
+Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.'
+		kdialog --msgbox "$RICH_MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || :
 	elif command -v notify-send >/dev/null 2>&1; then
-		notify-send -i "/usr/share/stemwerk-reaper/stemwerk.svg" "STEMwerk Installer" "STEMwerk installed to /usr/share/stemwerk-reaper. Open REAPER and run STEMwerk_First_Run_Setup.lua." >/dev/null 2>&1 || :
+		notify-send "STEMwerk Installer" "$PLAIN_MESSAGE" >/dev/null 2>&1 || :
 	fi
 fi
 

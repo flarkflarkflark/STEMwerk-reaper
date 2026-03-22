@@ -44,7 +44,13 @@ cat > "$PKG_ROOT/DEBIAN/postinst" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
+PLAIN_MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
+RICH_MESSAGE='<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>
+
+STEMwerk is installed to /usr/share/stemwerk-reaper
+
+<b>Next step</b>
+Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.'
 
 echo
 echo "STEMwerk installed to /usr/share/stemwerk-reaper"
@@ -52,11 +58,11 @@ echo "Next step: Open REAPER and run STEMwerk_First_Run_Setup.lua before using S
 echo
 
 if command -v zenity >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-  zenity --info --width=520 --title="STEMwerk Installer" --window-icon="/usr/share/stemwerk-reaper/stemwerk.svg" --text="$MESSAGE" >/dev/null 2>&1 || true
+  zenity --info --width=520 --title="STEMwerk Installer" --text="$RICH_MESSAGE" >/dev/null 2>&1 || true
 elif command -v kdialog >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-  kdialog --msgbox "$MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || true
+  kdialog --msgbox "$RICH_MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || true
 elif command -v notify-send >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-  notify-send -i "/usr/share/stemwerk-reaper/stemwerk.svg" "STEMwerk Installer" "$MESSAGE" >/dev/null 2>&1 || true
+  notify-send "STEMwerk Installer" "$PLAIN_MESSAGE" >/dev/null 2>&1 || true
 fi
 EOF
 chmod 0755 "$PKG_ROOT/DEBIAN/postinst"
