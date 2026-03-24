@@ -1,6 +1,6 @@
 -- @description STEMwerk: First Run Setup
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1
+-- @version 2.2.1.1
 -- @changelog
 --   2026-03-15: Route setup to the new first-run bootstrap flow.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

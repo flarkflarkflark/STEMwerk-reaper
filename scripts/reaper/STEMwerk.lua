@@ -3,8 +3,9 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1
+-- @version 2.2.1.1
 -- @changelog
+--   2026-03-24: Local working build saved as v2.2.1.1 for installer follow-up.
 --   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
 --   2026-03-13: Comprehensive UI synchronization: footers and tooltips now accurately mirror button states (In-place/Takes).
 --   2026-03-13: Improved target reporting: footer now detects tracks via time selection across multiple tracks.
@@ -50,7 +51,7 @@ function clearDebugLog() end
 --   ## License
 --   MIT License - https://opensource.org/licenses/MIT
 
-local SCRIPT_NAME = "STEMwerk (v2.2.1)"
+local SCRIPT_NAME = "STEMwerk (v2.2.1.1)"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
 local DEBUG = { enabled = false, logPath = nil }
 -- STEMwerk.lua
@@ -232,10 +233,23 @@ function SW_LOG.wrapCmdForWindows(cmd)
     return 'cmd.exe /S /C "' .. c .. '"'
 end
 
+function SW_LOG.commandNeedsWindowsShell(cmd)
+    local c = tostring(cmd or "")
+    local lower = c:lower()
+    if lower == "" then return false end
+    if lower:match("^%s*cmd%.exe") or lower:match("^%s*cmd%s") then return true end
+    if c:find(">", 1, true) or c:find("<", 1, true) or c:find("|", 1, true) then return true end
+    if c:find("&&", 1, true) or c:find("&", 1, true) then return true end
+    if c:find("%ERRORLEVEL%", 1, true) then return true end
+    if lower:find(" if errorlevel ", 1, true) then return true end
+    if lower:find(" copy ", 1, true) then return true end
+    return false
+end
+
 local function exec_capture(cmd, timeoutMs)
     timeoutMs = timeoutMs or 8000
     if reaper and reaper.ExecProcess then
-        if SW_LOG.isWindows() then
+        if SW_LOG.isWindows() and SW_LOG.commandNeedsWindowsShell(cmd) then
             cmd = SW_LOG.wrapCmdForWindows(cmd)
         end
         local rc, out = reaper.ExecProcess(cmd, timeoutMs)
@@ -337,7 +351,7 @@ function getWindowsGpuNames()
         psFile:write("$out='" .. escapePsSingle(outPath) .. "'\n")
         psFile:write("Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name | Out-File -FilePath $out -Encoding ascii\n")
         psFile:close()
-        local psCmd = 'cmd.exe /S /C ""powershell" -NoProfile -ExecutionPolicy Bypass -File ' .. quoteArg(psPath) .. '""'
+        local psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' .. quoteArg(psPath)
         exec_capture(psCmd, 5000)
     end
     local out = readFile(outPath)
@@ -348,19 +362,8 @@ function getWindowsGpuNames()
     if psPath then os.remove(psPath) end
 
     if #names == 0 then
-        -- Fallback to WMIC (write to file).
-        outPath = tempBase .. "\\STEMwerk_gpu_names_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)) .. ".txt"
-        local wmicCmd = 'cmd.exe /S /C "wmic path win32_VideoController get Name > ' .. quoteArg(outPath) .. '"'
-        exec_capture(wmicCmd, 5000)
-        local out2 = readFile(outPath)
-        if out2 and out2 ~= "" then
-            parseLines(out2)
-        end
-        os.remove(outPath)
-    end
-    if #names == 0 then
-        -- Last-resort: try to capture WMIC output directly.
-        local rc3, out3 = exec_capture('cmd.exe /S /C "wmic path win32_VideoController get Name"', 5000)
+        -- Fallback to WMIC without an extra cmd.exe wrapper.
+        local rc3, out3 = exec_capture('wmic path win32_VideoController get Name', 5000)
         if out3 and out3 ~= "" then
             parseLines(out3)
         end
@@ -796,6 +799,104 @@ local function getInstallScriptsDir()
     return script_path
 end
 
+function PATH_STATE.getInstallPathState()
+    if PATH_STATE.helper then
+        if not PATH_STATE.installCache then
+            PATH_STATE.installCache = PATH_STATE.helper.resolveInstallRoot(script_path, { os = OS })
+        end
+        return PATH_STATE.installCache
+    end
+    return nil
+end
+
+function PATH_STATE.allowNonCanonicalLaunch()
+    if os.getenv("STEMWERK_ALLOW_NONCANONICAL") == "1" then
+        return true
+    end
+    return getExtStateValue("allowNonCanonicalLaunch") == "1"
+end
+
+function PATH_STATE.joinPathLocal(sep, ...)
+    if PATH_STATE.helper and PATH_STATE.helper.joinPath then
+        return PATH_STATE.helper.joinPath(sep, ...)
+    end
+    local parts = { ... }
+    local out = ""
+    for _, part in ipairs(parts) do
+        if part and part ~= "" then
+            local p = tostring(part):gsub("[/\\]+", sep)
+            p = p:gsub(sep .. "+$", "")
+            if out == "" then
+                out = p
+            else
+                p = p:gsub("^" .. sep .. "+", "")
+                out = out .. sep .. p
+            end
+        end
+    end
+    return out
+end
+
+function PATH_STATE.shouldBlockNonCanonicalLaunch()
+    if PATH_STATE.allowNonCanonicalLaunch() then
+        return nil
+    end
+
+    local install = PATH_STATE.getInstallPathState()
+    if not install or not install.ok or not install.canonicalMismatch or install.canonical == "" then
+        return nil
+    end
+
+    local canonicalScript = PATH_STATE.joinPathLocal(install.sep or PATH_SEP, install.canonical, "scripts", "reaper", "STEMwerk.lua")
+    if canonicalScript == "" or not fileExists(canonicalScript) then
+        return nil
+    end
+
+    local currentScript = script_path .. "STEMwerk.lua"
+    if PATH_STATE.helper and PATH_STATE.helper.pathEquals and PATH_STATE.helper.pathEquals(currentScript, canonicalScript, OS) then
+        return nil
+    end
+
+    return {
+        currentScript = currentScript,
+        canonicalScript = canonicalScript,
+        install = install,
+    }
+end
+
+function PATH_STATE.formatNonCanonicalLaunchMessage(details)
+    local install = details and details.install or {}
+    return table.concat({
+        "STEMwerk was launched from a non-canonical script copy.",
+        "",
+        "Current script:",
+        tostring(details and details.currentScript or "(unknown)"),
+        "",
+        "Installed REAPER script:",
+        tostring(details and details.canonicalScript or install.canonical or "(unknown)"),
+        "",
+        "This usually means REAPER is running a stale copy, which can trigger false 'missing components' checks and CPU-only processing.",
+        "",
+        "Run STEMwerk from the REAPER Scripts/STEMwerk-reaper install, or reinstall STEMwerk.",
+        "",
+        "Development override: set STEMWERK_ALLOW_NONCANONICAL=1 or ExtState allowNonCanonicalLaunch=1."
+    }, "\n")
+end
+
+function PATH_STATE.guardNonCanonicalLaunch()
+    local details = PATH_STATE.shouldBlockNonCanonicalLaunch()
+    if not details then
+        return true
+    end
+    debugLog("Blocking non-canonical launch: current=" .. tostring(details.currentScript) .. " canonical=" .. tostring(details.canonicalScript))
+    reaper.ShowMessageBox(
+        PATH_STATE.formatNonCanonicalLaunchMessage(details),
+        "STEMwerk install mismatch",
+        0
+    )
+    return false
+end
+
 -- Get home directory (cross-platform)
 local function getHome()
     if OS == "Windows" then
@@ -827,7 +928,6 @@ local function sanitizeFriendlyName(name)
     lbl = lbl:gsub("%(%s*[Tt][Mm]%s*%)", "")
     lbl = lbl:gsub("%(%s*[Rr]%s*%)", "")
     lbl = lbl:gsub("[Aa][Mm][Dd]%s*[Rr]adeon%s*", "")
-    lbl = lbl:gsub("^RX%s*", "")
     lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*[Gg]e[Ff]orce%s*", "")
     lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*", "")
     lbl = lbl:gsub("[Ii][Nn][Tt][Ee][Ll]%s*", "")
@@ -1272,6 +1372,61 @@ local function buildDeviceNoteFromEnvJson(envJson, devices)
     return noteKey
 end
 
+local function formatBackendReasonForUi(reason, deviceName)
+    local text = tostring(reason or "")
+    if text == "" then return "" end
+
+    local normalizedDevice = tostring(deviceName or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+    local parts = {}
+    local seen = {}
+
+    for raw in text:gmatch("[^;]+") do
+        local part = tostring(raw or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local lower = part:lower()
+
+        if lower == "device_probe_failed" then
+            part = ""
+        elseif lower == "backend_install_failed" then
+            part = "Backend install failed; using CPU"
+        elseif lower == "backend_force_cpu" then
+            part = "CPU fallback forced"
+        elseif lower == "bootstrap_cuda_confirmed" then
+            part = "CUDA runtime confirmed"
+        elseif lower == "bootstrap_directml_confirmed" then
+            part = "DirectML runtime confirmed"
+        elseif lower == "device_name_probe_failed" then
+            part = "GPU model name could not be confirmed; the listed device may still work."
+        end
+
+        local normalizedPart = part:lower()
+        if normalizedPart ~= "" and normalizedPart ~= normalizedDevice and not seen[normalizedPart] then
+            seen[normalizedPart] = true
+            parts[#parts + 1] = part
+        end
+    end
+
+    return table.concat(parts, "; ")
+end
+
+local function backendTypeLabel(dev)
+    if not dev or not dev.id then return "" end
+    local id = tostring(dev.id)
+    if id == "auto" then return "Auto" end
+    if id == "cpu" then return "CPU" end
+    if dev.type == "directml" or id:match("^directml") then return "DirectML" end
+    if dev.type == "cuda" or id:match("^cuda") then
+        if OS == "Linux" then
+            local gpuName = string.lower(tostring(dev.fullName or dev.name or ""))
+            if gpuName:find("amd", 1, true) or gpuName:find("radeon", 1, true) or gpuName:find("gfx", 1, true) then
+                return "ROCm"
+            end
+        end
+        return "CUDA"
+    end
+    if dev.type == "mps" or id == "mps" then return "Apple MPS" end
+    return id
+end
+
 local function envJsonBool(envJson, key)
     if not envJson or envJson == "" or not key then return nil end
     if envJson:find('"' .. key .. '"%s*:%s*true') then return true end
@@ -1332,7 +1487,6 @@ function applyRuntimeDevicesFromParsed(devices, envJson, now)
         lbl = lbl:gsub("%(%s*[Tt][Mm]%s*%)", "")
         lbl = lbl:gsub("%(%s*[Rr]%s*%)", "")
         lbl = lbl:gsub("[Aa][Mm][Dd]%s*[Rr]adeon%s*", "")
-        lbl = lbl:gsub("^RX%s*", "")
         lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*[Gg]e[Ff]orce%s*", "")
         lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*", "")
         lbl = lbl:gsub("[Ii][Nn][Tt][Ee][Ll]%s*", "")
@@ -1558,21 +1712,9 @@ function startRuntimeDeviceProbeAsync(force)
         return false
     end
 
-    if not force and type(readCapabilities) == "function" then
-        local cap = readCapabilities()
-        if cap and cap.raw and cap.raw:find("STEMWERK_DEVICES_BEGIN") then
-            local devices, envJson, skipNote = parseDeviceListFromPythonOutput(cap.raw)
-            if devices then
-                local backendReason = cap.kv and cap.kv.BACKEND_REASON or ""
-                if backendReason and backendReason ~= "" then
-                    skipNote = (skipNote and (skipNote .. "\n\n") or "") .. "Backend: " .. tostring(backendReason)
-                end
-                RUNTIME_DEVICE_SKIP_NOTE = skipNote
-                applyRuntimeDevicesFromParsed(devices, envJson, os.time())
-                debugLog("=== Device probe: loaded from capabilities ===")
-                return false
-            end
-        end
+    if not force and applyCachedRuntimeDevices() then
+        debugLog("=== Device probe: loaded from capabilities ===")
+        return false
     end
 
     local function getTempDirEarly()
@@ -1641,25 +1783,42 @@ function startRuntimeDeviceProbeAsync(force)
             return tostring(s or ""):gsub('"', '""')
         end
 
-        local py = quoteArg(PYTHON_PATH)
-        local sep = quoteArg(SEPARATOR_SCRIPT)
-        local outQ = quoteArg(outFile)
-        local rcQ = quoteArg(rcFile)
-        local doneQ = quoteArg(doneFile)
-        local outLast = quoteArg(script_path .. "probe_out_last.txt")
-        local rcLast = quoteArg(script_path .. "probe_rc_last.txt")
+        local function escPsSingle(s)
+            return tostring(s or ""):gsub("'", "''")
+        end
 
-        local cmd1 = py .. " -u " .. sep .. " --list-devices-machine"
-        local cmd2 = py .. " -u " .. sep .. " --list-devices"
-        local cmdInner = cmd1 .. " >" .. outQ .. " 2>&1"
-            .. " & if errorlevel 1 " .. cmd2 .. " >" .. outQ .. " 2>&1"
-            .. " & echo %ERRORLEVEL% >" .. rcQ
-            .. " & echo DONE >" .. doneQ
-            .. " & copy /Y " .. outQ .. " " .. outLast .. " >nul"
-            .. " & copy /Y " .. rcQ .. " " .. rcLast .. " >nul"
+        local psPath = probeDir .. PATH_SEP .. "run_probe_hidden.ps1"
+        local psScript = io.open(psPath, "w")
+        if not psScript then
+            vbsFile:close()
+            debugLog("Async probe: failed to write PowerShell launcher")
+            RUNTIME_DEVICE_PROBE.active = false
+            return false
+        end
+
+        psScript:write("$ErrorActionPreference='SilentlyContinue'\n")
+        psScript:write("$py='" .. escPsSingle(PYTHON_PATH) .. "'\n")
+        psScript:write("$sep='" .. escPsSingle(SEPARATOR_SCRIPT) .. "'\n")
+        psScript:write("$out='" .. escPsSingle(outFile) .. "'\n")
+        psScript:write("$rc='" .. escPsSingle(rcFile) .. "'\n")
+        psScript:write("$done='" .. escPsSingle(doneFile) .. "'\n")
+        psScript:write("$outLast='" .. escPsSingle(script_path .. "probe_out_last.txt") .. "'\n")
+        psScript:write("$rcLast='" .. escPsSingle(script_path .. "probe_rc_last.txt") .. "'\n")
+        psScript:write("$arg1=@('-u',$sep,'--list-devices-machine')\n")
+        psScript:write("$arg2=@('-u',$sep,'--list-devices')\n")
+        psScript:write("$p=Start-Process -FilePath $py -ArgumentList $arg1 -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $out\n")
+        psScript:write("$exitCode=$p.ExitCode\n")
+        psScript:write("if ($exitCode -ne 0) { $p=Start-Process -FilePath $py -ArgumentList $arg2 -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $out; $exitCode=$p.ExitCode }\n")
+        psScript:write("Set-Content -Path $rc -Value $exitCode -Encoding ascii\n")
+        psScript:write("Set-Content -Path $done -Value 'DONE' -Encoding ascii\n")
+        psScript:write("Copy-Item -LiteralPath $out -Destination $outLast -Force -ErrorAction SilentlyContinue\n")
+        psScript:write("Copy-Item -LiteralPath $rc -Destination $rcLast -Force -ErrorAction SilentlyContinue\n")
+        psScript:close()
+
+        local psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' .. quoteArg(psPath)
 
         vbsFile:write('Set sh = CreateObject("WScript.Shell")' .. "\n")
-        vbsFile:write('cmd = "cmd.exe /S /C ""' .. escVbs(cmdInner) .. '"""' .. "\n")
+        vbsFile:write('cmd = "' .. escVbs(psCmd) .. '"' .. "\n")
         vbsFile:write('sh.Run cmd, 0, False' .. "\n")
         vbsFile:close()
 
@@ -1667,10 +1826,10 @@ function startRuntimeDeviceProbeAsync(force)
         local dbgPath = script_path .. "probe_debug_last.txt"
         local dbgF = io.open(dbgPath, "w")
         if dbgF then
-            dbgF:write("--- CMD inner (for device probe) ---\n")
-            dbgF:write(cmdInner .. "\n\n")
+            dbgF:write("--- PowerShell launcher (for device probe) ---\n")
+            dbgF:write(psCmd .. "\n\n")
             dbgF:write("--- VBS wrapper content (will run wscript) ---\n")
-            local vbsContent = 'Set sh = CreateObject("WScript.Shell")\n' .. 'cmd = "cmd.exe /S /C ""' .. escVbs(cmdInner) .. '"""\n' .. 'sh.Run cmd, 0, False\n'
+            local vbsContent = 'Set sh = CreateObject("WScript.Shell")\n' .. 'cmd = "' .. escVbs(psCmd) .. '"\n' .. 'sh.Run cmd, 0, False\n'
             dbgF:write(vbsContent .. "\n")
             dbgF:close()
         end
@@ -1726,6 +1885,57 @@ function startRuntimeDeviceProbeAsync(force)
     return true
 end
 
+local function extractCapabilityDeviceOutput(cap)
+    if not (cap and cap.raw) then return "" end
+
+    local deviceOut = cap.raw:match("DEVICES_OUTPUT_BEGIN\r?\n(.-)\r?\nDEVICES_OUTPUT_END")
+    if deviceOut and deviceOut ~= "" then
+        return deviceOut
+    end
+    if cap.raw:find("STEMWERK_CUDA_DEVICE", 1, true)
+        or cap.raw:find("STEMWERK_DML_DEVICE", 1, true)
+        or cap.raw:find("STEMWERK_MPS_DEVICE", 1, true)
+        or cap.raw:find("STEMWERK_DEVICE\t", 1, true)
+        or cap.raw:find("STEMWERK_ENV_JSON ", 1, true) then
+        return cap.raw
+    end
+
+    local kv = cap.kv or {}
+    local lines = {}
+    local envJson = tostring(kv.ENV_JSON or "")
+    local deviceNames = tostring(kv.DEVICE_NAMES or "")
+    local backend = tostring(kv.BACKEND or "")
+
+    if envJson ~= "" then
+        lines[#lines + 1] = "STEMWERK_ENV_JSON " .. envJson
+    end
+
+    local function addCsvDevices(prefix, idPrefix, fallbackLabel)
+        local idx = 0
+        for name in deviceNames:gmatch("[^,]+") do
+            local trimmed = tostring(name):gsub("^%s+", ""):gsub("%s+$", "")
+            if trimmed ~= "" then
+                lines[#lines + 1] = prefix .. "\t" .. idPrefix .. tostring(idx) .. "\t" .. trimmed
+                idx = idx + 1
+            end
+        end
+        if idx == 0 then
+            lines[#lines + 1] = prefix .. "\t" .. idPrefix .. "0\t" .. fallbackLabel
+        end
+    end
+
+    if backend == "cuda" then
+        addCsvDevices("STEMWERK_CUDA_DEVICE", "cuda:", "CUDA GPU 0")
+    elseif backend == "directml" then
+        addCsvDevices("STEMWERK_DML_DEVICE", "directml:", "DirectML GPU 0")
+        lines[#lines + 1] = "STEMWERK_DML_ALIAS\tdirectml\tdirectml:0"
+    elseif backend == "mps" then
+        lines[#lines + 1] = "STEMWERK_MPS_DEVICE\tmps\tApple MPS"
+    end
+
+    return table.concat(lines, "\n")
+end
+
 function pollRuntimeDeviceProbe()
     if not (RUNTIME_DEVICE_PROBE and RUNTIME_DEVICE_PROBE.active) then return false end
 
@@ -1763,23 +1973,8 @@ local function refreshRuntimeDevices(force)
         return
     end
 
-    if not force and type(readCapabilities) == "function" then
-        local cap = readCapabilities()
-        if cap and cap.raw and cap.raw:find("STEMWERK_DEVICES_BEGIN") then
-            local devices, envJson, skipNote = parseDeviceListFromPythonOutput(cap.raw)
-            if devices then
-                local backendReason = cap.kv and cap.kv.BACKEND_REASON or ""
-                if backendReason and backendReason ~= "" then
-                    skipNote = (skipNote and (skipNote .. "\n\n") or "") .. "Backend: " .. tostring(backendReason)
-                end
-                RUNTIME_DEVICE_SKIP_NOTE = skipNote
-                applyRuntimeDevicesFromParsed(devices, envJson, os.time())
-                if cap.kv and cap.kv.PROFILE then
-                    debugLog("Capabilities profile=" .. tostring(cap.kv.PROFILE) .. " backend=" .. tostring(cap.kv.BACKEND))
-                end
-                return
-            end
-        end
+    if not force and applyCachedRuntimeDevices() then
+        return
     end
 
     debugLog("=== Device probe: refreshRuntimeDevices() ===")
@@ -1801,23 +1996,21 @@ local function refreshRuntimeDevices(force)
         if out ~= "" then
             return rc, out
         end
-        if OS ~= "Windows" then
-            local h = io.popen(cmd .. " 2>&1")
-            if h then
-                local content = h:read("*a") or ""
-                local ok, _, code = h:close()
-                if ok == true then
-                    rc = 0
-                elseif type(code) == "number" then
-                    rc = code
-                else
-                    rc = rc or -1
-                end
-                if content ~= "" then
-                    debugLog("  probe io.popen used (rc=" .. tostring(rc) .. " outLen=" .. tostring(#content) .. ")")
-                end
-                return rc, content
+        local h = io.popen(cmd .. " 2>&1")
+        if h then
+            local content = h:read("*a") or ""
+            local ok, _, code = h:close()
+            if ok == true then
+                rc = 0
+            elseif type(code) == "number" then
+                rc = code
+            else
+                rc = rc or -1
             end
+            if content ~= "" then
+                debugLog("  probe io.popen used (rc=" .. tostring(rc) .. " outLen=" .. tostring(#content) .. ")")
+            end
+            return rc, content
         end
         return rc, out
     end
@@ -2049,6 +2242,42 @@ if env.get('directml_possible'):
         SETTINGS.device = "auto"
         saveSettings()
     end
+end
+
+function applyCachedRuntimeDevices()
+    if type(readCapabilities) ~= "function" then
+        return false
+    end
+    local cap = readCapabilities()
+    if not cap then
+        return false
+    end
+
+    local cachedOut = extractCapabilityDeviceOutput(cap)
+    if cachedOut == "" then
+        return false
+    end
+
+    local devices, envJson, skipNote = parseDeviceListFromPythonOutput(cachedOut)
+    if not devices then
+        return false
+    end
+
+    local backendReason = cap.kv and cap.kv.BACKEND_REASON or ""
+    local backendReasonLabel = formatBackendReasonForUi(backendReason)
+    if backendReasonLabel ~= "" then
+        local backendLabel = "Backend"
+        if type(T) == "function" then
+            backendLabel = T("backend_label") or backendLabel
+        end
+        skipNote = (skipNote and (skipNote .. "\n\n") or "") .. backendLabel .. ": " .. tostring(backendReasonLabel)
+    end
+    RUNTIME_DEVICE_SKIP_NOTE = skipNote
+    applyRuntimeDevicesFromParsed(devices, envJson, os.time())
+    if cap.kv and cap.kv.PROFILE then
+        debugLog("Capabilities profile=" .. tostring(cap.kv.PROFILE) .. " backend=" .. tostring(cap.kv.BACKEND))
+    end
+    return true
 end
 
 -- Available models
@@ -8558,7 +8787,7 @@ local function artGalleryLoop()
             -- Title changes dynamically; find by current title first, then by stable prefix.
             hwnd = reaper.JS_Window_Find(currentTitle, true)
                 or reaper.JS_Window_Find("STEMwerk -", false)
-                or reaper.JS_Window_Find("STEMwerk Art Gallery", true)
+                or reaper.JS_Window_Find("STEMwerk Art Gallery (v2.2.1.1)", true)
         end
         if hwnd then
             helpState.hwnd = hwnd
@@ -8586,7 +8815,7 @@ local function artGalleryLoop()
         end
         if (not captured) and (not lastDialogX or not lastDialogY) then
             if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry("STEMwerk Art Gallery")
+                captureWindowGeometry("STEMwerk Art Gallery (v2.2.1.1)")
             end
         end
         -- Save settings before closing
@@ -8620,7 +8849,7 @@ local function artGalleryLoop()
         end
         if (not captured) and (not lastDialogX or not lastDialogY) then
             if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry("STEMwerk Art Gallery")
+                captureWindowGeometry("STEMwerk Art Gallery (v2.2.1.1)")
             end
         end
         saveSettings()
@@ -8655,10 +8884,10 @@ local function showArtGallery()
     artGalleryState.lastMouseWheel = 0
 
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init("STEMwerk Art Gallery", winW, winH, 0, winX, winY)
+    gfx.init("STEMwerk Art Gallery (v2.2.1.1)", winW, winH, 0, winX, winY)
     helpState.hwnd = nil
     if reaper.JS_Window_Find then
-        helpState.hwnd = reaper.JS_Window_Find("STEMwerk Art Gallery", true)
+        helpState.hwnd = reaper.JS_Window_Find("STEMwerk Art Gallery (v2.2.1.1)", true)
     end
     reaper.defer(artGalleryLoop)
 end
@@ -10219,8 +10448,14 @@ function buildResultMessageLines()
     if data.kind == "multi_new_tracks" then
         local stemsCreated = data.stemsCreated or 0
         local srcCount = data.sourceCount or 0
+        local sourceKind = data.sourceKind or "tracks"
         local stemWord = trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
-        local srcWord = trPlural(srcCount, "result_source_track_one", "result_source_track_many", "source track", "source tracks")
+        local srcWord
+        if sourceKind == "items" then
+            srcWord = trPlural(srcCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
+        else
+            srcWord = trPlural(srcCount, "result_source_track_one", "result_source_track_many", "source track", "source tracks")
+        end
         local line1 = string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, srcCount, srcWord)
 
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
@@ -11025,10 +11260,6 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         return nvidia, other
     end
 
-    for _, d in ipairs(DEVICES) do
-        addDevice(d, false)
-    end
-
     if RUNTIME_DEVICES then
         for _, rd in ipairs(RUNTIME_DEVICES) do
             if rd and rd.id then
@@ -11046,6 +11277,10 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
                 end
             end
         end
+    else
+        for _, d in ipairs(DEVICES) do
+            addDevice(d, false)
+        end
     end
 
     if RUNTIME_DEVICES and RUNTIME_DEVICE_PROBE_DEBUG == "ok" then
@@ -11058,40 +11293,54 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         deviceList = filtered
     end
 
-    -- If the runtime probe failed, prune placeholder CUDA/DML entries based on actual GPU counts.
-    if OS == "Windows" and RUNTIME_DEVICE_PROBE_DEBUG ~= "ok" then
-        local names = getWindowsGpuNames()
-        local nvidia, _ = splitGpuNames(names)
-        local totalCount = #names
-        local nvidiaCount = #nvidia
+    local function hasNumberedDevice(prefix)
+        for _, d in ipairs(deviceList) do
+            if d.id and tostring(d.id):match("^" .. prefix .. ":%d+$") then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function firstNumberedDeviceId(prefix)
+        for _, d in ipairs(deviceList) do
+            if d.id and tostring(d.id):match("^" .. prefix .. ":%d+$") then
+                return d.id
+            end
+        end
+        return nil
+    end
+
+    -- Hide legacy alias devices (directml/cuda) when numbered devices exist.
+    local hasDirectmlNumbered = hasNumberedDevice("directml")
+    local hasCudaNumbered = hasNumberedDevice("cuda")
+    if hasDirectmlNumbered or hasCudaNumbered then
         local filtered = {}
         for _, d in ipairs(deviceList) do
             local id = tostring(d.id or "")
-            local isCuda = d.type == "cuda" or id:match("^cuda")
-            local isDml = d.type == "directml" or id:match("^directml")
-            if isCuda then
-                if nvidiaCount > 0 then
-                    local idx = tonumber(id:match(":(%d+)$")) or 0
-                    if id == "cuda" then idx = 0 end
-                    if idx < nvidiaCount then
-                        filtered[#filtered + 1] = d
-                    end
-                end
-            elseif isDml then
-                if totalCount > 0 then
-                    local idx = tonumber(id:match(":(%d+)$")) or 0
-                    if id == "directml" then idx = 0 end
-                    if idx < totalCount then
-                        filtered[#filtered + 1] = d
-                    end
-                else
-                    filtered[#filtered + 1] = d
-                end
+            if (id == "directml" and hasDirectmlNumbered) or (id == "cuda" and hasCudaNumbered) then
+                -- skip alias
             else
                 filtered[#filtered + 1] = d
             end
         end
         deviceList = filtered
+    end
+
+    if SETTINGS and SETTINGS.device then
+        if SETTINGS.device == "directml" then
+            local mapped = firstNumberedDeviceId("directml")
+            if mapped then
+                SETTINGS.device = mapped
+                if saveSettings then saveSettings() end
+            end
+        elseif SETTINGS.device == "cuda" then
+            local mapped = firstNumberedDeviceId("cuda")
+            if mapped then
+                SETTINGS.device = mapped
+                if saveSettings then saveSettings() end
+            end
+        end
     end
 
     -- Load optional device map so placeholders and runtime devices can show friendly names.
@@ -11243,16 +11492,11 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
             end
             base = "GPU" .. tostring(idx)
         end
-        local prefix = deviceBackendPrefix(dev)
-        if prefix == "ROCm" then
+        if deviceBackendPrefix(dev) == "ROCm" then
             local short = rocmShortName(base)
             if short and short ~= "" then
                 return short
             end
-            return base ~= "" and base or (dev.name or dev.id)
-        end
-        if prefix then
-            return prefix .. " " .. base
         end
         return base ~= "" and base or (dev.name or dev.id)
     end
@@ -11362,10 +11606,6 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         if device.id then
             local isGpuLike = (tostring(device.id):match("^cuda:%d+$") or tostring(device.id):match("^directml:%d+$") or device.type == "cuda" or device.type == "directml")
             if isGpuLike then
-                local hint = T("device_hint")
-                if hint and hint ~= "" then
-                    tip = tostring(tip or "") .. "\n\n" .. tostring(hint)
-                end
                 if WINDOWS_GPU_NAME_STATUS then
                     local nameTip = T(WINDOWS_GPU_NAME_STATUS) or tostring(WINDOWS_GPU_NAME_STATUS)
                     if nameTip and nameTip ~= "" then
@@ -11378,18 +11618,12 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         if (device.id == "auto" or device.id == "cpu") and RUNTIME_DEVICE_SKIP_NOTE and RUNTIME_DEVICE_SKIP_NOTE ~= "" then
             tip = tostring(tip or "") .. "\n\n" .. tostring(RUNTIME_DEVICE_SKIP_NOTE)
         end
+        if tostring(device.id) == "auto" and RUNTIME_DEVICE_NOTE_KEY and T(RUNTIME_DEVICE_NOTE_KEY)
+            and RUNTIME_DEVICE_NOTE_KEY ~= "device_note_probe_failed" then
+            tip = tostring(tip or "") .. "\n\n" .. tostring(T(RUNTIME_DEVICE_NOTE_KEY))
+        end
         -- Also append the resolved backend string so users see what the separator will use.
         if device.id then
-            local function backendLabelFromName(name, id)
-                if name and name ~= "" then
-                    return cleanDeviceLabel(name)
-                end
-                if id and tostring(id):match("^directml:%d+$") then
-                    return tostring(id)
-                end
-                return id and tostring(id) or ""
-            end
-
             local backend_label = nil
             if tostring(device.id) == "auto" then
                 local bestDevice = nil
@@ -11402,21 +11636,21 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
                     end
                 end
                 if bestDevice then
-                    local bestLabel = backendLabelFromName(bestDevice.fullName or bestDevice.name, bestDevice.id)
+                    local bestLabel = backendTypeLabel(bestDevice)
                     backend_label = (T("best_device_label") or "Best device") .. ": " .. bestLabel
-                else
-                    backend_label = "Auto"
                 end
             else
-                backend_label = backendLabelFromName(device.fullName, device.id)
+                backend_label = backendTypeLabel(device)
             end
 
-            local backend_prefix = T("backend_label") or "Backend"
-            tip = tostring(tip or "") .. "\n\n" .. backend_prefix .. ": " .. backend_label
+            if backend_label and backend_label ~= "" then
+                local backend_prefix = T("backend_label") or "Backend"
+                tip = tostring(tip or "") .. "\n\n" .. backend_prefix .. ": " .. backend_label
+            end
         end
         local chosen_prefix = T("chosen_device_label") or "Chosen device"
         local chosen_label = chosenDeviceLabel()
-        if chosen_label and chosen_label ~= "" then
+        if tostring(device.id) == "auto" and chosen_label and chosen_label ~= "" then
             tip = tostring(tip or "") .. "\n\n" .. chosen_prefix .. ": " .. chosen_label
         end
         setTooltip(col4X, deviceY, deviceBoxW, btnH, tip)
@@ -11437,10 +11671,6 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         headerTip = T(RUNTIME_DEVICE_NOTE_KEY)
     else
         headerTip = T("device_note_probe_failed")
-    end
-    local hint = T("device_hint")
-    if hint and hint ~= "" then
-        headerTip = (headerTip and (tostring(headerTip) .. "\n\n") or "") .. tostring(hint)
     end
     if WINDOWS_GPU_NAME_STATUS then
         local nameTip = T(WINDOWS_GPU_NAME_STATUS) or tostring(WINDOWS_GPU_NAME_STATUS)
@@ -11563,6 +11793,7 @@ end
 local function resolveTimeSelectionTargets()
     local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     if startTime >= endTime then return nil end
+    local minOverlapSec = 1 / 100
 
     local soloActive = getProcessingSoloActive()
     local selItemCount = reaper.CountSelectedMediaItems(0) or 0
@@ -11578,16 +11809,18 @@ local function resolveTimeSelectionTargets()
         local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
         local iEnd = iPos + iLen
         if iPos < endTime and iEnd > startTime then
-            rawOverlap = rawOverlap + 1
-            if AUDIBILITY.isItemAudible(item, soloActive) then
-                local overlapStart = math.max(iPos, startTime)
-                local overlapEnd = math.min(iEnd, endTime)
-                local overlapLen = math.max(0, overlapEnd - overlapStart)
+            local overlapStart = math.max(iPos, startTime)
+            local overlapEnd = math.min(iEnd, endTime)
+            local overlapLen = math.max(0, overlapEnd - overlapStart)
+            if overlapLen > minOverlapSec then
+                rawOverlap = rawOverlap + 1
+                if AUDIBILITY.isItemAudible(item, soloActive) then
                 items[#items + 1] = { item = item, track = track, start = overlapStart, ["end"] = overlapEnd, len = overlapLen }
                 if not trackItems[track] then
                     trackItems[track] = {}
                 end
                 trackItems[track][#trackItems[track] + 1] = { item = item, track = track, start = overlapStart, ["end"] = overlapEnd, len = overlapLen }
+                end
             end
         end
     end
@@ -11885,34 +12118,66 @@ buildFooterLines = function()
         if (n or 0) == 1 then return trSafe("stem", "stem") end
         return trSafe("stems", "stems")
     end
+    local function stemTrackUnit(n)
+        return trSingularPlural(n, "footer_stem_track", "footer_stem_tracks")
+    end
+    local function stemFolderUnit(n)
+        return trSingularPlural(n, "footer_stem_folder", "footer_stem_folders")
+    end
 
     if stemsPerTrack == 0 then
         outLine = "[!] " .. (T("no_stems_selected") or "No Stems Selected")
         locLine = T("please_select_stem") or "Please select stems in the center column."
     else
         if viaTimeSelection then
+            local folderCountOut = summary.targetCount
             local totalOutputStems = summary.outputStems
-            outLine = trFmt(
-                "footer_line_output_time",
-                "Output: %d %s from time selection",
-                totalOutputStems,
-                stemUnit(totalOutputStems)
-            )
+            if SETTINGS.createNewTracks and SETTINGS.createFolder and folderCountOut > 0 then
+                outLine = trFmt(
+                    "footer_line_output_time_folders",
+                    "Output: %d %s, %d %s from time selection",
+                    folderCountOut,
+                    stemFolderUnit(folderCountOut),
+                    totalOutputStems,
+                    stemTrackUnit(totalOutputStems)
+                )
+            else
+                outLine = trFmt(
+                    "footer_line_output_time",
+                    "Output: %d %s from time selection",
+                    totalOutputStems,
+                    stemUnit(totalOutputStems)
+                )
+            end
             if timeSelText and timeSelText ~= "" then
                 outLine = outLine .. " · " .. timeSelText
             end
         elseif SETTINGS.createNewTracks then
+            local folderCountOut = summary.targetCount
             local trackCountOut = summary.targetCount
             local totalOutputStems = summary.outputStems
             local trackUnitOut = trSingularPlural(trackCountOut, "footer_track", "footer_tracks")
-            outLine = trFmt(
-                "footer_line_output_tracks",
-                "Output: %d %s from %d %s",
-                totalOutputStems,
-                stemUnit(totalOutputStems),
-                trackCountOut,
-                trackUnitOut
-            )
+            if SETTINGS.createFolder and folderCountOut > 0 then
+                outLine = trFmt(
+                    "footer_line_output_tracks_folders",
+                    "Output: %d %s, %d %s from %d %s",
+                    folderCountOut,
+                    stemFolderUnit(folderCountOut),
+                    totalOutputStems,
+                    stemTrackUnit(totalOutputStems),
+                    trackCountOut,
+                    trackUnitOut
+                )
+            else
+                outLine = trFmt(
+                    "footer_line_output_tracks",
+                    "Output: %d %s from %d %s",
+                    totalOutputStems,
+                    stemUnit(totalOutputStems),
+                    trackCountOut,
+                    trackUnitOut
+                )
+            end
         else
             local itemCountOut = summary.targetCount
             local itemDurOut = selItemDur
@@ -13078,13 +13343,24 @@ showStemSelectionDialog = function()
     GUI.result = nil
     GUI.wasMouseDown = false
     GUI.hadSelectionOnOpen = true  -- Dialog was opened with valid selection, don't auto-close
-    -- Device list probe can be slow (imports torch). Run it async so the window appears immediately.
-    startRuntimeDeviceProbeAsync(true)
-    perfMark("showStemSelectionDialog(): async device probe started")
+
+    -- Keep startup non-blocking: seed a safe device list immediately and do runtime probing
+    -- only after the window is already visible.
+    if not RUNTIME_DEVICES then
+        RUNTIME_DEVICES = runtimeDeviceSafeList()
+    end
 
     local dialogW, dialogH, posX, posY = GUI.applyLiveGeometry(840, 600)
     gfx.init(SCRIPT_NAME, dialogW, dialogH, 0, posX, posY)
     perfMark("showStemSelectionDialog(): gfx.init done (window visible)")
+
+    reaper.defer(function()
+        if applyCachedRuntimeDevices() then
+            perfMark("showStemSelectionDialog(): cached devices applied")
+        else
+            perfMark("showStemSelectionDialog(): cached devices unavailable")
+        end
+    end)
 
     -- Make window resizable (requires js_ReaScriptAPI extension)
     makeWindowResizable()
@@ -13207,31 +13483,67 @@ end
 -- Returns: ok(bool), ffmpegLogPath(string), exitCode(number|nil)
 local function runFfmpegExtract(sourceFile, offsetSec, durationSec, outputPath)
     local logPath = tostring(outputPath) .. ".ffmpeg.log"
-    -- Keep output quiet in REAPER; log errors for us.
     local ffmpegBin = FFMPEG_PATH or "ffmpeg"
-    local cmd = string.format(
-        '%s -y -hide_banner -nostats -loglevel error -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s"',
-        quoteArg(ffmpegBin), sourceFile, offsetSec, durationSec, outputPath
-    )
 
     local exitCode = nil
-    if OS ~= "Windows" then
+    if OS == "Windows" then
+        local psPath = tostring(outputPath) .. ".ffmpeg.ps1"
+        local vbsPath = tostring(outputPath) .. ".ffmpeg.vbs"
+        local rcPath = tostring(outputPath) .. ".ffmpeg.rc"
+
+        local function escPsSingle(s)
+            return tostring(s or ""):gsub("'", "''")
+        end
+
+        local psFile = io.open(psPath, "w")
+        if psFile then
+            psFile:write("$ErrorActionPreference='SilentlyContinue'\n")
+            psFile:write("$ff='" .. escPsSingle(ffmpegBin) .. "'\n")
+            psFile:write("$src='" .. escPsSingle(sourceFile) .. "'\n")
+            psFile:write("$out='" .. escPsSingle(outputPath) .. "'\n")
+            psFile:write("$log='" .. escPsSingle(logPath) .. "'\n")
+            psFile:write("$rc='" .. escPsSingle(rcPath) .. "'\n")
+            psFile:write("$args=@('-y','-hide_banner','-nostats','-loglevel','error','-i',$src,'-ss','" .. string.format("%.6f", offsetSec) .. "','-t','" .. string.format("%.6f", durationSec) .. "','-ar','44100','-ac','2',$out)\n")
+            psFile:write("$p=Start-Process -FilePath $ff -ArgumentList $args -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $log -RedirectStandardError $log\n")
+            psFile:write("Set-Content -Path $rc -Value $p.ExitCode -Encoding ascii\n")
+            psFile:close()
+
+            local vbsFile = io.open(vbsPath, "w")
+            if vbsFile then
+                local psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' .. quoteArg(psPath)
+                vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
+                vbsFile:write('sh.Run "' .. psCmd:gsub('"', '""') .. '", 0, True\n')
+                vbsFile:close()
+
+                local wscriptCmd = 'wscript "' .. vbsPath .. '"'
+                if reaper and reaper.ExecProcess then
+                    reaper.ExecProcess(wscriptCmd, 0)
+                else
+                    os.execute(wscriptCmd)
+                end
+
+                exitCode = SW_LOG.readExitCode(rcPath)
+            end
+        end
+
+        os.remove(psPath)
+        os.remove(vbsPath)
+        os.remove(rcPath)
+    else
+        local cmd = string.format(
+            '%s -y -hide_banner -nostats -loglevel error -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s"',
+            quoteArg(ffmpegBin), sourceFile, offsetSec, durationSec, outputPath
+        )
         -- On Unix, os.execute uses /bin/sh so redirection works.
         local ok, _, code = os.execute(cmd .. ' >"' .. logPath .. '" 2>&1')
         if ok == true then exitCode = 0
         elseif type(code) == "number" then exitCode = code
-	else
-	    -- Best-effort on Windows: run via cmd.exe so redirection works (still hidden via execHidden).
-	    -- Note: cmd quoting is a bit different; this is diagnostic, not performance-critical.
-	    local winCmd = 'cmd /c ' .. quoteArg(cmd .. ' >' .. quoteArg(logPath) .. ' 2>&1')
-	    execHidden(winCmd)
-	    -- We don't get a reliable exit code from execHidden here.
-	end
+        end
+    end
 
     local sz = fileSizeBytes(outputPath)
     local ok = (sz and sz > 1024)
     return ok, logPath, exitCode
-end
 end
 
 -- Fallback extractor: render audio from REAPER itself (no ffmpeg dependency).
@@ -13260,12 +13572,52 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
         return false, "Failed to create take audio accessor"
     end
 
+    local ownerItem = reaper.GetMediaItemTake_Item and reaper.GetMediaItemTake_Item(take) or nil
+    local ownerPos = ownerItem and reaper.ValidatePtr(ownerItem, "MediaItem*") and reaper.GetMediaItemInfo_Value(ownerItem, "D_POSITION") or nil
+    local ownerLen = ownerItem and reaper.ValidatePtr(ownerItem, "MediaItem*") and reaper.GetMediaItemInfo_Value(ownerItem, "D_LENGTH") or nil
+    local ownerEnd = (ownerPos and ownerLen) and (ownerPos + ownerLen) or nil
+    local accStart = reaper.GetAudioAccessorStartTime and reaper.GetAudioAccessorStartTime(acc) or nil
+    local accEnd = reaper.GetAudioAccessorEndTime and reaper.GetAudioAccessorEndTime(acc) or nil
+    local eps = 1e-5
+    local requestStart = startTime
+    local requestEnd = endTime
+    local sampleStart = requestStart
+    local sampleEnd = requestEnd
+    local sampleMode = "project"
+
+    if accStart and accEnd then
+        local function fitsAccessor(rangeStart, rangeEnd)
+            return rangeStart >= (accStart - eps) and rangeEnd <= (accEnd + eps)
+        end
+
+        local function fitsAsItemLocal()
+            if not ownerPos or not ownerEnd then return false end
+            if requestStart < (ownerPos - eps) or requestEnd > (ownerEnd + eps) then return false end
+            local localStart = accStart + math.max(0, requestStart - ownerPos)
+            local localEnd = accStart + math.max(0, requestEnd - ownerPos)
+            return fitsAccessor(localStart, localEnd), localStart, localEnd
+        end
+
+        if not fitsAccessor(sampleStart, sampleEnd) then
+            local localFits, localStart, localEnd = fitsAsItemLocal()
+            if localFits then
+                sampleStart = localStart
+                sampleEnd = localEnd
+                sampleMode = "item-local"
+            else
+                sampleStart = math.max(accStart, sampleStart)
+                sampleEnd = math.min(accEnd, sampleEnd)
+                sampleMode = "clamped-project"
+            end
+        end
+    end
+
     -- Try to set bounds when available (not required, but can improve correctness).
     if reaper.GetSet_AudioAccessorStartTime then
-        pcall(function() reaper.GetSet_AudioAccessorStartTime(acc, true, startTime) end)
+        pcall(function() reaper.GetSet_AudioAccessorStartTime(acc, true, sampleStart) end)
     end
     if reaper.GetSet_AudioAccessorEndTime then
-        pcall(function() reaper.GetSet_AudioAccessorEndTime(acc, true, endTime) end)
+        pcall(function() reaper.GetSet_AudioAccessorEndTime(acc, true, sampleEnd) end)
     end
 
     local f = io.open(outputPath, "wb")
@@ -13300,7 +13652,7 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
     local blockFrames = 8192
     local buf = reaper.new_array(blockFrames * ch)
     local framesWritten = 0
-    local curTime = startTime
+    local curTime = sampleStart
 
     while framesWritten < totalFrames do
         local need = math.min(blockFrames, totalFrames - framesWritten)
@@ -13336,7 +13688,16 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
     f:close()
 
     if dataBytes <= 0 then
-        return false, "AudioAccessor rendered 0 samples"
+        return false, string.format(
+            "AudioAccessor rendered 0 samples (requested %.6f..%.6f, sampled %.6f..%.6f, mode %s, accessor %.6f..%.6f)",
+            tonumber(startTime) or -1,
+            tonumber(endTime) or -1,
+            tonumber(sampleStart) or -1,
+            tonumber(sampleEnd) or -1,
+            tostring(sampleMode),
+            tonumber(accStart) or -1,
+            tonumber(accEnd) or -1
+        )
     end
     return true, nil
 end
@@ -13348,27 +13709,23 @@ function execHidden(cmd)
     debugLog("execHidden called")
     debugLog("  Command: " .. cmd:sub(1, 200) .. (cmd:len() > 200 and ".." or ""))
     if OS == "Windows" then
-        -- Prefer direct ExecProcess (no console windows). Note: shell redirection (2>nul)
-        -- only works via cmd.exe, so strip it when running without cmd.
-        if reaper and reaper.ExecProcess then
-            local directCmd = cmd
-            directCmd = directCmd:gsub("%s+2>nul%s*$", "")
-            debugLog("  Using reaper.ExecProcess (direct)")
-            reaper.ExecProcess(directCmd, 0)  -- wait for completion
+        local directCmd = tostring(cmd or "")
+        directCmd = directCmd:gsub("%s+2>nul%s*$", "")
+
+        if reaper and reaper.ExecProcess and not SW_LOG.commandNeedsWindowsShell(directCmd) then
+            debugLog("  Using reaper.ExecProcess (direct, no shell)")
+            reaper.ExecProcess(directCmd, 0)
             debugLog("  Command completed")
             return
         end
-        -- Use a temporary VBS file to run the command hidden
+
+        -- Fall back to a temporary VBS wrapper and execute the original command string
+        -- directly, without nesting it inside another cmd.exe /c layer.
         local tempDir = os.getenv("TEMP") or os.getenv("TMP") or "."
         local vbsPath = tempDir .. "\\STEMwerk_exec_" .. os.time() .. ".vbs"
         debugLog("  VBS path: " .. vbsPath)
         local vbsFile = io.open(vbsPath, "w")
         if vbsFile then
-            -- Run without cmd.exe to avoid console windows.
-            -- Also strip cmd-only redirections like `2>nul`.
-            local directCmd = cmd:gsub("%s+2>nul%s*$", "")
-
-            -- Window style 0 = hidden. Exec gives us a process object so we can wait.
             vbsFile:write('On Error Resume Next\n')
             vbsFile:write('Dim sh, p\n')
             vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
@@ -13380,10 +13737,10 @@ function execHidden(cmd)
             debugLog("  VBS file created")
 
             if reaper.ExecProcess then
-                debugLog("  Using reaper.ExecProcess")
+                debugLog("  Using reaper.ExecProcess via hidden wscript wrapper")
                 reaper.ExecProcess('wscript "' .. vbsPath .. '"', 0)  -- 0 = wait for completion
             else
-                debugLog("  Using os.execute")
+                debugLog("  Using os.execute via hidden wscript wrapper")
                 os.execute('wscript "' .. vbsPath .. '"')
             end
             debugLog("  Command completed")
@@ -13405,7 +13762,7 @@ end
 
 -- Render selected item to a temporary WAV file
 -- If time selection exists and overlaps item, only render that portion
-local function renderItemToWav(item, outputPath)
+local function renderItemToWav(item, outputPath, explicitRenderStart, explicitRenderEnd)
     local take = reaper.GetActiveTake(item)
     if not take then return nil, "No active take" end
 
@@ -13429,10 +13786,13 @@ local function renderItemToWav(item, outputPath)
     local timeSelStart, timeSelEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     local hasTimeSel = timeSelectionMode and (timeSelEnd > timeSelStart)
 
-    local renderStart = itemPos
-    local renderEnd = itemEnd
+    local renderStart = explicitRenderStart or itemPos
+    local renderEnd = explicitRenderEnd or itemEnd
 
-    if hasTimeSel then
+    if explicitRenderStart and explicitRenderEnd then
+        renderStart = math.max(itemPos, explicitRenderStart)
+        renderEnd = math.min(itemEnd, explicitRenderEnd)
+    elseif hasTimeSel then
         -- Clamp time selection to item bounds
         if timeSelStart > itemPos and timeSelStart < itemEnd then
             renderStart = timeSelStart
@@ -13451,8 +13811,42 @@ local function renderItemToWav(item, outputPath)
     -- Calculate source file offset and duration
     local renderOffset = takeOffset + (renderStart - itemPos) * playrate
     local renderDuration = (renderEnd - renderStart) * playrate
-    if not renderDuration or renderDuration <= 0.0 then
+    if not renderDuration or renderDuration <= (1 / 100) then
         return nil, "Selection is empty (0s). Make a longer time selection or pick an item with length.", nil
+    end
+
+    local isPartialSlice = (math.abs(renderStart - itemPos) > 0.0001) or (math.abs(renderEnd - itemEnd) > 0.0001)
+    if isPartialSlice then
+        debugLog(string.format(
+            "renderItemToWav partial slice: itemPos=%.6f itemEnd=%.6f renderStart=%.6f renderEnd=%.6f takeOffset=%.6f playrate=%.6f sourceOffset=%.6f duration=%.6f source=%s",
+            tonumber(itemPos) or 0,
+            tonumber(itemEnd) or 0,
+            tonumber(renderStart) or 0,
+            tonumber(renderEnd) or 0,
+            tonumber(takeOffset) or 0,
+            tonumber(playrate) or 1,
+            tonumber(renderOffset) or 0,
+            tonumber(renderDuration) or 0,
+            tostring(sourceFile)
+        ))
+    end
+
+    -- Partial slices must reflect the item/take as arranged in REAPER, including split
+    -- context and item-local offsets. Prefer AudioAccessor there; keep ffmpeg as the fast
+    -- path for full-item extracts.
+    if isPartialSlice then
+        local accOk, accErr = renderTakeAccessorToWav(take, renderStart, renderEnd, outputPath)
+        if accOk and fileSizeBytes(outputPath) > 1024 then
+            return outputPath, nil, renderStart, renderEnd - renderStart
+        end
+        if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
+            os.remove(outputPath)
+        end
+        local ok, ffmpegLog = runFfmpegExtract(sourceFile, renderOffset, renderDuration, outputPath)
+        if ok then
+            return outputPath, nil, renderStart, renderEnd - renderStart
+        end
+        return nil, "Failed to extract partial audio slice. AudioAccessor: " .. tostring(accErr) .. "; ffmpeg log: " .. tostring(ffmpegLog), nil
     end
 
     -- Prefer ffmpeg (fast). If it fails, fall back to REAPER AudioAccessor (robust).
@@ -13461,8 +13855,11 @@ local function renderItemToWav(item, outputPath)
         return outputPath, nil, renderStart, renderEnd - renderStart
     end
     local accOk, accErr = renderTakeAccessorToWav(take, renderStart, renderEnd, outputPath)
-    if accOk then
+    if accOk and fileSizeBytes(outputPath) > 1024 then
         return outputPath, nil, renderStart, renderEnd - renderStart
+    end
+    if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
+        os.remove(outputPath)
     end
     return nil, "Failed to extract audio (ffmpeg produced empty output). See: " .. tostring(ffmpegLog) .. (accErr and ("\nAudioAccessor: " .. tostring(accErr)) or ""), nil
 end
@@ -13764,6 +14161,7 @@ end
 -- Progress window state
 local progressState = {
     running = false,
+    windowOpen = false,
     outputDir = nil,
     stdoutFile = nil,
     logFile = nil,
@@ -13780,6 +14178,28 @@ local progressState = {
     terminalScrollPos = 0,
     lastTerminalUpdate = 0,
 }
+
+local function showProcessingWindow(stage, percent)
+    if stage and stage ~= "" then
+        progressState.stage = stage
+    end
+    if percent ~= nil then
+        progressState.percent = tonumber(percent) or progressState.percent or 0
+    end
+    if not progressState.startTime or progressState.startTime == 0 then
+        progressState.startTime = os.time()
+    end
+
+    if not progressState.windowOpen then
+        local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
+        gfx.init("STEMwerk - Processing.. (v2.2.1.1)", winW, winH, 0, winX, winY)
+        progressWindowResizableSet = false
+        progressState.windowOpen = true
+    end
+
+    drawProgressWindow()
+    gfx.update()
+end
 
 -- Multi-track queue state (declared early for access in drawProgressWindow)
 local multiTrackQueue = {
@@ -13932,7 +14352,7 @@ local function makeProgressWindowResizable()
     if progressWindowResizableSet then return true end
     if not reaper.JS_Window_Find then return false end
 
-    local hwnd = reaper.JS_Window_Find("STEMwerk - Processing..", true)
+    local hwnd = reaper.JS_Window_Find("STEMwerk - Processing.. (v2.2.1.1)", true)
     if not hwnd then return false end
 
     local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
@@ -14761,12 +15181,35 @@ local function drawProgressWindow()
 end
 
 -- Refactor flow helpers into module-like namespaces to reduce top-level locals.
-local WORKFLOW = {}
-local HELPERS = {}
-local UI = {}
+WORKFLOW = WORKFLOW or {}
+HELPERS = HELPERS or {}
+UI = UI or {}
+
+function HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stemName)
+    local trackBase = tostring(sourceTrackName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local itemBase = tostring(sourceItemName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local stemBase = tostring(stemName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+
+    if trackBase == "" then trackBase = "Track" end
+    if itemBase == "" then itemBase = trackBase end
+    if stemBase == "" then stemBase = "Stem" end
+
+    local takeName = itemBase .. " - " .. stemBase
+    local folderBase = trackBase
+    if itemBase ~= "" and itemBase ~= trackBase then
+        folderBase = trackBase .. " - " .. itemBase
+    end
+
+    return {
+        folderBase = folderBase,
+        trackName = folderBase .. " - " .. stemBase,
+        takeName = takeName,
+    }
+end
 
 -- Read latest progress from stdout file
 function WORKFLOW.updateProgressFromFile()
+    if not progressState.stdoutFile or progressState.stdoutFile == "" then return end
     local f = io.open(progressState.stdoutFile, "r")
     if not f then return end
 
@@ -14787,6 +15230,9 @@ end
 
 -- Check if separation process is done (check for done.txt marker file)
 function WORKFLOW.checkSeparationDone()
+    if not progressState.outputDir or progressState.outputDir == "" then
+        return false
+    end
     -- Check for done marker file
     local doneFile = io.open(progressState.outputDir .. PATH_SEP .. "done.txt", "r")
     if doneFile then
@@ -15060,7 +15506,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
                 "$outq=$dq + $out + $dq;" ..
                 "$modelq=$dq + $model + $dq;" ..
                 "$devq=$dq + $dev + $dq;" ..
-                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "'; " ..
+                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "'; " ..
                 "Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii; " ..
                 "Wait-Process -Id $p.Id; " ..
                 "$ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii; " ..
@@ -15189,13 +15635,14 @@ function WORKFLOW.progressLoop()
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Processing..")
+        captureWindowGeometry("STEMwerk - Processing.. (v2.2.1.1)")
         saveSettings()
 
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
         HELPERS.killProcessFromPidFile(progressState.pidFile)
 
         gfx.quit()
+        progressState.windowOpen = false
 
         -- After cancel, go back to the start/selection monitoring window.
         -- This lets the user quickly pick a new item/time selection without reopening the full dialog.
@@ -15208,10 +15655,11 @@ function WORKFLOW.progressLoop()
         progressState.running = false
 
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Processing..")
+        captureWindowGeometry("STEMwerk - Processing.. (v2.2.1.1)")
         saveSettings()
 
         gfx.quit()
+        progressState.windowOpen = false
         WORKFLOW.finishSeparationCallback()
         return
     end
@@ -15222,10 +15670,11 @@ function WORKFLOW.progressLoop()
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Processing..")
+        captureWindowGeometry("STEMwerk - Processing.. (v2.2.1.1)")
         saveSettings()
 
         gfx.quit()
+        progressState.windowOpen = false
         showMessage("Timeout", "Separation timed out after 10 minutes.", "error", true)
         return
     end
@@ -15286,10 +15735,6 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     loadSettings()
     updateTheme()
 
-    -- Capture main window geometry and snapshot for cancel -> main restore
-    captureWindowGeometry(SCRIPT_NAME)
-    GUI.snapshotMainGeometry()
-
     -- Start the process
     local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     if ok == false then
@@ -15297,9 +15742,29 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
         return
     end
 
-    local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
+    -- Capture main window geometry and snapshot for cancel -> main restore
+    captureWindowGeometry(SCRIPT_NAME)
+    GUI.snapshotMainGeometry()
+
+    -- Use same size as main dialog and open the Processing window only after the worker launched.
+    local winW = lastDialogW or 380
+    local winH = lastDialogH or 340
+    local winX, winY
+    if lastDialogX and lastDialogY then
+        winX = lastDialogX
+        winY = lastDialogY
+    else
+        local mouseX, mouseY = reaper.GetMousePosition()
+        winX = mouseX - winW / 2
+        winY = mouseY - winH / 2
+        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
+    end
+
     gfx.init("STEMwerk - Processing..", winW, winH, 0, winX, winY)
-    progressWindowResizableSet = false  -- Reset so we try to make it resizable
+    progressWindowResizableSet = false
+    progressState.windowOpen = true
+    progressState.stage = type(T) == "function" and (T("starting") or "Starting...") or "Starting..."
+
     progressState.running = true
 
     -- Start progress loop
@@ -15788,11 +16253,13 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
         if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end
     end
 
+    local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, "Stems")
+
     local folderTrack = nil
     if SETTINGS.createFolder then
         reaper.InsertTrackAtIndex(trackIdx, true)
         folderTrack = reaper.GetTrack(0, trackIdx)
-        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
+        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
         reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
         reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
         ensureTrackHeight(folderTrack)
@@ -15808,8 +16275,8 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
                 local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
                 ensureTrackHeight(newTrack)
 
-                local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
-                reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+                local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
+                reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
 
                 local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
                 reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
@@ -15820,8 +16287,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
 
                 local newTake = reaper.AddTakeToMediaItem(newItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
-                local newTakeName = sourceItemName .. " - " .. stem.name
-                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", newTakeName, true)
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
                 reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
 
                 importedCount = importedCount + 1
@@ -16110,8 +16576,6 @@ end
 function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack)
     reaper.Undo_BeginBlock()
     lastNoAudibleOverlap = false
-    -- Track/folder identity must stay track-based in all workflows.
-    useItemNameForTrack = false
     local soloActive = getProcessingSoloActive()
     local function trackAudible(track)
         return AUDIBILITY.isTrackAudible(track, soloActive)
@@ -16143,7 +16607,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                         local p = math.max(ipos, startSel)
                         local e = math.min(iend, endSel)
                         local l = math.max(0, e - p)
-                        if l > 0.0005 then
+                        if l > 0.01 then
                             table.insert(itemsToProcess, {item = it, pos = p, len = l, sourceItemName = nameOverride})
                         end
                     end
@@ -16182,7 +16646,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                             local p = math.max(ipos, startSel)
                             local e = math.min(iend, endSel)
                             local l = math.max(0, e - p)
-                            if l > 0.0005 then
+                            if l > 0.01 then
                                 table.insert(itemsToProcess, {item = it, pos = p, len = l})
                             end
                         end
@@ -16202,7 +16666,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                         local p = math.max(ipos, startSel)
                         local e = math.min(iend, endSel)
                         local l = math.max(0, e - p)
-                        if l > 0.0005 then
+                        if l > 0.01 then
                             table.insert(itemsToProcess, {item = it, pos = p, len = l})
                         end
                     end
@@ -16336,7 +16800,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 end
             end
         end
-        local nameBase = (useItemNameForTrack and sourceItemName) or sourceTrackName
+        local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, "Stems")
 
         local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
 
@@ -16344,7 +16808,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if SETTINGS.createFolder then
             reaper.InsertTrackAtIndex(trackIdx, true)
             folderTrack = reaper.GetTrack(0, trackIdx)
-            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", nameBase .. " - Stems", true)
+            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
             ensureTrackHeight(folderTrack)
@@ -16362,12 +16826,8 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     reaper.InsertTrackAtIndex(trackIdx + createdForThisItem, true)
                     local newTrack = reaper.GetTrack(0, trackIdx + createdForThisItem)
                 ensureTrackHeight(newTrack)
-                    local newTakeName = sourceItemName .. " - " .. stem.name
-                    local newTrackName = selectedCount == 1 and (stem.name .. " - " .. nameBase) or (nameBase .. " - " .. stem.name)
-                    if info.sourceItemName then
-                        newTrackName = sourceTrackName .. " - " .. newTakeName
-                    end
-                    reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+                    local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
+                    reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
                     reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
 
@@ -16376,11 +16836,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", ilen)
                     local newTake = reaper.AddTakeToMediaItem(newItem)
                     reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
-                    local takeLabel = newTakeName
-                    if info.sourceItemName then
-                        takeLabel = sourceTrackName .. " - " .. newTakeName
-                    end
-                    reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeLabel, true)
+                    reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
                     reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
 
                     createdForThisItem = createdForThisItem + 1
@@ -16422,10 +16878,6 @@ function processStemsResult(stems)
             local actionMsg = ""
 
             local itemsOverride = timeSelectionResolvedItems
-            if itemsOverride and #itemsOverride > 1 then
-                itemsOverride = { itemsOverride[1] }
-            end
-
             -- Create stems first so the selection-based cleanup doesn't disturb placement
             count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
             if lastNoAudibleOverlap and count == 0 then
@@ -16512,9 +16964,6 @@ function processStemsResult(stems)
                 -- Fallback: create new tracks if no source item
                 local sourceTrack = multiTrackQueue.active and multiTrackQueue.currentSourceTrack or nil
                 local itemsOverride = timeSelectionResolvedItems
-                if itemsOverride and #itemsOverride > 1 then
-                    itemsOverride = { itemsOverride[1] }
-                end
                 count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
                 if lastNoAudibleOverlap and count == 0 then
                     showMessage("No audible targets", noAudibleOverlapMsg, "info", true)
@@ -16800,7 +17249,7 @@ end
 function resultWindowLoop()
     -- Save window position for next time
     if reaper.JS_Window_GetRect then
-        local hwnd = reaper.JS_Window_Find("STEMwerk - Complete", true)
+        local hwnd = reaper.JS_Window_Find("STEMwerk - Complete (v2.2.1.1)", true)
         if hwnd then
             local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
             if retval then
@@ -16814,15 +17263,17 @@ function resultWindowLoop()
 
     if drawResultWindow() then
         -- Remember any size/position changes made in the complete window
-        captureWindowGeometry("STEMwerk - Complete")
+        captureWindowGeometry("STEMwerk - Complete (v2.2.1.1)")
         saveSettings()
         gfx.quit()
         -- Ensure the user immediately sees what was created/changed in REAPER (no extra click required).
         -- Some systems don't redraw the arrange view until the next interaction.
         adjustTrackLayout()
-        -- Reopen main dialog (if there's still a selection)
-        skipExistingWindowCheckOnce = true
-        reaper.defer(function() main() end)
+        -- Reopen the main dialog directly to avoid retriggering startup checks and shell flashes.
+        reaper.defer(function()
+            skipExistingWindowCheckOnce = true
+            showStemSelectionDialog()
+        end)
         return
     end
     reaper.defer(resultWindowLoop)
@@ -16854,7 +17305,7 @@ function showResultWindow(selectedStems, message)
     -- Intentionally do not change playhead position or playback state.
 
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init("STEMwerk - Complete", winW, winH, 0, winX, winY)
+    gfx.init("STEMwerk - Complete (v2.2.1.1)", winW, winH, 0, winX, winY)
 
     -- Best-effort: force an arrange repaint while the Complete window is open.
     -- This makes the processing result visible immediately (without needing to close the window).
@@ -16955,6 +17406,121 @@ runSingleTrackSeparation = function(trackList)
         return baseName or displayName, displayName
     end
 
+    local function renderPerItemOverlapFallback(item, outputPath, overlapStart, overlapEnd)
+        if not item or not reaper.ValidatePtr(item, "MediaItem*") then
+            return nil, "Invalid item"
+        end
+        if not (reaper.GetItemStateChunk and reaper.SetItemStateChunk) then
+            return nil, "REAPER item state chunk API not available"
+        end
+
+        local overlapLen = (tonumber(overlapEnd) or 0) - (tonumber(overlapStart) or 0)
+        if overlapLen <= 0.01 then
+            return nil, "Selection is empty (0s). Make a longer time selection or pick an item with length."
+        end
+
+        local okChunk, itemChunk = reaper.GetItemStateChunk(item, "", false)
+        if not okChunk or not itemChunk or itemChunk == "" then
+            return nil, "Failed to clone item state for overlap extraction"
+        end
+
+        debugLog(string.format(
+            "renderPerItemOverlapFallback: using temporary track clone for %.6f..%.6f",
+            tonumber(overlapStart) or -1,
+            tonumber(overlapEnd) or -1
+        ))
+
+        local selectedTracks = {}
+        local selectedItems = {}
+        local selectedTrackCount = reaper.CountSelectedTracks(0)
+        local selectedItemCount = reaper.CountSelectedMediaItems(0)
+        for idx = 0, selectedTrackCount - 1 do
+            selectedTracks[#selectedTracks + 1] = reaper.GetSelectedTrack(0, idx)
+        end
+        for idx = 0, selectedItemCount - 1 do
+            selectedItems[#selectedItems + 1] = reaper.GetSelectedMediaItem(0, idx)
+        end
+
+        local function restoreSelectionState()
+            reaper.Main_OnCommand(40297, 0) -- Unselect all tracks
+            reaper.Main_OnCommand(40289, 0) -- Unselect all items
+            for _, track in ipairs(selectedTracks) do
+                if track and reaper.ValidatePtr(track, "MediaTrack*") then
+                    reaper.SetTrackSelected(track, true)
+                end
+            end
+            for _, selectedItem in ipairs(selectedItems) do
+                if selectedItem and reaper.ValidatePtr(selectedItem, "MediaItem*") then
+                    reaper.SetMediaItemSelected(selectedItem, true)
+                end
+            end
+        end
+
+        reaper.PreventUIRefresh(1)
+
+        local tempTrackIdx = reaper.CountTracks(0)
+        reaper.InsertTrackAtIndex(tempTrackIdx, false)
+        local tempTrack = reaper.GetTrack(0, tempTrackIdx)
+        if not tempTrack then
+            restoreSelectionState()
+            reaper.PreventUIRefresh(-1)
+            return nil, "Failed to create temporary extraction track"
+        end
+
+        if reaper.SetMediaTrackInfo_Value then
+            pcall(function() reaper.SetMediaTrackInfo_Value(tempTrack, "B_SHOWINTCP", 0) end)
+            pcall(function() reaper.SetMediaTrackInfo_Value(tempTrack, "B_SHOWINMIXER", 0) end)
+            pcall(function() reaper.SetMediaTrackInfo_Value(tempTrack, "B_MUTE", 1) end)
+        end
+
+        local tempItem = reaper.AddMediaItemToTrack(tempTrack)
+        if not tempItem then
+            if reaper.ValidatePtr(tempTrack, "MediaTrack*") then
+                reaper.DeleteTrack(tempTrack)
+            end
+            restoreSelectionState()
+            reaper.PreventUIRefresh(-1)
+            return nil, "Failed to create temporary extraction item"
+        end
+
+        if not reaper.SetItemStateChunk(tempItem, itemChunk, false) then
+            if reaper.ValidatePtr(tempTrack, "MediaTrack*") then
+                reaper.DeleteTrack(tempTrack)
+            end
+            restoreSelectionState()
+            reaper.PreventUIRefresh(-1)
+            return nil, "Failed to apply cloned item state for overlap extraction"
+        end
+
+        tempItem = reaper.GetTrackMediaItem(tempTrack, 0) or tempItem
+        local middleItem = tempItem
+        local tempPos = reaper.GetMediaItemInfo_Value(tempItem, "D_POSITION") or overlapStart
+        local tempEnd = tempPos + (reaper.GetMediaItemInfo_Value(tempItem, "D_LENGTH") or 0)
+        if overlapStart > tempPos and overlapStart < tempEnd then
+            middleItem = reaper.SplitMediaItem(tempItem, overlapStart) or tempItem
+        end
+
+        if middleItem and reaper.ValidatePtr(middleItem, "MediaItem*") then
+            local midPos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION") or overlapStart
+            local midEnd = midPos + (reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH") or 0)
+            if overlapEnd > midPos and overlapEnd < midEnd then
+                reaper.SplitMediaItem(middleItem, overlapEnd)
+            end
+        end
+
+        local extracted, err = renderSingleItemToWav(middleItem, outputPath)
+        if reaper.ValidatePtr(tempTrack, "MediaTrack*") then
+            reaper.DeleteTrack(tempTrack)
+        end
+        restoreSelectionState()
+        reaper.PreventUIRefresh(-1)
+        reaper.UpdateArrange()
+        if extracted then
+            return extracted, nil, overlapStart, overlapLen
+        end
+        return nil, err or "Failed to extract temporary overlap slice"
+    end
+
     local filteredTrackList = AUDIBILITY.filterTracks(trackList, soloActive)
     if #filteredTrackList ~= (trackList and #trackList or 0) then
         debugLog("Audibility filter: tracks=" .. tostring(trackList and #trackList or 0) .. " -> " .. tostring(#filteredTrackList) .. " (solo=" .. tostring(soloActive) .. ")")
@@ -17019,7 +17585,10 @@ runSingleTrackSeparation = function(trackList)
                 makeDir(itemDir)
                 local inputFile = itemDir .. PATH_SEP .. "input.wav"
 
-                local extracted, err, renderStart, renderLen = renderItemToWav(item, inputFile)
+                local extracted, err, renderStart, renderLen = renderItemToWav(item, inputFile, entry.start, entry["end"])
+                if not extracted then
+                    extracted, err, renderStart, renderLen = renderPerItemOverlapFallback(item, inputFile, entry.start, entry["end"])
+                end
                 if extracted then
                     local sourceItemName, sourceItemDisplayName = getItemNameFields(item, trackName)
                     local itemName = sourceItemDisplayName
@@ -17037,7 +17606,7 @@ runSingleTrackSeparation = function(trackList)
 
                     table.insert(trackJobs, {
                         track = track,
-                        trackName = trackName .. " [" .. itemIdx .. "/" .. #eligibleEntries .. "]",
+                        trackName = trackName,
                         uiColor = getJobUIColor(track, jobIndex),
                         trackDir = itemDir,
                         inputFile = inputFile,
@@ -17057,6 +17626,13 @@ runSingleTrackSeparation = function(trackList)
                         perItem = true,
                     })
                 else
+                    local ef = io.open(itemDir .. PATH_SEP .. "extract_error.txt", "w")
+                    if ef then
+                        ef:write("Track: " .. tostring(trackName) .. "\n")
+                        ef:write("Item index: " .. tostring(itemIdx) .. "/" .. tostring(#eligibleEntries) .. "\n")
+                        ef:write("Error: " .. tostring(err) .. "\n")
+                        ef:close()
+                    end
                     debugLog("Per-item extract failed: " .. tostring(err))
                 end
             end
@@ -17211,11 +17787,26 @@ runSingleTrackSeparation = function(trackList)
     end
     multiTrackQueue.expectedItemCount = expectedItemsTotal
     multiTrackQueue.expectedStemCount = expectedStemsTotal
+    if perItemEligible > 0 then
+        multiTrackQueue.detectedItemCount = perItemEligible
+    elseif perItemCandidates > 0 then
+        multiTrackQueue.detectedItemCount = perItemCandidates
+    else
+        multiTrackQueue.detectedItemCount = expectedItemsTotal
+    end
+    multiTrackQueue.queuedItemCount = #trackJobs
     -- Default: follow user's parallel/sequential preference.
     -- However, on Windows CPU-only (device=cpu/auto), parallel multi-job runs can be MUCH slower
     -- because each job loads the model separately and they compete for CPU/RAM/disk.
     multiTrackQueue.sequentialMode = not SETTINGS.parallelProcessing
     multiTrackQueue.forceSequentialReason = nil
+    local hasPerItemJobs = false
+    for _, job in ipairs(trackJobs) do
+        if job.perItem then
+            hasPerItemJobs = true
+            break
+        end
+    end
     if SETTINGS.parallelProcessing and #trackJobs > 1 then
         local function hasRuntimeGpuBackends()
             local list = RUNTIME_DEVICES or DEVICES or {}
@@ -17230,10 +17821,19 @@ runSingleTrackSeparation = function(trackList)
 
         local dev = string.lower(tostring(SETTINGS.device or "auto"))
         local isExplicitGpu = dev:find("cuda", 1, true) ~= nil or dev:find("directml", 1, true) ~= nil
+
+        -- Per-item multi-track runs are correctness-sensitive because each item slice becomes its own
+        -- backend job. Launching those jobs in parallel has produced cross-job contamination in practice,
+        -- so keep them deterministic until the separator backend is proven safe for concurrent runs.
+        if hasPerItemJobs then
+            multiTrackQueue.sequentialMode = true
+            multiTrackQueue.forceSequentialReason = "Per-item multi-track isolation"
+            debugLog("Forcing sequential multi-track processing (" .. multiTrackQueue.forceSequentialReason .. ")")
+        end
         
         -- Respect user's Parallel choice even on CPU. 
         -- Only force sequential if device is "auto" AND we know for sure there is no GPU.
-        if dev == "auto" and not hasRuntimeGpuBackends() then
+        if not multiTrackQueue.sequentialMode and dev == "auto" and not hasRuntimeGpuBackends() then
             multiTrackQueue.sequentialMode = true
             multiTrackQueue.forceSequentialReason = "Auto device (no GPU)"
             debugLog("Forcing sequential multi-track processing (" .. multiTrackQueue.forceSequentialReason .. ")")
@@ -17277,6 +17877,9 @@ startSeparationProcessForJob = function(job, segmentSize)
     job.percent = 0
     job.stage = "Starting.."
     job.startTime = os.time()
+    multiTrackQueue.currentIndex = tonumber(job.index) or 0
+    multiTrackQueue.currentTrackName = job.sourceTrackName or job.trackName or ""
+    multiTrackQueue.currentSourceTrack = job.track or nil
 
     -- Preflight checks so failures show up clearly in logs/UI.
     if not fileExists(job.inputFile) then
@@ -17392,7 +17995,7 @@ startSeparationProcessForJob = function(job, segmentSize)
                 "$outq=$dq + $out + $dq;" ..
                 "$modelq=$dq + $model + $dq;" ..
                 "$devq=$dq + $dev + $dq;" ..
-                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "';" ..
+                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "';" ..
                 " Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii;" ..
                 " Wait-Process -Id $p.Id;" ..
                 " $ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii;" ..
@@ -17534,6 +18137,26 @@ updateAllJobsProgress = function()
             -- Job not yet started (sequential mode)
             job.percent = 0
             job.stage = "Waiting.."
+        end
+    end
+
+    if multiTrackQueue.sequentialMode then
+        local runningJob = false
+        local nextWaitingIndex = nil
+        for idx, job in ipairs(multiTrackQueue.jobs) do
+            if job.startTime and not job.done then
+                runningJob = true
+                break
+            end
+            if nextWaitingIndex == nil and not job.startTime then
+                nextWaitingIndex = idx
+            end
+        end
+        if not runningJob and nextWaitingIndex ~= nil then
+            local nextJob = multiTrackQueue.jobs[nextWaitingIndex]
+            debugLog("Sequential queue fallback starting job " .. tostring(nextWaitingIndex))
+            startSeparationProcessForJob(nextJob, 40)
+            multiTrackQueue.currentJobIndex = math.max(tonumber(multiTrackQueue.currentJobIndex) or 0, nextWaitingIndex)
         end
     end
 end
@@ -17721,13 +18344,17 @@ function drawMultiTrackProgressWindow()
     for _, job in ipairs(multiTrackQueue.jobs) do
         if job.perItem then anyPerItem = true; break end
     end
+    local titleJobCount = #multiTrackQueue.jobs
+    if anyPerItem and (multiTrackQueue.detectedItemCount or 0) > 0 then
+        titleJobCount = multiTrackQueue.detectedItemCount
+    end
     local function jobUnitLabel(count)
         if anyPerItem then
             return (count == 1) and (T("footer_item") or "item") or (T("footer_items") or "items")
         end
         return (count == 1) and (T("footer_track") or "track") or (T("footer_tracks") or "tracks")
     end
-    gfx.drawstr(string.format(" - %s (%d %s)%s", runtimeMode, #multiTrackQueue.jobs, jobUnitLabel(#multiTrackQueue.jobs), runtimeNote))
+    gfx.drawstr(string.format(" - %s (%d %s)%s", runtimeMode, titleJobCount, jobUnitLabel(titleJobCount), runtimeNote))
 
     -- Language toggle (left of theme toggle)
     local langW = PS(20)
@@ -18299,14 +18926,22 @@ function drawMultiTrackProgressWindow()
     end
     local statusFmt
     if anyPerItem then
-        statusFmt = trSafeProgress("mt_status_line_items", "Items: %d/%d | Audio: %.1fs/%.1fs | Stems: %d expected")
+        statusFmt = trSafeProgress("mt_status_line_items", "Items: %d/%d | Queued: %d | Audio: %.1fs/%.1fs | Stems: %d expected")
     else
         statusFmt = trSafeProgress("mt_status_line", "Tracks: %d/%d | Audio: %.1fs/%.1fs | Stems: %d expected")
     end
     
     -- Show the duration of the current/last selection as the reference point, not the cumulative batch time
     local displayTotalDur = numJobs > 0 and (multiTrackQueue.jobs[1].audioDuration or 0) or totalAudioDur
-    local statusText = string.format(statusFmt, completedJobs, numJobs, completedAudioDur / (totalAudioDur/displayTotalDur), displayTotalDur, expectedStems)
+    local processedItemTotal = anyPerItem and ((multiTrackQueue.detectedItemCount or 0) > 0 and multiTrackQueue.detectedItemCount or numJobs) or numJobs
+    local queuedItemCount = anyPerItem and (multiTrackQueue.queuedItemCount or numJobs) or numJobs
+    local displayProcessedAudio = (totalAudioDur > 0 and displayTotalDur > 0) and (completedAudioDur / (totalAudioDur / displayTotalDur)) or 0
+    local statusText
+    if anyPerItem then
+        statusText = string.format(statusFmt, completedJobs, processedItemTotal, queuedItemCount, displayProcessedAudio, displayTotalDur, expectedStems)
+    else
+        statusText = string.format(statusFmt, completedJobs, numJobs, displayProcessedAudio, displayTotalDur, expectedStems)
+    end
     gfx.x = barX
     gfx.y = infoY
     gfx.drawstr(statusText)
@@ -18337,13 +18972,17 @@ function drawMultiTrackProgressWindow()
         local jobSecs = jobElapsed % 60
         local audioDurStr = activeJob.audioDuration and string.format("%.1fs", activeJob.audioDuration) or "?"
         local infoFmt = T("mt_current_line") or "Current: %s (%s) | %d:%02d elapsed"
-        local infoText = string.format(infoFmt, activeJob.trackName or "?", audioDurStr, jobMins, jobSecs)
+        local currentLabel = activeJob.trackName or "?"
+        if activeJob.perItem and activeJob.sourceTrackName and activeJob.sourceItemDisplayName then
+            currentLabel = activeJob.sourceTrackName .. " - " .. activeJob.sourceItemDisplayName
+        end
+        local infoText = string.format(infoFmt, currentLabel, audioDurStr, jobMins, jobSecs)
         gfx.x = barX
         gfx.y = infoY + PS(48)
         gfx.drawstr(infoText)
 
         -- Line 5: Media item info
-        local itemInfo = activeJob.itemNames or "Unknown"
+        local itemInfo = activeJob.itemNames or activeJob.sourceItemDisplayName or "Unknown"
         if #itemInfo > 55 then itemInfo = itemInfo:sub(1, 52) .. ".." end
         gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
         gfx.x = barX
@@ -18457,7 +19096,7 @@ function multiTrackProgressLoop()
 
     if result == "cancel" then
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Multi-Track Progress")
+        captureWindowGeometry("STEMwerk - Multi-Track Progress (v2.2.1.1)")
         saveSettings()
 
         gfx.quit()
@@ -18477,7 +19116,7 @@ function multiTrackProgressLoop()
 
     if allJobsDone() then
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Multi-Track Progress")
+        captureWindowGeometry("STEMwerk - Multi-Track Progress (v2.2.1.1)")
         saveSettings()
 
         gfx.quit()
@@ -18498,7 +19137,7 @@ showMultiTrackProgressWindow = function()
     captureWindowGeometry(SCRIPT_NAME)
     GUI.snapshotMainGeometry()
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init("STEMwerk - Multi-Track Progress", winW, winH, 0, winX, winY)
+    gfx.init("STEMwerk - Multi-Track Progress (v2.2.1.1)", winW, winH, 0, winX, winY)
     reaper.defer(multiTrackProgressLoop)
 end
 
@@ -18541,6 +19180,7 @@ processAllStemsResult = function()
     -- Now create stems for each job
     local totalStemsCreated = 0
     local sourceTracksWithStems = {} -- track ptr -> true (only count tracks that actually received stems)
+    local sourceItemsWithStems = {} -- item ptr -> true (only count items that actually received stems)
     local trackNames = {}
 
     debugLog("=== processAllStemsResult: Creating stem tracks ===")
@@ -18590,7 +19230,13 @@ processAllStemsResult = function()
                 -- Use per-job selection range: if time selection exists, use it; otherwise use the job's source item position/length
                 local jobSelPos = globalSelPos
                 local jobSelLen = globalSelLen
-                if not timeSelectionMode and job.sourceItem and reaper.ValidatePtr(job.sourceItem, "MediaItem*") then
+                if job.perItem and job.selPos and job.selLen and job.selLen > 0 then
+                    -- Per-item time-selection jobs already captured their exact overlap slice during extraction.
+                    -- Reuse that range here so later items don't get rebuilt from the full global selection.
+                    jobSelPos = job.selPos
+                    jobSelLen = job.selLen
+                    debugLog("  Per-item job range: using job sel pos=" .. jobSelPos .. ", len=" .. jobSelLen)
+                elseif not timeSelectionMode and job.sourceItem and reaper.ValidatePtr(job.sourceItem, "MediaItem*") then
                     -- No time selection: use the source item's position/length for this job
                     jobSelPos = reaper.GetMediaItemInfo_Value(job.sourceItem, "D_POSITION")
                     jobSelLen = reaper.GetMediaItemInfo_Value(job.sourceItem, "D_LENGTH")
@@ -18614,8 +19260,16 @@ processAllStemsResult = function()
                 local count = createStemTracksForSelection(stems, jobSelPos, jobSelLen, job.track, itemsOverride, useItemNameForTrack)
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
-                if count > 0 and job.track and reaper.ValidatePtr(job.track, "MediaTrack*") then
-                    sourceTracksWithStems[job.track] = true
+                if count > 0 then
+                    if job.track and reaper.ValidatePtr(job.track, "MediaTrack*") then
+                        sourceTracksWithStems[job.track] = true
+                    end
+                    local jobItems = job.sourceItems or (job.sourceItem and { job.sourceItem }) or {}
+                    for _, item in ipairs(jobItems) do
+                        if item and reaper.ValidatePtr(item, "MediaItem*") then
+                            sourceItemsWithStems[tostring(item)] = true
+                        end
+                    end
                 end
             else
                 -- In-place mode: replace source item with stems as takes
@@ -18704,6 +19358,8 @@ processAllStemsResult = function()
     end
     local sourceTrackCountWithStems = 0
     for _ in pairs(sourceTracksWithStems) do sourceTrackCountWithStems = sourceTrackCountWithStems + 1 end
+    local sourceItemCountWithStems = 0
+    for _ in pairs(sourceItemsWithStems) do sourceItemCountWithStems = sourceItemCountWithStems + 1 end
     debugLog("Total stems created: " .. totalStemsCreated)
 
     -- If nothing was created, surface the Python log instead of silently returning to main().
@@ -18922,11 +19578,27 @@ processAllStemsResult = function()
     local speedStr = string.format("%.2fx", realtimeFactor)
     local resultData
     if SETTINGS.createNewTracks then
-        local srcCount = sourceTrackCountWithStems > 0 and sourceTrackCountWithStems or #multiTrackQueue.jobs
+        local anyPerItem = false
+        for _, job in ipairs(multiTrackQueue.jobs or {}) do
+            if job.perItem then
+                anyPerItem = true
+                break
+            end
+        end
+        local srcCount
+        local sourceKind
+        if anyPerItem then
+            srcCount = sourceItemCountWithStems > 0 and sourceItemCountWithStems or #multiTrackQueue.jobs
+            sourceKind = "items"
+        else
+            srcCount = sourceTrackCountWithStems > 0 and sourceTrackCountWithStems or #multiTrackQueue.jobs
+            sourceKind = "tracks"
+        end
         resultData = {
             kind = "multi_new_tracks",
             stemsCreated = totalStemsCreated,
             sourceCount = srcCount,
+            sourceKind = sourceKind,
             totalTimeSec = totalTime,
             realtimeFactor = realtimeFactor,
             sequentialMode = multiTrackQueue.sequentialMode and true or false,
@@ -19017,13 +19689,15 @@ function runSeparationWorkflow()
         end
     end
 
+    local processSelectionSnap = PROCESS_SELECTION_SNAPSHOT
+
     debugLog(string.format(
         "Workflow start selection: timeSel=%s (%.6f..%.6f) selItems=%d selTracks=%d snap=%s",
         tostring(hasTimeSel),
         tonumber(ts0) or -1, tonumber(ts1) or -1,
         (reaper.CountSelectedMediaItems(0) or 0),
         (reaper.CountSelectedTracks(0) or 0),
-        tostring(PROCESS_SELECTION_SNAPSHOT ~= nil)
+        tostring(processSelectionSnap ~= nil)
     ))
 
     -- If REAPER reports no selection at workflow start, try to restore the snapshot taken
@@ -19038,9 +19712,8 @@ function runSeparationWorkflow()
             hasSelNow = true
         end
 
-        if (not hasSelNow) and PROCESS_SELECTION_SNAPSHOT then
-            local snap = PROCESS_SELECTION_SNAPSHOT
-            PROCESS_SELECTION_SNAPSHOT = nil
+        if (not hasSelNow) and processSelectionSnap then
+            local snap = processSelectionSnap
             debugLog("No current selection; attempting to restore snapshot from Process click")
 
             if snap.timeStart and snap.timeEnd and (snap.timeEnd > snap.timeStart) then
@@ -19098,6 +19771,19 @@ function runSeparationWorkflow()
 
     -- Re-fetch the current selection at processing time (user may have changed it)
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
+    if (not selectedItem or not reaper.ValidatePtr(selectedItem, "MediaItem*")) and processSelectionSnap and processSelectionSnap.items then
+        for _, it in ipairs(processSelectionSnap.items) do
+            if it and reaper.ValidatePtr(it, "MediaItem*") then
+                reaper.SetMediaItemSelected(it, true)
+                selectedItem = it
+                debugLog("Recovered selected item directly from Process-click snapshot")
+                break
+            end
+        end
+        if selectedItem then
+            reaper.UpdateArrange()
+        end
+    end
     timeSelectionMode = false
     debugLog("Selected item: " .. tostring(selectedItem))
 
@@ -19138,19 +19824,26 @@ function runSeparationWorkflow()
     end
 
     if selectedItem and reaper.ValidatePtr(selectedItem, "MediaItem*") then
-        local tr = reaper.GetMediaItem_Track(selectedItem)
-        if not (tr and trackAudibleWorkflow(tr)) or isItemMutedWorkflow(selectedItem) then
-            local found = nil
-            local cnt = reaper.CountSelectedMediaItems(0) or 0
-            for i = 0, cnt - 1 do
-                local it = reaper.GetSelectedMediaItem(0, i)
-                local itr = it and reaper.GetMediaItem_Track(it)
-                if it and itr and trackAudibleWorkflow(itr) and not isItemMutedWorkflow(it) then
-                    found = it
-                    break
+        local selectedItemCount = reaper.CountSelectedMediaItems(0) or 0
+        if selectedItemCount > 1 then
+            local tr = reaper.GetMediaItem_Track(selectedItem)
+            if not (tr and trackAudibleWorkflow(tr)) or isItemMutedWorkflow(selectedItem) then
+                local found = nil
+                for i = 0, selectedItemCount - 1 do
+                    local it = reaper.GetSelectedMediaItem(0, i)
+                    local itr = it and reaper.GetMediaItem_Track(it)
+                    if it and itr and trackAudibleWorkflow(itr) and not isItemMutedWorkflow(it) then
+                        found = it
+                        break
+                    end
+                end
+                if found then
+                    selectedItem = found
+                    debugLog("Selected item was filtered; using alternate audible selected item")
+                else
+                    debugLog("Keeping explicitly selected item despite audibility filter to avoid selection regression")
                 end
             end
-            selectedItem = found
         end
     end
 
@@ -19170,6 +19863,40 @@ function runSeparationWorkflow()
         itemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
         itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
     else
+        if processSelectionSnap then
+            local restored = false
+            if processSelectionSnap.timeStart and processSelectionSnap.timeEnd and (processSelectionSnap.timeEnd > processSelectionSnap.timeStart) then
+                reaper.GetSet_LoopTimeRange(true, false, processSelectionSnap.timeStart, processSelectionSnap.timeEnd, false)
+                restored = true
+            end
+            if processSelectionSnap.items then
+                for _, it in ipairs(processSelectionSnap.items) do
+                    if it and reaper.ValidatePtr(it, "MediaItem*") then
+                        reaper.SetMediaItemSelected(it, true)
+                        selectedItem = it
+                        restored = true
+                        break
+                    end
+                end
+            end
+            if (not selectedItem) and processSelectionSnap.tracks then
+                for _, tr in ipairs(processSelectionSnap.tracks) do
+                    if tr and reaper.ValidatePtr(tr, "MediaTrack*") then
+                        reaper.SetTrackSelected(tr, true)
+                        restored = true
+                    end
+                end
+            end
+            if restored then
+                reaper.UpdateArrange()
+                debugLog("Recovered selection from Process-click snapshot before start-screen fallback; retrying workflow")
+                PROCESS_SELECTION_SNAPSHOT = nil
+                isProcessingActive = false
+                reaper.defer(function() runSeparationWorkflow() end)
+                return
+            end
+        end
+
         -- No time selection and no item selected (and no track with items)
         debugLog(string.format(
             "No selection to process -> Start screen. timeSel=%s selItems=%d selTracks=%d",
@@ -19181,6 +19908,8 @@ function runSeparationWorkflow()
         isProcessingActive = false
         return
     end
+
+    PROCESS_SELECTION_SNAPSHOT = nil
 
     WORKFLOW_TEMP_DIR = makeUniqueTempSubdir("STEMwerk")
     makeDir(WORKFLOW_TEMP_DIR)
@@ -19199,6 +19928,10 @@ function runSeparationWorkflow()
         if err == "MULTI_TRACK" and trackList and #trackList > 1 then
             -- Multi-track mode: process all tracks in parallel
             debugLog("Multi-track mode: " .. #trackList .. " tracks")
+            if trackItems then
+                timeSelectionItemMap = trackItems
+                debugLog("Multi-track time selection: using per-item jobs across tracks")
+            end
             runSingleTrackSeparation(trackList)
             -- If multi-track setup failed before activating the queue, unlock so user can retry
             if not multiTrackQueue.active then
@@ -19392,6 +20125,10 @@ main = function()
     debugLog("=== main() called ===")
     perfMark("main() enter")
 
+    if not PATH_STATE.guardNonCanonicalLaunch() then
+        return
+    end
+
     -- If a toolbar preset requested an immediate run, bypass the focus-only guard.
     local quickRunRequested = (reaper and reaper.GetExtState and reaper.GetExtState(EXT_SECTION, "quick_run") == "1")
 
@@ -19415,10 +20152,6 @@ main = function()
     -- Load settings first (needed for window position in error messages)
     loadSettings()
     perfMark("loadSettings() done")
-
-    if not ensureDependenciesInteractive() then
-        return
-    end
 
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
     timeSelectionMode = false

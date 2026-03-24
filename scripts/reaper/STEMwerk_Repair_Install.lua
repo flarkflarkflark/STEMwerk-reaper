@@ -1,6 +1,6 @@
 -- @description STEMwerk: Repair Install (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1
+-- @version 2.2.1.1
 -- @changelog
 --   2026-03-15: Wrapper for first-run bootstrap.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

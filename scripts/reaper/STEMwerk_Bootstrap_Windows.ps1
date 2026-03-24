@@ -32,7 +32,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeBase "python") | Ou
 
 $status = "ok"
 $statusReason = ""
-$package = "audio-separator"
+$audioSeparatorVersion = "0.24.4"
+$torchVersion = "2.4.1"
+$torchVisionVersion = "0.19.1"
+$torchDirectMlVersion = "0.2.5.dev240914"
+$onnxRuntimeDirectMlVersion = "1.24.4"
+$audioSeparatorOk = $false
+$stemwerkCoreOk = $false
+$pytorchCudaIndex = "https://download.pytorch.org/whl/cu121"
+$package = "audio-separator==$audioSeparatorVersion"
 $coreExtra = ""
 $profile = "windows-cpu"
 $backend = "cpu"
@@ -43,7 +51,12 @@ $venvPy = Join-Path $RuntimeBase ".venv\\Scripts\\python.exe"
 $installerMode = ($env:STEMWERK_INSTALLER -eq "1")
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bundledCoreDir = Join-Path $scriptRoot "vendor\\stemwerk-core"
+$constraintsDir = Join-Path $scriptRoot "constraints"
+$baseConstraints = Join-Path $constraintsDir "base.txt"
+$cudaConstraints = Join-Path $constraintsDir "cuda.txt"
+$directmlConstraints = Join-Path $constraintsDir "directml.txt"
 $allowPypiCore = ($env:STEMWERK_ALLOW_PYPI_CORE -eq "1")
+$supportedPythonText = "3.11 or 3.12"
 
 function WriteState([string]$State, [string]$Reason) {
     $lines = @()
@@ -67,6 +80,39 @@ function LogProgress([string]$Message) {
     if ([string]::IsNullOrWhiteSpace($Message)) { return }
     LogLine $Message
     if ($installerMode) { Write-Host $Message }
+}
+
+function WriteBootstrapGuard([string]$GuardStatus, [string]$GuardReason) {
+    if ([string]::IsNullOrWhiteSpace($RuntimeBase)) { return }
+    $guardPath = Join-Path $RuntimeBase "state\\bootstrap.guard"
+    $timestamp = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $scriptPath = $PSCommandPath
+    $lines = @(
+        "STATUS=$GuardStatus",
+        "REASON=$GuardReason",
+        "SCRIPT_PATH=$scriptPath",
+        "UPDATED_AT=$timestamp",
+        "PID=$PID"
+    )
+    $lines | Out-File -FilePath $guardPath -Encoding ascii
+}
+
+function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue) {
+    $lines = @()
+    $lines += "CAP_VERSION=1"
+    $lines += "PROFILE=$ProfileValue"
+    $lines += "BACKEND=$BackendValue"
+    $lines += "BACKEND_REASON=$BackendReasonValue"
+    $lines += "PYTHON_PATH=$PythonPathValue"
+    $lines += "FFMPEG_PATH=$FfmpegPathValue"
+    $lines += "RUNTIME_BASE=$RuntimeBaseValue"
+    $lines += "BOOTSTRAP_STATUS=$BootstrapStatusValue"
+    $lines += "BOOTSTRAP_REASON=$BootstrapReasonValue"
+    $lines += "VERIFICATION=$VerificationValue"
+    $lines += "AUDIO_SEPARATOR=$AudioSeparatorValue"
+    $lines += "STEMWERK_CORE=$StemwerkCoreValue"
+    $lines += "DEVICE_NAMES="
+    $lines | Out-File -FilePath $Path -Encoding ascii
 }
 
 function Set-Progress([string]$Reason, [string]$Message) {
@@ -114,14 +160,47 @@ function RunHidden([string]$File, [string[]]$Arguments, [string]$Description) {
         $p = New-Object System.Diagnostics.Process
         $p.StartInfo = $psi
         $null = $p.Start()
-        $stdout = $p.StandardOutput.ReadToEnd()
-        $stderr = $p.StandardError.ReadToEnd()
-        $p.WaitForExit()
-        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
-            LogLine $stdout
+        $lastBeat = [DateTime]::UtcNow
+        $stdoutSourceId = "stemwerk.stdout." + [Guid]::NewGuid().ToString()
+        $stderrSourceId = "stemwerk.stderr." + [Guid]::NewGuid().ToString()
+
+        $stdoutAction = {
+            param($sender, $eventArgs)
+            if ($null -ne $eventArgs.Data) {
+                Add-Content -Path $Event.MessageData -Value $eventArgs.Data -Encoding ascii
+            }
         }
-        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
-            LogLine $stderr
+        $stderrAction = {
+            param($sender, $eventArgs)
+            if ($null -ne $eventArgs.Data) {
+                Add-Content -Path $Event.MessageData -Value $eventArgs.Data -Encoding ascii
+            }
+        }
+
+        $stdoutHandler = Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -SourceIdentifier $stdoutSourceId -Action $stdoutAction -MessageData $LogFile
+        $stderrHandler = Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived -SourceIdentifier $stderrSourceId -Action $stderrAction -MessageData $LogFile
+
+        $p.BeginOutputReadLine()
+        $p.BeginErrorReadLine()
+
+        try {
+            while (-not $p.WaitForExit(1000)) {
+                if (-not [string]::IsNullOrWhiteSpace($Description)) {
+                    $elapsed = [DateTime]::UtcNow - $lastBeat
+                    if ($elapsed.TotalSeconds -ge 15) {
+                        LogProgress ("Still running: " + $Description + "...")
+                        $lastBeat = [DateTime]::UtcNow
+                    }
+                }
+            }
+            $p.WaitForExit()
+        } finally {
+            try { $p.CancelOutputRead() } catch {}
+            try { $p.CancelErrorRead() } catch {}
+            if ($stdoutHandler) { Unregister-Event -SourceIdentifier $stdoutSourceId -ErrorAction SilentlyContinue }
+            if ($stderrHandler) { Unregister-Event -SourceIdentifier $stderrSourceId -ErrorAction SilentlyContinue }
+            if ($stdoutHandler) { Remove-Job -Id $stdoutHandler.Id -Force -ErrorAction SilentlyContinue }
+            if ($stderrHandler) { Remove-Job -Id $stderrHandler.Id -Force -ErrorAction SilentlyContinue }
         }
         if (-not [string]::IsNullOrWhiteSpace($Description)) {
             LogProgress ("Finished: " + $Description + " (exit=" + $p.ExitCode + ")")
@@ -150,6 +229,49 @@ function TestPython([string]$Path) {
         return ($LASTEXITCODE -eq 0 -and ($out -match "Python"))
     } catch {
         return $false
+    }
+}
+
+function GetPythonVersionInfo([string]$Path) {
+    $result = [ordered]@{
+        Major = 0
+        Minor = 0
+        Text = ""
+    }
+    if (-not (TestPython $Path)) { return $result }
+    try {
+        $out = & $Path -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')" 2>&1
+        if ($LASTEXITCODE -ne 0) { return $result }
+        $text = [string]($out | Select-Object -First 1)
+        if ([string]::IsNullOrWhiteSpace($text)) { return $result }
+        $text = $text.Trim()
+        if ($text -match "^(\d+)\.(\d+)") {
+            $result.Major = [int]$matches[1]
+            $result.Minor = [int]$matches[2]
+            $result.Text = "$($result.Major).$($result.Minor)"
+        }
+    } catch {
+    }
+    return $result
+}
+
+function IsSupportedPythonVersion($VersionInfo) {
+    if (-not $VersionInfo) { return $false }
+    return ($VersionInfo.Major -eq 3 -and $VersionInfo.Minor -ge 11 -and $VersionInfo.Minor -le 12)
+}
+
+function TestSupportedPython([string]$Path) {
+    if (-not (TestPython $Path)) { return $false }
+    return (IsSupportedPythonVersion (GetPythonVersionInfo $Path))
+}
+
+function LogUnsupportedPython([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    $info = GetPythonVersionInfo $Path
+    if ($info.Text -ne "") {
+        LogProgress ("Ignoring unsupported Python " + $info.Text + " at " + $Path + " (need " + $supportedPythonText + ")")
+    } else {
+        LogProgress ("Ignoring unusable Python at " + $Path)
     }
 }
 
@@ -202,7 +324,9 @@ function InstallFfmpegDirect {
 function IsFfmpegShim([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     $p = $Path.ToLowerInvariant().Trim().Trim('"').Trim("'").Replace("/", "\")
-    return ($p.Contains("\winget\links\ffmpeg.exe") -or $p.Contains("\windowsapps\ffmpeg"))
+    if ($p.Contains("\winget\links\ffmpeg.exe") -or $p.Contains("\windowsapps\ffmpeg")) { return $true }
+    if ($p.Contains("\microsoft\winget\packages\") -and $p.Contains("\ffmpeg")) { return $true }
+    return $false
 }
 
 function ResolveCoreInstallTarget([string]$Extra) {
@@ -232,6 +356,12 @@ function ResolveCoreInstallTarget([string]$Extra) {
     $bundleDir = $env:STEMWERK_CORE_BUNDLE_DIR
     if (-not $bundleDir -or $bundleDir -eq "") { $bundleDir = $bundledCoreDir }
     if ($bundleDir -and (Test-Path $bundleDir)) {
+        if ((Test-Path (Join-Path $bundleDir "pyproject.toml")) -and (Test-Path (Join-Path $bundleDir "src\\stemwerk_core"))) {
+            $result.Target = $bundleDir
+            $result.Description = "bundled source"
+            $result.SupportsExtras = $true
+            return $result
+        }
         $wheel = Get-ChildItem -Path $bundleDir -File -Filter "*.whl" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($wheel) {
             $result.Target = $wheel.FullName
@@ -265,6 +395,69 @@ function ResolveCoreInstallTarget([string]$Extra) {
     return $result
 }
 
+function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
+    if ([string]::IsNullOrWhiteSpace($BackendName) -or $BackendName -eq "cpu") { return $true }
+
+    if ($BackendName -eq "cuda") {
+        LogProgress "Installing PyTorch CUDA runtime"
+        RunHidden $PythonPath @(
+            "-m","pip","install","--upgrade","--force-reinstall",
+            "--index-url",$pytorchCudaIndex,
+            "-c",$baseConstraints,
+            "-c",$cudaConstraints,
+            "numpy<2",
+            "torch==$torchVersion",
+            "torchvision==$torchVisionVersion"
+        ) "Install PyTorch CUDA runtime" | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+
+    if ($BackendName -eq "directml") {
+        LogProgress "Installing DirectML runtime packages"
+        RunHidden $PythonPath @(
+            "-m","pip","install","--upgrade",
+            "-c",$baseConstraints,
+            "-c",$directmlConstraints,
+            "numpy<2",
+            "torch==$torchVersion",
+            "torchvision==$torchVisionVersion",
+            "torch-directml==$torchDirectMlVersion",
+            "onnxruntime-directml==$onnxRuntimeDirectMlVersion"
+        ) "Install DirectML runtime" | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+
+    return $false
+}
+
+function VerifyBackendRuntime([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
+    if ([string]::IsNullOrWhiteSpace($BackendName) -or $BackendName -eq "cpu") { return $true }
+
+    if ($BackendName -eq "cuda") {
+        $code = 'import sys, torch; avail=bool(torch.cuda.is_available()); count=int(torch.cuda.device_count()) if avail else 0; ver=getattr(torch.version,"cuda",None); print(f"STEMWERK_CUDA_CHECK avail={avail} count={count} version={ver}"); sys.exit(0 if (avail and count > 0 and ver) else 1)'
+        RunHidden $PythonPath @("-c", $code) "Verify CUDA runtime" | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+
+    if ($BackendName -eq "directml") {
+        $code = 'import sys, torch, torch_directml; count=int(torch_directml.device_count()); print(f"STEMWERK_DIRECTML_CHECK count={count} torch={getattr(torch, ''__version__'', '''')}"); sys.exit(0 if count > 0 else 1)'
+        RunHidden $PythonPath @("-c", $code) "Verify DirectML runtime" | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+
+    return $false
+}
+
+function GetAudioConstraints([string]$BackendName) {
+    $args = @("-c", $baseConstraints)
+    if ($BackendName -eq "directml") {
+        $args += @("-c", $directmlConstraints)
+    }
+    return $args
+}
+
 $candidates = @()
 if ($env:CONDA_PREFIX) {
     $candidates += (Join-Path $env:CONDA_PREFIX "python.exe")
@@ -286,28 +479,48 @@ $candidates += (Join-Path $programFilesX86 "Python310\\python.exe")
 
 Step "step_1_runtime" "runtime initialization"
 LogProgress "Runtime directories prepared"
+WriteBootstrapGuard "running" "bootstrap_running"
 
 Step "step_2_python" "python + venv"
 LogProgress "Looking for existing Python installations"
+if ((Test-Path $venvPy) -and -not (TestSupportedPython $venvPy)) {
+    LogUnsupportedPython $venvPy
+    LogProgress "Removing incompatible virtual environment"
+    Remove-Item -Path (Join-Path $RuntimeBase ".venv") -Recurse -Force -ErrorAction SilentlyContinue
+}
 foreach ($p in $candidates) {
     if ($p -and (Test-Path $p) -and -not (IsWindowsStorePython $p)) {
-        $python = $p
-        break
+        if (TestSupportedPython $p) {
+            $python = $p
+            break
+        }
+        LogUnsupportedPython $p
     }
 }
 
 if (-not $python) {
     $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd -and -not (IsWindowsStorePython $cmd.Source)) { $python = $cmd.Source }
+    if ($cmd -and -not (IsWindowsStorePython $cmd.Source)) {
+        if (TestSupportedPython $cmd.Source) {
+            $python = $cmd.Source
+        } else {
+            LogUnsupportedPython $cmd.Source
+        }
+    }
 }
 
-if ($python -and -not (TestPython $python)) {
+if ($python -and -not (TestSupportedPython $python)) {
+    LogUnsupportedPython $python
     $python = $null
 }
 
 if (-not $python) {
     LogProgress "Python not found; attempting direct install"
     $python = InstallPythonDirect
+    if ($python -and -not (TestSupportedPython $python)) {
+        LogUnsupportedPython $python
+        $python = $null
+    }
 }
 
 LogProgress "Detecting GPU devices for backend selection"
@@ -332,11 +545,12 @@ if ($nvidiaSmi) {
 if ($hasNvidia) {
     $profile = "windows-cuda"
     $backend = "cuda"
-    $package = "audio-separator[gpu]"
+    $package = "audio-separator[gpu]==$audioSeparatorVersion"
     $coreExtra = "[gpu]"
 } elseif ($hasAmd -or $hasIntel) {
     $profile = "windows-directml"
     $backend = "directml"
+    $package = "audio-separator==$audioSeparatorVersion"
     $coreExtra = "[directml]"
 }
 
@@ -355,10 +569,6 @@ if (-not $python) {
         RunHidden $python @("-m","pip","install","--upgrade","pip") "Upgrade pip" | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Set-Status "pip_failed" "pip_upgrade_failed"
-        }
-        RunHidden $python @("-m","pip","install","numpy<2.4") "Install numpy" | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Set-Status "deps_failed" "numpy_install_failed"
         }
     }
 }
@@ -434,7 +644,7 @@ if (Test-Path $venvPy) {
         }
         LogProgress ("Installing stemwerk-core from " + $coreTarget.Description)
         LogLine ("Installing stemwerk-core from " + $coreTarget.Description + ": " + $installTarget)
-        RunHidden $python @("-m","pip","install",$installTarget) "Install stemwerk-core" | Out-Null
+        RunHidden $python @("-m","pip","install","--upgrade","--force-reinstall","-c",$baseConstraints,$installTarget) "Install stemwerk-core" | Out-Null
         if ($LASTEXITCODE -ne 0 -and $coreExtra -ne "" -and $coreTarget.SupportsExtras) {
             LogLine "GPU/DirectML stemwerk-core install failed; falling back to CPU"
             $coreExtra = ""
@@ -443,36 +653,82 @@ if (Test-Path $venvPy) {
             $backendReason = "backend_install_failed"
             $installTarget = $coreTarget.Target
             LogLine ("Installing stemwerk-core from " + $coreTarget.Description + ": " + $installTarget)
-            RunHidden $python @("-m","pip","install",$installTarget) "Install stemwerk-core (CPU fallback)" | Out-Null
+            RunHidden $python @("-m","pip","install","--upgrade","--force-reinstall","-c",$baseConstraints,$installTarget) "Install stemwerk-core (CPU fallback)" | Out-Null
         }
         if ($LASTEXITCODE -ne 0) {
             Set-Status "deps_failed" "stemwerk_core_install_failed"
         }
     }
 
-    RunHidden $python @("-c","import audio_separator") "Check audio-separator" | Out-Null
+    if ($status -eq "ok" -and $backend -ne "cpu" -and $backend -ne "cuda") {
+        $requestedBackend = $backend
+        if (-not (InstallBackendRuntime $python $requestedBackend)) {
+            LogLine ("Backend runtime install failed for " + $requestedBackend + "; falling back to CPU")
+            $profile = "windows-cpu"
+            $backend = "cpu"
+            $package = "audio-separator==$audioSeparatorVersion"
+            $backendReason = "backend_runtime_install_failed"
+        } elseif (-not (VerifyBackendRuntime $python $requestedBackend)) {
+            LogLine ("Backend runtime verify failed for " + $requestedBackend + "; falling back to CPU")
+            $profile = "windows-cpu"
+            $backend = "cpu"
+            $package = "audio-separator==$audioSeparatorVersion"
+            $backendReason = "backend_runtime_verify_failed"
+        }
+    }
+
+    $audioConstraints = GetAudioConstraints $backend
+    $audioArgs = @("-m","pip","install")
+    if ($backend -ne "directml") {
+        $audioArgs += "--upgrade"
+    }
+    $audioArgs += $audioConstraints
+    $audioArgs += $package
+    LogProgress ("Installing " + $package)
+    LogLine "Installing $package"
+    RunHidden $python $audioArgs "Install audio-separator" | Out-Null
+    RunHidden $python @("-c","import audio_separator") "Verify audio-separator" | Out-Null
+    $audioSeparatorOk = ($LASTEXITCODE -eq 0)
     if ($LASTEXITCODE -ne 0) {
-        LogProgress ("Installing " + $package)
-        LogLine "Installing $package"
-        RunHidden $python @("-m","pip","install",$package) "Install audio-separator" | Out-Null
-        RunHidden $python @("-c","import audio_separator") "Verify audio-separator" | Out-Null
+        if ($package -ne ("audio-separator==$audioSeparatorVersion")) {
+            LogLine "GPU audio-separator install failed; falling back to CPU"
+            $package = "audio-separator==$audioSeparatorVersion"
+            $profile = "windows-cpu"
+            $backend = "cpu"
+            if (-not $backendReason) { $backendReason = "backend_install_failed" }
+            $audioConstraints = GetAudioConstraints $backend
+            $audioArgs = @("-m","pip","install")
+            if ($backend -ne "directml") {
+                $audioArgs += "--upgrade"
+            }
+            $audioArgs += $audioConstraints
+            $audioArgs += $package
+            RunHidden $python $audioArgs "Install audio-separator (CPU fallback)" | Out-Null
+            RunHidden $python @("-c","import audio_separator") "Verify audio-separator (CPU fallback)" | Out-Null
+            $audioSeparatorOk = ($LASTEXITCODE -eq 0)
+        }
         if ($LASTEXITCODE -ne 0) {
-            if ($package -ne "audio-separator") {
-                LogLine "GPU audio-separator install failed; falling back to CPU"
-                $package = "audio-separator"
-                $profile = "windows-cpu"
-                $backend = "cpu"
-                if (-not $backendReason) { $backendReason = "backend_install_failed" }
-                RunHidden $python @("-m","pip","install",$package) "Install audio-separator (CPU fallback)" | Out-Null
-                RunHidden $python @("-c","import audio_separator") "Verify audio-separator (CPU fallback)" | Out-Null
-            }
-            if ($LASTEXITCODE -ne 0) {
-                Set-Status "deps_failed" "audio_separator_install_failed"
-            }
+            Set-Status "deps_failed" "audio_separator_install_failed"
+        }
+    }
+
+    if ($status -eq "ok" -and $backend -eq "cuda") {
+        $requestedBackend = $backend
+        if (-not (InstallBackendRuntime $python $requestedBackend)) {
+            LogLine ("Backend runtime install failed for " + $requestedBackend + "; falling back to CPU")
+            $profile = "windows-cpu"
+            $backend = "cpu"
+            $backendReason = "backend_runtime_install_failed"
+        } elseif (-not (VerifyBackendRuntime $python $requestedBackend)) {
+            LogLine ("Backend runtime verify failed for " + $requestedBackend + "; falling back to CPU")
+            $profile = "windows-cpu"
+            $backend = "cpu"
+            $backendReason = "backend_runtime_verify_failed"
         }
     }
 
     RunHidden $python @("-c","import stemwerk_core") "Verify stemwerk-core" | Out-Null
+    $stemwerkCoreOk = ($LASTEXITCODE -eq 0)
     if ($LASTEXITCODE -ne 0) {
         Set-Status "deps_failed" "stemwerk_core_missing"
     }
@@ -487,13 +743,31 @@ $lines += "PROFILE=$profile"
 $lines += "BACKEND=$backend"
 if ($backendReason) { $lines += "BACKEND_REASON=$backendReason" }
 if ($python) { $lines += "PYTHON_PATH=$python" }
+if (Test-Path $venvPy) { $lines += "VENV_PYTHON=$venvPy" }
 if ($ffmpeg) { $lines += "FFMPEG_PATH=$ffmpeg" }
 if ($installerMode) { $lines += "INSTALLER=1" }
 if ($RuntimeBase) { $lines += "RUNTIME_BASE=$RuntimeBase" }
 
 $lines | Out-File -FilePath $StateFile -Encoding ascii
 
+if ($RuntimeBase) {
+    $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
+    $bootstrapStatusValue = $status
+    $bootstrapReasonValue = $statusReason
+    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk) { "ok" } else { "failed" }
+    $audioSeparatorValue = if ($audioSeparatorOk) { "ok" } else { "missing" }
+    $stemwerkCoreValue = if ($stemwerkCoreOk) { "ok" } else { "missing" }
+    $pythonValue = if ($python) { $python } else { "" }
+    $ffmpegValue = if ($ffmpeg) { $ffmpeg } else { "" }
+    WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue
+
+    $guardStatus = if ($status -eq "ok") { "ok" } else { "failed" }
+    $guardReason = if ($status -eq "ok") { "completed" } else { $statusReason }
+    WriteBootstrapGuard $guardStatus $guardReason
+}
+
 if ($status -ne "ok") {
     exit 1
 }
+LogProgress "Bootstrap complete"
 exit 0

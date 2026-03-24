@@ -9,6 +9,7 @@ Progress output (stdout):
 """
 
 import argparse
+from contextlib import contextmanager
 import importlib
 import importlib.util
 import json
@@ -48,6 +49,23 @@ class _TeeTextIO:
 _progress_file = None
 
 
+@contextmanager
+def _working_directory(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+def _resolve_stem_path(output_dir: Path, stem_path: Path | str) -> Path:
+    path = Path(stem_path)
+    if path.is_absolute():
+        return path
+    return output_dir / path
+
+
 def _setup_reaper_io(output_dir: Optional[str]):
     """If output_dir is set, write progress/log/done markers into that folder."""
     global _progress_file
@@ -73,6 +91,86 @@ def _setup_reaper_io(output_dir: Optional[str]):
             pass
 
     return write_done
+
+
+def _read_simple_env_file(path: Path) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return values
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"')
+        if key:
+            values[key] = value
+    return values
+
+
+def _candidate_ffmpeg_paths() -> List[Path]:
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    def add(path_value: Optional[str | Path]) -> None:
+        if not path_value:
+            return
+        try:
+            path = Path(path_value).expanduser()
+        except Exception:
+            return
+        key = str(path).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    ffmpeg_env = os.environ.get("FFMPEG_PATH") or os.environ.get("IMAGEIO_FFMPEG_EXE")
+    add(ffmpeg_env)
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        runtime_base = Path(local_appdata) / "STEMwerk"
+        add(runtime_base / "ffmpeg" / "bin" / "ffmpeg.exe")
+        add(runtime_base / "ffmpeg" / "ffmpeg.exe")
+        add(runtime_base / "bin" / "ffmpeg.exe")
+        bootstrap_values = _read_simple_env_file(runtime_base / "state" / "bootstrap.env")
+        add(bootstrap_values.get("FFMPEG_PATH"))
+        capabilities_values = _read_simple_env_file(runtime_base / "state" / "capabilities.env")
+        add(capabilities_values.get("FFMPEG_PATH"))
+
+    exe_dir = Path(sys.executable).resolve().parent
+    add(exe_dir / "ffmpeg.exe")
+    add(exe_dir.parent / "ffmpeg" / "bin" / "ffmpeg.exe")
+
+    found = shutil.which("ffmpeg")
+    add(found)
+
+    return candidates
+
+
+def _configure_ffmpeg_runtime() -> Optional[Path]:
+    for candidate in _candidate_ffmpeg_paths():
+        try:
+            if not candidate.exists() or candidate.is_dir():
+                continue
+        except Exception:
+            continue
+
+        candidate_str = str(candidate)
+        candidate_dir = str(candidate.parent)
+        current_path = os.environ.get("PATH", "")
+        path_parts = current_path.split(os.pathsep) if current_path else []
+        normalized_dir = candidate_dir.lower()
+        if normalized_dir not in {part.lower() for part in path_parts if part}:
+            os.environ["PATH"] = candidate_dir + (os.pathsep + current_path if current_path else "")
+        os.environ["FFMPEG_PATH"] = candidate_str
+        os.environ["IMAGEIO_FFMPEG_EXE"] = candidate_str
+        return candidate
+    return None
 
 
 def emit_progress(percent: float, stage: str = ""):
@@ -145,7 +243,6 @@ def _clean_env() -> Dict[str, str]:
     for key in ("HIP_VISIBLE_DEVICES", "HSA_OVERRIDE_GFX_VERSION", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
         env.pop(key, None)
     return env
-
 
 def _run_cmd_lines(cmd: List[str]) -> List[str]:
     try:
@@ -480,6 +577,11 @@ def main():
     args = parser.parse_args()
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
+    ffmpeg_path = _configure_ffmpeg_runtime()
+    if ffmpeg_path is not None:
+        print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)
+    else:
+        print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)
 
     skip_devices = set(_split_list(args.skip_devices))
 
@@ -544,6 +646,9 @@ def main():
         print(f"STEMWERK_DIAG requested_device={device_preference}", file=sys.stderr)
 
     try:
+        output_root = Path(args.output_dir).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+
         sep = StemSeparator(model=args.model, device=resolved_device)
 
         def reaper_progress(pct: float, msg: str):
@@ -551,7 +656,8 @@ def main():
 
         sep.on_progress = reaper_progress
 
-        result = sep.separate(args.input, args.output_dir, stems=stems or None)
+        with _working_directory(output_root):
+            result = sep.separate(args.input, str(output_root), stems=stems or None)
         
         # Mapping logica voor REAPER compatibiliteit
         stem_mapping = {
@@ -565,8 +671,9 @@ def main():
 
         reaper_stems = {}
         for stem_name, stem_path in result.stems.items():
-            # Zorg voor absoluut pad
-            abs_path = Path(stem_path).absolute()
+            abs_path = _resolve_stem_path(output_root, stem_path)
+            if not abs_path.exists():
+                raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
             
             # Zoek naar de juiste REAPER naam
             filename = abs_path.stem.lower()

@@ -635,7 +635,9 @@ function M.verifyRuntimeAfterBootstrap()
     end
 
     if not fileExists(runtime.venvPython) then
-        errors[#errors + 1] = "venv_missing"
+        if not (pythonPath and pythonPath ~= "" and fileExists(pythonPath)) then
+            errors[#errors + 1] = "venv_missing"
+        end
     end
 
     local ffmpegPath = nil

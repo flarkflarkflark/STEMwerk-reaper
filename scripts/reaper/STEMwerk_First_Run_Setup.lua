@@ -1,6 +1,6 @@
 -- @description STEMwerk: First Run Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1
+-- @version 2.2.1.1
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -46,6 +46,7 @@ end
 
 local RAW_SCRIPT_DIR = getScriptDir()
 local PATH_HELPER = nil
+local linuxEnvPrefix
 local helperOk, helperMod = pcall(dofile, RAW_SCRIPT_DIR .. "STEMwerk_Path_Helper.lua")
 if helperOk and type(helperMod) == "table" then
     PATH_HELPER = helperMod
@@ -116,6 +117,14 @@ local function execCapture(cmd, timeoutMs)
     if out ~= "" then
         return rc, out
     end
+    if OS == "Windows" then
+        local wrapped = 'cmd.exe /d /c ' .. quoteArg(cmd .. ' 2>&1')
+        local rc2, out2 = exec(wrapped, timeoutMs or 20000)
+        out2 = out2 or ""
+        if out2 ~= "" then
+            return rc2, out2
+        end
+    end
     if OS ~= "Windows" then
         local h = io.popen(cmd .. " 2>&1")
         if h then
@@ -132,7 +141,76 @@ local function execCapture(cmd, timeoutMs)
     return rc, out
 end
 
-local function fileExists(path)
+local function probeOutputHasUsefulDevices(out)
+    if not out or out == "" then return false end
+    if out:find("STEMWERK_CUDA_DEVICE\t", 1, true) then return true end
+    if out:find("STEMWERK_DML_DEVICE\t", 1, true) then return true end
+    if out:find("STEMWERK_MPS_DEVICE\t", 1, true) then return true end
+    if out:find("STEMWERK_SELECTED_DEVICE\tcuda:", 1, true) then return true end
+    if out:find("STEMWERK_SELECTED_DEVICE\tdirectml", 1, true) then return true end
+    if out:find("STEMWERK_SELECTED_DEVICE\tmps", 1, true) then return true end
+    if out:match('"cuda_available"%s*:%s*true') then return true end
+    if out:match('"cuda_count"%s*:%s*[1-9]%d*') then return true end
+    if out:match('"directml_possible"%s*:%s*true') then return true end
+    if out:match('"mps_available"%s*:%s*true') then return true end
+    return false
+end
+
+local fileExists
+
+local function directRuntimeDeviceProbe(pythonPath)
+    if not pythonPath or pythonPath == "" or not fileExists(pythonPath) then
+        return nil, nil
+    end
+
+    local py = [[
+import json, importlib.util
+env = {}
+try:
+    import torch
+    env['torch'] = getattr(torch, '__version__', '')
+    env['cuda_available'] = bool(torch.cuda.is_available())
+    env['cuda_count'] = int(torch.cuda.device_count()) if env['cuda_available'] else 0
+    env['cuda_names'] = [torch.cuda.get_device_name(i) for i in range(env['cuda_count'])] if env['cuda_available'] else []
+    try:
+        env['mps_available'] = bool(getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_available())
+    except Exception:
+        env['mps_available'] = False
+except Exception as e:
+    env['torch_error'] = str(e)
+    env['cuda_available'] = False
+    env['cuda_count'] = 0
+    env['cuda_names'] = []
+    env['mps_available'] = False
+env['directml_possible'] = importlib.util.find_spec('torch_directml') is not None
+print('STEMWERK_ENV_JSON ' + json.dumps(env, ensure_ascii=False))
+for i, n in enumerate(env.get('cuda_names', [])):
+    print(f'STEMWERK_CUDA_DEVICE\tcuda:{i}\t{n}')
+if env.get('mps_available'):
+    print('STEMWERK_MPS_DEVICE\tmps\tApple MPS')
+if env.get('directml_possible'):
+    try:
+        import torch_directml
+        c = torch_directml.device_count()
+        for i in range(c):
+            print(f'STEMWERK_DML_DEVICE\tdirectml:{i}\tDirectML GPU {i}')
+        if c == 1:
+            print('STEMWERK_DML_ALIAS\tdirectml\tdirectml:0')
+    except Exception:
+        pass
+]]
+
+    local prefix = linuxEnvPrefix()
+    local cmd = prefix .. quoteArg(pythonPath) .. " -c " .. quoteArg(py)
+    local rc, out = execCapture(cmd, 30000)
+    out = out or ""
+    if out ~= "" then
+        return out, rc
+    end
+    return nil, rc
+end
+
+fileExists = function(path)
     if not path or path == "" then return false end
     local f = io.open(path, "r")
     if f then f:close(); return true end
@@ -264,6 +342,10 @@ local function prettyBackendReason(reason)
             part = "Backend install failed; using CPU"
         elseif lower == "backend_force_cpu" then
             part = "CPU fallback forced"
+        elseif lower == "bootstrap_cuda_confirmed" then
+            part = "CUDA runtime confirmed by installer"
+        elseif lower == "bootstrap_directml_confirmed" then
+            part = "DirectML runtime confirmed by installer"
         end
         local key = part:lower()
         if key ~= "" and not seen[key] then
@@ -317,7 +399,7 @@ local function resolvePath(raw)
     return value
 end
 
-local function linuxEnvPrefix()
+linuxEnvPrefix = function()
     if OS ~= "Linux" then return "" end
     return "env -u HIP_VISIBLE_DEVICES -u HSA_OVERRIDE_GFX_VERSION -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES "
 end
@@ -531,14 +613,19 @@ local function probeRuntimeDevices(pythonPath, separatorScript)
     local prefix = linuxEnvPrefix()
     local cmd1 = prefix .. quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript) .. " --list-devices-machine"
     local rc1, out1 = execCapture(cmd1, 30000)
-    if out1 and out1 ~= "" then
+    if probeOutputHasUsefulDevices(out1) then
         return out1, rc1, nil
     end
 
     local cmd2 = prefix .. quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript) .. " --list-devices"
     local rc2, out2 = execCapture(cmd2, 30000)
-    if out2 and out2 ~= "" then
+    if probeOutputHasUsefulDevices(out2) then
         return out2, rc2, nil
+    end
+
+    local out3, rc3 = directRuntimeDeviceProbe(pythonPath)
+    if out3 and out3 ~= "" then
+        return out3, rc3, nil
     end
     return nil, rc2 or rc1, "device_probe_failed"
 end
@@ -596,11 +683,27 @@ local function collectDeviceNames(deviceOut)
 end
 
 local function detectBackendFromProbe(deviceOut, envJson)
-    local hasCuda = deviceOut and (deviceOut:find("cuda:") or deviceOut:find("STEMWERK_CUDA_DEVICE")) or false
+    local cudaAvail = envJson and envJson:find('"cuda_available"%s*:%s*true') ~= nil
+    local cudaCount = envJson and tonumber(envJson:match('"cuda_count"%s*:%s*(%d+)')) or 0
+    local hasCuda = deviceOut and (
+        deviceOut:find("cuda:")
+        or deviceOut:find("STEMWERK_CUDA_DEVICE")
+        or deviceOut:find("STEMWERK_TORCH_GPU")
+        or deviceOut:find("STEMWERK_SELECTED_DEVICE\tcuda:")
+    ) or false
     local hasMps = deviceOut and (deviceOut:find("STEMWERK_MPS_DEVICE") or deviceOut:find("\tmps\t")) or false
-    local hasDirectml = deviceOut and (deviceOut:find("directml") or deviceOut:find("STEMWERK_DML_DEVICE")) or false
+    local directmlPossible = envJson and envJson:find('"directml_possible"%s*:%s*true') ~= nil
+    local hasDirectml = deviceOut and (
+        deviceOut:find("directml")
+        or deviceOut:find("STEMWERK_DML_DEVICE")
+        or deviceOut:find("STEMWERK_SELECTED_DEVICE\tdirectml")
+    ) or false
     local backend = "cpu"
     local reason = ""
+
+    if not hasCuda and cudaAvail and cudaCount > 0 then
+        hasCuda = true
+    end
 
     if OS == "macOS" then
         if hasMps then
@@ -645,7 +748,7 @@ local function detectBackendFromProbe(deviceOut, envJson)
                 reason = "cuda_unavailable"
             elseif OS == "macOS" and envJson:find('"mps_available"%s*:%s*false') then
                 reason = "mps_unavailable"
-            elseif OS == "Windows" and envJson:find('"directml_possible"%s*:%s*false') then
+            elseif OS == "Windows" and directmlPossible == false then
                 reason = "directml_unavailable"
             end
         end
@@ -1483,11 +1586,46 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     if probeErr and probeErr ~= "" then
         backendReason = probeErr
     end
+    if OS == "Windows" and verifiedRuntimeOk and (probeErr == "device_probe_failed" or deviceOut == nil or deviceOut == "") then
+        local bootstrapBackend = trim(state.BACKEND or "")
+        local bootstrapProfile = trim(state.PROFILE or "")
+        if bootstrapBackend == "cuda" and bootstrapProfile == "windows-cuda" then
+            backend = "cuda"
+            backendReason = "bootstrap_cuda_confirmed"
+        elseif bootstrapBackend == "directml" and bootstrapProfile == "windows-directml" then
+            backend = "directml"
+            backendReason = "bootstrap_directml_confirmed"
+        end
+    end
+    if OS == "Windows" and backend == "cpu" and verifiedRuntimeOk then
+        local bootstrapBackend = trim(state.BACKEND or "")
+        local bootstrapProfile = trim(state.PROFILE or "")
+        local envCudaAvail = envJsonValue(envJson, "cuda_available") == "true"
+        local envCudaCount = tonumber(envJsonValue(envJson, "cuda_count")) or 0
+        local sawCudaRuntime = envCudaAvail or envCudaCount > 0
+            or (deviceOut and (deviceOut:find("STEMWERK_TORCH_GPU\tcuda:") or deviceOut:find("STEMWERK_SELECTED_DEVICE\tcuda:")))
+        local sawDirectMlRuntime = deviceOut and (
+            deviceOut:find("STEMWERK_DEVICE\tdirectml")
+            or deviceOut:find("STEMWERK_DML_DEVICE\tdirectml")
+            or deviceOut:find("STEMWERK_SELECTED_DEVICE\tdirectml")
+        )
+        if bootstrapBackend == "cuda" and sawCudaRuntime then
+            backend = "cuda"
+            backendReason = "bootstrap_cuda_confirmed"
+        elseif bootstrapBackend == "directml" and sawDirectMlRuntime and bootstrapProfile == "windows-directml" then
+            backend = "directml"
+            backendReason = "bootstrap_directml_confirmed"
+        end
+    end
     if state.BACKEND_REASON and state.BACKEND_REASON ~= "" then
-        if backendReason ~= "" then
-            backendReason = backendReason .. "; " .. state.BACKEND_REASON
-        else
-            backendReason = state.BACKEND_REASON
+        local priorBackend = trim(state.BACKEND or "")
+        local sameBackend = (priorBackend == "") or (priorBackend == backend)
+        if backend == "cpu" or sameBackend then
+            if backendReason ~= "" then
+                backendReason = backendReason .. "; " .. state.BACKEND_REASON
+            else
+                backendReason = state.BACKEND_REASON
+            end
         end
     end
     local backendReasonLabel = prettyBackendReason(backendReason)
