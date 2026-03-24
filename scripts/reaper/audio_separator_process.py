@@ -22,8 +22,32 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from stemwerk_core import StemSeparator, get_available_devices, select_device
-from stemwerk_core import devices as core_devices
+StemSeparator = None
+get_available_devices = None
+select_device = None
+core_devices = None
+_core_loaded = False
+
+
+def _require_core() -> None:
+    global StemSeparator, get_available_devices, select_device, core_devices, _core_loaded
+    if _core_loaded:
+        return
+    try:
+        from stemwerk_core import StemSeparator as _StemSeparator
+        from stemwerk_core import get_available_devices as _get_available_devices
+        from stemwerk_core import select_device as _select_device
+        from stemwerk_core import devices as _core_devices
+    except Exception as exc:
+        raise ModuleNotFoundError(
+            "stemwerk_core is required for this operation. Install with: pip install stemwerk-core"
+        ) from exc
+
+    StemSeparator = _StemSeparator
+    get_available_devices = _get_available_devices
+    select_device = _select_device
+    core_devices = _core_devices
+    _core_loaded = True
 
 
 class _TeeTextIO:
@@ -200,6 +224,7 @@ def _split_list(value: Optional[str]) -> List[str]:
 
 
 def _get_device_skips() -> List[Dict[str, str]]:
+    _require_core()
     skips = getattr(core_devices, "_DEVICE_SKIPS", None)
     if not skips:
         return []
@@ -424,6 +449,7 @@ def _log_device_diagnostics(devices: List[Dict[str, str]], env: Dict[str, object
 
 def list_devices_machine(skip_devices: Optional[Set[str]] = None):
     """Machine-readable dump for REAPER/Lua UIs (no JSON parser needed on Lua side)."""
+    _require_core()
     devices = get_available_devices()
     if skip_devices:
         devices = [d for d in devices if d.get("id") not in skip_devices]
@@ -515,6 +541,7 @@ def list_devices_machine(skip_devices: Optional[Set[str]] = None):
 
 def list_devices(skip_devices: Optional[Set[str]] = None):
     """List all available compute devices."""
+    _require_core()
     devices = get_available_devices()
     if skip_devices:
         devices = [d for d in devices if d.get("id") not in skip_devices]
@@ -527,6 +554,7 @@ def list_devices(skip_devices: Optional[Set[str]] = None):
 def check_installation():
     """Check if stemwerk-core and audio-separator are properly installed."""
     try:
+        _require_core()
         from audio_separator.separator import Separator  # noqa: F401
         import torch
 
@@ -612,6 +640,8 @@ def main():
     if not args.input or not args.output_dir:
         parser.print_help()
         return 1
+
+    _require_core()
 
     if not os.path.exists(args.input):
         print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
