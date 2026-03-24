@@ -27,12 +27,16 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 ### Recommended (Installer)
 1. Download the latest installer for your platform (Windows/macOS/Linux).
 2. Run the installer.
-3. Open REAPER and run `STEMwerk_First_Run_Setup.lua` once.
-4. After setup completes, run `STEMwerk.lua` from the REAPER Action List.
+3. Let the installer finish the bootstrap/runtime setup.
+4. Open REAPER.
+5. If the scripts are not visible yet in the Action List, use Actions -> ReaScript -> Load ReaScript... and load `STEMwerk_Setup_Toolbar.lua` or `STEMwerk.lua` from `REAPER/Scripts/STEMwerk-reaper/`.
+6. Run `STEMwerk.lua` (shown in REAPER as `Stemwerk: Main`).
 
 This step prepares the runtime environment (Python, FFmpeg, and dependencies).
 
-You can re-run `STEMwerk_First_Run_Setup.lua` later if dependencies need repair.
+On Windows, `STEMwerk_First_Run_Setup.lua` does not replace the installer bootstrap. If the runtime is incomplete, re-run the Windows installer first.
+
+On macOS and Linux, `STEMwerk_First_Run_Setup.lua` is the normal REAPER-side bootstrap and repair entry point.
 
 Note: First-time setup downloads can take a while and may require several gigabytes of free disk space. On Windows, keeping roughly 4–8 GB free is a safe baseline.
 
@@ -45,12 +49,21 @@ Note: First-time setup downloads can take a while and may require several gigaby
 
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
 
-### ReaPack
+### ReaPack (Linux & Mac only!!!)
 Import this repository URL into ReaPack:
 
 ```text
 https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
 ```
+
+Example workflow:
+1. Extensions -> ReaPack -> Import a repository.
+2. Paste the URL above.
+3. ReaPack -> Synchronize packages.
+4. Search for "STEMwerk" and install.
+5. In the REAPER Action List, run `STEMwerk_First_Run_Setup.lua`, then `STEMwerk.lua`.
+
+> **WARNING (Windows)**: ReaPack is not recommended. On Windows, full setup is intentionally handled by the installer; the REAPER setup does not launch bootstrap installers. ReaPack installs only the scripts, so Python/FFmpeg/venv are often missing or resolve to unsupported Windows shim paths. Use the installer (recommended) or the manual developer install instead.
 
 - ReaPack installs STEMwerk under `REAPER/Scripts/STEMwerk-reaper/`, the same folder layout used by the installers.
 - Older ReaPack layouts are still accepted by the runtime scripts as a fallback, so existing installs keep working.
@@ -58,9 +71,9 @@ https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
 
 ### REAPER Action List: which scripts to use
 To avoid confusion, only these are meant for normal use:
-- `STEMwerk: First Run Setup` (`STEMwerk-SETUP.lua`) — run once after install, or if STEMwerk says components are missing.
-- `STEMwerk.lua` — the main UI.
-- `STEMwerk: Karaoke`, `STEMwerk: Vocals Only`, `STEMwerk: Drums Only`, `STEMwerk: Bass Only`, `STEMwerk: All Stems` — optional presets.
+- `STEMwerk: First Run Setup` (`STEMwerk-SETUP.lua`) — use this for manual installs, ReaPack installs, and the normal bootstrap/repair flow on macOS/Linux.
+- `Stemwerk: Main` (`STEMwerk.lua`) — the main UI.
+- `Stemwerk: Karaoke`, `Stemwerk: Vocals Only`, `Stemwerk: Drums Only`, `Stemwerk: Bass Only`, `Stemwerk: All Stems` — optional presets.
 
 Internal/troubleshooting (not for regular use):
 - `STEMwerk: First Run Setup (internal)` — invoked by the setup wrapper.
@@ -74,6 +87,31 @@ Note: REAPER does not auto-register scripts in the Action List. Use Actions → 
 - Time selection: Process only the selected region, even without a selected item
 - Per-item: Multi-item tracks can be processed item-by-item for cleaner naming
 - Quick presets: Optional toolbar scripts for one-click workflows
+
+## GUI highlights
+- Main dialog: stem toggles, presets, in-place vs new tracks, model choice, and device selector.
+- Progress window: per-job status, realtime stages/ETA, sequential/parallel indicator with fallback reason.
+- Visuals: optional procedural art gallery and audio-reactive visuals (toggleable).
+- Shortcuts: quick stem toggles (1-4), presets (K/I/D), Enter to start, Esc to cancel.
+- Language support: provisional three-language UI (EN/NL/DE).
+- Theme: day/night mode (light/dark) with persistent settings.
+
+## Parallel vs Sequential (Multi-track)
+STEMwerk can run multi-track jobs in parallel when Parallel is enabled and more than one job is queued. It will automatically fall back to Sequential in two cases:
+- Per-item time selection jobs (for correctness and isolation).
+- Device = Auto with no GPU backends detected (CPU-only is faster and safer).
+
+Examples where pure parallel does happen:
+- You select 3 tracks with items, no time selection, Parallel on, device = `cuda:0` or `directml`. -> 3 jobs at once (per track).
+- You select 5 tracks, Parallel on, device = `auto`, and a GPU is detected. -> 5 jobs at once.
+- You select multiple items across multiple tracks (no time selection), Parallel on, device = `cuda`. -> per-track jobs in parallel.
+
+Examples where it does not run in parallel:
+- Time selection with multiple items on one track -> per-item jobs -> sequential forced ("Per-item multi-track isolation").
+- Parallel on, device = `auto`, but no GPU backend -> sequential forced ("Auto device (no GPU)").
+- Only 1 job (1 track) -> sequential by definition.
+
+The progress window shows the active mode and the reason when a fallback happens.
 
 ## Relationship to STEMwerk-core
 STEMwerk-reaper bundles the same separation pipeline used by STEMwerk-core via `scripts/reaper/audio_separator_process.py` and the `tools/` utilities. The REAPER layer handles DAW integration, UI, and item or track management, while the core handles model execution and device selection.
@@ -92,10 +130,8 @@ See `docs/ROCm.md` for Linux AMD guidance.
 - Requirements are listed in `requirements-ci.txt` and `requirements-gui.txt`
 - Tests and fixtures live under `tests/`
 
-## Roadmap
-- Installer builds for Windows, macOS, and Linux
-- UI scaling and i18n polish for long translations
-- Improved device detection and guidance
+## Credits
+3D artwork collection inspired by / derived from Milkdrop presets.
 
 ## License / author
 MIT License.
