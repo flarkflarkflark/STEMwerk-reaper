@@ -320,6 +320,7 @@ local LANGUAGES = {
         help_step3_detail = "Click the STEMwerk button and watch the AI work its magic!",
         help_pro_tip = "Pro Tip: Use the 6-stem model (htdemucs_6s) for guitar and piano separation!",
         tips_hints = "Tips",
+        keyboard_shortcuts = "Keyboard shortcuts:",
         open_help = "Open Help",
         close_cancel = "Close / Cancel",
         start_stemwerk = "Start STEMwerk",
@@ -762,6 +763,7 @@ local LANGUAGES = {
         footer_takes = "Takes",
         footer_time_selection = "Zeitauswahl",
         footer_from = "von",
+        footer_source = "Quelle",
         stem = "Stem",
         stems = "Stems",
         footer_stem_track = "Stem-Track",
@@ -784,6 +786,9 @@ local LANGUAGES = {
         footer_line_output_items = "Ausgabe: %d %s aus %d %s",
         footer_line_location_details = "Ort: %s (%d: %s)",
         footer_line_location_simple = "Ort: %s",
+        footer_output_calc = "%d Stems (%d x %d Tracks)",
+        footer_using_device = "Verwendet: %s",
+        footer_device_none = "CPU (Keine GPU)",
 
         -- Stems
         vocals = "Gesang",
