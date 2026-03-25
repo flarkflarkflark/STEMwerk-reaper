@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 3 * * 0' # weekly: Sunday 03:00 UTC
 
+concurrency:
+  group: ci-heavy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   heavy:
     runs-on: ubuntu-latest
@@ -12,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: 3.11
 

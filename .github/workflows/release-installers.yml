@@ -7,12 +7,20 @@ on:
         description: "Release tag to upload assets to (e.g. v2.1.0). Leave empty when running from a tag push."
         required: false
         default: ""
+      upload_release_assets:
+        description: "Upload built installers to the GitHub release. Ignored on tag pushes."
+        required: false
+        default: "true"
   push:
     tags:
       - "v*"
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-installers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   STEMWERK_VERSION_FILE: VERSION
@@ -110,6 +118,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload release asset (Windows .exe)
+        if: ${{ github.event_name == 'push' || github.event.inputs.upload_release_assets == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-version.outputs.release_tag }}
@@ -136,6 +145,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload release asset (macOS .pkg)
+        if: ${{ github.event_name == 'push' || github.event.inputs.upload_release_assets == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-version.outputs.release_tag }}
@@ -188,6 +198,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload release assets (Linux)
+        if: ${{ github.event_name == 'push' || github.event.inputs.upload_release_assets == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-version.outputs.release_tag }}

@@ -1,10 +1,14 @@
-name: CI Full
+name: CI Fast
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+
+concurrency:
+  group: ci-fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   tests:
@@ -13,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
@@ -24,9 +28,10 @@ jobs:
         run: |
           python -m pip install pytest soundfile
 
-      - name: Quick script smoke test
+      - name: Quick script smoke tests
         run: |
           # lightweight invocation that doesn't require heavy ML stacks
+          python scripts/reaper/audio_separator_process.py --list-models
           python scripts/reaper/audio_separator_process.py --help
 
       - name: Test i18n completeness
@@ -36,4 +41,3 @@ jobs:
             echo "Language file validation failed"
             exit 1
           fi
-
