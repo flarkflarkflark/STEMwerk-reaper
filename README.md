@@ -34,9 +34,9 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 
 This step prepares the runtime environment (Python, FFmpeg, and dependencies).
 
-On Windows, `STEMwerk_First_Run_Setup.lua` does not replace the installer bootstrap. If the runtime is incomplete, re-run the Windows installer first.
+On Windows, `STEMwerk-SETUP.lua` does not replace the installer bootstrap. If the runtime is incomplete, re-run the Windows installer first.
 
-On macOS and Linux, `STEMwerk_First_Run_Setup.lua` is the normal REAPER-side bootstrap and repair entry point.
+On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side bootstrap and repair entry point.
 
 Note: First-time setup downloads can take a while and may require several gigabytes of free disk space. On Windows, keeping roughly 4–8 GB free is a safe baseline.
 
@@ -61,23 +61,22 @@ Example workflow:
 2. Paste the URL above.
 3. ReaPack -> Synchronize packages.
 4. Search for "STEMwerk" and install.
-5. In the REAPER Action List, run `STEMwerk_First_Run_Setup.lua`, then `STEMwerk.lua`.
+5. In the REAPER Action List, run `STEMwerk-SETUP.lua`, then `STEMwerk.lua`.
 
 > **WARNING (Windows)**: ReaPack is not recommended. On Windows, full setup is intentionally handled by the installer; the REAPER setup does not launch bootstrap installers. ReaPack installs only the scripts, so Python/FFmpeg/venv are often missing or resolve to unsupported Windows shim paths. Use the installer (recommended) or the manual developer install instead.
 
 - ReaPack installs STEMwerk under `REAPER/Scripts/STEMwerk-reaper/`, the same folder layout used by the installers.
 - Older ReaPack layouts are still accepted by the runtime scripts as a fallback, so existing installs keep working.
-- After installing or updating via ReaPack, run `STEMwerk_First_Run_Setup.lua` once.
+- After installing or updating via ReaPack, run `STEMwerk-SETUP.lua` once.
 
 ### REAPER Action List: which scripts to use
 To avoid confusion, only these are meant for normal use:
-- `STEMwerk: First Run Setup` (`STEMwerk-SETUP.lua`) — use this for manual installs, ReaPack installs, and the normal bootstrap/repair flow on macOS/Linux.
+- `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) — use this for manual installs, ReaPack installs, and the normal bootstrap/repair flow on macOS/Linux.
 - `Stemwerk: Main` (`STEMwerk.lua`) — the main UI.
 - `Stemwerk: Karaoke`, `Stemwerk: Vocals Only`, `Stemwerk: Drums Only`, `Stemwerk: Bass Only`, `Stemwerk: All Stems` — optional presets.
 
 Internal/troubleshooting (not for regular use):
-- `STEMwerk: First Run Setup (internal)` — invoked by the setup wrapper.
-- `STEMwerk: Repair Install (internal)` — fallback wrapper used by support.
+- everything under `scripts/reaper/_internal/` — runtime helpers used by the public scripts
 
 Note: REAPER does not auto-register scripts in the Action List. Use Actions → ReaScript → Load ReaScript… or run `STEMwerk_Setup_Toolbar.lua` to register the standard actions.
 

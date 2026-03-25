@@ -103,8 +103,14 @@ end
 function M.deriveInstallRootFromScriptDir(scriptDir, osName, sep)
     local clean = M.stripTrailingSep(scriptDir)
     if clean == "" then return "" end
-    local suffix = sep .. "scripts" .. sep .. "reaper"
+    local internalSuffix = sep .. "_internal"
     local lowerClean = normalizeForCompare(clean, osName)
+    local lowerInternal = normalizeForCompare(internalSuffix, osName)
+    if lowerClean:sub(-#lowerInternal) == lowerInternal then
+        clean = clean:sub(1, #clean - #internalSuffix)
+        lowerClean = normalizeForCompare(clean, osName)
+    end
+    local suffix = sep .. "scripts" .. sep .. "reaper"
     local lowerSuffix = normalizeForCompare(suffix, osName)
     if lowerClean:sub(-#lowerSuffix) == lowerSuffix then
         return clean:sub(1, #clean - #suffix)

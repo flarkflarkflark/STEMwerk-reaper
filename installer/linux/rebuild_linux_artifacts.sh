@@ -4,9 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT_DIR="$ROOT_DIR/installer/linux/dist"
 
-VERSION="${STEMWERK_VERSION:-0.0.0}"
-if [[ -z "${STEMWERK_VERSION:-}" && -f "$ROOT_DIR/VERSION" ]]; then
+VERSION="${STEMWERK_VERSION:-}"
+if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
+fi
+if [[ -z "$VERSION" ]]; then
+  echo "ERROR: STEMWERK_VERSION is not set and VERSION could not be read." >&2
+  exit 1
 fi
 
 usage() {

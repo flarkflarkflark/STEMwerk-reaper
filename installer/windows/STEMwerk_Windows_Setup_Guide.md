@@ -29,7 +29,7 @@ Optional:
 
 ## Important Windows note
 
-On Windows, `STEMwerk_First_Run_Setup.lua` does not replace the installer bootstrap.
+On Windows, `STEMwerk-SETUP.lua` does not replace the installer bootstrap.
 
 If something is missing or the runtime is incomplete:
 
@@ -74,11 +74,10 @@ Normal use:
 
 Support / repair paths:
 
-- `STEMwerk: First Run Setup`
-- `STEMwerk: Repair Install (internal)`
+- `STEMwerk: Setup`
 
-## When to use First Run Setup
+## When to use Setup
 
-On Windows, use `STEMwerk: First Run Setup` only as a REAPER-side support or repair path after installation.
+On Windows, use `STEMwerk: Setup` only as a REAPER-side support or repair path after installation.
 
 For a fresh Windows installation, the installer is the correct setup route.

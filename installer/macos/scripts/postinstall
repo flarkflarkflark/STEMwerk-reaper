@@ -36,7 +36,7 @@ rsync -a --delete "$SRC/" "$TARGET/"
 chown -R "$CONSOLE_USER":staff "$TARGET" 2>/dev/null || true
 
 echo "STEMwerk postinstall: copied to $TARGET"
-echo "Next step: Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua."
+echo "Next step: Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua."
 
 # Best-effort: reveal folder in Finder for convenience (won't fail CI if no GUI).
 if command -v open >/dev/null 2>&1; then
@@ -44,7 +44,6 @@ if command -v open >/dev/null 2>&1; then
 fi
 
 if command -v osascript >/dev/null 2>&1; then
-  sudo -u "$CONSOLE_USER" osascript -e 'display dialog "STEMwerk is installed. Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua." with title "STEMwerk Installer" buttons {"OK"}' >/dev/null 2>&1 || true
+  sudo -u "$CONSOLE_USER" osascript -e 'display dialog "STEMwerk is installed. Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua." with title "STEMwerk Installer" buttons {"OK"}' >/dev/null 2>&1 || true
 fi
-
 

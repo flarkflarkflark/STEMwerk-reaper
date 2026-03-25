@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sync the repo versions of the REAPER scripts into the user's REAPER Scripts folder.
-# This is useful because REAPER often runs the copies under its config directory,
-# not the files inside this git repo.
+# Sync the repo versions of the REAPER scripts into the user's REAPER Scripts
+# folder. This is useful because REAPER often runs the copies under its config
+# directory, not the files inside this git repo.
 #
 # Linux:  ~/.config/REAPER/Scripts/STEMwerk-reaper/
 # macOS:  ~/Library/Application Support/REAPER/Scripts/STEMwerk-reaper/
@@ -32,23 +32,49 @@ fi
 
 mkdir -p "${dest}"
 
-mapfile -t sync_files <<'EOF'
-STEMwerk.lua
-audio_separator_process.py
-STEMwerk-SETUP.lua
-STEMwerk_First_Run_Setup.lua
-STEMwerk_Runtime_Setup.lua
-STEMwerk_Repair_Install.lua
-STEMwerk_Path_Helper.lua
-STEMwerk_Bootstrap_Linux.sh
-STEMwerk_Bootstrap_macOS.sh
-STEMwerk_Bootstrap_Windows.ps1
-STEMwerk_Bootstrap_Linux_Launcher.sh
-EOF
+prune_files=(
+  "STEMwerk.lua.bak"
+  "STEMwerk.lua.bak2"
+  "sync_to_reaper.sh"
+  "STEMwerk_Enable_Debug.lua"
+  "STEMwerk_Disable_Debug.lua"
+  "STEMwerk_Set_FFmpegPath.lua"
+  "STEMwerk_Set_PythonPath.lua"
+  "STEMwerk_separate.lua"
+)
 
-for file in "${sync_files[@]}"; do
-  cp -v "${src_dir}/${file}" "${dest}/${file}"
+for rel in "${prune_files[@]}"; do
+  rm -f "${dest}/${rel}"
 done
+
+rsync -a --delete \
+  --exclude='__pycache__/' \
+  --exclude='*.pyc' \
+  --exclude='*.pyo' \
+  --exclude='*.bak' \
+  --exclude='*.bak2' \
+  --exclude='.DS_Store' \
+  --exclude='sync_to_reaper.sh' \
+  --exclude='STEMwerk_Enable_Debug.lua' \
+  --exclude='STEMwerk_Disable_Debug.lua' \
+  --exclude='STEMwerk_Set_FFmpegPath.lua' \
+  --exclude='STEMwerk_Set_PythonPath.lua' \
+  --exclude='STEMwerk_separate.lua' \
+  --exclude='vendor/stemwerk-core/build/' \
+  "${src_dir}/" \
+  "${dest}/"
+
+rsync -a --delete \
+  --exclude='__pycache__/' \
+  --exclude='*.pyc' \
+  --exclude='*.pyo' \
+  --exclude='.DS_Store' \
+  "${repo_root}/i18n/" \
+  "${dest}/i18n/"
+
+if [[ ! -e "${dest}/vendor/stemwerk-core/stemwerk_core-0.1.0-py3-none-any.whl" ]]; then
+  echo "WARNING: stemwerk-core bundle was not synced to ${dest}/vendor/stemwerk-core" >&2
+fi
 
 echo
 echo "Synced STEMwerk scripts to: ${dest}"

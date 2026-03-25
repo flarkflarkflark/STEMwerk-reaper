@@ -1,4 +1,4 @@
--- @description STEMwerk: First Run Setup (internal)
+-- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.2.1.1
 -- @changelog
@@ -80,7 +80,7 @@ end
 if not INSTALL.ok then
     msgBox(
         "STEMwerk Setup",
-        "STEMwerk runtime location could not be resolved.\n\nReinstall STEMwerk and run STEMwerk_First_Run_Setup.lua from REAPER.",
+        "STEMwerk runtime location could not be resolved.\n\nReinstall STEMwerk and run STEMwerk-SETUP.lua from REAPER.",
         0
     )
     return
@@ -356,6 +356,19 @@ local function prettyBackendReason(reason)
     return table.concat(parts, "; ")
 end
 
+local function prettyBackendNote(note)
+    local value = trim(note)
+    if value == "" then return "" end
+    local lower = value:lower()
+    if lower == "non_official_rocm_distro" then
+        return "ROCm was enabled on a non-official Linux distro. This can work, but it is outside AMD's officially supported distro list."
+    end
+    local text = value:gsub("_", " ")
+    text = text:gsub("%s+", " ")
+    text = text:gsub("^%l", string.upper)
+    return text
+end
+
 local function formatStepStatus(state)
     local stepIndex = trim(state.STEP_INDEX or "")
     local stepTotal = trim(state.STEP_TOTAL or "")
@@ -543,6 +556,30 @@ local function wrapLine(line, maxLen)
     end
     if s ~= "" then out[#out + 1] = s end
     return out
+end
+
+local function setLinuxLogLineColor(line)
+    if not line then
+        gfx.set(0.08, 0.08, 0.08, 1)
+        return
+    end
+    if line:match("^STAGE:") then
+        gfx.set(0.92, 0.45, 0.10, 1)
+    elseif line:match("^STEP%s+1/%d+:") then
+        gfx.set(1.0, 100 / 255, 100 / 255, 1)
+    elseif line:match("^STEP%s+2/%d+:") then
+        gfx.set(100 / 255, 200 / 255, 1.0, 1)
+    elseif line:match("^STEP%s+3/%d+:") then
+        gfx.set(150 / 255, 100 / 255, 1.0, 1)
+    elseif line:match("^STEP%s+4/%d+:") then
+        gfx.set(100 / 255, 1.0, 100 / 255, 1)
+    elseif line:match("^STEP%s+%d+/%d+:") then
+        gfx.set(0.40, 0.78, 1.0, 1)
+    elseif line:match("^=+$") or line:match("^- rocminfo:") or line:match("^- rocm%-smi:") then
+        gfx.set(0.50, 0.50, 0.50, 1)
+    else
+        gfx.set(0.82, 0.84, 0.87, 1)
+    end
 end
 
 local function drawStemwerkTitleWindows(y, fontSize)
@@ -1630,6 +1667,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     end
     local backendReasonLabel = prettyBackendReason(backendReason)
     local backendNote = state.BACKEND_NOTE and tostring(state.BACKEND_NOTE) or ""
+    local backendNoteLabel = prettyBackendNote(backendNote)
     local profile = profileForBackend(backend)
 
     local function hasError(key)
@@ -1696,8 +1734,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         if backendReasonLabel and backendReasonLabel ~= "" then
             finalMessage[#finalMessage + 1] = "Backend reason: " .. tostring(backendReasonLabel)
         end
-        if backendNote and backendNote ~= "" then
-            finalMessage[#finalMessage + 1] = "Note: " .. tostring(backendNote)
+        if backendNoteLabel ~= "" then
+            finalMessage[#finalMessage + 1] = "Note: " .. tostring(backendNoteLabel)
         end
         if deviceNames and deviceNames ~= "" then
             finalMessage[#finalMessage + 1] = "Devices: " .. tostring(deviceNames)
@@ -1730,8 +1768,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     if backendReasonLabel and backendReasonLabel ~= "" then
         finalMessage[#finalMessage + 1] = "Backend reason: " .. tostring(backendReasonLabel)
     end
-    if backendNote and backendNote ~= "" then
-        finalMessage[#finalMessage + 1] = "Note: " .. tostring(backendNote)
+    if backendNoteLabel ~= "" then
+        finalMessage[#finalMessage + 1] = "Note: " .. tostring(backendNoteLabel)
     end
     if deviceNames and deviceNames ~= "" then
         finalMessage[#finalMessage + 1] = "Devices: " .. tostring(deviceNames)
@@ -1769,7 +1807,7 @@ safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSucces
             "Reason: postbootstrap_failed",
             "",
             "An internal setup reporting step failed.",
-            "Please run STEMwerk_First_Run_Setup.lua again.",
+            "Please run STEMwerk-SETUP.lua again.",
         },
     }
 end
@@ -2169,6 +2207,55 @@ local function windowsVerifyRepair(runtime, separatorScript)
 end
 
 local LINUX_SETUP = nil
+local LINUX_SETUP_FONT_SCALE_KEY = "linuxSetupFontScale"
+local LINUX_SETUP_FONT_SCALE_MIN = 0.7
+local LINUX_SETUP_FONT_SCALE_MAX = 1.8
+local LINUX_SETUP_FONT_SCALE_STEP = 0.1
+
+local function clamp(value, minValue, maxValue)
+    if value < minValue then return minValue end
+    if value > maxValue then return maxValue end
+    return value
+end
+
+local function getLinuxSetupFontScale()
+    local raw = tonumber(getExt(LINUX_SETUP_FONT_SCALE_KEY) or "")
+    if not raw then return 1.25 end
+    return clamp(raw, LINUX_SETUP_FONT_SCALE_MIN, LINUX_SETUP_FONT_SCALE_MAX)
+end
+
+local function saveLinuxSetupFontScale(scale)
+    setExt(LINUX_SETUP_FONT_SCALE_KEY, string.format("%.2f", clamp(scale, LINUX_SETUP_FONT_SCALE_MIN, LINUX_SETUP_FONT_SCALE_MAX)))
+end
+
+local function linuxFontSize(baseSize)
+    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale) or getLinuxSetupFontScale()
+    return math.max(10, math.floor((baseSize * scale) + 0.5))
+end
+
+local function linuxWrapWidth(baseWidth)
+    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale) or getLinuxSetupFontScale()
+    return math.max(48, math.floor((baseWidth / scale) + 0.5))
+end
+
+local function linuxLineHeight(baseHeight)
+    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale) or getLinuxSetupFontScale()
+    return math.max(12, math.floor((baseHeight * scale) + 0.5))
+end
+
+local function adjustLinuxSetupFontScale(delta)
+    if not LINUX_SETUP then return end
+    local nextScale = clamp((LINUX_SETUP.fontScale or 1.0) + delta, LINUX_SETUP_FONT_SCALE_MIN, LINUX_SETUP_FONT_SCALE_MAX)
+    if math.abs(nextScale - (LINUX_SETUP.fontScale or 1.0)) < 0.001 then return end
+    LINUX_SETUP.fontScale = nextScale
+    saveLinuxSetupFontScale(nextScale)
+end
+
+local function resetLinuxSetupFontScale()
+    if not LINUX_SETUP then return end
+    LINUX_SETUP.fontScale = 1.25
+    saveLinuxSetupFontScale(1.25)
+end
 
 local function linuxPidAlive(pidFile)
     local f = io.open(pidFile, "r")
@@ -2179,6 +2266,32 @@ local function linuxPidAlive(pidFile)
     if not pid then return false, nil end
     local ok = os.execute("kill -0 " .. pid .. " >/dev/null 2>&1")
     return (ok == true or ok == 0), pid
+end
+
+local function captureLinuxWindowGeometry()
+    if not (gfx and gfx.dock) then return nil end
+    local dockState, wx, wy, ww, wh = gfx.dock(-1, 0, 0, 0, 0)
+    if type(wx) ~= "number" or type(wy) ~= "number" or type(ww) ~= "number" or type(wh) ~= "number" then
+        return nil
+    end
+    if ww <= 0 or wh <= 0 then
+        return nil
+    end
+    return {
+        dockState = dockState or 0,
+        x = math.floor(wx),
+        y = math.floor(wy),
+        w = math.floor(ww),
+        h = math.floor(wh),
+    }
+end
+
+local function restoreLinuxWindowGeometry()
+    if not (LINUX_SETUP and LINUX_SETUP.windowGeometry and gfx and gfx.dock) then return end
+    if LINUX_SETUP.geometryRestored then return end
+    local g = LINUX_SETUP.windowGeometry
+    gfx.dock(g.dockState or 0, g.x or 0, g.y or 0, g.w or 0, g.h or 0)
+    LINUX_SETUP.geometryRestored = true
 end
 
 local function tryExec(cmd)
@@ -2224,8 +2337,9 @@ local function drawButton(label, x, y, w, h)
     gfx.rect(x, y, w, h, 1)
     gfx.set(1, 1, 1, 1)
     gfx.rect(x, y, w, h, 0)
+    gfx.setfont(1, "Arial", linuxFontSize(13))
     gfx.x = x + 8
-    gfx.y = y + 6
+    gfx.y = y + math.max(2, math.floor((h - linuxLineHeight(13)) / 2))
     gfx.drawstr(label)
 end
 
@@ -2233,173 +2347,748 @@ local function isMouseIn(x, y, w, h)
     return gfx.mouse_x >= x and gfx.mouse_x <= (x + w) and gfx.mouse_y >= y and gfx.mouse_y <= (y + h)
 end
 
-local function linuxDrawStatus(state, logLines, pidAlive, pid)
-    local w, h = gfx.w, gfx.h
-    gfx.set(0, 0, 0, 1)
-    gfx.rect(0, 0, w, h, 1)
-    gfx.set(1, 1, 1, 1)
+local function drawLinuxPanel(x, y, w, h, bg, border)
+    gfx.set(bg[1], bg[2], bg[3], bg[4] or 1)
+    gfx.rect(x, y, w, h, 1)
+    gfx.set(border[1], border[2], border[3], border[4] or 1)
+    gfx.rect(x, y, w, h, 0)
+end
 
-    local y = 16
-    gfx.setfont(1, "Arial", 22)
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("STEMwerk Setup [Linux]")
-    y = y + 30
+local buildLinuxLogDisplayLines
+local syncLinuxLogScroll
+local drawLinuxScrollbar
 
-    gfx.setfont(1, "Arial", 16)
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("Linux live setup UI active")
-    y = y + 22
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("UI loop running")
-    y = y + 20
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("Phase: " .. ((state.STATUS == "running" or state.STATUS == "" or not state.STATUS) and "Bootstrapping" or "Finalizing"))
-    y = y + 20
-
-    gfx.setfont(1, "Arial", 14)
-    local statusLine = "Status: " .. tostring(state.STATUS or "running")
-    if LINUX_SETUP and LINUX_SETUP.spinner then
-        statusLine = statusLine .. " [" .. LINUX_SETUP.spinner .. "]"
+local function linuxValueColor(kind, isSuccess)
+    if kind == "python_path" then
+        return { 1.0, 100 / 255, 100 / 255, 1 }
+    elseif kind == "ffmpeg_path" then
+        return { 100 / 255, 200 / 255, 1.0, 1 }
+    elseif kind == "cap_path" then
+        return { 150 / 255, 100 / 255, 1.0, 1 }
+    elseif kind == "log_path" then
+        return { 100 / 255, 1.0, 150 / 255, 1 }
+    elseif kind == "status_ok" then
+        return { 0.25, 0.95, 0.35, 1 }
+    elseif kind == "status_fail" then
+        return { 1.0, 0.45, 0.15, 1 }
+    elseif kind == "note" then
+        return { 0.96, 0.76, 0.45, 1 }
+    elseif kind == "muted" then
+        return { 0.72, 0.74, 0.78, 1 }
+    elseif isSuccess then
+        return { 0.96, 0.96, 0.97, 1 }
     end
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr(statusLine)
-    y = y + 18
+    return { 0.92, 0.92, 0.94, 1 }
+end
 
-    if state.STATUS_REASON and state.STATUS_REASON ~= "" then
-        gfx.x = 18
+local function resolveLinuxPythonPath(state)
+    for _, candidate in ipairs({
+        state.PYTHON_PATH or "",
+        state.VENV_PYTHON or "",
+        (LINUX_SETUP and LINUX_SETUP.runtime and LINUX_SETUP.runtime.venvPython) or "",
+    }) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and (fileExists(resolved) or resolved:match("/%.venv/bin/python$")) then
+            return resolved
+        end
+    end
+    return ""
+end
+
+local function resolveLinuxFfmpegPath(state)
+    for _, candidate in ipairs({
+        state.FFMPEG_PATH or "",
+        getExt("ffmpegPath"),
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/snap/bin/ffmpeg",
+    }) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) then
+            return resolved
+        end
+    end
+    return ""
+end
+
+local function measureLinuxInfoRows(rows, wrapWidth)
+    local total = 0
+    for _, row in ipairs(rows or {}) do
+        local wrapped = wrapLine(tostring(row.value or ""), wrapWidth)
+        total = total + math.max(1, #wrapped)
+    end
+    return total
+end
+
+local function drawLinuxInfoRows(x, y, w, rows, wrapWidth, rowGap, successMode)
+    local labelW = math.max(100, math.floor(w * 0.18))
+    local valueX = x + labelW
+    local lineH = linuxLineHeight(18)
+    rowGap = rowGap or linuxLineHeight(4)
+    wrapWidth = wrapWidth or linuxWrapWidth(90)
+
+    for _, row in ipairs(rows or {}) do
+        local wrapped = wrapLine(tostring(row.value or ""), wrapWidth)
+        gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+        gfx.set(0.72, 0.74, 0.78, 1)
+        gfx.x = x
         gfx.y = y
-        gfx.drawstr("Reason: " .. tostring(state.STATUS_REASON))
-        y = y + 18
-    end
+        gfx.drawstr((row.label or "") .. ":")
 
-    local stepLine = formatStepStatus(state)
-    if stepLine ~= "" then
-        gfx.x = 18
-        gfx.y = y
-        gfx.drawstr(stepLine)
-        y = y + 18
-    end
-
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or ""))
-    y = y + 18
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("FFmpeg: " .. tostring(state.FFMPEG_PATH or ""))
-    y = y + 18
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("PID: " .. tostring(pid or "") .. " (alive: " .. tostring(pidAlive) .. ")")
-    y = y + 18
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("Log: " .. tostring(LINUX_SETUP.logFile))
-    y = y + 18
-    gfx.x = 18
-    gfx.y = y
-    gfx.drawstr("Recent log lines (newest last):")
-    y = y + 18
-
-    gfx.setfont(1, "Courier New", 12)
-    for _, line in ipairs(logLines) do
-        local wrapped = wrapLine(line, 140)
-        for _, wl in ipairs(wrapped) do
-            gfx.x = 18
+        gfx.setfont(1, "Arial", linuxFontSize(13))
+        local color = linuxValueColor(row.kind, successMode)
+        gfx.set(color[1], color[2], color[3], color[4] or 1)
+        for idx, line in ipairs(wrapped) do
+            gfx.x = valueX
             gfx.y = y
-            gfx.drawstr(wl)
-            y = y + 14
+            gfx.drawstr(line)
+            if idx < #wrapped then
+                y = y + lineH
+            end
+        end
+        y = y + lineH + rowGap
+    end
+    return y
+end
+
+local function normalizeLinuxUiState(state, pidAlive)
+    local out = {}
+    for k, v in pairs(state or {}) do
+        out[k] = v
+    end
+    if pidAlive and trim(out.STATUS or "") == "ok" then
+        out.STATUS = "running"
+    end
+    return out
+end
+
+local function buildLinuxStatusRows(state, pidAlive, pid)
+    local rows = {}
+    local stepLine = formatStepStatus(state)
+    local note = prettyBackendNote(state.BACKEND_NOTE or "")
+
+    rows[#rows + 1] = {
+        label = "Phase",
+        value = ((state.STATUS == "running" or state.STATUS == "" or not state.STATUS) and "Bootstrapping" or "Finalizing"),
+        kind = "muted",
+    }
+    rows[#rows + 1] = {
+        label = "Status",
+        value = tostring(state.STATUS or "running") .. ((LINUX_SETUP and LINUX_SETUP.spinner) and (" [" .. LINUX_SETUP.spinner .. "]") or ""),
+        kind = (trim(state.STATUS or "") == "ok") and "status_ok" or "muted",
+    }
+    if stepLine ~= "" then
+        rows[#rows + 1] = { label = "Step", value = stepLine:gsub("^Step%s*", ""), kind = "muted" }
+    end
+    if trim(state.PROFILE or "") ~= "" then
+        rows[#rows + 1] = { label = "Profile", value = tostring(state.PROFILE), kind = "muted" }
+    end
+    if trim(state.BACKEND or "") ~= "" then
+        rows[#rows + 1] = { label = "Backend", value = tostring(state.BACKEND), kind = "muted" }
+    end
+    rows[#rows + 1] = { label = "Python", value = resolveLinuxPythonPath(state), kind = "python_path" }
+    rows[#rows + 1] = { label = "FFmpeg", value = resolveLinuxFfmpegPath(state), kind = "ffmpeg_path" }
+    rows[#rows + 1] = { label = "PID", value = tostring(pid or "") .. " (alive: " .. tostring(pidAlive) .. ")", kind = "muted" }
+    rows[#rows + 1] = { label = "Log", value = tostring(LINUX_SETUP and LINUX_SETUP.logFile or ""), kind = "log_path" }
+    if note ~= "" then
+        rows[#rows + 1] = { label = "Note", value = note, kind = "note" }
+    end
+    return rows
+end
+
+local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess)
+    local rows = {}
+    local pythonPath = trim(capState.PYTHON_PATH or state.PYTHON_PATH or resolveLinuxPythonPath(state))
+    local ffmpegPath = trim(capState.FFMPEG_PATH or state.FFMPEG_PATH or resolveLinuxFfmpegPath(state))
+    local profile = trim(capState.PROFILE or state.PROFILE or "")
+    local backend = trim(capState.BACKEND or state.BACKEND or "")
+    local backendReason = prettyBackendReason(capState.BACKEND_REASON or state.BACKEND_REASON or "")
+    local backendNote = prettyBackendNote(capState.BACKEND_NOTE or state.BACKEND_NOTE or "")
+    local deviceNames = trim(capState.DEVICE_NAMES or "")
+
+    rows[#rows + 1] = { label = "Python", value = pythonPath, kind = "python_path" }
+    rows[#rows + 1] = { label = "FFmpeg", value = ffmpegPath, kind = "ffmpeg_path" }
+    if profile ~= "" then
+        rows[#rows + 1] = { label = "Profile", value = profile, kind = "muted" }
+    end
+    if backend ~= "" then
+        rows[#rows + 1] = { label = "Backend", value = backend, kind = finalSuccess and "status_ok" or "status_fail" }
+    end
+    if backendReason ~= "" then
+        rows[#rows + 1] = { label = "Backend Reason", value = backendReason, kind = "muted" }
+    end
+    if backendNote ~= "" then
+        rows[#rows + 1] = { label = "Note", value = backendNote, kind = "note" }
+    end
+    if deviceNames ~= "" then
+        rows[#rows + 1] = { label = "Devices", value = deviceNames, kind = "muted" }
+    end
+    rows[#rows + 1] = { label = "Capabilities", value = tostring((runtime and runtime.runtimeState or "") .. PATH_SEP .. "capabilities.env"), kind = "cap_path" }
+    rows[#rows + 1] = { label = "Log", value = tostring(logFile or ""), kind = "log_path" }
+    return rows
+end
+
+local function drawLinuxLogPanel(logX, logY, logW, logH, logLines, footerText)
+    drawLinuxPanel(logX, logY, logW, logH, { 0.06, 0.06, 0.07, 1 }, { 0.22, 0.22, 0.24, 1 })
+
+    local logHeaderY = logY + 12
+    gfx.setfont(1, "Arial Bold", linuxFontSize(14))
+    gfx.set(1, 1, 1, 1)
+    gfx.x = logX + 14
+    gfx.y = logHeaderY
+    gfx.drawstr("Console output")
+
+    local logInnerPad = 14
+    local scrollbarW = 24
+    local logBodyY = logHeaderY + linuxLineHeight(22)
+    local footerH = linuxLineHeight(28)
+    local logBodyH = logH - (logBodyY - logY) - footerH - logInnerPad
+    local logTextX = logX + logInnerPad
+    local logTextY = logBodyY
+    local logTextW = logW - (logInnerPad * 2) - scrollbarW - 8
+    local logLineH = linuxLineHeight(14)
+    local wrapWidth = linuxWrapWidth(132)
+    local displayLines = buildLinuxLogDisplayLines(logLines, wrapWidth)
+    local visibleLines = math.max(1, math.floor(logBodyH / logLineH))
+    local totalLines = #displayLines
+    syncLinuxLogScroll(totalLines, visibleLines)
+    local startIdx = math.max(1, totalLines - visibleLines - (LINUX_SETUP.logScroll or 0) + 1)
+    local endIdx = math.min(totalLines, startIdx + visibleLines - 1)
+
+    LINUX_SETUP.logRect = { x = logTextX, y = logTextY, w = logTextW, h = logBodyH }
+    LINUX_SETUP.scrollbarRect = { x = logX + logW - logInnerPad - scrollbarW, y = logBodyY, w = scrollbarW, h = logBodyH }
+    LINUX_SETUP.visibleLogLines = visibleLines
+    LINUX_SETUP.totalLogLines = totalLines
+
+    gfx.setfont(1, "Courier New", linuxFontSize(12))
+    local drawY = logTextY
+    for i = startIdx, endIdx do
+        local item = displayLines[i]
+        setLinuxLogLineColor(item and item.source or "")
+        gfx.x = logTextX
+        gfx.y = drawY
+        gfx.drawstr(item and item.text or "")
+        drawY = drawY + logLineH
+    end
+
+    drawLinuxScrollbar(LINUX_SETUP.scrollbarRect, totalLines, visibleLines)
+    local footerY = logY + logH - footerH
+    gfx.set(0.30, 0.30, 0.33, 1)
+    gfx.line(logX + 1, footerY - 1, logX + logW - 2, footerY - 1)
+    gfx.set(0.11, 0.11, 0.12, 1)
+    gfx.rect(logX + 1, footerY, logW - 2, footerH, 1)
+    gfx.set(0.24, 0.24, 0.26, 1)
+    gfx.rect(logX + 1, footerY, logW - 2, footerH, 0)
+    gfx.set(0.70, 0.70, 0.72, 1)
+    gfx.setfont(1, "Arial", linuxFontSize(11))
+    gfx.x = logX + 14
+    gfx.y = footerY + math.max(4, math.floor((footerH - linuxFontSize(11)) / 2) - 1)
+    gfx.drawstr(footerText or "Console wheel scrolls. Wheel outside console zooms text. Use +/- or 0 for text size.")
+    gfx.set(1, 1, 1, 1)
+end
+
+local function drawIntroActionButton(label, x, y, w, h, accent, hovered, primary)
+    local fill = primary and { accent[1], accent[2], accent[3], hovered and 0.95 or 0.82 } or { 0.16, 0.16, 0.18, hovered and 1 or 0.92 }
+    local border = primary and { accent[1], accent[2], accent[3], 1 } or { 0.34, 0.34, 0.38, 1 }
+    gfx.set(fill[1], fill[2], fill[3], fill[4])
+    gfx.rect(x, y, w, h, 1)
+    gfx.set(border[1], border[2], border[3], border[4])
+    gfx.rect(x, y, w, h, 0)
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, primary and "Arial Bold" or "Arial", linuxFontSize(13))
+    local tw = gfx.measurestr(label)
+    gfx.x = x + math.floor((w - tw) / 2)
+    gfx.y = y + math.max(4, math.floor((h - linuxFontSize(13)) / 2) - 1)
+    gfx.drawstr(label)
+end
+
+local function showStyledIntroDialog(runtime)
+    local winW, winH = 760, 430
+    local winX, winY = 180, 120
+    local mouseWasDown = false
+    local accentYes = { 0.92, 0.45, 0.10 }
+    local accentNo = { 0.42, 0.42, 0.46 }
+    local bullets = {
+        { label = "Python runtime", color = { 1.0, 100 / 255, 100 / 255 } },
+        { label = "FFmpeg", color = { 100 / 255, 200 / 255, 1.0 } },
+        { label = "STEMwerk venv", color = { 100 / 255, 1.0, 100 / 255 } },
+    }
+    local runtimeBase = tostring(runtime and runtime.base or "")
+    gfx.init("STEMwerk Setup", winW, winH, 0, winX, winY)
+
+    while true do
+        local w, h = gfx.w, gfx.h
+        local outerPad = 18
+        local panelX = outerPad
+        local panelY = 22
+        local panelW = w - (outerPad * 2)
+        local panelH = h - (outerPad * 2) - 6
+        local bodyX = panelX + 18
+        local bodyY = panelY + 20
+        local bodyW = panelW - 36
+
+        gfx.set(0.03, 0.03, 0.04, 1)
+        gfx.rect(0, 0, w, h, 1)
+        gfx.set(0.97, 0.55, 0.05, 1)
+        gfx.rect(0, 0, w, math.max(8, linuxLineHeight(8)), 1)
+        drawLinuxPanel(panelX, panelY, panelW, panelH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.29, 1 })
+
+        local y = bodyY
+        drawStemwerkInline(bodyX, y, linuxFontSize(22), "", "werk Setup")
+        y = y + linuxLineHeight(30)
+
+        gfx.setfont(1, "Arial Bold", linuxFontSize(16))
+        gfx.set(1, 1, 1, 1)
+        gfx.x = bodyX
+        gfx.y = y
+        gfx.drawstr("Run this setup once in REAPER before using STEMwerk.lua.")
+        y = y + linuxLineHeight(30)
+
+        gfx.setfont(1, "Arial", linuxFontSize(13))
+        gfx.set(0.82, 0.85, 0.90, 1)
+        local introLines = wrapLine("STEMwerk will check and repair components if needed, then prepare a fixed runtime for this machine.", linuxWrapWidth(82))
+        for _, line in ipairs(introLines) do
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr(line)
+            y = y + linuxLineHeight(18)
+        end
+
+        y = y + linuxLineHeight(10)
+        local bulletH = linuxLineHeight(26)
+        for _, item in ipairs(bullets) do
+            local boxY = y
+            drawLinuxPanel(bodyX, boxY, bodyW, bulletH, { 0.11, 0.11, 0.12, 1 }, { 0.20, 0.20, 0.22, 1 })
+            gfx.set(item.color[1], item.color[2], item.color[3], 1)
+            gfx.rect(bodyX, boxY, 8, bulletH, 1)
+            gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+            gfx.x = bodyX + 18
+            gfx.y = boxY + math.max(4, math.floor((bulletH - linuxFontSize(13)) / 2) - 1)
+            gfx.drawstr(item.label)
+            y = y + bulletH + 8
+        end
+
+        local pathBoxH = linuxLineHeight(58)
+        drawLinuxPanel(bodyX, y, bodyW, pathBoxH, { 0.06, 0.06, 0.07, 1 }, { 0.19, 0.19, 0.22, 1 })
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        gfx.set(0.72, 0.74, 0.78, 1)
+        gfx.x = bodyX + 14
+        gfx.y = y + 10
+        gfx.drawstr("Runtime location")
+        gfx.setfont(1, "Courier New", linuxFontSize(12))
+        gfx.set(0.92, 0.92, 0.94, 1)
+        local pathLines = wrapLine(runtimeBase, linuxWrapWidth(78))
+        local pathY = y + linuxLineHeight(28)
+        for _, line in ipairs(pathLines) do
+            gfx.x = bodyX + 14
+            gfx.y = pathY
+            gfx.drawstr(line)
+            pathY = pathY + linuxLineHeight(14)
+        end
+        y = y + pathBoxH + linuxLineHeight(14)
+
+        gfx.setfont(1, "Arial", linuxFontSize(13))
+        gfx.set(0.90, 0.72, 0.40, 1)
+        local noteLines = wrapLine("This may download tools and can take several minutes on first run.", linuxWrapWidth(82))
+        for _, line in ipairs(noteLines) do
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr(line)
+            y = y + linuxLineHeight(18)
+        end
+
+        gfx.setfont(1, "Arial", linuxFontSize(11))
+        gfx.set(0.58, 0.60, 0.64, 1)
+        gfx.x = bodyX
+        gfx.y = panelY + panelH - linuxLineHeight(72)
+        gfx.drawstr("Enter = start, Esc = cancel")
+
+        local btnW = 138
+        local btnH = 36
+        local btnGap = 14
+        local btnY = panelY + panelH - btnH - 18
+        local yesX = panelX + panelW - (btnW * 2) - btnGap - 18
+        local noX = yesX + btnW + btnGap
+        local yesHot = isMouseIn(yesX, btnY, btnW, btnH)
+        local noHot = isMouseIn(noX, btnY, btnW, btnH)
+        drawIntroActionButton("Start Setup", yesX, btnY, btnW, btnH, accentYes, yesHot, true)
+        drawIntroActionButton("Not Now", noX, btnY, btnW, btnH, accentNo, noHot, false)
+
+        local ch = gfx.getchar()
+        if ch < 0 then
+            gfx.quit()
+            return false
+        end
+        if ch == 13 or ch == 32 or ch == string.byte("y") or ch == string.byte("Y") then
+            gfx.quit()
+            return true
+        end
+        if ch == 27 or ch == string.byte("n") or ch == string.byte("N") then
+            gfx.quit()
+            return false
+        end
+
+        local mouseDown = (gfx.mouse_cap & 1) == 1
+        if mouseDown and not mouseWasDown then
+            if yesHot then
+                gfx.quit()
+                return true
+            end
+            if noHot then
+                gfx.quit()
+                return false
+            end
+        end
+        mouseWasDown = mouseDown
+
+        gfx.update()
+    end
+end
+
+buildLinuxLogDisplayLines = function(logLines, wrapWidth)
+    local out = {}
+    for _, line in ipairs(logLines or {}) do
+        local wrapped = wrapLine(line, wrapWidth)
+        for _, wl in ipairs(wrapped) do
+            out[#out + 1] = { text = wl, source = line }
+        end
+    end
+    return out
+end
+
+syncLinuxLogScroll = function(totalLines, visibleLines)
+    if not LINUX_SETUP then return 0 end
+    local maxScroll = math.max(0, totalLines - visibleLines)
+    LINUX_SETUP.logScroll = clamp(LINUX_SETUP.logScroll or 0, 0, maxScroll)
+    return maxScroll
+end
+
+local function adjustLinuxLogScroll(delta, totalLines, visibleLines)
+    if not LINUX_SETUP then return end
+    local maxScroll = syncLinuxLogScroll(totalLines, visibleLines)
+    LINUX_SETUP.logScroll = clamp((LINUX_SETUP.logScroll or 0) + delta, 0, maxScroll)
+end
+
+drawLinuxScrollbar = function(rect, totalLines, visibleLines)
+    if not rect then return end
+    local x, y, w, h = rect.x, rect.y, rect.w, rect.h
+    gfx.set(0.10, 0.10, 0.10, 1)
+    gfx.rect(x, y, w, h, 1)
+    gfx.set(0.35, 0.35, 0.35, 1)
+    gfx.rect(x, y, w, h, 0)
+
+    if totalLines <= 0 or visibleLines >= totalLines then
+        gfx.set(0.22, 0.22, 0.22, 1)
+        gfx.rect(x + 2, y + 2, w - 4, h - 4, 1)
+        return
+    end
+
+    local maxScroll = math.max(1, totalLines - visibleLines)
+    local thumbH = math.max(20, math.floor((visibleLines / totalLines) * h))
+    local travel = math.max(1, h - thumbH)
+    local scrollRatio = (LINUX_SETUP and LINUX_SETUP.logScroll or 0) / maxScroll
+    local thumbY = y + math.floor((1 - scrollRatio) * travel)
+    gfx.set(0.34, 0.34, 0.34, 1)
+    gfx.rect(x + 2, thumbY + 2, w - 4, math.max(8, thumbH - 4), 1)
+end
+
+local function linuxCurrentStep(state)
+    local idx = tonumber(trim(state.STEP_INDEX or ""))
+    if idx and idx >= 1 and idx <= 4 then
+        return idx
+    end
+    if trim(state.STATUS or "") == "ok" then
+        return 4
+    end
+    return 1
+end
+
+local function linuxActiveStepFill(state, logLines)
+    if trim(state.STATUS or "") == "ok" then
+        return 1
+    end
+
+    for i = #logLines, 1, -1 do
+        local line = tostring(logLines[i] or "")
+        local pct = tonumber(line:match("(%d+)%%"))
+        if pct and pct >= 0 and pct <= 100 then
+            return clamp(pct / 100, 0.08, 1.0)
+        end
+        local current, total = line:match("([%d%.]+)%s*/%s*([%d%.]+)%s*GB")
+        current = tonumber(current)
+        total = tonumber(total)
+        if current and total and total > 0 then
+            return clamp(current / total, 0.08, 1.0)
+        end
+    end
+
+    local pulse = (((LINUX_SETUP and LINUX_SETUP.spinnerIndex) or 1) - 1) % 6
+    return 0.18 + (pulse / 5) * 0.62
+end
+
+local function linuxProgressPercent(state, logLines)
+    if trim(state.STATUS or "") == "ok" then
+        return 100, 1
+    end
+    local idx = linuxCurrentStep(state)
+    local activeFill = linuxActiveStepFill(state, logLines or {})
+    local segment = 100 / 4
+    local completed = (idx - 1) * segment
+    return math.floor(completed + (activeFill * segment) + 0.5), activeFill
+end
+
+local function linuxStageColor(stepIndex)
+    local colors = {
+        { 255, 100, 100 },
+        { 100, 200, 255 },
+        { 150, 100, 255 },
+        { 100, 255, 100 },
+    }
+    local c = colors[tonumber(stepIndex or 0) or 0] or colors[4]
+    return c[1] / 255, c[2] / 255, c[3] / 255
+end
+
+local function drawLinuxStepLegend(x, y, w, state, logLines)
+    local labels = {
+        "1. Runtime",
+        "2. Python + venv",
+        "3. FFmpeg",
+        "4. Finalizing",
+    }
+    local colors = {
+        { 255, 100, 100 },
+        { 100, 200, 255 },
+        { 150, 100, 255 },
+        { 100, 255, 100 },
+    }
+    local currentStep = linuxCurrentStep(state)
+    local done = trim(state.STATUS or "") == "ok"
+    local gap = 14
+    local colW = math.floor((w - gap * 3) / 4)
+    local trackH = math.max(10, linuxLineHeight(10))
+
+    for i = 1, 4 do
+        local colX = x + ((i - 1) * (colW + gap))
+        local c = colors[i]
+        local isCompleted = done or i < currentStep
+        local isActive = (not done) and i == currentStep
+        if isCompleted or isActive then
+            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
+            gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+        else
+            gfx.set(0.42, 0.42, 0.42, 1)
+            gfx.setfont(1, "Arial", linuxFontSize(13))
+        end
+        gfx.x = colX
+        gfx.y = y
+        gfx.drawstr(labels[i])
+
+        local trackY = y + linuxLineHeight(20)
+        gfx.set(0.20, 0.20, 0.22, 1)
+        gfx.rect(colX, trackY, colW, trackH, 1)
+        if isCompleted then
+            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
+            gfx.rect(colX, trackY, colW, trackH, 1)
+            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
+            gfx.rect(colX, trackY, colW, trackH, 0)
+        elseif isActive then
+            gfx.set(0.20, 0.20, 0.22, 1)
+            gfx.rect(colX, trackY, colW, trackH, 1)
+            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
+            gfx.rect(colX, trackY, colW, trackH, 0)
+        else
+            gfx.set(0.34, 0.34, 0.36, 1)
+            gfx.rect(colX, trackY, colW, trackH, 0)
         end
     end
 end
 
-local function linuxDrawFinal(finalLines, finalSuccess)
+local function linuxDrawStatus(state, logLines, pidAlive, pid)
+    local uiState = normalizeLinuxUiState(state, pidAlive)
     local w, h = gfx.w, gfx.h
-    gfx.set(0, 0, 0, 1)
+    gfx.set(0.03, 0.03, 0.04, 1)
     gfx.rect(0, 0, w, h, 1)
-    gfx.set(1, 1, 1, 1)
+    gfx.set(0.97, 0.55, 0.05, 1)
+    gfx.rect(0, 0, w, math.max(8, linuxLineHeight(8)), 1)
 
-    local y = 16
-    gfx.setfont(1, "Arial", 22)
-    gfx.x = 18
+    local outerPad = 18
+    local gap = 16
+    local infoX = outerPad
+    local infoY = 22
+    local infoW = w - (outerPad * 2)
+    local infoIntroLines = {
+        "Please wait while Setup installs STEMwerk on your computer.",
+        "",
+        "First-time setup can take several minutes.",
+        "STEMwerk is preparing the runtime, creating the Python environment, checking FFmpeg, and finalizing the runtime.",
+        "",
+    }
+    local infoRows = buildLinuxStatusRows(uiState, pidAlive, pid)
+    local infoHeaderH = linuxLineHeight(24)
+    local infoBodyLineH = linuxLineHeight(18)
+    local infoRowGap = linuxLineHeight(3)
+    local infoRowsH = (measureLinuxInfoRows(infoRows, linuxWrapWidth(86)) * infoBodyLineH) + (#infoRows * infoRowGap)
+    local progressH = math.max(18, linuxLineHeight(18))
+    local legendGap = linuxLineHeight(14)
+    local contentBottomY = (infoY + 14) + linuxLineHeight(28) + linuxLineHeight(22) + (#infoIntroLines * infoBodyLineH) + linuxLineHeight(6) + infoRowsH
+    local legendY = contentBottomY + legendGap
+    local progressY = legendY + linuxLineHeight(36)
+    local infoH = (progressY + progressH + 14) - infoY
+    local logX = outerPad
+    local logY = infoY + infoH + gap
+    local logW = infoW
+    local logH = math.max(160, h - logY - outerPad)
+
+    drawLinuxPanel(infoX, infoY, infoW, infoH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.28, 1 })
+
+    local y = infoY + 14
+    drawStemwerkInline(infoX + 14, y, linuxFontSize(22), "", "werk Setup [Linux]")
+    y = y + linuxLineHeight(28)
+
+    gfx.setfont(1, "Arial Bold", linuxFontSize(14))
+    gfx.set(1, 1, 1, 1)
+    gfx.x = infoX + 14
     gfx.y = y
-    gfx.drawstr("STEMwerk Setup [Linux]")
-    y = y + 30
-    gfx.setfont(1, "Arial", 16)
-    gfx.x = 18
+    gfx.drawstr("Installing")
+    y = y + linuxLineHeight(22)
+
+    gfx.setfont(1, "Arial", linuxFontSize(13))
+    gfx.set(0.82, 0.85, 0.90, 1)
+    for _, line in ipairs(infoIntroLines) do
+        gfx.x = infoX + 14
+        gfx.y = y
+        gfx.drawstr(line)
+        y = y + infoBodyLineH
+    end
+
+    y = y + linuxLineHeight(6)
+    y = drawLinuxInfoRows(infoX + 14, y, infoW - 28, infoRows, linuxWrapWidth(86), infoRowGap, false)
+
+    drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, uiState, logLines)
+
+    local progressX = infoX + 14
+    local progressW = infoW - 28
+    local progressPct = linuxProgressPercent(uiState, logLines)
+    local pr, pg, pb = linuxStageColor(linuxCurrentStep(uiState))
+    gfx.set(0.18, 0.18, 0.19, 1)
+    gfx.rect(progressX, progressY, progressW, progressH, 1)
+    gfx.set(0.32, 0.32, 0.34, 1)
+    gfx.rect(progressX, progressY, progressW, progressH, 0)
+    gfx.set(pr, pg, pb, 1)
+    gfx.rect(progressX, progressY, math.floor(progressW * (progressPct / 100)), progressH, 1)
+    drawLinuxLogPanel(logX, logY, logW, logH, logLines, "Console wheel scrolls. Wheel outside console zooms text. Use +/- or 0 for text size.")
+end
+
+local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
+    local w, h = gfx.w, gfx.h
+    gfx.set(0.03, 0.03, 0.04, 1)
+    gfx.rect(0, 0, w, h, 1)
+    gfx.set(0.97, 0.55, 0.05, 1)
+    gfx.rect(0, 0, w, math.max(8, linuxLineHeight(8)), 1)
+
+    local outerPad = 18
+    local gap = 16
+    local infoX = outerPad
+    local infoY = 22
+    local infoW = w - (outerPad * 2)
+    local btnGap = 12
+    local btnH = math.max(26, linuxLineHeight(24))
+    local actionH = linuxLineHeight(104)
+    local capState = parseStateFile((LINUX_SETUP and LINUX_SETUP.capFile) or "")
+    local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess)
+    local infoLineH = linuxLineHeight(18)
+    local infoRowGap = linuxLineHeight(2)
+    local infoRowsH = (measureLinuxInfoRows(infoRows, linuxWrapWidth(84)) * infoLineH) + (#infoRows * infoRowGap)
+    local progressH = math.max(18, linuxLineHeight(18))
+    local legendGap = linuxLineHeight(14)
+    local contentBottomY = (infoY + 14) + linuxLineHeight(28) + linuxLineHeight(26) + linuxLineHeight(30) + infoRowsH
+    local legendY = contentBottomY + legendGap
+    local progressY = legendY + linuxLineHeight(36)
+    local infoH = (progressY + progressH + 14) - infoY
+    local footerY = h - outerPad - actionH
+    local logX = outerPad
+    local logY = infoY + infoH + gap
+    local logW = infoW
+    local logH = math.max(160, footerY - gap - logY)
+
+    drawLinuxPanel(infoX, infoY, infoW, infoH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.28, 1 })
+    drawLinuxPanel(outerPad, footerY, infoW, actionH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.28, 1 })
+
+    local y = infoY + 14
+    drawStemwerkInline(infoX + 14, y, linuxFontSize(22), "", "werk Setup [Linux]")
+    y = y + linuxLineHeight(28)
+    gfx.setfont(1, "Arial", linuxFontSize(16))
+    gfx.set(0.92, 0.92, 0.94, 1)
+    gfx.x = infoX + 14
     gfx.y = y
     gfx.drawstr("Linux live setup UI active")
-    y = y + 22
-    gfx.setfont(1, "Arial Bold", 26)
-    gfx.x = 18
-    gfx.y = y
+    y = y + linuxLineHeight(26)
+    gfx.setfont(1, "Arial Bold", linuxFontSize(20))
     if finalSuccess then
-        gfx.set(0.2, 0.9, 0.2, 1)
-        local headline = "Setup complete — run STEMwerk.lua from the REAPER Action List"
-        local wrapped = wrapLine(headline, 110)
-        for _, wl in ipairs(wrapped) do
-            gfx.drawstr(wl)
-            y = y + 26
-            gfx.x = 18
-            gfx.y = y
-        end
-        y = y - 26
+        gfx.set(0.20, 0.92, 0.28, 1)
+        gfx.x = infoX + 14
+        gfx.y = y
+        gfx.drawstr("Setup complete - run STEMwerk.lua from the REAPER Action List")
     else
-        gfx.set(1.0, 0.4, 0.1, 1)
+        gfx.set(1.0, 0.42, 0.12, 1)
+        gfx.x = infoX + 14
+        gfx.y = y
         gfx.drawstr("Setup was not completely successful.")
     end
-    gfx.set(1, 1, 1, 1)
-    y = y + 32
+    y = y + linuxLineHeight(30)
+    drawLinuxInfoRows(infoX + 14, y, infoW - 28, infoRows, linuxWrapWidth(84), infoRowGap, finalSuccess)
 
-    gfx.setfont(1, "Arial", 15)
-    local startIdx = 1
-    if finalSuccess and finalLines and finalLines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
-        startIdx = 2
-    elseif (not finalSuccess) and finalLines and finalLines[1] == "Setup was not completely successful." then
-        startIdx = 2
+    local finalState = {}
+    for k, v in pairs(state or {}) do
+        finalState[k] = v
     end
-    for i = startIdx, #(finalLines or {}) do
-        local line = finalLines[i]
-        local wrapped = wrapLine(line, 140)
-        for _, wl in ipairs(wrapped) do
-            gfx.x = 18
-            gfx.y = y
-            gfx.drawstr(wl)
-            y = y + 18
-        end
+    if finalSuccess then
+        finalState.STATUS = "ok"
+        finalState.STEP_INDEX = "4"
     end
 
-    gfx.setfont(1, "Arial", 13)
-    gfx.x = 18
-    gfx.y = h - 28
-    gfx.drawstr("Press Esc or close this window to continue.")
+    drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, finalState, logLines or {})
 
+    local progressX = infoX + 14
+    local progressW = infoW - 28
+    local progressPct = finalSuccess and 100 or select(1, linuxProgressPercent(finalState, logLines or {}))
+    local pr, pg, pb = linuxStageColor(linuxCurrentStep(finalState))
+    gfx.set(0.18, 0.18, 0.19, 1)
+    gfx.rect(progressX, progressY, progressW, progressH, 1)
+    gfx.set(0.32, 0.32, 0.34, 1)
+    gfx.rect(progressX, progressY, progressW, progressH, 0)
+    gfx.set(pr, pg, pb, 1)
+    gfx.rect(progressX, progressY, math.floor(progressW * (progressPct / 100)), progressH, 1)
+
+    drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "Console wheel scrolls. Wheel outside console zooms text. Use +/- or 0 for text size.")
+
+    local btnW = math.floor((infoW - 28 - (12 * 3)) / 4)
+    local btnX = outerPad + 14
+    local btnY1 = footerY + linuxLineHeight(28)
+    local btnY2 = btnY1 + btnH + 8
     if LINUX_SETUP then
-        local btnY = h - 64
-        local btnW = 200
-        local btnH = 26
-        local gap = 12
-        local x = 18
         LINUX_SETUP.buttons = {
-            { label = "Copy Summary", x = x, y = btnY, w = btnW, h = btnH, action = "copy_summary" },
-            { label = "Copy Log Path", x = x + (btnW + gap), y = btnY, w = btnW, h = btnH, action = "copy_log" },
-            { label = "Copy Capabilities", x = x + 2 * (btnW + gap), y = btnY, w = btnW, h = btnH, action = "copy_cap" },
+            { label = "Open Log", x = btnX, y = btnY1, w = btnW, h = btnH, action = "open_log" },
+            { label = "Open Capabilities", x = btnX + (btnW + btnGap), y = btnY1, w = btnW, h = btnH, action = "open_cap" },
+            { label = "Open Action List", x = btnX + 2 * (btnW + btnGap), y = btnY1, w = btnW, h = btnH, action = "open_action_list" },
+            { label = "Open REAPER Help", x = btnX + 3 * (btnW + btnGap), y = btnY1, w = btnW, h = btnH, action = "open_help" },
+            { label = "Copy Summary", x = btnX, y = btnY2, w = btnW, h = btnH, action = "copy_summary" },
+            { label = "Copy Log Path", x = btnX + (btnW + btnGap), y = btnY2, w = btnW, h = btnH, action = "copy_log" },
+            { label = "Copy Capabilities", x = btnX + 2 * (btnW + btnGap), y = btnY2, w = btnW, h = btnH, action = "copy_cap" },
         }
-        local btnY2 = btnY - (btnH + 8)
-        LINUX_SETUP.buttons[#LINUX_SETUP.buttons + 1] = { label = "Open Log", x = x, y = btnY2, w = btnW, h = btnH, action = "open_log" }
-        LINUX_SETUP.buttons[#LINUX_SETUP.buttons + 1] = { label = "Open Capabilities", x = x + (btnW + gap), y = btnY2, w = btnW, h = btnH, action = "open_cap" }
-        LINUX_SETUP.buttons[#LINUX_SETUP.buttons + 1] = { label = "Open Action List", x = x + 2 * (btnW + gap), y = btnY2, w = btnW, h = btnH, action = "open_action_list" }
-
-        gfx.setfont(1, "Arial", 13)
+        gfx.setfont(1, "Arial", linuxFontSize(13))
         for _, b in ipairs(LINUX_SETUP.buttons) do
             drawButton(b.label, b.x, b.y, b.w, b.h)
         end
     end
+
+    gfx.setfont(1, "Arial", linuxFontSize(12))
+    gfx.set(0.70, 0.70, 0.72, 1)
+    local footerText = string.format("Press Esc or close this window to continue.  Text %.0f%%  Mouse wheel / +/- / 0", ((LINUX_SETUP and LINUX_SETUP.fontScale) or 1.0) * 100)
+    local footerW = gfx.measurestr(footerText)
+    gfx.x = outerPad + infoW - 14 - footerW
+    gfx.y = footerY + 8
+    gfx.drawstr(footerText)
 end
 
 local function linuxSetupTick()
@@ -2407,7 +3096,7 @@ local function linuxSetupTick()
     if not gfx then return end
 
     local state = parseStateFile(LINUX_SETUP.stateFile)
-    local logLines = readTail(LINUX_SETUP.logFile, 32)
+    local logLines = readTail(LINUX_SETUP.logFile, 400)
     local pidAlive, pid = linuxPidAlive(LINUX_SETUP.pidFile)
     if pidAlive then
         LINUX_SETUP.pidSeen = true
@@ -2417,10 +3106,25 @@ local function linuxSetupTick()
     local idx = (LINUX_SETUP.spinnerIndex or 1)
     LINUX_SETUP.spinner = spinner[idx]
     LINUX_SETUP.spinnerIndex = (idx % #spinner) + 1
+    local wheel = gfx.mouse_wheel or 0
+    local lastWheel = LINUX_SETUP.lastMouseWheel or 0
+    if wheel ~= lastWheel then
+        local wheelStep = (wheel > lastWheel) and 3 or -3
+        if LINUX_SETUP.logRect and isMouseIn(LINUX_SETUP.logRect.x, LINUX_SETUP.logRect.y, LINUX_SETUP.logRect.w, LINUX_SETUP.logRect.h) then
+            adjustLinuxLogScroll(wheelStep, LINUX_SETUP.totalLogLines or 0, LINUX_SETUP.visibleLogLines or 1)
+        else
+            if wheel > lastWheel then
+                adjustLinuxSetupFontScale(LINUX_SETUP_FONT_SCALE_STEP)
+            else
+                adjustLinuxSetupFontScale(-LINUX_SETUP_FONT_SCALE_STEP)
+            end
+        end
+        LINUX_SETUP.lastMouseWheel = wheel
+    end
 
     if not LINUX_SETUP.finalized then
         local status = state.STATUS or ""
-        if status ~= "" and status ~= "running" then
+        if not pidAlive and status ~= "" and status ~= "running" then
             local result = safePerformPostBootstrap(LINUX_SETUP.runtime, LINUX_SETUP.stateFile, LINUX_SETUP.logFile, status == "ok", state, LINUX_SETUP.separatorScript)
             LINUX_SETUP.finalized = true
             LINUX_SETUP.finalMessage = result.finalMessage
@@ -2439,7 +3143,8 @@ local function linuxSetupTick()
     end
 
     if LINUX_SETUP.finalized then
-        linuxDrawFinal(LINUX_SETUP.finalMessage, LINUX_SETUP.finalSuccess)
+        restoreLinuxWindowGeometry()
+        linuxDrawFinal(LINUX_SETUP.finalMessage, LINUX_SETUP.finalSuccess, state, logLines, pid)
     else
         linuxDrawStatus(state, logLines, pidAlive, pid)
     end
@@ -2465,13 +3170,57 @@ local function linuxSetupTick()
                         openPath(LINUX_SETUP.capFile)
                     elseif b.action == "open_action_list" then
                         openActionList()
+                    elseif b.action == "open_help" then
+                        openPath(LINUX_SETUP.helpFile)
                     end
                     break
                 end
             end
         end
     end
+    if LINUX_SETUP and not LINUX_SETUP.finalized then
+        local cap = gfx.mouse_cap
+        local last = LINUX_SETUP.lastMouseCap or 0
+        local clicked = (cap & 1) == 1 and (last & 1) == 0
+        LINUX_SETUP.lastMouseCap = cap
+        if clicked and LINUX_SETUP.scrollbarRect and isMouseIn(LINUX_SETUP.scrollbarRect.x, LINUX_SETUP.scrollbarRect.y, LINUX_SETUP.scrollbarRect.w, LINUX_SETUP.scrollbarRect.h) then
+            local rect = LINUX_SETUP.scrollbarRect
+            local total = LINUX_SETUP.totalLogLines or 0
+            local visible = LINUX_SETUP.visibleLogLines or 1
+            if total > visible then
+                local ratio = clamp((gfx.mouse_y - rect.y) / math.max(1, rect.h), 0, 1)
+                local maxScroll = math.max(0, total - visible)
+                LINUX_SETUP.logScroll = math.floor((1 - ratio) * maxScroll + 0.5)
+            end
+        end
+    end
+    if LINUX_SETUP and LINUX_SETUP.finalized then
+        local cap = gfx.mouse_cap
+        local last = LINUX_SETUP.lastMouseCap or 0
+        local clicked = (cap & 1) == 1 and (last & 1) == 0
+        if clicked and LINUX_SETUP.scrollbarRect and isMouseIn(LINUX_SETUP.scrollbarRect.x, LINUX_SETUP.scrollbarRect.y, LINUX_SETUP.scrollbarRect.w, LINUX_SETUP.scrollbarRect.h) then
+            local rect = LINUX_SETUP.scrollbarRect
+            local total = LINUX_SETUP.totalLogLines or 0
+            local visible = LINUX_SETUP.visibleLogLines or 1
+            if total > visible then
+                local ratio = clamp((gfx.mouse_y - rect.y) / math.max(1, rect.h), 0, 1)
+                local maxScroll = math.max(0, total - visible)
+                LINUX_SETUP.logScroll = math.floor((1 - ratio) * maxScroll + 0.5)
+            end
+        end
+    end
     local key = gfx.getchar()
+    if key == 43 or key == 61 then
+        adjustLinuxSetupFontScale(LINUX_SETUP_FONT_SCALE_STEP)
+    elseif key == 45 or key == 95 then
+        adjustLinuxSetupFontScale(-LINUX_SETUP_FONT_SCALE_STEP)
+    elseif key == 48 then
+        resetLinuxSetupFontScale()
+    elseif key == 30064 then
+        adjustLinuxLogScroll(5, LINUX_SETUP and LINUX_SETUP.totalLogLines or 0, LINUX_SETUP and LINUX_SETUP.visibleLogLines or 1)
+    elseif key == 1685026670 then
+        adjustLinuxLogScroll(-5, LINUX_SETUP and LINUX_SETUP.totalLogLines or 0, LINUX_SETUP and LINUX_SETUP.visibleLogLines or 1)
+    end
     if key == -1 or (LINUX_SETUP.finalized and key == 27) then
         gfx.quit()
         LINUX_SETUP = nil
@@ -2541,7 +3290,7 @@ local function startLinuxSetup(runtime, separatorScript)
         UPDATED_AT = os.time(),
     })
     exec(cmd, 20000)
-    gfx.init("STEMwerk Setup [Linux]", 1100, 760, 0, 120, 80)
+    gfx.init("STEMwerk Setup [Linux]", 1240, 860, 0, 120, 80)
     LINUX_SETUP = {
         runtime = runtime,
         separatorScript = separatorScript,
@@ -2549,6 +3298,7 @@ local function startLinuxSetup(runtime, separatorScript)
         logFile = logFile,
         pidFile = pidFile,
         capFile = capFile,
+        helpFile = RAW_SCRIPT_DIR .. "STEMwerk_Linux_Setup_Guide.txt",
         spinnerIndex = 1,
         finalized = false,
         finalMessage = nil,
@@ -2557,6 +3307,11 @@ local function startLinuxSetup(runtime, separatorScript)
         finalSuccess = false,
         summaryText = "",
         lastMouseCap = 0,
+        lastMouseWheel = gfx.mouse_wheel or 0,
+        fontScale = getLinuxSetupFontScale(),
+        logScroll = 0,
+        geometryRestored = false,
+        windowGeometry = captureLinuxWindowGeometry(),
     }
     reaper.defer(linuxSetupTick)
 end

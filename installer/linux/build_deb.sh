@@ -6,11 +6,15 @@ OUT_DIR="$ROOT_DIR/installer/linux/dist"
 BUILD_DIR="$ROOT_DIR/installer/linux/build"
 PKG_ROOT="$BUILD_DIR/root"
 
-VERSION="${STEMWERK_VERSION:-0.0.0}"
+VERSION="${STEMWERK_VERSION:-}"
 ARCH="${STEMWERK_DEB_ARCH:-amd64}"
 
-if [[ -z "${STEMWERK_VERSION:-}" && -f "$ROOT_DIR/VERSION" ]]; then
+if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
+fi
+if [[ -z "$VERSION" ]]; then
+  echo "ERROR: STEMWERK_VERSION is not set and VERSION could not be read." >&2
+  exit 1
 fi
 
 rm -rf "$BUILD_DIR"
@@ -18,6 +22,14 @@ mkdir -p "$OUT_DIR" "$PKG_ROOT/DEBIAN" "$PKG_ROOT/usr/share/stemwerk-reaper"
 
 # Copy only what we need
 rsync -a --delete \
+  --exclude='*.bak' \
+  --exclude='*.bak2' \
+  --exclude='sync_to_reaper.sh' \
+  --exclude='STEMwerk_Enable_Debug.lua' \
+  --exclude='STEMwerk_Disable_Debug.lua' \
+  --exclude='STEMwerk_Set_FFmpegPath.lua' \
+  --exclude='STEMwerk_Set_PythonPath.lua' \
+  --exclude='STEMwerk_separate.lua' \
   "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
   "$ROOT_DIR/installer/assets/stemwerk.svg" \
@@ -44,17 +56,17 @@ cat > "$PKG_ROOT/DEBIAN/postinst" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-PLAIN_MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.')
+PLAIN_MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.')
 RICH_MESSAGE='<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>
 
 STEMwerk is installed to /usr/share/stemwerk-reaper
 
 <b>Next step</b>
-Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.'
+Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
 
 echo
 echo "STEMwerk installed to /usr/share/stemwerk-reaper"
-echo "Next step: Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua."
+echo "Next step: Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua."
 echo
 
 if command -v zenity >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then

@@ -2,10 +2,20 @@
 #define MyAppPublisher "flarkAUDIO <flarkaudio@pm.me>"
 #define MyAppURL "https://github.com/flarkflarkflark/STEMwerk"
 
-; Version comes from env in CI (fallback to the current local working build)
+; Version comes from env in CI. Local builds fall back to the repo VERSION file.
 #define MyAppVersion GetEnv('STEMWERK_VERSION')
 #if MyAppVersion == ""
-  #define MyAppVersion "2.2.1.1"
+  #define VersionFile "..\..\VERSION"
+  #if FileExists(VersionFile)
+    #define VersionHandle FileOpen(VersionFile)
+    #if VersionHandle
+      #define MyAppVersion Trim(FileRead(VersionHandle))
+      #expr FileClose(VersionHandle)
+    #endif
+  #endif
+#endif
+#if MyAppVersion == ""
+  #error STEMWERK_VERSION is not set and VERSION could not be read.
 #endif
 
 [Setup]
@@ -38,7 +48,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 ; Core files needed to run in REAPER
-Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\i18n\*"; DestDir: "{app}\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 ; Helpful docs

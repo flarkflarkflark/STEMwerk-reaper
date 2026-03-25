@@ -1,8 +1,8 @@
--- @description STEMwerk: First Run Setup
+-- @description STEMwerk: Setup
 -- @author flarkAUDIO <flarkaudio@pm.me>
 -- @version 2.2.1.1
 -- @changelog
---   2026-03-15: Route setup to the new first-run bootstrap flow.
+--   2026-03-15: Route setup to the internal setup bootstrap flow.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
 
 local function getScriptDir()
@@ -23,7 +23,7 @@ end
 
 local rawScriptDir = getScriptDir()
 local PATH_HELPER = nil
-local helperOk, helperMod = pcall(dofile, rawScriptDir .. "STEMwerk_Path_Helper.lua")
+local helperOk, helperMod = pcall(dofile, rawScriptDir .. "_internal/STEMwerk_Path_Helper.lua")
 if helperOk and type(helperMod) == "table" then
     PATH_HELPER = helperMod
 end
@@ -43,7 +43,7 @@ if INSTALL.ok and INSTALL.canonicalMismatch and INSTALL.canonical ~= "" then
             .. "Preferred:\n" .. tostring(INSTALL.canonical or "(unknown)") .. "\n\n"
             .. "Current runtime install:\n" .. tostring(INSTALL.root or rawScriptDir) .. "\n\n"
             .. "Setup continues using the current location.\n"
-            .. "Run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.",
+            .. "Run STEMwerk-SETUP.lua before using STEMwerk.lua.",
         0
     )
 elseif not INSTALL.ok then
@@ -52,14 +52,14 @@ elseif not INSTALL.ok then
         "STEMwerk is not installed in the REAPER Scripts folder.\n\nExpected:\n"
             .. tostring(INSTALL.canonical or "(unknown)")
             .. "\n\nCurrent script location:\n" .. tostring(rawScriptDir)
-            .. "\n\nReinstall STEMwerk and run STEMwerk_First_Run_Setup.lua from REAPER.",
+            .. "\n\nReinstall STEMwerk and run STEMwerk-SETUP.lua from REAPER.",
         0
     )
     return
 end
 
 local scriptDir = INSTALL.scriptsDir or rawScriptDir
-local setupScript = scriptDir .. "STEMwerk_First_Run_Setup.lua"
+local setupScript = scriptDir .. "_internal/STEMwerk_Setup_Internal.lua"
 
 if fileExists(setupScript) then
     dofile(setupScript)

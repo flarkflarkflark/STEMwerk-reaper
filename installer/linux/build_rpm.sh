@@ -6,10 +6,14 @@ OUT_DIR="$ROOT_DIR/installer/linux/dist"
 BUILD_DIR="$ROOT_DIR/installer/linux/build-rpm"
 RPMTOP="$BUILD_DIR/rpmbuild"
 
-VERSION="${STEMWERK_VERSION:-0.0.0}"
+VERSION="${STEMWERK_VERSION:-}"
 
-if [[ -z "${STEMWERK_VERSION:-}" && -f "$ROOT_DIR/VERSION" ]]; then
+if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
+fi
+if [[ -z "$VERSION" ]]; then
+  echo "ERROR: STEMWERK_VERSION is not set and VERSION could not be read." >&2
+  exit 1
 fi
 
 # RPM spec "Version:" may not contain '-' characters.
@@ -26,6 +30,14 @@ SRC_DIR="$BUILD_DIR/stemwerk-$VERSION"
 mkdir -p "$SRC_DIR"
 
 rsync -a --delete \
+  --exclude='*.bak' \
+  --exclude='*.bak2' \
+  --exclude='sync_to_reaper.sh' \
+  --exclude='STEMwerk_Enable_Debug.lua' \
+  --exclude='STEMwerk_Disable_Debug.lua' \
+  --exclude='STEMwerk_Set_FFmpegPath.lua' \
+  --exclude='STEMwerk_Set_PythonPath.lua' \
+  --exclude='STEMwerk_separate.lua' \
   "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
   "$ROOT_DIR/installer/assets/stemwerk.svg" \

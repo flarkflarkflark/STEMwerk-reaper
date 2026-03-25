@@ -36,6 +36,6 @@ end
 
 msgBox(
     "Stemwerk: Setup Toolbar",
-    "Scripts are ready.\n\nTo add toolbar buttons:\n1) Open Actions → Show action list\n2) Filter for 'STEMwerk:'\n3) Select a script (e.g. 'STEMwerk: Karaoke')\n4) Add it to a toolbar (right-click toolbar → Customize)\n\nTip: Run 'STEMwerk: First Run Setup' if separation fails or components are missing.",
+    "Scripts are ready.\n\nTo add toolbar buttons:\n1) Open Actions → Show action list\n2) Filter for 'STEMwerk:'\n3) Select a script (e.g. 'STEMwerk: Karaoke')\n4) Add it to a toolbar (right-click toolbar → Customize)\n\nTip: Run 'STEMwerk: Setup' if separation fails or components are missing.",
     0
 )

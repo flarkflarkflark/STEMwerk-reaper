@@ -1,0 +1,38 @@
+STEMwerk Linux Setup Guide
+==========================
+
+After setup completes:
+
+1. Open the REAPER Action List.
+2. Run STEMwerk.lua from the STEMwerk-reaper script install.
+3. Process a short test item first to confirm your runtime works.
+
+What setup repairs automatically:
+
+- Python runtime in ~/.local/share/STEMwerk
+- FFmpeg path detection
+- STEMwerk virtual environment
+- audio-separator and stemwerk-core packages
+
+Important paths:
+
+- Runtime base: ~/.local/share/STEMwerk
+- Runtime log: ~/.local/share/STEMwerk/logs/bootstrap.log
+- Capabilities: ~/.local/share/STEMwerk/state/capabilities.env
+
+If setup reports success but STEMwerk.lua still fails:
+
+1. Re-run STEMwerk-SETUP.lua from REAPER.
+2. Open bootstrap.log and check the last failing step.
+3. Open capabilities.env and confirm the detected backend/profile.
+4. If you use ROCm on Arch or another non-official distro, note that it can work, but it is outside AMD's officially supported distro matrix.
+
+If you want CPU-only fallback:
+
+- Re-run setup after clearing ~/.local/share/STEMwerk
+- Or set the runtime to a CPU profile and re-run the bootstrap
+
+If REAPER cannot find the script:
+
+- Make sure you are launching STEMwerk from the canonical REAPER Scripts/STEMwerk-reaper location.
+- Re-sync the repo scripts into REAPER if needed.

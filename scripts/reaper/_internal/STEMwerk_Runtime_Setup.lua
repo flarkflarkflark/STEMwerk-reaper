@@ -8,7 +8,7 @@ local function getPathHelper()
     if PATH_HELPER then return PATH_HELPER end
     local base = C.script_path or ""
     if base == "" then return nil end
-    local ok, helper = pcall(dofile, base .. "STEMwerk_Path_Helper.lua")
+    local ok, helper = pcall(dofile, base .. "_internal/STEMwerk_Path_Helper.lua")
     if ok and type(helper) == "table" then
         PATH_HELPER = helper
         return PATH_HELPER
@@ -44,7 +44,7 @@ local function showInstallMismatch(install)
             .. "Setup continues using the current install location."
     else
         text = "STEMwerk runtime location could not be resolved from script path.\n\n"
-            .. "Reinstall STEMwerk and run STEMwerk_First_Run_Setup.lua from REAPER."
+            .. "Reinstall STEMwerk and run STEMwerk-SETUP.lua from REAPER."
     end
     C.showMessageBox(
         "STEMwerk Setup",
@@ -578,7 +578,7 @@ function M.isPythonAvailable(path)
     return canRunCommand(path, " --version", "Python", 12000)
 end
 
-function M.runFirstRunSetup()
+function M.runSetup()
     local install = resolveInstallRoot()
     if not install.ok then
         showInstallMismatch(install)
@@ -590,7 +590,7 @@ function M.runFirstRunSetup()
         showInstallMismatch(install)
     end
 
-    local setupScript = scriptsDir .. "STEMwerk_First_Run_Setup.lua"
+    local setupScript = scriptsDir .. "_internal/STEMwerk_Setup_Internal.lua"
 
     if not fileExists(setupScript) then
         setupScript = scriptsDir .. "STEMwerk-SETUP.lua"
@@ -700,7 +700,7 @@ function M.ensureDependenciesInteractive()
                 C.showMessageBox(
                     "STEMwerk Setup",
                     "Previous bootstrap failed.\n\nReason: " .. tostring(guard.REASON or "unknown") .. "\n\n"
-                        .. "Fix the install and run STEMwerk_First_Run_Setup.lua manually in REAPER.",
+                        .. "Fix the install and run STEMwerk-SETUP.lua manually in REAPER.",
                     0
                 )
             end
@@ -782,7 +782,7 @@ function M.ensureDependenciesInteractive()
     local runtime = M.getRuntimePaths()
     local msg =
         "STEMwerk is missing components:\n\n- " .. table.concat(missing, "\n- ") ..
-        "\n\nRun STEMwerk_First_Run_Setup.lua in REAPER before using STEMwerk.lua.\n\n" ..
+        "\n\nRun STEMwerk-SETUP.lua in REAPER before using STEMwerk.lua.\n\n" ..
         "STEMwerk can repair this automatically and create a fixed runtime at:\n" .. tostring(runtime.base) ..
         "\n\nStart automatic setup?"
 
@@ -805,7 +805,7 @@ function M.ensureDependenciesInteractive()
 
     setBootstrapActive(true)
     setDepState("running", "bootstrap_running")
-    local bootstrapOk = M.runFirstRunSetup()
+    local bootstrapOk = M.runSetup()
     setBootstrapActive(false)
 
     if not bootstrapOk then
@@ -831,7 +831,7 @@ function M.ensureDependenciesInteractive()
             "Automatic setup could not fix everything.\n\n" ..
             "Status: " .. tostring(state.detail or "unknown") .. "\n\n" ..
             "You can rerun repair via:\n" ..
-            "  STEMwerk_First_Run_Setup.lua\n\n" ..
+            "  STEMwerk-SETUP.lua\n\n" ..
             "Please check again after that.",
             "STEMwerk Setup",
             0

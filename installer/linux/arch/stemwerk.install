@@ -1,7 +1,7 @@
 post_install() {
   echo
   echo "STEMwerk installed to /usr/share/stemwerk-reaper"
-  echo "Next step: Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua."
+  echo "Next step: Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua."
   echo
 
   if [[ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]]; then
@@ -12,7 +12,7 @@ post_install() {
 STEMwerk is installed to /usr/share/stemwerk-reaper
 
 <b>Next step</b>
-Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.'
+Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
       zenity --info --width=520 --title="STEMwerk Installer" --text="$rich_message" >/dev/null 2>&1 || true
     elif command -v kdialog >/dev/null 2>&1; then
       local rich_message
@@ -21,10 +21,10 @@ Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.'
 STEMwerk is installed to /usr/share/stemwerk-reaper
 
 <b>Next step</b>
-Open REAPER and run STEMwerk_First_Run_Setup.lua before using STEMwerk.lua.'
+Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
       kdialog --msgbox "$rich_message" --title "STEMwerk Installer" >/dev/null 2>&1 || true
     elif command -v notify-send >/dev/null 2>&1; then
-      notify-send "STEMwerk Installer" "STEMwerk installed to /usr/share/stemwerk-reaper. Open REAPER and run STEMwerk_First_Run_Setup.lua." >/dev/null 2>&1 || true
+      notify-send "STEMwerk Installer" "STEMwerk installed to /usr/share/stemwerk-reaper. Open REAPER and run STEMwerk-SETUP.lua." >/dev/null 2>&1 || true
     fi
   fi
 }

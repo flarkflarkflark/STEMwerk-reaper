@@ -64,7 +64,7 @@ local repo_root = script_path:match("(.*/)") or ""
 
 local PATH_STATE = { helper = nil, installCache = nil }
 do
-    local ok, helper = pcall(dofile, script_path .. "STEMwerk_Path_Helper.lua")
+    local ok, helper = pcall(dofile, script_path .. "_internal/STEMwerk_Path_Helper.lua")
     if ok and type(helper) == "table" then
         PATH_STATE.helper = helper
     end
@@ -94,7 +94,7 @@ local function setExtStateValue(key, value)
     end
 end
 
-local SW_SETUP = dofile(script_path .. "STEMwerk_Runtime_Setup.lua")
+local SW_SETUP = dofile(script_path .. "_internal/STEMwerk_Runtime_Setup.lua")
 
 local function isAbsolutePath(p)
     if not p or p == "" then return false end
@@ -723,8 +723,13 @@ end
 
 local function debugCudaProbe()
     if not DEBUG.enabled then return end
-    local runtime = getRuntimePaths()
+    local runtimeGetter = getRuntimePaths or (SW_SETUP and SW_SETUP.getRuntimePaths)
+    local runtime = type(runtimeGetter) == "function" and runtimeGetter() or {}
     local py = getExtStateValue("pythonPath") or runtime.venvPython
+    if not py or py == "" then
+        debugLog("debugCudaProbe: no python path available yet")
+        return
+    end
     if not isAbsolutePath(py) then
         py = script_path .. py
     end
@@ -915,7 +920,7 @@ local persistPythonPath
 local canImportAudioSeparator
 local safeDofile
 local isPythonAvailable
-local runFirstRunSetup
+local runSetup
 local verifyRuntimeAfterBootstrap
 local ensureDependenciesInteractive
 
@@ -1186,7 +1191,7 @@ resolveCommandPath = SW_SETUP.resolveCommandPath
 canImportAudioSeparator = SW_SETUP.canImportAudioSeparator
 safeDofile = SW_SETUP.safeDofile
 isPythonAvailable = SW_SETUP.isPythonAvailable
-runFirstRunSetup = SW_SETUP.runFirstRunSetup
+runSetup = SW_SETUP.runSetup
 verifyRuntimeAfterBootstrap = SW_SETUP.verifyRuntimeAfterBootstrap
 ensureDependenciesInteractive = SW_SETUP.ensureDependenciesInteractive
 persistPythonPath = SW_SETUP.persistPythonPath
@@ -15401,7 +15406,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     if not pythonAvailable then
         local msg =
             "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
-            .. "Run STEMwerk_First_Run_Setup.lua to repair the runtime."
+            .. "Run STEMwerk-SETUP.lua to repair the runtime."
         debugLog(msg)
         SW_LOG.logExecResult("preflight: python missing", -1, msg)
         local lf = io.open(logFile, "w")
@@ -17918,7 +17923,7 @@ startSeparationProcessForJob = function(job, segmentSize)
     if not pythonAvailable then
         local msg =
             "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
-            .. "Run STEMwerk_First_Run_Setup.lua to repair the runtime."
+            .. "Run STEMwerk-SETUP.lua to repair the runtime."
         debugLog(msg)
         SW_LOG.logExecResult("preflight: python missing", -1, msg)
         local lf = io.open(logFile, "w")
@@ -19387,6 +19392,8 @@ processAllStemsResult = function()
                 .. "\n\nFix:\n"
                 .. "Install onnxruntime into the Python venv that REAPER is using:\n"
                 .. tostring(PYTHON_PATH) .. " -m pip install onnxruntime\n\n"
+                .. "On Apple Silicon, use:\n"
+                .. tostring(PYTHON_PATH) .. " -m pip install onnxruntime-silicon\n\n"
                 .. "If pip refuses (no wheels for your Python version), recreate the venv with Python 3.11/3.12 and reinstall dependencies."
         end
 

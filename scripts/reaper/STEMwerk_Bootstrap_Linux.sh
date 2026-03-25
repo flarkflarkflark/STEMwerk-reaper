@@ -99,6 +99,12 @@ resolve_core_target() {
 
   CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
   if [ -d "${CORE_BUNDLE_DIR}" ]; then
+    if [ -f "${CORE_BUNDLE_DIR}/pyproject.toml" ] && [ -d "${CORE_BUNDLE_DIR}/src/stemwerk_core" ]; then
+      CORE_TARGET="${CORE_BUNDLE_DIR}"
+      CORE_TARGET_DESC="bundled source"
+      CORE_SUPPORTS_EXTRAS=1
+      return 0
+    fi
     for pattern in "${CORE_BUNDLE_DIR}"/*.whl "${CORE_BUNDLE_DIR}"/*.tar.gz "${CORE_BUNDLE_DIR}"/*.zip; do
       if [ -f "${pattern}" ]; then
         CORE_TARGET="${pattern}"
@@ -144,6 +150,7 @@ VENV_PY=""
 PYTHON_PATH=""
 # Conservative default on Linux to avoid extra GPU deps unless explicitly needed.
 PACKAGE="audio-separator"
+ONNX_PACKAGE="onnxruntime"
 CORE_EXTRA=""
 PROFILE="linux-cpu"
 BACKEND="cpu"
@@ -568,6 +575,20 @@ PY
     if [ "${audio_install_rc}" -ne 0 ]; then
       set_status "deps_failed" "audio_separator_install_failed"
     fi
+
+    log_stage "Checking/installing ONNX Runtime"
+    onnx_install_rc=0
+    if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
+      log_step "Installing ${ONNX_PACKAGE}"
+      if [ -n "${CONSTRAINTS_FILE}" ]; then
+        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
+      else
+        "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
+      fi
+    fi
+    if [ "${onnx_install_rc}" -ne 0 ]; then
+      set_status "deps_failed" "onnxruntime_install_failed"
+    fi
   fi
 fi
 
@@ -629,12 +650,15 @@ if [ -n "${PYTHON}" ] && [ -n "${VENV_PY}" ]; then
   if ! "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; then
     set_status "audio_separator_check_failed" "audio_separator_import_failed"
   fi
+  if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
+    set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
+  fi
   if ! "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1; then
     set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
   fi
 fi
 
-# verify venv runtime is complete (torch backend + audio_separator + stemwerk_core)
+# verify venv runtime is complete (torch backend + audio_separator + onnxruntime + stemwerk_core)
 VENV_TORCH_OK=0
 VENV_TORCH_PROBE=""
 FINAL_OK=0
@@ -668,6 +692,7 @@ log_step "Venv torch probe: ${VENV_TORCH_PROBE}"
 
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ] && \
    "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 && \
+   "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 && \
    "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 && \
    [ "${VENV_TORCH_OK}" -eq 1 ]; then
   PYTHON_PATH="${VENV_PY}"
@@ -677,12 +702,14 @@ else
   set_status "deps_failed" "runtime_python_split_brain"
   log_step "Venv runtime incomplete; refusing to set PYTHON_PATH"
   audio_rc="na"
+  onnx_rc="na"
   core_rc="na"
   if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     audio_rc=$("${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; echo $?)
+    onnx_rc=$("${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; echo $?)
     core_rc=$("${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1; echo $?)
   fi
-  log_step "Venv failure detail: audio_separator=${audio_rc} stemwerk_core=${core_rc} VENV_TORCH_OK=${VENV_TORCH_OK}"
+  log_step "Venv failure detail: audio_separator=${audio_rc} onnxruntime=${onnx_rc} stemwerk_core=${core_rc} VENV_TORCH_OK=${VENV_TORCH_OK}"
   PYTHON_PATH=""
   FINAL_OK=0
 fi

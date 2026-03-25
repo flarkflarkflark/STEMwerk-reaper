@@ -89,6 +89,12 @@ resolve_core_target() {
 
   CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
   if [ -d "${CORE_BUNDLE_DIR}" ]; then
+    if [ -f "${CORE_BUNDLE_DIR}/pyproject.toml" ] && [ -d "${CORE_BUNDLE_DIR}/src/stemwerk_core" ]; then
+      CORE_TARGET="${CORE_BUNDLE_DIR}"
+      CORE_TARGET_DESC="bundled source"
+      CORE_SUPPORTS_EXTRAS=1
+      return 0
+    fi
     for pattern in "${CORE_BUNDLE_DIR}"/*.whl "${CORE_BUNDLE_DIR}"/*.tar.gz "${CORE_BUNDLE_DIR}"/*.zip; do
       if [ -f "${pattern}" ]; then
         CORE_TARGET="${pattern}"
@@ -116,6 +122,10 @@ FFMPEG=""
 VENV_PY=""
 # Conservative default on macOS to avoid GPU extras with limited wheel support.
 PACKAGE="audio-separator==0.14.5"
+ONNX_PACKAGE="onnxruntime"
+if [ "$(uname -m)" = "arm64" ]; then
+  ONNX_PACKAGE="onnxruntime-silicon"
+fi
 PROFILE="mac-cpu"
 BACKEND="cpu"
 BACKEND_REASON=""
@@ -194,6 +204,10 @@ else
 
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
       "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "audio_separator_install_failed"
+
+    log "Installing ${ONNX_PACKAGE}"
+    "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || \
+      "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "onnxruntime_install_failed"
   fi
 fi
 
@@ -233,6 +247,12 @@ if [ -z "${FFMPEG}" ]; then
 fi
 
 set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
+
+if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
+  "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
+  "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 || set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
+fi
 
 if [ -n "${STATE_FILE}" ]; then
   write_state

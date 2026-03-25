@@ -59,7 +59,7 @@ REAPER Scripts folder.
 
 Improve the user handoff with:
 
-- postinstall message that explicitly says `Run STEMwerk_First_Run_Setup.lua`
+- postinstall message that explicitly says `Run STEMwerk-SETUP.lua`
 - optional creation of a small marker file that the REAPER setup UI can read to
   show `Installed successfully, runtime setup still required`
 - the same REAPER-side progress/status UI contract as Linux

@@ -6,10 +6,14 @@ OUT_DIR="$ROOT_DIR/installer/linux/dist"
 BUILD_DIR="$ROOT_DIR/installer/linux/build-appimage"
 APPDIR="$BUILD_DIR/AppDir"
 
-VERSION="${STEMWERK_VERSION:-0.0.0}"
+VERSION="${STEMWERK_VERSION:-}"
 
-if [[ -z "${STEMWERK_VERSION:-}" && -f "$ROOT_DIR/VERSION" ]]; then
+if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
+fi
+if [[ -z "$VERSION" ]]; then
+  echo "ERROR: STEMWERK_VERSION is not set and VERSION could not be read." >&2
+  exit 1
 fi
 
 rm -rf "$BUILD_DIR"
@@ -21,6 +25,14 @@ mkdir -p "$OUT_DIR" \
 
 # Copy only what we need
 rsync -a --delete \
+  --exclude='*.bak' \
+  --exclude='*.bak2' \
+  --exclude='sync_to_reaper.sh' \
+  --exclude='STEMwerk_Enable_Debug.lua' \
+  --exclude='STEMwerk_Disable_Debug.lua' \
+  --exclude='STEMwerk_Set_FFmpegPath.lua' \
+  --exclude='STEMwerk_Set_PythonPath.lua' \
+  --exclude='STEMwerk_separate.lua' \
   "$ROOT_DIR/scripts/reaper/" \
   "$ROOT_DIR/i18n" \
   "$ROOT_DIR/installer/assets/stemwerk.svg" \
@@ -110,7 +122,7 @@ mkdir -p "$REAPER_SCRIPTS" "$LOG_DIR"
   rsync -a --delete "$SRC/" "$DEST/"
   echo "Copy finished successfully"
 } >"$LOG_FILE" 2>&1 || {
-  MESSAGE=$(printf 'STEMwerk kon de bestanden niet kopieren naar:\n%s\n\nBekijk het log:\n%s' "$DEST" "$LOG_FILE")
+  MESSAGE=$(printf 'STEMwerk could not copy the files to:\n%s\n\nSee the log:\n%s' "$DEST" "$LOG_FILE")
   printf '%b\n' "$MESSAGE" >&2
   show_dialog "STEMwerk Installer" "$MESSAGE" "$MESSAGE" error || true
   if command -v xdg-open >/dev/null 2>&1; then
@@ -119,14 +131,14 @@ mkdir -p "$REAPER_SCRIPTS" "$LOG_DIR"
   exit 1
 }
 
-PLAIN_MESSAGE=$(printf 'STEMwerk-bestanden zijn gekopieerd naar:\n%s\n\nVolgende stap:\n1. Open REAPER\n2. Run STEMwerk_First_Run_Setup.lua\n3. Daarna kun je STEMwerk.lua gebruiken\n\nLog:\n%s' "$DEST" "$LOG_FILE")
-RICH_MESSAGE=$(printf '<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>\n\nSTEMwerk-bestanden zijn gekopieerd naar:\n%s\n\n<b>Volgende stap</b>\n1. Open REAPER\n2. Run STEMwerk_First_Run_Setup.lua\n3. Daarna kun je STEMwerk.lua gebruiken\n\nLog:\n%s' "$DEST" "$LOG_FILE")
+PLAIN_MESSAGE=$(printf 'STEMwerk files were copied to:\n%s\n\nNext step:\n1. Open REAPER\n2. Run STEMwerk-SETUP.lua\n3. Then run STEMwerk.lua\n\nLog:\n%s' "$DEST" "$LOG_FILE")
+RICH_MESSAGE=$(printf '<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>\n\nSTEMwerk files were copied to:\n%s\n\n<b>Next step</b>\n1. Open REAPER\n2. Run STEMwerk-SETUP.lua\n3. Then run STEMwerk.lua\n\nLog:\n%s' "$DEST" "$LOG_FILE")
 
 echo "STEMwerk files copied to: $DEST"
 echo ""
 echo "Next steps:"
 echo "1) In REAPER, open Actions -> Load ReaScript..."
-echo "2) Add: $DEST/STEMwerk_First_Run_Setup.lua (run this first)"
+echo "2) Add: $DEST/STEMwerk-SETUP.lua (run this first)"
 echo "3) Add: $DEST/STEMwerk.lua"
 echo ""
 echo "Docs:"
