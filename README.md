@@ -27,16 +27,15 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 ### Recommended (Installer)
 1. Download the latest installer for your platform (Windows/macOS/Linux).
 2. Run the installer.
-3. Let the installer finish the bootstrap/runtime setup.
-4. Open REAPER.
-5. If the scripts are not visible yet in the Action List, use Actions -> ReaScript -> Load ReaScript... and load `STEMwerk_Setup_Toolbar.lua` or `STEMwerk.lua` from `REAPER/Scripts/STEMwerk-reaper/`.
-6. Run `STEMwerk.lua` (shown in REAPER as `Stemwerk: Main`).
+3. Open REAPER.
+4. If the scripts are not visible yet in the Action List, use Actions -> ReaScript -> Load ReaScript... and load `STEMwerk-SETUP.lua`, `STEMwerk.lua`, or `STEMwerk_Setup_Toolbar.lua` from `REAPER/Scripts/STEMwerk-reaper/`.
+5. On macOS and Linux, run `STEMwerk-SETUP.lua` first.
+6. Then run `STEMwerk.lua` (shown in REAPER as `Stemwerk: Main`).
 
-This step prepares the runtime environment (Python, FFmpeg, and dependencies).
+On Windows, the installer handles the runtime/bootstrap work outside REAPER.
+On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side bootstrap and repair entry point.
 
 On Windows, `STEMwerk-SETUP.lua` does not replace the installer bootstrap. If the runtime is incomplete, re-run the Windows installer first.
-
-On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side bootstrap and repair entry point.
 
 Note: First-time setup downloads can take a while and may require several gigabytes of free disk space. On Windows, keeping roughly 4–8 GB free is a safe baseline.
 
@@ -49,7 +48,7 @@ Note: First-time setup downloads can take a while and may require several gigaby
 
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
 
-### ReaPack (Linux & Mac only!!!)
+### ReaPack (Linux and macOS only)
 Import this repository URL into ReaPack:
 
 ```text
