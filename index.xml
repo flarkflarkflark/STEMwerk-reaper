@@ -2,43 +2,37 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1.3" author="flarkAUDIO" time="1774209600">
+      <version name="2.2.1.1" author="flarkAUDIO" time="1774306800">
         <changelog><![CDATA[
-- ReaPack installeert nu in dezelfde Scripts/STEMwerk-reaper layout als de installers
-- Runtime path-detectie accepteert oude ReaPack-layouts nog steeds als fallback
-- Windows installer/runtime setup verbeterd (live feedback + log)
-- FFmpeg shim-detectie en lokale runtime-install gefixt
-- Bundled stemwerk-core installpad toegevoegd
-- First-run verify flow non-blocking op Windows
-- Geometry/focus consistency verbeterd tussen STEMwerk-vensters
-- Selectie-monitoring tussen select-audio en main verbeterd
-- i18n/footer/tooltip consistency verbeterd
-- STEMwerk.lua compile/load issue opgelost
-- ReaPack install path fix (force reinstall)
+- ReaPack payload aligned with the current public script set
+- Internal setup/runtime helpers moved under _internal and included correctly
+- Removed stale references to deleted setup/repair helper scripts
+- Bundled stemwerk-core wheel and constraint files included for setup/bootstrap
+- Linux and macOS setup flow fixes included, including ONNX Runtime handling
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
-        <source file="../STEMwerk_First_Run_Setup.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_First_Run_Setup.lua</source>
-        <source file="../STEMwerk_Runtime_Setup.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Runtime_Setup.lua</source>
-        <source file="../STEMwerk_Repair_Install.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Repair_Install.lua</source>
         <source file="../STEMwerk_AI_Separate.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_AI_Separate.lua</source>
         <source file="../STEMwerk_Setup_Toolbar.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
-        <source file="../STEMwerk_Enable_Debug.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Enable_Debug.lua</source>
-        <source file="../STEMwerk_Disable_Debug.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Disable_Debug.lua</source>
-        <source file="../STEMwerk_Set_PythonPath.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Set_PythonPath.lua</source>
-        <source file="../STEMwerk_Set_FFmpegPath.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Set_FFmpegPath.lua</source>
-        <source file="../STEMwerk_Path_Helper.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Path_Helper.lua</source>
         <source file="../STEMwerk_All_Stems.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_All_Stems.lua</source>
         <source file="../STEMwerk_Vocals_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Vocals_Only.lua</source>
         <source file="../STEMwerk_Drums_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Drums_Only.lua</source>
         <source file="../STEMwerk_Bass_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bass_Only.lua</source>
         <source file="../STEMwerk_Karaoke.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Karaoke.lua</source>
-        <source file="../STEMwerk_separate.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_separate.lua</source>
+        <source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua</source>
+        <source file="../_internal/STEMwerk_Runtime_Setup.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua</source>
+        <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
+        <source file="../_internal/STEMwerk_Linux_Setup_Guide.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Linux_Setup_Guide.txt</source>
         <source file="../STEMwerk_Bootstrap_Windows.ps1" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Windows.ps1</source>
         <source file="../STEMwerk_Bootstrap_macOS.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_macOS.sh</source>
         <source file="../STEMwerk_Bootstrap_Linux.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux.sh</source>
         <source file="../STEMwerk_Bootstrap_Linux_Launcher.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh</source>
         <source file="../audio_separator_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/audio_separator_process.py</source>
+        <source file="../constraints/base.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/base.txt</source>
+        <source file="../constraints/cuda.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/cuda.txt</source>
+        <source file="../constraints/directml.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/directml.txt</source>
+        <source file="../vendor/stemwerk-core/stemwerk_core-0.1.0-py3-none-any.whl" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/stemwerk_core-0.1.0-py3-none-any.whl</source>
+        <source file="../vendor/stemwerk-core/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/README.txt</source>
         <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/stemwerk_language_wrapper.lua</source>
         <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>
