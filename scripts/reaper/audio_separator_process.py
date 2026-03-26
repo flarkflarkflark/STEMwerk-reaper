@@ -197,6 +197,37 @@ def _configure_ffmpeg_runtime() -> Optional[Path]:
     return None
 
 
+def _default_model_cache_dir() -> Path:
+    override = os.environ.get("AUDIO_SEPARATOR_MODEL_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    home = Path.home()
+    if os.name == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / "STEMwerk" / "models"
+        return home / "AppData" / "Local" / "STEMwerk" / "models"
+
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "STEMwerk" / "models"
+
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home) / "STEMwerk" / "models"
+    return home / ".local" / "share" / "STEMwerk" / "models"
+
+
+def _configure_model_cache_runtime() -> Path:
+    model_dir = _default_model_cache_dir()
+    try:
+        model_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    os.environ["AUDIO_SEPARATOR_MODEL_DIR"] = str(model_dir)
+    return model_dir
+
+
 def emit_progress(percent: float, stage: str = ""):
     """Output progress in machine-readable format for Lua to parse."""
     line = f"PROGRESS:{int(percent)}:{stage}\n"
@@ -606,10 +637,12 @@ def main():
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
     ffmpeg_path = _configure_ffmpeg_runtime()
+    model_cache_dir = _configure_model_cache_runtime()
     if ffmpeg_path is not None:
         print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)
     else:
         print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)
+    print(f"STEMWERK_DIAG model_cache_dir={model_cache_dir}", file=sys.stderr)
 
     skip_devices = set(_split_list(args.skip_devices))
 
