@@ -10105,6 +10105,45 @@ local function fitTextToBox(text, availableW, baseFontSize, minFontSize)
     return text, tw, fontSize
 end
 
+function isModelLoadingStage(stage)
+    if not stage or stage == "" then return false end
+    local s = tostring(stage):lower()
+    return s:find("loading", 1, true) ~= nil and s:find("model", 1, true) ~= nil
+end
+
+function drawModelLoadNoteBox(x, y, w, h, mx, my)
+    if not w or w <= 20 then return false end
+
+    local hover = mx >= x and mx <= x + w and my >= y and my <= y + h
+    local bg = THEME.inputBg or {0.12, 0.12, 0.14}
+    local border = THEME.border or {0.35, 0.35, 0.4}
+    local accent = THEME.accent or {0.35, 0.65, 0.95}
+    local textColor = THEME.textDim or THEME.text or {0.85, 0.85, 0.9}
+
+    gfx.set(bg[1], bg[2], bg[3], hover and 0.96 or 0.88)
+    gfx.rect(x, y, w, h, 1)
+
+    gfx.set(border[1], border[2], border[3], hover and 1 or 0.85)
+    gfx.rect(x, y, w, h, 0)
+
+    gfx.set(accent[1], accent[2], accent[3], 0.9)
+    gfx.rect(x, y, math.max(2, math.floor(h * 0.16)), h, 1)
+
+    local fontSize = math.max(8, math.floor(h * 0.5))
+    gfx.setfont(1, "Arial", fontSize)
+    local label = T("model_load_note") or "First model load can take longer. Later runs are usually faster."
+    local fitted, _, usedFontSize = fitTextToBox(label, w - 14, fontSize, 8)
+
+    gfx.setfont(1, "Arial", usedFontSize)
+    gfx.set(textColor[1], textColor[2], textColor[3], 1)
+    local textH = gfx.texth
+    gfx.x = x + 8
+    gfx.y = y + math.max(0, (h - textH) / 2) - 1
+    gfx.drawstr(fitted)
+
+    return hover
+end
+
 -- Draw a checkbox as a toggle box (like stems/presets) and return if it was clicked (scaled)
 -- Optional fixedW parameter to set a fixed width for all boxes
 -- Optional fontSizeOverride: when provided, a group of boxes can share the same text size.
@@ -14888,6 +14927,21 @@ local function drawProgressWindow()
         end
     end
 
+    if isModelLoadingStage(progressState.stage)
+        and drawModelLoadNoteBox(
+            nerdBtnX + nerdBtnW + PS(8),
+            nerdBtnY,
+            math.max(PS(100), w - (nerdBtnX + nerdBtnW + PS(8)) - PS(25)),
+            nerdBtnH,
+            mx,
+            my
+        )
+    then
+            GUI.uiClickedThisFrame = true
+            tooltipText = T("model_load_note_long") or "First model load can take longer. STEMwerk may download the model and warm up the selected backend."
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+    end
+
     -- === DISPLAY AREA (ART or TERMINAL) ===
     local displayY = nerdBtnY + nerdBtnH + PS(10)
     -- If terminal is requested, try to give it a bit more vertical room.
@@ -18523,6 +18577,26 @@ function drawMultiTrackProgressWindow()
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not multiTrackQueue.wasMouseDown then
             multiTrackQueue.showTerminal = not multiTrackQueue.showTerminal
+        end
+    end
+
+    for _, job in ipairs(multiTrackQueue.jobs) do
+        if job.startTime and not job.done and isModelLoadingStage(job.stage) then
+            if (barW - PS(150)) > PS(100)
+                and drawModelLoadNoteBox(
+                    barX + PS(120),
+                    nerdBtnY,
+                    barW - PS(150),
+                    nerdBtnH,
+                    mx,
+                    my
+                )
+            then
+                GUI.uiClickedThisFrame = true
+                tooltipText = T("model_load_note_long") or "First model load can take longer. STEMwerk may download the model and warm up the selected backend."
+                tooltipX, tooltipY = mx + PS(10), my + PS(15)
+            end
+            break
         end
     end
 
