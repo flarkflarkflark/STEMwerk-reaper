@@ -18,6 +18,13 @@
   #error STEMWERK_VERSION is not set and VERSION could not be read.
 #endif
 
+#define BundleRuntime GetEnv('STEMWERK_BUNDLE_RUNTIME')
+#if BundleRuntime == "1"
+  #define OutputSuffix "-bundled"
+#else
+  #define OutputSuffix ""
+#endif
+
 [Setup]
 AppId={{9A6BDA0D-6A2A-4B36-9C3B-1D4C77E5D0A3}
 AppName={#MyAppName}
@@ -37,7 +44,7 @@ DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
 DisableProgramGroupPage=yes
 OutputDir=dist
-OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}
+OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}{#OutputSuffix}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -50,6 +57,19 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; Core files needed to run in REAPER
 Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\i18n\*"; DestDir: "{app}\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
+
+#if BundleRuntime == "1"
+  #if FileExists('payload\python\python-3.11.8-amd64.exe')
+Source: "payload\python\python-3.11.8-amd64.exe"; DestDir: "{app}\_bundled\python"; Flags: ignoreversion
+  #else
+    #error STEMWERK_BUNDLE_RUNTIME=1 but payload\python\python-3.11.8-amd64.exe is missing.
+  #endif
+  #if FileExists('payload\ffmpeg\ffmpeg-release-essentials.zip')
+Source: "payload\ffmpeg\ffmpeg-release-essentials.zip"; DestDir: "{app}\_bundled\ffmpeg"; Flags: ignoreversion
+  #else
+    #error STEMWERK_BUNDLE_RUNTIME=1 but payload\ffmpeg\ffmpeg-release-essentials.zip is missing.
+  #endif
+#endif
 
 ; Helpful docs
 Source: "STEMwerk_Windows_Setup_Guide.md"; DestDir: "{app}"; Flags: ignoreversion

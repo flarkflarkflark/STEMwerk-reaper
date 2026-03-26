@@ -11,6 +11,10 @@ on:
         description: "Upload built installers to the GitHub release. Ignored on tag pushes."
         required: false
         default: "true"
+      windows_bundled_asset:
+        description: "Also build a bundled Windows installer with Python + FFmpeg included."
+        required: false
+        default: "false"
   push:
     tags:
       - "v*"
@@ -108,6 +112,30 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          & $iscc "installer\windows\STEMwerk.iss"
+
+      - name: Fetch bundled runtime assets (Windows)
+        if: ${{ github.event.inputs.windows_bundled_asset == 'true' }}
+        shell: powershell
+        run: |
+          $pyDir = "installer\windows\payload\python"
+          $ffmpegDir = "installer\windows\payload\ffmpeg"
+          New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
+
+          $pyOut = Join-Path $pyDir "python-3.11.8-amd64.exe"
+          $ffOut = Join-Path $ffmpegDir "ffmpeg-release-essentials.zip"
+
+          Invoke-WebRequest "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe" -OutFile $pyOut
+          Invoke-WebRequest "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffOut
+
+      - name: Build bundled .exe (Inno Setup)
+        if: ${{ github.event.inputs.windows_bundled_asset == 'true' }}
+        shell: powershell
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          $env:STEMWERK_BUNDLE_RUNTIME = "1"
           & $iscc "installer\windows\STEMwerk.iss"
 
       - name: Upload build artifacts (Windows)

@@ -50,6 +50,13 @@ $ffmpeg = $null
 $venvPy = Join-Path $RuntimeBase ".venv\\Scripts\\python.exe"
 $installerMode = ($env:STEMWERK_INSTALLER -eq "1")
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$bundledRuntimeDir = Join-Path $scriptRoot "_bundled"
+$pythonInstallerFileName = "python-3.11.8-amd64.exe"
+$pythonInstallerUrl = "https://www.python.org/ftp/python/3.11.8/$pythonInstallerFileName"
+$ffmpegArchiveFileName = "ffmpeg-release-essentials.zip"
+$ffmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegArchiveFileName"
+$bundledPythonInstaller = Join-Path $bundledRuntimeDir ("python\\" + $pythonInstallerFileName)
+$bundledFfmpegZip = Join-Path $bundledRuntimeDir ("ffmpeg\\" + $ffmpegArchiveFileName)
 $bundledCoreDir = Join-Path $scriptRoot "vendor\\stemwerk-core"
 $constraintsDir = Join-Path $scriptRoot "constraints"
 $baseConstraints = Join-Path $constraintsDir "base.txt"
@@ -276,14 +283,23 @@ function LogUnsupportedPython([string]$Path) {
 }
 
 function InstallPythonDirect {
-    $pyUrl = "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe"
     $pyInstaller = Join-Path $RuntimeBase "bin\\python-installer.exe"
-    try {
-        LogProgress ("Downloading Python installer: " + $pyUrl)
-        Invoke-WebRequest -Uri $pyUrl -OutFile $pyInstaller -UseBasicParsing | Out-Null
-    } catch {
-        LogLine "Python download failed"
-        return $null
+    if (Test-Path $bundledPythonInstaller) {
+        try {
+            LogProgress ("Using bundled Python installer: " + $bundledPythonInstaller)
+            Copy-Item -Path $bundledPythonInstaller -Destination $pyInstaller -Force
+        } catch {
+            LogLine "Bundled Python installer copy failed"
+            return $null
+        }
+    } else {
+        try {
+            LogProgress ("Downloading Python installer: " + $pythonInstallerUrl)
+            Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pyInstaller -UseBasicParsing | Out-Null
+        } catch {
+            LogLine "Python download failed"
+            return $null
+        }
     }
     LogProgress "Installing Python silently (per-user)"
     RunHidden $pyInstaller @("/quiet","InstallAllUsers=0","Include_test=0","Include_pip=1","PrependPath=0","Shortcuts=0") "Python installer" | Out-Null
@@ -293,14 +309,23 @@ function InstallPythonDirect {
 }
 
 function InstallFfmpegDirect {
-    $zipUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     $zipPath = Join-Path $RuntimeBase "ffmpeg\\ffmpeg.zip"
-    try {
-        LogProgress ("Downloading FFmpeg (gyan.dev release): " + $zipUrl)
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing | Out-Null
-    } catch {
-        LogLine "FFmpeg download failed"
-        return $null
+    if (Test-Path $bundledFfmpegZip) {
+        try {
+            LogProgress ("Using bundled FFmpeg archive: " + $bundledFfmpegZip)
+            Copy-Item -Path $bundledFfmpegZip -Destination $zipPath -Force
+        } catch {
+            LogLine "Bundled FFmpeg archive copy failed"
+            return $null
+        }
+    } else {
+        try {
+            LogProgress ("Downloading FFmpeg (gyan.dev release): " + $ffmpegArchiveUrl)
+            Invoke-WebRequest -Uri $ffmpegArchiveUrl -OutFile $zipPath -UseBasicParsing | Out-Null
+        } catch {
+            LogLine "FFmpeg download failed"
+            return $null
+        }
     }
     if (Test-Path $zipPath) {
         $zipSize = (Get-Item $zipPath).Length

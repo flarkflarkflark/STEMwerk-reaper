@@ -7,5 +7,7 @@ desktop.ini
 installer/linux/dist/
 installer/linux/build/
 installer/linux/build-*/
+installer/windows/dist/
+installer/windows/payload/
 installer/macos/dist/
 installer/macos/build/
