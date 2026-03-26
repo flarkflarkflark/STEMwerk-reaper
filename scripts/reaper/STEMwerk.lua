@@ -10503,19 +10503,27 @@ function buildResultMessageLines()
         local line1 = string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, srcCount, srcWord)
 
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
-        local modeStr = (data.sequentialMode and (T("sequential") or "Sequential")) or (T("parallel") or "Parallel")
-        local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, modeStr)
+        local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
+        local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
         table.insert(lines, line1)
         table.insert(lines, line2)
+        if runtimeReason ~= "" then
+            local reasonLabel = T("mode_reason_label") or "Reason"
+            table.insert(lines, string.format("%s: %s", reasonLabel, runtimeReason))
+        end
     elseif data.kind == "multi_in_place" then
         local itemCount = data.itemCount or 0
         local itemWord = trPlural(itemCount, "footer_item", "footer_items", "item", "items")
         local line1 = string.format(T("result_items_replaced") or "%d %s replaced with stems as takes.", itemCount, itemWord)
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
-        local modeStr = (data.sequentialMode and (T("sequential") or "Sequential")) or (T("parallel") or "Parallel")
-        local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, modeStr)
+        local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
+        local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
         table.insert(lines, line1)
         table.insert(lines, line2)
+        if runtimeReason ~= "" then
+            local reasonLabel = T("mode_reason_label") or "Reason"
+            table.insert(lines, string.format("%s: %s", reasonLabel, runtimeReason))
+        end
     elseif data.kind == "single" then
         if data.mainKey then
             if data.mainKey == "result_time_selection_created" or data.mainKey == "result_stems_created_generic" then
@@ -11823,15 +11831,29 @@ end
 getRuntimeModeLabel = function(queue)
     local runtimeMode = (queue and queue.sequentialMode) and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
     local runtimeNote = ""
-    if SETTINGS.parallelProcessing and (queue and queue.sequentialMode) then
-        local reason = (queue.sequentialReason or queue.sequentialReasonText or "")
-        if reason ~= "" then
-            runtimeNote = " (" .. tostring(reason) .. ")"
+    local runtimeReason = ""
+    local requestedParallel = SETTINGS.parallelProcessing
+    if queue and queue.requestedParallel ~= nil then
+        requestedParallel = queue.requestedParallel and true or false
+    end
+    if requestedParallel and (queue and queue.sequentialMode) then
+        local reasonCode = queue.forceSequentialReason or queue.sequentialReason or queue.sequentialReasonText or ""
+        local reason = ""
+        if reasonCode == "per_item_jobs" then
+            reason = T("mode_reason_per_item_jobs") or "per-item safety mode"
+        elseif reasonCode == "auto_no_gpu" then
+            reason = T("mode_reason_auto_no_gpu") or "auto device, no GPU"
+        elseif reasonCode ~= "" then
+            reason = tostring(reasonCode)
         else
-            runtimeNote = " (fallback)"
+            reason = T("mode_fallback") or "fallback"
+        end
+        runtimeReason = tostring(reason or "")
+        if runtimeReason ~= "" then
+            runtimeNote = " (" .. runtimeReason .. ")"
         end
     end
-    return runtimeMode, runtimeNote
+    return runtimeMode, runtimeNote, runtimeReason
 end
 
 local function resolveTimeSelectionTargets()
@@ -17881,20 +17903,18 @@ runSingleTrackSeparation = function(trackList)
         local dev = string.lower(tostring(SETTINGS.device or "auto"))
         local isExplicitGpu = dev:find("cuda", 1, true) ~= nil or dev:find("directml", 1, true) ~= nil
 
-        -- Per-item multi-track runs are correctness-sensitive because each item slice becomes its own
-        -- backend job. Launching those jobs in parallel has produced cross-job contamination in practice,
-        -- so keep them deterministic until the separator backend is proven safe for concurrent runs.
-        if hasPerItemJobs then
-            multiTrackQueue.sequentialMode = true
-            multiTrackQueue.forceSequentialReason = "Per-item multi-track isolation"
-            debugLog("Forcing sequential multi-track processing (" .. multiTrackQueue.forceSequentialReason .. ")")
+        -- Per-item jobs now follow the user's Parallel/Sequential choice.
+        -- Each job already has isolated temp I/O and REAPER-side result application happens later,
+        -- so do not force sequential mode here anymore.
+        if hasPerItemJobs and not multiTrackQueue.sequentialMode then
+            debugLog("Per-item multi-track jobs: honoring user-selected parallel mode")
         end
         
         -- Respect user's Parallel choice even on CPU. 
         -- Only force sequential if device is "auto" AND we know for sure there is no GPU.
         if not multiTrackQueue.sequentialMode and dev == "auto" and not hasRuntimeGpuBackends() then
             multiTrackQueue.sequentialMode = true
-            multiTrackQueue.forceSequentialReason = "Auto device (no GPU)"
+            multiTrackQueue.forceSequentialReason = "auto_no_gpu"
             debugLog("Forcing sequential multi-track processing (" .. multiTrackQueue.forceSequentialReason .. ")")
         end
     end
@@ -18362,16 +18382,6 @@ function drawMultiTrackProgressWindow()
 
     -- Title / branding
     gfx.setfont(1, "Arial", PS(16), string.byte('b'))
-    local modeStr = multiTrackQueue.sequentialMode and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
-    local modeNote = ""
-    if multiTrackQueue.sequentialMode and SETTINGS.parallelProcessing then
-        local reason = multiTrackQueue.forceSequentialReason or ""
-        if reason ~= "" then
-            modeNote = " (" .. tostring(reason) .. ")"
-        else
-            modeNote = " (fallback)"
-        end
-    end
     local titleX = PS(20)
     local titleY = PS(25)
 
@@ -18398,7 +18408,7 @@ function drawMultiTrackProgressWindow()
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.x = titleX + prefixW + logoW
     gfx.y = titleY
-    local runtimeMode, runtimeNote = getRuntimeModeLabel(multiTrackQueue)
+    local runtimeMode, _, runtimeReason = getRuntimeModeLabel(multiTrackQueue)
     local anyPerItem = false
     for _, job in ipairs(multiTrackQueue.jobs) do
         if job.perItem then anyPerItem = true; break end
@@ -18413,7 +18423,7 @@ function drawMultiTrackProgressWindow()
         end
         return (count == 1) and (T("footer_track") or "track") or (T("footer_tracks") or "tracks")
     end
-    gfx.drawstr(string.format(" - %s (%d %s)%s", runtimeMode, titleJobCount, jobUnitLabel(titleJobCount), runtimeNote))
+    gfx.drawstr(string.format(" - %s (%d %s)", runtimeMode, titleJobCount, jobUnitLabel(titleJobCount)))
 
     -- Language toggle (left of theme toggle)
     local langW = PS(20)
@@ -18479,9 +18489,24 @@ function drawMultiTrackProgressWindow()
         end
     end
 
+    if runtimeReason ~= "" then
+        gfx.setfont(1, "Arial", PS(10))
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.95)
+        local reasonLabel = T("mode_reason_label") or "Reason"
+        local reasonText = string.format("%s: %s", reasonLabel, runtimeReason)
+        gfx.x = PS(20)
+        gfx.y = stemRowY + stemBoxSize + PS(3)
+        gfx.drawstr(reasonText)
+    end
+
     -- Overall progress bar
     local barX = PS(20)
-    local barY = (#selectedStems > 0) and (stemRowY + stemBoxSize + PS(8)) or PS(55)
+    local barY
+    if #selectedStems > 0 then
+        barY = stemRowY + stemBoxSize + (runtimeReason ~= "" and PS(18) or PS(8))
+    else
+        barY = PS(55)
+    end
     local barW = w - PS(40)
     local barH = PS(20)
     local overallProgress = getOverallProgress()
@@ -19683,6 +19708,8 @@ processAllStemsResult = function()
             totalTimeSec = totalTime,
             realtimeFactor = realtimeFactor,
             sequentialMode = multiTrackQueue.sequentialMode and true or false,
+            forceSequentialReason = multiTrackQueue.forceSequentialReason,
+            requestedParallel = SETTINGS.parallelProcessing and true or false,
         }
     else
         local itemCount = #multiTrackQueue.jobs
@@ -19692,6 +19719,8 @@ processAllStemsResult = function()
             totalTimeSec = totalTime,
             realtimeFactor = realtimeFactor,
             sequentialMode = multiTrackQueue.sequentialMode and true or false,
+            forceSequentialReason = multiTrackQueue.forceSequentialReason,
+            requestedParallel = SETTINGS.parallelProcessing and true or false,
         }
     end
     resultData.action = actionData
