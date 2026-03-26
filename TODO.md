@@ -47,6 +47,14 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 	- Ensure `audio_separator_process.py` reports usable GPU devices under ROCm (often via `torch.cuda`)
 	- Update device UI/tooltips to explain ROCm requirements + fallback behavior
 
+- [ ] Bazzite / Flatpak REAPER support
+	- Detect REAPER Flatpak config/scripts paths (likely under `~/.var/app/fm.reaper.Reaper/config/REAPER`)
+	- Distinguish native/AppImage REAPER paths from Flatpak REAPER paths on Linux
+	- Extend Linux setup/sync flow so scripts land in the correct REAPER Flatpak script directory
+	- Verify runtime/state paths still behave correctly with Flatpak-based REAPER
+	- Check whether current Linux installers/AppImage should detect or warn about Flatpak REAPER explicitly
+	- Add a short Bazzite/Flatpak install note to README/help
+
 - [ ] Test matrix: NVIDIA RTX 3060 laptop (Windows + Linux)
 	- Fresh clone + venv setup
 	- Install GPU backend (CUDA torch) and verify via `python tools/gpu_check.py`
@@ -60,6 +68,20 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 	- Windows: .msi or .exe
 	- macOS: .pkg
 	- Linux: AppImage and/or .deb
+
+- [ ] Windows installer: explore semi-bundled installer
+	- Bundle Python installer payload into the Windows setup flow
+	- Bundle FFmpeg into the Windows setup flow to avoid the long first download
+	- Keep `stemwerk-core` bundled from the installer payload as the default path
+	- Measure final installer size impact for CPU / DirectML / CUDA users
+	- Decide whether to keep one smart installer or add optional offline Windows variants later
+
+- [ ] Windows installer docs: clarify runtime/download expectations
+	- Add backend table for CPU / DirectML / CUDA download size
+	- Add estimated installed size table
+	- Add first-use model download size table (`Fast`, `Quality`, `6-Stem`)
+	- State clearly that normal processing works offline after setup + model download
+	- State that model cache is persistent and usually survives reboots
 
 ### REAPER UI scaling/status checklist
 
@@ -91,3 +113,12 @@ Toolbar + Icons + Toolbarscripts:
 - **Sample Rate Mismatches / Drift:** Investigate potential sub-sample timing drifts when items with different sample rates than the REAPER project are processed via a time selection.
 - **Padding Clicks / Fades:** When items are padded with silence to match a longer time selection, apply a micro-fade to prevent DC-offset clicks at the zero-crossing.
 - (After installers exist) Add “novice mode” UX: guided install outside REAPER, minimal prompts, clear GPU choice
+- **Bundled / Offline Distribution Options:** Revisit backend-specific bundled packages after Windows is stabilized.
+	- Windows CPU offline / semi-bundled installer
+	- Windows DirectML offline / semi-bundled installer
+	- Windows CUDA large offline installer as a separate release path
+	- Linux CPU semi-bundled installer or AppImage
+	- Linux ROCm / CUDA offline packs only if maintenance cost is acceptable
+	- macOS semi-bundled installer path
+	- Optional model packs: `Fast`, `Quality`, `6-Stem`
+- **Repository housekeeping:** Clean up worktree / local artifacts / temporary build clutter once the current installer and runtime work settles down

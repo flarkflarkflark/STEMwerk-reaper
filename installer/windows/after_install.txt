@@ -1,4 +1,6 @@
 STEMwerk installed.
 
 Important:
-Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.
+Open REAPER and run STEMwerk.lua.
+
+Use STEMwerk-SETUP.lua only as a support or repair path if something is missing after installation.

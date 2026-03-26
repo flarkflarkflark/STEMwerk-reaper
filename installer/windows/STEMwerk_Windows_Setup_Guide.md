@@ -37,18 +37,20 @@ If something is missing or the runtime is incomplete:
 2. then check the setup log if needed
 
 ## Parallel vs Sequential (Multi-track)
-STEMwerk can run multi-track jobs in parallel when Parallel is enabled and more than one job is queued. It will automatically fall back to Sequential in two cases:
-- Per-item time selection jobs (for correctness and isolation).
-- Device = Auto with no GPU backends detected (CPU-only is faster and safer).
+STEMwerk can run multi-track jobs in parallel when Parallel is enabled and more than one job is queued.
+
+It will automatically fall back to Sequential when:
+- device = `auto` and no GPU backend is available
+- only 1 job is queued
 
 Examples where pure parallel does happen:
 - You select 3 tracks with items, no time selection, Parallel on, device = `cuda:0` or `directml`. -> 3 jobs at once (per track).
 - You select 5 tracks, Parallel on, device = `auto`, and a GPU is detected. -> 5 jobs at once.
 - You select multiple items across multiple tracks (no time selection), Parallel on, device = `cuda`. -> per-track jobs in parallel.
+- You select a time range that includes multiple items on one or more tracks, Parallel on, and a GPU backend is available. -> per-item jobs can still run in parallel.
 
 Examples where it does not run in parallel:
-- Time selection with multiple items on one track -> per-item jobs -> sequential forced ("Per-item multi-track isolation").
-- Parallel on, device = `auto`, but no GPU backend -> sequential forced ("Auto device (no GPU)").
+- Parallel on, device = `auto`, but no GPU backend -> sequential fallback ("Auto device, no GPU").
 - Only 1 job (1 track) -> sequential by definition.
 
 The progress window shows the active mode and the reason when a fallback happens.
