@@ -2285,6 +2285,51 @@ function applyCachedRuntimeDevices()
     return true
 end
 
+function normalizeRequestedDeviceForRuntime(requestedDevice)
+    local req = tostring(requestedDevice or "auto")
+    if req == "" then return "auto" end
+    if req == "auto" or req == "cpu" or req == "mps" then return req end
+
+    local list = RUNTIME_DEVICES or DEVICES or {}
+    local function hasId(id)
+        for _, d in ipairs(list) do
+            if tostring(d.id or "") == tostring(id or "") then
+                return true
+            end
+        end
+        return false
+    end
+    local function firstNumbered(prefix)
+        for _, d in ipairs(list) do
+            local id = tostring(d.id or "")
+            if id:match("^" .. prefix .. ":%d+$") then
+                return id
+            end
+        end
+        return nil
+    end
+
+    if hasId(req) then
+        return req
+    end
+
+    if req == "directml" then
+        return firstNumbered("directml") or (hasId("directml") and "directml") or req
+    end
+    if req:match("^directml:%d+$") then
+        return (hasId("directml") and "directml") or firstNumbered("directml") or req
+    end
+
+    if req == "cuda" then
+        return firstNumbered("cuda") or (hasId("cuda") and "cuda") or req
+    end
+    if req:match("^cuda:%d+$") then
+        return firstNumbered("cuda") or (hasId("cuda") and "cuda") or req
+    end
+
+    return req
+end
+
 -- Available models
 local MODELS = {
     { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
@@ -15539,7 +15584,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
 
         -- Launch Python hidden WITHOUT a .bat/.cmd (prevents console windows).
         -- Use WMI Win32_Process.Create to get a PID for proper cancel.
-        local deviceArg = SETTINGS.device or "auto"
+        local requestedDeviceArg = SETTINGS.device or "auto"
+        local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
             quoteArg(PYTHON_PATH),
@@ -15551,7 +15597,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
         )
         progressState.lastCmd = pythonCmd
         SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
-        debugLog("  device=" .. tostring(deviceArg))
+        if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
+            debugLog("  device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
+        else
+            debugLog("  device=" .. tostring(deviceArg))
+        end
 
         -- Write a tiny VBS launcher that runs PowerShell invisibly via wscript
         -- PowerShell will Start-Process the Python worker and write its PID to pidFile
@@ -15617,7 +15667,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
         -- Unix: run in background so REAPER stays responsive and the progress window can update.
         -- Launch a tiny sh script that starts the Python worker in the background, writes a pid.txt,
         -- and writes done.txt only when the worker exits successfully.
-        local deviceArg = tostring(SETTINGS.device or "auto")
+        local requestedDeviceArg = tostring(SETTINGS.device or "auto")
+        local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
         local modelArg  = tostring(model or SETTINGS.model or "htdemucs")
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
@@ -15630,6 +15681,9 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
         )
         progressState.lastCmd = pythonCmd
         SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
+        if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
+            debugLog("  device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
+        end
 
         -- Create empty progress/log files (Python writes to these directly)
         local sf = io.open(stdoutFile, "w")
@@ -18044,7 +18098,8 @@ startSeparationProcessForJob = function(job, segmentSize)
     local lf = io.open(logFile, "w")
     if lf then lf:close() end
 
-    local deviceArg = tostring(SETTINGS.device or "auto")
+    local requestedDeviceArg = tostring(SETTINGS.device or "auto")
+    local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
     local modelArg  = tostring(SETTINGS.model or "htdemucs")
     local pythonCmd = string.format(
         '%s -u %s %s %s --model %s --device %s',
@@ -18057,6 +18112,9 @@ startSeparationProcessForJob = function(job, segmentSize)
     )
     job.lastCmd = pythonCmd
     SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
+    if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
+        debugLog("Job " .. tostring(job.index) .. " device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
+    end
 
     if OS == "Windows" then
         -- Windows: hidden PowerShell runner (async) that also writes pid.txt and done.txt.
