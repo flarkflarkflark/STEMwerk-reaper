@@ -55,7 +55,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 ; Core files needed to run in REAPER
-Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*,vendor\stemwerk-core\pyproject.toml"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\i18n\*"; DestDir: "{app}\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 #if BundleRuntime == "1"
@@ -211,6 +211,49 @@ begin
   Result := Trim(Tail);
 end;
 
+function FilterVisibleLogText(const Text: string): string;
+var
+  Remaining: string;
+  Line: string;
+  EolPos: Integer;
+  Marker: string;
+begin
+  Result := '';
+  Remaining := Text;
+  Marker := 'STEMWERK_STATUS detail=';
+
+  while Remaining <> '' do
+  begin
+    EolPos := Pos(#13#10, Remaining);
+    if EolPos > 0 then
+    begin
+      Line := Copy(Remaining, 1, EolPos - 1);
+      Delete(Remaining, 1, EolPos + 1);
+    end
+    else
+    begin
+      EolPos := Pos(#10, Remaining);
+      if EolPos > 0 then
+      begin
+        Line := Copy(Remaining, 1, EolPos - 1);
+        Delete(Remaining, 1, EolPos);
+      end
+      else
+      begin
+        Line := Remaining;
+        Remaining := '';
+      end;
+    end;
+
+    if Copy(Line, 1, Length(Marker)) <> Marker then
+    begin
+      if Result <> '' then
+        Result := Result + #13#10;
+      Result := Result + Line;
+    end;
+  end;
+end;
+
 function ExtractBootstrapProgress(const Text: string): Integer;
 var
   UpperText: string;
@@ -316,7 +359,7 @@ end;
 
 procedure UpdateLogMemo;
 var
-  Path, Text, Detail: string;
+  Path, Text, VisibleText, Detail: string;
   WasAtBottom: Boolean;
 begin
   if (LogMemo <> nil) and LogMemo.Focused then
@@ -331,12 +374,13 @@ begin
   if Text = '' then
     Text := 'Waiting for bootstrap log at:' + #13#10 + Path + #13#10 +
             'Installer will update this view automatically...';
-  if Text <> LastLogText then
+  VisibleText := FilterVisibleLogText(Text);
+  if VisibleText <> LastLogText then
   begin
-    LastLogText := Text;
+    LastLogText := VisibleText;
     if WasAtBottom or (LogMemo.Lines.Count = 0) then
     begin
-      LogMemo.Lines.Text := Text;
+      LogMemo.Lines.Text := VisibleText;
       if LogMemo.Handle <> 0 then
         SendMessage(LogMemo.Handle, WM_VSCROLL, SB_BOTTOM, 0);
     end;

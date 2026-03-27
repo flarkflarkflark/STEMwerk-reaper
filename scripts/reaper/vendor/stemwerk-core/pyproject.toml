@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stemwerk-core"
+version = "0.1.1"
+description = "AI stem separation engine for the flarkAUDIO ecosystem."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "soundfile",
+]
+
+[project.optional-dependencies]
+gpu = []
+directml = []
+rocm = []
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
