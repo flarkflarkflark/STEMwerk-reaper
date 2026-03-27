@@ -17917,12 +17917,12 @@ runSingleTrackSeparation = function(trackList)
 
         local dev = string.lower(tostring(SETTINGS.device or "auto"))
         local explicitDirectml = dev:find("directml", 1, true) ~= nil
-        local autoLikelyDirectml = dev == "auto" and hasRuntimeBackendType("directml") and not hasRuntimeBackendType("cuda") and not hasRuntimeBackendType("mps")
-        local directmlMultiJob = explicitDirectml or autoLikelyDirectml
+        local directmlMultiJob = explicitDirectml
 
         -- DirectML multi-job runs are not stable enough yet across Windows GPU stacks.
         -- Run them sequentially so time-selection/multi-track jobs do not silently drop outputs
-        -- after the first successful item/track.
+        -- after the first successful item/track. Do not apply this to AUTO:
+        -- AUTO may legitimately choose CUDA on mixed-GPU Windows systems.
         if not multiTrackQueue.sequentialMode and directmlMultiJob then
             multiTrackQueue.sequentialMode = true
             multiTrackQueue.forceSequentialReason = "directml_multi_track"
