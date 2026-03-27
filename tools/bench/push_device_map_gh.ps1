@@ -3,7 +3,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = (Get-Location).Path
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$repo = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+Set-Location $repo
 
 $mapPath = Join-Path $repo 'tests\bench_results\device_mapping.json'
 $readmePath = Join-Path $repo 'tests\bench_results\README.md'

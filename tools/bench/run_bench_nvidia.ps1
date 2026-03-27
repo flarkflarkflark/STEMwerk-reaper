@@ -1,7 +1,7 @@
 <#
 PowerShell runner for NVIDIA laptop
-Usage (copy to repo root and run from repo root):
-  .\installers\run_bench_nvidia.ps1 -Sizes 2048,4096,8192,16384 -Iterations 20 -Reps 3 -Push
+Usage:
+  .\tools\bench\run_bench_nvidia.ps1 -Sizes 2048,4096,8192,16384 -Iterations 20 -Reps 3 -Push
 
 What it does:
 - Creates/activates a venv at .venv
@@ -18,8 +18,7 @@ param(
 )
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-Set-Location $ScriptDir
-$RepoRoot = Split-Path -Parent $ScriptDir
+$RepoRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 Set-Location $RepoRoot
 
 Write-Host "Repo root: $RepoRoot"
@@ -80,6 +79,23 @@ if (-not $installed) {
 python -m pip install --upgrade matplotlib
 
 # Small CUDA inspect (prints to console and writes to tests/bench_results/nvidia_inspect.json)
+$inspect = @'
+import json, torch
+out = {}
+out["torch_version"] = torch.__version__
+out["cuda_available"] = torch.cuda.is_available()
+out["cuda_version"] = torch.version.cuda
+out["device_count"] = torch.cuda.device_count()
+out["devices"] = []
+for i in range(torch.cuda.device_count()):
+    try:
+        out["devices"].append(torch.cuda.get_device_name(i))
+    except Exception as e:
+        out["devices"].append(str(e))
+print(json.dumps(out))
+with open("tests/bench_results/nvidia_inspect.json", "w", encoding="utf-8") as f:
+    f.write(json.dumps(out, indent=2))
+'@
 $tempPy = [System.IO.Path]::GetTempFileName() + ".py"
 Set-Content -Path $tempPy -Value $inspect
 python $tempPy
