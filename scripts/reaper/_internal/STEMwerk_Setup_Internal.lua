@@ -470,7 +470,7 @@ local function canImportAudioSeparator(path)
     path = resolvePath(path)
     if not path or path == "" then return false end
     if not fileExists(path) then return false end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator")
+    local cmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
     if OS ~= "Linux" then
         local rc = select(1, exec(cmd, 15000))
         return rc == 0

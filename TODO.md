@@ -82,6 +82,12 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 	- Add first-use model download size table (`Fast`, `Quality`, `6-Stem`)
 	- State clearly that normal processing works offline after setup + model download
 	- State that model cache is persistent and usually survives reboots
+	- Mention the correct ONNX Runtime package per backend (`onnxruntime` vs `onnxruntime-directml`)
+
+- [ ] Runtime regression tests: catch partial separator installs
+	- Add a check that `import audio_separator` is not considered sufficient by itself
+	- Verify `import onnxruntime` and `from audio_separator.separator import Separator` in setup/runtime validation paths
+	- Add a regression case for Windows DirectML where `audio_separator` imports but ONNX Runtime is missing or lacks `DmlExecutionProvider`
 
 ### REAPER UI scaling/status checklist
 

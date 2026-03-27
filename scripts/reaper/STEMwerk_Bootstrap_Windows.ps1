@@ -89,6 +89,11 @@ function LogProgress([string]$Message) {
     if ($installerMode) { Write-Host $Message }
 }
 
+function LogStatusDetail([string]$Message) {
+    if ([string]::IsNullOrWhiteSpace($Message)) { return }
+    LogProgress ("STEMWERK_STATUS detail=" + $Message)
+}
+
 function WriteBootstrapGuard([string]$GuardStatus, [string]$GuardReason) {
     if ([string]::IsNullOrWhiteSpace($RuntimeBase)) { return }
     $guardPath = Join-Path $RuntimeBase "state\\bootstrap.guard"
@@ -145,6 +150,39 @@ function Step([string]$Reason, [string]$Label) {
     Set-Progress $Reason ($prefix + $Label)
 }
 
+function GetTaskDetailMessage([string]$Description, [double]$ElapsedSeconds) {
+    if ([string]::IsNullOrWhiteSpace($Description)) { return "" }
+
+    if ($Description -like "Install audio-separator*") {
+        if ($ElapsedSeconds -ge 45) {
+            return "Installing audio-separator into the venv. Pip may still be resolving dependencies or unpacking wheels."
+        }
+        return "Installing audio-separator into the venv. This can take several minutes on slower systems or VMs."
+    }
+    if ($Description -eq "Install DirectML runtime") {
+        return "Installing DirectML runtime packages (torch-directml and onnxruntime-directml)."
+    }
+    if ($Description -eq "Install PyTorch CUDA runtime") {
+        return "Installing CUDA-enabled PyTorch packages into the venv."
+    }
+    if ($Description -eq "Install ONNX Runtime") {
+        return "Installing the ONNX Runtime package required by the separator backend."
+    }
+    if ($Description -like "Install stemwerk-core*") {
+        return "Installing the bundled stemwerk-core package into the Python environment."
+    }
+    if ($Description -eq "Create virtual environment") {
+        return "Creating the Python virtual environment used by STEMwerk."
+    }
+    if ($Description -eq "Python installer") {
+        return "Installing Python for the STEMwerk runtime."
+    }
+    if ($Description -eq "Install audio-separator runtime") {
+        return "Installing separator runtime packages."
+    }
+    return ""
+}
+
 function RunHidden([string]$File, [string[]]$Arguments, [string]$Description) {
     if ([string]::IsNullOrWhiteSpace($File)) { return 1 }
     try {
@@ -163,11 +201,16 @@ function RunHidden([string]$File, [string[]]$Arguments, [string]$Description) {
         }
         if (-not [string]::IsNullOrWhiteSpace($Description)) {
             LogProgress ("Starting: " + $Description)
+            $initialTaskDetail = GetTaskDetailMessage $Description 0
+            if (-not [string]::IsNullOrWhiteSpace($initialTaskDetail)) {
+                LogStatusDetail $initialTaskDetail
+            }
         }
         $p = New-Object System.Diagnostics.Process
         $p.StartInfo = $psi
         $null = $p.Start()
         $lastBeat = [DateTime]::UtcNow
+        $startedAt = [DateTime]::UtcNow
         $stdoutSourceId = "stemwerk.stdout." + [Guid]::NewGuid().ToString()
         $stderrSourceId = "stemwerk.stderr." + [Guid]::NewGuid().ToString()
 
@@ -195,7 +238,12 @@ function RunHidden([string]$File, [string[]]$Arguments, [string]$Description) {
                 if (-not [string]::IsNullOrWhiteSpace($Description)) {
                     $elapsed = [DateTime]::UtcNow - $lastBeat
                     if ($elapsed.TotalSeconds -ge 15) {
-                        LogProgress ("Still running: " + $Description + "...")
+                        $totalElapsed = [DateTime]::UtcNow - $startedAt
+                        LogProgress ("Still running (" + [int]$totalElapsed.TotalSeconds + "s): " + $Description + "...")
+                        $taskDetail = GetTaskDetailMessage $Description $totalElapsed.TotalSeconds
+                        if (-not [string]::IsNullOrWhiteSpace($taskDetail)) {
+                            LogStatusDetail $taskDetail
+                        }
                         $lastBeat = [DateTime]::UtcNow
                     }
                 }
@@ -467,7 +515,7 @@ function VerifyBackendRuntime([string]$PythonPath, [string]$BackendName) {
     }
 
     if ($BackendName -eq "directml") {
-        $code = 'import sys, torch, torch_directml; count=int(torch_directml.device_count()); print(f"STEMWERK_DIRECTML_CHECK count={count} torch={getattr(torch, ''__version__'', '''')}"); sys.exit(0 if count > 0 else 1)'
+        $code = 'import sys, torch, torch_directml, onnxruntime as ort; count=int(torch_directml.device_count()); providers=ort.get_available_providers() or []; has_dml="DmlExecutionProvider" in providers; print(f"STEMWERK_DIRECTML_CHECK count={count} torch={getattr(torch, ''__version__'', '''')} has_dml={has_dml} providers={providers}"); sys.exit(0 if (count > 0 and has_dml) else 1)'
         RunHidden $PythonPath @("-c", $code) "Verify DirectML runtime" | Out-Null
         return ($LASTEXITCODE -eq 0)
     }
@@ -481,6 +529,79 @@ function GetAudioConstraints([string]$BackendName) {
         $args += @("-c", $directmlConstraints)
     }
     return $args
+}
+
+function GetOnnxRuntimePackage([string]$BackendName) {
+    if ($BackendName -eq "directml") {
+        return "onnxruntime-directml==$onnxRuntimeDirectMlVersion"
+    }
+    return "onnxruntime"
+}
+
+function EnsureOnnxRuntime([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
+
+    if ($BackendName -eq "directml") {
+        $verifyCode = 'import sys, onnxruntime as ort; providers=ort.get_available_providers() or []; has_dml="DmlExecutionProvider" in providers; print(f"STEMWERK_ONNX_CHECK backend=directml has_dml={has_dml} providers={providers}"); sys.exit(0 if has_dml else 1)'
+    } else {
+        $verifyCode = 'import onnxruntime as ort; print(f"STEMWERK_ONNX_CHECK backend=cpu version={getattr(ort, ''__version__'', '''')}")'
+    }
+
+    RunHidden $PythonPath @("-c", $verifyCode) "Verify ONNX Runtime" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    $onnxPackage = GetOnnxRuntimePackage $BackendName
+    $onnxArgs = @("-m","pip","install","--upgrade")
+    $onnxArgs += GetAudioConstraints $BackendName
+    $onnxArgs += $onnxPackage
+    LogProgress ("Installing " + $onnxPackage)
+    RunHidden $PythonPath $onnxArgs "Install ONNX Runtime" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        return $false
+    }
+
+    RunHidden $PythonPath @("-c", $verifyCode) "Verify ONNX Runtime" | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function VerifyAudioSeparatorRuntime([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
+
+    $verifyCode = 'import audio_separator, onnxruntime; from audio_separator.separator import Separator; print("STEMWERK_AUDIO_SEPARATOR_CHECK ok=1")'
+    RunHidden $PythonPath @("-c", $verifyCode) "Verify audio-separator runtime" | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function InstallAndVerifyAudioSeparator([string]$PythonPath, [string]$BackendName, [string]$PackageName, [string]$Description) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return "audio_separator_install_failed" }
+    if ([string]::IsNullOrWhiteSpace($PackageName)) { return "audio_separator_install_failed" }
+
+    $audioConstraints = GetAudioConstraints $BackendName
+    $audioArgs = @("-m","pip","install")
+    if ($BackendName -ne "directml") {
+        $audioArgs += "--upgrade"
+    }
+    $audioArgs += $audioConstraints
+    $audioArgs += $PackageName
+
+    LogProgress ("Installing " + $PackageName)
+    LogLine ("Installing " + $PackageName)
+    RunHidden $PythonPath $audioArgs $Description | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        return "audio_separator_install_failed"
+    }
+
+    if (-not (EnsureOnnxRuntime $PythonPath $BackendName)) {
+        return "onnxruntime_install_failed"
+    }
+
+    if (-not (VerifyAudioSeparatorRuntime $PythonPath $BackendName)) {
+        return "audio_separator_runtime_check_failed"
+    }
+
+    return "ok"
 }
 
 $candidates = @()
@@ -702,38 +823,20 @@ if (Test-Path $venvPy) {
         }
     }
 
-    $audioConstraints = GetAudioConstraints $backend
-    $audioArgs = @("-m","pip","install")
-    if ($backend -ne "directml") {
-        $audioArgs += "--upgrade"
-    }
-    $audioArgs += $audioConstraints
-    $audioArgs += $package
-    LogProgress ("Installing " + $package)
-    LogLine "Installing $package"
-    RunHidden $python $audioArgs "Install audio-separator" | Out-Null
-    RunHidden $python @("-c","import audio_separator") "Verify audio-separator" | Out-Null
-    $audioSeparatorOk = ($LASTEXITCODE -eq 0)
-    if ($LASTEXITCODE -ne 0) {
+    $audioInstallResult = InstallAndVerifyAudioSeparator $python $backend $package "Install audio-separator"
+    $audioSeparatorOk = ($audioInstallResult -eq "ok")
+    if (-not $audioSeparatorOk) {
         if ($package -ne ("audio-separator==$audioSeparatorVersion")) {
             LogLine "GPU audio-separator install failed; falling back to CPU"
             $package = "audio-separator==$audioSeparatorVersion"
             $profile = "windows-cpu"
             $backend = "cpu"
             if (-not $backendReason) { $backendReason = "backend_install_failed" }
-            $audioConstraints = GetAudioConstraints $backend
-            $audioArgs = @("-m","pip","install")
-            if ($backend -ne "directml") {
-                $audioArgs += "--upgrade"
-            }
-            $audioArgs += $audioConstraints
-            $audioArgs += $package
-            RunHidden $python $audioArgs "Install audio-separator (CPU fallback)" | Out-Null
-            RunHidden $python @("-c","import audio_separator") "Verify audio-separator (CPU fallback)" | Out-Null
-            $audioSeparatorOk = ($LASTEXITCODE -eq 0)
+            $audioInstallResult = InstallAndVerifyAudioSeparator $python $backend $package "Install audio-separator (CPU fallback)"
+            $audioSeparatorOk = ($audioInstallResult -eq "ok")
         }
-        if ($LASTEXITCODE -ne 0) {
-            Set-Status "deps_failed" "audio_separator_install_failed"
+        if (-not $audioSeparatorOk) {
+            Set-Status "deps_failed" $audioInstallResult
         }
     }
 

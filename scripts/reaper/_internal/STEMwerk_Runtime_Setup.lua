@@ -533,7 +533,7 @@ end
 
 function M.canImportAudioSeparator(pythonPath)
     if not pythonPath or pythonPath == "" then return false end
-    local cmd = commandQuote(pythonPath) .. " -c " .. commandQuote("import audio_separator")
+    local cmd = commandQuote(pythonPath) .. " -c " .. commandQuote("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
     local rc, out = execCommandWithOutput(cmd, 15000)
     if rc == 0 then
         return true
@@ -777,7 +777,7 @@ function M.ensureDependenciesInteractive()
     local missing = {}
     if not pythonOk then missing[#missing + 1] = "Python runtime" end
     if not ffmpegOk then missing[#missing + 1] = "FFmpeg" end
-    if pythonOk and ffmpegOk and (not audioOk) then missing[#missing + 1] = "audio-separator" end
+    if pythonOk and ffmpegOk and (not audioOk) then missing[#missing + 1] = "separator runtime (audio-separator/onnxruntime)" end
 
     local runtime = M.getRuntimePaths()
     local msg =

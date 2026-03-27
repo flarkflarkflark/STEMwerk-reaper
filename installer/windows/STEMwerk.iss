@@ -186,6 +186,33 @@ begin
   end;
 end;
 
+function DefaultStatusDetailText: string;
+begin
+  Result := 'First-time setup can take several minutes.' + #13#10 +
+    'STEMwerk prepares the runtime, creates the Python environment, checks FFmpeg, and installs the core packages.';
+end;
+
+function ExtractStatusDetail(const Text: string): string;
+var
+  Marker: string;
+  P: Integer;
+  Tail: string;
+  EolPos: Integer;
+begin
+  Result := '';
+  Marker := 'STEMWERK_STATUS detail=';
+  P := FindLastPos(Marker, Text);
+  if P = 0 then
+    Exit;
+  Tail := Copy(Text, P + Length(Marker), Length(Text));
+  EolPos := Pos(#13, Tail);
+  if EolPos = 0 then
+    EolPos := Pos(#10, Tail);
+  if EolPos > 0 then
+    Tail := Copy(Tail, 1, EolPos - 1);
+  Result := Trim(Tail);
+end;
+
 function ExtractBootstrapProgress(const Text: string): Integer;
 var
   UpperText: string;
@@ -291,7 +318,7 @@ end;
 
 procedure UpdateLogMemo;
 var
-  Path, Text: string;
+  Path, Text, Detail: string;
   WasAtBottom: Boolean;
 begin
   if (LogMemo <> nil) and LogMemo.Focused then
@@ -315,6 +342,15 @@ begin
       if LogMemo.Handle <> 0 then
         SendMessage(LogMemo.Handle, WM_VSCROLL, SB_BOTTOM, 0);
     end;
+  end;
+  Detail := ExtractStatusDetail(Text);
+  if StatusDetailLabel <> nil then
+  begin
+    if Detail <> '' then
+      StatusDetailLabel.Caption := 'Current task:' + #13#10 + Detail + #13#10 +
+        'Long package installs are normal on slower systems and VMs.'
+    else
+      StatusDetailLabel.Caption := DefaultStatusDetailText;
   end;
   UpdateProgressGauge(Text);
   UpdateStepLegend(Text);
@@ -417,8 +453,7 @@ begin
   StatusDetailLabel.WordWrap := True;
   StatusDetailLabel.Font.Size := 9;
   StatusDetailLabel.Font.Color := RGBColor(90, 90, 90);
-  StatusDetailLabel.Caption := 'First-time setup can take several minutes.' + #13#10 +
-    'STEMwerk prepares the runtime, creates the Python environment, checks FFmpeg, and installs the core packages.';
+  StatusDetailLabel.Caption := DefaultStatusDetailText;
   StatusDetailLabel.Left := WizardForm.StatusLabel.Left;
   StatusDetailLabel.Top := y + ScaleY(18);
   StatusDetailLabel.Width := PageW - StatusDetailLabel.Left - ScaleX(8);

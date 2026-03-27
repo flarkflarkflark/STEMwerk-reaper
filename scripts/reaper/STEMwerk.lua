@@ -19487,10 +19487,17 @@ processAllStemsResult = function()
 
         -- Friendly hint for the most common missing dependency.
         if logSnippet:find("No module named 'onnxruntime'", 1, true) then
+            local onnxFixCmd = tostring(PYTHON_PATH) .. " -m pip install onnxruntime"
+            if logSnippet:find("requested_device=directml", 1, true) then
+                onnxFixCmd = tostring(PYTHON_PATH) .. " -m pip install onnxruntime-directml"
+            end
             msg = msg
                 .. "\n\nFix:\n"
-                .. "Install onnxruntime into the Python venv that REAPER is using:\n"
-                .. tostring(PYTHON_PATH) .. " -m pip install onnxruntime\n\n"
+                .. "Install the missing ONNX Runtime package into the Python venv that REAPER is using:\n"
+                .. onnxFixCmd .. "\n\n"
+                .. "Then rerun STEMwerk-SETUP.lua in REAPER to repair the runtime.\n\n"
+                .. "On Windows DirectML, use:\n"
+                .. tostring(PYTHON_PATH) .. " -m pip install onnxruntime-directml\n\n"
                 .. "On Apple Silicon, use:\n"
                 .. tostring(PYTHON_PATH) .. " -m pip install onnxruntime-silicon\n\n"
                 .. "If pip refuses (no wheels for your Python version), recreate the venv with Python 3.11/3.12 and reinstall dependencies."
