@@ -38,8 +38,6 @@ rsync -a --delete \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \
   "$ROOT_DIR/TODO.md" \
-  "$ROOT_DIR/INTEGRATION.md" \
-  "$ROOT_DIR/TESTING.md" \
   "$SRC_DIR/"
 
 tar -C "$BUILD_DIR" -czf "$WORK_DIR/stemwerk-$VERSION.tar.gz" "stemwerk-$VERSION"

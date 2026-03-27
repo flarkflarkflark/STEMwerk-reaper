@@ -75,8 +75,6 @@ Source: "payload\ffmpeg\ffmpeg-release-essentials.zip"; DestDir: "{app}\_bundled
 Source: "STEMwerk_Windows_Setup_Guide.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\TODO.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\INTEGRATION.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\TESTING.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

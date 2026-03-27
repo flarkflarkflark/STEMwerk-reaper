@@ -39,8 +39,6 @@ rsync -a --delete \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/LICENSE" \
   "$ROOT_DIR/TODO.md" \
-  "$ROOT_DIR/INTEGRATION.md" \
-  "$ROOT_DIR/TESTING.md" \
   "$APPDIR/usr/share/stemwerk/"
 
 # Icon (optional)

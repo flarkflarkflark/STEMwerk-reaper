@@ -48,7 +48,7 @@ Write-Host "✓ Opgeslagen: $outFile ($([math]::Round((Get-Item $outFile).Length
 # Git commit
 Write-Host "`nCommitting..." -ForegroundColor Cyan
 git add $outFile
-git add i18n/ tests/i18n/ INTEGRATION.md
+git add i18n/ tests/i18n/ docs/dev/INTEGRATION.md
 
 $commitMsg = "Add STEMwerk.lua with i18n integration (EN/NL/DE, 152 keys each)"
 git commit -m $commitMsg

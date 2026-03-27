@@ -7,7 +7,7 @@
 - `tests/i18n/test_languages.py` - Complete validation suite (all tests pass)
 - `i18n/stemwerk_language_wrapper.lua` - Lua wrapper for language loading
 - CI integration in `.github/workflows/ci-full.yml`
-- Documentation in `README.md` and `TESTING.md`
+- Documentation in `README.md`
 
 ## Integration with STEMwerk REAPER Script
 

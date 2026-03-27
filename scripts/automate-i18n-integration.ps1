@@ -192,7 +192,7 @@ Write-Host "  Grootte: $([math]::Round((Get-Item $targetFile).Length / 1KB, 1)) 
 # Stap 4: Commit en push
 Write-Host "`n[4/4] Git commit en push..." -ForegroundColor Yellow
 
-git add $targetFile, "i18n/", "tests/i18n/", "INTEGRATION.md", ".github/workflows/ci-full.yml"
+git add $targetFile, "i18n/", "tests/i18n/", "docs/dev/INTEGRATION.md", ".github/workflows/ci-full.yml"
 
 $commitMsg = @"
 Add STEMwerk.lua with i18n integration
@@ -229,7 +229,7 @@ Write-Host "`nBestanden gemaakt:" -ForegroundColor White
 Write-Host "  ✓ scripts/reaper/STEMwerk.lua (hoofdscript)" -ForegroundColor Green
 Write-Host "  ✓ i18n/languages.lua (152 keys × 3 talen)" -ForegroundColor Green
 Write-Host "  ✓ tests/i18n/test_languages.py (validatie)" -ForegroundColor Green
-Write-Host "  ✓ INTEGRATION.md (documentatie)" -ForegroundColor Green
+Write-Host "  ✓ docs/dev/INTEGRATION.md (documentatie)" -ForegroundColor Green
 
 Write-Host "`nTest resultaten:" -ForegroundColor White
 Write-Host "  ✓ 4/4 i18n tests slagen" -ForegroundColor Green
