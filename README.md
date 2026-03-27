@@ -22,6 +22,78 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 - Sound designers and educators building isolated parts
 - Anyone who wants a fast, offline stem workflow
 
+## Requirements
+- 64-bit REAPER
+- 64-bit Windows, macOS, or Linux
+- Internet access for first-time setup and first model download
+- Enough free disk space for the runtime, package cache, temporary files, and model cache
+
+Recommended free space:
+- Windows thin installer: at least 4-8 GB free during first setup
+- Windows bundled installer: fewer first-time downloads, but similar runtime/model space is still needed
+- Additional space is needed for downloaded models and separated stem files
+
+## What The Installer Does
+STEMwerk uses a Python runtime for separation. On first setup it may:
+
+- create a dedicated Python virtual environment
+- install backend/runtime packages
+- verify FFmpeg
+- download the selected model on first use
+
+On Windows, the installer handles the runtime/bootstrap work outside REAPER.
+On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side setup and repair entry point.
+
+## Internet And Offline Use
+Internet is normally required for:
+
+- first-time runtime setup
+- backend package installation
+- first-time model download
+
+After setup is complete and the model is cached locally, normal separation usually works offline.
+
+## Backend Support
+### CPU
+- Windows: supported
+- macOS: supported
+- Linux: supported
+
+### Windows GPU
+- NVIDIA: CUDA when compatible PyTorch/CUDA packages install successfully
+- AMD / Intel GPU: DirectML route (`torch-directml` + `onnxruntime-directml`)
+
+### Linux GPU
+- NVIDIA: CUDA when compatible drivers and PyTorch packages are available
+- AMD: ROCm only on supported hardware/driver combinations
+- Not all AMD GPUs that work on Windows DirectML are supported on Linux ROCm
+
+### Apple Silicon
+- CPU is supported
+- Platform-specific acceleration should be treated as best-effort unless explicitly documented otherwise
+
+## Download Expectations
+Installer/runtime size and model size are separate.
+
+Windows installers:
+- `STEMwerk-Setup-<version>.exe`: thin installer
+- `STEMwerk-Setup-<version>-bundled.exe`: bundled Python + FFmpeg installer
+
+Approximate first-use model downloads:
+- `Fast` (`htdemucs`): about 84 MB
+- `Quality` (`htdemucs_ft`): about 337 MB
+- `6-Stem` (`htdemucs_6s`): about 55 MB
+
+These model downloads are the same for CPU and GPU. Only the runtime/backend packages differ.
+
+Note: the 6-stem model is not necessarily larger than the 4-stem models. Model size depends on the checkpoint set used by the model, not just the number of output stems.
+
+## Windows Notes
+- The installer is the recommended setup path on Windows.
+- ReaPack is not recommended for first-time Windows setup because it installs scripts only, not the full runtime.
+- During first-time setup, the installer may appear to pause for several minutes while Python packages are resolved and installed. This is most noticeable during the `audio-separator` step and can take longer on slower systems or virtual machines.
+- Windows setup now verifies ONNX Runtime automatically and installs the required backend package when needed.
+
 ## Installation
 
 ### Recommended (Installer)
@@ -36,8 +108,6 @@ On Windows, the installer handles the runtime/bootstrap work outside REAPER.
 On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side bootstrap and repair entry point.
 
 On Windows, `STEMwerk-SETUP.lua` does not replace the installer bootstrap. If the runtime is incomplete, re-run the Windows installer first.
-
-Note: First-time setup downloads can take a while and may require several gigabytes of free disk space. On Windows, keeping roughly 4–8 GB free is a safe baseline.
 
 ### Manual / Developer (Advanced)
 1. Install a 64-bit Python 3.x and ensure it is on your PATH.
@@ -113,12 +183,6 @@ The progress window shows the active mode and the reason when a fallback happens
 
 ## Relationship to STEMwerk-core
 STEMwerk-reaper bundles the same separation pipeline used by STEMwerk-core via `scripts/reaper/audio_separator_process.py` and the `tools/` utilities. The REAPER layer handles DAW integration, UI, and item or track management, while the core handles model execution and device selection.
-
-## Platform / GPU support
-- Windows, macOS, Linux with CPU fallback on all platforms
-- NVIDIA CUDA on Windows and Linux when CUDA-enabled PyTorch is installed
-- AMD ROCm on Linux with a working ROCm stack
-- AMD DirectML on Windows with torch-directml and onnxruntime-directml
 
 See `docs/ROCm.md` for Linux AMD guidance.
 
