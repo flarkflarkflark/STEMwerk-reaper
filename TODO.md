@@ -84,6 +84,12 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 	- State that model cache is persistent and usually survives reboots
 	- Mention the correct ONNX Runtime package per backend (`onnxruntime` vs `onnxruntime-directml`)
 
+- [ ] Windows distribution: reduce SmartScreen / "Windows protected your PC" friction
+	- Choose code-signing path: Microsoft Trusted Signing or a traditional code-signing certificate
+	- Sign Windows installer artifacts with timestamping in the release/build flow
+	- Verify publisher identity stays stable across releases so reputation can accumulate
+	- Document false-positive / file-submission fallback for SmartScreen review
+
 - [ ] Runtime regression tests: catch partial separator installs
 	- Add a check that `import audio_separator` is not considered sufficient by itself
 	- Verify `import onnxruntime` and `from audio_separator.separator import Separator` in setup/runtime validation paths
@@ -127,4 +133,6 @@ Toolbar + Icons + Toolbarscripts:
 	- Linux ROCm / CUDA offline packs only if maintenance cost is acceptable
 	- macOS semi-bundled installer path
 	- Optional model packs: `Fast`, `Quality`, `6-Stem`
+- **DirectML multi-track performance:** Revisit parallel job processing for Windows DirectML once the stability issue is understood. Current workaround forces sequential mode for DirectML multi-job runs; goal is to recover CUDA/CPU-like throughput without dropping outputs. Compare this explicitly against Linux ROCm/CUDA behavior.
 - **Repository housekeeping:** Clean up worktree / local artifacts / temporary build clutter once the current installer and runtime work settles down
+- **README / Docs visual pass:** Add curated screenshots with GUI highlights and annotated callouts for installer flow, main REAPER UI, and setup/troubleshooting screens

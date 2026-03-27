@@ -11841,6 +11841,8 @@ getRuntimeModeLabel = function(queue)
         local reason = ""
         if reasonCode == "per_item_jobs" then
             reason = T("mode_reason_per_item_jobs") or "per-item safety mode"
+        elseif reasonCode == "directml_multi_track" then
+            reason = T("mode_reason_directml_multi_track") or "DirectML multi-track stability mode"
         elseif reasonCode == "auto_no_gpu" then
             reason = T("mode_reason_auto_no_gpu") or "auto device, no GPU"
         elseif reasonCode ~= "" then
@@ -17899,18 +17901,35 @@ runSingleTrackSeparation = function(trackList)
             end
             return false
         end
+        local function hasRuntimeBackendType(kind)
+            local needle = string.lower(tostring(kind or ""))
+            local list = RUNTIME_DEVICES or DEVICES or {}
+            for _, d in ipairs(list) do
+                local id = string.lower(tostring(d.id or ""))
+                local typ = string.lower(tostring(d.type or ""))
+                if typ == needle then return true end
+                if needle == "directml" and id:match("^directml:") then return true end
+                if needle == "cuda" and id:match("^cuda:") then return true end
+                if needle == "mps" and id == "mps" then return true end
+            end
+            return false
+        end
 
         local dev = string.lower(tostring(SETTINGS.device or "auto"))
-        local isExplicitGpu = dev:find("cuda", 1, true) ~= nil or dev:find("directml", 1, true) ~= nil
+        local explicitDirectml = dev:find("directml", 1, true) ~= nil
+        local autoLikelyDirectml = dev == "auto" and hasRuntimeBackendType("directml") and not hasRuntimeBackendType("cuda") and not hasRuntimeBackendType("mps")
+        local directmlMultiJob = explicitDirectml or autoLikelyDirectml
 
-        -- Per-item jobs now follow the user's Parallel/Sequential choice.
-        -- Each job already has isolated temp I/O and REAPER-side result application happens later,
-        -- so do not force sequential mode here anymore.
-        if hasPerItemJobs and not multiTrackQueue.sequentialMode then
-            debugLog("Per-item multi-track jobs: honoring user-selected parallel mode")
+        -- DirectML multi-job runs are not stable enough yet across Windows GPU stacks.
+        -- Run them sequentially so time-selection/multi-track jobs do not silently drop outputs
+        -- after the first successful item/track.
+        if not multiTrackQueue.sequentialMode and directmlMultiJob then
+            multiTrackQueue.sequentialMode = true
+            multiTrackQueue.forceSequentialReason = "directml_multi_track"
+            debugLog("Forcing sequential multi-track processing (directml_multi_track)")
         end
-        
-        -- Respect user's Parallel choice even on CPU. 
+
+        -- Respect user's Parallel choice even on CPU.
         -- Only force sequential if device is "auto" AND we know for sure there is no GPU.
         if not multiTrackQueue.sequentialMode and dev == "auto" and not hasRuntimeGpuBackends() then
             multiTrackQueue.sequentialMode = true
