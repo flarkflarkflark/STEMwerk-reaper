@@ -93,6 +93,7 @@ Note: the 6-stem model is not necessarily larger than the 4-stem models. Model s
 - ReaPack is not recommended for first-time Windows setup because it installs scripts only, not the full runtime.
 - During first-time setup, the installer may appear to pause for several minutes while Python packages are resolved and installed. This is most noticeable during the `audio-separator` step and can take longer on slower systems or virtual machines.
 - Windows setup now verifies ONNX Runtime automatically and installs the required backend package when needed.
+- For a normal Windows first run, the installer is the canonical setup path. `STEMwerk-SETUP.lua` is a REAPER-side verify/repair path, not a replacement for the installer bootstrap.
 
 ## Installation
 
@@ -167,15 +168,17 @@ Note: REAPER does not auto-register scripts in the Action List. Use Actions → 
 ## Parallel vs Sequential (Multi-track)
 STEMwerk can run multi-track jobs in parallel when Parallel is enabled and more than one job is queued. It will automatically fall back to Sequential in two cases:
 - Per-item time selection jobs (for correctness and isolation).
+- Explicit `DirectML` multi-job runs on Windows (current stability safeguard).
 - Device = Auto with no GPU backends detected (CPU-only is faster and safer).
 
 Examples where pure parallel does happen:
-- You select 3 tracks with items, no time selection, Parallel on, device = `cuda:0` or `directml`. -> 3 jobs at once (per track).
+- You select 3 tracks with items, no time selection, Parallel on, device = `cuda:0`. -> 3 jobs at once (per track).
 - You select 5 tracks, Parallel on, device = `auto`, and a GPU is detected. -> 5 jobs at once.
 - You select multiple items across multiple tracks (no time selection), Parallel on, device = `cuda`. -> per-track jobs in parallel.
 
 Examples where it does not run in parallel:
 - Time selection with multiple items on one track -> per-item jobs -> sequential forced ("Per-item multi-track isolation").
+- Explicit `DirectML` with multiple queued jobs -> sequential forced ("DirectML multi-track stability mode").
 - Parallel on, device = `auto`, but no GPU backend -> sequential forced ("Auto device (no GPU)").
 - Only 1 job (1 track) -> sequential by definition.
 
