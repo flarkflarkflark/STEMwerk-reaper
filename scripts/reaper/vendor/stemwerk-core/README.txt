@@ -1,16 +1,19 @@
-STEMwerk-core bundle placeholder
-===============================
+STEMwerk-core bundled source
+============================
 
-Place the STEMwerk-core package artifact in this directory so the Windows
-installer/bootstrap can install it without relying on PyPI.
+This directory is the canonical bundled STEMwerk-core source tree used by
+installers, setup/bootstrap, and ReaPack payloads.
 
-Supported formats:
-- .whl
-- .tar.gz
-- .zip
+Expected contents:
+- pyproject.toml
+- src/stemwerk_core/__init__.py
+- src/stemwerk_core/devices.py
+- src/stemwerk_core/models.py
+- src/stemwerk_core/progress.py
+- src/stemwerk_core/separator.py
 
-Expected location:
+Location:
 scripts/reaper/vendor/stemwerk-core/
 
-If this folder is empty, the Windows installer will fail with:
-stemwerk-core bundle missing from installer payload
+Do not rely on an old wheel fallback here. If the source files are missing,
+setup should fail clearly instead of silently installing a stale package.

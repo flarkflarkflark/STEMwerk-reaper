@@ -72,8 +72,10 @@ rsync -a --delete \
   "${repo_root}/i18n/" \
   "${dest}/i18n/"
 
-if [[ ! -e "${dest}/vendor/stemwerk-core/stemwerk_core-0.1.0-py3-none-any.whl" ]]; then
-  echo "WARNING: stemwerk-core bundle was not synced to ${dest}/vendor/stemwerk-core" >&2
+if [[ ! -f "${dest}/vendor/stemwerk-core/pyproject.toml" ]] \
+  || [[ ! -f "${dest}/vendor/stemwerk-core/src/stemwerk_core/__init__.py" ]] \
+  || [[ ! -f "${dest}/vendor/stemwerk-core/src/stemwerk_core/separator.py" ]]; then
+  echo "WARNING: stemwerk-core source bundle was not synced to ${dest}/vendor/stemwerk-core" >&2
 fi
 
 echo

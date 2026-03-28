@@ -36,6 +36,13 @@ log_step() {
   log " - $*"
 }
 
+is_core_source_bundle() {
+  [ -n "${1:-}" ] \
+    && [ -f "$1/pyproject.toml" ] \
+    && [ -f "$1/src/stemwerk_core/__init__.py" ] \
+    && [ -f "$1/src/stemwerk_core/separator.py" ]
+}
+
 write_state() {
   if [ -n "${STATE_FILE}" ]; then
     {
@@ -80,39 +87,26 @@ resolve_core_target() {
   CORE_SUPPORTS_EXTRAS=0
 
   if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -e "${STEMWERK_CORE_PATH}" ]; then
-    if [ -f "${STEMWERK_CORE_PATH}/pyproject.toml" ] && [ -d "${STEMWERK_CORE_PATH}/src/stemwerk_core" ]; then
+    if is_core_source_bundle "${STEMWERK_CORE_PATH}"; then
       CORE_TARGET="${STEMWERK_CORE_PATH}"
       CORE_TARGET_DESC="STEMWERK_CORE_PATH source"
       CORE_SUPPORTS_EXTRAS=1
       return 0
     fi
-    case "${STEMWERK_CORE_PATH}" in
-      *.whl|*.zip|*.tar.gz)
-        CORE_TARGET="${STEMWERK_CORE_PATH}"
-        CORE_TARGET_DESC="STEMWERK_CORE_PATH artifact"
-        CORE_SUPPORTS_EXTRAS=0
-        return 0
-        ;;
-    esac
-    log_step "STEMWERK_CORE_PATH is set but invalid: ${STEMWERK_CORE_PATH}"
+    log_step "STEMWERK_CORE_PATH is set but incomplete: ${STEMWERK_CORE_PATH}"
+    log_step "Required: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
   fi
 
   CORE_BUNDLE_DIR="${STEMWERK_CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
   if [ -d "${CORE_BUNDLE_DIR}" ]; then
-    if [ -f "${CORE_BUNDLE_DIR}/pyproject.toml" ] && [ -d "${CORE_BUNDLE_DIR}/src/stemwerk_core" ]; then
+    if is_core_source_bundle "${CORE_BUNDLE_DIR}"; then
       CORE_TARGET="${CORE_BUNDLE_DIR}"
       CORE_TARGET_DESC="bundled source"
       CORE_SUPPORTS_EXTRAS=1
       return 0
     fi
-    for pattern in "${CORE_BUNDLE_DIR}"/*.whl "${CORE_BUNDLE_DIR}"/*.tar.gz "${CORE_BUNDLE_DIR}"/*.zip; do
-      if [ -f "${pattern}" ]; then
-        CORE_TARGET="${pattern}"
-        CORE_TARGET_DESC="bundled artifact"
-        CORE_SUPPORTS_EXTRAS=0
-        return 0
-      fi
-    done
+    log_step "Bundled stemwerk-core source is incomplete: ${CORE_BUNDLE_DIR}"
+    log_step "Required: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
   fi
 
   return 1
@@ -532,9 +526,13 @@ PY
         "${VENV_PY}" -m pip install "${INSTALL_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       fi
     else
-      log_step "stemwerk-core bundle missing from installer payload"
+      log_step "stemwerk-core source bundle is missing or incomplete"
       log_step "Expected bundle directory: ${CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"
-      core_install_rc=1
+      log_step "Required files: pyproject.toml, src/stemwerk_core/__init__.py, src/stemwerk_core/separator.py"
+      log_step "Recovery: run STEMwerk-SETUP.lua again after fixing or reinstalling STEMwerk."
+      set_status "deps_failed" "stemwerk_core_bundle_incomplete"
+      write_state
+      exit 1
     fi
 
     if [ "${core_install_rc}" -ne 0 ] && [ -n "${CORE_EXTRA}" ] && [ "${CORE_SUPPORTS_EXTRAS:-0}" -eq 1 ] && [ -n "${CORE_TARGET:-}" ]; then

@@ -7,7 +7,7 @@
 - ReaPack payload aligned with the current public script set
 - Internal setup/runtime helpers moved under _internal and included correctly
 - Removed stale references to deleted setup/repair helper scripts
-- Bundled stemwerk-core wheel and constraint files included for setup/bootstrap
+- Bundled stemwerk-core source bundle and constraint files included for setup/bootstrap
 - Linux and macOS setup flow fixes included, including ONNX Runtime handling
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
@@ -31,8 +31,13 @@
         <source file="../constraints/base.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/base.txt</source>
         <source file="../constraints/cuda.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/cuda.txt</source>
         <source file="../constraints/directml.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/directml.txt</source>
-        <source file="../vendor/stemwerk-core/stemwerk_core-0.1.0-py3-none-any.whl" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/stemwerk_core-0.1.0-py3-none-any.whl</source>
         <source file="../vendor/stemwerk-core/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/README.txt</source>
+        <source file="../vendor/stemwerk-core/pyproject.toml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/pyproject.toml</source>
+        <source file="../vendor/stemwerk-core/src/stemwerk_core/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py</source>
+        <source file="../vendor/stemwerk-core/src/stemwerk_core/devices.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/devices.py</source>
+        <source file="../vendor/stemwerk-core/src/stemwerk_core/models.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/models.py</source>
+        <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
+        <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
         <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/stemwerk_language_wrapper.lua</source>
         <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>

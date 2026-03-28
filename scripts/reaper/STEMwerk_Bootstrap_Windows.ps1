@@ -65,6 +65,16 @@ $directmlConstraints = Join-Path $constraintsDir "directml.txt"
 $allowPypiCore = ($env:STEMWERK_ALLOW_PYPI_CORE -eq "1")
 $supportedPythonText = "3.11 or 3.12"
 
+function TestCoreSourceBundle([string]$Root) {
+    if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
+    if (-not (Test-Path $Root)) { return $false }
+    return (
+        (Test-Path (Join-Path $Root "pyproject.toml")) -and
+        (Test-Path (Join-Path $Root "src\\stemwerk_core\\__init__.py")) -and
+        (Test-Path (Join-Path $Root "src\\stemwerk_core\\separator.py"))
+    )
+}
+
 function WriteState([string]$State, [string]$Reason) {
     $lines = @()
     $lines += "STATUS=$State"
@@ -408,19 +418,14 @@ function ResolveCoreInstallTarget([string]$Extra) {
     if ($env:STEMWERK_CORE_PATH) {
         $candidate = $env:STEMWERK_CORE_PATH
         if ($candidate -and (Test-Path $candidate)) {
-            if ((Test-Path (Join-Path $candidate "pyproject.toml")) -and (Test-Path (Join-Path $candidate "src\\stemwerk_core"))) {
+            if (TestCoreSourceBundle $candidate) {
                 $result.Target = $candidate
                 $result.Description = "STEMWERK_CORE_PATH source"
                 $result.SupportsExtras = $true
                 return $result
             }
-            if ($candidate -match "\\.(whl|zip|tar\\.gz)$") {
-                $result.Target = $candidate
-                $result.Description = "STEMWERK_CORE_PATH artifact"
-                $result.SupportsExtras = $false
-                return $result
-            }
-            LogLine "STEMWERK_CORE_PATH is set but invalid: $candidate"
+            LogLine "STEMWERK_CORE_PATH is set but incomplete: $candidate"
+            LogLine "Required: pyproject.toml, src\\stemwerk_core\\__init__.py, src\\stemwerk_core\\separator.py"
         } else {
             LogLine "STEMWERK_CORE_PATH is set but missing: $candidate"
         }
@@ -429,40 +434,14 @@ function ResolveCoreInstallTarget([string]$Extra) {
     $bundleDir = $env:STEMWERK_CORE_BUNDLE_DIR
     if (-not $bundleDir -or $bundleDir -eq "") { $bundleDir = $bundledCoreDir }
     if ($bundleDir -and (Test-Path $bundleDir)) {
-        if ((Test-Path (Join-Path $bundleDir "pyproject.toml")) -and (Test-Path (Join-Path $bundleDir "src\\stemwerk_core"))) {
+        if (TestCoreSourceBundle $bundleDir) {
             $result.Target = $bundleDir
             $result.Description = "bundled source"
             $result.SupportsExtras = $true
             return $result
         }
-        $wheel = Get-ChildItem -Path $bundleDir -File -Filter "*.whl" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($wheel) {
-            $result.Target = $wheel.FullName
-            $result.Description = "bundled wheel"
-            $result.SupportsExtras = $false
-            return $result
-        }
-        $sdist = Get-ChildItem -Path $bundleDir -File -Filter "*.tar.gz" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($sdist) {
-            $result.Target = $sdist.FullName
-            $result.Description = "bundled sdist"
-            $result.SupportsExtras = $false
-            return $result
-        }
-        $zip = Get-ChildItem -Path $bundleDir -File -Filter "*.zip" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($zip) {
-            $result.Target = $zip.FullName
-            $result.Description = "bundled zip"
-            $result.SupportsExtras = $false
-            return $result
-        }
-    }
-
-    if ($allowPypiCore) {
-        $result.Target = "stemwerk-core"
-        $result.Description = "PyPI"
-        $result.SupportsExtras = $true
-        return $result
+        LogLine "Bundled stemwerk-core source is incomplete: $bundleDir"
+        LogLine "Required: pyproject.toml, src\\stemwerk_core\\__init__.py, src\\stemwerk_core\\separator.py"
     }
 
     return $result
@@ -779,10 +758,16 @@ if (Test-Path $venvPy) {
     $python = $venvPy
     $coreTarget = ResolveCoreInstallTarget $coreExtra
     if (-not $coreTarget.Target) {
-        LogLine "stemwerk-core bundle missing from installer payload."
+        LogLine "stemwerk-core source bundle is missing or incomplete."
         LogLine ("Expected bundle directory: " + $bundledCoreDir)
-        LogLine "Provide a bundled wheel/sdist or set STEMWERK_CORE_PATH."
-        Set-Status "deps_failed" "stemwerk_core_install_failed"
+        LogLine "Required files: pyproject.toml, src\\stemwerk_core\\__init__.py, src\\stemwerk_core\\separator.py"
+        LogLine "Recovery: re-run the Windows installer to repair or reinstall STEMwerk."
+        if ($allowPypiCore) {
+            LogLine "Note: STEMWERK_ALLOW_PYPI_CORE is ignored for release safety; bundled source is required."
+        }
+        Set-Status "deps_failed" "stemwerk_core_bundle_incomplete"
+        WriteBootstrapGuard "failed" "stemwerk_core_bundle_incomplete"
+        exit 1
     } else {
         $installTarget = $coreTarget.Target
         if ($coreTarget.SupportsExtras -and $coreExtra -ne "") {
