@@ -47,7 +47,10 @@ if [[ -f "$ROOT_DIR/installer/assets/stemwerk.svg" ]]; then
   # appimagetool expects the icon referenced by the desktop file to be present at AppDir root
   # as stemwerk.{png,svg,xpm}. Provide svg + .DirIcon for maximum compatibility.
   cp -f "$ROOT_DIR/installer/assets/stemwerk.svg" "$APPDIR/stemwerk.svg"
-  ln -sf "stemwerk.svg" "$APPDIR/.DirIcon"
+  rm -f "$APPDIR/.DirIcon"
+  if ! ln -s "stemwerk.svg" "$APPDIR/.DirIcon" 2>/dev/null; then
+    cp -f "$APPDIR/stemwerk.svg" "$APPDIR/.DirIcon"
+  fi
 fi
 
 # Desktop entry

@@ -115,7 +115,7 @@ jobs:
           & $iscc "installer\windows\STEMwerk.iss"
 
       - name: Fetch bundled runtime assets (Windows)
-        if: ${{ github.event.inputs.windows_bundled_asset == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.windows_bundled_asset == 'true' }}
         shell: powershell
         run: |
           $pyDir = "installer\windows\payload\python"
@@ -130,7 +130,7 @@ jobs:
           Invoke-WebRequest "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffOut
 
       - name: Build bundled .exe (Inno Setup)
-        if: ${{ github.event.inputs.windows_bundled_asset == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.windows_bundled_asset == 'true' }}
         shell: powershell
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
