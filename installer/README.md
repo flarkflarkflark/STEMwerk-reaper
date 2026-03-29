@@ -13,6 +13,7 @@ These are **packaging helpers** so you can download installers from GitHub and t
 
 The canonical release version is stored in the repo root `VERSION` file.
 For release tags, the workflow enforces: tag `vX.Y.Z` must match `VERSION`.
+Keep ReaPack metadata and script headers in sync with `VERSION` by running `python tools/version_sync.py --write` before tagging.
 
 ## CI builds (GitHub Actions)
 

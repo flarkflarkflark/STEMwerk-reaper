@@ -37,6 +37,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.ref != '' && github.event.inputs.ref || github.ref }}
 
+      - name: Validate version sync
+        run: python3 tools/version_sync.py --check
+
       - name: Validate release tag matches VERSION
         id: version
         shell: bash

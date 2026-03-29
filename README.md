@@ -195,6 +195,14 @@ See `docs/ROCm.md` for Linux AMD guidance.
 - Requirements are listed in `requirements-ci.txt` and `requirements-gui.txt`
 - Tests and fixtures live under `tests/`
 
+## Versioning
+Single source of truth: `VERSION`.
+Before tagging/releases:
+1. Update `VERSION`
+2. Run `python tools/version_sync.py --write`
+3. Commit the changes
+4. Tag `vX.Y.Z` to match `VERSION`
+
 ## Credits
 3D artwork collection inspired by / derived from Milkdrop presets.
 

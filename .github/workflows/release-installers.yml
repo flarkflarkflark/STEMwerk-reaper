@@ -38,6 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate version sync
+        run: python3 tools/version_sync.py --check
+
       - id: v
         name: Validate tag matches VERSION
         shell: bash

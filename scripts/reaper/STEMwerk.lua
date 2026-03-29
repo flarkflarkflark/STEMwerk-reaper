@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.2
+-- @version 2.2.1.3
 -- @changelog
 --   2026-03-24: Local working build saved as v2.2.1.1 for installer follow-up.
 --   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
@@ -51,7 +51,13 @@ function clearDebugLog() end
 --   ## License
 --   MIT License - https://opensource.org/licenses/MIT
 
-local SCRIPT_NAME = "STEMwerk (v2.2.1.2)"
+-- Keep in sync with repo VERSION via tools/version_sync.py.
+local APP_VERSION = "2.2.1.3"
+local SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
+local WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
+local WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
+local WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_VERSION .. ")"
+local WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_VERSION .. ")"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
 local DEBUG = { enabled = false, logPath = nil }
 -- STEMwerk.lua
@@ -1238,9 +1244,6 @@ local STEMS = {
     { name = "Guitar", color = {255, 180, 80},  file = "guitar.wav", selected = true, key = "5", sixStemOnly = true },
     { name = "Piano",  color = {255, 120, 200}, file = "piano.wav", selected = true, key = "6", sixStemOnly = true },
 }
-
--- App version (single source of truth)
-local APP_VERSION = "2.1.8"
 
 -- Forward declarations (these are defined later in the file, but used by early helpers)
 local SETTINGS
@@ -8853,7 +8856,7 @@ local function artGalleryLoop()
             -- Title changes dynamically; find by current title first, then by stable prefix.
             hwnd = reaper.JS_Window_Find(currentTitle, true)
                 or reaper.JS_Window_Find("STEMwerk -", false)
-                or reaper.JS_Window_Find("STEMwerk Art Gallery (v2.2.1.2)", true)
+                or reaper.JS_Window_Find(WINDOW_ART_GALLERY, true)
         end
         if hwnd then
             helpState.hwnd = hwnd
@@ -8881,7 +8884,7 @@ local function artGalleryLoop()
         end
         if (not captured) and (not lastDialogX or not lastDialogY) then
             if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry("STEMwerk Art Gallery (v2.2.1.2)")
+                captureWindowGeometry(WINDOW_ART_GALLERY)
             end
         end
         -- Save settings before closing
@@ -8915,7 +8918,7 @@ local function artGalleryLoop()
         end
         if (not captured) and (not lastDialogX or not lastDialogY) then
             if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry("STEMwerk Art Gallery (v2.2.1.2)")
+                captureWindowGeometry(WINDOW_ART_GALLERY)
             end
         end
         saveSettings()
@@ -8950,10 +8953,10 @@ local function showArtGallery()
     artGalleryState.lastMouseWheel = 0
 
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init("STEMwerk Art Gallery (v2.2.1.2)", winW, winH, 0, winX, winY)
+    gfx.init(WINDOW_ART_GALLERY, winW, winH, 0, winX, winY)
     helpState.hwnd = nil
     if reaper.JS_Window_Find then
-        helpState.hwnd = reaper.JS_Window_Find("STEMwerk Art Gallery (v2.2.1.2)", true)
+        helpState.hwnd = reaper.JS_Window_Find(WINDOW_ART_GALLERY, true)
     end
     reaper.defer(artGalleryLoop)
 end
@@ -14321,7 +14324,7 @@ local function showProcessingWindow(stage, percent)
 
     if not progressState.windowOpen then
         local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-        gfx.init("STEMwerk - Processing.. (v2.2.1.2)", winW, winH, 0, winX, winY)
+        gfx.init(WINDOW_PROCESSING, winW, winH, 0, winX, winY)
         progressWindowResizableSet = false
         progressState.windowOpen = true
     end
@@ -14481,7 +14484,7 @@ local function makeProgressWindowResizable()
     if progressWindowResizableSet then return true end
     if not reaper.JS_Window_Find then return false end
 
-    local hwnd = reaper.JS_Window_Find("STEMwerk - Processing.. (v2.2.1.2)", true)
+    local hwnd = reaper.JS_Window_Find(WINDOW_PROCESSING, true)
     if not hwnd then return false end
 
     local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
@@ -15800,7 +15803,7 @@ function WORKFLOW.progressLoop()
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Processing.. (v2.2.1.2)")
+        captureWindowGeometry(WINDOW_PROCESSING)
         saveSettings()
 
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
@@ -15820,7 +15823,7 @@ function WORKFLOW.progressLoop()
         progressState.running = false
 
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Processing.. (v2.2.1.2)")
+        captureWindowGeometry(WINDOW_PROCESSING)
         saveSettings()
 
         gfx.quit()
@@ -15835,7 +15838,7 @@ function WORKFLOW.progressLoop()
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Processing.. (v2.2.1.2)")
+        captureWindowGeometry(WINDOW_PROCESSING)
         saveSettings()
 
         gfx.quit()
@@ -17414,7 +17417,7 @@ end
 function resultWindowLoop()
     -- Save window position for next time
     if reaper.JS_Window_GetRect then
-        local hwnd = reaper.JS_Window_Find("STEMwerk - Complete (v2.2.1.2)", true)
+        local hwnd = reaper.JS_Window_Find(WINDOW_COMPLETE, true)
         if hwnd then
             local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
             if retval then
@@ -17428,7 +17431,7 @@ function resultWindowLoop()
 
     if drawResultWindow() then
         -- Remember any size/position changes made in the complete window
-        captureWindowGeometry("STEMwerk - Complete (v2.2.1.2)")
+        captureWindowGeometry(WINDOW_COMPLETE)
         saveSettings()
         gfx.quit()
         -- Ensure the user immediately sees what was created/changed in REAPER (no extra click required).
@@ -17470,7 +17473,7 @@ function showResultWindow(selectedStems, message)
     -- Intentionally do not change playhead position or playback state.
 
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init("STEMwerk - Complete (v2.2.1.2)", winW, winH, 0, winX, winY)
+    gfx.init(WINDOW_COMPLETE, winW, winH, 0, winX, winY)
 
     -- Best-effort: force an arrange repaint while the Complete window is open.
     -- This makes the processing result visible immediately (without needing to close the window).
@@ -19317,7 +19320,7 @@ function multiTrackProgressLoop()
 
     if result == "cancel" then
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Multi-Track Progress (v2.2.1.2)")
+        captureWindowGeometry(WINDOW_MULTI_TRACK)
         saveSettings()
 
         gfx.quit()
@@ -19337,7 +19340,7 @@ function multiTrackProgressLoop()
 
     if allJobsDone() then
         -- Remember any size/position changes made during processing
-        captureWindowGeometry("STEMwerk - Multi-Track Progress (v2.2.1.2)")
+        captureWindowGeometry(WINDOW_MULTI_TRACK)
         saveSettings()
 
         gfx.quit()
@@ -19358,7 +19361,7 @@ showMultiTrackProgressWindow = function()
     captureWindowGeometry(SCRIPT_NAME)
     GUI.snapshotMainGeometry()
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init("STEMwerk - Multi-Track Progress (v2.2.1.2)", winW, winH, 0, winX, winY)
+    gfx.init(WINDOW_MULTI_TRACK, winW, winH, 0, winX, winY)
     reaper.defer(multiTrackProgressLoop)
 end
 
