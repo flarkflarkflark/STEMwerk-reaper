@@ -470,12 +470,21 @@ local function canImportAudioSeparator(path)
     path = resolvePath(path)
     if not path or path == "" then return false end
     if not fileExists(path) then return false end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
+    local fullCmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
+    if OS == "macOS" then
+        local rc = select(1, exec(fullCmd, 15000))
+        if rc == 0 then
+            return true
+        end
+        local lightCmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime")
+        local rc2 = select(1, exec(lightCmd, 15000))
+        return rc2 == 0
+    end
     if OS ~= "Linux" then
-        local rc = select(1, exec(cmd, 15000))
+        local rc = select(1, exec(fullCmd, 15000))
         return rc == 0
     end
-    local h = io.popen(cmd .. " 2>&1")
+    local h = io.popen(fullCmd .. " 2>&1")
     if not h then return false end
     local output = h:read("*a") or ""
     local ok, _, code = h:close()
@@ -1568,6 +1577,13 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             state.PYTHON_PATH = extPythonPath
         end
     end
+    if OS == "macOS" then
+        local venvPython = resolvePath(state.VENV_PYTHON or "")
+        if venvPython ~= "" and fileExists(venvPython) and canRunPython(venvPython) then
+            state.PYTHON_PATH = venvPython
+            updateBootstrapEnv(stateFile, { PYTHON_PATH = venvPython })
+        end
+    end
     if not state.FFMPEG_PATH or state.FFMPEG_PATH == "" then
         local extFfmpegPath = getExt("ffmpegPath")
         if extFfmpegPath ~= "" then
@@ -2304,6 +2320,17 @@ local function copyToClipboard(text)
         reaper.CF_SetClipboard(text or "")
         return true
     end
+    if OS == "macOS" then
+        local tmp = os.tmpname()
+        local f = io.open(tmp, "w")
+        if f then
+            f:write(text or "")
+            f:close()
+        end
+        local ok = tryExec("pbcopy < " .. quoteArg(tmp) .. " 2>/dev/null")
+        os.remove(tmp)
+        return ok
+    end
     if OS == "Linux" then
         local tmp = os.tmpname()
         local f = io.open(tmp, "w")
@@ -2325,6 +2352,10 @@ local function openPath(path)
     if not path or path == "" then return end
     if reaper and reaper.CF_ShellExecute then
         reaper.CF_ShellExecute(path)
+        return
+    end
+    if OS == "macOS" then
+        tryExec("open " .. quoteArg(path) .. " >/dev/null 2>&1 &")
         return
     end
     if OS == "Linux" then
@@ -2848,6 +2879,11 @@ local function linuxStageColor(stepIndex)
     return c[1] / 255, c[2] / 255, c[3] / 255
 end
 
+local function setupUiLabel()
+    if OS == "macOS" then return "macOS" end
+    return "Linux"
+end
+
 local function drawLinuxStepLegend(x, y, w, state, logLines)
     local labels = {
         "1. Runtime",
@@ -2942,7 +2978,7 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
     drawLinuxPanel(infoX, infoY, infoW, infoH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.28, 1 })
 
     local y = infoY + 14
-    drawStemwerkInline(infoX + 14, y, linuxFontSize(22), "", "werk Setup [Linux]")
+    drawStemwerkInline(infoX + 14, y, linuxFontSize(22), "", "werk Setup [" .. setupUiLabel() .. "]")
     y = y + linuxLineHeight(28)
 
     gfx.setfont(1, "Arial Bold", linuxFontSize(14))
@@ -3015,13 +3051,13 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     drawLinuxPanel(outerPad, footerY, infoW, actionH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.28, 1 })
 
     local y = infoY + 14
-    drawStemwerkInline(infoX + 14, y, linuxFontSize(22), "", "werk Setup [Linux]")
+    drawStemwerkInline(infoX + 14, y, linuxFontSize(22), "", "werk Setup [" .. setupUiLabel() .. "]")
     y = y + linuxLineHeight(28)
     gfx.setfont(1, "Arial", linuxFontSize(16))
     gfx.set(0.92, 0.92, 0.94, 1)
     gfx.x = infoX + 14
     gfx.y = y
-    gfx.drawstr("Linux live setup UI active")
+    gfx.drawstr(setupUiLabel() .. " live setup UI active")
     y = y + linuxLineHeight(26)
     gfx.setfont(1, "Arial Bold", linuxFontSize(20))
     if finalSuccess then
@@ -3094,6 +3130,15 @@ end
 local function linuxSetupTick()
     if not LINUX_SETUP then return end
     if not gfx then return end
+
+    if LINUX_SETUP.launchPending and LINUX_SETUP.launchCmd then
+        if OS == "macOS" then
+            tryExec(LINUX_SETUP.launchCmd)
+        else
+            exec(LINUX_SETUP.launchCmd, 20000)
+        end
+        LINUX_SETUP.launchPending = false
+    end
 
     local state = parseStateFile(LINUX_SETUP.stateFile)
     local logLines = readTail(LINUX_SETUP.logFile, 400)
@@ -3243,7 +3288,7 @@ local function startLinuxSetup(runtime, separatorScript)
     os.remove(pidFile)
     local lf = io.open(logFile, "w")
     if lf then
-        lf:write("Setup run started (Linux)\n")
+        lf:write("Setup run started (" .. setupUiLabel() .. ")\n")
         lf:close()
     end
     local sf = io.open(stateFile, "w")
@@ -3289,8 +3334,11 @@ local function startLinuxSetup(runtime, separatorScript)
         SCRIPT_PATH = scriptPath,
         UPDATED_AT = os.time(),
     })
-    exec(cmd, 20000)
-    gfx.init("STEMwerk Setup [Linux]", 1240, 860, 0, 120, 80)
+    local launchPending = (OS == "macOS")
+    if not launchPending then
+        exec(cmd, 20000)
+    end
+    gfx.init("STEMwerk Setup [" .. setupUiLabel() .. "]", 1240, 860, 0, 120, 80)
     LINUX_SETUP = {
         runtime = runtime,
         separatorScript = separatorScript,
@@ -3298,7 +3346,10 @@ local function startLinuxSetup(runtime, separatorScript)
         logFile = logFile,
         pidFile = pidFile,
         capFile = capFile,
-        helpFile = RAW_SCRIPT_DIR .. "STEMwerk_Linux_Setup_Guide.txt",
+        helpFile = (OS == "Linux") and (RAW_SCRIPT_DIR .. "STEMwerk_Linux_Setup_Guide.txt")
+            or "https://www.reaper.fm/userguide.php",
+        launchCmd = launchPending and cmd or nil,
+        launchPending = launchPending,
         spinnerIndex = 1,
         finalized = false,
         finalMessage = nil,
@@ -3314,6 +3365,29 @@ local function startLinuxSetup(runtime, separatorScript)
         windowGeometry = captureLinuxWindowGeometry(),
     }
     reaper.defer(linuxSetupTick)
+end
+
+local function shouldSkipMacBootstrap(runtime)
+    if OS ~= "macOS" then return false end
+    if not PATH_HELPER then return false end
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
+    if not guardPath or guardPath == "" or not fileExists(guardPath) then return false end
+    local guard = readBootstrapGuard(guardPath)
+    if tostring(guard.STATUS or "") ~= "ok" or tostring(guard.REASON or "") ~= "completed" then
+        return false
+    end
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    if not fileExists(stateFile) then return false end
+    local state = parseStateFile(stateFile)
+    if not state or next(state) == nil then return false end
+    if state.RUNTIME_BASE and state.RUNTIME_BASE ~= "" and runtime.base and runtime.base ~= "" then
+        if not PATH_HELPER.pathEquals(state.RUNTIME_BASE, runtime.base, OS) then return false end
+    end
+    local verification = verifyRuntimePaths(state)
+    local ok = verification and verification.pythonOk and verification.ffmpegOk and #(verification.errors or {}) == 0
+    if not ok then return false end
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    return true, stateFile, logFile, state
 end
 
 local function main()
@@ -3340,6 +3414,17 @@ local function main()
     end
 
     if OS == "Linux" then
+        startLinuxSetup(runtime, separatorScript)
+        return
+    end
+
+    if OS == "macOS" then
+        local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
+        if skip then
+            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
+            showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+            return
+        end
         startLinuxSetup(runtime, separatorScript)
         return
     end

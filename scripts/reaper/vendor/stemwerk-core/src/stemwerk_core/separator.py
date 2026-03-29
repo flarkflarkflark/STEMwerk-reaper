@@ -167,13 +167,6 @@ class StemSeparator:
                 "normalization_threshold": 0.9,
                 "log_level": 10,
                 "mdx_params": {"device": separator_device},
-                "demucs_params": {
-                    "device": separator_device,
-                    "segment_size": "Default",
-                    "shifts": quality_shift,
-                    "overlap": 0.25,
-                    "segments_enabled": True,
-                },
             }
             model_cache_dir = _default_model_cache_dir()
             os.environ["AUDIO_SEPARATOR_MODEL_DIR"] = model_cache_dir
@@ -183,6 +176,14 @@ class StemSeparator:
                 kwargs["use_soundfile"] = True
             if "use_directml" in init_params:
                 kwargs["use_directml"] = use_directml
+            if "demucs_params" in init_params:
+                kwargs["demucs_params"] = {
+                    "device": separator_device,
+                    "segment_size": "Default",
+                    "shifts": quality_shift,
+                    "overlap": 0.25,
+                    "segments_enabled": True,
+                }
 
             separator = Separator(**kwargs)
             if legacy_directml_mode and _has_onnxruntime_directml_provider():
@@ -300,7 +301,35 @@ class StemSeparator:
 
             self._emit_progress(3.0, f"Loading AI model [{effective_device_name}]")
 
-            separator.load_model(model_name)
+            audio_ver = _pkg_version("audio-separator") or ""
+            demucs_name = model_name[:-5] if str(model_name).endswith(".yaml") else str(model_name)
+            if audio_ver.startswith("0.14") and demucs_name in {"htdemucs", "htdemucs_ft", "htdemucs_6s", "hdemucs_mmi"}:
+                warnings.warn(
+                    f"audio-separator {audio_ver} treats Demucs identifiers as UVR models; skipping load_model('{demucs_name}')."
+                )
+            else:
+                try:
+                    separator.load_model(model_name)
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    fallback = model_name[:-5] if str(model_name).endswith(".yaml") else ""
+                    if fallback and ("unsupported model file" in msg or "uvr model data" in msg):
+                        warnings.warn(
+                            f"Model '{model_name}' was rejected by audio-separator; retrying as '{fallback}'."
+                        )
+                        try:
+                            separator.load_model(fallback)
+                        except Exception:
+                            audio_ver = _pkg_version("audio-separator") or ""
+                            if fallback == "htdemucs_ft" and audio_ver.startswith("0.14"):
+                                warnings.warn(
+                                    "audio-separator 0.14.x does not support htdemucs_ft; falling back to htdemucs."
+                                )
+                                separator.load_model("htdemucs")
+                            else:
+                                raise
+                    else:
+                        raise
 
             loading_done.set()
             loading_worker.join(timeout=1.0)

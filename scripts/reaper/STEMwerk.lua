@@ -1126,6 +1126,22 @@ local function findSeparatorScript()
     return script_path .. "audio_separator_process.py"
 end
 
+function refreshPythonPathFromExtState()
+    if OS ~= "macOS" then return end
+    local override = getExtStateValue("pythonPath")
+    if not override or override == "" then return end
+    local resolved = override
+    if (not isAbsolutePath(resolved)) and resolved:find("[/\\]") then
+        resolved = script_path .. resolved
+    end
+    if isAbsolutePath(resolved) and fileExists(resolved) and canRunPython(resolved) then
+        if resolved ~= PYTHON_PATH then
+            PYTHON_PATH = resolved
+            debugLog("Refreshed pythonPath from ExtState: " .. tostring(PYTHON_PATH))
+        end
+    end
+end
+
 local PYTHON_PATH
 local SEPARATOR_SCRIPT
 
@@ -15451,6 +15467,7 @@ end
 
 -- Start separation process in background (Windows)
 function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
+    refreshPythonPathFromExtState()
     local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
     local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
     local doneFile = outputDir .. PATH_SEP .. "done.txt"
@@ -15693,14 +15710,25 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
 
         local launcherPath = outputDir .. PATH_SEP .. "run_bg.sh"
         local script = io.open(launcherPath, "w")
-        if script then
-            script:write("#!/bin/sh\n")
-            script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
-            script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
-            script:write("IN=" .. quoteArg(inputFile) .. "\n")
-            script:write("OUT=" .. quoteArg(outputDir) .. "\n")
-            script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
-            script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
+          if script then
+              script:write("#!/bin/sh\n")
+              script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
+              script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
+              if OS == "macOS" then
+                  local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath")
+                  if ffmpegPath and ffmpegPath ~= "" then
+                      script:write("FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\n")
+                      script:write("IMAGEIO_FFMPEG_EXE=" .. quoteArg(ffmpegPath) .. "\n")
+                      script:write("export FFMPEG_PATH IMAGEIO_FFMPEG_EXE\n")
+                      script:write("FFMPEG_DIR=$(dirname \"$FFMPEG_PATH\")\n")
+                      script:write("PATH=\"$FFMPEG_DIR:${PATH}\"\n")
+                      script:write("export PATH\n")
+                  end
+              end
+              script:write("IN=" .. quoteArg(inputFile) .. "\n")
+              script:write("OUT=" .. quoteArg(outputDir) .. "\n")
+              script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
+              script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
             script:write("STDOUT=" .. quoteArg(stdoutFile) .. "\n")
             script:write("STDERR=" .. quoteArg(logFile) .. "\n")
             script:write("DONE=" .. quoteArg(doneFile) .. "\n")
@@ -17454,6 +17482,7 @@ end
 
 -- Run multi-track separation (parallel or sequential based on setting)
 runSingleTrackSeparation = function(trackList)
+    refreshPythonPathFromExtState()
     if not canRunFfmpeg() then
         if not ensureDependenciesInteractive() then
             if reaper and reaper.defer then
@@ -18191,11 +18220,22 @@ startSeparationProcessForJob = function(job, segmentSize)
         -- Unix: background sh launcher that writes pid.txt and done.txt.
         local launcherPath = job.trackDir .. PATH_SEP .. "run_bg.sh"
         local script = io.open(launcherPath, "w")
-        if script then
-            script:write("#!/bin/sh\n")
-            script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
-            script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
-            script:write("IN=" .. quoteArg(job.inputFile) .. "\n")
+          if script then
+              script:write("#!/bin/sh\n")
+              script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
+              script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
+              if OS == "macOS" then
+                  local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath")
+                  if ffmpegPath and ffmpegPath ~= "" then
+                      script:write("FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\n")
+                      script:write("IMAGEIO_FFMPEG_EXE=" .. quoteArg(ffmpegPath) .. "\n")
+                      script:write("export FFMPEG_PATH IMAGEIO_FFMPEG_EXE\n")
+                      script:write("FFMPEG_DIR=$(dirname \"$FFMPEG_PATH\")\n")
+                      script:write("PATH=\"$FFMPEG_DIR:${PATH}\"\n")
+                      script:write("export PATH\n")
+                  end
+              end
+              script:write("IN=" .. quoteArg(job.inputFile) .. "\n")
             script:write("OUT=" .. quoteArg(job.trackDir) .. "\n")
             script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
             script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")

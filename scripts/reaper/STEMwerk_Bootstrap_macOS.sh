@@ -115,7 +115,7 @@ PYTHON=""
 FFMPEG=""
 VENV_PY=""
 # Conservative default on macOS to avoid GPU extras with limited wheel support.
-PACKAGE="audio-separator==0.14.5"
+PACKAGE="audio-separator==0.23.0"
 ONNX_PACKAGE="onnxruntime"
 if [ "$(uname -m)" = "arm64" ]; then
   ONNX_PACKAGE="onnxruntime-silicon"
@@ -183,7 +183,7 @@ else
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     log "Installing ${PACKAGE} (conservative default on macOS)"
     "${VENV_PY}" -m pip install --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
-    "${VENV_PY}" -m pip install "numpy<2.4" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+    "${VENV_PY}" -m pip install "numpy<2.0" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
 
     log "Installing stemwerk-core"
     resolve_core_target || true
@@ -199,6 +199,10 @@ else
       write_state
       exit 1
     fi
+
+    log "Preinstalling numba/llvmlite (macOS wheels)"
+    "${VENV_PY}" -m pip install --only-binary=:all: "llvmlite==0.42.0" "numba==0.59.1" >> "${LOG_FILE}" 2>&1 || \
+      log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
       "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "audio_separator_install_failed"

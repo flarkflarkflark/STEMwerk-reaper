@@ -635,6 +635,11 @@ def main():
 
     args = parser.parse_args()
 
+    if sys.platform == "darwin":
+        print(f"STEMWERK_DIAG runtime_executable={sys.executable}", file=sys.stderr)
+        print(f"STEMWERK_DIAG runtime_prefix={sys.prefix}", file=sys.stderr)
+        print(f"STEMWERK_DIAG runtime_base_prefix={getattr(sys, 'base_prefix', '')}", file=sys.stderr)
+
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
     ffmpeg_path = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
