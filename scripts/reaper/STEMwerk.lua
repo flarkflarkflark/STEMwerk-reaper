@@ -54,10 +54,10 @@ function clearDebugLog() end
 -- Keep in sync with repo VERSION via tools/version_sync.py.
 local APP_VERSION = "2.2.1.3"
 local SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
-local WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
-local WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
-local WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_VERSION .. ")"
-local WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_VERSION .. ")"
+WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
+WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
+WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_VERSION .. ")"
+WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_VERSION .. ")"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
 local DEBUG = { enabled = false, logPath = nil }
 -- STEMwerk.lua
