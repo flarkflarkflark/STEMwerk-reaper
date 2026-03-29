@@ -24,7 +24,7 @@ For release tags, the workflow enforces: tag `vX.Y.Z` must match `VERSION`.
 ## Install locations
 
 - Windows: `%USERPROFILE%\\Documents\\STEMwerk`
-- macOS: `/Users/Shared/STEMwerk`
+- macOS: `~/Library/Application Support/STEMwerk` (runtime) and `~/Library/Application Support/REAPER/Scripts/STEMwerk-reaper` (scripts)
 - Linux: `/usr/share/stemwerk`
 
 The REAPER Lua scripts live under `scripts/reaper/` inside the installed folder.
