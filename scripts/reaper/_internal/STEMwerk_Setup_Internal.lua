@@ -342,6 +342,8 @@ local function prettyBackendReason(reason)
             part = "Backend install failed; using CPU"
         elseif lower == "backend_force_cpu" then
             part = "CPU fallback forced"
+        elseif lower == "python_unsupported" or lower == "unsupported_python_version" then
+            part = "Unsupported Python version (need 3.10-3.12)"
         elseif lower == "bootstrap_cuda_confirmed" then
             part = "CUDA runtime confirmed by installer"
         elseif lower == "bootstrap_directml_confirmed" then
@@ -1513,7 +1515,11 @@ local function verifyRuntimePaths(state)
     local audioOk = false
 
     if resolved.pythonPath == "" then
-        errors[#errors + 1] = "python_missing"
+        if trim(state.STATUS_REASON or "") == "python_unsupported" then
+            errors[#errors + 1] = "python_unsupported"
+        else
+            errors[#errors + 1] = "python_missing"
+        end
     else
         if canRunPython(resolved.pythonPath) then
             pythonOk = true

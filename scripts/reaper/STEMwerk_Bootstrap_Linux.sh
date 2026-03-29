@@ -206,14 +206,49 @@ is_pyenv_shim() {
   esac
 }
 
+UNSUPPORTED_PYTHON_VERSION=""
+UNSUPPORTED_PYTHON_PATH=""
+
+python_major_minor() {
+  local py="$1"
+  if [ ! -x "$py" ]; then
+    return 1
+  fi
+  local out
+  out="$("$py" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    return 1
+  fi
+  printf "%s" "${out}"
+  return 0
+}
+
+is_supported_python() {
+  local py="$1"
+  local mm
+  mm="$(python_major_minor "$py" || true)"
+  case "${mm}" in
+    3.10|3.11|3.12)
+      return 0
+      ;;
+  esac
+  if [ -n "${mm}" ]; then
+    log_step "Ignoring unsupported Python ${mm} at ${py} (need 3.10-3.12)"
+    UNSUPPORTED_PYTHON_VERSION="${mm}"
+    UNSUPPORTED_PYTHON_PATH="${py}"
+  fi
+  return 1
+}
+
 find_pyenv_real() {
   if [ -d "${HOME}/.pyenv/versions" ]; then
     for p in \
-      "${HOME}/.pyenv/versions/"*/bin/python3.11 \
       "${HOME}/.pyenv/versions/"*/bin/python3.12 \
+      "${HOME}/.pyenv/versions/"*/bin/python3.11 \
+      "${HOME}/.pyenv/versions/"*/bin/python3.10 \
       "${HOME}/.pyenv/versions/"*/bin/python3
     do
-      if [ -x "$p" ]; then
+      if [ -x "$p" ] && is_supported_python "$p"; then
         PYTHON="$p"
         return 0
       fi
@@ -224,15 +259,17 @@ find_pyenv_real() {
 
 if ! find_pyenv_real; then
   for p in \
-    "/usr/local/bin/python3.11" \
-    "/usr/bin/python3.11" \
     "/usr/local/bin/python3.12" \
     "/usr/bin/python3.12" \
+    "/usr/local/bin/python3.11" \
+    "/usr/bin/python3.11" \
+    "/usr/local/bin/python3.10" \
+    "/usr/bin/python3.10" \
     "/usr/local/bin/python3" \
     "/usr/bin/python3" \
     "/snap/bin/python3"
   do
-    if [ -x "$p" ]; then
+    if [ -x "$p" ] && is_supported_python "$p"; then
       PYTHON="$p"
       break
     fi
@@ -240,19 +277,24 @@ if ! find_pyenv_real; then
 fi
 
 if [ -z "${PYTHON}" ]; then
-  for cmd in python3.11 python3.12 python3; do
+  for cmd in python3.12 python3.11 python3.10 python3; do
     if command -v "${cmd}" >/dev/null 2>&1; then
       candidate="$(command -v "${cmd}")"
       if ! is_pyenv_shim "${candidate}"; then
-        PYTHON="${candidate}"
-        break
+        if is_supported_python "${candidate}"; then
+          PYTHON="${candidate}"
+          break
+        fi
       fi
     fi
   done
 fi
 
 if [ -z "${PYTHON}" ] && command -v python3 >/dev/null 2>&1; then
-  PYTHON="$(command -v python3)"
+  candidate="$(command -v python3)"
+  if is_supported_python "${candidate}"; then
+    PYTHON="${candidate}"
+  fi
 fi
 
 if [ -n "${PYTHON}" ]; then
@@ -280,12 +322,20 @@ if [ -z "${PYTHON}" ] && [ -n "${PKEXEC}" ]; then
     "${PKEXEC}" /usr/bin/zypper --non-interactive install python3 >> "${LOG_FILE}" 2>&1 || true
   fi
   if command -v python3 >/dev/null 2>&1; then
-    PYTHON="$(command -v python3)"
+    candidate="$(command -v python3)"
+    if is_supported_python "${candidate}"; then
+      PYTHON="${candidate}"
+    fi
   fi
 fi
 
 if [ -z "${PYTHON}" ]; then
-  set_status "missing_python" "python_not_found"
+  if [ -n "${UNSUPPORTED_PYTHON_VERSION}" ]; then
+    BACKEND_REASON="python_unsupported"
+    set_status "missing_python" "python_unsupported"
+  else
+    set_status "missing_python" "python_not_found"
+  fi
 else
   log_stage "Creating venv"
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
