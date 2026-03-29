@@ -306,34 +306,12 @@ if [ -x "/usr/bin/pkexec" ]; then
   PKEXEC="/usr/bin/pkexec"
 fi
 
-if [ -z "${PYTHON}" ] && [ -n "${PKEXEC}" ]; then
-  log_step "Installing python3 via package manager"
-  if [ -x "/usr/bin/apt-get" ]; then
-    log "Installing python3 via apt-get"
-    "${PKEXEC}" /usr/bin/apt-get -y install python3 >> "${LOG_FILE}" 2>&1 || true
-  elif [ -x "/usr/bin/dnf" ]; then
-    log "Installing python3 via dnf"
-    "${PKEXEC}" /usr/bin/dnf -y install python3 >> "${LOG_FILE}" 2>&1 || true
-  elif [ -x "/usr/bin/pacman" ]; then
-    log "Installing python via pacman"
-    "${PKEXEC}" /usr/bin/pacman -Sy --noconfirm python >> "${LOG_FILE}" 2>&1 || true
-  elif [ -x "/usr/bin/zypper" ]; then
-    log "Installing python3 via zypper"
-    "${PKEXEC}" /usr/bin/zypper --non-interactive install python3 >> "${LOG_FILE}" 2>&1 || true
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    candidate="$(command -v python3)"
-    if is_supported_python "${candidate}"; then
-      PYTHON="${candidate}"
-    fi
-  fi
-fi
-
 if [ -z "${PYTHON}" ]; then
   if [ -n "${UNSUPPORTED_PYTHON_VERSION}" ]; then
     BACKEND_REASON="python_unsupported"
     set_status "missing_python" "python_unsupported"
   else
+    BACKEND_REASON="python_not_found"
     set_status "missing_python" "python_not_found"
   fi
 else
@@ -654,29 +632,6 @@ do
     break
   fi
 done
-
-if [ -z "${FFMPEG}" ] && [ -n "${PKEXEC}" ]; then
-  log_step "Installing FFmpeg via package manager"
-  if [ -x "/usr/bin/apt-get" ]; then
-    log "Installing ffmpeg via apt-get"
-    "${PKEXEC}" /usr/bin/apt-get -y install ffmpeg >> "${LOG_FILE}" 2>&1 || true
-  elif [ -x "/usr/bin/dnf" ]; then
-    log "Installing ffmpeg via dnf"
-    "${PKEXEC}" /usr/bin/dnf -y install ffmpeg >> "${LOG_FILE}" 2>&1 || true
-  elif [ -x "/usr/bin/pacman" ]; then
-    log "Installing ffmpeg via pacman"
-    "${PKEXEC}" /usr/bin/pacman -Sy --noconfirm ffmpeg >> "${LOG_FILE}" 2>&1 || true
-  elif [ -x "/usr/bin/zypper" ]; then
-    log "Installing ffmpeg via zypper"
-    "${PKEXEC}" /usr/bin/zypper --non-interactive install ffmpeg >> "${LOG_FILE}" 2>&1 || true
-  fi
-  for p in /usr/local/bin/ffmpeg /usr/bin/ffmpeg /snap/bin/ffmpeg; do
-    if [ -x "$p" ]; then
-      FFMPEG="$p"
-      break
-    fi
-  done
-fi
 
 if [ -z "${FFMPEG}" ]; then
   set_status "missing_ffmpeg" "ffmpeg_not_found"

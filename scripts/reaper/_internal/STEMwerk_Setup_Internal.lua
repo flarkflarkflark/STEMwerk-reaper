@@ -344,6 +344,8 @@ local function prettyBackendReason(reason)
             part = "CPU fallback forced"
         elseif lower == "python_unsupported" or lower == "unsupported_python_version" then
             part = "Unsupported Python version (need 3.10-3.12)"
+        elseif lower == "python_not_found" then
+            part = "No supported Python found (need 3.10-3.12)"
         elseif lower == "bootstrap_cuda_confirmed" then
             part = "CUDA runtime confirmed by installer"
         elseif lower == "bootstrap_directml_confirmed" then
