@@ -208,6 +208,7 @@ is_pyenv_shim() {
 
 UNSUPPORTED_PYTHON_VERSION=""
 UNSUPPORTED_PYTHON_PATH=""
+MANAGED_PYTHON=""
 
 python_major_minor() {
   local py="$1"
@@ -257,7 +258,31 @@ find_pyenv_real() {
   return 1
 }
 
-if ! find_pyenv_real; then
+find_managed_python() {
+  for p in \
+    "${RUNTIME_BASE}/python/bin/python3.12" \
+    "${RUNTIME_BASE}/python/bin/python3.11" \
+    "${RUNTIME_BASE}/python/bin/python3.10" \
+    "${RUNTIME_BASE}/python/bin/python3" \
+    "${RUNTIME_BASE}/python/python3.12" \
+    "${RUNTIME_BASE}/python/python3.11" \
+    "${RUNTIME_BASE}/python/python3.10" \
+    "${RUNTIME_BASE}/python/python3"
+  do
+    if [ -x "$p" ] && is_supported_python "$p"; then
+      MANAGED_PYTHON="$p"
+      PYTHON="$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if find_managed_python; then
+  log_step "Using managed Python: ${PYTHON}"
+fi
+
+if [ -z "${PYTHON}" ] && ! find_pyenv_real; then
   for p in \
     "/usr/local/bin/python3.12" \
     "/usr/bin/python3.12" \
