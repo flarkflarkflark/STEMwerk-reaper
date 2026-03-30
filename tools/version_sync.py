@@ -34,7 +34,7 @@ def update_index_xml(text: str, version: str) -> tuple[str, list[str], list[str]
     current = {m.group(2) for m in matches}
     if current != {version}:
         notes.append(f"index.xml: version {sorted(current)} -> {version}")
-        text = pattern.sub(rf'\1{version}\3', text)
+        text = pattern.sub(lambda m: f"{m.group(1)}{version}{m.group(3)}", text)
     return text, notes, errors
 
 
@@ -49,7 +49,7 @@ def update_lua_version(text: str, version: str, label: str) -> tuple[str, list[s
     current = {m.group(2) for m in matches}
     if current != {version}:
         notes.append(f"{label}: @version {sorted(current)} -> {version}")
-        text = pattern.sub(rf'\1{version}\3', text)
+        text = pattern.sub(lambda m: f"{m.group(1)}{version}{m.group(3)}", text)
     return text, notes, errors
 
 
@@ -64,7 +64,7 @@ def update_app_version(text: str, version: str, label: str) -> tuple[str, list[s
     current = match.group(2)
     if current != version:
         notes.append(f"{label}: APP_VERSION {current} -> {version}")
-        text = pattern.sub(rf'\1{version}\3', text)
+        text = pattern.sub(lambda m: f"{m.group(1)}{version}{m.group(3)}", text)
     return text, notes, errors
 
 
@@ -79,7 +79,7 @@ def update_setup_guide(text: str, version: str) -> tuple[str, list[str], list[st
     current = match.group(2)
     if current != version:
         notes.append(f"tools/STEMwerk_Setup_Guide_Linux_macOS.md: {current} -> {version}")
-        text = pattern.sub(rf"\1{version}\3", text)
+        text = pattern.sub(lambda m: f"{m.group(1)}{version}{m.group(3)}", text)
     return text, notes, errors
 
 
