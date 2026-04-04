@@ -10,13 +10,6 @@ RAW_VERSION_VALUE="${STEMWERK_VERSION:-$(cat "$REPO_DIR/VERSION")}"
 VERSION_VALUE="$(printf '%s' "$RAW_VERSION_VALUE" | tr -d '\r\n')"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 VARIANT_FILTER="${STEMWERK_VARIANTS:-all}"
-INCLUDE_CUDA_WHEELS="${STEMWERK_INCLUDE_CUDA_WHEELS:-1}"
-
-if [[ "$INCLUDE_CUDA_WHEELS" == "0" ]]; then
-	OFFLINE_TAG="offline-bundled-cpu"
-else
-	OFFLINE_TAG="offline-bundled-gpu"
-fi
 
 should_build_variant() {
 	local variant="$1"
@@ -53,23 +46,58 @@ copy_variant_files() {
 build_variant() {
 	local payload_subdir="$1"
 	local variant_name="$2"
+	local wheel_subdir="$3"
+	local offline_tag="$4"
 	local dist_dir="$ROOT_DIR/dist"
 	local base_out="$dist_dir/STEMwerk-Setup-$VERSION_VALUE.exe"
-	local variant_tag="$OFFLINE_TAG-allmodels"
+	local variant_tag="$offline_tag-allmodels"
 	if [[ "$variant_name" != "allmodels" ]]; then
-		variant_tag="$OFFLINE_TAG-model-$variant_name"
+		variant_tag="$offline_tag-model-$variant_name"
 	fi
 	local variant_out="$dist_dir/STEMwerk-Setup-$VERSION_VALUE-$variant_tag.exe"
 	echo "Building variant: $variant_name (payload: $payload_subdir)"
 	STEMWERK_BUNDLE_RUNTIME=1 \
 	STEMWERK_VERSION="$VERSION_VALUE" \
 	STEMWERK_MODEL_PAYLOAD_SUBDIR="$payload_subdir" \
+	STEMWERK_WHEEL_PAYLOAD_SUBDIR="$wheel_subdir" \
 	wine "$INNO_EXE" "Z:${ISS_PATH//\//\\}"
 	require_file "$base_out"
 	mv -f "$base_out" "$variant_out"
 }
 
-"$ROOT_DIR/fetch_runtime_assets.sh"
+prepare_wheelhouse() {
+	local wheel_subdir="$1"
+	local include_cuda="$2"
+	local include_directml="$3"
+	STEMWERK_WHEELHOUSE_SUBDIR="$wheel_subdir" \
+	STEMWERK_INCLUDE_CUDA_WHEELS="$include_cuda" \
+	STEMWERK_INCLUDE_DIRECTML_WHEELS="$include_directml" \
+	"$ROOT_DIR/fetch_runtime_assets.sh"
+}
+
+build_flavor() {
+	local flavor="$1"
+	local wheel_subdir="$2"
+	local offline_tag="$3"
+	local include_cuda="$4"
+	local include_directml="$5"
+
+	echo "Preparing offline wheelhouse for $flavor..."
+	prepare_wheelhouse "$wheel_subdir" "$include_cuda" "$include_directml"
+
+	if should_build_variant "fast"; then
+		build_variant "$FAST_SUBDIR" "fast" "$wheel_subdir" "$offline_tag"
+	fi
+	if should_build_variant "quality"; then
+		build_variant "$QUALITY_SUBDIR" "quality" "$wheel_subdir" "$offline_tag"
+	fi
+	if should_build_variant "6stem"; then
+		build_variant "$SIXSTEM_SUBDIR" "6stem" "$wheel_subdir" "$offline_tag"
+	fi
+	if should_build_variant "allmodels"; then
+		build_variant "$ALL_SUBDIR" "allmodels" "$wheel_subdir" "$offline_tag"
+	fi
+}
 
 BASE_PAYLOAD_DIR="$ROOT_DIR/payload"
 FAST_SUBDIR="models-$STAMP-fast"
@@ -112,18 +140,9 @@ copy_variant_files "$ALL_DIR" \
 	5c90dfd2-34c22ccb.th \
 	download_checks.json
 
-if should_build_variant "fast"; then
-	build_variant "$FAST_SUBDIR" "fast"
-fi
-if should_build_variant "quality"; then
-	build_variant "$QUALITY_SUBDIR" "quality"
-fi
-if should_build_variant "6stem"; then
-	build_variant "$SIXSTEM_SUBDIR" "6stem"
-fi
-if should_build_variant "allmodels"; then
-	build_variant "$ALL_SUBDIR" "allmodels"
-fi
+build_flavor "nvidia" "wheels-nvidia" "offline-bundled-nvidia-gpu" "1" "0"
+build_flavor "amd" "wheels-directml" "offline-bundled-amd-gpu" "0" "1"
+build_flavor "cpu" "wheels-cpu" "offline-bundled-cpu" "0" "0"
 
 echo
 echo "Build complete. Generated installers in: $ROOT_DIR/dist"

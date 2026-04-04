@@ -5,8 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAYLOAD_DIR="$ROOT_DIR/payload"
 PYTHON_DIR="$PAYLOAD_DIR/python"
 FFMPEG_DIR="$PAYLOAD_DIR/ffmpeg"
-WHEELS_DIR="$PAYLOAD_DIR/wheels"
+WHEELHOUSE_SUBDIR="${STEMWERK_WHEELHOUSE_SUBDIR:-wheels}"
+WHEELS_DIR="$PAYLOAD_DIR/$WHEELHOUSE_SUBDIR"
 INCLUDE_CUDA_WHEELS="${STEMWERK_INCLUDE_CUDA_WHEELS:-1}"
+INCLUDE_DIRECTML_WHEELS="${STEMWERK_INCLUDE_DIRECTML_WHEELS:-0}"
 
 PYTHON_FILE="python-3.11.8-amd64.exe"
 PYTHON_URL="https://www.python.org/ftp/python/3.11.8/$PYTHON_FILE"
@@ -30,7 +32,10 @@ download_windows_wheels() {
   ensure_pip || return 1
   mkdir -p "$WHEELS_DIR"
   find "$WHEELS_DIR" -maxdepth 1 -type f -name '*.whl' -delete
-  python3 "$ROOT_DIR/../../tools/build_windows_wheelhouse.py" --output-dir "$WHEELS_DIR" --include-cuda-wheels "$INCLUDE_CUDA_WHEELS"
+  python3 "$ROOT_DIR/../../tools/build_windows_wheelhouse.py" \
+    --output-dir "$WHEELS_DIR" \
+    --include-cuda-wheels "$INCLUDE_CUDA_WHEELS" \
+    --include-directml-wheels "$INCLUDE_DIRECTML_WHEELS"
 }
 
 download_if_missing() {
@@ -52,6 +57,5 @@ echo
 echo "Bundled runtime assets ready:"
 ls -lh "$PYTHON_DIR/$PYTHON_FILE" "$FFMPEG_DIR/$FFMPEG_FILE"
 echo
-echo "Bundled wheels ready:"
+echo "Bundled wheels ready ($WHEELHOUSE_SUBDIR):"
 ls -lh "$WHEELS_DIR" | sed -n '1,8p'
-

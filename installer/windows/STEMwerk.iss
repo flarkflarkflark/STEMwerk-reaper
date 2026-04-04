@@ -25,6 +25,11 @@
   #define ModelPayloadSubdir "models"
 #endif
 
+#define WheelPayloadSubdir GetEnv('STEMWERK_WHEEL_PAYLOAD_SUBDIR')
+#if WheelPayloadSubdir == ""
+  #define WheelPayloadSubdir "wheels"
+#endif
+
 [Setup]
 AppId={{9A6BDA0D-6A2A-4B36-9C3B-1D4C77E5D0A3}
 AppName={#MyAppName}
@@ -69,7 +74,7 @@ Source: "payload\ffmpeg\ffmpeg-release-essentials.zip"; DestDir: "{app}\_bundled
   #else
     #error STEMWERK_BUNDLE_RUNTIME=1 but payload\ffmpeg\ffmpeg-release-essentials.zip is missing.
   #endif
-Source: "payload\wheels\*"; DestDir: "{app}\_bundled\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+Source: "payload\{#WheelPayloadSubdir}\*"; DestDir: "{app}\_bundled\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 Source: "payload\{#ModelPayloadSubdir}\*"; DestDir: "{localappdata}\STEMwerk\models"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 #endif
 
@@ -190,6 +195,12 @@ function DefaultStatusDetailText: string;
 begin
   Result := 'First-time setup can take several minutes.' + #13#10 +
     'STEMwerk prepares the runtime, creates the Python environment, checks FFmpeg, and installs the core packages.';
+end;
+
+function ExtractingStatusDetailText: string;
+begin
+  Result := 'Extracting installer components.' + #13#10 +
+    'This can take a few minutes on slower disks.';
 end;
 
 function ExtractStatusDetail(const Text: string): string;
@@ -362,6 +373,7 @@ end;
 procedure UpdateLogMemo;
 var
   Path, Text, VisibleText, Detail: string;
+  WaitingForBootstrap: Boolean;
   WasAtBottom: Boolean;
 begin
   if (LogMemo <> nil) and LogMemo.Focused then
@@ -373,9 +385,10 @@ begin
   WasAtBottom := MemoIsAtBottom(LogMemo);
   Path := GetLogPath;
   Text := ReadLogTail(Path, 12000);
+  WaitingForBootstrap := Text = '';
   if Text = '' then
     Text := 'Waiting for bootstrap log at:' + #13#10 + Path + #13#10 +
-            'Installer will update this view automatically...';
+            'Installer will update this view automatically after extraction.';
   VisibleText := FilterVisibleLogText(Text);
   if VisibleText <> LastLogText then
   begin
@@ -390,7 +403,9 @@ begin
   Detail := ExtractStatusDetail(Text);
   if StatusDetailLabel <> nil then
   begin
-    if Detail <> '' then
+    if WaitingForBootstrap then
+      StatusDetailLabel.Caption := ExtractingStatusDetailText
+    else if Detail <> '' then
       StatusDetailLabel.Caption := 'Current task:' + #13#10 + Detail + #13#10 +
         'Long package installs are normal on slower systems and VMs.'
     else
@@ -670,7 +685,7 @@ begin
   LogMemo.Enabled := True;
   LogMemo.Font.Name := 'Consolas';
   LogMemo.Font.Size := 9;
-  LogMemo.Lines.Text := 'Preparing bootstrap log...';
+  LogMemo.Lines.Text := 'Extracting installer components...';
 
   LogTimerId := 0;
   LogTimerProc := 0;

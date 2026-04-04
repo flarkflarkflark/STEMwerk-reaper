@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--implementation", default="cp")
     parser.add_argument("--abi", default="cp311")
     parser.add_argument("--include-cuda-wheels", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--include-directml-wheels", type=int, choices=(0, 1), default=0)
     return parser.parse_args()
 
 
@@ -140,9 +141,9 @@ def requirement_to_spec(req: Requirement) -> str:
     return req.name
 
 
-def seeded_requirements() -> Iterable[str]:
+def seeded_requirements(include_directml: bool) -> Iterable[str]:
     # Keep versions aligned with Windows bootstrap defaults.
-    return [
+    requirements = [
         "pip",
         "setuptools",
         "wheel",
@@ -171,6 +172,12 @@ def seeded_requirements() -> Iterable[str]:
         "torchvision==0.19.1",
         "audio-separator==0.24.4",
     ]
+    if include_directml:
+        requirements += [
+            "torch-directml==0.2.5.dev240914",
+            "onnxruntime-directml==1.24.4",
+        ]
+    return requirements
 
 
 def main() -> int:
@@ -178,7 +185,7 @@ def main() -> int:
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    queue: List[str] = list(seeded_requirements())
+    queue: List[str] = list(seeded_requirements(include_directml=bool(args.include_directml_wheels)))
     seen_specs: Set[str] = set()
     resolved_names: Dict[str, str] = {}
 

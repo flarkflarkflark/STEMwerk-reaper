@@ -5,10 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 INNO_EXE="/mnt/WINDOWS11/Users/Administrator/AppData/Local/Programs/Inno Setup 6/ISCC.exe"
 ISS_PATH="$REPO_DIR/installer/windows/STEMwerk.iss"
+WHEELHOUSE_SUBDIR="${STEMWERK_WHEELHOUSE_SUBDIR:-wheels}"
 
+STEMWERK_WHEELHOUSE_SUBDIR="$WHEELHOUSE_SUBDIR" \
 "$ROOT_DIR/fetch_runtime_assets.sh"
 
 export STEMWERK_BUNDLE_RUNTIME=1
+export STEMWERK_WHEEL_PAYLOAD_SUBDIR="${STEMWERK_WHEEL_PAYLOAD_SUBDIR:-$WHEELHOUSE_SUBDIR}"
 wine "$INNO_EXE" "Z:${ISS_PATH//\//\\}"
 
 RAW_VERSION_VALUE="${STEMWERK_VERSION:-$(cat "$REPO_DIR/VERSION")}" 

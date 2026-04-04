@@ -13,6 +13,15 @@ The Windows installer:
 
 In the normal Windows flow, this installer is the bootstrap step.
 
+## Offline installer flavors (GPU)
+
+If you downloaded an offline bundled installer, the filename tells you which GPU runtime is included:
+
+- `offline-bundled-nvidia`: CUDA wheels for NVIDIA GPUs.
+- `offline-bundled-amd`: DirectML wheels for AMD/Intel GPUs.
+
+If the installer cannot verify a GPU runtime, STEMwerk will fall back to CPU.
+
 ## What to do next
 
 1. Open REAPER.
