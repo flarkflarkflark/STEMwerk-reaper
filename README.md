@@ -53,6 +53,8 @@ Internet is normally required for:
 
 After setup is complete and the model is cached locally, normal separation usually works offline.
 
+For releasing pre-zipped offline model packs (`Fast`, `Quality`, `6-Stem`, `All`), see `docs/OFFLINE_MODEL_PACKS.md`.
+
 ## Backend Support
 ### CPU
 - Windows: supported

@@ -15,3 +15,14 @@ Validated flows:
 - macOS: working
 - Linux / EndeavourOS: working
 - ReaPack update + setup + processing: working on MacBookPro11,2 with EndeavourOS
+
+Offline model packs (new release assets):
+- STEMwerk-Model-Pack-Fast-v2.2.1.4.zip (~75 MB)
+- STEMwerk-Model-Pack-Quality-v2.2.1.4.zip (~298 MB)
+- STEMwerk-Model-Pack-6-Stem-v2.2.1.4.zip (~49 MB)
+- STEMwerk-Model-Pack-All-v2.2.1.4.zip (~421 MB)
+- STEMwerk-Model-Packs-v2.2.1.4-SHA256.txt (checksums)
+
+Notes:
+- These packs contain offline model cache files only.
+- Runtime/bootstrap dependencies are not bundled in these model-pack assets.

@@ -4,6 +4,15 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 
 ## Current
 
+- [ ] Kijken of onderstaande todo-lijst nog actueel is, welke zaken zijn aangepakt, welke moeten nog, etc. (volgende keer)
+- [ ] Urgent release follow-up: verify that `v2.2.1.1` Windows assets install `stemwerk-core` from bundled source, not the old `0.1.0` wheel
+	- Source of truth: issue `#6` bootstrap log showed `Installing stemwerk-core from bundled wheel`
+	- Confirm new Windows assets now contain `vendor/stemwerk-core/pyproject.toml` and `src/stemwerk_core/*`
+	- Re-test on the Windows NVIDIA laptop after reinstall / clean runtime
+- [ ] Re-test DirectML behavior after the source-bundle release fix
+	- Verify whether explicit `DirectML` still falls back to CPU
+	- Verify whether `AUTO` vs explicit `DirectML` now behave consistently
+	- Re-check whether the old DirectML multi-job instability remains once the packaging mismatch is gone
 - [ ] CI: build GitHub Actions pipeline for installers/artifacts on tag push
 - [ ] Themes: investigate user-themable UI (fonts/colors/styles) vs current look
 	- Define theme tokens (palette, fonts, sizes)
@@ -134,5 +143,6 @@ Toolbar + Icons + Toolbarscripts:
 	- macOS semi-bundled installer path
 	- Optional model packs: `Fast`, `Quality`, `6-Stem`
 - **DirectML multi-track performance:** Revisit parallel job processing for Windows DirectML once the stability issue is understood. Current workaround forces sequential mode for DirectML multi-job runs; goal is to recover CUDA/CPU-like throughput without dropping outputs. Compare this explicitly against Linux ROCm/CUDA behavior.
+- **Vendor packaging hygiene:** Replace or regenerate the stale bundled `stemwerk_core-0.1.0-py3-none-any.whl`, or stop shipping it as a fallback once source-bundle packaging is stable.
 - **Repository housekeeping:** Clean up worktree / local artifacts / temporary build clutter once the current installer and runtime work settles down
 - **README / Docs visual pass:** Add curated screenshots with GUI highlights and annotated callouts for installer flow, main REAPER UI, and setup/troubleshooting screens
