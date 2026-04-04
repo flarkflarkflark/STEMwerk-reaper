@@ -19,10 +19,10 @@
 #endif
 
 #define BundleRuntime GetEnv('STEMWERK_BUNDLE_RUNTIME')
-#if BundleRuntime == "1"
-  #define OutputSuffix "-bundled"
-#else
-  #define OutputSuffix ""
+
+#define ModelPayloadSubdir GetEnv('STEMWERK_MODEL_PAYLOAD_SUBDIR')
+#if ModelPayloadSubdir == ""
+  #define ModelPayloadSubdir "models"
 #endif
 
 [Setup]
@@ -44,7 +44,7 @@ DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
 DisableProgramGroupPage=yes
 OutputDir=dist
-OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}{#OutputSuffix}
+OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -69,6 +69,8 @@ Source: "payload\ffmpeg\ffmpeg-release-essentials.zip"; DestDir: "{app}\_bundled
   #else
     #error STEMWERK_BUNDLE_RUNTIME=1 but payload\ffmpeg\ffmpeg-release-essentials.zip is missing.
   #endif
+Source: "payload\wheels\*"; DestDir: "{app}\_bundled\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+Source: "payload\{#ModelPayloadSubdir}\*"; DestDir: "{localappdata}\STEMwerk\models"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 #endif
 
 ; Helpful docs

@@ -35,6 +35,7 @@ $statusReason = ""
 $audioSeparatorVersion = "0.24.4"
 $torchVersion = "2.4.1"
 $torchVisionVersion = "0.19.1"
+$torchCudaSuffix = "+cu121"
 $torchDirectMlVersion = "0.2.5.dev240914"
 $onnxRuntimeDirectMlVersion = "1.24.4"
 $audioSeparatorOk = $false
@@ -57,7 +58,9 @@ $ffmpegArchiveFileName = "ffmpeg-release-essentials.zip"
 $ffmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegArchiveFileName"
 $bundledPythonInstaller = Join-Path $bundledRuntimeDir ("python\\" + $pythonInstallerFileName)
 $bundledFfmpegZip = Join-Path $bundledRuntimeDir ("ffmpeg\\" + $ffmpegArchiveFileName)
+$bundledWheelsDir = Join-Path $bundledRuntimeDir "wheels"
 $bundledCoreDir = Join-Path $scriptRoot "vendor\\stemwerk-core"
+$bundledJuliusDir = Join-Path $scriptRoot "vendor\\julius"
 $constraintsDir = Join-Path $scriptRoot "constraints"
 $baseConstraints = Join-Path $constraintsDir "base.txt"
 $cudaConstraints = Join-Path $constraintsDir "cuda.txt"
@@ -447,28 +450,63 @@ function ResolveCoreInstallTarget([string]$Extra) {
     return $result
 }
 
+function HasBundledWheels {
+    if ([string]::IsNullOrWhiteSpace($bundledWheelsDir)) { return $false }
+    if (-not (Test-Path $bundledWheelsDir)) { return $false }
+    $wheel = Get-ChildItem -Path $bundledWheelsDir -Filter "*.whl" -Recurse | Select-Object -First 1
+    return ($null -ne $wheel)
+}
+
+function GetPipOfflineArgs {
+    if (HasBundledWheels) {
+        return @("--no-index", "--find-links", $bundledWheelsDir)
+    }
+    return @()
+}
+
+function InstallWithPip([string]$PythonPath, [string[]]$InstallArgs, [string]$Description) {
+    $args = @("-m", "pip", "install")
+    $args += GetPipOfflineArgs
+    $args += $InstallArgs
+    RunHidden $PythonPath $args $Description | Out-Null
+}
+
 function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
     if ([string]::IsNullOrWhiteSpace($BackendName) -or $BackendName -eq "cpu") { return $true }
 
     if ($BackendName -eq "cuda") {
         LogProgress "Installing PyTorch CUDA runtime"
-        RunHidden $PythonPath @(
-            "-m","pip","install","--upgrade","--force-reinstall",
+        $torchCudaReq = "torch==$torchVersion$torchCudaSuffix"
+        $torchVisionCudaReq = "torchvision==$torchVisionVersion$torchCudaSuffix"
+        $installArgs = @(
+            "--upgrade","--force-reinstall",
             "--index-url",$pytorchCudaIndex,
             "-c",$baseConstraints,
             "-c",$cudaConstraints,
             "numpy<2",
-            "torch==$torchVersion",
-            "torchvision==$torchVisionVersion"
-        ) "Install PyTorch CUDA runtime" | Out-Null
+            $torchCudaReq,
+            $torchVisionCudaReq
+        )
+        # Offline bundle mode cannot satisfy CUDA index installs unless explicit wheels are bundled.
+        if (HasBundledWheels) {
+            $installArgs = @(
+                "--upgrade","--force-reinstall",
+                "-c",$baseConstraints,
+                "-c",$cudaConstraints,
+                "numpy<2",
+                $torchCudaReq,
+                $torchVisionCudaReq
+            )
+        }
+        InstallWithPip $PythonPath $installArgs "Install PyTorch CUDA runtime"
         return ($LASTEXITCODE -eq 0)
     }
 
     if ($BackendName -eq "directml") {
         LogProgress "Installing DirectML runtime packages"
-        RunHidden $PythonPath @(
-            "-m","pip","install","--upgrade",
+        InstallWithPip $PythonPath @(
+            "--upgrade",
             "-c",$baseConstraints,
             "-c",$directmlConstraints,
             "numpy<2",
@@ -476,7 +514,7 @@ function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
             "torchvision==$torchVisionVersion",
             "torch-directml==$torchDirectMlVersion",
             "onnxruntime-directml==$onnxRuntimeDirectMlVersion"
-        ) "Install DirectML runtime" | Out-Null
+        ) "Install DirectML runtime"
         return ($LASTEXITCODE -eq 0)
     }
 
@@ -517,6 +555,71 @@ function GetOnnxRuntimePackage([string]$BackendName) {
     return "onnxruntime"
 }
 
+function GetAudioRuntimeDependencyList([string]$BackendName) {
+    $deps = @(
+        "beartype>=0.18.5,<0.19.0",
+        "diffq-fixed>=0.2",
+        "einops>=0.7",
+        "librosa>=0.10",
+        "ml_collections",
+        "numpy<2",
+        "onnx>=1.14",
+        "onnx2torch>=1.5",
+        "pydub>=0.25",
+        "pyyaml",
+        "requests>=2",
+        "resampy>=0.4",
+        "rotary-embedding-torch>=0.6.1,<0.7.0",
+        "scipy>=1.13.0,<2.0.0",
+        "six>=1.16",
+        "tqdm",
+        "soundfile>=0.12.1"
+    )
+
+    if ($BackendName -eq "directml") {
+        $deps += @("torch==$torchVersion", "torchvision==$torchVisionVersion", "torch-directml==$torchDirectMlVersion", "onnxruntime-directml==$onnxRuntimeDirectMlVersion")
+    } elseif ($BackendName -eq "cuda") {
+        $deps += @("torch==$torchVersion$torchCudaSuffix", "torchvision==$torchVisionVersion$torchCudaSuffix", "onnxruntime")
+    } else {
+        $deps += @("torch==$torchVersion", "torchvision==$torchVisionVersion", "onnxruntime")
+    }
+    return $deps
+}
+
+function InstallAudioRuntimeDependencies([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
+    $deps = GetAudioRuntimeDependencyList $BackendName
+    $args = @("--upgrade")
+    $args += GetAudioConstraints $BackendName
+    $args += $deps
+    LogProgress "Installing curated audio runtime dependencies"
+    InstallWithPip $PythonPath $args "Install audio runtime dependencies"
+    return ($LASTEXITCODE -eq 0)
+}
+
+function EnsureJuliusRuntime([string]$PythonPath) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
+
+    RunHidden $PythonPath @("-c", "import julius") "Verify julius runtime" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    if (-not (Test-Path (Join-Path $bundledJuliusDir "pyproject.toml"))) {
+        LogLine ("Bundled julius fallback is missing: " + $bundledJuliusDir)
+        return $false
+    }
+
+    LogProgress "Installing bundled julius fallback"
+    InstallWithPip $PythonPath @("--upgrade", "--force-reinstall", "--no-build-isolation", $bundledJuliusDir) "Install julius fallback"
+    if ($LASTEXITCODE -ne 0) {
+        return $false
+    }
+
+    RunHidden $PythonPath @("-c", "import julius") "Verify julius runtime" | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
 function EnsureOnnxRuntime([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
 
@@ -532,11 +635,11 @@ function EnsureOnnxRuntime([string]$PythonPath, [string]$BackendName) {
     }
 
     $onnxPackage = GetOnnxRuntimePackage $BackendName
-    $onnxArgs = @("-m","pip","install","--upgrade")
+    $onnxArgs = @("--upgrade")
     $onnxArgs += GetAudioConstraints $BackendName
     $onnxArgs += $onnxPackage
     LogProgress ("Installing " + $onnxPackage)
-    RunHidden $PythonPath $onnxArgs "Install ONNX Runtime" | Out-Null
+    InstallWithPip $PythonPath $onnxArgs "Install ONNX Runtime"
     if ($LASTEXITCODE -ne 0) {
         return $false
     }
@@ -558,18 +661,27 @@ function InstallAndVerifyAudioSeparator([string]$PythonPath, [string]$BackendNam
     if ([string]::IsNullOrWhiteSpace($PackageName)) { return "audio_separator_install_failed" }
 
     $audioConstraints = GetAudioConstraints $BackendName
-    $audioArgs = @("-m","pip","install")
+    $audioArgs = @()
     if ($BackendName -ne "directml") {
         $audioArgs += "--upgrade"
     }
     $audioArgs += $audioConstraints
+    $audioArgs += "--no-deps"
     $audioArgs += $PackageName
 
     LogProgress ("Installing " + $PackageName)
     LogLine ("Installing " + $PackageName)
-    RunHidden $PythonPath $audioArgs $Description | Out-Null
+    InstallWithPip $PythonPath $audioArgs $Description
     if ($LASTEXITCODE -ne 0) {
         return "audio_separator_install_failed"
+    }
+
+    if (-not (InstallAudioRuntimeDependencies $PythonPath $BackendName)) {
+        return "audio_runtime_deps_install_failed"
+    }
+
+    if (-not (EnsureJuliusRuntime $PythonPath)) {
+        return "julius_install_failed"
     }
 
     if (-not (EnsureOnnxRuntime $PythonPath $BackendName)) {
@@ -691,7 +803,8 @@ if (-not $python) {
     }
     if (Test-Path $venvPy) {
         $python = $venvPy
-        RunHidden $python @("-m","pip","install","--upgrade","pip") "Upgrade pip" | Out-Null
+        $pipBootstrap = @("--upgrade", "pip", "setuptools", "wheel")
+        InstallWithPip $python $pipBootstrap "Upgrade pip"
         if ($LASTEXITCODE -ne 0) {
             Set-Status "pip_failed" "pip_upgrade_failed"
         }
@@ -775,7 +888,13 @@ if (Test-Path $venvPy) {
         }
         LogProgress ("Installing stemwerk-core from " + $coreTarget.Description)
         LogLine ("Installing stemwerk-core from " + $coreTarget.Description + ": " + $installTarget)
-        RunHidden $python @("-m","pip","install","--upgrade","--force-reinstall","-c",$baseConstraints,$installTarget) "Install stemwerk-core" | Out-Null
+        InstallWithPip $python @(
+            "--upgrade",
+            "--force-reinstall",
+            "--no-build-isolation",
+            "-c",$baseConstraints,
+            $installTarget
+        ) "Install stemwerk-core"
         if ($LASTEXITCODE -ne 0 -and $coreExtra -ne "" -and $coreTarget.SupportsExtras) {
             LogLine "GPU/DirectML stemwerk-core install failed; falling back to CPU"
             $coreExtra = ""
@@ -784,7 +903,13 @@ if (Test-Path $venvPy) {
             $backendReason = "backend_install_failed"
             $installTarget = $coreTarget.Target
             LogLine ("Installing stemwerk-core from " + $coreTarget.Description + ": " + $installTarget)
-            RunHidden $python @("-m","pip","install","--upgrade","--force-reinstall","-c",$baseConstraints,$installTarget) "Install stemwerk-core (CPU fallback)" | Out-Null
+            InstallWithPip $python @(
+                "--upgrade",
+                "--force-reinstall",
+                "--no-build-isolation",
+                "-c",$baseConstraints,
+                $installTarget
+            ) "Install stemwerk-core (CPU fallback)"
         }
         if ($LASTEXITCODE -ne 0) {
             Set-Status "deps_failed" "stemwerk_core_install_failed"

@@ -10,3 +10,12 @@ ISS_PATH="$REPO_DIR/installer/windows/STEMwerk.iss"
 
 export STEMWERK_BUNDLE_RUNTIME=1
 wine "$INNO_EXE" "Z:${ISS_PATH//\//\\}"
+
+RAW_VERSION_VALUE="${STEMWERK_VERSION:-$(cat "$REPO_DIR/VERSION")}" 
+VERSION_VALUE="$(printf '%s' "$RAW_VERSION_VALUE" | tr -d '\r\n')"
+DIST_DIR="$ROOT_DIR/dist"
+BASE_OUT="$DIST_DIR/STEMwerk-Setup-$VERSION_VALUE.exe"
+BUNDLED_OUT="$DIST_DIR/STEMwerk-Setup-$VERSION_VALUE-bundled.exe"
+if [[ -f "$BASE_OUT" ]]; then
+	mv -f "$BASE_OUT" "$BUNDLED_OUT"
+fi

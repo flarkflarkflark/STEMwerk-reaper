@@ -2356,6 +2356,107 @@ local MODELS = {
     { id = "htdemucs_6s", name = "6-Stem", desc = "htdemucs_6s - Adds Guitar & Piano separation" },
 }
 
+MODEL_AVAILABILITY = {
+    bundledLimited = false,
+    byId = {},
+}
+
+do
+    local function directoryHasAnyFiles(path)
+        if not path or path == "" then return false end
+        local cmd
+        if OS == "Windows" then
+            cmd = 'dir /b ' .. quoteArg(path) .. ' 2>nul'
+        else
+            cmd = 'ls -1 ' .. quoteArg(path) .. ' 2>/dev/null'
+        end
+        local h = io.popen(cmd)
+        if not h then return false end
+        local out = h:read("*a") or ""
+        h:close()
+        return out:match("%S") ~= nil
+    end
+
+    local function getModelCacheDirForUi()
+        local override = os.getenv("AUDIO_SEPARATOR_MODEL_DIR")
+        if override and override ~= "" then
+            return override
+        end
+
+        local home = os.getenv("HOME") or ""
+        if OS == "Windows" then
+            local localAppData = os.getenv("LOCALAPPDATA") or ""
+            if localAppData ~= "" then
+                return localAppData .. "\\STEMwerk\\models"
+            end
+            if home ~= "" then
+                return home .. "\\AppData\\Local\\STEMwerk\\models"
+            end
+            return ""
+        end
+        if OS == "macOS" then
+            return home .. "/Library/Application Support/STEMwerk/models"
+        end
+
+        local xdg = os.getenv("XDG_DATA_HOME") or ""
+        if xdg ~= "" then
+            return xdg .. "/STEMwerk/models"
+        end
+        return home .. "/.local/share/STEMwerk/models"
+    end
+
+    local function getFirstAvailableModelId()
+        for _, model in ipairs(MODELS) do
+            if isModelAvailableInCurrentMode(model.id) then
+                return model.id
+            end
+        end
+        return MODELS[1] and MODELS[1].id or "htdemucs"
+    end
+
+    function refreshModelAvailability()
+        local bundledRoot = script_path .. "_bundled"
+        local hasBundledPayload = directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "wheels")
+            or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "ffmpeg")
+            or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "python")
+        MODEL_AVAILABILITY.bundledLimited = hasBundledPayload
+
+        local byId = {}
+        if hasBundledPayload then
+            local modelDir = getModelCacheDirForUi()
+            for _, model in ipairs(MODELS) do
+                local yaml = modelDir .. PATH_SEP .. tostring(model.id) .. ".yaml"
+                byId[model.id] = fileExists(yaml)
+            end
+        else
+            for _, model in ipairs(MODELS) do
+                byId[model.id] = true
+            end
+        end
+
+        MODEL_AVAILABILITY.byId = byId
+    end
+
+    function isModelAvailableInCurrentMode(modelId)
+        if not MODEL_AVAILABILITY.bundledLimited then
+            return true
+        end
+        return MODEL_AVAILABILITY.byId[tostring(modelId or "")] and true or false
+    end
+
+    function ensureSelectedModelIsAvailable()
+        if isModelAvailableInCurrentMode(SETTINGS and SETTINGS.model) then
+            return false
+        end
+        SETTINGS.model = getFirstAvailableModelId()
+        return true
+    end
+
+    function unavailableModelTooltipSuffix()
+        return "Not included in this bundled installer variant."
+    end
+end
+
 -- Settings (persist between runs)
 SETTINGS = {
     model = "htdemucs",
@@ -2843,6 +2944,8 @@ end
 
 -- Load settings from ExtState
 local function loadSettings()
+    refreshModelAvailability()
+
     local model = reaper.GetExtState(EXT_SECTION, "model")
     if model ~= "" then SETTINGS.model = model end
 
@@ -2932,6 +3035,14 @@ local function loadSettings()
     -- Sanitize: if user is not on the 6-stem model, ensure 6-stem-only stems are not selected.
     -- (These can remain "on" from older saved settings, but they're not valid for 4-stem models.)
     if tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
+        for _, stem in ipairs(STEMS) do
+            if stem.sixStemOnly then
+                stem.selected = false
+            end
+        end
+    end
+
+    if ensureSelectedModelIsAvailable() and tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
         for _, stem in ipairs(STEMS) do
             if stem.sixStemOnly then
                 stem.selected = false
@@ -12837,7 +12948,9 @@ function renderMainColumns(ctx)
         htdemucs_6s = "model_6stem_desc",
     }
     for _, model in ipairs(MODELS) do
-        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, nil, modelBoxW, nil, nil, commonBtnFontSize) then
+        local modelAvailable = isModelAvailableInCurrentMode(model.id)
+        local modelColor = modelAvailable and nil or {120, 120, 120}
+        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, modelColor, modelBoxW, nil, nil, commonBtnFontSize) and modelAvailable then
             local prevModel = SETTINGS.model
             SETTINGS.model = model.id
             if prevModel ~= SETTINGS.model then
@@ -12854,7 +12967,11 @@ function renderMainColumns(ctx)
             end
         end
         local descKey = modelDescKeys[model.id] or "model_fast_desc"
-        setTooltip(col3X, modelY, modelBoxW, btnH, T(descKey))
+        local tip = T(descKey)
+        if not modelAvailable then
+            tip = tostring(tip or "") .. "\n\n" .. unavailableModelTooltipSuffix()
+        end
+        setTooltip(col3X, modelY, modelBoxW, btnH, tip)
         modelY = modelY + S(22)
     end
 
@@ -13290,16 +13407,22 @@ function handleDialogKeyboard(ctx)
     elseif char == 105 or char == 73 then applyPresetKaraoke()
     elseif char == 97 or char == 65 then applyPresetAll()
     elseif char == 102 or char == 70 then
-        SETTINGS.model = "htdemucs"
-        for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
-        saveSettings()
+        if isModelAvailableInCurrentMode("htdemucs") then
+            SETTINGS.model = "htdemucs"
+            for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
+            saveSettings()
+        end
     elseif char == 113 or char == 81 then
-        SETTINGS.model = "htdemucs_ft"
-        for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
-        saveSettings()
+        if isModelAvailableInCurrentMode("htdemucs_ft") then
+            SETTINGS.model = "htdemucs_ft"
+            for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
+            saveSettings()
+        end
     elseif char == 115 or char == 83 then
-        SETTINGS.model = "htdemucs_6s"
-        saveSettings()
+        if isModelAvailableInCurrentMode("htdemucs_6s") then
+            SETTINGS.model = "htdemucs_6s"
+            saveSettings()
+        end
     elseif char == 43 or char == 61 then
         local newW = math.min(GUI.maxW, gfx.w + 76)
         local newH = math.min(GUI.maxH, gfx.h + 68)
