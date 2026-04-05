@@ -25,10 +25,18 @@ The assets listed below under "**Assets**" are **EXCLUSIVELY for online installa
 - Use these only if your computer is connected to the internet.
 
 #### 📵 Offline Installers (Full Bundles)
-For production machines **without internet access**, use the full bundles available on Google Drive:
-- **Download folder:** [STEMwerk v2.2.1.4 Offline Bundles (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)
-- **Included:** 12 variants including all models and runtimes for NVIDIA (CUDA), AMD/Intel (DirectML), and CPU.
-- **Size:** Several GBs (fully self-contained).
+For production machines **without internet access**, download the full bundles here:
+
+**[📂 BROWSE ALL OFFLINE INSTALLERS (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)**
+
+| GPU Backend | All Models | Fast | Quality | 6-Stem |
+| :--- | :--- | :--- | :--- | :--- |
+| **NVIDIA (CUDA)** | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) |
+| **AMD/Intel (DirectML)** | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) |
+| **CPU Only** | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) |
+
+- **Selection:** Choose the variant that matches your hardware and desired model set.
+- **Size:** Large (fully self-contained).
 
 ---
 
