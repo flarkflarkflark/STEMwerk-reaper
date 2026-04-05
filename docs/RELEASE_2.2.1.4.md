@@ -16,6 +16,22 @@ Validated flows:
 - Linux / EndeavourOS: working
 - ReaPack update + setup + processing: working on MacBookPro11,2 with EndeavourOS
 
+### 📦 Download Options
+
+#### 🛜 Online Installers (Standard)
+The assets listed below under "**Assets**" are **UITSLUITEND bedoeld voor online installatie**. 
+- Deze bestanden zijn klein (~275KB - 132MB).
+- Ze **vereisen een actieve internetverbinding** tijdens de installatie om AI-modellen en runtime-bestanden te downloaden.
+- Gebruik deze alleen als je computer verbonden is met internet.
+
+#### 📵 Offline Installers (Full Bundles)
+Voor computers **zonder internet** (offline productie-systemen), gebruik de volledige bundels op Google Drive:
+- **Download folder:** [STEMwerk v2.2.1.4 Offline Bundles (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)
+- **Bevat:** 12 varianten inclusief alle modellen en runtimes (NVIDIA, AMD/DirectML, en CPU).
+- **Grootte:** Enkele GB's (volledig zelfvoorzienend).
+
+---
+
 Offline installers and model packs (v2.2.1.4):
 - Download folder: [STEMwerk v2.2.1.4 Offline Bundles (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)
 - Checksums: `installer/windows/dist/checksums.txt` (also available as `.sha256` files next to each installer)
