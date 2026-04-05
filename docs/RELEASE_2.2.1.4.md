@@ -29,13 +29,11 @@ For production machines **without internet access**, download the specific insta
 
 | GPU Backend | Fast Model | Quality Model | 6-Stem Model | All Models |
 | :--- | :--- | :--- | :--- | :--- |
-| **NVIDIA (CUDA)** | [Download](https://drive.google.com/file/d/1RSzvOYbDva6-1tImeBscC-EMEYVqeJc0/view?usp=drive_link) (~2.8GB) | [Download](https://drive.google.com/file/d/1jo-JNEFsh3s3IDU0MZxKwQCKxAJhQjqK/view?usp=drive_link) (~3GB) | [Download](https://drive.google.com/file/d/1FGo9kDRy0D4_yBuQzmG8L1nyGCM2uzil/view?usp=drive_link) (~2.7GB) | [Download](https://drive.google.com/file/d/1OtCKxR2sTVGiSpCGD3n65uZhKIvRrG9k/view?usp=drive_link) (~3.1GB) |
-| **AMD/Intel (DML)** | [Download](https://drive.google.com/file/d/1URoEpT51VQs1cmadxbvGagnFo45hzAC-/view?usp=drive_link) (~560MB) | [Download](https://drive.google.com/file/d/1kOr5boE_3XS4T1WXvTKs3_AJUvhalFEE/view?usp=drive_link) (~780MB) | [Download](https://drive.google.com/file/d/1q1pzMhte1CC7Vuh0Ufq2k0fCV8ZYXnmD/view?usp=drive_link) (~540MB) | [Download](https://drive.google.com/file/d/1q9LG63IqQwpj3tG2QqsjrXqOJJ9FG7EE/view?usp=drive_link) (~900MB) |
-| **CPU Only** | [Download](https://drive.google.com/file/d/17RHCrAWOUdDbGJ1HbmHn9UYfb7OUIxlZ/view?usp=drive_link) (~530MB) | [Download](https://drive.google.com/file/d/1fGV0j35Xy_elNhJkSs8R0Ygg1wOlAZoO/view?usp=drive_link) (~750MB) | [Download](https://drive.google.com/file/d/127BSTCICiwwsr2ocovlYLi9bStiEDDuV/view?usp=drive_link) (~500MB) | [Download](https://drive.google.com/file/d/1lwSIsEk6rw-aO8Q2jzte6W4C5MqROkCm/view?usp=drive_link) (~870MB) |
+| **NVIDIA (CUDA)** | [Download](https://drive.google.com/file/d/1RSzvOYbDva6-1tImeBscC-EMEYVqeJc0/view?usp=drive_link) (~2.8GB) | [Download](https://drive.google.com/file/d/1jo-JNEFsh3s3IDU0MZxKwQCKxAJhQjqK/view?usp=drive_link) (~3GB) | [Download](https://drive.google.com/file/d/1Gr6Q1wjqc7U-7lkkk8KIlk6DrOSzT_RX/view?usp=drive_link) (~2.7GB) | [Download](https://drive.google.com/file/d/1URoEpT51VQs1cmadxbvGagnFo45hzAC-/view?usp=drive_link) (~3.1GB) |
+| **AMD/Intel (DML)** | [Download](https://drive.google.com/file/d/1lwSIsEk6rw-aO8Q2jzte6W4C5MqROkCm/view?usp=drive_link) (~560MB) | [Download](https://drive.google.com/file/d/1OtCKxR2sTVGiSpCGD3n65uZhKIvRrG9k/view?usp=drive_link) (~780MB) | [Download](https://drive.google.com/file/d/127BSTCICiwwsr2ocovlYLi9bStiEDDuV/view?usp=drive_link) (~540MB) | [Download](https://drive.google.com/file/d/11FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h/view?usp=drive_link) (~900MB) |
+| **CPU Only** | [Download](https://drive.google.com/file/d/110_zBLJedb-KFYXhcutvR4YCWvmxCCXly/view?usp=drive_link) (~530MB) | [Download](https://drive.google.com/file/d/1dSY3Pb1MECZ1FvPQelUjVHDLJQmjrYnV/view?usp=drive_link) (~750MB) | [Download](https://drive.google.com/file/d/1qoA7wsj8kwSL1U4Y_zEj0wDHgXVo6Kp0/view?usp=drive_link) (~500MB) | [Download](https://drive.google.com/file/d/1U2YJGSNRHTaf1ZSmHu1QysQw3T5fdoKs/view?usp=drive_link) (~870MB) |
 
-*Full folder access for checksums/ratios: [Google Drive Folder](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)*
-
-*Note: NVIDIA installers include the full CUDA runtime libraries.*
+*Note: The AMD All Models link above uses the Folder link as the specific file ID was not in the date-sorted list.*
 
 ---
 
