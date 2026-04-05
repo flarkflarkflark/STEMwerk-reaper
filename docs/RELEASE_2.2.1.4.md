@@ -25,24 +25,19 @@ The assets listed below under "**Assets**" are **EXCLUSIVELY for online installa
 - Use these only if your computer is connected to the internet.
 
 #### 📵 Offline Installers (Full Bundles)
-For production machines **without internet access**, download the full bundles here:
+For production machines **without internet access**, download the specific installer for your hardware using the direct links below:
 
-**[📂 BROWSE ALL OFFLINE INSTALLERS (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)**
-
-| GPU Backend | All Models | Fast | Quality | 6-Stem |
+| GPU Backend | Fast Model | Quality Model | 6-Stem Model | All Models |
 | :--- | :--- | :--- | :--- | :--- |
-| **NVIDIA (CUDA)** | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) |
-| **AMD/Intel (DirectML)** | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) |
-| **CPU Only** | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) | [Download](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h) |
+| **NVIDIA (CUDA)** | [Download](https://drive.google.com/file/d/1RSzvOYbDva6-1tImeBscC-EMEYVqeJc0/view?usp=drive_link) (~2.8GB) | [Download](https://drive.google.com/file/d/1jo-JNEFsh3s3IDU0MZxKwQCKxAJhQjqK/view?usp=drive_link) (~3GB) | [Download](https://drive.google.com/file/d/1FGo9kDRy0D4_yBuQzmG8L1nyGCM2uzil/view?usp=drive_link) (~2.7GB) | [Download](https://drive.google.com/file/d/1OtCKxR2sTVGiSpCGD3n65uZhKIvRrG9k/view?usp=drive_link) (~3.1GB) |
+| **AMD/Intel (DML)** | [Download](https://drive.google.com/file/d/1URoEpT51VQs1cmadxbvGagnFo45hzAC-/view?usp=drive_link) (~560MB) | [Download](https://drive.google.com/file/d/1kOr5boE_3XS4T1WXvTKs3_AJUvhalFEE/view?usp=drive_link) (~780MB) | [Download](https://drive.google.com/file/d/1q1pzMhte1CC7Vuh0Ufq2k0fCV8ZYXnmD/view?usp=drive_link) (~540MB) | [Download](https://drive.google.com/file/d/1q9LG63IqQwpj3tG2QqsjrXqOJJ9FG7EE/view?usp=drive_link) (~900MB) |
+| **CPU Only** | [Download](https://drive.google.com/file/d/17RHCrAWOUdDbGJ1HbmHn9UYfb7OUIxlZ/view?usp=drive_link) (~530MB) | [Download](https://drive.google.com/file/d/1fGV0j35Xy_elNhJkSs8R0Ygg1wOlAZoO/view?usp=drive_link) (~750MB) | [Download](https://drive.google.com/file/d/127BSTCICiwwsr2ocovlYLi9bStiEDDuV/view?usp=drive_link) (~500MB) | [Download](https://drive.google.com/file/d/1lwSIsEk6rw-aO8Q2jzte6W4C5MqROkCm/view?usp=drive_link) (~870MB) |
 
-- **Selection:** Choose the variant that matches your hardware and desired model set.
-- **Size:** Large (fully self-contained).
+*Full folder access for checksums/ratios: [Google Drive Folder](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)*
+
+*Note: NVIDIA installers include the full CUDA runtime libraries.*
 
 ---
-
-Offline installers and model packs (v2.2.1.4):
-- Download folder: [STEMwerk v2.2.1.4 Offline Bundles (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)
-- Checksums: `installer/windows/dist/checksums.txt` (also available as `.sha256` files next to each installer)
 
 Model bundles contained in the folder:
 - Fast, Quality, 6-Stem, All-Models
