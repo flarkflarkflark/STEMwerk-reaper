@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "julius"
+version = "0.2.0.post1"
+description = "STEMwerk bundled Julius fallback for offline Windows installs"
+requires-python = ">=3.10,<3.13"
+dependencies = ["torch>=2.3,<2.5"]
+
+[tool.setuptools]
+py-modules = ["julius"]
+
+[tool.setuptools.package-dir]
+"" = "src"

@@ -124,8 +124,9 @@ function Resolve-ModelStamp {
 }
 
 function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$VariantName, [string]$WheelSubdir, [string]$OfflineTag) {
-    $baseOut = Join-Path $distDir ("STEMwerk-Setup-$version.exe")
-    if (Test-Path $baseOut) { Remove-Item -Path $baseOut -Force }
+    $baseName = "STEMwerk-Setup-$version"
+    $tempOutDir = Join-Path $payloadDir ("_tmp-out-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tempOutDir | Out-Null
 
     $env:STEMWERK_BUNDLE_RUNTIME = "1"
     $env:STEMWERK_VERSION = $version
@@ -133,7 +134,7 @@ function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$Varia
     $env:STEMWERK_WHEEL_PAYLOAD_SUBDIR = $WheelSubdir
 
     Write-Host "Building variant: $VariantName (payload: $PayloadSubdir)"
-    & $IsccPath $issPath | Out-Null
+    & $IsccPath "/O$($tempOutDir)" "/F$($baseName)" $issPath | Out-Null
 
     if ($VariantName -eq "allmodels") {
         $variantTag = "$OfflineTag-allmodels"
@@ -141,8 +142,10 @@ function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$Varia
         $variantTag = "$OfflineTag-model-$VariantName"
     }
     $variantOut = Join-Path $distDir ("STEMwerk-Setup-$version-$variantTag.exe")
+    $baseOut = Join-Path $tempOutDir ("$baseName.exe")
     Require-File $baseOut
     Move-Item -Path $baseOut -Destination $variantOut -Force
+    Remove-Item -Path $tempOutDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 function Build-Flavor([string]$Name, [string]$WheelSubdir, [string]$OfflineTag, [string]$IncludeCuda, [string]$IncludeDirectml, [string]$Stamp) {

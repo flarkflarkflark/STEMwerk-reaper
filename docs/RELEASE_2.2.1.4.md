@@ -16,13 +16,14 @@ Validated flows:
 - Linux / EndeavourOS: working
 - ReaPack update + setup + processing: working on MacBookPro11,2 with EndeavourOS
 
-Offline model packs (new release assets):
-- STEMwerk-Model-Pack-Fast-v2.2.1.4.zip (~75 MB)
-- STEMwerk-Model-Pack-Quality-v2.2.1.4.zip (~298 MB)
-- STEMwerk-Model-Pack-6-Stem-v2.2.1.4.zip (~49 MB)
-- STEMwerk-Model-Pack-All-v2.2.1.4.zip (~421 MB)
-- STEMwerk-Model-Packs-v2.2.1.4-SHA256.txt (checksums)
+Offline installers and model packs (v2.2.1.4):
+- Download folder: [STEMwerk v2.2.1.4 Offline Bundles (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)
+- Checksums: `installer/windows/dist/checksums.txt` (also available as `.sha256` files next to each installer)
+
+Model bundles contained in the folder:
+- Fast, Quality, 6-Stem, All-Models
+- Specific builds for NVIDIA (CUDA), AMD/Intel (DirectML), and CPU-only.
 
 Notes:
-- These packs contain offline model cache files only.
-- Runtime/bootstrap dependencies are not bundled in these model-pack assets.
+- These installers are self-contained and require no internet for runtime or model installation.
+- Model packs (~75MB - ~421MB) are also available as separate ZIP files for existing installations.

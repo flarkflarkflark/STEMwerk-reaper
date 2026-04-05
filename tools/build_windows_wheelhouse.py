@@ -153,6 +153,7 @@ def seeded_requirements(include_directml: bool) -> Iterable[str]:
         "diffq-fixed>=0.2",
         "einops>=0.7",
         "librosa>=0.10",
+        "llvmlite<0.48,>=0.47.0dev0",
         "ml_collections",
         "MarkupSafe>=2.0",
         "numpy<2",

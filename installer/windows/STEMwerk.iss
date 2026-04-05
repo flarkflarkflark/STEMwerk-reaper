@@ -109,6 +109,7 @@ var
   FinishedStemM: TNewStaticText;
   FinishedSuffixLabel: TNewStaticText;
   StatusDetailLabel: TNewStaticText;
+  ProgressOverlayLabel: TNewStaticText;
   StepLabelS: TNewStaticText;
   StepLabelT: TNewStaticText;
   StepLabelE: TNewStaticText;
@@ -354,6 +355,30 @@ begin
   end;
 end;
 
+procedure UpdateProgressOverlay(WaitingForBootstrap: Boolean);
+var
+  CaptionText: string;
+begin
+  if ProgressOverlayLabel = nil then Exit;
+  if WaitingForBootstrap then
+    CaptionText := 'Extracting installer components...'
+  else
+    CaptionText := '';
+
+  if CaptionText = '' then
+  begin
+    ProgressOverlayLabel.Visible := False;
+    Exit;
+  end;
+
+  ProgressOverlayLabel.Caption := CaptionText;
+  ProgressOverlayLabel.Left := WizardForm.ProgressGauge.Left +
+    (WizardForm.ProgressGauge.Width - ProgressOverlayLabel.Width) div 2;
+  ProgressOverlayLabel.Top := WizardForm.ProgressGauge.Top + ScaleY(3);
+  ProgressOverlayLabel.Visible := True;
+  ProgressOverlayLabel.BringToFront;
+end;
+
 function ReadLogTail(const FileName: string; MaxChars: Integer): string;
 var
   S: AnsiString;
@@ -387,8 +412,9 @@ begin
   Text := ReadLogTail(Path, 12000);
   WaitingForBootstrap := Text = '';
   if Text = '' then
-    Text := 'Waiting for bootstrap log at:' + #13#10 + Path + #13#10 +
-            'Installer will update this view automatically after extraction.';
+    Text := 'Extracting installer components...' + #13#10 +
+            'Waiting for bootstrap log at:' + #13#10 + Path + #13#10 +
+            'Installer will update this view automatically... after extraction.';
   VisibleText := FilterVisibleLogText(Text);
   if VisibleText <> LastLogText then
   begin
@@ -411,6 +437,7 @@ begin
     else
       StatusDetailLabel.Caption := DefaultStatusDetailText;
   end;
+  UpdateProgressOverlay(WaitingForBootstrap);
   UpdateProgressGauge(Text);
   UpdateStepLegend(Text);
 end;
@@ -669,6 +696,18 @@ begin
   WizardForm.ProgressGauge.Left := 0;
   WizardForm.ProgressGauge.Width := PageW;
   WizardForm.ProgressGauge.Top := BarTop + ScaleY(24);
+
+  ProgressOverlayLabel := TNewStaticText.Create(WizardForm);
+  ProgressOverlayLabel.Parent := WizardForm.InstallingPage;
+  ProgressOverlayLabel.AutoSize := True;
+  ProgressOverlayLabel.Font.Size := 9;
+  ProgressOverlayLabel.Font.Style := [fsBold];
+  ProgressOverlayLabel.Font.Color := RGBColor(30, 30, 30);
+  ProgressOverlayLabel.Caption := 'Extracting installer components...';
+  ProgressOverlayLabel.Left := WizardForm.ProgressGauge.Left +
+    (WizardForm.ProgressGauge.Width - ProgressOverlayLabel.Width) div 2;
+  ProgressOverlayLabel.Top := WizardForm.ProgressGauge.Top + ScaleY(3);
+  ProgressOverlayLabel.Visible := False;
 
   UpdateStepLegend('');
 

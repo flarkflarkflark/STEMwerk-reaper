@@ -88,7 +88,8 @@ Download-IfMissing $pythonUrl (Join-Path $pythonDir $pythonFile)
 Download-IfMissing $ffmpegUrl (Join-Path $ffmpegDir $ffmpegFile)
 
 Ensure-Packaging
-Get-ChildItem -Path $wheelsDir -Filter "*.whl" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem -Path $wheelsDir -Filter "*.whl" -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 $wheelhouseScript = Join-Path $RootDir "..\\..\\tools\\build_windows_wheelhouse.py"
 Write-Host "Building wheelhouse ($wheelhouseSubdir)..."

@@ -12950,7 +12950,7 @@ function renderMainColumns(ctx)
     for _, model in ipairs(MODELS) do
         local modelAvailable = isModelAvailableInCurrentMode(model.id)
         local modelColor = modelAvailable and nil or {120, 120, 120}
-        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, modelColor, modelBoxW, nil, nil, commonBtnFontSize) and modelAvailable then
+        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, nil, modelBoxW, nil, nil, commonBtnFontSize) and modelAvailable then
             local prevModel = SETTINGS.model
             SETTINGS.model = model.id
             if prevModel ~= SETTINGS.model then
