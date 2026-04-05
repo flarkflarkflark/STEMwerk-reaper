@@ -1,0 +1,52 @@
+Reaper Windows Setup Problem Fix – Chat Summary
+
+Context:
+User is building STEMwerk Windows installer + REAPER integration.
+
+Main Issues Identified:
+1. Windows installer was performing heavy tasks inside REAPER → caused UI freezing, loops, and poor UX.
+2. FFmpeg detection incorrectly accepted Windows shim paths (WinGet / WindowsApps).
+3. Installer did not actually install FFmpeg → runtime incomplete.
+4. stemwerk-core was assumed to exist on PyPI but does not → pip install failed.
+5. Installer gave no feedback → user perceived hangs.
+
+Fixes Implemented:
+- Disabled Windows bootstrap from REAPER (verify-only mode).
+- Added non-blocking REAPER UI using reaper.defer.
+- Implemented FFmpeg shim filtering across:
+  - Bootstrap (PowerShell)
+  - Runtime setup (Lua)
+  - First-run verify
+- Forced invalid FFmpeg paths to be treated as missing.
+- Introduced bundled dependency model for stemwerk-core:
+  scripts/reaper/vendor/stemwerk-core/
+
+Current Architecture:
+Installer:
+- Responsible for Python, FFmpeg, venv, dependencies.
+- Writes bootstrap.env as source of truth.
+
+REAPER:
+- Only verifies:
+  - Python
+  - FFmpeg
+  - stemwerk_core import
+- No external processes or installs.
+
+Remaining Issues:
+- FFmpeg still not installed automatically → needs active download/extract in bootstrap.
+- Installer UX lacks progress feedback.
+- stemwerk-core requires real wheel artifact in vendor directory.
+
+Next Steps:
+1. Implement real FFmpeg install in bootstrap.
+2. Add installer progress logging (step-by-step).
+3. Add real stemwerk-core wheel to vendor directory.
+4. Rebuild installer and test end-to-end.
+
+Expected Final State:
+- Installer performs all setup visibly.
+- REAPER shows green OK immediately.
+- No loops, no shell windows, no silent failures.
+
+End of summary.
