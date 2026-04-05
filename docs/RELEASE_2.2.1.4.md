@@ -19,16 +19,16 @@ Validated flows:
 ### 📦 Download Options
 
 #### 🛜 Online Installers (Standard)
-The assets listed below under "**Assets**" are **UITSLUITEND bedoeld voor online installatie**. 
-- Deze bestanden zijn klein (~275KB - 132MB).
-- Ze **vereisen een actieve internetverbinding** tijdens de installatie om AI-modellen en runtime-bestanden te downloaden.
-- Gebruik deze alleen als je computer verbonden is met internet.
+The assets listed below under "**Assets**" are **EXCLUSIVELY for online installation**.
+- These files are small (~275KB - 132MB).
+- They **require an active internet connection** during installation to download AI models and runtime dependencies.
+- Use these only if your computer is connected to the internet.
 
 #### 📵 Offline Installers (Full Bundles)
-Voor computers **zonder internet** (offline productie-systemen), gebruik de volledige bundels op Google Drive:
+For production machines **without internet access**, use the full bundles available on Google Drive:
 - **Download folder:** [STEMwerk v2.2.1.4 Offline Bundles (Google Drive)](https://drive.google.com/drive/folders/1FuVnhxPI3MAKnKVE_4UTaoT1fHdnsv-h?usp=drive_link)
-- **Bevat:** 12 varianten inclusief alle modellen en runtimes (NVIDIA, AMD/DirectML, en CPU).
-- **Grootte:** Enkele GB's (volledig zelfvoorzienend).
+- **Included:** 12 variants including all models and runtimes for NVIDIA (CUDA), AMD/Intel (DirectML), and CPU.
+- **Size:** Several GBs (fully self-contained).
 
 ---
 
