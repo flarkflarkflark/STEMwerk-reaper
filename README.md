@@ -2,7 +2,7 @@
 	<img src="docs/assets/stemwerk-dynamic.svg" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
 </p>
 
-Demucs stem separation directly inside REAPER, no round-tripping (open source, ReaPack) 
+Demucs stem separation directly inside REAPER, no round-tripping (open source, ReaPack)
 Split vocals, drums, bass, and more directly inside your DAW with GPU acceleration where available.
 
 ## What is STEMwerk-reaper?
