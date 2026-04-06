@@ -2,7 +2,8 @@
 	<img src="docs/assets/stemwerk-dynamic.svg" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
 </p>
 
-Local-first AI stem separation for REAPER. Split vocals, drums, bass, and more directly inside your DAW with GPU acceleration where available.
+Demucs stem separation directly inside REAPER, no round-tripping (open source, ReaPack) 
+Split vocals, drums, bass, and more directly inside your DAW with GPU acceleration where available.
 
 ## What is STEMwerk-reaper?
 STEMwerk-reaper is a REAPER script that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend (audio-separator/Demucs) and keeps processing on your machine.
