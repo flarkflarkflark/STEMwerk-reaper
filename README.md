@@ -82,6 +82,7 @@ Installer/runtime size and model size are separate.
 Windows installers:
 - `STEMwerk-Setup-<version>.exe`: thin installer
 - `STEMwerk-Setup-<version>-bundled.exe`: bundled Python + FFmpeg installer
+- `STEMwerk-<version>-offline-patch.exe`: small patch installer for existing offline installs
 
 Approximate first-use model downloads:
 - `Fast` (`htdemucs`): about 84 MB

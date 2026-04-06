@@ -139,7 +139,15 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
           $env:STEMWERK_BUNDLE_RUNTIME = "1"
+          $env:STEMWERK_OUTPUT_SUFFIX = "-bundled"
           & $iscc "installer\windows\STEMwerk.iss"
+
+      - name: Build offline patch .exe (Inno Setup)
+        shell: powershell
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          & $iscc "installer\windows\STEMwerk_Offline_Patch.iss"
 
       - name: Upload build artifacts (Windows)
         uses: actions/upload-artifact@v4

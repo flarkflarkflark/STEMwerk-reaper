@@ -2,7 +2,7 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1.4" author="flarkAUDIO" time="1774306800">
+      <version name="2.2.1.5" author="flarkAUDIO" time="1774306800">
         <changelog><![CDATA[
 - ReaPack payload aligned with the current public script set
 - Internal setup/runtime helpers moved under _internal and included correctly

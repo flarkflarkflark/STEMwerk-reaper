@@ -19,6 +19,7 @@
 #endif
 
 #define BundleRuntime GetEnv('STEMWERK_BUNDLE_RUNTIME')
+#define OutputSuffix GetEnv('STEMWERK_OUTPUT_SUFFIX')
 
 #define ModelPayloadSubdir GetEnv('STEMWERK_MODEL_PAYLOAD_SUBDIR')
 #if ModelPayloadSubdir == ""
@@ -49,7 +50,7 @@ DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
 DisableProgramGroupPage=yes
 OutputDir=dist
-OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}
+OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}{#OutputSuffix}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

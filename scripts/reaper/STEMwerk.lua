@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.4
+-- @version 2.2.1.5
 -- @changelog
 --   2026-03-24: Local working build saved as v2.2.1.1 for installer follow-up.
 --   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
@@ -52,7 +52,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.1.4"
+local APP_VERSION = "2.2.1.5"
 local SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -60,6 +60,9 @@ WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_VERSION .. ")"
 WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_VERSION .. ")"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
 local DEBUG = { enabled = false, logPath = nil }
+WORKFLOW = WORKFLOW or {}
+HELPERS = HELPERS or {}
+UI = UI or {}
 -- STEMwerk.lua
 
 -- repo root bepalen (werkt ook als Reaper het via een symlink laadt)
@@ -2458,10 +2461,22 @@ do
 end
 
 -- Settings (persist between runs)
+normalizeColorMode = function(mode)
+    mode = tostring(mode or "")
+    if mode == "no_track" or mode == "no_media" or mode == "off" then
+        return mode
+    end
+    return "both"
+end
+
 SETTINGS = {
     model = "htdemucs",
     createNewTracks = true,
     createFolder = false,
+    applyTrackColors = true,
+    colorMode = "both", -- "both", "no_track", "no_media", "off"
+    stemFileDestination = "temp", -- "temp", "project_media", "custom"
+    customStemDir = "",
     -- Post-processing for in-place output (treat the resulting multi-take item)
     -- Values: "none", "explode_new_tracks", "explode_in_place", "explode_in_order"
     postProcessTakes = "none",
@@ -2631,6 +2646,9 @@ end
 local function adjustTrackLayout()
     if reaper.TrackList_AdjustWindows then
         reaper.TrackList_AdjustWindows(false)
+    end
+    if reaper.UpdateTimeline then
+        reaper.UpdateTimeline()
     end
     reaper.UpdateArrange()
 end
@@ -2955,6 +2973,23 @@ local function loadSettings()
     local createFolder = reaper.GetExtState(EXT_SECTION, "createFolder")
     if createFolder ~= "" then SETTINGS.createFolder = (createFolder == "1") end
 
+    local colorMode = reaper.GetExtState(EXT_SECTION, "colorMode")
+    if colorMode ~= "" then
+        SETTINGS.colorMode = normalizeColorMode(colorMode)
+    else
+    local applyTrackColors = reaper.GetExtState(EXT_SECTION, "applyTrackColors")
+        if applyTrackColors ~= "" then
+            SETTINGS.colorMode = (applyTrackColors == "1") and "both" or "no_track"
+        end
+    end
+    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
+
+    local stemFileDestination = reaper.GetExtState(EXT_SECTION, "stemFileDestination")
+    if stemFileDestination ~= "" then SETTINGS.stemFileDestination = stemFileDestination end
+
+    local customStemDir = reaper.GetExtState(EXT_SECTION, "customStemDir")
+    if customStemDir ~= "" then SETTINGS.customStemDir = customStemDir end
+
     local postProcessTakes = reaper.GetExtState(EXT_SECTION, "postProcessTakes")
     if postProcessTakes ~= "" then SETTINGS.postProcessTakes = postProcessTakes end
 
@@ -3060,6 +3095,12 @@ saveSettings = function()
     reaper.SetExtState(EXT_SECTION, "model", SETTINGS.model, true)
     reaper.SetExtState(EXT_SECTION, "createNewTracks", SETTINGS.createNewTracks and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "createFolder", SETTINGS.createFolder and "1" or "0", true)
+    SETTINGS.colorMode = normalizeColorMode(SETTINGS.colorMode)
+    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
+    reaper.SetExtState(EXT_SECTION, "applyTrackColors", SETTINGS.applyTrackColors and "1" or "0", true)
+    reaper.SetExtState(EXT_SECTION, "colorMode", SETTINGS.colorMode, true)
+    reaper.SetExtState(EXT_SECTION, "stemFileDestination", tostring(SETTINGS.stemFileDestination or "temp"), true)
+    reaper.SetExtState(EXT_SECTION, "customStemDir", tostring(SETTINGS.customStemDir or ""), true)
     reaper.SetExtState(EXT_SECTION, "postProcessTakes", tostring(SETTINGS.postProcessTakes or "none"), true)
     reaper.SetExtState(EXT_SECTION, "muteOriginal", SETTINGS.muteOriginal and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "muteSelection", SETTINGS.muteSelection and "1" or "0", true)
@@ -3380,6 +3421,88 @@ local function getProcessingSoloActive()
         return PROCESS_AUDIBILITY_SOLO_ACTIVE
     end
     return AUDIBILITY.anySoloActive()
+end
+
+function HELPERS.getSelectionMonitorState()
+    local soloActive = getProcessingSoloActive()
+    local selItemCount = reaper.CountSelectedMediaItems(0) or 0
+    local selTrackCount = reaper.CountSelectedTracks(0) or 0
+    local timeSelStart, timeSelEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    local hasTimeSel = (timeSelEnd or 0) > (timeSelStart or 0)
+
+    local function itemOverlapsTimeSelection(item)
+        if not hasTimeSel then return true end
+        if not item or not reaper.ValidatePtr(item, "MediaItem*") then return false end
+        local pos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+        local len = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+        local itemEnd = pos + len
+        return pos < timeSelEnd and itemEnd > timeSelStart
+    end
+
+    local function anyAudibleItemOnTrack(track)
+        if not track or not reaper.ValidatePtr(track, "MediaTrack*") then return false, false end
+        local anyOverlap = false
+        local itemCount = reaper.CountTrackMediaItems(track) or 0
+        for i = 0, itemCount - 1 do
+            local item = reaper.GetTrackMediaItem(track, i)
+            if item and itemOverlapsTimeSelection(item) then
+                anyOverlap = true
+                if AUDIBILITY.isItemAudible(item, soloActive) then
+                    return true, true
+                end
+            end
+        end
+        return false, anyOverlap
+    end
+
+    if selItemCount > 0 then
+        local anySelectedOverlap = false
+        for i = 0, selItemCount - 1 do
+            local item = reaper.GetSelectedMediaItem(0, i)
+            if item and itemOverlapsTimeSelection(item) then
+                anySelectedOverlap = true
+                if AUDIBILITY.isItemAudible(item, soloActive) then
+                    return { actionable = true, hasSource = true, reason = "selected_items_audible" }
+                end
+            end
+        end
+        if anySelectedOverlap then
+            return { actionable = false, hasSource = true, reason = "selected_items_inaudible" }
+        end
+    end
+
+    if selTrackCount > 0 then
+        local anyTrackOverlap = false
+        for t = 0, selTrackCount - 1 do
+            local track = reaper.GetSelectedTrack(0, t)
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            if overlapOnTrack then anyTrackOverlap = true end
+            if audibleOnTrack then
+                return { actionable = true, hasSource = true, reason = "selected_tracks_audible" }
+            end
+        end
+        if anyTrackOverlap then
+            return { actionable = false, hasSource = true, reason = "selected_tracks_inaudible" }
+        end
+    end
+
+    if hasTimeSel then
+        local anyOverlap = false
+        local trackCount = reaper.CountTracks(0) or 0
+        for t = 0, trackCount - 1 do
+            local track = reaper.GetTrack(0, t)
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            if overlapOnTrack then anyOverlap = true end
+            if audibleOnTrack then
+                return { actionable = true, hasSource = true, reason = "time_selection_audible" }
+            end
+        end
+        if anyOverlap then
+            return { actionable = false, hasSource = true, reason = "time_selection_inaudible" }
+        end
+    end
+
+    return { actionable = false, hasSource = false, reason = "none" }
 end
 
 -- Message window state (for errors, warnings, info)
@@ -8804,9 +8927,15 @@ local function drawArtGallery()
             -- Note: Pan and zoom are preserved when switching art
         end
     end
-    -- Tab switching with number keys
-    if char >= 49 and char <= 54 then  -- 1-6 keys
-        helpState.currentTab = char - 48
+    -- Tab switching with left/right arrow keys
+    if char == 1818584692 then  -- Left arrow
+        helpState.currentTab = helpState.currentTab - 1
+        if helpState.currentTab < 1 then helpState.currentTab = 6 end
+        resetCamera()
+        resetTextView()
+    elseif char == 1919379572 then  -- Right arrow
+        helpState.currentTab = helpState.currentTab + 1
+        if helpState.currentTab > 6 then helpState.currentTab = 1 end
         resetCamera()
         resetTextView()
     end
@@ -9004,6 +9133,7 @@ local function artGalleryLoop()
         helpState.hwnd = nil
         -- Save where we came from before resetting
         local cameFromDialog = (helpState.openedFrom == "dialog")
+        local cameFromMonitor = (helpState.openedFrom == "monitor")
         -- Reset help state for next time
         helpState.currentTab = 1  -- Start at Welcome tab next time
         helpState.openedFrom = "start"
@@ -9011,6 +9141,11 @@ local function artGalleryLoop()
         if cameFromDialog then
             -- Came from main dialog - go back to main dialog
             reaper.defer(function() showStemSelectionDialog() end)
+        elseif cameFromMonitor then
+            reaper.defer(function()
+                local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+                showMessage(promptTitle, promptMessage, "info", true)
+            end)
         else
             -- Came from start screen - go back to main (which checks for selection)
             reaper.defer(function() main() end)
@@ -9320,7 +9455,7 @@ local function drawMessageWindow()
     -- === Tagline (ABOVE waveform) ===
     gfx.setfont(1, "Arial", PS(11))
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    local tagline = "AI-Powered Stem Separation"
+    local tagline = "STEM Separation"
     local tagW = gfx.measurestr(tagline)
     gfx.x = (w - tagW) / 2
     gfx.y = PS(68)
@@ -9354,38 +9489,6 @@ local function drawMessageWindow()
         end
     end
 
-    -- === Four stem icons ===
-    local iconY = PS(170)
-    local iconSpacing = PS(70)
-    local iconStartX = (w - iconSpacing * 3) / 2
-    local stemNames = {T("vocals"), T("drums"), T("bass"), T("other")}
-    local stemSymbols = {"V", "D", "B", "O"}
-
-    for i = 1, 4 do
-        local ix = iconStartX + (i-1) * iconSpacing
-        local pulseScale = 1 + math.sin(time * 4 + i) * 0.1
-
-        -- Colored circle
-        gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 0.8)
-        gfx.circle(ix, iconY, PS(16) * pulseScale, 1, 1)
-
-        -- Letter
-        gfx.set(1, 1, 1, 1)
-        gfx.setfont(1, "Arial", PS(14), string.byte('b'))
-        local symW = gfx.measurestr(stemSymbols[i])
-        gfx.x = ix - symW/2
-        gfx.y = iconY - PS(6)
-        gfx.drawstr(stemSymbols[i])
-
-        -- Label
-        gfx.setfont(1, "Arial", PS(9))
-        gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
-        local nameW = gfx.measurestr(stemNames[i])
-        gfx.x = ix - nameW/2
-        gfx.y = iconY + PS(20)
-        gfx.drawstr(stemNames[i])
-    end
-
     -- === Message (animated, bold, pulsing) ===
     gfx.setfont(1, "Arial", PS(14), string.byte('b'))
 
@@ -9404,15 +9507,29 @@ local function drawMessageWindow()
 
     gfx.set(r, g, b, pulseAlpha)
 
-    local msg = T("select_audio")
-    local msgW = gfx.measurestr(msg)
-    local msgX = (w - msgW) / 2
-    gfx.x = msgX
-    gfx.y = PS(240)
-    gfx.drawstr(msg)
+    local msg = tostring(messageWindowState.message or T("select_audio") or "")
+    local msgMaxW = math.min(w - PS(70), PS(480))
+    local msgLines = _wrapTextToWidth(msg, msgMaxW)
+    if #msgLines == 0 then msgLines = { msg } end
+    local msgLineH = gfx.texth + PS(4)
+    local msgTopY = PS(210)
+    local widestMsgW = 0
+    for _, line in ipairs(msgLines) do
+        widestMsgW = math.max(widestMsgW, gfx.measurestr(line))
+    end
+    local msgBlockW = math.min(msgMaxW, widestMsgW)
+    local msgX = (w - msgBlockW) / 2
+    local msgBottomY = msgTopY
+    for idx, line in ipairs(msgLines) do
+        local lineW = gfx.measurestr(line)
+        gfx.x = (w - lineW) / 2
+        gfx.y = msgTopY + (idx - 1) * msgLineH
+        gfx.drawstr(line)
+        msgBottomY = gfx.y + gfx.texth
+    end
 
     -- Tooltip for message area
-    local msgHover = mx >= msgX and mx <= msgX + msgW and my >= PS(240) and my <= PS(240) + PS(16)
+    local msgHover = mx >= msgX and mx <= msgX + msgBlockW and my >= msgTopY and my <= msgBottomY
     if msgHover and not tooltipText then
         tooltipText = T("select_audio_tooltip")
         tooltipX = mx + PS(10)
@@ -9420,10 +9537,10 @@ local function drawMessageWindow()
     end
 
     -- Subtle underline animation (growing/shrinking)
-    local underlineW = msgW * (0.5 + math.sin(time * 2) * 0.3)
+    local underlineW = msgBlockW * (0.5 + math.sin(time * 2) * 0.3)
     local underlineX = (w - underlineW) / 2
     gfx.set(r, g, b, pulseAlpha * 0.5)
-    gfx.line(underlineX, PS(258), underlineX + underlineW, PS(258))
+    gfx.line(underlineX, msgBottomY + PS(6), underlineX + underlineW, msgBottomY + PS(6))
 
     -- Shared button dimensions for consistency
     local btnW = PS(70)
@@ -9558,8 +9675,27 @@ local function drawMessageWindow()
         end
     end
 
+    local clickedBackground = (not mouseDown)
+        and messageWindowState.wasMouseDown
+        and not (messageWindowState.wasDragging or false)
+        and not helpHover
+        and not hover
+        and not themeHover
+        and not langHover
+        and not fxHover
+    if clickedBackground then
+        generateNewArt()
+        messageWindowState.artZoom = 1.0
+        messageWindowState.artPanX = 0
+        messageWindowState.artPanY = 0
+        messageWindowState.artRotation = 0
+    end
+
     messageWindowState.wasMouseDown = mouseDown
     messageWindowState.wasRightMouseDown = rightMouseDown
+    if not mouseDown and not rightMouseDown then
+        messageWindowState.wasDragging = false
+    end
 
     local char = gfx.getchar()
 
@@ -9602,21 +9738,7 @@ end
 
 -- Check if there's any valid selection for processing
 local function hasAnySelection()
-    -- Check for time selection
-    if hasTimeSelection() then return true end
-    -- Check for selected items
-    if reaper.CountSelectedMediaItems(0) > 0 then return true end
-    -- Check for selected tracks with items
-    local selTrackCount = reaper.CountSelectedTracks(0)
-    if selTrackCount > 0 then
-        for t = 0, selTrackCount - 1 do
-            local track = reaper.GetSelectedTrack(0, t)
-            if reaper.CountTrackMediaItems(track) > 0 then
-                return true
-            end
-        end
-    end
-    return false
+    return HELPERS.getSelectionMonitorState().actionable
 end
 
 -- Message window loop
@@ -9635,6 +9757,13 @@ local function messageWindowLoop()
     -- If monitoring for selection, check if user made a selection
     -- But DON'T transition while user is still dragging (mouse button held)
     -- This prevents stealing focus while user is making a time selection
+    if messageWindowState.monitorSelection then
+        local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+        messageWindowState.title = promptTitle or "Start"
+        messageWindowState.message = promptMessage or "Select audio in REAPER"
+        messageWindowState.icon = "info"
+    end
+
     local hasSel = hasAnySelection()
     if messageWindowState.monitorSelection and hasSel then
         -- Check if mouse button is currently held down (user still dragging)
@@ -9647,6 +9776,7 @@ local function messageWindowLoop()
             captureWindowGeometry("STEMwerk")
             saveSettings()
             gfx.quit()
+            messageWindowState.onClose = nil
             messageWindowState.monitorSelection = false
             -- Open the main dialog directly. Re-entering main() adds extra window
             -- checks and can cause visible flashing / delays on some systems.
@@ -9661,10 +9791,12 @@ local function messageWindowLoop()
 
     local result = drawMessageWindow()
     if result == "close" then
+        local onClose = messageWindowState.onClose
         -- Save window position/size before closing
         captureWindowGeometry("STEMwerk")
         saveSettings()
         gfx.quit()
+        messageWindowState.onClose = nil
         messageWindowState.monitorSelection = false
         if messageWindowState.monitorSelection then
             local mainHwnd = reaper.GetMainHwnd()
@@ -9672,15 +9804,20 @@ local function messageWindowLoop()
                 reaper.JS_Window_SetFocus(mainHwnd)
             end
         end
+        if onClose then
+            reaper.defer(onClose)
+        end
         return
     elseif result == "artgallery" then
         -- Save window position/size before switching to art gallery
+        local cameFromMonitor = messageWindowState.monitorSelection and true or false
         captureWindowGeometry("STEMwerk")
         saveSettings()
         gfx.quit()
+        messageWindowState.onClose = nil
         messageWindowState.monitorSelection = false
-        -- Open Art Gallery - track that it came from start screen
-        helpState.openedFrom = "start"
+        -- Open Art Gallery - remember whether we came from selection monitoring or a plain start screen
+        helpState.openedFrom = cameFromMonitor and "monitor" or "start"
         showArtGallery()
         return
     end
@@ -9690,7 +9827,7 @@ end
 -- Show a styled message window (replacement for reaper.MB)
 -- icon: "info", "warning", "error"
 -- monitorSelection: if true, window will auto-close and open main dialog when user makes a selection
-showMessage = function(title, message, icon, monitorSelection)
+showMessage = function(title, message, icon, monitorSelection, onClose)
     -- Load settings to get current theme
     loadSettings()
     updateTheme()
@@ -9710,9 +9847,42 @@ showMessage = function(title, message, icon, monitorSelection)
     messageWindowState.wasMouseDown = false
     messageWindowState.startTime = os.clock()
     messageWindowState.monitorSelection = monitorSelection or false
+    messageWindowState.onClose = onClose
+
+    if messageWindowState.monitorSelection then
+        local overrideTitle = nil
+        local overrideMessage = nil
+        if hasTimeSelection() then
+            local res = resolveTimeSelectionTargets and resolveTimeSelectionTargets() or nil
+            if res and (res.rawOverlap or 0) > 0 and #(res.items or {}) == 0 then
+                overrideTitle = HELPERS.getNoAudibleTargetsTitle()
+                overrideMessage = HELPERS.getNoAudibleTargetsMessage()
+            end
+        end
+        if not overrideTitle and (reaper.CountSelectedTracks(0) or 0) > 0 then
+            local soloActive = getProcessingSoloActive()
+            local anyAudibleTrack = false
+            for t = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
+                local tr = reaper.GetSelectedTrack(0, t)
+                if tr and AUDIBILITY.isTrackAudible(tr, soloActive) then
+                    anyAudibleTrack = true
+                    break
+                end
+            end
+            if not anyAudibleTrack then
+                overrideTitle = HELPERS.getNoAudibleTargetsTitle()
+                overrideMessage = HELPERS.getNoAudibleTargetsMessage()
+            end
+        end
+        if overrideTitle then
+            messageWindowState.title = overrideTitle
+            messageWindowState.message = overrideMessage
+            messageWindowState.icon = "info"
+        end
+    end
 
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init("STEMwerk", winW, winH, 0, winX, winY)
+    gfx.init(SCRIPT_NAME, winW, winH, 0, winX, winY)
 
     -- In selection-monitoring mode, don't steal focus from REAPER.
     if monitorSelection then
@@ -11288,6 +11458,10 @@ function drawMainDialogModalOverlay()
     local mx, my = gfx.mouse_x, gfx.mouse_y
     local mouseDown = (gfx.mouse_cap & 1) == 1
     local char = gfx.getchar()
+    if char == -1 then
+        GUI.modal = nil
+        return "close"
+    end
     GUI.uiClickedThisFrame = true
 
     -- Keep the "cool background FX" alive even while the modal is open (dialogLoop() returns early).
@@ -11324,6 +11498,9 @@ function drawMainDialogModalOverlay()
     local title = tostring(modal.title or (T("warning") or "Warning"))
     local msg = tostring(modal.message or "")
     local iconKind = tostring(modal.icon or "warning")
+    local isInputModal = tostring(modal.mode or "") == "input"
+    local inputLabel = tostring(modal.inputLabel or "")
+    local inputValue = tostring(modal.inputValue or "")
 
     -- Measure + wrap
     gfx.setfont(1, "Arial", S(13), string.byte('b'))
@@ -11333,7 +11510,10 @@ function drawMainDialogModalOverlay()
     local lines = _wrapTextToWidth(msg, math.max(S(120), textW))
     if #lines == 0 then lines = {msg} end
 
-    local boxH = pad + topBarH + S(10) + titleH + S(8) + (#lines * lineH) + S(12) + btnH + pad
+    local inputGap = isInputModal and S(10) or 0
+    local inputLabelH = isInputModal and lineH or 0
+    local inputH = isInputModal and S(28) or 0
+    local boxH = pad + topBarH + S(10) + titleH + S(8) + (#lines * lineH) + inputGap + inputLabelH + inputH + S(12) + btnH + pad
     boxH = math.max(boxH, S(150))
 
     local boxX = (gfx.w - boxW) / 2
@@ -11416,8 +11596,52 @@ function drawMainDialogModalOverlay()
         y = y + lineH
     end
 
-    -- OK button (theme primary)
-    local btnX = boxX + (boxW - btnW) / 2
+    local inputX = tx
+    local inputW = math.max(S(120), boxX + boxW - pad - inputX)
+    local inputY = y
+    if isInputModal then
+        gfx.setfont(1, "Arial", S(11))
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        gfx.x = inputX
+        gfx.y = inputY
+        gfx.drawstr(inputLabel)
+
+        local valueY = inputY + inputLabelH
+        local ir = math.floor(inputH / 2)
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.95)
+        roundedFill(inputX, valueY, inputW, inputH, ir)
+        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+        roundedFill(inputX + 1, valueY + 1, inputW - 2, inputH - 2, math.max(0, ir - 1))
+
+        if char == 8 or char == 127 or char == 6579564 then
+            modal.inputValue = inputValue:sub(1, math.max(0, #inputValue - 1))
+            inputValue = tostring(modal.inputValue or "")
+        elseif char >= 32 and char <= 126 then
+            modal.inputValue = inputValue .. string.char(char)
+            inputValue = tostring(modal.inputValue or "")
+        end
+
+        gfx.setfont(1, "Arial", S(12))
+        local displayValue = inputValue
+        local maxTextW = inputW - S(16)
+        while gfx.measurestr(displayValue) > maxTextW and #displayValue > 4 do
+            displayValue = "..." .. displayValue:sub(2)
+        end
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = inputX + S(8)
+        gfx.y = valueY + (inputH - gfx.texth) / 2
+        gfx.drawstr(displayValue)
+        if math.floor(os.clock() * 2) % 2 == 0 then
+            local caretX = math.min(inputX + inputW - S(8), gfx.x + S(2))
+            gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+            gfx.rect(caretX, valueY + S(6), S(1.5), inputH - S(12), 1)
+        end
+        y = valueY + inputH
+    end
+
+    -- OK / Cancel buttons
+    local btnGap = S(10)
+    local btnX = isInputModal and (boxX + (boxW - ((btnW * 2) + btnGap)) / 2) or (boxX + (boxW - btnW) / 2)
     local btnY = boxY + boxH - btnH - pad
     local hover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
     local col = hover and THEME.buttonPrimaryHover or THEME.buttonPrimary
@@ -11437,12 +11661,40 @@ function drawMainDialogModalOverlay()
     gfx.y = btnY + (btnH - gfx.texth) / 2
     gfx.drawstr(okText)
 
+    local cancelX, cancelHover = nil, false
+    if isInputModal then
+        cancelX = btnX + btnW + btnGap
+        cancelHover = mx >= cancelX and mx <= cancelX + btnW and my >= btnY and my <= btnY + btnH
+        local cancelCol = cancelHover and THEME.buttonHover or THEME.button
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.95)
+        roundedFill(cancelX, btnY, btnW, btnH, br)
+        gfx.set(cancelCol[1], cancelCol[2], cancelCol[3], 1)
+        roundedFill(cancelX + 1, btnY + 1, btnW - 2, btnH - 2, math.max(0, br - 1))
+
+        local cancelText = T("cancel") or "Cancel"
+        local cancelW = gfx.measurestr(cancelText)
+        gfx.set(1, 1, 1, 1)
+        gfx.x = cancelX + (btnW - cancelW) / 2
+        gfx.y = btnY + (btnH - gfx.texth) / 2
+        gfx.drawstr(cancelText)
+    end
+
     local overBox = mx >= boxX and mx <= boxX + boxW and my >= boxY and my <= boxY + boxH
     local clickedOk = (not mouseDown) and GUI.modalWasMouseDown and hover
+    local clickedCancel = isInputModal and (not mouseDown) and GUI.modalWasMouseDown and cancelHover
     local clickedOutside = (not mouseDown) and GUI.modalWasMouseDown and (not overBox)
-    local keyClose = (char == 27) or (char == 13)
-    if clickedOk or clickedOutside or keyClose then
+    local keyCancel = (char == 27)
+    local keySubmit = isInputModal and (char == 13)
+    local keyClose = (not isInputModal) and ((char == 27) or (char == 13))
+    if clickedOk or keySubmit then
+        local onSubmit = modal.onSubmit
+        local value = tostring(modal.inputValue or "")
         GUI.modal = nil
+        if onSubmit then onSubmit(value) end
+    elseif clickedCancel or clickedOutside or keyCancel or keyClose then
+        local onCancel = modal.onCancel
+        GUI.modal = nil
+        if onCancel then onCancel() end
     end
     GUI.modalWasMouseDown = mouseDown
 end
@@ -11911,6 +12163,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     if headerTip and headerTip ~= "" then
         setTooltip(col4X, contentTop - S(2), deviceBoxW, S(18), headerTip)
     end
+
 end
 
 function GUI._updateFocusHandoff()
@@ -11955,7 +12208,8 @@ function GUI._handleNoSelection()
             autoSelectionTracks = {}
             GUI.noSelectionFrames = 0
             reaper.defer(function()
-                showMessage("Start", "Select audio in REAPER", "info", true)
+                local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+                showMessage(promptTitle, promptMessage, "info", true)
             end)
             return true
         end
@@ -12068,28 +12322,57 @@ local function resolveTimeSelectionTargets()
         end
     end
 
+    local selectedItemOverlap = 0
     if selItemCount > 0 then
-        mode = "selected_items"
         for i = 0, selItemCount - 1 do
             local item = reaper.GetSelectedMediaItem(0, i)
             if item and reaper.ValidatePtr(item, "MediaItem*") then
                 local track = reaper.GetMediaItem_Track(item)
-                addItem(item, track)
+                local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                local iEnd = iPos + iLen
+                if iPos < endTime and iEnd > startTime then
+                    selectedItemOverlap = selectedItemOverlap + 1
+                    addItem(item, track)
+                end
             end
         end
-    elseif selTrackCount > 0 then
-        mode = "selected_tracks"
+    end
+
+    if selectedItemOverlap > 0 then
+        mode = "selected_items"
+    else
+        items = {}
+        trackItems = {}
+        rawOverlap = 0
+    end
+
+    local selectedTrackOverlap = 0
+    if selectedItemOverlap == 0 and selTrackCount > 0 then
         for t = 0, selTrackCount - 1 do
             local track = reaper.GetSelectedTrack(0, t)
             if track and reaper.ValidatePtr(track, "MediaTrack*") then
                 local numItems = reaper.CountTrackMediaItems(track)
                 for i = 0, numItems - 1 do
                     local item = reaper.GetTrackMediaItem(track, i)
-                    addItem(item, track)
+                    local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                    local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                    local iEnd = iPos + iLen
+                    if iPos < endTime and iEnd > startTime then
+                        selectedTrackOverlap = selectedTrackOverlap + 1
+                        addItem(item, track)
+                    end
                 end
             end
         end
-    else
+    end
+
+    if selectedItemOverlap == 0 and selectedTrackOverlap > 0 then
+        mode = "selected_tracks"
+    elseif selectedItemOverlap == 0 and selectedTrackOverlap == 0 then
+        items = {}
+        trackItems = {}
+        rawOverlap = 0
         mode = "all_items"
         local numTracks = reaper.CountTracks(0)
         for t = 0, numTracks - 1 do
@@ -12119,6 +12402,78 @@ local function resolveTimeSelectionTargets()
         trackCount = #trackList,
         rawOverlap = rawOverlap,
     }
+end
+
+FOOTER_TIMESEL_CACHE = FOOTER_TIMESEL_CACHE or {
+    key = nil,
+    value = nil,
+    at = 0,
+}
+
+function HELPERS.getCachedTimeSelectionTargets(hasTimeSel, useTimeSel, rawSelTrackCount, rawSelItemCount)
+    if not hasTimeSel or not useTimeSel then
+        FOOTER_TIMESEL_CACHE.key = nil
+        FOOTER_TIMESEL_CACHE.value = nil
+        FOOTER_TIMESEL_CACHE.at = 0
+        return nil
+    end
+
+    local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    local key = table.concat({
+        tostring(startTime or 0),
+        tostring(endTime or 0),
+        tostring(rawSelTrackCount or 0),
+        tostring(rawSelItemCount or 0),
+    }, "|")
+    local now = os.clock()
+    if FOOTER_TIMESEL_CACHE.key == key and FOOTER_TIMESEL_CACHE.value and (now - (FOOTER_TIMESEL_CACHE.at or 0)) < 0.20 then
+        return FOOTER_TIMESEL_CACHE.value
+    end
+
+    FOOTER_TIMESEL_CACHE.key = key
+    FOOTER_TIMESEL_CACHE.value = resolveTimeSelectionTargets()
+    FOOTER_TIMESEL_CACHE.at = now
+    return FOOTER_TIMESEL_CACHE.value
+end
+
+function HELPERS.hasExplicitOverlapSelection(startTime, endTime)
+    if not startTime or not endTime or endTime <= startTime then
+        return false
+    end
+
+    local selItemCount = reaper.CountSelectedMediaItems(0) or 0
+    for i = 0, selItemCount - 1 do
+        local item = reaper.GetSelectedMediaItem(0, i)
+        if item and reaper.ValidatePtr(item, "MediaItem*") then
+            local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+            local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+            local iEnd = iPos + iLen
+            if iPos < endTime and iEnd > startTime then
+                return true
+            end
+        end
+    end
+
+    local selTrackCount = reaper.CountSelectedTracks(0) or 0
+    for t = 0, selTrackCount - 1 do
+        local track = reaper.GetSelectedTrack(0, t)
+        if track and reaper.ValidatePtr(track, "MediaTrack*") then
+            local numItems = reaper.CountTrackMediaItems(track)
+            for i = 0, numItems - 1 do
+                local item = reaper.GetTrackMediaItem(track, i)
+                if item and reaper.ValidatePtr(item, "MediaItem*") then
+                    local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                    local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                    local iEnd = iPos + iLen
+                    if iPos < endTime and iEnd > startTime then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    return false
 end
 
 buildFooterLines = function()
@@ -12192,11 +12547,8 @@ buildFooterLines = function()
         timeSelectionMode = false
     end
 
-    local useTimeSel = hasTimeSel and rawSelTrackCount == 0 and rawSelItemCount == 0
-    local timeSelResolved = nil
-    if hasTimeSel then
-        timeSelResolved = resolveTimeSelectionTargets()
-    end
+    local useTimeSel = hasTimeSel and not HELPERS.hasExplicitOverlapSelection(currentTimeStart, currentTimeEnd)
+    local timeSelResolved = HELPERS.getCachedTimeSelectionTargets(hasTimeSel, useTimeSel, rawSelTrackCount, rawSelItemCount)
     local timeSelItemCount = timeSelResolved and #timeSelResolved.items or 0
     local timeSelTrackCount = timeSelResolved and timeSelResolved.trackCount or 0
     if useTimeSel then
@@ -12826,15 +13178,17 @@ function renderMainColumns(ctx)
     local gutter = S(10)
     local presetsW = S(58)
     local stemsW = S(58)
-    local modelColW = S(70)
+    local modelColW = S(68)
     local deviceColW = S(58)
-    local outputColW = S(70)
+    local outputColW = S(60)
+    local afterColW = S(60)
 
     local col1X = S(10)
     local col2X = col1X + presetsW + gutter
     local col3X = col2X + stemsW + gutter
     local col4X = col3X + modelColW + gutter
     local col5X = col4X + deviceColW + gutter
+    local col6X = col5X + outputColW + gutter
 
     local colW = presetsW
     local btnH = S(20)
@@ -12947,6 +13301,11 @@ function renderMainColumns(ctx)
         htdemucs_ft = "model_quality_desc",
         htdemucs_6s = "model_6stem_desc",
     }
+    local modelShortcutKeys = {
+        htdemucs = "F",
+        htdemucs_ft = "Q",
+        htdemucs_6s = "S",
+    }
     for _, model in ipairs(MODELS) do
         local modelAvailable = isModelAvailableInCurrentMode(model.id)
         local modelColor = modelAvailable and nil or {120, 120, 120}
@@ -12971,7 +13330,7 @@ function renderMainColumns(ctx)
         if not modelAvailable then
             tip = tostring(tip or "") .. "\n\n" .. unavailableModelTooltipSuffix()
         end
-        setTooltip(col3X, modelY, modelBoxW, btnH, tip)
+        setTooltipWithShortcut(col3X, modelY, modelBoxW, btnH, tip, modelShortcutKeys[model.id] or "?", {255, 200, 100})
         modelY = modelY + S(22)
     end
 
@@ -13011,6 +13370,15 @@ function renderMainColumns(ctx)
         T("new_track"),
         T("new_tracks"),
         inPlaceLabel,
+        HELPERS.getStemFilesHeaderLabel(),
+        "Temp",
+        HELPERS.getStemFileProjectLabel(),
+        "Custom",
+        HELPERS.getSetCustomPathLabel(),
+        "Clr T+M",
+        "Clr -T",
+        "Clr Off",
+        "Clr -M",
         T("keep_takes"),
         T("create_folder"),
         T("mute_original"),
@@ -13035,76 +13403,119 @@ function renderMainColumns(ctx)
     end
     setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
 
+    outY = outY + S(28)
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    drawColumnHeader(HELPERS.getStemFilesHeaderLabel(), col5X, outBoxW, mainHeaderFont, outY)
+    gfx.setfont(1, "Arial", S(13))
+
+    outY = outY + S(20)
+    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "temp", "Temp", nil, outBoxW, nil, nil, commonBtnFontSize) then
+        SETTINGS.stemFileDestination = "temp"
+    end
+    setTooltip(col5X, outY, outBoxW, btnH, HELPERS.getStemFilesTempTooltip())
+
+    outY = outY + S(22)
+    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "project_media", HELPERS.getStemFileProjectLabel(), nil, outBoxW, nil, nil, commonBtnFontSize) then
+        SETTINGS.stemFileDestination = "project_media"
+    end
+    setTooltip(col5X, outY, outBoxW, btnH, HELPERS.getStemFilesProjectTooltip())
+
+    outY = outY + S(22)
+    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "custom", HELPERS.getStemFileCustomLabel(), nil, outBoxW, nil, nil, commonBtnFontSize) then
+        SETTINGS.stemFileDestination = "custom"
+    end
+    setTooltip(col5X, outY, outBoxW, btnH, HELPERS.getStemFilesCustomTooltip())
+
+    if SETTINGS.stemFileDestination == "custom" then
+        outY = outY + S(22)
+        local customPathLabel = HELPERS.trimString(SETTINGS.customStemDir)
+        if customPathLabel == "" then
+            customPathLabel = HELPERS.getSetCustomPathLabel()
+        elseif #customPathLabel > 24 then
+            customPathLabel = "..." .. customPathLabel:sub(-21)
+        end
+        if drawButton(col5X, outY, outBoxW, btnH, customPathLabel, false, {80, 80, 90}, commonBtnFontSize) then
+            openCustomFolderDialog()
+        end
+        setTooltip(col5X, outY, outBoxW, btnH, HELPERS.trimString(SETTINGS.customStemDir) ~= "" and SETTINGS.customStemDir or HELPERS.getStemFilesCustomPathTooltip())
+    end
+
     if SETTINGS.createNewTracks then
         local posR = THEME.accent[1] * 255
         local posG = THEME.accent[2] * 255
         local posB = THEME.accent[3] * 255
+        local afterY = contentTop + S(20)
+        local afterBoxW = afterColW
 
-        outY = outY + S(28)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        drawColumnHeader(T("after"), col5X, outBoxW, mainHeaderFont, outY)
+        drawColumnHeader(T("after"), col6X, afterBoxW, mainHeaderFont, contentTop)
         gfx.setfont(1, "Arial", S(13))
 
-        outY = outY + S(20)
-        if drawCheckbox(col5X, outY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, outBoxW, commonBtnFontSize) then
+        if drawCheckbox(col6X, afterY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, afterBoxW, commonBtnFontSize) then
             SETTINGS.createFolder = not SETTINGS.createFolder
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_create_folder"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_create_folder"))
 
-        outY = outY + S(22)
-        if drawCheckbox(col5X, outY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, outBoxW, commonBtnFontSize) then
+        afterY = afterY + S(22)
+        if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, commonBtnFontSize) then
+            HELPERS.cycleColorMode()
+        end
+        setTooltip(col6X, afterY, afterBoxW, btnH, HELPERS.getColorModeTooltip())
+
+        afterY = afterY + S(22)
+        if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, commonBtnFontSize) then
             SETTINGS.muteOriginal = not SETTINGS.muteOriginal
             if SETTINGS.muteOriginal then
                 SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_mute_original"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_original"))
 
-        outY = outY + S(22)
+        afterY = afterY + S(22)
         local delItemColor = SETTINGS.deleteOriginal and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(col5X, outY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], outBoxW, commonBtnFontSize) then
+        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], afterBoxW, commonBtnFontSize) then
             SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
             if SETTINGS.deleteOriginal then
                 SETTINGS.muteOriginal = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_original"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_original"))
 
-        outY = outY + S(22)
+        afterY = afterY + S(22)
         local delTrackColor = SETTINGS.deleteOriginalTrack and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(col5X, outY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], outBoxW, commonBtnFontSize) then
+        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], afterBoxW, commonBtnFontSize) then
             SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
             if SETTINGS.deleteOriginalTrack then
                 SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_track"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_track"))
 
         local hasTimeSel = hasTimeSelection()
         if hasTimeSel then
-            outY = outY + S(22)
-            if drawCheckbox(col5X, outY, SETTINGS.muteSelection, T("mute_selection"), posR, posG, posB, outBoxW, commonBtnFontSize) then
+            afterY = afterY + S(22)
+            if drawCheckbox(col6X, afterY, SETTINGS.muteSelection, T("mute_selection"), posR, posG, posB, afterBoxW, commonBtnFontSize) then
                 SETTINGS.muteSelection = not SETTINGS.muteSelection
                 if SETTINGS.muteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
                     SETTINGS.deleteSelection = false
                 end
             end
-            setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_mute_selection"))
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_selection"))
 
-            outY = outY + S(22)
+            afterY = afterY + S(22)
             local delSelColor = SETTINGS.deleteSelection and {255, 120, 120} or {160, 160, 160}
-            if drawCheckbox(col5X, outY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], outBoxW, commonBtnFontSize) then
+            if drawCheckbox(col6X, afterY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], afterBoxW, commonBtnFontSize) then
                 SETTINGS.deleteSelection = not SETTINGS.deleteSelection
                 if SETTINGS.deleteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
                     SETTINGS.muteSelection = false
                 end
             end
-            setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_selection"))
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_selection"))
         end
 
         local selectedMultiTakeCount = getSelectedMultiTakeCountRespectingTimeSelection()
@@ -13112,40 +13523,41 @@ function renderMainColumns(ctx)
             local t = os.clock() or 0
             local pulseMult = 0.85 + 0.25 * (0.5 + 0.5 * math.sin(t * 6.0))
 
-            outY = outY + S(28)
+            afterY = afterY + S(28)
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-            gfx.x = col5X
-            gfx.y = outY
+            gfx.x = col6X
+            gfx.y = afterY
             gfx.drawstr(T("direct") or "Direct")
 
-            outY = outY + S(16)
+            afterY = afterY + S(16)
             gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
-            gfx.x = col5X
-            gfx.y = outY
+            gfx.x = col6X
+            gfx.y = afterY
             gfx.drawstr(T("direct_explode_now") or "Explode selected takes now")
 
-            outY = outY + S(20)
-            if drawRadio(col5X, outY, false, stripExplodePrefix(T("explode_to_new_tracks")), nil, outBoxW, pulseMult, "explode", commonBtnFontSize) then
+            afterY = afterY + S(20)
+            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_to_new_tracks")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
                 applyPostProcessToSelectedCandidates("explode_new_tracks")
             end
-            setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_direct_explode_new_tracks"))
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_new_tracks"))
 
-            outY = outY + S(22)
-            if drawRadio(col5X, outY, false, stripExplodePrefix(T("explode_in_place")), nil, outBoxW, pulseMult, "explode", commonBtnFontSize) then
+            afterY = afterY + S(22)
+            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_place")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
                 applyPostProcessToSelectedCandidates("explode_in_place")
             end
-            setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_direct_explode_in_place"))
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_in_place"))
 
-            outY = outY + S(22)
-            if drawRadio(col5X, outY, false, stripExplodePrefix(T("explode_in_order")), nil, outBoxW, pulseMult, "explode", commonBtnFontSize) then
+            afterY = afterY + S(22)
+            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_order")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
                 applyPostProcessToSelectedCandidates("explode_in_order")
             end
-            setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_direct_explode_in_order"))
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_in_order"))
         end
     else
-        outY = outY + S(28)
+        local afterY = contentTop + S(20)
+        local afterBoxW = afterColW
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        drawColumnHeader(T("after"), col5X, outBoxW, mainHeaderFont, outY)
+        drawColumnHeader(T("after"), col6X, afterBoxW, mainHeaderFont, contentTop)
         gfx.setfont(1, "Arial", S(13))
 
         local selectedMultiTakeCount = getSelectedMultiTakeCountRespectingTimeSelection()
@@ -13155,38 +13567,37 @@ function renderMainColumns(ctx)
             pulseMult = 0.85 + 0.25 * (0.5 + 0.5 * math.sin(t * 6.0))
         end
 
-        outY = outY + S(20)
         local mode = tostring(SETTINGS.postProcessTakes or "none")
 
-        if drawRadio(col5X, outY, mode == "none", T("keep_takes"), nil, outBoxW, nil, nil, commonBtnFontSize) then
+        if drawRadio(col6X, afterY, mode == "none", T("keep_takes"), nil, afterBoxW, nil, nil, commonBtnFontSize) then
             SETTINGS.postProcessTakes = "none"
             mode = "none"
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_keep_takes"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_keep_takes"))
 
-        outY = outY + S(22)
-        if drawRadio(col5X, outY, mode == "explode_new_tracks", stripExplodePrefix(T("explode_to_new_tracks")), nil, outBoxW, pulseMult, "explode", commonBtnFontSize) then
+        afterY = afterY + S(22)
+        if drawRadio(col6X, afterY, mode == "explode_new_tracks", stripExplodePrefix(T("explode_to_new_tracks")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
             SETTINGS.postProcessTakes = "explode_new_tracks"
             mode = "explode_new_tracks"
             applyPostProcessToSelectedCandidates(mode)
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_explode_to_new_tracks"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_explode_to_new_tracks"))
 
-        outY = outY + S(22)
-        if drawRadio(col5X, outY, mode == "explode_in_place", stripExplodePrefix(T("explode_in_place")), nil, outBoxW, pulseMult, "explode", commonBtnFontSize) then
+        afterY = afterY + S(22)
+        if drawRadio(col6X, afterY, mode == "explode_in_place", stripExplodePrefix(T("explode_in_place")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
             SETTINGS.postProcessTakes = "explode_in_place"
             mode = "explode_in_place"
             applyPostProcessToSelectedCandidates(mode)
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_explode_in_place"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_explode_in_place"))
 
-        outY = outY + S(22)
-        if drawRadio(col5X, outY, mode == "explode_in_order", stripExplodePrefix(T("explode_in_order")), nil, outBoxW, pulseMult, "explode", commonBtnFontSize) then
+        afterY = afterY + S(22)
+        if drawRadio(col6X, afterY, mode == "explode_in_order", stripExplodePrefix(T("explode_in_order")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
             SETTINGS.postProcessTakes = "explode_in_order"
             mode = "explode_in_order"
             applyPostProcessToSelectedCandidates(mode)
         end
-        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_explode_in_order"))
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_explode_in_order"))
     end
 end
 
@@ -13309,24 +13720,9 @@ function renderFooter(ctx)
     setRichTooltip(stemBtnX, footerRow4Y, stemBtnW, btnH)
 
     if stemBtnHover and GUI.wasMouseDown and not ctx.mouseDown then
-        local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
-        local validSelected = false
-        for _, stem in ipairs(STEMS) do
-            if stem.selected and ((not stem.sixStemOnly) or is6Stem) then
-                validSelected = true
-                break
-            end
-        end
-        if validSelected then
+        if canStartProcessingFromDialog() then
             saveSettings()
             GUI.result = true
-        else
-            GUI.modal = {
-                title = T("no_stems_selected") or "No Stems Selected",
-                message = T("please_select_stem") or "Please select at least one stem.",
-                icon = "warning",
-            }
-            GUI.modalWasMouseDown = false
         end
     end
 
@@ -13364,6 +13760,61 @@ function renderFooter(ctx)
     GUI.wasMouseDown = ctx.mouseDown
 end
 
+openDialogWarning = function(title, message)
+    GUI.modal = {
+        title = title or "Warning",
+        message = message or "",
+        icon = "warning",
+    }
+    GUI.modalWasMouseDown = false
+end
+
+openCustomFolderDialog = function()
+    GUI.modal = {
+        mode = "input",
+        title = HELPERS.getCustomFolderPromptTitle(),
+        message = HELPERS.getStemFilesCustomPathTooltip(),
+        inputLabel = HELPERS.getCustomFolderPromptLabel(),
+        inputValue = tostring(SETTINGS.customStemDir or ""),
+        icon = "info",
+        onSubmit = function(value)
+            SETTINGS.customStemDir = HELPERS.trimString(value)
+            saveSettings()
+        end,
+    }
+    GUI.modalWasMouseDown = false
+end
+
+canStartProcessingFromDialog = function()
+    local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+    local validSelected = false
+    for _, stem in ipairs(STEMS) do
+        if stem.selected and ((not stem.sixStemOnly) or is6Stem) then
+            validSelected = true
+            break
+        end
+    end
+    if not validSelected then
+        openDialogWarning(
+            T("no_stems_selected") or "No Stems Selected",
+            T("please_select_stem") or "Please select at least one stem."
+        )
+        return false
+    end
+
+    if tostring(SETTINGS.stemFileDestination or "temp") == "custom" and HELPERS.trimString(SETTINGS.customStemDir) == "" then
+        openDialogWarning(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesMissingCustomWarning())
+        return false
+    end
+
+    if tostring(SETTINGS.stemFileDestination or "temp") == "project_media" and not HELPERS.getProjectMediaDir() then
+        openDialogWarning(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesProjectUnavailableWarning())
+        return false
+    end
+
+    return true
+end
+
 function handleDialogKeyboard(ctx)
     local char = gfx.getchar()
     ctx.char = char
@@ -13373,23 +13824,8 @@ function handleDialogKeyboard(ctx)
     elseif char == 26161 then
         GUI.result = "help"
     elseif char == 13 or char == 32 then
-        local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
-        local validSelected = false
-        for _, stem in ipairs(STEMS) do
-            if stem.selected and ((not stem.sixStemOnly) or is6Stem) then
-                validSelected = true
-                break
-            end
-        end
-        if validSelected then
+        if canStartProcessingFromDialog() then
             GUI.result = true
-        else
-            GUI.modal = {
-                title = T("no_stems_selected") or "No Stems Selected",
-                message = T("please_select_stem") or "Please select at least one stem.",
-                icon = "warning",
-            }
-            GUI.modalWasMouseDown = false
         end
     elseif char == 49 then STEMS[1].selected = not STEMS[1].selected
     elseif char == 50 then STEMS[2].selected = not STEMS[2].selected
@@ -13546,7 +13982,14 @@ function dialogLoop()
     updateScale()
 
     if GUI.modal then
-        drawMainDialogModalOverlay()
+        local modalResult = drawMainDialogModalOverlay()
+        if modalResult == "close" then
+            captureWindowGeometry(SCRIPT_NAME)
+            saveSettings()
+            gfx.quit()
+            GUI.result = false
+            return
+        end
         reaper.defer(dialogLoop)
         return
     end
@@ -13594,6 +14037,7 @@ end
 -- Show stem selection dialog
 showStemSelectionDialog = function()
     loadSettings()
+    PROCESS_AUDIBILITY_SOLO_ACTIVE = nil
     perfMark("showStemSelectionDialog(): loadSettings done")
     GUI.result = nil
     GUI.wasMouseDown = false
@@ -14126,7 +14570,7 @@ local function renderTimeSelectionToWav(outputPath)
     if not res then return nil, "No time selection" end
 
     local startTime, endTime = res.startTime, res.endTime
-    local noAudibleOverlapMsg = T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible."
+    local noAudibleOverlapMsg = HELPERS.getNoAudibleTargetsMessage()
     local selectedItems = res.items or {}
     local foundItem = selectedItems[1] and selectedItems[1].item or nil
 
@@ -14266,7 +14710,7 @@ function renderTrackTimeSelectionToWav(track, outputPath)
     local allFoundItems = {}
     local rawSelectedOverlap = 0
     local rawAnyOverlap = 0
-    local noAudibleOverlapMsg = T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible."
+    local noAudibleOverlapMsg = HELPERS.getNoAudibleTargetsMessage()
 
     -- First pass: look for selected items (raw overlap + eligible)
     for i = 0, numItems - 1 do
@@ -15477,6 +15921,502 @@ function HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stemName)
     }
 end
 
+function HELPERS.trimString(s)
+    s = tostring(s or "")
+    return s:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+function HELPERS.getUiLanguageCode()
+    local lang = tostring((SETTINGS and SETTINGS.language) or "en"):lower()
+    if lang:find("nl", 1, true) == 1 then return "nl" end
+    if lang:find("de", 1, true) == 1 then return "de" end
+    return "en"
+end
+
+function HELPERS.getColorMode()
+    SETTINGS.colorMode = normalizeColorMode(SETTINGS.colorMode)
+    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
+    return SETTINGS.colorMode
+end
+
+function HELPERS.setColorMode(mode)
+    SETTINGS.colorMode = normalizeColorMode(mode)
+    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
+end
+
+function HELPERS.cycleColorMode()
+    local order = {
+        both = "no_track",
+        no_track = "off",
+        off = "no_media",
+        no_media = "both",
+    }
+    HELPERS.setColorMode(order[HELPERS.getColorMode()] or "both")
+end
+
+function HELPERS.isTrackColoringEnabled()
+    local mode = HELPERS.getColorMode()
+    return mode ~= "no_track" and mode ~= "off"
+end
+
+function HELPERS.isMediaColoringEnabled()
+    local mode = HELPERS.getColorMode()
+    return mode ~= "no_media" and mode ~= "off"
+end
+
+function HELPERS.getColorModeButtonLabel()
+    local mode = HELPERS.getColorMode()
+    if mode == "no_track" then
+        return "Clr -T"
+    elseif mode == "no_media" then
+        return "Clr -M"
+    elseif mode == "off" then
+        return "Clr Off"
+    end
+    return "Clr T+M"
+end
+
+function HELPERS.getColorModeButtonColor()
+    if HELPERS.getColorMode() == "off" then
+        return {120, 120, 120}
+    end
+    return nil
+end
+
+function HELPERS.getColorModeTooltip()
+    local mode = HELPERS.getColorMode()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then
+        if mode == "no_track" then
+            return "Trackkleur uit. Item/media-kleur blijft aan. Klik om te wisselen."
+        elseif mode == "no_media" then
+            return "Item/media-kleur uit. Trackkleur blijft aan. Klik om te wisselen."
+        elseif mode == "off" then
+            return "Track- en item/media-kleur uit. Klik om te wisselen."
+        end
+        return "Track- en item/media-kleur aan. Klik om te wisselen."
+    elseif lang == "de" then
+        if mode == "no_track" then
+            return "Track-Farbe aus. Item/Medien-Farbe bleibt an. Klicken zum Wechseln."
+        elseif mode == "no_media" then
+            return "Item/Medien-Farbe aus. Track-Farbe bleibt an. Klicken zum Wechseln."
+        elseif mode == "off" then
+            return "Track- und Item/Medien-Farbe aus. Klicken zum Wechseln."
+        end
+        return "Track- und Item/Medien-Farbe an. Klicken zum Wechseln."
+    end
+    if mode == "no_track" then
+        return "Track colors off. Item/media colors stay on. Click to cycle."
+    elseif mode == "no_media" then
+        return "Item/media colors off. Track colors stay on. Click to cycle."
+    elseif mode == "off" then
+        return "Track and item/media colors off. Click to cycle."
+    end
+    return "Track and item/media colors on. Click to cycle."
+end
+
+function HELPERS.applyTrackColorIfEnabled(track, color)
+    if not (track and reaper.ValidatePtr(track, "MediaTrack*")) then return end
+    if not HELPERS.isTrackColoringEnabled() then
+        reaper.SetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR", 0)
+        return
+    end
+    if color and color ~= 0 then
+        reaper.SetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR", color)
+    end
+end
+
+function HELPERS.applyItemColorIfEnabled(item, color)
+    if not (item and reaper.ValidatePtr(item, "MediaItem*")) then return end
+    if not HELPERS.isMediaColoringEnabled() then
+        reaper.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", 0)
+        return
+    end
+    if color and color ~= 0 then
+        reaper.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", color)
+    end
+end
+
+function HELPERS.applyTakeColorIfEnabled(take, color)
+    if not (take and reaper.ValidatePtr(take, "MediaItem_Take*")) then return end
+    if not HELPERS.isMediaColoringEnabled() then
+        reaper.SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", 0)
+        return
+    end
+    if color and color ~= 0 then
+        reaper.SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", color)
+    end
+end
+
+function HELPERS.getStemFileDestinationLabel()
+    local mode = tostring(SETTINGS.stemFileDestination or "temp")
+    if mode == "project_media" then
+        return HELPERS.getStemFileProjectLabel and HELPERS.getStemFileProjectLabel() or "Project"
+    elseif mode == "custom" then
+        return HELPERS.getStemFileCustomLabel and HELPERS.getStemFileCustomLabel() or "Custom"
+    end
+    return "Temp"
+end
+
+function HELPERS.getStemFilesHeaderLabel()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "de" then return "Stem-Dateien:" end
+    return "Stem files:"
+end
+
+function HELPERS.getStemFileProjectLabel()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "de" then return "Projekt" end
+    return "Project"
+end
+
+function HELPERS.getStemFileCustomLabel()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Eigen" end
+    if lang == "de" then return "Eigen" end
+    return "Custom"
+end
+
+function HELPERS.getSetCustomPathLabel()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Kies map" end
+    if lang == "de" then return "Ordner" end
+    return "Set folder"
+end
+
+function HELPERS.getCustomFolderPromptTitle()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "STEMwerk aangepaste stemmap" end
+    if lang == "de" then return "STEMwerk Stem-Ordner" end
+    return "STEMwerk custom stem folder"
+end
+
+function HELPERS.getCustomFolderPromptLabel()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Mappad:" end
+    if lang == "de" then return "Ordnerpfad:" end
+    return "Folder path:"
+end
+
+function HELPERS.getStemFilesTempTooltip()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Bewaar de gemaakte stemfiles in de tijdelijke STEMwerk-map." end
+    if lang == "de" then return "Speichert die erzeugten Stem-Dateien im temporaeren STEMwerk-Ordner." end
+    return "Keep generated stem files in STEMwerk temp folders."
+end
+
+function HELPERS.getStemFilesProjectTooltip()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Verplaats de gemaakte stemfiles eerst naar de huidige REAPER-projectmap en importeer ze daarna." end
+    if lang == "de" then return "Verschiebt die erzeugten Stem-Dateien zuerst in den aktuellen REAPER-Projektordner und importiert sie dann." end
+    return "Move generated stem files to the current REAPER project path before importing."
+end
+
+function HELPERS.getStemFilesCustomTooltip()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Verplaats de gemaakte stemfiles eerst naar een eigen map en importeer ze daarna." end
+    if lang == "de" then return "Verschiebt die erzeugten Stem-Dateien zuerst in einen eigenen Ordner und importiert sie dann." end
+    return "Move generated stem files to a custom folder before importing."
+end
+
+function HELPERS.getStemFilesCustomPathTooltip()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Vul de doelmap voor de definitieve stemfiles in." end
+    if lang == "de" then return "Zielordner fuer die finalen Stem-Dateien eingeben." end
+    return "Enter the destination folder for final stem files."
+end
+
+function HELPERS.getStemFilesWarningTitle()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Stem files" end
+    if lang == "de" then return "Stem-Dateien" end
+    return "Stem files"
+end
+
+function HELPERS.getStemFilesMissingCustomWarning()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Stel eerst een eigen stemmap in, of zet Stem files terug op Temp/Project." end
+    if lang == "de" then return "Zuerst einen eigenen Stem-Ordner festlegen, oder Stem-Dateien auf Temp/Projekt zuruecksetzen." end
+    return "Set a custom stem folder first, or switch Stem files back to Temp/Project."
+end
+
+function HELPERS.getStemFilesProjectUnavailableWarning()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Project is niet beschikbaar voor dit project. Sla het project eerst op, of gebruik Temp/Custom." end
+    if lang == "de" then return "Projekt ist fuer dieses Projekt nicht verfuegbar. Projekt zuerst speichern, oder Temp/Custom verwenden." end
+    return "Project is unavailable for this project. Save the project first, or use Temp/Custom."
+end
+
+function HELPERS.getNoAudibleTargetsTitle()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then return "Geen hoorbare doelwitten" end
+    if lang == "de" then return "Keine hoerbaren Ziele" end
+    return "No audible targets"
+end
+
+function HELPERS.getNoAudibleTargetsMessage()
+    local lang = HELPERS.getUiLanguageCode()
+    if lang == "nl" then
+        return "Er is wel audio binnen de huidige selectie, maar alle overeenkomende tracks/items zijn gemute of niet solo-hoorbaar.\n\nUnmute de relevante track of item, of pas de solo-status aan, en probeer opnieuw."
+    end
+    if lang == "de" then
+        return "Innerhalb der aktuellen Auswahl gibt es Audio, aber alle passenden Tracks/Items sind stummgeschaltet oder wegen Solo nicht hoerbar.\n\nRelevanten Track oder Item entstummen oder den Solo-Status anpassen und erneut versuchen."
+    end
+    return "There is audio inside the current selection, but all matching tracks/items are muted or not solo-audible.\n\nUnmute the relevant track or item, or adjust solo state, then try again."
+end
+
+function HELPERS.isNoAudibleTargetsError(err)
+    local s = string.lower(tostring(err or ""))
+    if s == "" then return false end
+    if s:find("no audible targets overlap", 1, true) then return true end
+    if s:find("muted or not solo%-audible") then return true end
+    if s:find("geen hoorbare doelwitten", 1, true) then return true end
+    if s:find("keine hoerbaren ziele", 1, true) then return true end
+    return false
+end
+
+function HELPERS.getSelectionMonitorPrompt()
+    local state = HELPERS.getSelectionMonitorState()
+    local lang = HELPERS.getUiLanguageCode()
+    if state and state.hasSource and not state.actionable then
+        if lang == "nl" then
+            return HELPERS.getNoAudibleTargetsTitle(), "Selecteer audio of maak tracks/items hoorbaar in REAPER."
+        end
+        if lang == "de" then
+            return HELPERS.getNoAudibleTargetsTitle(), "Audio auswaehlen oder Tracks/Items in REAPER hoerbar machen."
+        end
+        return HELPERS.getNoAudibleTargetsTitle(), "Select audio or make tracks/items audible in REAPER."
+    end
+    if lang == "nl" then
+        return "Start", "Selecteer audio in REAPER"
+    end
+    if lang == "de" then
+        return "Start", "Audio in REAPER auswaehlen"
+    end
+    return "Start", "Select audio in REAPER"
+end
+
+function HELPERS.getProjectMediaDir()
+    local projectPath = nil
+    if reaper and reaper.GetProjectPathEx then
+        local ok, result = pcall(reaper.GetProjectPathEx, 0, "")
+        if ok and type(result) == "string" and result ~= "" then
+            projectPath = result
+        end
+    end
+    if (not projectPath or projectPath == "") and reaper and reaper.GetProjectPath then
+        local ok, result = pcall(reaper.GetProjectPath, "")
+        if ok and type(result) == "string" and result ~= "" then
+            projectPath = result
+        end
+    end
+    projectPath = HELPERS.trimString(projectPath)
+    if projectPath == "" then return nil end
+    return projectPath
+end
+
+function HELPERS.resolveFinalStemOutputDir()
+    local mode = tostring(SETTINGS.stemFileDestination or "temp")
+    if mode == "project_media" then
+        return HELPERS.getProjectMediaDir()
+    elseif mode == "custom" then
+        local customDir = HELPERS.trimString(SETTINGS.customStemDir)
+        if customDir ~= "" then
+            return customDir
+        end
+        return nil
+    end
+    return nil
+end
+
+function HELPERS.sanitizeStemFilenamePart(name)
+    local s = HELPERS.trimString(name)
+    if s == "" then s = "Stem" end
+    s = s:gsub("[<>:\"/\\|%?%*]", "_")
+    s = s:gsub("[%c]", "_")
+    s = s:gsub("%s+", " ")
+    s = s:gsub("^%.+", "")
+    s = s:gsub("%.+$", "")
+    s = s:gsub("%s+$", "")
+    if s == "" then s = "Stem" end
+    return s
+end
+
+function HELPERS.makeUniqueFilePath(dir, baseName, ext)
+    local safeBase = HELPERS.sanitizeStemFilenamePart(baseName)
+    local safeExt = ext or ""
+    local candidate = dir .. PATH_SEP .. safeBase .. safeExt
+    local counter = 2
+    while fileExists(candidate) do
+        candidate = dir .. PATH_SEP .. safeBase .. "_" .. tostring(counter) .. safeExt
+        counter = counter + 1
+    end
+    return candidate
+end
+
+function HELPERS.copyFile(src, dst)
+    local inFile = io.open(src, "rb")
+    if not inFile then return false end
+    local outFile = io.open(dst, "wb")
+    if not outFile then
+        inFile:close()
+        return false
+    end
+    local data = inFile:read("*all")
+    inFile:close()
+    if not data then
+        outFile:close()
+        os.remove(dst)
+        return false
+    end
+    outFile:write(data)
+    outFile:close()
+    return true
+end
+
+function HELPERS.moveFile(src, dst)
+    if src == dst then return true end
+    local ok = os.rename(src, dst)
+    if ok then return true end
+    if HELPERS.copyFile(src, dst) then
+        os.remove(src)
+        return true
+    end
+    return false
+end
+
+function HELPERS.getStemNamingContextForItem(item, fallbackTrackName, fallbackItemName)
+    local trackName = HELPERS.trimString(fallbackTrackName)
+    local itemName = HELPERS.trimString(fallbackItemName)
+    if item and reaper.ValidatePtr(item, "MediaItem*") then
+        local track = reaper.GetMediaItem_Track(item)
+        if track then
+            local _, tn = reaper.GetTrackName(track)
+            trackName = HELPERS.trimString(tn)
+        end
+        local display = getItemDisplayNameForTakes(item)
+        if display and display ~= "" then
+            itemName = HELPERS.trimString(display)
+        end
+    end
+    if trackName == "" then trackName = "Track" end
+    if itemName == "" then itemName = fallbackItemName or trackName end
+    return trackName, itemName
+end
+
+function HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
+    local finalDir = HELPERS.resolveFinalStemOutputDir()
+    if not finalDir or finalDir == "" then
+        return stems, nil
+    end
+
+    makeDir(finalDir)
+    local moved = {}
+    local relocated = {}
+    for _, stem in ipairs(STEMS) do
+        local key = stem.name:lower()
+        local src = stems[key]
+        if src then
+            local names = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
+            local dst = HELPERS.makeUniqueFilePath(finalDir, names.takeName, ".wav")
+            if HELPERS.moveFile(src, dst) then
+                relocated[key] = dst
+                moved[#moved + 1] = dst
+            else
+                relocated[key] = src
+            end
+        end
+    end
+    return relocated, moved
+end
+
+function HELPERS.refreshImportedMediaItems(items, sourcePaths)
+    local seenTracks = {}
+    for _, path in ipairs(sourcePaths or {}) do
+        if path and path ~= "" and reaper.GetPeakFileName then
+            local ok, peakPath = pcall(reaper.GetPeakFileName, path)
+            if ok and type(peakPath) == "string" and peakPath ~= "" then
+                os.remove(peakPath)
+            end
+        end
+    end
+    if reaper.ClearPeakCache then
+        pcall(reaper.ClearPeakCache)
+    end
+    for _, item in ipairs(items or {}) do
+        if item and reaper.ValidatePtr(item, "MediaItem*") then
+            local takeCount = reaper.CountTakes(item) or 0
+            for takeIdx = 0, takeCount - 1 do
+                local take = reaper.GetTake(item, takeIdx)
+                if take and reaper.ValidatePtr(take, "MediaItem_Take*") and reaper.PCM_Source_BuildPeaks then
+                    local src = reaper.GetMediaItemTake_Source(take)
+                    if src then
+                        local okStart, remaining = pcall(reaper.PCM_Source_BuildPeaks, src, 0)
+                        if okStart and tonumber(remaining or 0) and tonumber(remaining or 0) > 0 then
+                            local guard = 0
+                            repeat
+                                local okRun, runRemaining = pcall(reaper.PCM_Source_BuildPeaks, src, 1)
+                                if not okRun then break end
+                                remaining = tonumber(runRemaining or 0) or 0
+                                guard = guard + 1
+                            until remaining <= 0 or guard > 20000
+                            pcall(reaper.PCM_Source_BuildPeaks, src, 2)
+                        end
+                    end
+                end
+            end
+            local track = reaper.GetMediaItem_Track(item)
+            if track and reaper.ValidatePtr(track, "MediaTrack*") then
+                local trackKey = tostring(track)
+                if not seenTracks[trackKey] then
+                    seenTracks[trackKey] = track
+                end
+            end
+            if reaper.UpdateItemInProject then
+                pcall(reaper.UpdateItemInProject, item)
+            end
+        end
+    end
+    for _, track in pairs(seenTracks) do
+        if reaper.MarkTrackItemsDirty then
+            pcall(reaper.MarkTrackItemsDirty, track, nil)
+        end
+    end
+    adjustTrackLayout()
+end
+
+function HELPERS.forceArrangeRefresh()
+    if reaper.PreventUIRefresh then
+        pcall(reaper.PreventUIRefresh, 1)
+    end
+    adjustTrackLayout()
+    if reaper.PreventUIRefresh then
+        pcall(reaper.PreventUIRefresh, -1)
+    end
+    adjustTrackLayout()
+end
+
+function HELPERS.scheduleResultWindowRefresh()
+    local step = 0
+    local function tick()
+        step = step + 1
+        HELPERS.forceArrangeRefresh()
+
+        if reaper.JS_Window_SetFocus then
+            local mainHwnd = reaper.GetMainHwnd and reaper.GetMainHwnd() or nil
+            if mainHwnd then
+                pcall(reaper.JS_Window_SetFocus, mainHwnd)
+            end
+        end
+
+        if step < 6 then
+            reaper.defer(tick)
+        end
+    end
+
+    reaper.defer(tick)
+end
+
 -- Read latest progress from stdout file
 function WORKFLOW.updateProgressFromFile()
     if not progressState.stdoutFile or progressState.stdoutFile == "" then return end
@@ -16147,6 +17087,12 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
     local track = reaper.GetMediaItem_Track(item)
     local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
     local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    local replaceStart = math.max(tonumber(selStart) or origItemPos, origItemPos)
+    local replaceEnd = math.min(tonumber(selEnd) or origItemEnd, origItemEnd)
+
+    if replaceEnd <= replaceStart then
+        return 0, nil
+    end
 
     reaper.Undo_BeginBlock()
 
@@ -16160,8 +17106,8 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
     local rightItem = nil  -- Part after selection (if any)
 
     -- Split at selection start if it's inside the item
-    if selStart > origItemPos and selStart < origItemEnd then
-        middleItem = reaper.SplitMediaItem(item, selStart)
+    if replaceStart > origItemPos and replaceStart < origItemEnd then
+        middleItem = reaper.SplitMediaItem(item, replaceStart)
         leftItem = item
         if middleItem then
             reaper.SetMediaItemSelected(leftItem, false)
@@ -16178,8 +17124,8 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
         local midPos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
         local midEnd = midPos + reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
 
-        if selEnd > midPos and selEnd < midEnd then
-            rightItem = reaper.SplitMediaItem(middleItem, selEnd)
+        if replaceEnd > midPos and replaceEnd < midEnd then
+            rightItem = reaper.SplitMediaItem(middleItem, replaceEnd)
             if rightItem then
                 reaper.SetMediaItemSelected(rightItem, false)
             end
@@ -16187,7 +17133,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
     end
 
     -- Now delete the middle item and insert stems in its place
-    local selLen = selEnd - selStart
+    local selLen = replaceEnd - replaceStart
     if middleItem then
         reaper.DeleteTrackMediaItem(track, middleItem)
     end
@@ -16205,12 +17151,13 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
     end
     local totalStems = #stemEntries
     local baseName = nameBase or getItemDisplayNameForTakes(item)
-    local stemColors = {}  -- Store colors for later take coloring
+    local importedItems = {}
+    local importedPaths = {}
     for idx, entry in ipairs(stemEntries) do
         local stem = entry.stem
         local stemPath = entry.path
         local newItem = reaper.AddMediaItemToTrack(track)
-        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selStart)
+        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", replaceStart)
         reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
 
         local take = reaper.AddTakeToMediaItem(newItem)
@@ -16222,16 +17169,18 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
         reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
 
         local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-        reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
+        HELPERS.applyItemColorIfEnabled(newItem, stemColor)
 
         items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
+        importedItems[#importedItems + 1] = newItem
+        importedPaths[#importedPaths + 1] = stemPath
     end
 
     -- Merge into takes on the first item
     if #items > 1 then
         local mainItem = items[1].item
         -- Set main item color to first stem color
-        reaper.SetMediaItemInfo_Value(mainItem, "I_CUSTOMCOLOR", items[1].color)
+        HELPERS.applyItemColorIfEnabled(mainItem, items[1].color)
 
         for i = 2, #items do
             local srcTake = reaper.GetActiveTake(items[i].item)
@@ -16256,7 +17205,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
                 for _, stemData in ipairs(items) do
                     if stemData.name == takeName then
                         -- Set take color (I_CUSTOMCOLOR on the take)
-                        reaper.SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", stemData.color)
+                        HELPERS.applyTakeColorIfEnabled(take, stemData.color)
                         break
                     end
                 end
@@ -16264,6 +17213,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
         end
     end
 
+    HELPERS.refreshImportedMediaItems({ ((#items >= 1) and items[1].item or nil) }, importedPaths)
     reaper.Undo_EndBlock("STEMwerk: Replace selection in-place", -1)
     local mainItem = (#items >= 1) and items[1].item or nil
     return #items, mainItem
@@ -16287,6 +17237,7 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
     end
     local totalStems = #stemEntries
     local baseName = nameBase or getItemDisplayNameForTakes(item)
+    local importedPaths = {}
     for idx, entry in ipairs(stemEntries) do
         local stem = entry.stem
         local stemPath = entry.path
@@ -16303,16 +17254,17 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
         reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
 
         local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-        reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
+        HELPERS.applyItemColorIfEnabled(newItem, stemColor)
 
         items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
+        importedPaths[#importedPaths + 1] = stemPath
     end
 
     -- Merge into takes
     if #items > 1 then
         local mainItem = items[1].item
         -- Set main item color to first stem color
-        reaper.SetMediaItemInfo_Value(mainItem, "I_CUSTOMCOLOR", items[1].color)
+        HELPERS.applyItemColorIfEnabled(mainItem, items[1].color)
 
         for i = 2, #items do
             local srcTake = reaper.GetActiveTake(items[i].item)
@@ -16335,7 +17287,7 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
                 -- Find the matching stem color
                 for _, stemData in ipairs(items) do
                     if stemData.name == takeName then
-                        reaper.SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", stemData.color)
+                        HELPERS.applyTakeColorIfEnabled(take, stemData.color)
                         break
                     end
                 end
@@ -16343,6 +17295,7 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
         end
     end
 
+    HELPERS.refreshImportedMediaItems({ ((#items >= 1) and items[1].item or nil) }, importedPaths)
     reaper.Undo_EndBlock("STEMwerk: Replace in-place", -1)
     local mainItem = (#items >= 1) and items[1].item or nil
     return #items, mainItem
@@ -16416,7 +17369,7 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
                 if newTrack then
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", takeName, true)
                     if takeColor and takeColor ~= 0 then
-                        reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", takeColor)
+                        HELPERS.applyTrackColorIfEnabled(newTrack, takeColor)
                     end
 
                     local newItem = reaper.AddMediaItemToTrack(newTrack)
@@ -16429,8 +17382,8 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
                             reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(take))
                             reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
                             if takeColor and takeColor ~= 0 then
-                                reaper.SetMediaItemTakeInfo_Value(newTake, "I_CUSTOMCOLOR", takeColor)
-                                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", takeColor)
+                                HELPERS.applyTakeColorIfEnabled(newTake, takeColor)
+                                HELPERS.applyItemColorIfEnabled(newItem, takeColor)
                             end
                             created = created + 1
                         end
@@ -16472,8 +17425,8 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
                         -- Use the original take name for each new take (temporary)
                         reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
                         if takeColor and takeColor ~= 0 then
-                            reaper.SetMediaItemTakeInfo_Value(newTake, "I_CUSTOMCOLOR", takeColor)
-                            reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", takeColor)
+                            HELPERS.applyTakeColorIfEnabled(newTake, takeColor)
+                            HELPERS.applyItemColorIfEnabled(newItem, takeColor)
                         end
                         table.insert(newTakes, newTake)
                         table.insert(newItems, newItem)
@@ -16545,6 +17498,8 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
     end
 
     local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, "Stems")
+    local importedItems = {}
+    local importedPaths = {}
 
     local folderTrack = nil
     if SETTINGS.createFolder then
@@ -16552,7 +17507,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
         folderTrack = reaper.GetTrack(0, trackIdx)
         reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
         reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
-        reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
+        HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
         ensureTrackHeight(folderTrack)
         trackIdx = trackIdx + 1
     end
@@ -16570,7 +17525,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
                 reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
 
                 local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-                reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
+                HELPERS.applyTrackColorIfEnabled(newTrack, color)
 
                 local newItem = reaper.AddMediaItemToTrack(newTrack)
                 reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
@@ -16579,8 +17534,10 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
                 local newTake = reaper.AddTakeToMediaItem(newItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
-                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+                HELPERS.applyItemColorIfEnabled(newItem, color)
 
+                importedItems[#importedItems + 1] = newItem
+                importedPaths[#importedPaths + 1] = stemPath
                 importedCount = importedCount + 1
             end
         end
@@ -16673,6 +17630,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
     end
     -- If none of the above, leave item as-is
 
+    HELPERS.refreshImportedMediaItems(importedItems, importedPaths)
     reaper.Undo_EndBlock("STEMwerk: Create stem tracks", -1)
     return importedCount
 end
@@ -16867,6 +17825,8 @@ end
 function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack)
     reaper.Undo_BeginBlock()
     lastNoAudibleOverlap = false
+    local importedItems = {}
+    local importedPaths = {}
     local soloActive = getProcessingSoloActive()
     local function trackAudible(track)
         return AUDIBILITY.isTrackAudible(track, soloActive)
@@ -17022,7 +17982,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             folderTrack = reaper.GetTrack(0, trackIdx)
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
-            reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
+            HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
             ensureTrackHeight(folderTrack)
             trackIdx = trackIdx + 1
         end
@@ -17038,7 +17998,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-                    reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
+                    HELPERS.applyTrackColorIfEnabled(newTrack, color)
                     local newItem = reaper.AddMediaItemToTrack(newTrack)
                     reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selPos)
                     reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
@@ -17046,7 +18006,9 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                     local newTakeName = sourceItemName .. " - " .. stem.name
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", newTakeName, true)
-                    reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+                    HELPERS.applyItemColorIfEnabled(newItem, color)
+                    importedItems[#importedItems + 1] = newItem
+                    importedPaths[#importedPaths + 1] = stemPath
                     importedCount = importedCount + 1
                 end
             end
@@ -17057,6 +18019,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         end
 
         reaper.PreventUIRefresh(-1)
+        HELPERS.refreshImportedMediaItems(importedItems, importedPaths)
         reaper.UpdateArrange()
         reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
         return importedCount
@@ -17101,7 +18064,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             folderTrack = reaper.GetTrack(0, trackIdx)
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
-            reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
+            HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
             ensureTrackHeight(folderTrack)
             trackIdx = trackIdx + 1
         end
@@ -17120,7 +18083,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-                    reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
+                    HELPERS.applyTrackColorIfEnabled(newTrack, color)
 
                     local newItem = reaper.AddMediaItemToTrack(newTrack)
                     reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", ipos)
@@ -17128,8 +18091,10 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     local newTake = reaper.AddTakeToMediaItem(newItem)
                     reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                     reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
-                    reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+                    HELPERS.applyItemColorIfEnabled(newItem, color)
 
+                    importedItems[#importedItems + 1] = newItem
+                    importedPaths[#importedPaths + 1] = stemPath
                     createdForThisItem = createdForThisItem + 1
                     totalCreated = totalCreated + 1
                 end
@@ -17144,6 +18109,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
     end
 
     reaper.PreventUIRefresh(-1)
+    HELPERS.refreshImportedMediaItems(importedItems, importedPaths)
     reaper.UpdateArrange()
     reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection (per-item)", -1)
     return totalCreated
@@ -17159,7 +18125,14 @@ function processStemsResult(stems)
     local mainItem
     local resultMsg
     local resultData = nil
-    local noAudibleOverlapMsg = T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible."
+    local noAudibleOverlapMsg = HELPERS.getNoAudibleTargetsMessage()
+    local contextItem = timeSelectionSourceItem or selectedItem
+    local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
+    if not contextItem and timeSelectionMode then
+        sourceTrackName = sourceTrackName or "Selection"
+        sourceItemName = sourceItemName or "Selection"
+    end
+    stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
 
     if timeSelectionMode then
         -- Time selection mode: respect user's setting
@@ -17172,7 +18145,7 @@ function processStemsResult(stems)
             -- Create stems first so the selection-based cleanup doesn't disturb placement
             count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
             if lastNoAudibleOverlap and count == 0 then
-                showMessage("No audible targets", noAudibleOverlapMsg, "info", true)
+                showMessage(HELPERS.getNoAudibleTargetsTitle(), noAudibleOverlapMsg, "info", true)
                 return
             end
 
@@ -17257,7 +18230,7 @@ function processStemsResult(stems)
                 local itemsOverride = timeSelectionResolvedItems
                 count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
                 if lastNoAudibleOverlap and count == 0 then
-                    showMessage("No audible targets", noAudibleOverlapMsg, "info", true)
+                    showMessage(HELPERS.getNoAudibleTargetsTitle(), noAudibleOverlapMsg, "info", true)
                     return
                 end
                 local trackWord = count == 1 and "track" or "tracks"
@@ -17559,7 +18532,7 @@ function resultWindowLoop()
         gfx.quit()
         -- Ensure the user immediately sees what was created/changed in REAPER (no extra click required).
         -- Some systems don't redraw the arrange view until the next interaction.
-        adjustTrackLayout()
+        HELPERS.forceArrangeRefresh()
         -- Reopen the main dialog directly to avoid retriggering startup checks and shell flashes.
         reaper.defer(function()
             skipExistingWindowCheckOnce = true
@@ -17578,7 +18551,7 @@ function showResultWindow(selectedStems, message)
 
     -- Ensure newly created/changed tracks/items are visible in REAPER *before* showing the Complete window.
     -- Some systems won't repaint the arrange view until focus changes, so we also do a best-effort focus nudge below.
-    adjustTrackLayout()
+    HELPERS.forceArrangeRefresh()
 
     resultWindowState.selectedStems = selectedStems
     if type(message) == "table" then
@@ -17600,9 +18573,7 @@ function showResultWindow(selectedStems, message)
 
     -- Best-effort: force an arrange repaint while the Complete window is open.
     -- This makes the processing result visible immediately (without needing to close the window).
-    reaper.defer(function()
-        adjustTrackLayout()
-    end)
+    HELPERS.scheduleResultWindowRefresh()
     reaper.defer(resultWindowLoop)
 end
 
@@ -17820,7 +18791,7 @@ runSingleTrackSeparation = function(trackList)
     trackList = filteredTrackList
     if #trackList == 0 then
         isProcessingActive = false
-        showMessage("No audible targets", "All candidate tracks/items are muted or not solo-audible.", "info", true)
+        showMessage(HELPERS.getNoAudibleTargetsTitle(), HELPERS.getNoAudibleTargetsMessage(), "info", true)
         return
     end
 
@@ -18053,7 +19024,7 @@ runSingleTrackSeparation = function(trackList)
 
     if perItemMap and perItemCandidates > 0 and perItemEligible == 0 then
         isProcessingActive = false
-        showMessage("No audible targets", T("no_audible_targets_overlap") or "All overlapping targets are muted or not solo-audible.", "info", true)
+        showMessage(HELPERS.getNoAudibleTargetsTitle(), HELPERS.getNoAudibleTargetsMessage(), "info", true)
         return
     end
 
@@ -19572,6 +20543,9 @@ processAllStemsResult = function()
 
         -- Create stems based on output mode
         if next(stems) then
+            local namingTrack = job.sourceTrackName or job.trackName or "Track"
+            local namingItem = job.sourceItemName or job.sourceItemDisplayName or namingTrack
+            stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem)
             if SETTINGS.createNewTracks then
                 -- New tracks mode: create separate tracks for each stem
                 -- Use per-job selection range: if time selection exists, use it; otherwise use the job's source item position/length
@@ -20121,6 +21095,17 @@ function runSeparationWorkflow()
         return
     end
 
+    if tostring(SETTINGS.stemFileDestination or "temp") == "custom" and HELPERS.trimString(SETTINGS.customStemDir) == "" then
+        showMessage(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesMissingCustomWarning(), "warning")
+        isProcessingActive = false
+        return
+    end
+    if tostring(SETTINGS.stemFileDestination or "temp") == "project_media" and not HELPERS.getProjectMediaDir() then
+        showMessage(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesProjectUnavailableWarning(), "warning")
+        isProcessingActive = false
+        return
+    end
+
     -- Save playback state to restore after processing
     savedPlaybackState = reaper.GetPlayState()
     debugLog("Saved playback state: " .. tostring(savedPlaybackState))
@@ -20209,7 +21194,7 @@ function runSeparationWorkflow()
 
     local selTrackCount = reaper.CountSelectedTracks(0) or 0
     local selItemCount = reaper.CountSelectedMediaItems(0) or 0
-    local useTimeSel = hasTimeSel and selTrackCount == 0 and selItemCount == 0
+    local useTimeSel = hasTimeSel and not HELPERS.hasExplicitOverlapSelection(ts0, ts1)
 
     -- Only use time selection when nothing else is explicitly selected.
     if useTimeSel then
@@ -20264,7 +21249,8 @@ function runSeparationWorkflow()
             (reaper.CountSelectedMediaItems(0) or 0),
             (reaper.CountSelectedTracks(0) or 0)
         ))
-        showMessage("Start", "Please select a media item, track, or make a time selection to separate.", "info", true)
+        local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+        showMessage(promptTitle, promptMessage, "info", true)
         isProcessingActive = false
         return
     end
@@ -20404,14 +21390,23 @@ function runSeparationWorkflow()
     if not extracted then
         debugLog("Extraction FAILED: " .. (err or "Unknown"))
         isProcessingActive = false
-        -- Show error, then return to dialog if there's still a selection
-        reaper.ShowMessageBox("Failed to extract audio:\n\n" .. (err or "Unknown") .. "\n\nMake sure you have items/tracks selected that overlap your time selection.", "Extraction Failed", 0)
-        -- Go back to dialog
-        if hasAnySelection() or timeSelectionMode then
-            reaper.defer(function() showStemSelectionDialog() end)
-        else
-            showMessage("Start", "Select audio in REAPER", "info", true)
-        end
+        local detail = tostring(err or "Unknown")
+        local noAudibleTargets = HELPERS.isNoAudibleTargetsError(detail)
+        local title = noAudibleTargets and HELPERS.getNoAudibleTargetsTitle() or "Extraction Failed"
+        local message = noAudibleTargets
+            and HELPERS.getNoAudibleTargetsMessage()
+            or ("Failed to extract audio.\n\n" .. detail .. "\n\nMake sure the items/tracks you want to process overlap your time selection.")
+        showMessage(title, message, noAudibleTargets and "info" or "warning", false, function()
+            if noAudibleTargets then
+                local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+                showMessage(promptTitle, promptMessage, "info", true)
+            elseif hasTimeSelection() or hasAnySelection() then
+                showStemSelectionDialog()
+            else
+                local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+                showMessage(promptTitle, promptMessage, "info", true)
+            end
+        end)
         return
     end
 
@@ -20552,7 +21547,15 @@ main = function()
     else
         -- No time selection, no item selected, no track with items
         -- Show start screen with selection monitoring
-        showMessage("Start", "Select audio in REAPER", "info", true)
+        local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+        showMessage(promptTitle, promptMessage, "info", true)
+        return
+    end
+
+    local monitorState = HELPERS.getSelectionMonitorState()
+    if not monitorState.actionable then
+        local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+        showMessage(promptTitle, promptMessage, "info", true)
         return
     end
 

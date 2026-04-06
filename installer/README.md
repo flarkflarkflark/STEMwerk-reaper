@@ -5,6 +5,7 @@ These are **packaging helpers** so you can download installers from GitHub and t
 ## Outputs
 
 - Windows: `STEMwerk-Setup-<version>.exe` (Inno Setup)
+- Windows patch: `STEMwerk-<version>-offline-patch.exe` (Inno Setup)
 - macOS: `STEMwerk-<version>.pkg` (pkgbuild)
 - Linux (Debian/Ubuntu): `stemwerk_<version>_amd64.deb` (dpkg-deb)
 - Linux (portable): `STEMwerk-<version>-x86_64.AppImage` (AppImageKit)
