@@ -274,9 +274,9 @@ local LANGUAGES = {
         hint_nav = "< > Navigate | Scroll to zoom | Right-drag to pan | ESC to close",
         hint_cancel = "Press ESC or close window to cancel",
         click_new_art = "Click for new art",
-        help_gallery_controls_tip = "Gallery controls:\n- Mouse wheel: Zoom\n- Left drag: Pan\n- Right drag: Rotate\n- Double-click: Reset view\n- Space: New art\n- 1-6: Switch tabs",
-        help_about_controls_tip = "About controls:\n- Mouse wheel: Zoom\n- Left drag: Pan\n- Right drag: Rotate\n- Double-click: Reset view\n- Space: New art\n- 1-6: Switch tabs",
-        help_text_controls_tip = "Help controls:\n- Mouse wheel: Zoom text\n- Left drag: Move content\n- Right/Middle drag: Pan\n- Double-click: Reset view\n- 1-6: Switch tabs\n- Enter: Start STEMwerk\n- ESC: Close",
+        help_gallery_controls_tip = "Gallery controls:\n- Mouse wheel: Zoom\n- Left drag: Pan\n- Right drag: Rotate\n- Double-click: Reset view\n- Space: New art\n- Left/Right: Switch tabs",
+        help_about_controls_tip = "About controls:\n- Mouse wheel: Zoom\n- Left drag: Pan\n- Right drag: Rotate\n- Double-click: Reset view\n- Space: New art\n- Left/Right: Switch tabs",
+        help_text_controls_tip = "Help controls:\n- Mouse wheel: Zoom text\n- Left drag: Move content\n- Right/Middle drag: Pan\n- Double-click: Reset view\n- Left/Right: Switch tabs\n- Enter: Start STEMwerk\n- ESC: Close",
 
         -- Help tabs
         help_welcome = "Welcome",
@@ -645,9 +645,9 @@ local LANGUAGES = {
         hint_nav = "< > Navigeer | Scroll om te zoomen | Rechts-slepen om te pannen | ESC om te sluiten",
         hint_cancel = "Druk ESC of sluit venster om te annuleren",
         click_new_art = "Klik voor nieuwe kunst",
-        help_gallery_controls_tip = "Gallery bediening:\n- Muiswiel: Zoom\n- Links slepen: Pan\n- Rechts slepen: Rotatie\n- Dubbelklik: Reset view\n- Spatie: Nieuwe kunst\n- 1-6: Wissel tabs",
-        help_about_controls_tip = "About bediening:\n- Muiswiel: Zoom\n- Links slepen: Pan\n- Rechts slepen: Rotatie\n- Dubbelklik: Reset view\n- Spatie: Nieuwe kunst\n- 1-6: Wissel tabs",
-        help_text_controls_tip = "Help bediening:\n- Muiswiel: Zoom tekst\n- Links slepen: Verplaats content\n- Rechts/Midden slepen: Pan\n- Dubbelklik: Reset view\n- 1-6: Wissel tabs\n- Enter: Start STEMwerk\n- ESC: Sluiten",
+        help_gallery_controls_tip = "Gallery bediening:\n- Muiswiel: Zoom\n- Links slepen: Pan\n- Rechts slepen: Rotatie\n- Dubbelklik: Reset view\n- Spatie: Nieuwe kunst\n- Links/Rechts: Wissel tabs",
+        help_about_controls_tip = "About bediening:\n- Muiswiel: Zoom\n- Links slepen: Pan\n- Rechts slepen: Rotatie\n- Dubbelklik: Reset view\n- Spatie: Nieuwe kunst\n- Links/Rechts: Wissel tabs",
+        help_text_controls_tip = "Help bediening:\n- Muiswiel: Zoom tekst\n- Links slepen: Verplaats content\n- Rechts/Midden slepen: Pan\n- Dubbelklik: Reset view\n- Links/Rechts: Wissel tabs\n- Enter: Start STEMwerk\n- ESC: Sluiten",
 
         -- Help tabs
         help_welcome = "Welkom",
@@ -822,7 +822,7 @@ local LANGUAGES = {
         new_track = "Neuer Track",
         in_place = "An Ort",
         keep_takes = "Takes behalten",
-        explode_to_new_tracks = "Explode → Tracks",
+        explode_to_new_tracks = "Explode → tracks",
         explode_in_place = "Explode an Ort",
         explode_in_order = "Explode in Reihenfolge",
         create_folder = "Ordner",
@@ -1014,9 +1014,9 @@ local LANGUAGES = {
         hint_nav = "< > Navigieren | Scrollen zum Zoomen | Rechts ziehen zum Schwenken | ESC zum Schliessen",
         hint_cancel = "ESC druecken oder Fenster schliessen zum Abbrechen",
         click_new_art = "Klicken fuer neue Kunst",
-        help_gallery_controls_tip = "Gallery Bedienung:\n- Mausrad: Zoom\n- Links ziehen: Pan\n- Rechts ziehen: Rotation\n- Doppelklick: Reset View\n- Leertaste: Neue Kunst\n- 1-6: Tabs wechseln",
-        help_about_controls_tip = "About Bedienung:\n- Mausrad: Zoom\n- Links ziehen: Pan\n- Rechts ziehen: Rotation\n- Doppelklick: Reset View\n- Leertaste: Neue Kunst\n- 1-6: Tabs wechseln",
-        help_text_controls_tip = "Hilfe Bedienung:\n- Mausrad: Text zoomen\n- Links ziehen: Inhalt bewegen\n- Rechts/Mitte ziehen: Pan\n- Doppelklick: Reset View\n- 1-6: Tabs wechseln\n- Enter: STEMwerk starten\n- ESC: Schliessen",
+        help_gallery_controls_tip = "Gallery Bedienung:\n- Mausrad: Zoom\n- Links ziehen: Pan\n- Rechts ziehen: Rotation\n- Doppelklick: Reset View\n- Leertaste: Neue Kunst\n- Links/Rechts: Tabs wechseln",
+        help_about_controls_tip = "About Bedienung:\n- Mausrad: Zoom\n- Links ziehen: Pan\n- Rechts ziehen: Rotation\n- Doppelklick: Reset View\n- Leertaste: Neue Kunst\n- Links/Rechts: Tabs wechseln",
+        help_text_controls_tip = "Hilfe Bedienung:\n- Mausrad: Text zoomen\n- Links ziehen: Inhalt bewegen\n- Rechts/Mitte ziehen: Pan\n- Doppelklick: Reset View\n- Links/Rechts: Tabs wechseln\n- Enter: STEMwerk starten\n- ESC: Schliessen",
 
         -- Help tabs
         help_welcome = "Willkommen",
