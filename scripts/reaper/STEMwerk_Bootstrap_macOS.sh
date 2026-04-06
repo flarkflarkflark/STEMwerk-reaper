@@ -27,6 +27,96 @@ log() {
   fi
 }
 
+resolve_existing_path() {
+  if [ -z "${1:-}" ] || [ ! -e "$1" ]; then
+    return 1
+  fi
+  _dir=$(CDPATH= cd -- "$(dirname "$1")" 2>/dev/null && pwd -P) || return 1
+  printf "%s/%s\n" "${_dir}" "$(basename "$1")"
+}
+
+resolve_python_candidate() {
+  case "$1" in
+    */*)
+      resolve_existing_path "$1"
+      ;;
+    *)
+      _resolved=$(command -v "$1" 2>/dev/null || true)
+      [ -n "${_resolved}" ] || return 1
+      case "${_resolved}" in
+        /*) resolve_existing_path "${_resolved}" ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+}
+
+get_python_version() {
+  if [ -z "${1:-}" ] || [ ! -x "$1" ]; then
+    return 1
+  fi
+  "$1" -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null | awk 'NR==1 { print; exit }'
+}
+
+accept_python_version() {
+  _version_text=$(get_python_version "$1") || return 1
+  _major=$(printf "%s" "${_version_text}" | awk -F. 'NR==1 { print $1 }')
+  _minor=$(printf "%s" "${_version_text}" | awk -F. 'NR==1 { print $2 }')
+  [ "${_major}" = "3" ] || return 1
+  case "${_minor}" in
+    10|11|12) return 0 ;;
+  esac
+  return 1
+}
+
+log_python_candidate() {
+  _candidate_path="$1"
+  _candidate_version="$2"
+  _candidate_action="$3"
+  _candidate_reason="$4"
+  if [ -n "${_candidate_reason}" ]; then
+    log "Python candidate ${_candidate_action}: ${_candidate_path} (version ${_candidate_version}; ${_candidate_reason})"
+  else
+    log "Python candidate ${_candidate_action}: ${_candidate_path} (version ${_candidate_version})"
+  fi
+}
+
+remove_incompatible_venv() {
+  if [ -d "${RUNTIME_BASE}/.venv" ]; then
+    log "Removing incompatible virtual environment: ${RUNTIME_BASE}/.venv"
+    rm -rf "${RUNTIME_BASE}/.venv"
+  fi
+}
+
+evaluate_python_candidate() {
+  _resolved_path=$(resolve_python_candidate "$1") || return 1
+  case "${SEEN_PYTHON_PATHS}" in
+    *"|${_resolved_path}|"*)
+      return 1
+      ;;
+  esac
+  SEEN_PYTHON_PATHS="${SEEN_PYTHON_PATHS}${_resolved_path}|"
+
+  _version_text=$(get_python_version "${_resolved_path}" || true)
+  if [ -z "${_version_text}" ]; then
+    log_python_candidate "${_resolved_path}" "unknown" "rejected" "version_probe_failed"
+    return 1
+  fi
+  if accept_python_version "${_resolved_path}"; then
+    log_python_candidate "${_resolved_path}" "${_version_text}" "accepted" "supported"
+    PYTHON="${_resolved_path}"
+    SELECTED_PYTHON_VERSION="${_version_text}"
+    return 0
+  fi
+
+  log_python_candidate "${_resolved_path}" "${_version_text}" "rejected" "unsupported_on_macos"
+  if [ -z "${FIRST_UNSUPPORTED_PYTHON_PATH}" ]; then
+    FIRST_UNSUPPORTED_PYTHON_PATH="${_resolved_path}"
+    FIRST_UNSUPPORTED_PYTHON_VERSION="${_version_text}"
+  fi
+  return 1
+}
+
 write_state() {
   if [ -n "${STATE_FILE}" ]; then
     {
@@ -126,26 +216,57 @@ BACKEND_REASON=""
 STEP_INDEX=""
 STEP_TOTAL="4"
 STEP_LABEL=""
+SELECTED_PYTHON_VERSION=""
+FIRST_UNSUPPORTED_PYTHON_PATH=""
+FIRST_UNSUPPORTED_PYTHON_VERSION=""
+SEEN_PYTHON_PATHS="|"
 
 set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 
-for p in \
-  "${RUNTIME_BASE}/.venv/bin/python" \
-  "/opt/homebrew/opt/python@3.11/libexec/bin/python3" \
-  "/usr/local/opt/python@3.11/libexec/bin/python3" \
-  "/opt/homebrew/opt/python@3.12/libexec/bin/python3" \
-  "/usr/local/opt/python@3.12/libexec/bin/python3" \
-  "/opt/homebrew/bin/python3.11" \
-  "/usr/local/bin/python3.11" \
-  "/opt/homebrew/bin/python3" \
-  "/usr/local/bin/python3" \
-  "/usr/bin/python3"
-do
-  if [ -x "$p" ]; then
-    PYTHON="$p"
-    break
+# macOS must not blindly trust bare python3 because Homebrew/system aliases can
+# move to 3.13+ while STEMwerk 2.x only supports Python 3.10-3.12.
+if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+  if evaluate_python_candidate "${RUNTIME_BASE}/.venv/bin/python"; then
+    log "Selected existing virtual environment Python: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
+  else
+    remove_incompatible_venv
   fi
-done
+fi
+
+if [ -z "${PYTHON}" ]; then
+  for p in \
+    "python3.12" \
+    "/opt/homebrew/bin/python3.12" \
+    "/usr/local/bin/python3.12" \
+    "/opt/homebrew/opt/python@3.12/libexec/bin/python3" \
+    "/usr/local/opt/python@3.12/libexec/bin/python3" \
+    "/opt/homebrew/opt/python@3.12/bin/python3" \
+    "/usr/local/opt/python@3.12/bin/python3" \
+    "python3.11" \
+    "/opt/homebrew/bin/python3.11" \
+    "/usr/local/bin/python3.11" \
+    "/opt/homebrew/opt/python@3.11/libexec/bin/python3" \
+    "/usr/local/opt/python@3.11/libexec/bin/python3" \
+    "/opt/homebrew/opt/python@3.11/bin/python3" \
+    "/usr/local/opt/python@3.11/bin/python3" \
+    "python3.10" \
+    "/opt/homebrew/bin/python3.10" \
+    "/usr/local/bin/python3.10" \
+    "/opt/homebrew/opt/python@3.10/libexec/bin/python3" \
+    "/usr/local/opt/python@3.10/libexec/bin/python3" \
+    "/opt/homebrew/opt/python@3.10/bin/python3" \
+    "/usr/local/opt/python@3.10/bin/python3" \
+    "python3" \
+    "/opt/homebrew/bin/python3" \
+    "/usr/local/bin/python3" \
+    "/usr/bin/python3"
+  do
+    if evaluate_python_candidate "${p}"; then
+      log "Selected macOS Python interpreter: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
+      break
+    fi
+  done
+fi
 
 BREW=""
 if [ -x "/opt/homebrew/bin/brew" ]; then
@@ -156,27 +277,25 @@ elif command -v brew >/dev/null 2>&1; then
   BREW="$(command -v brew)"
 fi
 
-if [ -z "${PYTHON}" ] && [ -n "${BREW}" ]; then
-  log "Installing python@3.11 via brew"
-  "${BREW}" install python@3.11 >> "${LOG_FILE}" 2>&1 || true
-  if [ -x "/opt/homebrew/opt/python@3.11/libexec/bin/python3" ]; then
-    PYTHON="/opt/homebrew/opt/python@3.11/libexec/bin/python3"
-  elif [ -x "/usr/local/opt/python@3.11/libexec/bin/python3" ]; then
-    PYTHON="/usr/local/opt/python@3.11/libexec/bin/python3"
-  elif [ -x "/opt/homebrew/bin/python3.11" ]; then
-    PYTHON="/opt/homebrew/bin/python3.11"
-  elif [ -x "/usr/local/bin/python3.11" ]; then
-    PYTHON="/usr/local/bin/python3.11"
-  fi
-fi
-
 set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
 
 if [ -z "${PYTHON}" ]; then
-  set_status "missing_python" "python_not_found"
+  if [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
+    PYTHON_MESSAGE="Detected Python ${FIRST_UNSUPPORTED_PYTHON_VERSION} at ${FIRST_UNSUPPORTED_PYTHON_PATH}, but STEMwerk currently supports Python 3.10-3.12 on macOS. Please install Python 3.11 or 3.12, or let STEMwerk use one if already present."
+    log "${PYTHON_MESSAGE}"
+    printf "%s\n" "${PYTHON_MESSAGE}" >&2
+    set_status "missing_python" "python_unsupported"
+  else
+    PYTHON_MESSAGE="No supported Python 3.10-3.12 interpreter found on macOS. Please install Python 3.11 or 3.12, or let STEMwerk use one if already present."
+    log "${PYTHON_MESSAGE}"
+    printf "%s\n" "${PYTHON_MESSAGE}" >&2
+    set_status "missing_python" "python_not_found"
+  fi
+  write_state
+  exit 1
 else
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    log "Creating venv"
+    log "Creating venv with ${PYTHON}"
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
   fi
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
@@ -189,7 +308,12 @@ else
     resolve_core_target || true
     if [ -n "${CORE_TARGET:-}" ]; then
       log "Installing stemwerk-core from ${CORE_TARGET_DESC}: ${CORE_TARGET}"
-      "${VENV_PY}" -m pip install "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "stemwerk_core_install_failed"
+      if ! "${VENV_PY}" -m pip install "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1; then
+        log "stemwerk-core install failed; aborting macOS bootstrap before secondary dependency installation"
+        set_status "deps_failed" "stemwerk_core_install_failed"
+        write_state
+        exit 1
+      fi
     else
       log "stemwerk-core source bundle is missing or incomplete"
       log "Expected bundle directory: ${CORE_BUNDLE_DIR:-${BUNDLED_CORE_DIR}}"

@@ -209,6 +209,33 @@ local function resolveWindowsPythonPath(runtime)
     return ""
 end
 
+local function resolveNonWindowsPythonPath(runtime)
+    local pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
+    local canRunPython = C.canRunPython
+
+    if pythonPath and pythonPath ~= "" then
+        if type(canRunPython) == "function" then
+            if canRunPython(pythonPath) then
+                return pythonPath
+            end
+        elseif canRunCommand(pythonPath, " --version", "Python", 12000) then
+            return pythonPath
+        end
+    end
+
+    if runtime and runtime.venvPython and runtime.venvPython ~= "" then
+        if type(canRunPython) == "function" then
+            if canRunPython(runtime.venvPython) then
+                return runtime.venvPython
+            end
+        elseif canRunCommand(runtime.venvPython, " --version", "Python", 12000) then
+            return runtime.venvPython
+        end
+    end
+
+    return ""
+end
+
 local function resolveRuntimeFfmpeg(runtime)
     if not runtime or not runtime.base then return "" end
     local PATH_SEP = C.PATH_SEP or "/"
@@ -619,10 +646,7 @@ function M.verifyRuntimeAfterBootstrap()
     if (C.OS or "Windows") == "Windows" then
         pythonPath = resolveWindowsPythonPath(runtime)
     else
-        pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
-        if (not pythonPath or pythonPath == "") and runtime.venvPython then
-            pythonPath = runtime.venvPython
-        end
+        pythonPath = resolveNonWindowsPythonPath(runtime)
     end
     if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
         C.setPythonPath(pythonPath)
@@ -672,11 +696,7 @@ function M.resolveRuntimePythonPath()
     if (C.OS or "Windows") == "Windows" then
         return resolveWindowsPythonPath(runtime)
     end
-    local pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
-    if (not pythonPath or pythonPath == "") and runtime.venvPython then
-        pythonPath = runtime.venvPython
-    end
-    return pythonPath or ""
+    return resolveNonWindowsPythonPath(runtime)
 end
 
 function M.ensureDependenciesInteractive()
@@ -730,10 +750,7 @@ function M.ensureDependenciesInteractive()
     if (C.OS or "Windows") == "Windows" then
         pythonPath = resolveWindowsPythonPath(runtime)
     else
-        pythonPath = type(C.getPythonPath) == "function" and C.getPythonPath() or nil
-        if (not pythonPath or pythonPath == "") and runtime.venvPython then
-            pythonPath = runtime.venvPython
-        end
+        pythonPath = resolveNonWindowsPythonPath(runtime)
     end
     if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
         C.setPythonPath(pythonPath)

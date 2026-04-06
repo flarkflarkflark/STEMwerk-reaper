@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.5
+-- @version 2.2.1.6
 -- @changelog
 --   2026-03-24: Local working build saved as v2.2.1.1 for installer follow-up.
 --   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
@@ -52,7 +52,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.1.5"
+local APP_VERSION = "2.2.1.6"
 local SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -390,6 +390,7 @@ end
 
 local function canRunPython(pythonCmd)
     if not pythonCmd or pythonCmd == "" then return false end
+    local runnable = false
 
     -- If the user provided an absolute path, check if file exists
     if isAbsolutePath(pythonCmd) and fileExists(pythonCmd) then
@@ -399,7 +400,7 @@ local function canRunPython(pythonCmd)
             local rc, out = execProcess(cmd, 12000)
             debugLog("canRunPython Windows: cmd=" .. tostring(cmd) .. " rc=" .. tostring(rc) .. " out=" .. tostring(out))
             if rc == 0 and out and out:find("Python") then
-                return true
+                runnable = true
             else
                 debugLog("canRunPython Windows: failed to run python, output: " .. tostring(out))
                 return false
@@ -407,41 +408,83 @@ local function canRunPython(pythonCmd)
         else
             -- Best effort executable bit check (Unix)
             local ok, _, code = os.execute(quoteArg(pythonCmd) .. " --version >/dev/null 2>&1")
-            if ok == true or ok == 0 then return true end
+            runnable = (ok == true or ok == 0)
         end
     end
 
-    -- Avoid nested quotes; simplest cross-platform check.
-    local cmd = quoteArg(pythonCmd) .. " --version"
-    local rc, out = execProcess(cmd, 12000)
-    debugLog("canRunPython: cmd=" .. tostring(cmd) .. " rc=" .. tostring(rc) .. " out=" .. tostring(out))
-    if rc == 0 then
-        -- Some ExecProcess implementations return a successful rc but no captured output.
-        -- Try a popen fallback to capture stdout/stderr; if that isn't available, treat rc==0 as success.
-        if out and out:find("Python") then return true end
-        if OS == "Windows" then
-            local captureCmd = SW_LOG.isWindows() and SW_LOG.wrapCmdForWindows(cmd) or (cmd .. " 2>&1")
-            local h = io.popen(captureCmd)
-            if h then
-                local content = h:read("*a") or ""
-                local ok, _, code = h:close()
-                debugLog("canRunPython popen rc=" .. tostring(code) .. " outLen=" .. tostring(#content))
-                if content and content:find("Python") then return true end
+    if not runnable then
+        -- Avoid nested quotes; simplest cross-platform check.
+        local cmd = quoteArg(pythonCmd) .. " --version"
+        local rc, out = execProcess(cmd, 12000)
+        debugLog("canRunPython: cmd=" .. tostring(cmd) .. " rc=" .. tostring(rc) .. " out=" .. tostring(out))
+        if rc == 0 then
+            -- Some ExecProcess implementations return a successful rc but no captured output.
+            -- Try a popen fallback to capture stdout/stderr; if that isn't available, treat rc==0 as success.
+            if out and out:find("Python") then
+                runnable = true
+            elseif OS == "Windows" then
+                local captureCmd = SW_LOG.isWindows() and SW_LOG.wrapCmdForWindows(cmd) or (cmd .. " 2>&1")
+                local h = io.popen(captureCmd)
+                if h then
+                    local content = h:read("*a") or ""
+                    local ok, _, code = h:close()
+                    debugLog("canRunPython popen rc=" .. tostring(code) .. " outLen=" .. tostring(#content))
+                    if content and content:find("Python") then
+                        runnable = true
+                    end
+                end
+                if not runnable then
+                    -- No output but exit code 0 -> treat as runnable
+                    runnable = true
+                end
+            else
+                -- On Unix, use exit code as primary indicator
+                runnable = true
             end
-            -- No output but exit code 0 -> treat as runnable
-            return true
-        else
-            -- On Unix, use exit code as primary indicator
-            return true
         end
     end
 
     -- Final fallback for Unix shells if ExecProcess is problematic
-    if OS ~= "Windows" then
-        local ok = os.execute(cmd .. " >/dev/null 2>&1")
-        return ok == true or ok == 0
+    if not runnable and OS ~= "Windows" then
+        local finalCmd = quoteArg(pythonCmd) .. " --version"
+        local ok = os.execute(finalCmd .. " >/dev/null 2>&1")
+        runnable = (ok == true or ok == 0)
     end
 
+    if not runnable then
+        return false
+    end
+
+    if OS ~= "macOS" then
+        return true
+    end
+
+    local versionCmd = quoteArg(pythonCmd) .. " -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
+    local versionRc, versionOut = execProcess(versionCmd, 12000)
+    if versionRc ~= 0 or not versionOut or versionOut == "" then
+        local h = io.popen(versionCmd .. " 2>&1")
+        if h then
+            versionOut = h:read("*a") or ""
+            local ok, _, code = h:close()
+            versionRc = (ok == true or code == 0) and 0 or (tonumber(code) or -1)
+        end
+    end
+
+    local major, minor, patch = tostring(versionOut or ""):match("(%d+)%.(%d+)%.(%d+)")
+    if not major or not minor then
+        major, minor = tostring(versionOut or ""):match("(%d+)%.(%d+)")
+    end
+    local versionText = tostring(versionOut or ""):match("(%d+%.%d+%.%d+)") or tostring(versionOut or ""):match("(%d+%.%d+)")
+    if versionRc ~= 0 or not major or not minor then
+        debugLog("canRunPython macOS: version probe failed for " .. tostring(pythonCmd) .. " output=" .. tostring(versionOut))
+        return false
+    end
+    major = tonumber(major) or 0
+    minor = tonumber(minor) or 0
+    if major == 3 and minor >= 10 and minor <= 12 then
+        return true
+    end
+    debugLog("Rejecting unsupported macOS Python: " .. tostring(pythonCmd) .. " version=" .. tostring(versionText or (major .. "." .. minor)))
     return false
 end
 
@@ -975,10 +1018,13 @@ local function findPython()
             resolved = script_path .. resolved
         end
 
-        -- If the user provided an absolute path that exists, trust it (avoid false negatives).
+        -- On macOS, still verify the version: a bare python3 symlink can jump to 3.13+.
         if isAbsolutePath(resolved) and fileExists(resolved) then
-            debugLog("pythonPath override exists, accepting: " .. tostring(resolved))
-            return resolved
+            if canRunPython(resolved) then
+                debugLog("pythonPath override exists, accepting: " .. tostring(resolved))
+                return resolved
+            end
+            debugLog("pythonPath override exists but is not supported: " .. tostring(resolved))
         end
 
         if not isAbsolutePath(resolved) then
@@ -1071,28 +1117,46 @@ local function findPython()
         table.insert(paths, script_path .. "../.venv/bin/python")
         -- Homebrew on macOS
         if OS == "macOS" then
-            table.insert(paths, "/opt/homebrew/opt/python@3.11/libexec/bin/python3")
-            table.insert(paths, "/usr/local/opt/python@3.11/libexec/bin/python3")
             table.insert(paths, "/opt/homebrew/opt/python@3.12/libexec/bin/python3")
             table.insert(paths, "/usr/local/opt/python@3.12/libexec/bin/python3")
+            table.insert(paths, "/opt/homebrew/opt/python@3.12/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.12/bin/python3")
+            table.insert(paths, "/opt/homebrew/bin/python3.12")
+            table.insert(paths, "/usr/local/bin/python3.12")
+            table.insert(paths, "python3.12")
+            table.insert(paths, "/opt/homebrew/opt/python@3.11/libexec/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.11/libexec/bin/python3")
+            table.insert(paths, "/opt/homebrew/opt/python@3.11/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.11/bin/python3")
             table.insert(paths, "/opt/homebrew/bin/python3.11")
             table.insert(paths, "/usr/local/bin/python3.11")
+            table.insert(paths, "python3.11")
+            table.insert(paths, "/opt/homebrew/opt/python@3.10/libexec/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.10/libexec/bin/python3")
+            table.insert(paths, "/opt/homebrew/opt/python@3.10/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.10/bin/python3")
+            table.insert(paths, "/opt/homebrew/bin/python3.10")
+            table.insert(paths, "/usr/local/bin/python3.10")
+            table.insert(paths, "python3.10")
+            table.insert(paths, "/usr/local/opt/python@3.11/bin/python3")
             table.insert(paths, "/opt/homebrew/bin/python3")
             table.insert(paths, "/usr/local/bin/python3")
-            table.insert(paths, "/usr/local/opt/python@3.11/bin/python3")
-            table.insert(paths, "/usr/local/opt/python@3.12/bin/python3")
+            table.insert(paths, "/usr/bin/python3")
+            table.insert(paths, "python3")
         end
         -- User local and system paths
-        table.insert(paths, home .. "/.local/bin/python3")
-        table.insert(paths, "/usr/local/bin/python3.11")
-        table.insert(paths, "/usr/bin/python3.11")
-        table.insert(paths, "/usr/local/bin/python3.12")
-        table.insert(paths, "/usr/bin/python3.12")
-        table.insert(paths, "/usr/local/bin/python3")
-        table.insert(paths, "/usr/bin/python3")
-        table.insert(paths, "/snap/bin/python3")
-        table.insert(paths, "python3")
-        table.insert(paths, "python")
+        if OS ~= "macOS" then
+            table.insert(paths, home .. "/.local/bin/python3")
+            table.insert(paths, "/usr/local/bin/python3.11")
+            table.insert(paths, "/usr/bin/python3.11")
+            table.insert(paths, "/usr/local/bin/python3.12")
+            table.insert(paths, "/usr/bin/python3.12")
+            table.insert(paths, "/usr/local/bin/python3")
+            table.insert(paths, "/usr/bin/python3")
+            table.insert(paths, "/snap/bin/python3")
+            table.insert(paths, "python3")
+            table.insert(paths, "python")
+        end
     end
 
     for _, p in ipairs(paths) do
@@ -1107,7 +1171,7 @@ local function findPython()
         end
     end
 
-    local fallback = OS == "Windows" and "python" or "python3"
+    local fallback = OS == "Windows" and "python" or (OS == "macOS" and "" or "python3")
     return fallback
 end
 

@@ -2,13 +2,12 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1.5" author="flarkAUDIO" time="1774306800">
+      <version name="2.2.1.6" author="flarkAUDIO" time="1775481055">
         <changelog><![CDATA[
-- ReaPack payload aligned with the current public script set
-- Internal setup/runtime helpers moved under _internal and included correctly
-- Removed stale references to deleted setup/repair helper scripts
-- Bundled stemwerk-core source bundle and constraint files included for setup/bootstrap
-- Linux and macOS setup flow fixes included, including ONNX Runtime handling
+- macOS bootstrap now accepts only Python 3.10, 3.11, or 3.12
+- Python 3.13+ is explicitly rejected on macOS, including bare python3 fallbacks
+- Existing macOS virtual environments are reused only when their Python version is still supported
+- macOS bootstrap now aborts immediately after stemwerk-core install failure
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
