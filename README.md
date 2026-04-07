@@ -1,5 +1,5 @@
 <p align="center">
-	<img src="docs/assets/stemwerk-dynamic.svg" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
+	<img src="docs/assets/STEMwerk.gif" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
 </p>
 
 Demucs stem separation directly inside REAPER, no round-tripping (open source, ReaPack)<br>
