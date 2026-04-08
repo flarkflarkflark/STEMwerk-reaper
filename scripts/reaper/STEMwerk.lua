@@ -15461,12 +15461,18 @@ local function drawProgressWindow()
         end
     end
 
+    -- Single-track progress layout
+    local barX = PS(38)
+    local barY = PS(102)
+    local barW = w - (barX * 2)
+    local barH = PS(24)
+
     -- Model badge (align with progress bar at right side)
     local modelText = SETTINGS.model or "htdemucs"
     gfx.setfont(1, "Arial", PS(11))
     local modelW = gfx.measurestr(modelText) + PS(16)
-    local badgeX = w - modelW - PS(25) -- align with progress bar right edge
-    local badgeY = PS(98) + math.floor((PS(28) - PS(18)) / 2) -- vertically center against progress bar
+    local badgeX = barX + barW - modelW
+    local badgeY = barY + math.floor((barH - PS(18)) / 2)
     local badgeH = PS(18)
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
     gfx.rect(badgeX, badgeY, modelW, badgeH, 1)
@@ -15529,12 +15535,6 @@ local function drawProgressWindow()
         end
     end
 
-    -- Progress bar
-    local barX = PS(25)
-    local barY = PS(98)
-    local barW = w - PS(50)
-    local barH = PS(28)
-
     -- Progress bar background
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
     gfx.rect(barX, barY, barW, barH, 1)
@@ -15582,147 +15582,24 @@ local function drawProgressWindow()
     local py = barY + (barH - PS(14)) / 2
     drawProgressText(percentText, px, py, 1)
 
-    -- Stage text
-    gfx.setfont(1, "Arial", PS(11))
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    gfx.x = PS(25)
-    gfx.y = PS(130)
-    local stageDisplay = progressState.stage or (T("starting") or "Starting...")
-    if stageDisplay == "Starting.." or stageDisplay == "Starting..." then
-        stageDisplay = T("starting") or stageDisplay
-    elseif stageDisplay == "Waiting.." or stageDisplay == "Waiting..." then
-        stageDisplay = T("waiting") or stageDisplay
-    end
-    -- Normalize common spacing quirks so ETA parsing/rendering is stable.
-    stageDisplay = stageDisplay:gsub("ETA%s+(%d+):%s*(%d+)", "ETA %1:%2")
-    stageDisplay = stageDisplay:gsub("%((%d+):%s*(%d+)", "(%1:%2")
-    local maxStageLen = math.floor(70 * scale)
-    if #stageDisplay > maxStageLen then stageDisplay = stageDisplay:sub(1, maxStageLen - 3) .. ".." end
-    gfx.drawstr(stageDisplay)
-
-    -- Info boxes row
-    local infoY = PS(155)
-    local infoH = PS(22)
-    local infoGap = PS(8)
-
-    -- Time info box
-    local elapsed = os.time() - progressState.startTime
-    local mins = math.floor(elapsed / 60)
-    local secs = elapsed % 60
-
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
-    gfx.rect(PS(25), infoY, PS(95), infoH, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(PS(25), infoY, PS(95), infoH, 0)
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-    gfx.x = PS(32)
-    gfx.y = infoY + PS(4)
-    local elapsedLabel = T("elapsed") or "Elapsed:"
-    gfx.drawstr(string.format("%s %d:%02d", tostring(elapsedLabel), mins, secs))
-
-    -- ETA box (if available)
-    local stageStr = progressState.stage or ""
-    local eta = stageStr:match("ETA%s+([%d]+:%s*%d+)")
-    if eta then eta = eta:gsub("%s+", "") end
-    if eta then
-        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
-        gfx.rect(PS(128), infoY, PS(75), infoH, 1)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-        gfx.rect(PS(128), infoY, PS(75), infoH, 0)
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        gfx.x = PS(135)
-        gfx.y = infoY + PS(4)
-        local etaLabel = T("eta_label") or "ETA:"
-        gfx.drawstr(tostring(etaLabel) .. " " .. eta)
-    end
-
-    -- Segment size indicator
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
-    gfx.rect(w - PS(190), infoY, PS(60), infoH, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(w - PS(190), infoY, PS(60), infoH, 0)
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    gfx.x = w - PS(183)
-    gfx.y = infoY + PS(4)
-    local segLabel = T("seg_label") or "Seg:"
-    gfx.drawstr(tostring(segLabel) .. " 30")
-
-    -- Device indicator (CPU/GPU) - must reflect actual runtime device, not OS-specific hardcodes.
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
-    gfx.rect(w - PS(122), infoY, PS(97), infoH, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(w - PS(122), infoY, PS(97), infoH, 0)
-    local devId = tostring(progressState._deviceId or SETTINGS.device or "auto")
-    local devName = progressState._deviceName
-    local isCpu = (devId == "cpu")
-    local label = nil
-    if devId:match("^cuda:%d+$") then
-        local idx = devId:match("^cuda:(%d+)$") or "0"
-        label = "GPU" .. tostring(idx)
-    elseif devId:match("^directml:%d+$") then
-        local idx = devId:match("^directml:(%d+)$") or "0"
-        label = "DML" .. tostring(idx)
-    elseif devId == "directml" then
-        label = "DML"
-    elseif devId == "mps" then
-        label = "MPS"
-    elseif devId == "cpu" then
-        label = "CPU"
-    else
-        label = "AUTO"
-    end
-    local dr, dg, db = THEME.textDim[1], THEME.textDim[2], THEME.textDim[3]
-    if not isCpu and (devId:match("^cuda:") or devId:match("^directml") or devId == "mps") then
-        -- Green-ish only when actually using a GPU backend.
-        dr, dg, db = 0.3, 0.75, 0.45
-    end
-    gfx.set(dr, dg, db, 1)
-    gfx.x = w - PS(115)
-    gfx.y = infoY + PS(4)
-    gfx.drawstr(label)
-    -- Tooltip on device box (full id + name)
-    local devBoxX, devBoxW = w - PS(122), PS(97)
-    local devHover = mx >= devBoxX and mx <= devBoxX + devBoxW and my >= infoY and my <= infoY + infoH
-    if devHover then
-        GUI.uiClickedThisFrame = true
-        local tipPrefix = T("device_tooltip_prefix") or "Device:"
-        local tip = tostring(tipPrefix) .. " " .. tostring(devId)
-        if devName and devName ~= "" then
-            tip = tip .. "\n" .. tostring(devName)
-        end
-        local chosenPrefix = T("chosen_device_label") or "Chosen device"
-        local chosenId = SETTINGS.device or "auto"
-        local chosenLabel = tostring(chosenId)
-        if chosenId == "auto" then
-            if RUNTIME_DEVICES then
-                for _, d in ipairs(RUNTIME_DEVICES) do
-                    if d.id and not (d.id == "auto" or d.id == "cpu") then
-                        chosenLabel = tostring(d.fullName or d.name or d.id)
-                        break
-                    end
-                end
-            end
-        else
-            if RUNTIME_DEVICES then
-                for _, d in ipairs(RUNTIME_DEVICES) do
-                    if d.id == chosenId then
-                        chosenLabel = tostring(d.fullName or d.name or d.id)
-                        break
-                    end
-                end
-            end
-        end
-        tip = tip .. "\n" .. tostring(chosenPrefix) .. ": " .. tostring(chosenLabel)
-        tooltipText = tip
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+    -- Stage text inside the main progress bar, like the multi-track job bars.
+    local stageDisplay = normalizeProgressStage(progressState.stage or (T("starting") or "Starting..."))
+    local inlineStageText = tostring(stageDisplay or "")
+        :gsub("%s*%([^%)]*%)", "")
+        :gsub("%s*%[[^%]]*%]", "")
+        :gsub("%s+$", "")
+    if inlineStageText ~= "" then
+        gfx.setfont(1, "Arial", PS(11))
+        local stageTextW = math.max(PS(110), barW - PS(170))
+        local fittedStageText = fitTextToBox(inlineStageText, stageTextW, PS(11), PS(11))
+        drawProgressText(fittedStageText, barX + PS(10), barY + PS(4), 0.95)
     end
 
     -- === NERD TERMINAL TOGGLE BUTTON ===
     local nerdBtnW = PS(22)
     local nerdBtnH = PS(18)
     local nerdBtnX = PS(25)
-    -- Keep it below the time/ETA row so it doesn't overlap "Elapsed:"
-    local nerdBtnY = math.min(infoY + infoH + PS(6), h - PS(85))
+    local nerdBtnY = math.min(barY + barH + PS(8), h - PS(85))
     local nerdHover = mx >= nerdBtnX and mx <= nerdBtnX + nerdBtnW and my >= nerdBtnY and my <= nerdBtnY + nerdBtnH
 
     -- Draw nerd button (terminal icon: >_)
@@ -15767,10 +15644,28 @@ local function drawProgressWindow()
             tooltipX, tooltipY = mx + PS(10), my + PS(15)
     end
 
+    local footerElapsed = os.time() - (progressState.startTime or os.time())
+    local footerProcessedAudioDur = 0
+    if itemSubSelection and itemSubSelEnd and itemSubSelStart and itemSubSelEnd > itemSubSelStart then
+        footerProcessedAudioDur = itemSubSelEnd - itemSubSelStart
+    elseif itemLen and itemLen > 0 then
+        footerProcessedAudioDur = itemLen
+    end
+    local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
+    local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
+    local footerSummaryActive = (not progressState.showTerminal) and (
+        footerRealtimeFactor > 0 or (footerDeviceDetail and footerDeviceDetail ~= "")
+    )
+    local previewStatusFontSize = PS(10)
+    local previewStatusPadY = PS(10)
+    gfx.setfont(1, "Arial", previewStatusFontSize)
+    local previewStatusLineH = gfx.texth
+    local previewStatusRowGap = footerSummaryActive and PS(4) or 0
+    local singleFooterReserve = previewStatusLineH * (footerSummaryActive and 2 or 1) + previewStatusPadY * 2 + previewStatusRowGap
+
     -- === DISPLAY AREA (ART or TERMINAL) ===
     local displayY = nerdBtnY + nerdBtnH + PS(10)
-    -- If terminal is requested, try to give it a bit more vertical room.
-    local bottomPad = progressState.showTerminal and PS(30) or PS(55)
+    local bottomPad = singleFooterReserve + (progressState.showTerminal and PS(8) or 0)
     local displayH = h - displayY - bottomPad
     local displayX = PS(15)
     local displayW = w - PS(30)
@@ -15889,7 +15784,7 @@ local function drawProgressWindow()
 
             -- Draw terminal lines (monospace, green on black)
             local termContentY = displayY + PS(22)
-            local termContentH = displayH - PS(26)
+            local termContentH = displayH - PS(30)
             local lineHeight = PS(12)
             local maxLines = math.floor(termContentH / lineHeight)
             local startLine = math.max(1, #progressState.terminalLines - maxLines + 1)
@@ -15937,42 +15832,12 @@ local function drawProgressWindow()
             local termHint = T("terminal_hint_return_to_art") or "Click >_ to return to art"
             local termHintW = gfx.measurestr(termHint)
             gfx.x = displayX + (displayW - termHintW) / 2
-            gfx.y = displayY + displayH - PS(12)
+            gfx.y = displayY + displayH - PS(16)
             gfx.drawstr(termHint)
 
         else
             -- === ART INFO VIEW ===
-            -- Art is already drawn as full background layer
-            -- Just show title/subtitle info in the display area
-
-            -- Art title overlay (bottom of display area)
-            gfx.setfont(1, "Arial", PS(11), string.byte('b'))
-            gfx.set(1, 1, 1, 0.9)
-            local artTitle = proceduralArt.title or "Generative Art"
-            local titleW = gfx.measurestr(artTitle)
-            gfx.x = displayX + (displayW - titleW) / 2
-            gfx.y = displayY + displayH - PS(35)
-            gfx.drawstr(artTitle)
-
-            -- Art subtitle
-            gfx.setfont(1, "Arial", PS(9))
-            gfx.set(0.7, 0.7, 0.7, 0.8)
-            local artSub = proceduralArt.subtitle or ""
-            local subW = gfx.measurestr(artSub)
-            gfx.x = displayX + (displayW - subW) / 2
-            gfx.y = displayY + displayH - PS(20)
-            gfx.drawstr(artSub)
-
-            -- Click hint at bottom
-            gfx.setfont(1, "Arial", PS(8))
-            gfx.set(0.5, 0.5, 0.5, 0.6)
-            local clickHint = T("click_new_art")
-            local clickW = gfx.measurestr(clickHint)
-            gfx.x = displayX + (displayW - clickW) / 2
-            gfx.y = displayY + displayH - PS(8)
-            gfx.drawstr(clickHint)
-
-            -- Click anywhere in display area to regenerate art
+            -- Keep the art clean; allow regenerating without overlay labels.
             local artHover = mx >= displayX and mx <= displayX + displayW and my >= displayY and my <= displayY + displayH
             if artHover then
                 tooltipText = T("click_new_art")
@@ -15997,42 +15862,112 @@ local function drawProgressWindow()
     progressState.wasMouseDown = mouseDown
     progressState.wasRightMouseDown = rightMouseDown
 
-    -- Bottom ETA + cancel hint (styled like main status bar)
-    local bottomEta = nil
+    -- Bottom footer (aligned with the multi-track Processing footer)
     local stageStr = progressState.stage or ""
-    bottomEta = stageStr:match("ETA%s+([%d]+:%s*%d+)")
+    local bottomEta = stageStr:match("ETA%s+([%d]+:%s*%d+)")
     if bottomEta then bottomEta = bottomEta:gsub("%s+", "") end
-    local hintText = T("hint_cancel")
+    local deviceDetail = footerDeviceDetail
+
+    local elapsed = footerElapsed
+    local elapsedMins = math.floor(elapsed / 60)
+    local elapsedSecs = elapsed % 60
+    local etaText = ""
     if bottomEta and bottomEta ~= "" then
         local etaLabel = T("eta_label") or "ETA:"
-        hintText = tostring(etaLabel) .. " " .. tostring(bottomEta) .. " | " .. tostring(hintText)
+        etaText = " | " .. tostring(etaLabel) .. " " .. tostring(bottomEta)
     end
-    -- Add active device info
-    local activeDeviceStr = ""
-    local activeDevice = SETTINGS.device or "auto"
-    if activeDevice ~= "auto" then
-        activeDeviceStr = ""
+
+    local segValue = "30"
+    local modelDisplay = (SETTINGS.model == "htdemucs_ft") and "Quality" or ((SETTINGS.model == "htdemucs_6s") and "6-Stem" or "Fast")
+    local mtTime = T("mt_time") or "Time"
+    local mtSeg = T("mt_seg") or "Seg"
+    local mtCancel = T("mt_cancel") or "ESC=cancel"
+
+    local contextItem = timeSelectionSourceItem or selectedItem
+    local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
+    local currentLabel = sourceTrackName or sourceItemName or "Selection"
+    if sourceItemName and sourceItemName ~= "" and sourceItemName ~= currentLabel then
+        currentLabel = tostring(currentLabel) .. " - " .. tostring(sourceItemName)
     end
-    hintText = activeDeviceStr .. hintText
+
+    local processedAudioDur = footerProcessedAudioDur
+    local audioDurStr = processedAudioDur > 0 and string.format("%.1fs", processedAudioDur) or nil
+    local realtimeFactor = footerRealtimeFactor
+
+    local leftParts = {
+        string.format("%s: %d:%02d%s", mtTime, elapsedMins, elapsedSecs, etaText),
+        string.format("%s: %s", mtSeg, segValue),
+        modelDisplay,
+    }
+    local rightParts = {}
+    if currentLabel and currentLabel ~= "" then
+        if audioDurStr then
+            rightParts[#rightParts + 1] = string.format("%s (%s, %d:%02d)", currentLabel, audioDurStr, elapsedMins, elapsedSecs)
+        else
+            rightParts[#rightParts + 1] = currentLabel
+        end
+    end
+    rightParts[#rightParts + 1] = mtCancel
+
+    local summaryLeft = nil
+    if (not progressState.showTerminal) and realtimeFactor > 0 then
+        local speedFmt = T("mt_footer_speed_line") or "Speed %.2fx realtime"
+        summaryLeft = string.format(speedFmt, realtimeFactor)
+    end
+    local summaryRight = nil
+    if not progressState.showTerminal then
+        summaryRight = deviceDetail
+    end
+
     local statusFontSize = PS(10)
     local statusPadX = PS(10)
     local statusBlockPadY = PS(10)
-    local statusBlockAlpha = 0.8
-    local statusBlockBorderAlpha = 0.85
+    local statusBlockAlpha = progressState.showTerminal and 0.8 or 0.96
+    local statusBlockBorderAlpha = progressState.showTerminal and 0.85 or 0.92
     gfx.setfont(1, "Arial", statusFontSize)
     local statusLineH = gfx.texth
-    local statusBlockH = statusLineH + statusBlockPadY * 2
+    local hasSummaryFooter = (summaryLeft and summaryLeft ~= "") or (summaryRight and summaryRight ~= "")
+    local statusRowGap = hasSummaryFooter and PS(4) or 0
+    local statusBlockH = statusLineH * (hasSummaryFooter and 2 or 1) + statusBlockPadY * 2 + statusRowGap
     local statusBlockY = h - statusBlockH
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], statusBlockAlpha)
     gfx.rect(0, statusBlockY, w, statusBlockH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
     gfx.rect(0, statusBlockY, w, statusBlockH, 0)
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+
     local availableW = w - statusPadX * 2
-    local labelText, tw = fitTextToBox(hintText, availableW, statusFontSize, statusFontSize)
-    gfx.x = statusPadX + (availableW - tw) / 2
-    gfx.y = statusBlockY + statusBlockPadY
-    gfx.drawstr(labelText)
+    local splitGap = PS(16)
+    local leftW = math.max(PS(180), math.floor((availableW - splitGap) * 0.48))
+    local rightW = math.max(PS(180), availableW - leftW - splitGap)
+    local row1Y = statusBlockY + statusBlockPadY
+    local row2Y = row1Y + statusLineH + statusRowGap
+
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local leftLabel, _ = fitTextToBox(table.concat(leftParts, " | "), leftW, statusFontSize, statusFontSize)
+    local rightLabel, rightTw = fitTextToBox(table.concat(rightParts, " | "), rightW, statusFontSize, statusFontSize)
+    gfx.x = statusPadX
+    gfx.y = row1Y
+    gfx.drawstr(leftLabel)
+    gfx.x = w - statusPadX - rightTw
+    gfx.y = row1Y
+    gfx.drawstr(rightLabel)
+
+    if hasSummaryFooter then
+        local summaryFontSize = PS(9)
+        gfx.setfont(1, "Arial", summaryFontSize)
+        local summaryLeftLabel = fitTextToBox(summaryLeft or "", leftW, summaryFontSize, summaryFontSize)
+        local summaryRightLabel, summaryRightTw = fitTextToBox(summaryRight or "", rightW, summaryFontSize, summaryFontSize)
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.78)
+        gfx.x = statusPadX
+        gfx.y = row2Y
+        gfx.drawstr(summaryLeftLabel)
+        if summaryRight and summaryRight ~= "" then
+            gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.68)
+            gfx.x = w - statusPadX - summaryRightTw
+            gfx.y = row2Y
+            gfx.drawstr(summaryRightLabel)
+        end
+    end
 
     -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
     gfx.setfont(1, "Arial", PS(10))
