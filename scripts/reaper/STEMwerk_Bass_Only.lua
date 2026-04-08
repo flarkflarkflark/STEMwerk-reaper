@@ -1,6 +1,6 @@
 -- @description Stemwerk: Bass Only
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.6
+-- @version 2.2.1.7
 -- @changelog
 --   Quick preset: bass only.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
