@@ -844,6 +844,36 @@ end
 local OS = getOS()
 local PATH_SEP = OS == "Windows" and "\\" or "/"
 
+function uiNow()
+    if reaper and reaper.time_precise then
+        return reaper.time_precise()
+    end
+    return os.clock()
+end
+
+UI_PACING = UI_PACING or {
+    dialogFrameInterval = 1 / 18,
+    dialogFrameIntervalFx = 1 / 14,
+    messageFrameInterval = 1 / 15,
+    messageFrameIntervalFx = 1 / 8,
+    messageSelectionCheckInterval = 0.25,
+    progressFrameInterval = 1 / 20,
+    progressFrameIntervalFx = 1 / 10,
+    progressPollInterval = 0.33,
+    multiTrackFrameInterval = 1 / 15,
+    multiTrackFrameIntervalFx = 1 / 8,
+    multiTrackPollInterval = 0.40,
+    terminalReadInterval = 0.75,
+}
+
+function pacingFrameInterval(baseKey, fxKey)
+    local useFx = SETTINGS and SETTINGS.visualFX
+    if useFx and UI_PACING[fxKey] then
+        return UI_PACING[fxKey]
+    end
+    return UI_PACING[baseKey]
+end
+
 local function getInstallScriptsDir()
     if PATH_STATE.helper then
         if not PATH_STATE.installCache then
@@ -9807,6 +9837,14 @@ end
 
 -- Message window loop
 local function messageWindowLoop()
+    local loopNow = uiNow()
+    local nextFrameAt = messageWindowState.nextFrameAt or 0
+    if loopNow < nextFrameAt then
+        reaper.defer(messageWindowLoop)
+        return
+    end
+    messageWindowState.nextFrameAt = loopNow + pacingFrameInterval("messageFrameInterval", "messageFrameIntervalFx")
+
     -- Save window position for next time
     if reaper.JS_Window_Find then
         local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
@@ -9821,14 +9859,21 @@ local function messageWindowLoop()
     -- If monitoring for selection, check if user made a selection
     -- But DON'T transition while user is still dragging (mouse button held)
     -- This prevents stealing focus while user is making a time selection
+    local hasSel = false
     if messageWindowState.monitorSelection then
-        local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
-        messageWindowState.title = promptTitle or "Start"
-        messageWindowState.message = promptMessage or "Select audio in REAPER"
-        messageWindowState.icon = "info"
+        if loopNow >= (messageWindowState.nextSelectionCheckAt or 0) then
+            messageWindowState.nextSelectionCheckAt = loopNow + (UI_PACING.messageSelectionCheckInterval or 0.25)
+            local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+            messageWindowState.title = promptTitle or "Start"
+            messageWindowState.message = promptMessage or "Select audio in REAPER"
+            messageWindowState.icon = "info"
+            hasSel = hasAnySelection()
+            messageWindowState.cachedHasSelection = hasSel
+        else
+            hasSel = messageWindowState.cachedHasSelection and true or false
+        end
     end
 
-    local hasSel = hasAnySelection()
     if messageWindowState.monitorSelection and hasSel then
         -- Check if mouse button is currently held down (user still dragging)
         local mouseState = reaper.JS_Mouse_GetState and reaper.JS_Mouse_GetState(1) or 0
@@ -9910,6 +9955,8 @@ showMessage = function(title, message, icon, monitorSelection, onClose)
     messageWindowState.icon = icon or "info"
     messageWindowState.wasMouseDown = false
     messageWindowState.startTime = os.clock()
+    messageWindowState.nextFrameAt = 0
+    messageWindowState.nextSelectionCheckAt = 0
     messageWindowState.monitorSelection = monitorSelection or false
     messageWindowState.onClose = onClose
 
@@ -10113,56 +10160,11 @@ local function drawTooltip()
         end
 
         gfx.setfont(1, "Arial", S(10))
-        -- Compose status info for tooltip (matching footer logic)
-        local selTrackCount = reaper.CountSelectedTracks(0)
-        local selItemCount = reaper.CountSelectedMediaItems(0)
-        local effectiveTargets = 0
-        local viaTimeSelection = false
-        local start_time, end_time = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
-        
-        if start_time ~= end_time and (selTrackCount == 0 and selItemCount == 0) then
-            viaTimeSelection = true
-            for i = 0, reaper.CountTracks(0) - 1 do
-                local track = reaper.GetTrack(0, i)
-                local itemCount = reaper.CountTrackMediaItems(track)
-                local hasItemInSelection = false
-                for j = 0, itemCount - 1 do
-                    local item = reaper.GetTrackMediaItem(track, j)
-                    local pos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                    local length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                    if pos < end_time and pos + length > start_time then
-                        hasItemInSelection = true
-                        break
-                    end
-                end
-                if hasItemInSelection then effectiveTargets = effectiveTargets + 1 end
-            end
-        else
-            effectiveTargets = selTrackCount > 0 and selTrackCount or (selItemCount > 0 and 1 or 0)
-        end
-
-        local function trSafeTooltip(key, fallback)
-            local v = T(key)
-            if not v or v == "" or v == key or v == key:gsub("_", " ") then
-                return fallback
-            end
-            return v
-        end
-
-        local function trPluralTooltip(count, singularKey, pluralKey, singularFallback, pluralFallback)
-            if (count or 0) == 1 then
-                return trSafeTooltip(singularKey, singularFallback or singularKey)
-            end
-            return trSafeTooltip(pluralKey, pluralFallback or pluralKey)
-        end
-
-        local trackUnit = trPluralTooltip(effectiveTargets, "footer_track", "footer_tracks", "track", "tracks")
-        local itemUnit = trPluralTooltip(selItemCount, "footer_item", "footer_items", "item", "items")
-        local selectionText
-        if viaTimeSelection then
-            selectionText = string.format("%d %s %s", effectiveTargets, trackUnit, trSafeTooltip("footer_via_time_selection", "(via time selection)"))
-        else
-            selectionText = string.format("%d %s, %d %s", selTrackCount, trackUnit, selItemCount, itemUnit)
+        -- Compose status info for tooltip from the same footer summary used by the main window.
+        local selectionText = ""
+        local footerLines = (type(buildFooterLines) == "function") and buildFooterLines() or nil
+        if footerLines and footerLines.selLine and footerLines.selLine ~= "" then
+            selectionText = tostring(footerLines.selLine):gsub("^[^:]+:%s*", "")
         end
 
         local isTakesMode = not SETTINGS.createNewTracks
@@ -10832,33 +10834,6 @@ function renderResultTitleArea(ctx)
         stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(16)
     end
 
-    local targetY = PS(150)
-    gfx.setfont(1, "Arial", PS(10))
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    local targetText = (T("complete_target_prefix") or "Target:") .. " "
-    if SETTINGS.createNewTracks then
-        targetText = targetText .. (T("new_tracks") or "New tracks")
-        if SETTINGS.createFolder then
-            targetText = targetText .. " (" .. (T("create_folder") or "Folder") .. ")"
-        end
-    else
-        targetText = targetText .. (T("in_place") or "In-place") .. " (" .. (T("keep_takes") or "Keep takes") .. ")"
-    end
-    if SETTINGS.muteOriginal then
-        targetText = targetText .. " | " .. (T("mute_original") or "Mute orig")
-    elseif SETTINGS.muteSelection then
-        targetText = targetText .. " | " .. (T("mute_selection") or "Mute sel")
-    elseif SETTINGS.deleteOriginal then
-        targetText = targetText .. " | " .. (T("delete_original") or "Delete orig")
-    elseif SETTINGS.deleteSelection then
-        targetText = targetText .. " | " .. (T("delete_selection") or "Delete sel")
-    elseif SETTINGS.deleteOriginalTrack then
-        targetText = targetText .. " | " .. (T("delete_track") or "Del track")
-    end
-    local targetW = gfx.measurestr(targetText)
-    gfx.x = (w - targetW) / 2
-    gfx.y = targetY
-    gfx.drawstr(targetText)
 end
 
 function renderResultMessageBox(ctx)
@@ -10934,21 +10909,39 @@ function buildResultMessageLines()
             table.insert(lines, string.format("%s: %s", reasonLabel, runtimeReason))
         end
     elseif data.kind == "single" then
-        if data.mainKey then
+        local line1 = nil
+        if data.stemsCreated and data.sourceCount and data.sourceKind then
+            local stemsCreated = data.stemsCreated or 0
+            local sourceCount = data.sourceCount or 0
+            local stemWord = trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
+            if data.sourceKind == "time_selection" then
+                line1 = string.format(T("result_time_selection_created") or "%d stem %s created from time selection.", stemsCreated, stemWord)
+            else
+                local srcWord = trPlural(sourceCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
+                line1 = string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, sourceCount, srcWord)
+            end
+        elseif data.mainKey then
             if data.mainKey == "result_time_selection_created" or data.mainKey == "result_stems_created_generic" then
                 local count = data.count or 0
                 local trackWord = trPlural(count, "footer_track", "footer_tracks", "track", "tracks")
-                table.insert(lines, string.format(T(data.mainKey) or "%d stem %s created.", count, trackWord))
+                line1 = string.format(T(data.mainKey) or "%d stem %s created.", count, trackWord)
             else
-                table.insert(lines, T(data.mainKey) or "")
+                line1 = T(data.mainKey) or ""
             end
         else
-            table.insert(lines, data.fallback or "")
+            line1 = data.fallback or ""
         end
+        table.insert(lines, line1)
         if data.actionKey then
             table.insert(lines, T(data.actionKey) or "")
         end
-        table.insert(lines, string.format(T("result_time_line") or "Time: %s", timeStr))
+        local speed = tonumber(data.realtimeFactor or 0) or 0
+        if speed > 0 then
+            local speedStr = string.format("%.2fx", speed)
+            table.insert(lines, string.format("Time: %s | Speed: %s realtime", timeStr, speedStr))
+        else
+            table.insert(lines, string.format(T("result_time_line") or "Time: %s", timeStr))
+        end
     end
 
     if data.action then
@@ -12263,7 +12256,13 @@ function GUI._throttleSaveSettings()
 end
 
 function GUI._handleNoSelection()
-    local hasSel = hasAnySelection()
+    -- Cache hasAnySelection() to avoid per-tick REAPER project scan; refresh every 250ms
+    local now = uiNow()
+    if not GUI._noSelCheckAt or now - GUI._noSelCheckAt >= 0.25 then
+        GUI._noSelCheckAt = now
+        GUI._noSelCached = hasAnySelection()
+    end
+    local hasSel = GUI._noSelCached
     if not hasSel then
         GUI.noSelectionFrames = (GUI.noSelectionFrames or 0) + 1
         if GUI.noSelectionFrames > 10 then
@@ -12554,10 +12553,12 @@ buildFooterLines = function()
     local soloActiveFooter = getProcessingSoloActive()
 
     local selTrackCount = 0
+    local selectedTrackSet = {}
     for t = 0, rawSelTrackCount - 1 do
         local tr = reaper.GetSelectedTrack(0, t)
         if tr and AUDIBILITY.isTrackAudible(tr, soloActiveFooter) then
             selTrackCount = selTrackCount + 1
+            selectedTrackSet[tr] = true
         end
     end
 
@@ -12567,6 +12568,7 @@ buildFooterLines = function()
     local selItemCount = 0
     local selItemDur = 0
     local selItemTrackSet = {}
+    local selectedItemsByTrack = {}
     for i = 0, rawSelItemCount - 1 do
         local it = reaper.GetSelectedMediaItem(0, i)
         local tr = it and reaper.GetMediaItem_Track(it)
@@ -12581,14 +12583,17 @@ buildFooterLines = function()
                 selItemCount = selItemCount + 1
                 selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
                 selItemTrackSet[tr] = true
+                local items = selectedItemsByTrack[tr]
+                if not items then
+                    items = {}
+                    selectedItemsByTrack[tr] = items
+                end
+                items[#items + 1] = it
             end
         end
     end
     local selItemTrackCount = 0
     for _ in pairs(selItemTrackSet) do selItemTrackCount = selItemTrackCount + 1 end
-
-    local trackLabel = selTrackCount == 1 and "track" or "tracks"
-    local itemLabel = selItemCount == 1 and "item" or "items"
 
     local function formatDuration(seconds)
         if not seconds or seconds <= 0 then return nil end
@@ -12627,6 +12632,7 @@ buildFooterLines = function()
 
     local autoItemCount = 0
     local autoItemDur = 0
+    local autoItemsByTrack = {}
     if not useTimeSel and rawSelItemCount == 0 and rawSelTrackCount > 0 then
         for t = 0, rawSelTrackCount - 1 do
             local track = reaper.GetSelectedTrack(0, t)
@@ -12637,10 +12643,26 @@ buildFooterLines = function()
                     if item and AUDIBILITY.isItemAudible(item, soloActiveFooter) then
                         autoItemCount = autoItemCount + 1
                         autoItemDur = autoItemDur + (reaper.GetMediaItemInfo_Value(item, "D_LENGTH") or 0)
+                        local items = autoItemsByTrack[track]
+                        if not items then
+                            items = {}
+                            autoItemsByTrack[track] = items
+                        end
+                        items[#items + 1] = item
                     end
                 end
             end
         end
+    end
+
+    local displayTrackSet = {}
+    for tr in pairs(selectedTrackSet) do displayTrackSet[tr] = true end
+    for tr in pairs(selItemTrackSet) do displayTrackSet[tr] = true end
+    local displayTrackCount = 0
+    for _ in pairs(displayTrackSet) do displayTrackCount = displayTrackCount + 1 end
+    local displayItemCount = selItemCount
+    if not useTimeSel and displayItemCount == 0 and autoItemCount > 0 then
+        displayItemCount = autoItemCount
     end
 
     local selectedStemCount = 0
@@ -12649,12 +12671,6 @@ buildFooterLines = function()
             selectedStemCount = selectedStemCount + 1
         end
     end
-
-    local effectiveSrcTracks = selTrackCount > 0 and selTrackCount or (timeSelText and 1 or 0)
-    local effectiveSrcItems = selItemCount > 0 and selItemCount or (timeSelText and 1 or 0)
-
-    local outTrackCount = SETTINGS.createNewTracks and (effectiveSrcTracks * selectedStemCount) or 0
-    local outItemCount = effectiveSrcItems * selectedStemCount
 
     local function trSingularPlural(n, keySingular, keyPlural)
         if (n or 0) == 1 then return T(keySingular) else return T(keyPlural) end
@@ -12667,11 +12683,52 @@ buildFooterLines = function()
         return v
     end
 
+    local function summarizeNoTimeJobs(trackItemMap)
+        local summary = {
+            targetCount = 0,
+            targetIsItem = false,
+            outputStems = 0,
+            folderCount = 0,
+        }
+        local trackCount = 0
+        local jobCount = 0
+        local anyPerItem = false
+
+        for _, items in pairs(trackItemMap or {}) do
+            local itemCount = #items
+            if itemCount > 0 then
+                trackCount = trackCount + 1
+                if SETTINGS.createNewTracks then
+                    if itemCount > 1 then
+                        anyPerItem = true
+                        jobCount = jobCount + itemCount
+                    else
+                        jobCount = jobCount + 1
+                    end
+                else
+                    jobCount = jobCount + itemCount
+                end
+            end
+        end
+
+        if SETTINGS.createNewTracks then
+            summary.targetIsItem = anyPerItem
+            summary.targetCount = anyPerItem and jobCount or trackCount
+            summary.folderCount = SETTINGS.createFolder and jobCount or 0
+        else
+            summary.targetIsItem = true
+            summary.targetCount = jobCount
+        end
+        summary.outputStems = jobCount * selectedStemCount
+        return summary
+    end
+
     local function previewOutputSummary()
         local summary = {
             targetCount = 0,
             targetIsItem = false,
             outputStems = 0,
+            folderCount = 0,
         }
         if selectedStemCount <= 0 then
             return summary
@@ -12690,41 +12747,11 @@ buildFooterLines = function()
         end
 
         if rawSelItemCount > 0 then
-            local trackSet = {}
-            local audibleItems = 0
-            for i = 0, rawSelItemCount - 1 do
-                local it = reaper.GetSelectedMediaItem(0, i)
-                local tr = it and reaper.GetMediaItem_Track(it)
-                if it and tr and AUDIBILITY.isItemAudible(it, soloActiveFooter) then
-                    audibleItems = audibleItems + 1
-                    trackSet[tr] = true
-                end
-            end
-            local trackCount = 0
-            for _ in pairs(trackSet) do trackCount = trackCount + 1 end
-            if SETTINGS.createNewTracks then
-                summary.targetIsItem = false
-                summary.targetCount = trackCount
-                summary.outputStems = trackCount * selectedStemCount
-            else
-                summary.targetIsItem = true
-                summary.targetCount = audibleItems
-                summary.outputStems = audibleItems * selectedStemCount
-            end
-            return summary
+            return summarizeNoTimeJobs(selectedItemsByTrack)
         end
 
         if rawSelTrackCount > 0 then
-            if SETTINGS.createNewTracks then
-                summary.targetIsItem = false
-                summary.targetCount = selTrackCount
-                summary.outputStems = selTrackCount * selectedStemCount
-            else
-                summary.targetIsItem = true
-                summary.targetCount = autoItemCount
-                summary.outputStems = autoItemCount * selectedStemCount
-            end
-            return summary
+            return summarizeNoTimeJobs(autoItemsByTrack)
         end
 
         return summary
@@ -12737,8 +12764,8 @@ buildFooterLines = function()
         viaTimeSelection = true
     end
 
-    local trackUnit = trSingularPlural(effectiveTargets, "footer_track", "footer_tracks")
-    local itemUnit = trSingularPlural(selItemCount, "footer_item", "footer_items")
+    local trackUnit = trSingularPlural(displayTrackCount, "footer_track", "footer_tracks")
+    local itemUnit = trSingularPlural(displayItemCount, "footer_item", "footer_items")
     local selLine
 
     local function trFmt(key, fallback, ...)
@@ -12756,14 +12783,58 @@ buildFooterLines = function()
             timeSelText or ""
         )
     else
-        selLine = trFmt(
-            "footer_line_selected",
-            "Selected: %d %s, %d %s",
-            selTrackCount,
-            trackUnit,
-            selItemCount,
-            itemUnit
-        )
+        if rawSelTrackCount > 0 and rawSelItemCount == 0 then
+            local explicitTrackUnit = trSingularPlural(selTrackCount, "footer_track", "footer_tracks")
+            if autoItemCount > 0 then
+                local autoItemUnit = trSingularPlural(autoItemCount, "footer_item", "footer_items")
+                if selTrackCount == 1 then
+                    selLine = trFmt(
+                        "footer_line_selected_tracks_with_items",
+                        "Selected: %d %s (with %d %s)",
+                        selTrackCount,
+                        explicitTrackUnit,
+                        autoItemCount,
+                        autoItemUnit
+                    )
+                else
+                    selLine = trFmt(
+                        "footer_line_selected_tracks_containing_items",
+                        "Selected: %d %s (containing %d %s)",
+                        selTrackCount,
+                        explicitTrackUnit,
+                        autoItemCount,
+                        autoItemUnit
+                    )
+                end
+            else
+                selLine = trFmt(
+                    "footer_line_selected_tracks_only",
+                    "Selected: %d %s",
+                    selTrackCount,
+                    explicitTrackUnit
+                )
+            end
+        elseif rawSelItemCount > 0 and rawSelTrackCount == 0 then
+            local explicitItemUnit = trSingularPlural(selItemCount, "footer_item", "footer_items")
+            local explicitItemTrackUnit = trSingularPlural(selItemTrackCount, "footer_track", "footer_tracks")
+            selLine = trFmt(
+                "footer_line_selected_items_on_tracks",
+                "Selected: %d %s on %d %s",
+                selItemCount,
+                explicitItemUnit,
+                selItemTrackCount,
+                explicitItemTrackUnit
+            )
+        else
+            selLine = trFmt(
+                "footer_line_selected",
+                "Selected: %d %s, %d %s",
+                displayTrackCount,
+                trackUnit,
+                displayItemCount,
+                itemUnit
+            )
+        end
     end
 
     local stemsPerTrack = 0
@@ -12812,10 +12883,12 @@ buildFooterLines = function()
                 outLine = outLine .. " · " .. timeSelText
             end
         elseif SETTINGS.createNewTracks then
-            local folderCountOut = summary.targetCount
-            local trackCountOut = summary.targetCount
+            local folderCountOut = (summary.folderCount or 0) > 0 and summary.folderCount or summary.targetCount
+            local sourceCountOut = summary.targetCount
             local totalOutputStems = summary.outputStems
-            local trackUnitOut = trSingularPlural(trackCountOut, "footer_track", "footer_tracks")
+            local sourceUnitOut = summary.targetIsItem
+                and trSingularPlural(sourceCountOut, "footer_item", "footer_items")
+                or trSingularPlural(sourceCountOut, "footer_track", "footer_tracks")
             if SETTINGS.createFolder and folderCountOut > 0 then
                 outLine = trFmt(
                     "footer_line_output_tracks_folders",
@@ -12824,8 +12897,8 @@ buildFooterLines = function()
                     stemFolderUnit(folderCountOut),
                     totalOutputStems,
                     stemTrackUnit(totalOutputStems),
-                    trackCountOut,
-                    trackUnitOut
+                    sourceCountOut,
+                    sourceUnitOut
                 )
             else
                 outLine = trFmt(
@@ -12833,8 +12906,8 @@ buildFooterLines = function()
                     "Output: %d %s from %d %s",
                     totalOutputStems,
                     stemUnit(totalOutputStems),
-                    trackCountOut,
-                    trackUnitOut
+                    sourceCountOut,
+                    sourceUnitOut
                 )
             end
         else
@@ -12870,7 +12943,7 @@ buildFooterLines = function()
 
         if SETTINGS.createNewTracks then
             local baseLoc
-            if viaTimeSelection and summary.targetIsItem and effectiveTargets > 1 then
+            if summary.targetIsItem and effectiveTargets > 1 then
                 baseLoc = trSafe("footer_per_item_folders", "Per-item stem folders")
             else
                 baseLoc = effectiveTargets > 1 and (trSafe("footer_per_track_folders", "Per-track stem folders")) or trSafe("footer_location_new_folder", "New folder")
@@ -13310,7 +13383,7 @@ function renderMainColumns(ctx)
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    drawColumnHeader(is6Stem and T("stems_6") or T("stems"), col2X, stemsW, mainHeaderFont, contentTop)
+    drawColumnHeader(is6Stem and T("stems_6") or "Stems:", col2X, stemsW, mainHeaderFont, contentTop)
 
     local stemY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
@@ -13673,16 +13746,19 @@ function renderFooter(ctx)
     local stemBtnW = S(70)
 
     local statusFontSize = S(9)
+    local statusSubFontSize = S(8)
     local statusPadX = S(10)
-    local statusBlockPadY = S(1)
-    local statusBlockGap = S(1)
+    local statusBlockPadY = S(6)
+    local statusRowGap = S(2)
     local statusBlockAlpha = 0.7
     local statusBlockBorderAlpha = 0.75
 
     gfx.setfont(1, "Arial", statusFontSize)
     local statusLineH = gfx.texth
-    local statusBlockH = statusLineH + statusBlockPadY * 2
-    local statusBarH = statusBlockH * 3 + statusBlockGap * 2
+    gfx.setfont(1, "Arial", statusSubFontSize)
+    local statusSubLineH = gfx.texth
+    local statusBlockH = statusLineH + statusSubLineH + statusBlockPadY * 2 + statusRowGap
+    local statusBarH = statusBlockH
     local statusBarY = h - statusBarH
 
     local footerRow4Y = statusBarY - S(10) - btnH
@@ -13692,39 +13768,46 @@ function renderFooter(ctx)
     local locLine = footerLines.locLine or ""
     local isWarning = footerLines.isWarning
 
-    local function drawCenteredStatusLine(y, text)
-        local availableW = w - statusPadX * 2
-        local baseFontSize = statusFontSize
-        local minFontSize = baseFontSize
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], statusBlockAlpha)
+    gfx.rect(0, statusBarY, w, statusBlockH, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
+    gfx.rect(0, statusBarY, w, statusBlockH, 0)
 
-        gfx.setfont(1, "Arial", baseFontSize)
-        local labelText, tw, _ = fitTextToBox(text, availableW, baseFontSize, minFontSize)
-        gfx.y = y
-        gfx.x = statusPadX + (availableW - tw) / 2
-        gfx.drawstr(labelText)
+    local availableW = w - statusPadX * 2
+    local splitGap = S(16)
+    local leftW = math.max(S(180), math.floor((availableW - splitGap) * 0.48))
+    local rightW = math.max(S(180), availableW - leftW - splitGap)
+    local row1Y = statusBarY + statusBlockPadY
+    local row2Y = row1Y + statusLineH + statusRowGap
+
+    gfx.setfont(1, "Arial", statusFontSize)
+    local selLabel = fitTextToBox(selLine, leftW, statusFontSize, statusFontSize)
+    local outLabel, outTw = fitTextToBox(outLine, rightW, statusFontSize, statusFontSize)
+
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.x = statusPadX
+    gfx.y = row1Y
+    gfx.drawstr(selLabel)
+
+    if isWarning then
+        gfx.set(1, 0.3, 0.3, 1)
+    else
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     end
+    gfx.x = w - statusPadX - outTw
+    gfx.y = row1Y
+    gfx.drawstr(outLabel)
 
-    local function drawStatusBlock(blockY, text, warn)
-        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], statusBlockAlpha)
-        gfx.rect(0, blockY, w, statusBlockH, 1)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
-        gfx.rect(0, blockY, w, statusBlockH, 0)
-
-        if warn then
-            gfx.set(1, 0.3, 0.3, 1)
-        else
-            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        end
-        drawCenteredStatusLine(blockY + statusBlockPadY, text)
+    gfx.setfont(1, "Arial", statusSubFontSize)
+    local locLabel = fitTextToBox(locLine, availableW, statusSubFontSize, statusSubFontSize)
+    if isWarning then
+        gfx.set(1, 0.35, 0.35, 0.95)
+    else
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.82)
     end
-
-    local block1Y = statusBarY
-    local block2Y = block1Y + statusBlockH + statusBlockGap
-    local block3Y = block2Y + statusBlockH + statusBlockGap
-
-    drawStatusBlock(block1Y, selLine, false)
-    drawStatusBlock(block2Y, outLine, isWarning)
-    drawStatusBlock(block3Y, locLine, isWarning)
+    gfx.x = statusPadX
+    gfx.y = row2Y
+    gfx.drawstr(locLabel)
 
     local footerMarginX = S(10)
     local stemBtnX = w - footerMarginX - stemBtnW
@@ -14062,6 +14145,7 @@ function dialogLoop()
         return
     end
 
+    local loopNow = uiNow()
     local ctx = {
         S = S,
         w = gfx.w,
@@ -14071,15 +14155,24 @@ function dialogLoop()
         mouseDown = (gfx.mouse_cap & 1) == 1,
         rightMouseDown = (gfx.mouse_cap & 2) == 2,
         mouseWheel = gfx.mouse_wheel,
-        time = os.clock(),
+        time = loopNow,
     }
     ctx.is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+
+    handleDialogKeyboard(ctx)
+
+    local nextFrameAt = GUI._nextFrameAt or 0
+    local forceRedraw = GUI.result ~= nil or GUI.modal or mainDialogArt.pendingNewArt
+    if not forceRedraw and loopNow < nextFrameAt then
+        reaper.defer(dialogLoop)
+        return
+    end
+    GUI._nextFrameAt = loopNow + pacingFrameInterval("dialogFrameInterval", "dialogFrameIntervalFx")
 
     renderDialogBackground(ctx)
     renderHelpTabs(ctx)
     renderMainColumns(ctx)
     renderFooter(ctx)
-    handleDialogKeyboard(ctx)
     renderFlarkLogo(ctx)
 
     if mainDialogArt.pendingNewArt then
@@ -14105,6 +14198,7 @@ showStemSelectionDialog = function()
     perfMark("showStemSelectionDialog(): loadSettings done")
     GUI.result = nil
     GUI.wasMouseDown = false
+    GUI._nextFrameAt = 0
     GUI.hadSelectionOnOpen = true  -- Dialog was opened with valid selection, don't auto-close
 
     -- Keep startup non-blocking: seed a safe device list immediately and do runtime probing
@@ -14940,6 +15034,9 @@ local progressState = {
     terminalLines = {},
     terminalScrollPos = 0,
     lastTerminalUpdate = 0,
+    nextFrameAt = 0,
+    nextPollAt = 0,
+    doneDetected = false,
 }
 
 local function showProcessingWindow(stage, percent)
@@ -14958,6 +15055,9 @@ local function showProcessingWindow(stage, percent)
         gfx.init(WINDOW_PROCESSING, winW, winH, 0, winX, winY)
         progressWindowResizableSet = false
         progressState.windowOpen = true
+    progressState.nextFrameAt = 0
+    progressState.nextPollAt = 0
+    progressState.doneDetected = false
     end
 
     drawProgressWindow()
@@ -14975,6 +15075,11 @@ local multiTrackQueue = {
     showTerminal = false,  -- Nerd mode: show terminal output (sequential mode only)
     terminalLines = {},    -- Terminal output lines
     lastTerminalUpdate = 0, -- Last time terminal was updated
+    listScroll = 0,        -- Scroll offset for large multi-job batches
+    listScrollDragging = false,
+    listScrollDragOffset = 0,
+    nextFrameAt = 0,
+    nextPollAt = 0,
 }
 
 -- Forward declarations for multi-track processing
@@ -15193,6 +15298,7 @@ local function drawProgressWindow()
     local mx, my = gfx.mouse_x, gfx.mouse_y
     local mouseDown = gfx.mouse_cap & 1 == 1
     local rightMouseDown = gfx.mouse_cap & 2 == 2
+    local mouseWheel = gfx.mouse_wheel
 
     -- Tooltip tracking
     local tooltipText = nil
@@ -15751,7 +15857,9 @@ local function drawProgressWindow()
             -- Terminal border (green)
             gfx.set(termBorderR, termBorderG, termBorderB, termBorderA)
             gfx.rect(displayX, displayY, displayW, displayH, 0)
-            drawTerminalFx(displayX, displayY, displayW, displayH, os.clock(), termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
+            if SETTINGS.visualFX then
+                drawTerminalFx(displayX, displayY, displayW, displayH, uiNow(), termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
+            end
 
             -- Terminal header
             gfx.set(termHeaderR, termHeaderG, termHeaderB, termHeaderA)
@@ -15763,8 +15871,8 @@ local function drawProgressWindow()
             gfx.drawstr(T("terminal_output_title") or "DEMUCS OUTPUT")
 
             -- Read latest terminal output from stdout file
-            local now = os.clock()
-            if now - progressState.lastTerminalUpdate > 0.5 then  -- Update every 0.5 sec
+            local now = uiNow()
+            if now - progressState.lastTerminalUpdate > UI_PACING.terminalReadInterval then
                 progressState.lastTerminalUpdate = now
                 progressState.terminalLines = {}
                 if progressState.stdoutFile then
@@ -16915,8 +17023,17 @@ end
 
 -- Progress loop with UI
 function WORKFLOW.progressLoop()
-    WORKFLOW.updateProgressFromFile()
-    drawProgressWindow()
+    local loopNow = uiNow()
+
+    if loopNow >= (progressState.nextPollAt or 0) then
+        progressState.nextPollAt = loopNow + UI_PACING.progressPollInterval
+        WORKFLOW.updateProgressFromFile()
+    end
+
+    if loopNow >= (progressState.nextFrameAt or 0) then
+        progressState.nextFrameAt = loopNow + pacingFrameInterval("progressFrameInterval", "progressFrameIntervalFx")
+        drawProgressWindow()
+    end
 
     local char = gfx.getchar()
     local mouseDown = gfx.mouse_cap & 1 == 1
@@ -17706,6 +17823,7 @@ itemLen = 0
 -- timeSelectionMode, timeSelectionStart, timeSelectionEnd declared at top of file
 timeSelectionSourceItem = nil  -- The item found in time selection (for in-place replacement)
 timeSelectionItemMap = nil     -- Track -> items for per-item time selection jobs
+selectedItemsNoTimeMap = nil   -- Track -> items captured before no-time-selection multi-job runs
 timeSelectionResolvedItems = nil -- Audible time-selection items for createNewTracks
 lastNoAudibleOverlap = false   -- Flag for audibility-filtered empty selection
 itemSubSelection = false  -- true when we rendered only a portion of the selected item
@@ -18255,7 +18373,14 @@ function processStemsResult(stems)
                 trackInfo = " [Track " .. multiTrackQueue.currentIndex .. "/" .. multiTrackQueue.totalTracks .. ": " .. (multiTrackQueue.currentTrackName or "?") .. "]"
             end
             resultMsg = count .. " stem " .. trackWord .. " created from time selection." .. actionMsg .. trackInfo
-            resultData = { kind = "single", mainKey = "result_time_selection_created", count = count }
+            resultData = {
+                kind = "single",
+                mainKey = "result_time_selection_created",
+                count = count,
+                stemsCreated = count,
+                sourceCount = 1,
+                sourceKind = "time_selection",
+            }
         else
             -- In-place mode: replace only the selected portion of the item
             if timeSelectionSourceItem then
@@ -18299,7 +18424,14 @@ function processStemsResult(stems)
                 end
                 local trackWord = count == 1 and "track" or "tracks"
                 resultMsg = count .. " stem " .. trackWord .. " created from time selection."
-                resultData = { kind = "single", mainKey = "result_time_selection_created", count = count }
+                resultData = {
+                    kind = "single",
+                    mainKey = "result_time_selection_created",
+                    count = count,
+                    stemsCreated = count,
+                    sourceCount = 1,
+                    sourceKind = "time_selection",
+                }
             end
         end
     elseif SETTINGS.createNewTracks then
@@ -18312,7 +18444,15 @@ function processStemsResult(stems)
         local trackWord = count == 1 and "track" or "tracks"
         resultMsg = count .. " stem " .. trackWord .. " created."
         if actionKey then resultMsg = resultMsg .. "\n" .. (T(actionKey) or "") end
-        resultData = { kind = "single", mainKey = "result_stems_created_generic", count = count, actionKey = actionKey }
+        resultData = {
+            kind = "single",
+            mainKey = "result_stems_created_generic",
+            count = count,
+            actionKey = actionKey,
+            stemsCreated = count,
+            sourceCount = 1,
+            sourceKind = "items",
+        }
     else
         -- Check if we processed a sub-selection of the item
         if itemSubSelection then
@@ -18371,7 +18511,17 @@ function processStemsResult(stems)
     local timeStr = string.format("%d:%02d", totalMins, totalSecs)
     resultMsg = resultMsg .. "\nTime: " .. timeStr
     if resultData then
+        local processedAudioDur = 0
+        if itemSubSelection and itemSubSelEnd and itemSubSelStart and itemSubSelEnd > itemSubSelStart then
+            processedAudioDur = itemSubSelEnd - itemSubSelStart
+        elseif itemLen and itemLen > 0 then
+            processedAudioDur = itemLen
+        end
+        local realtimeFactor = (processedAudioDur > 0 and totalTime > 0) and (processedAudioDur / totalTime) or 0
         resultData.totalTimeSec = totalTime
+        resultData.realtimeFactor = realtimeFactor
+        resultData.sequentialMode = SETTINGS.parallelProcessing and false or true
+        resultData.requestedParallel = SETTINGS.parallelProcessing and true or false
     end
 
     reaper.UpdateArrange()
@@ -18697,7 +18847,9 @@ runSingleTrackSeparation = function(trackList)
     local inPlaceMultiItem = not SETTINGS.createNewTracks and not hasTimeSel
 
     local perItemMap = timeSelectionItemMap
+    local noTimeSelectionItemMap = selectedItemsNoTimeMap
     timeSelectionItemMap = nil
+    selectedItemsNoTimeMap = nil
 
     local soloActive = getProcessingSoloActive()
     local function trackAudible(track)
@@ -18888,9 +19040,26 @@ runSingleTrackSeparation = function(trackList)
         return { r / 255, g / 255, b / 255 }
     end
 
+    local function getSelectedAudibleItemsOnTrack(track)
+        local items = {}
+        local numItems = reaper.CountTrackMediaItems(track)
+        for j = 0, numItems - 1 do
+            local item = reaper.GetTrackMediaItem(track, j)
+            if item and reaper.ValidatePtr(item, "MediaItem*")
+                and reaper.IsMediaItemSelected(item)
+                and AUDIBILITY.isItemAudible(item, soloActive) then
+                items[#items + 1] = item
+            end
+        end
+        return items
+    end
+
     for i, track in ipairs(trackList) do
         local _, trackName = reaper.GetTrackName(track)
         if trackName == "" then trackName = "Track " .. math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")) end
+        local selectedTrackItems = (not hasTimeSel)
+            and ((noTimeSelectionItemMap and noTimeSelectionItemMap[track]) or getSelectedAudibleItemsOnTrack(track))
+            or nil
 
         if perItemMap and hasTimeSel and perItemMap[track] then
             -- Time selection + per-item jobs for this track (new tracks OR in-place)
@@ -18963,16 +19132,10 @@ runSingleTrackSeparation = function(trackList)
                     debugLog("Per-item extract failed: " .. tostring(err))
                 end
             end
-        elseif inPlaceMultiItem then
-            -- In-place mode: create a separate job for EACH selected item on the track
-            local numItems = reaper.CountTrackMediaItems(track)
-            local selectedItems = {}
-            for j = 0, numItems - 1 do
-                local item = reaper.GetTrackMediaItem(track, j)
-                if reaper.IsMediaItemSelected(item) and AUDIBILITY.isItemAudible(item, soloActive) then
-                    table.insert(selectedItems, item)
-                end
-            end
+        elseif inPlaceMultiItem or (SETTINGS.createNewTracks and not hasTimeSel and selectedTrackItems and #selectedTrackItems > 1) then
+            -- No time selection + multiple selected items on one track:
+            -- build one job per item so new-tracks mode doesn't silently process only the first item.
+            local selectedItems = selectedTrackItems or getSelectedAudibleItemsOnTrack(track)
 
             for itemIdx, item in ipairs(selectedItems) do
                 jobIndex = jobIndex + 1
@@ -19005,6 +19168,9 @@ runSingleTrackSeparation = function(trackList)
                         expectedStemCount = selectedStemCount,
                         index = jobIndex,
                         audioDuration = audioDuration,
+                        selPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION") or 0,
+                        selLen = audioDuration,
+                        perItem = true,
                     })
                 end
             end
@@ -19800,27 +19966,23 @@ function drawMultiTrackProgressWindow()
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
     gfx.rect(barX, barY, barW, barH, 0)
 
-    -- Animated progress fill with gradient (dark → white based on progress)
+    -- Progress fill with the same stem color gradient as the single-track window.
     local fillW = math.floor(barW * overallProgress / 100)
-    if fillW > 0 then
+    if fillW > 0 and #selectedStems > 0 then
         for i = 0, fillW - 1 do
-            local progress = i / barW  -- 0 to 1 based on position
-            local pulse = 0.9 + math.sin(animTime * 3 + i * 0.05) * 0.1
-            -- Gradient: dark gray → teal → white
-            local r, g, b
-            if progress < 0.5 then
-                -- Dark to teal
-                local t = progress * 2
-                r = 0.1 + t * 0.2
-                g = 0.1 + t * 0.5
-                b = 0.15 + t * 0.4
-            else
-                -- Teal to white
-                local t = (progress - 0.5) * 2
-                r = 0.3 + t * 0.7
-                g = 0.6 + t * 0.4
-                b = 0.55 + t * 0.45
-            end
+            local pos = i / math.max(1, fillW - 1)
+            local idx = math.floor(pos * (#selectedStems - 1)) + 1
+            local nextIdx = math.min(idx + 1, #selectedStems)
+            local blend = (pos * (#selectedStems - 1)) % 1
+
+            idx = math.max(1, math.min(idx, #selectedStems))
+            nextIdx = math.max(1, math.min(nextIdx, #selectedStems))
+
+            local r = (selectedStems[idx].color[1] * (1 - blend) + selectedStems[nextIdx].color[1] * blend) / 255
+            local g = (selectedStems[idx].color[2] * (1 - blend) + selectedStems[nextIdx].color[2] * blend) / 255
+            local b = (selectedStems[idx].color[3] * (1 - blend) + selectedStems[nextIdx].color[3] * blend) / 255
+            local pulse = 0.92 + math.sin(animTime * 3 + i * 0.05) * 0.08
+
             gfx.set(r * pulse, g * pulse, b * pulse, 1)
             gfx.line(barX + 1 + i, barY + 1, barX + 1 + i, barY + barH - 2)
         end
@@ -19905,8 +20067,9 @@ function drawMultiTrackProgressWindow()
 
     -- === DISPLAY AREA (TRACK LIST or TERMINAL) ===
     local displayY = nerdBtnY + nerdBtnH + PS(10)
-    -- If terminal is requested, try to give it a bit more vertical room.
-    local bottomPad = multiTrackQueue.showTerminal and PS(30) or PS(55)
+    -- Keep a little extra clearance above the footer in terminal view so the bottom border
+    -- and return hint don't feel clipped by the status bar.
+    local bottomPad = multiTrackQueue.showTerminal and PS(38) or PS(55)
     local displayH = h - displayY - bottomPad
     local displayX = PS(15)
     local displayW = w - PS(30)
@@ -19918,9 +20081,12 @@ function drawMultiTrackProgressWindow()
     end
 
     -- Individual track progress (only when not in terminal view)
-    local trackSpacing = PS(30)
     local numJobs = #multiTrackQueue.jobs
-    local infoY = displayY + numJobs * trackSpacing + PS(8)  -- Below last progress bar
+    local infoBlockReserve = terminalViewActive and 0 or PS(34)
+    local listGap = terminalViewActive and PS(8) or PS(4)
+    local listAreaY = displayY
+    local listAreaH = terminalViewActive and displayH or math.max(PS(78), displayH - infoBlockReserve - listGap)
+    local infoY = listAreaY + listAreaH + listGap
 
     if terminalViewActive then
         -- Treat the terminal pane as UI so background art clicks don't trigger when reading logs.
@@ -20006,13 +20172,15 @@ function drawMultiTrackProgressWindow()
             termTextB = (termTextB * 0.85) + (activeBar[3] * 0.15)
         end
 
-        local termNow = os.clock()
+        local termNow = uiNow()
         gfx.set(termBgR, termBgG, termBgB, termBgA)
         gfx.rect(displayX, displayY, displayW, displayH, 1)
 
         gfx.set(termBorderR, termBorderG, termBorderB, termBorderA)
         gfx.rect(displayX, displayY, displayW, displayH, 0)
-        drawTerminalFx(displayX, displayY, displayW, displayH, termNow, termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
+        if SETTINGS.visualFX then
+            drawTerminalFx(displayX, displayY, displayW, displayH, termNow, termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
+        end
 
         gfx.set(termHeaderR, termHeaderG, termHeaderB, termHeaderA)
         gfx.rect(displayX, displayY, displayW, PS(18), 1)
@@ -20043,8 +20211,8 @@ function drawMultiTrackProgressWindow()
             return res
         end
 
-        termNow = os.clock()
-        if (termNow - (multiTrackQueue.lastTerminalUpdate or 0)) > 0.5 then
+        termNow = uiNow()
+        if (termNow - (multiTrackQueue.lastTerminalUpdate or 0)) > UI_PACING.terminalReadInterval then
             multiTrackQueue.lastTerminalUpdate = termNow
             multiTrackQueue.terminalLines = {}
 
@@ -20097,7 +20265,7 @@ function drawMultiTrackProgressWindow()
         end
 
         local termContentY = displayY + PS(22)
-        local termContentH = displayH - PS(26)
+        local termContentH = displayH - PS(30)
         local lineHeight = PS(12)
         local maxLines = math.floor(termContentH / lineHeight)
         local startLine = math.max(1, #(multiTrackQueue.terminalLines or {}) - maxLines + 1)
@@ -20158,7 +20326,7 @@ function drawMultiTrackProgressWindow()
         local termHint = T("terminal_hint_return_to_art") or "Click >_ to return to art"
         local termHintW = gfx.measurestr(termHint)
         gfx.x = displayX + (displayW - termHintW) / 2
-        gfx.y = displayY + displayH - PS(12)
+        gfx.y = displayY + displayH - PS(16)
         gfx.drawstr(termHint)
 
     else
@@ -20172,11 +20340,83 @@ function drawMultiTrackProgressWindow()
             gfx.y = nerdBtnY + nerdBtnH + PS(2)
             gfx.drawstr(msg)
         end
-        local trackY = displayY
+        local trackY = listAreaY
+        local defaultTrackSpacing = PS(30)
+        local minTrackSpacing = PS(22)
+        local trackSpacing = defaultTrackSpacing
+        if numJobs > 0 then
+            trackSpacing = math.max(minTrackSpacing, math.floor(listAreaH / numJobs))
+        end
+
+        local visibleStart = 1
+        local visibleEnd = numJobs
+        local scrollNeeded = false
+        local visibleRows = numJobs
+        local scrollTrackX, scrollTrackY, scrollTrackH, thumbY, thumbH
+        if (numJobs * trackSpacing) > listAreaH then
+            scrollNeeded = true
+            trackSpacing = minTrackSpacing
+            visibleRows = math.max(1, math.floor(listAreaH / trackSpacing))
+            local maxScroll = math.max(0, numJobs - visibleRows)
+            local listHover = mx >= displayX and mx <= displayX + displayW and my >= listAreaY and my <= listAreaY + listAreaH
+            scrollTrackX = displayX + displayW - PS(5)
+            scrollTrackY = listAreaY
+            scrollTrackH = listAreaH
+            thumbH = math.max(PS(18), math.floor(scrollTrackH * (visibleRows / math.max(1, numJobs))))
+            local thumbTravel = math.max(0, scrollTrackH - thumbH)
+            thumbY = scrollTrackY + math.floor(thumbTravel * ((multiTrackQueue.listScroll or 0) / math.max(1, maxScroll)))
+            local scrollHover = mx >= scrollTrackX - PS(6) and mx <= scrollTrackX + PS(8) and my >= scrollTrackY and my <= scrollTrackY + scrollTrackH
+
+            local wheelDelta = tonumber(mouseWheel) or 0
+            if (listHover or scrollHover) and wheelDelta ~= 0 then
+                local step = math.max(1, math.floor(math.abs(wheelDelta) / 120))
+                local delta = (wheelDelta > 0) and -step or step
+                multiTrackQueue.listScroll = math.max(0, math.min(maxScroll, (multiTrackQueue.listScroll or 0) + delta))
+                gfx.mouse_wheel = 0
+            end
+
+            if scrollHover and mouseDown and not multiTrackQueue.wasMouseDown then
+                if my >= thumbY and my <= thumbY + thumbH then
+                    multiTrackQueue.listScrollDragging = true
+                    multiTrackQueue.listScrollDragOffset = my - thumbY
+                else
+                    local thumbCenter = thumbY + (thumbH / 2)
+                    local page = math.max(1, visibleRows - 1)
+                    if my < thumbCenter then
+                        multiTrackQueue.listScroll = math.max(0, (multiTrackQueue.listScroll or 0) - page)
+                    else
+                        multiTrackQueue.listScroll = math.min(maxScroll, (multiTrackQueue.listScroll or 0) + page)
+                    end
+                end
+            end
+
+            if multiTrackQueue.listScrollDragging then
+                if mouseDown then
+                    local thumbTravelNow = math.max(0, scrollTrackH - thumbH)
+                    local rel = my - scrollTrackY - (multiTrackQueue.listScrollDragOffset or 0)
+                    local thumbPos = math.max(0, math.min(thumbTravelNow, rel))
+                    local ratio = (thumbTravelNow > 0) and (thumbPos / thumbTravelNow) or 0
+                    multiTrackQueue.listScroll = math.floor((maxScroll * ratio) + 0.5)
+                else
+                    multiTrackQueue.listScrollDragging = false
+                    multiTrackQueue.listScrollDragOffset = 0
+                end
+            end
+
+            multiTrackQueue.listScroll = math.max(0, math.min(maxScroll, multiTrackQueue.listScroll or 0))
+            visibleStart = 1 + (multiTrackQueue.listScroll or 0)
+            visibleEnd = math.min(numJobs, visibleStart + visibleRows - 1)
+        else
+            multiTrackQueue.listScroll = 0
+            multiTrackQueue.listScrollDragging = false
+            multiTrackQueue.listScrollDragOffset = 0
+        end
 
         gfx.setfont(1, "Arial", PS(10))
-        for i, job in ipairs(multiTrackQueue.jobs) do
-            local yPos = trackY + (i - 1) * trackSpacing
+        for i = visibleStart, visibleEnd do
+            local job = multiTrackQueue.jobs[i]
+            local rowIdx = i - visibleStart
+            local yPos = trackY + rowIdx * trackSpacing
 
             -- Track name
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
@@ -20189,7 +20429,7 @@ function drawMultiTrackProgressWindow()
             -- Track progress bar
             local tBarX = barX + PS(120)
             local tBarW = barW - PS(150)
-            local tBarH = PS(18)
+            local tBarH = math.max(PS(14), math.min(PS(18), trackSpacing - PS(6)))
 
             -- Progress bar background
             gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
@@ -20239,8 +20479,27 @@ function drawMultiTrackProgressWindow()
             end
         end
 
+        if scrollNeeded then
+            local maxScroll = math.max(1, numJobs - visibleRows)
+            local thumbTravel = math.max(0, scrollTrackH - thumbH)
+            thumbY = scrollTrackY + math.floor(thumbTravel * ((multiTrackQueue.listScroll or 0) / maxScroll))
+
+            gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.35)
+            gfx.rect(scrollTrackX, scrollTrackY, PS(3), scrollTrackH, 1)
+            gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.9)
+            gfx.rect(scrollTrackX, thumbY, PS(3), thumbH, 1)
+
+            gfx.setfont(1, "Arial", PS(8))
+            gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.9)
+            local scrollLabel = string.format("%d-%d/%d  wheel", visibleStart, visibleEnd, numJobs)
+            local scrollLabelW = gfx.measurestr(scrollLabel)
+            gfx.x = math.max(barX, displayX + displayW - scrollLabelW - PS(10))
+            gfx.y = infoY - PS(12)
+            gfx.drawstr(scrollLabel)
+        end
+
         -- Current processing info (positioned below progress bars)
-        infoY = trackY + numJobs * trackSpacing + PS(8)  -- Below last progress bar
+        infoY = listAreaY + listAreaH + listGap
     end
 
     local globalElapsed = os.time() - (multiTrackQueue.globalStartTime or os.time())
@@ -20283,94 +20542,57 @@ function drawMultiTrackProgressWindow()
     end
 
     -- Keep the UI minimal in terminal view (like the single-track Processing window).
+    local summaryLine1, summaryLine2 = nil, nil
     if not terminalViewActive then
-
-    gfx.setfont(1, "Arial", PS(11))
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-
-    -- Count expected stems
-    local selectedStemCount = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected then selectedStemCount = selectedStemCount + 1 end
-    end
-    local expectedStems = multiTrackQueue.expectedStemCount
-    if not expectedStems or expectedStems <= 0 then
-        expectedStems = numJobs * selectedStemCount
-    end
-
-    -- Line 1: Status overview
-    local function trSafeProgress(key, fallback)
-        local v = T(key)
-        if not v or v == "" or v == key or v == key:gsub("_", " ") then
-            return fallback
+        local function trSafeProgress(key, fallback)
+            local v = T(key)
+            if not v or v == "" or v == key or v == key:gsub("_", " ") then
+                return fallback
+            end
+            return v
         end
-        return v
-    end
-    local statusFmt
-    if anyPerItem then
-        statusFmt = trSafeProgress("mt_status_line_items", "Items: %d/%d | Queued: %d | Audio: %.1fs/%.1fs | Stems: %d expected")
-    else
-        statusFmt = trSafeProgress("mt_status_line", "Tracks: %d/%d | Audio: %.1fs/%.1fs | Stems: %d expected")
-    end
-    
-    -- Show the duration of the current/last selection as the reference point, not the cumulative batch time
-    local displayTotalDur = numJobs > 0 and (multiTrackQueue.jobs[1].audioDuration or 0) or totalAudioDur
-    local processedItemTotal = anyPerItem and ((multiTrackQueue.detectedItemCount or 0) > 0 and multiTrackQueue.detectedItemCount or numJobs) or numJobs
-    local queuedItemCount = anyPerItem and (multiTrackQueue.queuedItemCount or numJobs) or numJobs
-    local displayProcessedAudio = (totalAudioDur > 0 and displayTotalDur > 0) and (completedAudioDur / (totalAudioDur / displayTotalDur)) or 0
-    local statusText
-    if anyPerItem then
-        statusText = string.format(statusFmt, completedJobs, processedItemTotal, queuedItemCount, displayProcessedAudio, displayTotalDur, expectedStems)
-    else
-        statusText = string.format(statusFmt, completedJobs, numJobs, displayProcessedAudio, displayTotalDur, expectedStems)
-    end
-    gfx.x = barX
-    gfx.y = infoY
-    gfx.drawstr(statusText)
 
-    -- Line 2: Speed and ETA
-    local speedText = ""
-    if realtimeFactor > 0 then
-        local speedFmt = T("mt_speed_line") or "Speed: %.2fx realtime"
-        speedText = string.format(speedFmt, realtimeFactor)
-    else
-        speedText = T("mt_speed_calc") or "Speed: calculating.."
-    end
-    local etaText = ""
-    if eta > 0 then
-        local etaMins = math.floor(eta / 60)
-        local etaSecs = math.floor(eta % 60)
-        local etaFmt = T("mt_eta_suffix") or " | ETA: %d:%02d remaining"
-        etaText = string.format(etaFmt, etaMins, etaSecs)
-    end
-    gfx.x = barX
-    gfx.y = infoY + PS(16)
-    gfx.drawstr(speedText .. etaText)
-
-    -- Line 3: Current job info (if active)
-    if activeJob then
-        local jobElapsed = os.time() - (activeJob.startTime or os.time())
-        local jobMins = math.floor(jobElapsed / 60)
-        local jobSecs = jobElapsed % 60
-        local audioDurStr = activeJob.audioDuration and string.format("%.1fs", activeJob.audioDuration) or "?"
-        local infoFmt = T("mt_current_line") or "Current: %s (%s) | %d:%02d elapsed"
-        local currentLabel = activeJob.trackName or "?"
-        if activeJob.perItem and activeJob.sourceTrackName and activeJob.sourceItemDisplayName then
-            currentLabel = activeJob.sourceTrackName .. " - " .. activeJob.sourceItemDisplayName
+        -- Count expected stems
+        local selectedStemCount = 0
+        for _, stem in ipairs(STEMS) do
+            if stem.selected then selectedStemCount = selectedStemCount + 1 end
         end
-        local infoText = string.format(infoFmt, currentLabel, audioDurStr, jobMins, jobSecs)
-        gfx.x = barX
-        gfx.y = infoY + PS(48)
-        gfx.drawstr(infoText)
+        local expectedStems = multiTrackQueue.expectedStemCount
+        if not expectedStems or expectedStems <= 0 then
+            expectedStems = numJobs * selectedStemCount
+        end
 
-        -- Line 5: Media item info
-        local itemInfo = activeJob.itemNames or activeJob.sourceItemDisplayName or "Unknown"
-        if #itemInfo > 55 then itemInfo = itemInfo:sub(1, 52) .. ".." end
-        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
-        gfx.x = barX
-        gfx.y = infoY + PS(64)
-        gfx.drawstr((T("mt_media_label") or "Media:") .. " " .. itemInfo)
-    end
+        -- Show the duration of the current/last selection as the reference point, not the cumulative batch time
+        local displayTotalDur = numJobs > 0 and (multiTrackQueue.jobs[1].audioDuration or 0) or totalAudioDur
+        local processedItemTotal = anyPerItem and ((multiTrackQueue.detectedItemCount or 0) > 0 and multiTrackQueue.detectedItemCount or numJobs) or numJobs
+        local queuedItemCount = anyPerItem and (multiTrackQueue.queuedItemCount or numJobs) or numJobs
+        local displayProcessedAudio = (totalAudioDur > 0 and displayTotalDur > 0) and (completedAudioDur / (totalAudioDur / displayTotalDur)) or 0
+        local itemUnit = (processedItemTotal == 1) and (T("footer_item") or "item") or (T("footer_items") or "items")
+        local trackUnit = (numJobs == 1) and (T("footer_track") or "track") or (T("footer_tracks") or "tracks")
+        local stemUnit = (expectedStems == 1) and (T("stem") or "stem") or (T("stems") or "stems")
+
+        if anyPerItem then
+            local tpl = trSafeProgress("mt_footer_summary_items", "%d/%d %s | Queue %d | Audio %.1fs/%.1fs | %d %s")
+            summaryLine1 = string.format(tpl,
+                completedJobs, processedItemTotal, itemUnit, queuedItemCount, displayProcessedAudio, displayTotalDur, expectedStems, stemUnit)
+        else
+            local tpl = trSafeProgress("mt_footer_summary_tracks", "%d/%d %s | Audio %.1fs/%.1fs | %d %s")
+            summaryLine1 = string.format(tpl,
+                completedJobs, numJobs, trackUnit, displayProcessedAudio, displayTotalDur, expectedStems, stemUnit)
+        end
+
+        if realtimeFactor > 0 then
+            local speedFmt = trSafeProgress("mt_footer_speed_line", "Speed %.2fx realtime")
+            summaryLine2 = string.format(speedFmt, realtimeFactor)
+        else
+            summaryLine2 = T("mt_speed_calc") or "Speed calculating.."
+        end
+        if eta > 0 then
+            local etaMins = math.floor(eta / 60)
+            local etaSecs = math.floor(eta % 60)
+            local etaFmt = trSafeProgress("mt_footer_eta_suffix", " | ETA %d:%02d")
+            summaryLine2 = summaryLine2 .. string.format(etaFmt, etaMins, etaSecs)
+        end
     end
 
     -- (Terminal rendering moved into the shared display area above, so it works in both Seq and Par)
@@ -20383,7 +20605,9 @@ function drawMultiTrackProgressWindow()
     local statusBlockBorderAlpha = 0.85
     gfx.setfont(1, "Arial", statusFontSize)
     local statusLineH = gfx.texth
-    local statusBlockH = statusLineH + statusBlockPadY * 2
+    local hasSummaryFooter = (summaryLine1 and summaryLine1 ~= "") or (summaryLine2 and summaryLine2 ~= "")
+    local statusRowGap = hasSummaryFooter and PS(4) or 0
+    local statusBlockH = statusLineH * (hasSummaryFooter and 2 or 1) + statusBlockPadY * 2 + statusRowGap
     local statusBlockY = h - statusBlockH
     local segSize = multiTrackQueue.sequentialMode and "40" or "25"
     local modeStr = multiTrackQueue.sequentialMode and "Seq" or "Par"
@@ -20405,21 +20629,67 @@ function drawMultiTrackProgressWindow()
     end
     
     local modelDisplay = (SETTINGS.model == "htdemucs_ft") and "Quality" or (is6Stem and "6-Stem" or "Fast")
-    local hintText = string.format("%s: %d:%02d%s | %s: %s%s | %s | %s", 
-        mtTime, totalMins, totalSecs, etaText, 
-        mtSeg, segSize, modeStr,
-        modelDisplay, mtCancel)
+    local leftParts = {
+        string.format("%s: %d:%02d%s", mtTime, totalMins, totalSecs, etaText),
+        string.format("%s: %s%s", mtSeg, segSize, modeStr),
+        modelDisplay,
+    }
+    local rightParts = {}
+    if activeJob then
+        local jobElapsed = os.time() - (activeJob.startTime or os.time())
+        local jobMins = math.floor(jobElapsed / 60)
+        local jobSecs = jobElapsed % 60
+        local currentLabel = activeJob.trackName or "?"
+        if activeJob.perItem and activeJob.sourceTrackName and activeJob.sourceItemDisplayName then
+            currentLabel = activeJob.sourceTrackName .. " - " .. activeJob.sourceItemDisplayName
+        end
+        local audioDurStr = activeJob.audioDuration and string.format("%.1fs", activeJob.audioDuration) or "?"
+        rightParts[#rightParts + 1] = string.format("%s (%s, %d:%02d)", currentLabel, audioDurStr, jobMins, jobSecs)
+    end
+    rightParts[#rightParts + 1] = mtCancel
+    local leftText = table.concat(leftParts, " | ")
+    local rightText = table.concat(rightParts, " | ")
 
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], statusBlockAlpha)
     gfx.rect(0, statusBlockY, gfx.w, statusBlockH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
     gfx.rect(0, statusBlockY, gfx.w, statusBlockH, 0)
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+
     local availableW = gfx.w - statusPadX * 2
-    local labelText, tw = fitTextToBox(hintText, availableW, statusFontSize, statusFontSize)
-    gfx.x = statusPadX + (availableW - tw) / 2
-    gfx.y = statusBlockY + statusBlockPadY
-    gfx.drawstr(labelText)
+    local splitGap = PS(16)
+    local leftW = math.max(PS(180), math.floor((availableW - splitGap) * 0.48))
+    local rightW = math.max(PS(180), availableW - leftW - splitGap)
+    local row1Y = statusBlockY + statusBlockPadY
+    local row2Y = row1Y + statusLineH + statusRowGap
+
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local leftLabel, _ = fitTextToBox(leftText, leftW, statusFontSize, statusFontSize)
+    local rightLabel, rightTw = fitTextToBox(rightText, rightW, statusFontSize, statusFontSize)
+    gfx.x = statusPadX
+    gfx.y = row1Y
+    gfx.drawstr(leftLabel)
+    gfx.x = gfx.w - statusPadX - rightTw
+    gfx.y = row1Y
+    gfx.drawstr(rightLabel)
+
+    if hasSummaryFooter then
+        local summaryFontSize = PS(9)
+        gfx.setfont(1, "Arial", summaryFontSize)
+        local summaryLeft = summaryLine1 or ""
+        local summaryRight = summaryLine2 or ""
+        local summaryLeftLabel = fitTextToBox(summaryLeft, leftW, summaryFontSize, summaryFontSize)
+        local summaryRightLabel, summaryRightTw = fitTextToBox(summaryRight, rightW, summaryFontSize, summaryFontSize)
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.78)
+        gfx.x = statusPadX
+        gfx.y = row2Y
+        gfx.drawstr(summaryLeftLabel)
+        if summaryRight ~= "" then
+            gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.68)
+            gfx.x = gfx.w - statusPadX - summaryRightTw
+            gfx.y = row2Y
+            gfx.drawstr(summaryRightLabel)
+        end
+    end
 
 
     -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
@@ -20471,10 +20741,18 @@ end
 
 -- Multi-track progress window loop
 function multiTrackProgressLoop()
-    -- Update all job progress
-    updateAllJobsProgress()
+    local loopNow = uiNow()
 
-    local result = drawMultiTrackProgressWindow()
+    if loopNow >= (multiTrackQueue.nextPollAt or 0) then
+        multiTrackQueue.nextPollAt = loopNow + UI_PACING.multiTrackPollInterval
+        updateAllJobsProgress()
+    end
+
+    local result = nil
+    if loopNow >= (multiTrackQueue.nextFrameAt or 0) then
+        multiTrackQueue.nextFrameAt = loopNow + pacingFrameInterval("multiTrackFrameInterval", "multiTrackFrameIntervalFx")
+        result = drawMultiTrackProgressWindow()
+    end
 
     if result == "cancel" then
         -- Remember any size/position changes made during processing
@@ -20519,6 +20797,9 @@ showMultiTrackProgressWindow = function()
     captureWindowGeometry(SCRIPT_NAME)
     GUI.snapshotMainGeometry()
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
+    multiTrackQueue.listScroll = 0
+    multiTrackQueue.nextFrameAt = 0
+    multiTrackQueue.nextPollAt = 0
     gfx.init(WINDOW_MULTI_TRACK, winW, winH, 0, winX, winY)
     reaper.defer(multiTrackProgressLoop)
 end
@@ -21328,10 +21609,11 @@ function runSeparationWorkflow()
     debugLog("Temp input: " .. WORKFLOW_TEMP_INPUT)
 
     local extracted, err, sourceItem, trackList, trackItems
-    if timeSelectionMode then
-        debugLog("Rendering time selection to WAV..")
-        timeSelectionItemMap = nil
-        extracted, err, sourceItem, trackList, trackItems = renderTimeSelectionToWav(WORKFLOW_TEMP_INPUT)
+	    if timeSelectionMode then
+	        debugLog("Rendering time selection to WAV..")
+	        timeSelectionItemMap = nil
+	        selectedItemsNoTimeMap = nil
+	        extracted, err, sourceItem, trackList, trackItems = renderTimeSelectionToWav(WORKFLOW_TEMP_INPUT)
         debugLog("Render result: extracted=" .. tostring(extracted) .. ", err=" .. tostring(err))
 
         -- Check for multi-track mode
@@ -21364,14 +21646,64 @@ function runSeparationWorkflow()
         end
 
         timeSelectionSourceItem = sourceItem  -- Store for later use
-    else
-        -- No time selection - if tracks or items are selected, build combined track list
-        local selTrackCount = reaper.CountSelectedTracks(0)
-        local selItemCount = reaper.CountSelectedMediaItems(0)
-        debugLog("No time selection, selected items: " .. selItemCount .. ", selected tracks: " .. selTrackCount)
+	    else
+	        -- No time selection - if tracks or items are selected, build combined track list
+	        local selTrackCount = reaper.CountSelectedTracks(0)
+	        local selItemCount = reaper.CountSelectedMediaItems(0)
+	        debugLog("No time selection, selected items: " .. selItemCount .. ", selected tracks: " .. selTrackCount)
+	        selectedItemsNoTimeMap = nil
 
-        -- Build combined track list from selected tracks and tracks of selected items
-        local trackSet = {}
+	        local explicitTrackItemMap = {}
+	        local explicitTrackItemSeen = {}
+	        local function addExplicitTrackItem(track, item)
+	            if not (track and item) then return end
+	            if not reaper.ValidatePtr(track, "MediaTrack*") then return end
+	            if not reaper.ValidatePtr(item, "MediaItem*") then return end
+	            local seen = explicitTrackItemSeen[track]
+	            if not seen then
+	                seen = {}
+	                explicitTrackItemSeen[track] = seen
+	            end
+	            if seen[item] then return end
+	            seen[item] = true
+	            local items = explicitTrackItemMap[track]
+	            if not items then
+	                items = {}
+	                explicitTrackItemMap[track] = items
+	            end
+	            items[#items + 1] = item
+	        end
+
+	        if selItemCount and selItemCount > 0 then
+	            for i = 0, selItemCount - 1 do
+	                local it = reaper.GetSelectedMediaItem(0, i)
+	                if it and reaper.ValidatePtr(it, "MediaItem*") and not isItemMutedWorkflow(it) then
+	                    local tr = reaper.GetMediaItem_Track(it)
+	                    if tr and trackAudibleWorkflow(tr) then
+	                        addExplicitTrackItem(tr, it)
+	                    end
+	                end
+	            end
+	        elseif selTrackCount and selTrackCount > 0 then
+	            for t = 0, selTrackCount - 1 do
+	                local tr = reaper.GetSelectedTrack(0, t)
+	                if tr and reaper.ValidatePtr(tr, "MediaTrack*") and trackAudibleWorkflow(tr) then
+	                    local trackItemCount = reaper.CountTrackMediaItems(tr)
+	                    for i = 0, trackItemCount - 1 do
+	                        local it = reaper.GetTrackMediaItem(tr, i)
+	                        if it and reaper.ValidatePtr(it, "MediaItem*") and not isItemMutedWorkflow(it) then
+	                            addExplicitTrackItem(tr, it)
+	                        end
+	                    end
+	                end
+	            end
+	        end
+	        if next(explicitTrackItemMap) then
+	            selectedItemsNoTimeMap = explicitTrackItemMap
+	        end
+	
+	        -- Build combined track list from selected tracks and tracks of selected items
+	        local trackSet = {}
         if selTrackCount and selTrackCount > 0 then
             for t = 0, selTrackCount - 1 do
                 local tr = reaper.GetSelectedTrack(0, t)
