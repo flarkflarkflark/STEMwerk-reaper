@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.7
+-- @version 2.2.1.8
 -- @changelog
 --   2026-03-24: Local working build saved as v2.2.1.1 for installer follow-up.
 --   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
@@ -52,7 +52,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.1.7"
+local APP_VERSION = "2.2.1.8"
 local SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -317,76 +317,6 @@ end
 
 WINDOWS_GPU_NAMES = nil
 WINDOWS_GPU_NAME_STATUS = nil
-
-function getWindowsGpuNames()
-    if WINDOWS_GPU_NAMES and #WINDOWS_GPU_NAMES > 0 then return WINDOWS_GPU_NAMES end
-    if WINDOWS_GPU_NAMES and #WINDOWS_GPU_NAMES == 0 and WINDOWS_GPU_NAME_STATUS == "device_name_probe_failed" then
-        return WINDOWS_GPU_NAMES
-    end
-    local names = {}
-    if not (SW_LOG and SW_LOG.isWindows and SW_LOG.isWindows()) then
-        WINDOWS_GPU_NAMES = names
-        WINDOWS_GPU_NAME_STATUS = nil
-        return names
-    end
-    local function parseLines(out)
-        out = out or ""
-        for line in out:gmatch("[^\r\n]+") do
-            local trimmed = tostring(line):gsub("^%s+", ""):gsub("%s+$", "")
-            if trimmed ~= "" and trimmed:lower() ~= "name" then
-                names[#names + 1] = trimmed
-            end
-        end
-    end
-    local function readFile(path)
-        local f = io.open(path, "r")
-        if not f then return nil end
-        local content = f:read("*a")
-        f:close()
-        return content
-    end
-    local function escapePsSingle(s)
-        s = tostring(s or "")
-        return s:gsub("'", "''")
-    end
-    local tempBase = (SW_LOG and SW_LOG.getTempBase and SW_LOG.getTempBase()) or os.getenv("TEMP") or os.getenv("TMP") or "C:\\Windows\\Temp"
-    local outPath = tempBase .. "\\STEMwerk_gpu_names_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)) .. ".txt"
-
-    -- Prefer PowerShell (CIM), write to file to avoid ExecProcess capture issues.
-    local psPath = tempBase .. "\\STEMwerk_gpu_names_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)) .. ".ps1"
-    local psFile = io.open(psPath, "w")
-    if psFile then
-        psFile:write("$ErrorActionPreference='SilentlyContinue'\n")
-        psFile:write("$out='" .. escapePsSingle(outPath) .. "'\n")
-        psFile:write("Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name | Out-File -FilePath $out -Encoding ascii\n")
-        psFile:close()
-        local psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' .. quoteArg(psPath)
-        exec_capture(psCmd, 5000)
-    end
-    local out = readFile(outPath)
-    if out and out ~= "" then
-        parseLines(out)
-    end
-    os.remove(outPath)
-    if psPath then os.remove(psPath) end
-
-    if #names == 0 then
-        -- Fallback to WMIC without an extra cmd.exe wrapper.
-        local rc3, out3 = exec_capture('wmic path win32_VideoController get Name', 5000)
-        if out3 and out3 ~= "" then
-            parseLines(out3)
-        end
-    end
-    if #names == 0 then
-        WINDOWS_GPU_NAME_STATUS = "device_name_probe_failed"
-        SW_LOG.logExecResult("gpu_name_probe", -1, "No GPU names detected via Win32_VideoController.")
-    else
-        WINDOWS_GPU_NAME_STATUS = nil
-        SW_LOG.logExecResult("gpu_name_probe", 0, table.concat(names, "\n"))
-    end
-    WINDOWS_GPU_NAMES = names
-    return names
-end
 
 local function canRunPython(pythonCmd)
     if not pythonCmd or pythonCmd == "" then return false end
@@ -773,32 +703,6 @@ local function debugLog(msg)
     end
 end
 
-local function debugCudaProbe()
-    if not DEBUG.enabled then return end
-    local runtimeGetter = getRuntimePaths or (SW_SETUP and SW_SETUP.getRuntimePaths)
-    local runtime = type(runtimeGetter) == "function" and runtimeGetter() or {}
-    local py = getExtStateValue("pythonPath") or runtime.venvPython
-    if not py or py == "" then
-        debugLog("debugCudaProbe: no python path available yet")
-        return
-    end
-    if not isAbsolutePath(py) then
-        py = script_path .. py
-    end
-    if not fileExists(py) then
-        debugLog("debugCudaProbe: python not found at " .. tostring(py))
-        return
-    end
-    local cmd = quoteArg(py) .. ' -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.device_count()); print(torch.cuda.get_device_name(0))"'
-    local rc, out = exec_capture(cmd, 20000)
-    debugLog("debugCudaProbe rc=" .. tostring(rc))
-    debugLog("debugCudaProbe out:\n" .. tostring(out))
-    if reaper and reaper.ShowConsoleMsg then
-        reaper.ShowConsoleMsg("STEMwerk debugCudaProbe rc=" .. tostring(rc) .. "\n")
-        reaper.ShowConsoleMsg("STEMwerk debugCudaProbe out:\n" .. tostring(out) .. "\n")
-    end
-end
-
 -- Clear debug log on script start
 local function clearDebugLog()
     if not DEBUG.enabled then return end
@@ -814,7 +718,6 @@ end
 
 clearDebugLog()
 debugLog("Script loaded")
-debugCudaProbe()
 
 -- Lightweight performance markers (only when DEBUG.enabled is enabled).
 PERF_T0 = os.clock()
@@ -1205,6 +1108,40 @@ local function findPython()
     return fallback
 end
 
+function getFastStartupPythonPath()
+    if OS ~= "Windows" then
+        local detected = findPython()
+        if type(SW_SETUP.resolveRuntimePythonPath) == "function" then
+            local resolved = SW_SETUP.resolveRuntimePythonPath()
+            if resolved and resolved ~= "" then
+                detected = resolved
+            end
+        end
+        return detected
+    end
+
+    -- Windows cold-start must stay cheap: prefer already-known runtime paths and
+    -- avoid eager `python --version` checks before the first UI frame is visible.
+    if type(SW_SETUP.resolveRuntimePythonPath) == "function" then
+        local resolved = SW_SETUP.resolveRuntimePythonPath()
+        if resolved and resolved ~= "" then
+            return resolved
+        end
+    end
+
+    local override = getExtStateValue("pythonPath")
+    if override and override ~= "" then
+        return override
+    end
+
+    local runtime = getRuntimePaths()
+    if runtime and runtime.venvPython and runtime.venvPython ~= "" and fileExists(runtime.venvPython) then
+        return runtime.venvPython
+    end
+
+    return "python"
+end
+
 local function findSeparatorScript()
     local override = getExtStateValue("separatorScript")
     if override then
@@ -1316,20 +1253,16 @@ ensureDependenciesInteractive = SW_SETUP.ensureDependenciesInteractive
 persistPythonPath = SW_SETUP.persistPythonPath
 readCapabilities = SW_SETUP.readCapabilities
 
-PYTHON_PATH = findPython()
+PYTHON_PATH = getFastStartupPythonPath()
 SEPARATOR_SCRIPT = findSeparatorScript()
-if type(SW_SETUP.resolveRuntimePythonPath) == "function" then
-    local resolvedPython = SW_SETUP.resolveRuntimePythonPath()
-    if resolvedPython and resolvedPython ~= "" then
-        PYTHON_PATH = resolvedPython
-    end
-end
 
 debugLog("Detected Python: " .. tostring(PYTHON_PATH))
 debugLog("Detected separator script: " .. tostring(SEPARATOR_SCRIPT))
 
 -- Persist the chosen Python path into REAPER ExtState so the launcher uses it
-persistPythonPath(PYTHON_PATH)
+if OS ~= "Windows" then
+    persistPythonPath(PYTHON_PATH)
+end
 
 -- Stem configuration (with selection state)
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
@@ -1592,12 +1525,38 @@ function applyRuntimeDevicesFromParsed(devices, envJson, now)
 
     RUNTIME_DEVICE_PROBE_DEBUG = "ok"
 
+    local gpuOptionCount = 0
+    for _, dev in ipairs(devices) do
+        local id = tostring(dev.id or "")
+        if dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$") or id == "cuda" or id == "directml" then
+            gpuOptionCount = gpuOptionCount + 1
+        end
+    end
+
     local function compactGpuLabel(id)
-        local idx = tostring(id or ""):match("^cuda:(%d+)$")
+        local sid = tostring(id or "")
+        if OS == "Windows" and gpuOptionCount <= 1 and (sid:match("^cuda") or sid:match("^directml")) then
+            return "GPU"
+        end
+        local idx = sid:match(":(%d+)$")
         if idx then
             return "GPU" .. idx
         end
-        return tostring(id or "")
+        if sid == "cuda" or sid == "directml" then
+            return "GPU"
+        end
+        return sid
+    end
+
+    local function isPlaceholderGpuName(name)
+        local n = tostring(name or ""):lower()
+        if n == "" then return true end
+        if n:match("^cuda%s*%d*$") then return true end
+        if n:match("^cuda%s*gpu%s*%d*$") then return true end
+        if n:match("^directml%s*%d*$") then return true end
+        if n:match("^directml%s*gpu%s*%d*$") then return true end
+        if n:match("^gpu%s*%d*$") then return true end
+        return false
     end
 
     local function sanitizeFriendlyName(name)
@@ -1726,7 +1685,14 @@ function applyRuntimeDevicesFromParsed(devices, envJson, now)
             d.fullName = mapped
         end
         if d.id and (d.id:match("^cuda:%d+$") or d.id:match("^directml:%d+$") or d.type == "cuda" or d.type == "directml") then
-            d.uiName = sanitizeFriendlyName(d.fullName or d.name) or compactGpuLabel(d.id)
+            local short = sanitizeFriendlyName(d.fullName or d.name)
+            if not short or short == "" or isPlaceholderGpuName(short) then
+                short = sanitizeFriendlyName(d.name)
+            end
+            if not short or short == "" or isPlaceholderGpuName(short) then
+                short = compactGpuLabel(d.id)
+            end
+            d.uiName = short
         else
             d.uiName = d.name
         end
@@ -2287,14 +2253,38 @@ if env.get('directml_possible'):
 
     RUNTIME_DEVICE_PROBE_DEBUG = "ok"
 
-    -- Build compact UI labels so device names fit in the column, while tooltips keep full names.
-    -- Requested UX: show just GPU0/GPU1 on the buttons; keep device id + full name in tooltip.
+    local gpuOptionCount = 0
+    for _, dev in ipairs(devices) do
+        local id = tostring(dev.id or "")
+        if dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$") or id == "cuda" or id == "directml" then
+            gpuOptionCount = gpuOptionCount + 1
+        end
+    end
+
     local function compactGpuLabel(id)
-        local idx = tostring(id or ""):match("^cuda:(%d+)$")
+        local sid = tostring(id or "")
+        if OS == "Windows" and gpuOptionCount <= 1 and (sid:match("^cuda") or sid:match("^directml")) then
+            return "GPU"
+        end
+        local idx = sid:match(":(%d+)$")
         if idx then
             return "GPU" .. idx
         end
-        return tostring(id or "")
+        if sid == "cuda" or sid == "directml" then
+            return "GPU"
+        end
+        return sid
+    end
+
+    local function isPlaceholderGpuName(name)
+        local n = tostring(name or ""):lower()
+        if n == "" then return true end
+        if n:match("^cuda%s*%d*$") then return true end
+        if n:match("^cuda%s*gpu%s*%d*$") then return true end
+        if n:match("^directml%s*%d*$") then return true end
+        if n:match("^directml%s*gpu%s*%d*$") then return true end
+        if n:match("^gpu%s*%d*$") then return true end
+        return false
     end
 
     -- Filter out backends that can never work on this OS.
@@ -2330,10 +2320,15 @@ if env.get('directml_possible'):
     -- Fill descriptions for tooltips (store translation keys, not English strings).
     for _, d in ipairs(devices) do
         d.fullName = d.name
-        -- Make GPU device names compact in the UI so they fit in the column.
-        -- Requested UX: show just GPU0/GPU1 on the buttons; keep full id+name in tooltip.
         if d.id and (d.id:match("^cuda:%d+$") or d.id:match("^directml:%d+$") or d.type == "cuda" or d.type == "directml") then
-            d.uiName = compactGpuLabel(d.id)
+            local short = sanitizeFriendlyName(d.fullName or d.name)
+            if not short or short == "" or isPlaceholderGpuName(short) then
+                short = sanitizeFriendlyName(d.name)
+            end
+            if not short or short == "" or isPlaceholderGpuName(short) then
+                short = compactGpuLabel(d.id)
+            end
+            d.uiName = short
         else
             d.uiName = d.name
         end
@@ -2397,6 +2392,60 @@ function applyCachedRuntimeDevices()
     applyRuntimeDevicesFromParsed(devices, envJson, os.time())
     if cap.kv and cap.kv.PROFILE then
         debugLog("Capabilities profile=" .. tostring(cap.kv.PROFILE) .. " backend=" .. tostring(cap.kv.BACKEND))
+    end
+    return true
+end
+
+function getTrustedWindowsRuntimeState()
+    if OS ~= "Windows" or type(readCapabilities) ~= "function" then
+        return nil
+    end
+    local cap = readCapabilities()
+    if not (cap and type(cap.kv) == "table") then
+        return nil
+    end
+
+    local function trimValue(v)
+        return tostring(v or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    end
+    local function lowerValue(v)
+        return string.lower(trimValue(v))
+    end
+
+    local verification = lowerValue(cap.kv.VERIFICATION)
+    local audioSeparator = lowerValue(cap.kv.AUDIO_SEPARATOR)
+    local stemwerkCore = lowerValue(cap.kv.STEMWERK_CORE)
+    local pythonPath = trimValue(cap.kv.PYTHON_PATH)
+    local ffmpegPath = trimValue(cap.kv.FFMPEG_PATH)
+
+    if verification ~= "ok" or audioSeparator ~= "ok" or stemwerkCore ~= "ok" then
+        return nil
+    end
+    if pythonPath == "" or ffmpegPath == "" then
+        return nil
+    end
+    if isAbsolutePath(pythonPath) and not fileExists(pythonPath) then
+        return nil
+    end
+    if isAbsolutePath(ffmpegPath) and not fileExists(ffmpegPath) then
+        return nil
+    end
+
+    return {
+        pythonPath = pythonPath,
+        ffmpegPath = ffmpegPath,
+        backend = trimValue(cap.kv.BACKEND),
+        profile = trimValue(cap.kv.PROFILE),
+    }
+end
+
+function applyTrustedWindowsRuntimeState(state)
+    if not state then return false end
+    if state.pythonPath and state.pythonPath ~= "" then
+        PYTHON_PATH = state.pythonPath
+    end
+    if state.ffmpegPath and state.ffmpegPath ~= "" then
+        FFMPEG_PATH = state.ffmpegPath
     end
     return true
 end
@@ -9298,7 +9347,11 @@ local function showArtGallery()
     if reaper.JS_Window_Find then
         helpState.hwnd = reaper.JS_Window_Find(WINDOW_ART_GALLERY, true)
     end
-    reaper.defer(artGalleryLoop)
+    if OS == "Windows" then
+        artGalleryLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
+    else
+        reaper.defer(artGalleryLoop)
+    end
 end
 
 -- Draw message window (replaces reaper.MB for proper positioning)
@@ -10004,7 +10057,11 @@ showMessage = function(title, message, icon, monitorSelection, onClose)
             end
         end)
     end
-    reaper.defer(messageWindowLoop)
+    if OS == "Windows" then
+        messageWindowLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
+    else
+        reaper.defer(messageWindowLoop)
+    end
 end
 
 -- Scaling helper: converts base coordinates to current scale
@@ -11947,7 +12004,9 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
 
     local winGpuNames = nil
     if OS == "Windows" then
-        winGpuNames = getWindowsGpuNames()
+        -- Avoid synchronous PowerShell/WMI probing during the first UI render.
+        -- Under Windows this can stall startup and visibly churn taskbar windows.
+        winGpuNames = WINDOWS_GPU_NAMES
     end
 
     local function applyFriendlyGpuName(dev)
@@ -11980,6 +12039,12 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local n = string.lower(tostring(name or ""))
         if n == "" then return false end
         return n:find("amd", 1, true) or n:find("radeon", 1, true) or n:find("gfx", 1, true)
+    end
+
+    local function isGpuLikeDevice(dev)
+        if not dev or not dev.id then return false end
+        local id = tostring(dev.id or "")
+        return dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$")
     end
 
     local function deviceBackendPrefix(dev)
@@ -12016,6 +12081,19 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         if not dev then return "" end
         if dev.id == "auto" or dev.id == "cpu" then
             return dev.name or dev.id
+        end
+        if OS == "Windows" and isGpuLikeDevice(dev) then
+            local gpuCount = 0
+            for _, candidate in ipairs(deviceList) do
+                if isGpuLikeDevice(candidate) then
+                    gpuCount = gpuCount + 1
+                end
+            end
+            if gpuCount <= 1 then
+                return "GPU"
+            end
+            local idx = tonumber(tostring(dev.id):match(":(%d+)$")) or 0
+            return "GPU" .. tostring(idx)
         end
         local base = sanitizeFriendlyName(dev.fullName or dev.name or dev.id) or ""
         if base == "" or isPlaceholderName(base) then
@@ -12263,6 +12341,14 @@ function GUI._handleNoSelection()
         GUI._noSelCached = hasAnySelection()
     end
     local hasSel = GUI._noSelCached
+    if OS == "Windows" and GUI.windowsStartupMonitor then
+        if hasSel then
+            GUI.windowsStartupMonitor = false
+            GUI.hadSelectionOnOpen = true
+        end
+        GUI.noSelectionFrames = 0
+        return false
+    end
     if not hasSel then
         GUI.noSelectionFrames = (GUI.noSelectionFrames or 0) + 1
         if GUI.noSelectionFrames > 10 then
@@ -12970,6 +13056,13 @@ buildFooterLines = function()
                 trSafe("footer_location_new_tracks", "New tracks")
             )
         end
+    end
+
+    if OS == "Windows" and GUI and GUI.windowsStartupMonitor and not hasAnySelection() then
+        local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+        selLine = tostring(promptTitle or "Start")
+        outLine = tostring(promptMessage or "Select audio in REAPER")
+        locLine = T("tooltip_start") or "Choose audio in REAPER, then start STEMwerk."
     end
 
     local isWarning = (stemsPerTrack == 0)
@@ -13933,6 +14026,12 @@ openCustomFolderDialog = function()
 end
 
 canStartProcessingFromDialog = function()
+    if OS == "Windows" and GUI and GUI.windowsStartupMonitor and not hasAnySelection() then
+        local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
+        openDialogWarning(promptTitle, promptMessage)
+        return false
+    end
+
     local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
     local validSelected = false
     for _, stem in ipairs(STEMS) do
@@ -14115,7 +14214,10 @@ function finalizeDialogLoop(ctx)
 end
 
 function dialogLoop()
-    makeWindowResizable()
+    local loopNow = uiNow()
+    if OS ~= "Windows" or (loopNow - (GUI.windowOpenedAt or 0)) >= 0.35 then
+        makeWindowResizable()
+    end
     pollRuntimeDeviceProbe()
     if DEBUG.enabled and RUNTIME_DEVICE_PROBE_DEBUG == "async_running" and not GUI._probeLoggedOnce then
         GUI._probeLoggedOnce = true
@@ -14145,7 +14247,6 @@ function dialogLoop()
         return
     end
 
-    local loopNow = uiNow()
     local ctx = {
         S = S,
         w = gfx.w,
@@ -14200,6 +14301,7 @@ showStemSelectionDialog = function()
     GUI.wasMouseDown = false
     GUI._nextFrameAt = 0
     GUI.hadSelectionOnOpen = true  -- Dialog was opened with valid selection, don't auto-close
+    GUI.windowsStartupMonitor = GUI.windowsStartupMonitor and true or false
 
     -- Keep startup non-blocking: seed a safe device list immediately and do runtime probing
     -- only after the window is already visible.
@@ -14208,6 +14310,8 @@ showStemSelectionDialog = function()
     end
 
     local dialogW, dialogH, posX, posY = GUI.applyLiveGeometry(840, 600)
+    windowResizableSet = false
+    GUI.windowOpenedAt = uiNow()
     gfx.init(SCRIPT_NAME, dialogW, dialogH, 0, posX, posY)
     perfMark("showStemSelectionDialog(): gfx.init done (window visible)")
 
@@ -14217,10 +14321,9 @@ showStemSelectionDialog = function()
         else
             perfMark("showStemSelectionDialog(): cached devices unavailable")
         end
+        -- Windows startup keeps device labels generic in the main dialog to
+        -- avoid an extra cosmetic GPU-name probe during first paint.
     end)
-
-    -- Make window resizable (requires js_ReaScriptAPI extension)
-    makeWindowResizable()
 
     gfx.setfont(1, "Arial", S(13))
     dialogLoop()
@@ -14344,48 +14447,21 @@ local function runFfmpegExtract(sourceFile, offsetSec, durationSec, outputPath)
 
     local exitCode = nil
     if OS == "Windows" then
-        local psPath = tostring(outputPath) .. ".ffmpeg.ps1"
-        local vbsPath = tostring(outputPath) .. ".ffmpeg.vbs"
-        local rcPath = tostring(outputPath) .. ".ffmpeg.rc"
-
-        local function escPsSingle(s)
-            return tostring(s or ""):gsub("'", "''")
+        local cmd = string.format(
+            '%s -y -hide_banner -nostats -loglevel error -i %s -ss %.6f -t %.6f -ar 44100 -ac 2 %s',
+            quoteArg(ffmpegBin),
+            quoteArg(sourceFile),
+            offsetSec,
+            durationSec,
+            quoteArg(outputPath)
+        )
+        local rc, out = exec_capture(cmd, 0)
+        exitCode = tonumber(rc)
+        local logFile = io.open(logPath, "w")
+        if logFile then
+            logFile:write(out or "")
+            logFile:close()
         end
-
-        local psFile = io.open(psPath, "w")
-        if psFile then
-            psFile:write("$ErrorActionPreference='SilentlyContinue'\n")
-            psFile:write("$ff='" .. escPsSingle(ffmpegBin) .. "'\n")
-            psFile:write("$src='" .. escPsSingle(sourceFile) .. "'\n")
-            psFile:write("$out='" .. escPsSingle(outputPath) .. "'\n")
-            psFile:write("$log='" .. escPsSingle(logPath) .. "'\n")
-            psFile:write("$rc='" .. escPsSingle(rcPath) .. "'\n")
-            psFile:write("$args=@('-y','-hide_banner','-nostats','-loglevel','error','-i',$src,'-ss','" .. string.format("%.6f", offsetSec) .. "','-t','" .. string.format("%.6f", durationSec) .. "','-ar','44100','-ac','2',$out)\n")
-            psFile:write("$p=Start-Process -FilePath $ff -ArgumentList $args -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $log -RedirectStandardError $log\n")
-            psFile:write("Set-Content -Path $rc -Value $p.ExitCode -Encoding ascii\n")
-            psFile:close()
-
-            local vbsFile = io.open(vbsPath, "w")
-            if vbsFile then
-                local psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' .. quoteArg(psPath)
-                vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
-                vbsFile:write('sh.Run "' .. psCmd:gsub('"', '""') .. '", 0, True\n')
-                vbsFile:close()
-
-                local wscriptCmd = 'wscript "' .. vbsPath .. '"'
-                if reaper and reaper.ExecProcess then
-                    reaper.ExecProcess(wscriptCmd, 0)
-                else
-                    os.execute(wscriptCmd)
-                end
-
-                exitCode = SW_LOG.readExitCode(rcPath)
-            end
-        end
-
-        os.remove(psPath)
-        os.remove(vbsPath)
-        os.remove(rcPath)
     else
         local cmd = string.format(
             '%s -y -hide_banner -nostats -loglevel error -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s"',
@@ -15039,7 +15115,93 @@ local progressState = {
     doneDetected = false,
 }
 
-local function showProcessingWindow(stage, percent)
+function getProcessingWindowGeometry()
+    local winW = lastDialogW or 380
+    local winH = lastDialogH or 340
+    local winX, winY
+    if lastDialogX and lastDialogY then
+        winX = lastDialogX
+        winY = lastDialogY
+    else
+        local mouseX, mouseY = reaper.GetMousePosition()
+        winX = mouseX - winW / 2
+        winY = mouseY - winH / 2
+        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
+    end
+    return winW, winH, winX, winY
+end
+
+function ensureProcessingWindowOpen()
+    if progressState.windowOpen then return end
+    local winW, winH, winX, winY = getProcessingWindowGeometry()
+    gfx.init(WINDOW_PROCESSING, winW, winH, 0, winX, winY)
+    progressWindowResizableSet = false
+    progressState.windowOpen = true
+    progressState.nextFrameAt = 0
+    progressState.nextPollAt = 0
+    progressState.doneDetected = false
+end
+
+function showProcessingPlaceholderWindow(stage)
+    if stage and stage ~= "" then
+        progressState.stage = stage
+    end
+    if not progressState.startTime or progressState.startTime == 0 then
+        progressState.startTime = os.time()
+    end
+
+    ensureProcessingWindowOpen()
+
+    local w, h = gfx.w, gfx.h
+    local bg = (THEME and THEME.inputBg) or {0.12, 0.12, 0.14}
+    local border = (THEME and THEME.border) or {0.35, 0.35, 0.4}
+    local text = (THEME and THEME.text) or {0.95, 0.95, 0.95}
+    local dim = (THEME and THEME.textDim) or text
+    local accent = (THEME and THEME.accent) or {0.35, 0.65, 0.95}
+
+    gfx.set(bg[1], bg[2], bg[3], 1)
+    gfx.rect(0, 0, w, h, 1)
+    gfx.set(border[1], border[2], border[3], 1)
+    gfx.rect(0, 0, w, h, 0)
+
+    local barW = math.max(160, math.floor(w * 0.42))
+    local barH = 8
+    local barX = math.floor((w - barW) / 2)
+    local barY = math.floor(h * 0.56)
+    local pulse = (math.sin(os.clock() * 4.0) + 1) * 0.5
+    local fillW = math.max(24, math.floor(barW * (0.18 + 0.22 * pulse)))
+
+    gfx.setfont(1, "Arial", 20, string.byte('b'))
+    local title = "STEMwerk"
+    local titleW = gfx.measurestr(title)
+    gfx.set(text[1], text[2], text[3], 1)
+    gfx.x = math.floor((w - titleW) / 2)
+    gfx.y = math.floor(h * 0.34)
+    gfx.drawstr(title)
+
+    local stageText = tostring(progressState.stage or ((type(T) == "function" and (T("starting") or "Starting...")) or "Starting..."))
+    stageText = stageText:gsub("%s*%b[]", "")
+    stageText = stageText:gsub("%s*%b()", "")
+    stageText = stageText:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if stageText == "" then
+        stageText = (type(T) == "function" and (T("starting") or "Starting...")) or "Starting..."
+    end
+    gfx.setfont(1, "Arial", 13)
+    local stageW = gfx.measurestr(stageText)
+    gfx.set(dim[1], dim[2], dim[3], 1)
+    gfx.x = math.floor((w - stageW) / 2)
+    gfx.y = math.floor(h * 0.44)
+    gfx.drawstr(stageText)
+
+    gfx.set(border[1], border[2], border[3], 1)
+    gfx.rect(barX, barY, barW, barH, 0)
+    gfx.set(accent[1], accent[2], accent[3], 0.95)
+    gfx.rect(barX + 1, barY + 1, math.max(1, math.min(barW - 2, fillW)), math.max(1, barH - 2), 1)
+
+    gfx.update()
+end
+
+function showProcessingWindow(stage, percent)
     if stage and stage ~= "" then
         progressState.stage = stage
     end
@@ -15050,18 +15212,19 @@ local function showProcessingWindow(stage, percent)
         progressState.startTime = os.time()
     end
 
-    if not progressState.windowOpen then
-        local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-        gfx.init(WINDOW_PROCESSING, winW, winH, 0, winX, winY)
-        progressWindowResizableSet = false
-        progressState.windowOpen = true
-    progressState.nextFrameAt = 0
-    progressState.nextPollAt = 0
-    progressState.doneDetected = false
-    end
+    ensureProcessingWindowOpen()
 
     drawProgressWindow()
     gfx.update()
+end
+
+function closeProcessingWindow()
+    if not progressState.windowOpen then return end
+    captureWindowGeometry(WINDOW_PROCESSING)
+    saveSettings()
+    gfx.quit()
+    progressState.windowOpen = false
+    progressState.running = false
 end
 
 -- Multi-track queue state (declared early for access in drawProgressWindow)
@@ -16641,6 +16804,11 @@ end
 -- Start separation process in background (Windows)
 function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     refreshPythonPathFromExtState()
+    local trustedWindowsRuntime = nil
+    if OS == "Windows" then
+        trustedWindowsRuntime = getTrustedWindowsRuntimeState()
+        applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
+    end
     local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
     local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
     local doneFile = outputDir .. PATH_SEP .. "done.txt"
@@ -16708,49 +16876,50 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
         SW_LOG.writeExitCode(exitCodeFile, -1)
         return
     end
-    -- Check if Python is available (handle both absolute paths and command names)
-    local pythonAvailable = false
-    if isAbsolutePath(PYTHON_PATH) then
-        pythonAvailable = fileExists(PYTHON_PATH)
-    else
-        pythonAvailable = canRunPython(PYTHON_PATH)
-    end
-
-    if not pythonAvailable then
-        local msg =
-            "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
-            .. "Run STEMwerk-SETUP.lua to repair the runtime."
-        debugLog(msg)
-        SW_LOG.logExecResult("preflight: python missing", -1, msg)
-        local lf = io.open(logFile, "w")
-        if lf then lf:write(msg .. "\n"); lf:close() end
-        local df = io.open(doneFile, "w")
-        if df then df:write("DONE\n"); df:close() end
-        SW_LOG.writeExitCode(exitCodeFile, -1)
-        return
-    end
-    local numpyOk, numpyErr = checkNumpyCompat(PYTHON_PATH)
-    if not numpyOk then
-        local msg =
-            "NumPy compatibility issue.\n\n"
-            .. tostring(numpyErr or "Unknown error") .. "\n\n"
-            .. "Fix (command):\n"
-            .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
-        debugLog(msg)
-        SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
-        local lf = io.open(logFile, "w")
-        if lf then lf:write(msg .. "\n"); lf:close() end
-        local df = io.open(doneFile, "w")
-        if df then df:write("DONE\n"); df:close() end
-        SW_LOG.writeExitCode(exitCodeFile, -1)
-        if reaper and reaper.ShowMessageBox then
-            reaper.ShowMessageBox(msg, "Missing Dependency", 0)
+    if not trustedWindowsRuntime then
+        local pythonAvailable = false
+        if isAbsolutePath(PYTHON_PATH) then
+            pythonAvailable = fileExists(PYTHON_PATH)
+        else
+            pythonAvailable = canRunPython(PYTHON_PATH)
         end
-        return false
-    end
-    if not canRunFfmpeg() then
-        if not ensureDependenciesInteractive() then
+
+        if not pythonAvailable then
+            local msg =
+                "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
+                .. "Run STEMwerk-SETUP.lua to repair the runtime."
+            debugLog(msg)
+            SW_LOG.logExecResult("preflight: python missing", -1, msg)
+            local lf = io.open(logFile, "w")
+            if lf then lf:write(msg .. "\n"); lf:close() end
+            local df = io.open(doneFile, "w")
+            if df then df:write("DONE\n"); df:close() end
+            SW_LOG.writeExitCode(exitCodeFile, -1)
+            return
+        end
+        local numpyOk, numpyErr = checkNumpyCompat(PYTHON_PATH)
+        if not numpyOk then
+            local msg =
+                "NumPy compatibility issue.\n\n"
+                .. tostring(numpyErr or "Unknown error") .. "\n\n"
+                .. "Fix (command):\n"
+                .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
+            debugLog(msg)
+            SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
+            local lf = io.open(logFile, "w")
+            if lf then lf:write(msg .. "\n"); lf:close() end
+            local df = io.open(doneFile, "w")
+            if df then df:write("DONE\n"); df:close() end
+            SW_LOG.writeExitCode(exitCodeFile, -1)
+            if reaper and reaper.ShowMessageBox then
+                reaper.ShowMessageBox(msg, "Missing Dependency", 0)
+            end
             return false
+        end
+        if not canRunFfmpeg() then
+            if not ensureDependenciesInteractive() then
+                return false
+            end
         end
     end
     if not fileExists(SEPARATOR_SCRIPT) then
@@ -17082,9 +17251,16 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     loadSettings()
     updateTheme()
 
+    if OS == "Windows" and progressState.windowOpen then
+        showProcessingPlaceholderWindow("Initializing...")
+    end
+
     -- Start the process
     local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     if ok == false then
+        if OS == "Windows" and progressState.windowOpen then
+            closeProcessingWindow()
+        end
         isProcessingActive = false
         return
     end
@@ -17093,29 +17269,18 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     captureWindowGeometry(SCRIPT_NAME)
     GUI.snapshotMainGeometry()
 
-    -- Use same size as main dialog and open the Processing window only after the worker launched.
-    local winW = lastDialogW or 380
-    local winH = lastDialogH or 340
-    local winX, winY
-    if lastDialogX and lastDialogY then
-        winX = lastDialogX
-        winY = lastDialogY
-    else
-        local mouseX, mouseY = reaper.GetMousePosition()
-        winX = mouseX - winW / 2
-        winY = mouseY - winH / 2
-        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
+    if not progressState.windowOpen then
+        ensureProcessingWindowOpen()
     end
-
-    gfx.init("STEMwerk - Processing..", winW, winH, 0, winX, winY)
-    progressWindowResizableSet = false
-    progressState.windowOpen = true
     progressState.stage = type(T) == "function" and (T("starting") or "Starting...") or "Starting..."
 
     progressState.running = true
 
-    -- Start progress loop
-    reaper.defer(WORKFLOW.progressLoop)
+    if OS == "Windows" then
+        WORKFLOW.progressLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
+    else
+        reaper.defer(WORKFLOW.progressLoop)
+    end
 end
 
 -- Legacy synchronous separation (fallback)
@@ -18723,13 +18888,22 @@ function showResultWindow(selectedStems, message)
     -- Best-effort: force an arrange repaint while the Complete window is open.
     -- This makes the processing result visible immediately (without needing to close the window).
     HELPERS.scheduleResultWindowRefresh()
-    reaper.defer(resultWindowLoop)
+    if OS == "Windows" then
+        resultWindowLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
+    else
+        reaper.defer(resultWindowLoop)
+    end
 end
 
 -- Run multi-track separation (parallel or sequential based on setting)
 runSingleTrackSeparation = function(trackList)
     refreshPythonPathFromExtState()
-    if not canRunFfmpeg() then
+    local trustedWindowsRuntime = nil
+    if OS == "Windows" then
+        trustedWindowsRuntime = getTrustedWindowsRuntimeState()
+        applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
+    end
+    if (not trustedWindowsRuntime) and (not canRunFfmpeg()) then
         if not ensureDependenciesInteractive() then
             if reaper and reaper.defer then
                 reaper.defer(function() showStemSelectionDialog() end)
@@ -18741,7 +18915,10 @@ runSingleTrackSeparation = function(trackList)
             return
         end
     end
-    local numpyOk, numpyErr = checkNumpyCompat(PYTHON_PATH)
+    local numpyOk, numpyErr = true, nil
+    if not trustedWindowsRuntime then
+        numpyOk, numpyErr = checkNumpyCompat(PYTHON_PATH)
+    end
     if not numpyOk then
         local msg =
             "NumPy compatibility issue.\n\n"
@@ -19304,6 +19481,11 @@ end
 -- Start a separation process for one job (no window, just background process)
 -- segmentSize: optional, defaults to 25 for parallel, 40 for sequential
 startSeparationProcessForJob = function(job, segmentSize)
+    local trustedWindowsRuntime = nil
+    if OS == "Windows" then
+        trustedWindowsRuntime = getTrustedWindowsRuntimeState()
+        applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
+    end
     segmentSize = segmentSize or 25
     local logFile = job.trackDir .. PATH_SEP .. "separation_log.txt"
     local stdoutFile = job.trackDir .. PATH_SEP .. "stdout.txt"
@@ -19352,24 +19534,26 @@ startSeparationProcessForJob = function(job, segmentSize)
         SW_LOG.writeExitCode(exitCodeFile, -1)
         return
     end
-    local pythonAvailable = false
-    if isAbsolutePath(PYTHON_PATH) then
-        pythonAvailable = fileExists(PYTHON_PATH)
-    else
-        pythonAvailable = canRunPython(PYTHON_PATH)
-    end
-    if not pythonAvailable then
-        local msg =
-            "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
-            .. "Run STEMwerk-SETUP.lua to repair the runtime."
-        debugLog(msg)
-        SW_LOG.logExecResult("preflight: python missing", -1, msg)
-        local lf = io.open(logFile, "w")
-        if lf then lf:write(msg .. "\n"); lf:close() end
-        local df = io.open(doneFile, "w")
-        if df then df:write("DONE\n"); df:close() end
-        SW_LOG.writeExitCode(exitCodeFile, -1)
-        return
+    if not trustedWindowsRuntime then
+        local pythonAvailable = false
+        if isAbsolutePath(PYTHON_PATH) then
+            pythonAvailable = fileExists(PYTHON_PATH)
+        else
+            pythonAvailable = canRunPython(PYTHON_PATH)
+        end
+        if not pythonAvailable then
+            local msg =
+                "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
+                .. "Run STEMwerk-SETUP.lua to repair the runtime."
+            debugLog(msg)
+            SW_LOG.logExecResult("preflight: python missing", -1, msg)
+            local lf = io.open(logFile, "w")
+            if lf then lf:write(msg .. "\n"); lf:close() end
+            local df = io.open(doneFile, "w")
+            if df then df:write("DONE\n"); df:close() end
+            SW_LOG.writeExitCode(exitCodeFile, -1)
+            return
+        end
     end
     if not fileExists(SEPARATOR_SCRIPT) then
         local msg = "Separator script not found at: " .. tostring(SEPARATOR_SCRIPT)
@@ -20736,7 +20920,11 @@ showMultiTrackProgressWindow = function()
     multiTrackQueue.nextFrameAt = 0
     multiTrackQueue.nextPollAt = 0
     gfx.init(WINDOW_MULTI_TRACK, winW, winH, 0, winX, winY)
-    reaper.defer(multiTrackProgressLoop)
+    if OS == "Windows" then
+        multiTrackProgressLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
+    else
+        reaper.defer(multiTrackProgressLoop)
+    end
 end
 
 -- isProcessingActive is declared near the top of the file to avoid accidentally
@@ -21269,7 +21457,20 @@ function runSeparationWorkflow()
     isProcessingActive = true
     debugLog("=== runSeparationWorkflow started ===")
 
-    if not ensureDependenciesInteractive() then
+    if OS == "Windows" then
+        showProcessingPlaceholderWindow("Checking runtime...")
+    end
+
+    local trustedWindowsRuntime = nil
+    if OS == "Windows" then
+        trustedWindowsRuntime = getTrustedWindowsRuntimeState()
+        applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
+    end
+
+    if (not trustedWindowsRuntime) and (not ensureDependenciesInteractive()) then
+        if OS == "Windows" and progressState.windowOpen then
+            closeProcessingWindow()
+        end
         isProcessingActive = false
         return
     end
@@ -21370,17 +21571,26 @@ function runSeparationWorkflow()
         end
     end
     if selectedStemCount <= 0 then
+        if OS == "Windows" and progressState.windowOpen then
+            closeProcessingWindow()
+        end
         showMessage(T("no_stems_selected") or "No Stems Selected", T("please_select_stem") or "Please select at least one stem.", "warning")
         isProcessingActive = false
         return
     end
 
     if tostring(SETTINGS.stemFileDestination or "temp") == "custom" and HELPERS.trimString(SETTINGS.customStemDir) == "" then
+        if OS == "Windows" and progressState.windowOpen then
+            closeProcessingWindow()
+        end
         showMessage(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesMissingCustomWarning(), "warning")
         isProcessingActive = false
         return
     end
     if tostring(SETTINGS.stemFileDestination or "temp") == "project_media" and not HELPERS.getProjectMediaDir() then
+        if OS == "Windows" and progressState.windowOpen then
+            closeProcessingWindow()
+        end
         showMessage(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesProjectUnavailableWarning(), "warning")
         isProcessingActive = false
         return
@@ -21439,6 +21649,9 @@ function runSeparationWorkflow()
             end
         end
         if not anyAudibleTrack then
+            if OS == "Windows" and progressState.windowOpen then
+                closeProcessingWindow()
+            end
             showMessage("No audible tracks", "All selected tracks are muted or not solo-audible.", "info", true)
             isProcessingActive = false
             return
@@ -21516,6 +21729,9 @@ function runSeparationWorkflow()
                 reaper.UpdateArrange()
                 debugLog("Recovered selection from Process-click snapshot before start-screen fallback; retrying workflow")
                 PROCESS_SELECTION_SNAPSHOT = nil
+                if OS == "Windows" and progressState.windowOpen then
+                    closeProcessingWindow()
+                end
                 isProcessingActive = false
                 reaper.defer(function() runSeparationWorkflow() end)
                 return
@@ -21529,6 +21745,9 @@ function runSeparationWorkflow()
             (reaper.CountSelectedMediaItems(0) or 0),
             (reaper.CountSelectedTracks(0) or 0)
         ))
+        if OS == "Windows" and progressState.windowOpen then
+            closeProcessingWindow()
+        end
         local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
         showMessage(promptTitle, promptMessage, "info", true)
         isProcessingActive = false
@@ -21536,6 +21755,10 @@ function runSeparationWorkflow()
     end
 
     PROCESS_SELECTION_SNAPSHOT = nil
+
+    if OS == "Windows" then
+        showProcessingPlaceholderWindow("Preparing audio...")
+    end
 
     WORKFLOW_TEMP_DIR = makeUniqueTempSubdir("STEMwerk")
     makeDir(WORKFLOW_TEMP_DIR)
@@ -21552,12 +21775,15 @@ function runSeparationWorkflow()
         debugLog("Render result: extracted=" .. tostring(extracted) .. ", err=" .. tostring(err))
 
         -- Check for multi-track mode
-        if err == "MULTI_TRACK" and trackList and #trackList > 1 then
-            -- Multi-track mode: process all tracks in parallel
-            debugLog("Multi-track mode: " .. #trackList .. " tracks")
-            if trackItems then
-                timeSelectionItemMap = trackItems
-                debugLog("Multi-track time selection: using per-item jobs across tracks")
+            if err == "MULTI_TRACK" and trackList and #trackList > 1 then
+                -- Multi-track mode: process all tracks in parallel
+                debugLog("Multi-track mode: " .. #trackList .. " tracks")
+                if OS == "Windows" and progressState.windowOpen then
+                    closeProcessingWindow()
+                end
+                if trackItems then
+                    timeSelectionItemMap = trackItems
+                    debugLog("Multi-track time selection: using per-item jobs across tracks")
             end
             runSingleTrackSeparation(trackList)
             -- If multi-track setup failed before activating the queue, unlock so user can retry
@@ -21571,6 +21797,9 @@ function runSeparationWorkflow()
         -- Check for per-item time selection mode (single track, multiple items)
         if err == "MULTI_ITEM" and trackList and #trackList == 1 and trackItems then
             debugLog("Multi-item time selection on single track: using per-item jobs")
+            if OS == "Windows" and progressState.windowOpen then
+                closeProcessingWindow()
+            end
             timeSelectionItemMap = trackItems
             runSingleTrackSeparation(trackList)
             if not multiTrackQueue.active then
@@ -21658,6 +21887,9 @@ function runSeparationWorkflow()
         for tr in pairs(trackSet) do table.insert(combinedTrackList, tr) end
         if #combinedTrackList > 1 then
             debugLog("Combined selection: running multi-track on " .. #combinedTrackList .. " tracks")
+            if OS == "Windows" and progressState.windowOpen then
+                closeProcessingWindow()
+            end
             runSingleTrackSeparation(combinedTrackList)
             if not multiTrackQueue.active then
                 debugLog("Combined selection setup did not activate queue; resetting processing guard")
@@ -21688,6 +21920,9 @@ function runSeparationWorkflow()
             end
 
             debugLog("Multi-item mode: " .. #trackList .. " tracks with items")
+            if OS == "Windows" and progressState.windowOpen then
+                closeProcessingWindow()
+            end
             runSingleTrackSeparation(trackList)
             -- If multi-track setup failed before activating the queue, unlock so user can retry
             if not multiTrackQueue.active then
@@ -21721,6 +21956,9 @@ function runSeparationWorkflow()
     if not extracted then
         debugLog("Extraction FAILED: " .. (err or "Unknown"))
         isProcessingActive = false
+        if OS == "Windows" and progressState.windowOpen then
+            closeProcessingWindow()
+        end
         local detail = tostring(err or "Unknown")
         local noAudibleTargets = HELPERS.isNoAudibleTargetsError(detail)
         local title = noAudibleTargets and HELPERS.getNoAudibleTargetsTitle() or "Extraction Failed"
@@ -21877,6 +22115,11 @@ main = function()
         itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
     else
         -- No time selection, no item selected, no track with items
+        if OS == "Windows" then
+            GUI.windowsStartupMonitor = true
+            showStemSelectionDialog()
+            return
+        end
         -- Show start screen with selection monitoring
         local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
         showMessage(promptTitle, promptMessage, "info", true)
@@ -21885,6 +22128,11 @@ main = function()
 
     local monitorState = HELPERS.getSelectionMonitorState()
     if not monitorState.actionable then
+        if OS == "Windows" then
+            GUI.windowsStartupMonitor = true
+            showStemSelectionDialog()
+            return
+        end
         local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
         showMessage(promptTitle, promptMessage, "info", true)
         return
@@ -21906,6 +22154,7 @@ main = function()
         end)
     else
         -- Normal mode: show dialog
+        GUI.windowsStartupMonitor = false
         perfMark("showStemSelectionDialog() about to run")
         showStemSelectionDialog()
     end
