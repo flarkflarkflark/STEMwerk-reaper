@@ -2,7 +2,7 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1.7" author="flarkAUDIO" time="1775481055">
+      <version name="2.2.1.8" author="flarkAUDIO" time="1775481055">
         <changelog><![CDATA[
 - macOS bootstrap now accepts only Python 3.10, 3.11, or 3.12
 - Python 3.13+ is explicitly rejected on macOS, including bare python3 fallbacks
