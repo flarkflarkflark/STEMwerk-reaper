@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.9
+-- @version 2.2.1.8R
 -- @changelog
 --   2026-03-24: Local working build saved as v2.2.1.1 for installer follow-up.
 --   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
@@ -52,13 +52,14 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.1.9"
-local SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
+local APP_VERSION = "2.2.1.8R"
+SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
 WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_VERSION .. ")"
 WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_VERSION .. ")"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
+_G.EXT_SECTION = EXT_SECTION
 local DEBUG = { enabled = false, logPath = nil }
 WORKFLOW = WORKFLOW or {}
 HELPERS = HELPERS or {}
@@ -87,122 +88,41 @@ package.path =
   .. ";" .. repo_root .. "scripts/reaper/?.lua"
   .. ";" .. repo_root .. "scripts/reaper/?/init.lua"
 
-local function getExtStateValue(key)
-    if reaper and reaper.GetExtState then
-        local v = reaper.GetExtState(EXT_SECTION, key)
-        if v ~= nil and v ~= "" then
-            return v
-        end
-    end
-    return nil
-end
+local EXTSTATE = dofile(script_path .. "_internal/STEMwerk_ExtState.lua")
+local getExtStateValue = EXTSTATE.getExtStateValue
+local setExtStateValue = EXTSTATE.setExtStateValue
 
-local function setExtStateValue(key, value)
-    if reaper and reaper.SetExtState then
-        reaper.SetExtState(EXT_SECTION, tostring(key), tostring(value), true)
+local function loadModule(path, label)
+    local ok, mod = pcall(dofile, path)
+    if not ok then
+        error("STEMwerk: failed loading " .. tostring(label) .. ": " .. tostring(mod))
     end
+    if type(mod) ~= "table" then
+        error("STEMwerk: module " .. tostring(label) .. " did not return a table (got " .. type(mod) .. ")")
+    end
+    return mod
 end
 
 local SW_SETUP = dofile(script_path .. "_internal/STEMwerk_Runtime_Setup.lua")
+local SYSTEM = dofile(script_path .. "_internal/STEMwerk_System.lua")
+local getOS = SYSTEM.getOS
+local isAbsolutePath = SYSTEM.isAbsolutePath
+fileExists = SYSTEM.fileExists
+local quoteArg = SYSTEM.quoteArg
+local shellQuoteSingle = SYSTEM.shellQuoteSingle
+local getHome = SYSTEM.getHome
+local isFlatpak = SYSTEM.isFlatpak
+local getFlatpakTempBase = SYSTEM.getFlatpakTempBase
+local getTempDir = SYSTEM.getTempDir
+local makeDir = SYSTEM.makeDir
+local suppressStderr = SYSTEM.suppressStderr
+local normalizePath = SYSTEM.normalizePath
+local pathJoin = SYSTEM.pathJoin
+local execProcess = SYSTEM.execProcess
+execHidden = SYSTEM.execHidden
+exec_capture = SYSTEM.exec_capture
 
-local function isAbsolutePath(p)
-    if not p or p == "" then return false end
-    if p:match("^%a:[/\\]") then return true end -- Windows drive
-    if p:sub(1, 1) == "/" then return true end -- POSIX
-    return false
-end
-
-local function fileExists(path)
-    if not path or path == "" then return false end
-    local f = io.open(path, "r")
-    if f then f:close(); return true end
-    return false
-end
-
-local function quoteArg(s)
-    s = tostring(s)
-    if s:find('"') then
-        s = s:gsub('"', '\\"')
-    end
-    if s:find("%s") then
-        return '"' .. s .. '"'
-    end
-    return s
-end
-
-local function shellQuoteSingle(s)
-    return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
-end
-
-local function isFlatpak()
-    local id = os.getenv("FLATPAK_ID")
-    if id and id ~= "" then return true end
-    local container = os.getenv("container")
-    if container and container:lower():find("flatpak") then return true end
-    return false
-end
-
-local function getFlatpakTempBase()
-    if not isFlatpak() then return nil end
-    local home = os.getenv("HOME") or "/tmp"
-    return home .. "/.cache/STEMwerk"
-end
-
-local SW_LOG = {}
-
-function SW_LOG.isWindows()
-    return package.config:sub(1, 1) == "\\"
-end
-
-function SW_LOG.getTempBase()
-    return os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or (SW_LOG.isWindows() and "C:\\Windows\\Temp" or "/tmp")
-end
-
-function SW_LOG.getCacheBase()
-    if SW_LOG.isWindows() then return SW_LOG.getTempBase() end
-    return os.getenv("XDG_CACHE_HOME") or ((os.getenv("HOME") or "/tmp") .. "/.cache")
-end
-
-function SW_LOG.ensureDir(path)
-    if not path or path == "" then return end
-    if SW_LOG.isWindows() then
-        os.execute('mkdir "' .. path .. '" 2>nul')
-    else
-        os.execute('mkdir -p "' .. path .. '" 2>/dev/null')
-    end
-    return true
-end
-
-function SW_LOG.getLogDir()
-    if SW_LOG.isWindows() then
-        return SW_LOG.getTempBase() .. "\\STEMwerk\\logs"
-    end
-    return SW_LOG.getCacheBase() .. "/STEMwerk/logs"
-end
-
-function SW_LOG.getLogPath()
-    local sep = SW_LOG.isWindows() and "\\" or "/"
-    return SW_LOG.getLogDir() .. sep .. "stemwerk.log"
-end
-
-function SW_LOG.logExecResult(cmd, rc, out)
-    local logDir = SW_LOG.getLogDir()
-    SW_LOG.ensureDir(logDir)
-    local logPath = SW_LOG.getLogPath()
-    local f = io.open(logPath, "a")
-    if f then
-        f:write(os.date("[%Y-%m-%d %H:%M:%S] ") .. "CMD: " .. tostring(cmd) .. "\n")
-        if rc ~= nil then
-            f:write("RC: " .. tostring(rc) .. "\n")
-        end
-        if out and out ~= "" then
-            f:write("OUT:\n" .. tostring(out) .. "\n")
-        end
-        f:write("\n")
-        f:close()
-    end
-    return logPath
-end
+dofile(script_path .. "_internal/STEMwerk_Log.lua")
 
 SELF_CHECK_LOGGED = false
 function logSelfCheckOnce()
@@ -218,102 +138,232 @@ function logSelfCheckOnce()
     SW_LOG.logExecResult("self_check", 0, table.concat(lines, "\n"))
 end
 
-function SW_LOG.wrapCmdForWindows(cmd)
-    local lower = tostring(cmd or ""):lower()
-    if lower:match("^%s*cmd%.exe") or lower:match("^%s*cmd%s") then
-        if lower:find("/c", 1, true) then
-            return cmd
-        end
-    end
-    local c = tostring(cmd or "")
-    if not c:match('^%s*"') then
-        local exe, rest = c:match("^%s*([^%s]+)%s*(.*)$")
-        if exe then
-            if rest ~= "" then
-                c = '"' .. exe .. '" ' .. rest
-            else
-                c = '"' .. exe .. '"'
-            end
-        end
-    end
-    if not c:find("2>&1", 1, true) then
-        c = c .. " 2>&1"
-    end
-    return 'cmd.exe /S /C "' .. c .. '"'
+-- Debug mode
+-- Default: OFF (to avoid writing logs for normal users)
+-- Enable by setting:
+--   - Environment variable: STEMWERK_DEBUG=1
+--   - REAPER ExtState: section "STEMwerk" key "debugMode" or "debug" to "1"
+function DEBUG.isTruthy(v)
+    v = tostring(v or ""):lower()
+    return v == "1" or v == "true" or v == "yes" or v == "on"
 end
 
-function SW_LOG.commandNeedsWindowsShell(cmd)
-    local c = tostring(cmd or "")
-    local lower = c:lower()
-    if lower == "" then return false end
-    if lower:match("^%s*cmd%.exe") or lower:match("^%s*cmd%s") then return true end
-    if c:find(">", 1, true) or c:find("<", 1, true) or c:find("|", 1, true) then return true end
-    if c:find("&&", 1, true) or c:find("&", 1, true) then return true end
-    if c:find("%ERRORLEVEL%", 1, true) then return true end
-    if lower:find(" if errorlevel ", 1, true) then return true end
-    if lower:find(" copy ", 1, true) then return true end
+function DEBUG.getDebugMode()
+    if DEBUG.isTruthy(os.getenv("STEMWERK_DEBUG")) then
+        return true
+    end
+    if reaper and reaper.GetExtState then
+        local v = reaper.GetExtState(EXT_SECTION, "debugMode")
+        if v ~= "" then return v == "1" end
+        v = reaper.GetExtState(EXT_SECTION, "debug")
+        if v ~= "" then return v == "1" end
+    end
     return false
 end
 
-local function exec_capture(cmd, timeoutMs)
-    timeoutMs = timeoutMs or 8000
-    if reaper and reaper.ExecProcess then
-        if SW_LOG.isWindows() and SW_LOG.commandNeedsWindowsShell(cmd) then
-            cmd = SW_LOG.wrapCmdForWindows(cmd)
-        end
-        local rc, out = reaper.ExecProcess(cmd, timeoutMs)
-        out = out or ""
-        SW_LOG.logExecResult(cmd, rc, out)
-        if out ~= "" then
-            return tonumber(rc) or -1, out
-        end
-        if isFlatpak() and OS ~= "Windows" then
-            debugLog("exec_capture: ExecProcess empty -> flatpak sandbox file fallback")
-            local home = os.getenv("HOME") or ""
-            local sep = PATH_SEP or "/"
-            local cachePath = home .. sep .. ".cache" .. sep .. "stemwerk_exec_out.txt"
-            local inner = "mkdir -p $HOME/.cache && " .. cmd .. " > $HOME/.cache/stemwerk_exec_out.txt 2>&1"
-            local sandboxCmd = "sh -lc " .. shellQuoteSingle(inner)
-            local rc2 = reaper.ExecProcess(sandboxCmd, timeoutMs)
-            local f = io.open(cachePath, "r")
-            local content = ""
-            if f then
-                content = f:read("*a") or ""
-                f:close()
-                os.remove(cachePath)
-            end
-            if content ~= "" then
-                SW_LOG.logExecResult(sandboxCmd, rc2, content)
-                return tonumber(rc2) or tonumber(rc) or -1, content
-            end
-            debugLog("exec_capture: sandbox fallback empty -> flatpak-spawn host fallback")
-            local hostCmd = "flatpak-spawn --host sh -lc " .. shellQuoteSingle(inner)
-            local rc3 = reaper.ExecProcess(hostCmd, timeoutMs)
-            local f2 = io.open(cachePath, "r")
-            local content2 = ""
-            if f2 then
-                content2 = f2:read("*a") or ""
-                f2:close()
-                os.remove(cachePath)
-            end
-            if content2 ~= "" then
-                SW_LOG.logExecResult(hostCmd, rc3, content2)
-                return tonumber(rc3) or tonumber(rc) or -1, content2
-            end
-        end
-        return tonumber(rc) or -1, out
+DEBUG.enabled = DEBUG.getDebugMode()
+DEBUG.logPath = nil
+
+function debugLog(msg)
+    if not DEBUG.enabled then return end
+    if not DEBUG.logPath then
+        local tempDir = getFlatpakTempBase() or os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or "/tmp"
+        DEBUG.logPath = tempDir .. (package.config:sub(1, 1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
     end
-    local ok = os.execute(cmd)
-    local rc = (ok == true or ok == 0) and 0 or 1
-    SW_LOG.logExecResult(cmd, rc, "")
-    return rc, ""
+    local f = io.open(DEBUG.logPath, "a")
+    if f then
+        f:write(os.date("[%Y-%m-%d %H:%M:%S] ") .. tostring(msg) .. "\n")
+        f:close()
+    end
 end
 
-local function execProcess(cmd, timeoutMs)
-    timeoutMs = timeoutMs or 8000
-    local rc, out = exec_capture(cmd, timeoutMs)
-    return tonumber(rc) or -1, out or ""
+local function clearDebugLog()
+    if not DEBUG.enabled then return end
+    local tempDir = getFlatpakTempBase() or os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or "/tmp"
+    DEBUG.logPath = tempDir .. (package.config:sub(1, 1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
+    local f = io.open(DEBUG.logPath, "w")
+    if f then
+        f:write("=== STEMwerk Debug Log ===\n")
+        f:write("Started: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n\n")
+        f:close()
+    end
 end
+
+clearDebugLog()
+debugLog("Script loaded")
+
+PERF_T0 = os.clock()
+function perfMark(label)
+    if not DEBUG.enabled then return end
+    debugLog(string.format("PERF +%.3fs %s", os.clock() - PERF_T0, tostring(label)))
+end
+
+local function getCrashLogPath()
+    if DEBUG.logPath and DEBUG.logPath ~= "" then
+        return DEBUG.logPath
+    end
+    if SW_LOG and SW_LOG.getLogPath then
+        return SW_LOG.getLogPath()
+    end
+    return "unavailable"
+end
+
+OS = getOS()
+PATH_SEP = OS == "Windows" and "\\" or "/"
+
+function uiNow()
+    if reaper and reaper.time_precise then
+        return reaper.time_precise()
+    end
+    return os.clock()
+end
+
+UI_PACING = UI_PACING or {
+    dialogFrameInterval = 1 / 18,
+    dialogFrameIntervalFx = 1 / 14,
+    messageFrameInterval = 1 / 15,
+    messageFrameIntervalFx = 1 / 8,
+    messageSelectionCheckInterval = 0.25,
+    progressFrameInterval = 1 / 20,
+    progressFrameIntervalFx = 1 / 10,
+    progressPollInterval = 0.33,
+    multiTrackFrameInterval = 1 / 15,
+    multiTrackFrameIntervalFx = 1 / 8,
+    multiTrackPollInterval = 0.40,
+    terminalReadInterval = 0.75,
+}
+
+function pacingFrameInterval(baseKey, fxKey)
+    local useFx = SETTINGS and SETTINGS.visualFX
+    if useFx and UI_PACING[fxKey] then
+        return UI_PACING[fxKey]
+    end
+    return UI_PACING[baseKey]
+end
+
+local function getInstallScriptsDir()
+    if PATH_STATE.helper then
+        if not PATH_STATE.installCache then
+            PATH_STATE.installCache = PATH_STATE.helper.resolveInstallRoot(script_path, { os = OS })
+        end
+        if PATH_STATE.installCache and PATH_STATE.installCache.scriptsDir and PATH_STATE.installCache.scriptsDir ~= "" then
+            return PATH_STATE.installCache.scriptsDir
+        end
+    end
+    return script_path
+end
+
+function PATH_STATE.getInstallPathState()
+    if PATH_STATE.helper then
+        if not PATH_STATE.installCache then
+            PATH_STATE.installCache = PATH_STATE.helper.resolveInstallRoot(script_path, { os = OS })
+        end
+        return PATH_STATE.installCache
+    end
+    return nil
+end
+
+function PATH_STATE.allowNonCanonicalLaunch()
+    if os.getenv("STEMWERK_ALLOW_NONCANONICAL") == "1" then
+        return true
+    end
+    return getExtStateValue("allowNonCanonicalLaunch") == "1"
+end
+
+function PATH_STATE.joinPathLocal(sep, ...)
+    if PATH_STATE.helper and PATH_STATE.helper.joinPath then
+        return PATH_STATE.helper.joinPath(sep, ...)
+    end
+    local parts = { ... }
+    local out = ""
+    for _, part in ipairs(parts) do
+        if part and part ~= "" then
+            local p = tostring(part):gsub("[/\\]+", sep)
+            p = p:gsub(sep .. "+$", "")
+            if out == "" then
+                out = p
+            else
+                p = p:gsub("^" .. sep .. "+", "")
+                out = out .. sep .. p
+            end
+        end
+    end
+    return out
+end
+
+function PATH_STATE.shouldBlockNonCanonicalLaunch()
+    if PATH_STATE.allowNonCanonicalLaunch() then
+        return nil
+    end
+
+    local install = PATH_STATE.getInstallPathState()
+    if not install or not install.ok or not install.canonicalMismatch or install.canonical == "" then
+        return nil
+    end
+
+    local canonicalScript = PATH_STATE.joinPathLocal(install.sep or PATH_SEP, install.canonical, "scripts", "reaper", "STEMwerk.lua")
+    if canonicalScript == "" or not fileExists(canonicalScript) then
+        return nil
+    end
+
+    local currentScript = script_path .. "STEMwerk.lua"
+    if PATH_STATE.helper and PATH_STATE.helper.pathEquals and PATH_STATE.helper.pathEquals(currentScript, canonicalScript, OS) then
+        return nil
+    end
+
+    return {
+        currentScript = currentScript,
+        canonicalScript = canonicalScript,
+        install = install,
+    }
+end
+
+function PATH_STATE.formatNonCanonicalLaunchMessage(details)
+    local install = details and details.install or {}
+    return table.concat({
+        "STEMwerk was launched from a non-canonical script copy.",
+        "",
+        "Current script:",
+        tostring(details and details.currentScript or "(unknown)"),
+        "",
+        "Installed REAPER script:",
+        tostring(details and details.canonicalScript or install.canonical or "(unknown)"),
+        "",
+        "This usually means REAPER is running a stale copy, which can trigger false 'missing components' checks and CPU-only processing.",
+        "",
+        "Run STEMwerk from the REAPER Scripts/STEMwerk-reaper install, or reinstall STEMwerk.",
+        "",
+        "Development override: set STEMWERK_ALLOW_NONCANONICAL=1 or ExtState allowNonCanonicalLaunch=1."
+    }, "\n")
+end
+
+function PATH_STATE.guardNonCanonicalLaunch()
+    local details = PATH_STATE.shouldBlockNonCanonicalLaunch()
+    if not details then
+        return true
+    end
+    debugLog("Blocking non-canonical launch: current=" .. tostring(details.currentScript) .. " canonical=" .. tostring(details.canonicalScript))
+    reaper.ShowMessageBox(
+        PATH_STATE.formatNonCanonicalLaunchMessage(details),
+        "STEMwerk install mismatch",
+        0
+    )
+    return false
+end
+
+-- Runtime/setup helper functions are now delegated to a dedicated module.
+local ensureWritableDir
+local getRuntimeBase
+local getRuntimePaths
+local resolveCommandPath
+local readCapabilities
+local persistPythonPath
+local canImportAudioSeparator
+local safeDofile
+local isPythonAvailable
+local runSetup
+local verifyRuntimeAfterBootstrap
+local ensureDependenciesInteractive
 
 WINDOWS_GPU_NAMES = nil
 WINDOWS_GPU_NAME_STATUS = nil
@@ -329,8 +379,25 @@ local function canRunPython(pythonCmd)
             local cmd = quoteArg(pythonCmd) .. " --version"
             local rc, out = execProcess(cmd, 12000)
             debugLog("canRunPython Windows: cmd=" .. tostring(cmd) .. " rc=" .. tostring(rc) .. " out=" .. tostring(out))
-            if rc == 0 and out and out:find("Python") then
-                runnable = true
+            if rc == 0 then
+                if out and out:find("Python") then
+                    runnable = true
+                else
+                    local captureCmd = SW_LOG.isWindows() and SW_LOG.wrapCmdForWindows(cmd) or (cmd .. " 2>&1")
+                    local h = io.popen(captureCmd)
+                    if h then
+                        local content = h:read("*a") or ""
+                        local ok, _, code = h:close()
+                        debugLog("canRunPython popen rc=" .. tostring(code) .. " outLen=" .. tostring(#content))
+                        if content and content:find("Python") then
+                            runnable = true
+                        end
+                    end
+                    if not runnable then
+                        -- No output but exit code 0 -> treat as runnable
+                        runnable = true
+                    end
+                end
             else
                 debugLog("canRunPython Windows: failed to run python, output: " .. tostring(out))
                 return false
@@ -610,17 +677,13 @@ function canRunFfmpeg(path)
 end
 
 function checkNumpyCompat(pythonPath)
-    if not pythonPath or pythonPath == "" then
-        return true, nil
-    end
+    if not pythonPath or pythonPath == "" then return true, nil end
     local function escapePythonString(s)
         s = tostring(s or "")
         s = s:gsub("\\", "\\\\")
         s = s:gsub("'", "\\'")
         return s
     end
-
-    -- Cross-platform temp directory
     local tempBase
     if OS == "Windows" then
         tempBase = (SW_LOG and SW_LOG.getTempBase and SW_LOG.getTempBase()) or os.getenv("TEMP") or os.getenv("TMP") or "C:\\Windows\\Temp"
@@ -633,25 +696,19 @@ function checkNumpyCompat(pythonPath)
     local cmd = quoteArg(pythonPath) .. " -c " .. quoteArg(py)
     local rc, out = execProcess(cmd, 12000)
     out = out or ""
-
     local ver = nil
     local f = io.open(outPath, "r")
     if f then
         local line = f:read("*l") or ""
         f:close()
         os.remove(outPath)
-        if line ~= "" then
-            ver = line:match("(%d+%.%d+%.%d+)")
-        end
+        if line ~= "" then ver = line:match("(%d+%.%d+%.%d+)") end
     end
-
     if rc ~= 0 or not ver then
         if out:lower():find("no module named 'numpy'", 1, true) then
             return false, "NumPy is not installed."
         end
-        if rc == 0 and not ver then
-            return true, nil
-        end
+        if rc == 0 and not ver then return true, nil end
         local extra = out ~= "" and ("\nOutput:\n" .. tostring(out)) or "\nOutput: (none)"
         return false, "Unable to detect NumPy version." .. extra
     end
@@ -661,284 +718,6 @@ function checkNumpyCompat(pythonPath)
         return false, "NumPy " .. tostring(ver) .. " is not supported by Numba (requires < 2.4)."
     end
     return true, nil
-end
-
-
--- Debug mode
--- Default: OFF (to avoid writing logs for normal users)
--- Enable by setting:
---   - Environment variable: STEMWERK_DEBUG=1
---   - REAPER ExtState: section "STEMwerk" key "debugMode" or "debug" to "1"
-function DEBUG.isTruthy(v)
-    v = tostring(v or ""):lower()
-    return v == "1" or v == "true" or v == "yes" or v == "on"
-end
-
-function DEBUG.getDebugMode()
-    if DEBUG.isTruthy(os.getenv("STEMWERK_DEBUG")) then
-        return true
-    end
-    if reaper and reaper.GetExtState then
-        local v = reaper.GetExtState(EXT_SECTION, "debugMode")
-        if v ~= "" then return v == "1" end
-        v = reaper.GetExtState(EXT_SECTION, "debug")
-        if v ~= "" then return v == "1" end
-    end
-    return false
-end
-
-DEBUG.enabled = DEBUG.getDebugMode()
-DEBUG.logPath = nil  -- Set during init
-
-local function debugLog(msg)
-    if not DEBUG.enabled then return end
-    if not DEBUG.logPath then
-        local tempDir = getFlatpakTempBase() or os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or "/tmp"
-        DEBUG.logPath = tempDir .. (package.config:sub(1,1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
-    end
-    local f = io.open(DEBUG.logPath, "a")
-    if f then
-        f:write(os.date("[%Y-%m-%d %H:%M:%S] ") .. tostring(msg) .. "\n")
-        f:close()
-    end
-end
-
--- Clear debug log on script start
-local function clearDebugLog()
-    if not DEBUG.enabled then return end
-    local tempDir = getFlatpakTempBase() or os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or "/tmp"
-    DEBUG.logPath = tempDir .. (package.config:sub(1,1) == "\\" and "\\" or "/") .. "STEMwerk_debug.log"
-    local f = io.open(DEBUG.logPath, "w")
-    if f then
-        f:write("=== STEMwerk Debug Log ===\n")
-        f:write("Started: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n\n")
-        f:close()
-    end
-end
-
-clearDebugLog()
-debugLog("Script loaded")
-
--- Lightweight performance markers (only when DEBUG.enabled is enabled).
-PERF_T0 = os.clock()
-function perfMark(label)
-    if not DEBUG.enabled then return end
-    debugLog(string.format("PERF +%.3fs %s", os.clock() - PERF_T0, tostring(label)))
-end
-
--- FORCE DEBUG (temporary diagnostic): enable logging regardless of ExtState/env
--- (diagnostic removed)
-
--- Script path already calculated above
-
--- Detect OS
-local function getOS()
-    -- REAPER provides a reliable OS string; don't infer from Lua's package.config
-    -- (some REAPER builds report POSIX separators even on Windows).
-    local ros = ""
-    if reaper and reaper.GetOS then
-        ros = tostring(reaper.GetOS() or "")
-    end
-    if ros:match("Win") then return "Windows" end
-    if ros:match("OSX") or ros:match("macOS") then return "macOS" end
-    return "Linux"
-end
-
-local OS = getOS()
-local PATH_SEP = OS == "Windows" and "\\" or "/"
-
-function uiNow()
-    if reaper and reaper.time_precise then
-        return reaper.time_precise()
-    end
-    return os.clock()
-end
-
-UI_PACING = UI_PACING or {
-    dialogFrameInterval = 1 / 18,
-    dialogFrameIntervalFx = 1 / 14,
-    messageFrameInterval = 1 / 15,
-    messageFrameIntervalFx = 1 / 8,
-    messageSelectionCheckInterval = 0.25,
-    progressFrameInterval = 1 / 20,
-    progressFrameIntervalFx = 1 / 10,
-    progressPollInterval = 0.33,
-    multiTrackFrameInterval = 1 / 15,
-    multiTrackFrameIntervalFx = 1 / 8,
-    multiTrackPollInterval = 0.40,
-    terminalReadInterval = 0.75,
-}
-
-function pacingFrameInterval(baseKey, fxKey)
-    local useFx = SETTINGS and SETTINGS.visualFX
-    if useFx and UI_PACING[fxKey] then
-        return UI_PACING[fxKey]
-    end
-    return UI_PACING[baseKey]
-end
-
-local function getInstallScriptsDir()
-    if PATH_STATE.helper then
-        if not PATH_STATE.installCache then
-            PATH_STATE.installCache = PATH_STATE.helper.resolveInstallRoot(script_path, { os = OS })
-        end
-        if PATH_STATE.installCache and PATH_STATE.installCache.scriptsDir and PATH_STATE.installCache.scriptsDir ~= "" then
-            return PATH_STATE.installCache.scriptsDir
-        end
-    end
-    return script_path
-end
-
-function PATH_STATE.getInstallPathState()
-    if PATH_STATE.helper then
-        if not PATH_STATE.installCache then
-            PATH_STATE.installCache = PATH_STATE.helper.resolveInstallRoot(script_path, { os = OS })
-        end
-        return PATH_STATE.installCache
-    end
-    return nil
-end
-
-function PATH_STATE.allowNonCanonicalLaunch()
-    if os.getenv("STEMWERK_ALLOW_NONCANONICAL") == "1" then
-        return true
-    end
-    return getExtStateValue("allowNonCanonicalLaunch") == "1"
-end
-
-function PATH_STATE.joinPathLocal(sep, ...)
-    if PATH_STATE.helper and PATH_STATE.helper.joinPath then
-        return PATH_STATE.helper.joinPath(sep, ...)
-    end
-    local parts = { ... }
-    local out = ""
-    for _, part in ipairs(parts) do
-        if part and part ~= "" then
-            local p = tostring(part):gsub("[/\\]+", sep)
-            p = p:gsub(sep .. "+$", "")
-            if out == "" then
-                out = p
-            else
-                p = p:gsub("^" .. sep .. "+", "")
-                out = out .. sep .. p
-            end
-        end
-    end
-    return out
-end
-
-function PATH_STATE.shouldBlockNonCanonicalLaunch()
-    if PATH_STATE.allowNonCanonicalLaunch() then
-        return nil
-    end
-
-    local install = PATH_STATE.getInstallPathState()
-    if not install or not install.ok or not install.canonicalMismatch or install.canonical == "" then
-        return nil
-    end
-
-    local canonicalScript = PATH_STATE.joinPathLocal(install.sep or PATH_SEP, install.canonical, "scripts", "reaper", "STEMwerk.lua")
-    if canonicalScript == "" or not fileExists(canonicalScript) then
-        return nil
-    end
-
-    local currentScript = script_path .. "STEMwerk.lua"
-    if PATH_STATE.helper and PATH_STATE.helper.pathEquals and PATH_STATE.helper.pathEquals(currentScript, canonicalScript, OS) then
-        return nil
-    end
-
-    return {
-        currentScript = currentScript,
-        canonicalScript = canonicalScript,
-        install = install,
-    }
-end
-
-function PATH_STATE.formatNonCanonicalLaunchMessage(details)
-    local install = details and details.install or {}
-    return table.concat({
-        "STEMwerk was launched from a non-canonical script copy.",
-        "",
-        "Current script:",
-        tostring(details and details.currentScript or "(unknown)"),
-        "",
-        "Installed REAPER script:",
-        tostring(details and details.canonicalScript or install.canonical or "(unknown)"),
-        "",
-        "This usually means REAPER is running a stale copy, which can trigger false 'missing components' checks and CPU-only processing.",
-        "",
-        "Run STEMwerk from the REAPER Scripts/STEMwerk-reaper install, or reinstall STEMwerk.",
-        "",
-        "Development override: set STEMWERK_ALLOW_NONCANONICAL=1 or ExtState allowNonCanonicalLaunch=1."
-    }, "\n")
-end
-
-function PATH_STATE.guardNonCanonicalLaunch()
-    local details = PATH_STATE.shouldBlockNonCanonicalLaunch()
-    if not details then
-        return true
-    end
-    debugLog("Blocking non-canonical launch: current=" .. tostring(details.currentScript) .. " canonical=" .. tostring(details.canonicalScript))
-    reaper.ShowMessageBox(
-        PATH_STATE.formatNonCanonicalLaunchMessage(details),
-        "STEMwerk install mismatch",
-        0
-    )
-    return false
-end
-
--- Get home directory (cross-platform)
-local function getHome()
-    if OS == "Windows" then
-        return os.getenv("USERPROFILE") or "C:\\Users\\Default"
-    else
-        return os.getenv("HOME") or "/tmp"
-    end
-end
-
--- Runtime/setup helper functions are now delegated to a dedicated module.
-local ensureWritableDir
-local getRuntimeBase
-local getRuntimePaths
-local resolveCommandPath
-local persistPythonPath
-local canImportAudioSeparator
-local safeDofile
-local isPythonAvailable
-local runSetup
-local verifyRuntimeAfterBootstrap
-local ensureDependenciesInteractive
-
--- Shorten vendor-prefixed GPU names for UI (e.g. "AMD Radeon RX 9070" -> "RX 9070").
-local function sanitizeFriendlyName(name)
-    if not name then return name end
-    local raw = tostring(name)
-    local lbl = raw
-    lbl = lbl:gsub("^%s+", "")
-    lbl = lbl:gsub("%(%s*[Tt][Mm]%s*%)", "")
-    lbl = lbl:gsub("%(%s*[Rr]%s*%)", "")
-    lbl = lbl:gsub("[Aa][Mm][Dd]%s*[Rr]adeon%s*", "")
-    lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*[Gg]e[Ff]orce%s*", "")
-    lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*", "")
-    lbl = lbl:gsub("[Ii][Nn][Tt][Ee][Ll]%s*", "")
-    lbl = lbl:gsub("%(%s*[Ee]xternal%s*%)", "eGPU")
-    lbl = lbl:gsub("%(%s*[Ii]nternal%s*%)", "iGPU")
-    lbl = lbl:gsub("%s*[Ll]aptop%s*[Gg]PU%s*$", "")
-    lbl = lbl:gsub("%s*[Gg]raphics%s*$", "")
-    lbl = lbl:gsub("%s*[Gg]PU%s*$", "")
-    lbl = lbl:gsub("%s+", " ")
-    lbl = lbl:gsub("^%s+", ""):gsub("%s+$", "")
-    if lbl == "" or lbl:match("^%(%s*[Tt][Mm]%s*%)$") or #lbl < 3 then
-        local fallback = raw
-        fallback = fallback:gsub("%(%s*[Tt][Mm]%s*%)", "")
-        fallback = fallback:gsub("%(%s*[Rr]%s*%)", "")
-        fallback = fallback:gsub("^%s+", ""):gsub("%s+$", "")
-        fallback = fallback:gsub("^[Aa][Mm][Dd]%s+", "")
-        fallback = fallback:gsub("^[Nn][Vv][Ii][Dd][Ii][Aa]%s+", "")
-        fallback = fallback:gsub("%s+", " ")
-        lbl = fallback ~= "" and fallback or raw
-    end
-    return lbl
 end
 
 -- Configuration - Auto-detect paths (cross-platform)
@@ -1157,8 +936,8 @@ local function findSeparatorScript()
 
     local scriptsDir = getInstallScriptsDir()
     local paths = {
-        scriptsDir .. "audio_separator_process.py",
         script_path .. "audio_separator_process.py",
+        scriptsDir .. "audio_separator_process.py",
     }
     for _, p in ipairs(paths) do
         if fileExists(p) then return p end
@@ -1182,8 +961,8 @@ function refreshPythonPathFromExtState()
     end
 end
 
-local PYTHON_PATH
-local SEPARATOR_SCRIPT
+PYTHON_PATH = nil
+SEPARATOR_SCRIPT = nil
 
 local BOOTSTRAP_ACTIVE = false
 local DEP_STATUS = { state = "unknown", detail = nil, prompted = false, updatedAt = nil }
@@ -1264,9 +1043,41 @@ if OS ~= "Windows" then
     persistPythonPath(PYTHON_PATH)
 end
 
+-- Shorten vendor-prefixed GPU names for UI (e.g. "AMD Radeon RX 9070" -> "RX 9070").
+local function sanitizeFriendlyName(name)
+    if not name then return name end
+    local raw = tostring(name)
+    local lbl = raw
+    lbl = lbl:gsub("^%s+", "")
+    lbl = lbl:gsub("%(%s*[Tt][Mm]%s*%)", "")
+    lbl = lbl:gsub("%(%s*[Rr]%s*%)", "")
+    lbl = lbl:gsub("[Aa][Mm][Dd]%s*[Rr]adeon%s*", "")
+    lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*[Gg]e[Ff]orce%s*", "")
+    lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*", "")
+    lbl = lbl:gsub("[Ii][Nn][Tt][Ee][Ll]%s*", "")
+    lbl = lbl:gsub("%(%s*[Ee]xternal%s*%)", "eGPU")
+    lbl = lbl:gsub("%(%s*[Ii]nternal%s*%)", "iGPU")
+    lbl = lbl:gsub("%s*[Ll]aptop%s*[Gg]PU%s*$", "")
+    lbl = lbl:gsub("%s*[Gg]raphics%s*$", "")
+    lbl = lbl:gsub("%s*[Gg]PU%s*$", "")
+    lbl = lbl:gsub("%s+", " ")
+    lbl = lbl:gsub("^%s+", ""):gsub("%s+$", "")
+    if lbl == "" or lbl:match("^%(%s*[Tt][Mm]%s*%)$") or #lbl < 3 then
+        local fallback = raw
+        fallback = fallback:gsub("%(%s*[Tt][Mm]%s*%)", "")
+        fallback = fallback:gsub("%(%s*[Rr]%s*%)", "")
+        fallback = fallback:gsub("^%s+", ""):gsub("%s+$", "")
+        fallback = fallback:gsub("^[Aa][Mm][Dd]%s+", "")
+        fallback = fallback:gsub("^[Nn][Vv][Ii][Dd][Ii][Aa]%s+", "")
+        fallback = fallback:gsub("%s+", " ")
+        lbl = fallback ~= "" and fallback or raw
+    end
+    return lbl
+end
+
 -- Stem configuration (with selection state)
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
-local STEMS = {
+STEMS = {
     { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav", selected = true, key = "1", sixStemOnly = false },
     { name = "Drums",  color = {100, 200, 255}, file = "drums.wav", selected = true, key = "2", sixStemOnly = false },
     { name = "Bass",   color = {150, 100, 255}, file = "bass.wav", selected = true, key = "3", sixStemOnly = false },
@@ -1275,15 +1086,8 @@ local STEMS = {
     { name = "Piano",  color = {255, 120, 200}, file = "piano.wav", selected = true, key = "6", sixStemOnly = true },
 }
 
--- Forward declarations (these are defined later in the file, but used by early helpers)
-local SETTINGS
-local saveSettings
-local persistWindowPos
-local drawGlossyPill
-local drawGlossyRect
-
 -- Available processing devices
-local DEVICES = {
+DEVICES = {
     { id = "auto", name = "Auto", desc = "Automatically select best GPU" },
     { id = "cpu", name = "CPU", desc = "Force CPU processing (slower)" },
     -- Generic GPU entries (unverified) so users can manually choose a GPU
@@ -1294,1206 +1098,14 @@ local DEVICES = {
     { id = "cuda:1", name = "CUDA 1", type = "cuda", desc = "CUDA GPU 1 (unverified)" },
 }
 
--- Runtime-probed devices (preferred over the static DEVICES table).
--- This makes the UI capability-driven across OS/GPU stacks.
-local RUNTIME_DEVICES = nil
-local RUNTIME_DEVICE_NOTE_KEY = nil
-local RUNTIME_DEVICE_LAST_PROBE = 0
-local RUNTIME_DEVICE_PROBE_DEBUG = nil
-local RUNTIME_DEVICE_SKIP_NOTE = nil
-local RUNTIME_DIRECTML_POSSIBLE = nil
+RUNTIME_DEVICES = nil
+RUNTIME_DEVICE_LAST_PROBE = 0
+RUNTIME_DIRECTML_POSSIBLE = nil
 RUNTIME_CUDA_COUNT = nil
-RUNTIME_DEVICE_PROBE = nil -- async probe state (avoid blocking UI on startup)
-
-local function runtimeDeviceSafeList()
-    return {
-        { id = "auto", name = "Auto", type = "auto", desc = "Auto-select best available backend (or CPU fallback)." },
-        { id = "cpu", name = "CPU", type = "cpu", desc = "Force CPU processing (works everywhere; slower)." },
-    }
-end
-
-local function parseDeviceListFromPythonOutput(out)
-    if not out or out == "" then return nil, nil end
-    local devices = {}
-    local envJson = nil
-    local skipNote = nil
-    local sawMachine = false
-    local sawAlt = false
-    local skips = {}
-
-    for line in out:gmatch("[^\r\n]+") do
-        if line:match("^STEMWERK_DEVICE\t") then
-            sawMachine = true
-            local id, name, typ = line:match("^STEMWERK_DEVICE\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
-            if id and id ~= "" then
-                devices[#devices + 1] = { id = id, name = name ~= "" and name or id, type = typ or "", desc = "" }
-            end
-        elseif line:match("^STEMWERK_DEVICE_SKIPPED\t") then
-            local id, name, reason = line:match("^STEMWERK_DEVICE_SKIPPED\t([^\t]*)\t([^\t]*)\t(.*)$")
-            if id and id ~= "" then
-                skips[#skips + 1] = { id = id, name = name or id, reason = reason or "" }
-            end
-        elseif line:match("^STEMWERK_CUDA_DEVICE\t") then
-            sawAlt = true
-            local id, name = line:match("^STEMWERK_CUDA_DEVICE\t([^\t]*)\t(.*)$")
-            if id and id ~= "" then
-                devices[#devices + 1] = { id = id, name = (name and name ~= "" and name) or id, type = "cuda", desc = "" }
-            end
-        elseif line:match("^STEMWERK_DML_DEVICE\t") then
-            sawAlt = true
-            local id, name = line:match("^STEMWERK_DML_DEVICE\t([^\t]*)\t(.*)$")
-            if id and id ~= "" then
-                devices[#devices + 1] = { id = id, name = (name and name ~= "" and name) or id, type = "directml", desc = "" }
-            end
-        elseif line:match("^STEMWERK_DML_ALIAS\t") then
-            -- Optional alias like: directml -> directml:0 (we still treat it as its own id)
-            sawAlt = true
-            local id, name = line:match("^STEMWERK_DML_ALIAS\t([^\t]*)\t(.*)$")
-            if id and id ~= "" then
-                devices[#devices + 1] = { id = id, name = (name and name ~= "" and name) or id, type = "directml", desc = "" }
-            end
-        elseif line:match("^STEMWERK_MPS_DEVICE\t") then
-            sawAlt = true
-            local id, name = line:match("^STEMWERK_MPS_DEVICE\t([^\t]*)\t(.*)$")
-            if id and id ~= "" then
-                devices[#devices + 1] = { id = id, name = (name and name ~= "" and name) or id, type = "mps", desc = "" }
-            end
-        elseif line:match("^STEMWERK_ENV_JSON%s+") then
-            envJson = line:gsub("^STEMWERK_ENV_JSON%s+", "")
-        end
-    end
-
-    -- Fallback: parse human output from `--list-devices`
-    if not sawMachine and not sawAlt then
-        for line in out:gmatch("[^\r\n]+") do
-            local id, name, typ = line:match("^%s*([%w%-%_:%.]+):%s*(.-)%s*%(([%w%-%_]+)%)%s*$")
-            if id and name and typ then
-                devices[#devices + 1] = { id = id, name = name ~= "" and name or id, type = typ or "", desc = "" }
-            end
-        end
-    end
-
-    if #skips > 0 then
-        local parts = {}
-        for _, s in ipairs(skips) do
-            local label = (s.id or "") .. (s.name and s.name ~= "" and (" — " .. s.name) or "")
-            local reason = s.reason or ""
-            parts[#parts + 1] = label .. (reason ~= "" and ("\n" .. reason) or "")
-        end
-        skipNote = "Not available:\n" .. table.concat(parts, "\n\n")
-    end
-
-    if #devices == 0 then return nil, envJson, skipNote end
-    return devices, envJson, skipNote
-end
-
-local function buildDeviceNoteFromEnvJson(envJson, devices)
-    local noteKey = nil
-    local onlyCpu = true
-    if devices then
-        for _, d in ipairs(devices) do
-            if d.id ~= "cpu" and d.id ~= "auto" then
-                onlyCpu = false
-                break
-            end
-        end
-    end
-
-    if onlyCpu and OS == "Linux" then
-        noteKey = "device_note_linux_no_gpu"
-    end
-
-    -- If we have JSON, we can add a bit more context without fully parsing it.
-    if envJson and envJson ~= "" then
-        -- Special case: ROCm is installed but the Python env is using a CUDA build (common when a venv
-        -- has pip-installed +cuXXX torch while the system has ROCm torch).
-        if OS == "Linux"
-            and envJson:find('"rocm_path_exists"%s*:%s*true')
-            and envJson:find('"torch"%s*:%s*".-%+cu')
-            and envJson:find('"cuda_available"%s*:%s*false')
-            and (envJson:find('"torch_hip"%s*:%s*null') or envJson:find('"torch_hip"%s*:%s*""')) then
-            noteKey = "device_note_linux_cuda_build"
-        end
-
-        if envJson:find('"cuda_available"%s*:%s*false') and OS ~= "Windows" then
-            noteKey = noteKey or "device_note_cuda_unavailable"
-        end
-        if envJson:find('"mps_available"%s*:%s*false') and OS == "macOS" then
-            noteKey = noteKey or "device_note_mps_unavailable"
-        end
-    end
-
-    return noteKey
-end
-
-local function formatBackendReasonForUi(reason, deviceName)
-    local text = tostring(reason or "")
-    if text == "" then return "" end
-
-    local normalizedDevice = tostring(deviceName or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
-    local parts = {}
-    local seen = {}
-
-    for raw in text:gmatch("[^;]+") do
-        local part = tostring(raw or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        local lower = part:lower()
-
-        if lower == "device_probe_failed" then
-            part = ""
-        elseif lower == "backend_install_failed" then
-            part = "Backend install failed; using CPU"
-        elseif lower == "backend_force_cpu" then
-            part = "CPU fallback forced"
-        elseif lower == "bootstrap_cuda_confirmed" then
-            part = "CUDA runtime confirmed"
-        elseif lower == "bootstrap_directml_confirmed" then
-            part = "DirectML runtime confirmed"
-        elseif lower == "device_name_probe_failed" then
-            part = "GPU model name could not be confirmed; the listed device may still work."
-        end
-
-        local normalizedPart = part:lower()
-        if normalizedPart ~= "" and normalizedPart ~= normalizedDevice and not seen[normalizedPart] then
-            seen[normalizedPart] = true
-            parts[#parts + 1] = part
-        end
-    end
-
-    return table.concat(parts, "; ")
-end
-
-local function backendTypeLabel(dev)
-    if not dev or not dev.id then return "" end
-    local id = tostring(dev.id)
-    if id == "auto" then return "Auto" end
-    if id == "cpu" then return "CPU" end
-    if dev.type == "directml" or id:match("^directml") then return "DirectML" end
-    if dev.type == "cuda" or id:match("^cuda") then
-        if OS == "Linux" then
-            local gpuName = string.lower(tostring(dev.fullName or dev.name or ""))
-            if gpuName:find("amd", 1, true) or gpuName:find("radeon", 1, true) or gpuName:find("gfx", 1, true) then
-                return "ROCm"
-            end
-        end
-        return "CUDA"
-    end
-    if dev.type == "mps" or id == "mps" then return "Apple MPS" end
-    return id
-end
-
-local function envJsonBool(envJson, key)
-    if not envJson or envJson == "" or not key then return nil end
-    if envJson:find('"' .. key .. '"%s*:%s*true') then return true end
-    if envJson:find('"' .. key .. '"%s*:%s*false') then return false end
-    return nil
-end
-
--- Apply a parsed device list to globals (shared by sync + async probe).
-function applyRuntimeDevicesFromParsed(devices, envJson, now)
-    now = now or os.time()
-
-    if not devices then
-        -- Probe failed. To avoid misleading choices, show a safe minimal list.
-        debugLog("  probe FAILED -> safe device list (Auto/CPU)")
-        RUNTIME_DEVICE_SKIP_NOTE = nil
-        RUNTIME_DIRECTML_POSSIBLE = nil
-        RUNTIME_CUDA_COUNT = nil
-        RUNTIME_DEVICES = runtimeDeviceSafeList()
-        RUNTIME_DEVICE_NOTE_KEY = "device_note_probe_failed"
-        RUNTIME_DEVICE_PROBE_DEBUG = "probe_failed"
-        RUNTIME_DEVICE_LAST_PROBE = now
-        if SETTINGS and SETTINGS.device and SETTINGS.device ~= "auto" and SETTINGS.device ~= "cpu" then
-            SETTINGS.device = "auto"
-            if saveSettings then saveSettings() end
-        end
-        return
-    end
-
-    -- Ensure stable entries exist even if an older Python script didn't include them.
-    local function hasId(list, id)
-        for _, d in ipairs(list) do
-            if d.id == id then return true end
-        end
-        return false
-    end
-    if not hasId(devices, "auto") then
-        table.insert(devices, 1, { id = "auto", name = "Auto", type = "auto", desc = "" })
-    end
-    if not hasId(devices, "cpu") then
-        table.insert(devices, 2, { id = "cpu", name = "CPU", type = "cpu", desc = "" })
-    end
-
-    RUNTIME_DEVICE_PROBE_DEBUG = "ok"
-
-    local gpuOptionCount = 0
-    for _, dev in ipairs(devices) do
-        local id = tostring(dev.id or "")
-        if dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$") or id == "cuda" or id == "directml" then
-            gpuOptionCount = gpuOptionCount + 1
-        end
-    end
-
-    local function compactGpuLabel(id)
-        local sid = tostring(id or "")
-        if OS == "Windows" and gpuOptionCount <= 1 and (sid:match("^cuda") or sid:match("^directml")) then
-            return "GPU"
-        end
-        local idx = sid:match(":(%d+)$")
-        if idx then
-            return "GPU" .. idx
-        end
-        if sid == "cuda" or sid == "directml" then
-            return "GPU"
-        end
-        return sid
-    end
-
-    local function isPlaceholderGpuName(name)
-        local n = tostring(name or ""):lower()
-        if n == "" then return true end
-        if n:match("^cuda%s*%d*$") then return true end
-        if n:match("^cuda%s*gpu%s*%d*$") then return true end
-        if n:match("^directml%s*%d*$") then return true end
-        if n:match("^directml%s*gpu%s*%d*$") then return true end
-        if n:match("^gpu%s*%d*$") then return true end
-        return false
-    end
-
-    local function sanitizeFriendlyName(name)
-        if not name then return name end
-        local raw = tostring(name)
-        local lbl = raw
-        lbl = lbl:gsub("^%s+", "")
-        lbl = lbl:gsub("%(%s*[Tt][Mm]%s*%)", "")
-        lbl = lbl:gsub("%(%s*[Rr]%s*%)", "")
-        lbl = lbl:gsub("[Aa][Mm][Dd]%s*[Rr]adeon%s*", "")
-        lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*[Gg]e[Ff]orce%s*", "")
-        lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*", "")
-        lbl = lbl:gsub("[Ii][Nn][Tt][Ee][Ll]%s*", "")
-        lbl = lbl:gsub("%(%s*[Ee]xternal%s*%)", "eGPU")
-        lbl = lbl:gsub("%(%s*[Ii]nternal%s*%)", "iGPU")
-        lbl = lbl:gsub("%s*[Ll]aptop%s*[Gg]PU%s*$", "")
-        lbl = lbl:gsub("%s*[Gg]raphics%s*$", "")
-        lbl = lbl:gsub("%s*[Gg]PU%s*$", "")
-        lbl = lbl:gsub("%s+", " ")
-        lbl = lbl:gsub("^%s+", ""):gsub("%s+$", "")
-        if lbl == "" or lbl:match("^%(%s*[Tt][Mm]%s*%)$") or #lbl < 3 then
-            local fallback = raw
-            fallback = fallback:gsub("%(%s*[Tt][Mm]%s*%)", "")
-            fallback = fallback:gsub("%(%s*[Rr]%s*%)", "")
-            fallback = fallback:gsub("^%s+", ""):gsub("%s+$", "")
-            fallback = fallback:gsub("^[Aa][Mm][Dd]%s+", "")
-            fallback = fallback:gsub("^[Nn][Vv][Ii][Dd][Ii][Aa]%s+", "")
-            fallback = fallback:gsub("%s+", " ")
-            lbl = fallback ~= "" and fallback or raw
-        end
-        return lbl
-    end
-
-    -- Try to load optional mapping files that map device ids (e.g. "directml:0")
-    -- to a human-friendly GPU name discovered by probing.
-    --
-    -- IMPORTANT: These mappings are *machine-specific*. If you sync/copy the STEMwerk folder
-    -- between computers, a shared mapping file can show the "wrong" GPUs (from another system).
-    -- To avoid that, we only load per-machine mapping files stored in the user's home folder.
-    --
-    -- Create one of these files (JSON object of id->name) if you want friendly names:
-    --   Windows: %USERPROFILE%\.STEMwerk\device_map_<COMPUTERNAME>.json
-    --   Linux:   ~/.STEMwerk/device_map_<HOSTNAME>.json
-    --   macOS:   ~/.STEMwerk/device_map_<HOSTNAME>.json
-    local function loadDeviceMap()
-        local map = {}
-
-        local function readMapFile(mapPath)
-            local f = io.open(mapPath, "r")
-            if not f then return end
-            local ok, data = pcall(function() return f:read("*a") end)
-            f:close()
-            if not (ok and data and data ~= "") then return end
-            for k, v in data:gmatch('"([^"]+)"%s*:%s*"([^"]+)"') do
-                map[k] = v
-            end
-        end
-
-        local host = os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME") or ""
-        host = tostring(host):gsub("%s+", "")
-        local home = getHome()
-        local candidates = {}
-
-        if home and host ~= "" then
-            if PATH_SEP == "\\" then
-                table.insert(candidates, home .. "\\.STEMwerk\\device_map_" .. host .. ".json")
-                table.insert(candidates, home .. "\\Documents\\STEMwerk\\device_map_" .. host .. ".json")
-            else
-                table.insert(candidates, home .. "/.STEMwerk/device_map_" .. host .. ".json")
-                table.insert(candidates, home .. "/Documents/STEMwerk/device_map_" .. host .. ".json")
-            end
-        end
-
-        for _, mapPath in ipairs(candidates) do
-            readMapFile(mapPath)
-        end
-
-        if next(map) then return map end
-        return nil
-    end
-    local deviceMap = loadDeviceMap() or {}
-    local function mappedDeviceName(id)
-        if not id or not deviceMap then return nil end
-        if deviceMap[id] then return deviceMap[id] end
-        local idx = tostring(id):match("^directml:(%d+)$")
-        if idx then
-            return deviceMap["privateuseone:" .. idx]
-        end
-        return nil
-    end
-
-    -- Filter out backends that can never work on this OS.
-    if OS ~= "Windows" then
-        local filtered = {}
-        for _, d in ipairs(devices) do
-            if d.type ~= "directml" and not (d.id and d.id:match("^directml")) then
-                filtered[#filtered + 1] = d
-            end
-        end
-        devices = filtered
-    end
-
-    local directmlPossible = envJsonBool(envJson, "directml_possible")
-    if OS ~= "Windows" then
-        directmlPossible = false
-    end
-    if directmlPossible == nil then
-        for _, d in ipairs(devices) do
-            if d.type == "directml" or (d.id and d.id:match("^directml")) then
-                directmlPossible = true
-                break
-            end
-        end
-    end
-    RUNTIME_DIRECTML_POSSIBLE = directmlPossible
-    if envJson and envJson ~= "" then
-        RUNTIME_CUDA_COUNT = tonumber(envJson:match('"cuda_count"%s*:%s*(%d+)')) or RUNTIME_CUDA_COUNT
-    else
-        RUNTIME_CUDA_COUNT = nil
-    end
-
-    for _, d in ipairs(devices) do
-        d.fullName = d.name
-        local mapped = mappedDeviceName(d.id)
-        if mapped then
-            d.fullName = mapped
-        end
-        if d.id and (d.id:match("^cuda:%d+$") or d.id:match("^directml:%d+$") or d.type == "cuda" or d.type == "directml") then
-            local short = sanitizeFriendlyName(d.fullName or d.name)
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = sanitizeFriendlyName(d.name)
-            end
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = compactGpuLabel(d.id)
-            end
-            d.uiName = short
-        else
-            d.uiName = d.name
-        end
-        if d.id == "auto" then
-            d.descKey = "device_auto_desc"
-        elseif d.id == "cpu" then
-            d.descKey = "device_cpu_desc"
-        elseif d.type == "cuda" then
-            d.descKey = "device_cuda_desc"
-        elseif d.type == "directml" then
-            d.descKey = "device_directml_desc"
-        elseif d.type == "mps" then
-            d.descKey = "device_mps_desc"
-        end
-    end
-
-    RUNTIME_DEVICES = devices
-    RUNTIME_DEVICE_NOTE_KEY = buildDeviceNoteFromEnvJson(envJson, devices)
-    RUNTIME_DEVICE_LAST_PROBE = now
-
-    -- Auto-select best device by running a very short benchmark per GPU candidate.
-    local function parseBenchOutput(out)
-        if not out then return nil end
-        for line in out:gmatch("[^\r\n]+") do
-            local s = line:match("elapsed=([%d%.]+)s") or line:match("Completed on device=.*elapsed=([%d%.]+)s")
-            if s then
-                local n = tonumber(s)
-                if n then return n end
-            end
-        end
-        return nil
-    end
-
-    local function quickBenchDevice(d)
-        if not d or not d.id then return nil end
-        -- Only benchmark GPU backends
-        if not (d.type == "directml" or d.type == "cuda" or (d.id and d.id:match("^directml:%d+$") or d.id:match("^cuda:%d+$"))) then
-            return nil
-        end
-        -- Ensure the helper script exists
-        local benchScript = script_path .. "check_directml_runtime.py"
-        if not fileExists(benchScript) then
-            -- try repo location
-            benchScript = (repo_root or "") .. "scripts" .. PATH_SEP .. "reaper" .. PATH_SEP .. "check_directml_runtime.py"
-            if not fileExists(benchScript) then return nil end
-        end
-        local idx = tonumber((d.id or ""):match("%d+$")) or 0
-        local cmd = quoteArg(PYTHON_PATH) .. " -u " .. quoteArg(benchScript) .. " --size 800 --iters 1 --dml-device " .. tostring(idx)
-        local rc, out = execCapture(cmd, 20000)
-        if rc ~= 0 then return nil end
-        return parseBenchOutput(out)
-    end
-
-    local function autoSelectBestDevice(devices)
-        if not devices or #devices == 0 then return end
-        local bestId = nil
-        local bestTime = nil
-        local tried = 0
-        for _, d in ipairs(devices) do
-            if tried >= 3 then break end -- limit probes to at most 3 devices
-            local t = quickBenchDevice(d)
-            if t then
-                tried = tried + 1
-                if not bestTime or t < bestTime then
-                    bestTime = t
-                    bestId = d.id
-                end
-            end
-        end
-        if bestId and SETTINGS and (not SETTINGS.device or SETTINGS.device == "auto") then
-            SETTINGS.device = bestId
-            if saveSettings then saveSettings() end
-            RUNTIME_DEVICE_NOTE_KEY = "device_note_auto_selected"
-            debugLog("Auto-selected best device: " .. tostring(bestId) .. " time=" .. tostring(bestTime))
-        end
-    end
-
-    -- Try to pick the best GPU automatically in the background (non-blocking UI would be nicer,
-    -- but keep this simple: run a few quick benches so the UI shows the real preferred device).
-    pcall(function() autoSelectBestDevice(RUNTIME_DEVICES) end)
-
-    -- If the saved device is no longer available, fall back to auto.
-    if SETTINGS and SETTINGS.device then
-        local ok = false
-        for _, d in ipairs(RUNTIME_DEVICES) do
-            if d.id == SETTINGS.device then ok = true; break end
-        end
-        if not ok then
-            SETTINGS.device = "auto"
-            if saveSettings then saveSettings() end
-        end
-    end
-    return true
-end
-
--- Start an async device probe so we never block UI creation (probe results are parsed later).
-function startRuntimeDeviceProbeAsync(force)
-    force = force or false
-    local now = os.time()
-    if not force and RUNTIME_DEVICES and (now - (RUNTIME_DEVICE_LAST_PROBE or 0) < 10) then
-        return false
-    end
-    if RUNTIME_DEVICE_PROBE and RUNTIME_DEVICE_PROBE.active then
-        return false
-    end
-
-    if not force and applyCachedRuntimeDevices() then
-        debugLog("=== Device probe: loaded from capabilities ===")
-        return false
-    end
-
-    local function getTempDirEarly()
-        if OS == "Windows" then
-            return os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
-        end
-        local flatpakTemp = getFlatpakTempBase()
-        if flatpakTemp then return flatpakTemp end
-        return os.getenv("TMPDIR") or "/tmp"
-    end
-    local function makeDirEarly(path)
-        if reaper and reaper.RecursiveCreateDirectory then
-            reaper.RecursiveCreateDirectory(path, 0)
-            return
-        end
-        if OS == "Windows" then
-            os.execute('mkdir "' .. path .. '" 2>nul')
-        else
-            os.execute('mkdir -p "' .. path .. '" 2>/dev/null')
-        end
-    end
-    local function uniqueProbeDir()
-        local t = (reaper and reaper.time_precise) and reaper.time_precise() or os.clock() or 0
-        local ms = math.floor(t * 1000)
-        return getTempDirEarly() .. PATH_SEP .. "STEMwerk_devprobe_" .. tostring(os.time()) .. "_" .. tostring(ms)
-    end
-
-    local probeDir = uniqueProbeDir()
-    makeDirEarly(probeDir)
-
-    local outFile = probeDir .. PATH_SEP .. "probe_out.txt"
-    local doneFile = probeDir .. PATH_SEP .. "done.txt"
-    local pidFile = probeDir .. PATH_SEP .. "pid.txt"
-    local rcFile = probeDir .. PATH_SEP .. "rc.txt"
-
-    RUNTIME_DEVICE_PROBE = {
-        active = true,
-        startedAt = os.clock(),
-        dir = probeDir,
-        outFile = outFile,
-        doneFile = doneFile,
-        pidFile = pidFile,
-        rcFile = rcFile,
-    }
-    RUNTIME_DEVICE_PROBE_DEBUG = "async_running"
-
-    debugLog("=== Device probe: async start ===")
-    debugLog("  dir=" .. tostring(probeDir))
-
-    -- Seed a minimal list so the UI is usable while probing.
-    if not RUNTIME_DEVICES then
-        RUNTIME_DEVICES = runtimeDeviceSafeList()
-    end
-    RUNTIME_DEVICE_NOTE_KEY = "device_note_probing"
-
-    if OS == "Windows" then
-        local vbsPath = probeDir .. PATH_SEP .. "run_probe_hidden.vbs"
-        local vbsFile = io.open(vbsPath, "w")
-        if not vbsFile then
-            debugLog("Async probe: failed to write VBS")
-            RUNTIME_DEVICE_PROBE.active = false
-            return false
-        end
-
-        local function escVbs(s)
-            return tostring(s or ""):gsub('"', '""')
-        end
-
-        local function escPsSingle(s)
-            return tostring(s or ""):gsub("'", "''")
-        end
-
-        local psPath = probeDir .. PATH_SEP .. "run_probe_hidden.ps1"
-        local psScript = io.open(psPath, "w")
-        if not psScript then
-            vbsFile:close()
-            debugLog("Async probe: failed to write PowerShell launcher")
-            RUNTIME_DEVICE_PROBE.active = false
-            return false
-        end
-
-        psScript:write("$ErrorActionPreference='SilentlyContinue'\n")
-        psScript:write("$py='" .. escPsSingle(PYTHON_PATH) .. "'\n")
-        psScript:write("$sep='" .. escPsSingle(SEPARATOR_SCRIPT) .. "'\n")
-        psScript:write("$out='" .. escPsSingle(outFile) .. "'\n")
-        psScript:write("$rc='" .. escPsSingle(rcFile) .. "'\n")
-        psScript:write("$done='" .. escPsSingle(doneFile) .. "'\n")
-        psScript:write("$outLast='" .. escPsSingle(script_path .. "probe_out_last.txt") .. "'\n")
-        psScript:write("$rcLast='" .. escPsSingle(script_path .. "probe_rc_last.txt") .. "'\n")
-        psScript:write("$arg1=@('-u',$sep,'--list-devices-machine')\n")
-        psScript:write("$arg2=@('-u',$sep,'--list-devices')\n")
-        psScript:write("$p=Start-Process -FilePath $py -ArgumentList $arg1 -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $out\n")
-        psScript:write("$exitCode=$p.ExitCode\n")
-        psScript:write("if ($exitCode -ne 0) { $p=Start-Process -FilePath $py -ArgumentList $arg2 -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $out; $exitCode=$p.ExitCode }\n")
-        psScript:write("Set-Content -Path $rc -Value $exitCode -Encoding ascii\n")
-        psScript:write("Set-Content -Path $done -Value 'DONE' -Encoding ascii\n")
-        psScript:write("Copy-Item -LiteralPath $out -Destination $outLast -Force -ErrorAction SilentlyContinue\n")
-        psScript:write("Copy-Item -LiteralPath $rc -Destination $rcLast -Force -ErrorAction SilentlyContinue\n")
-        psScript:close()
-
-        local psCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' .. quoteArg(psPath)
-
-        vbsFile:write('Set sh = CreateObject("WScript.Shell")' .. "\n")
-        vbsFile:write('cmd = "' .. escVbs(psCmd) .. '"' .. "\n")
-        vbsFile:write('sh.Run cmd, 0, False' .. "\n")
-        vbsFile:close()
-
-        -- Save debug copy of the generated command and VBS wrapper
-        local dbgPath = script_path .. "probe_debug_last.txt"
-        local dbgF = io.open(dbgPath, "w")
-        if dbgF then
-            dbgF:write("--- PowerShell launcher (for device probe) ---\n")
-            dbgF:write(psCmd .. "\n\n")
-            dbgF:write("--- VBS wrapper content (will run wscript) ---\n")
-            local vbsContent = 'Set sh = CreateObject("WScript.Shell")\n' .. 'cmd = "' .. escVbs(psCmd) .. '"\n' .. 'sh.Run cmd, 0, False\n'
-            dbgF:write(vbsContent .. "\n")
-            dbgF:close()
-        end
-
-        local wscriptCmd = 'wscript "' .. vbsPath .. '"'
-        if reaper.ExecProcess then
-            reaper.ExecProcess(wscriptCmd, -1)
-        else
-            local h = io.popen(wscriptCmd)
-            if h then h:close() end
-        end
-    else
-        local launcherPath = probeDir .. PATH_SEP .. "run_bg.sh"
-        local script = io.open(launcherPath, "w")
-        if not script then
-            debugLog("Async probe: failed to write launcher")
-            RUNTIME_DEVICE_PROBE.active = false
-            return false
-        end
-
-        script:write("#!/bin/sh\n")
-        script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
-        script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
-        script:write("OUT=" .. quoteArg(outFile) .. "\n")
-        script:write("DONE=" .. quoteArg(doneFile) .. "\n")
-        script:write("PIDFILE=" .. quoteArg(pidFile) .. "\n")
-        script:write("RCFILE=" .. quoteArg(rcFile) .. "\n")
-        script:write("PY_SITE=$(\"$PY\" -c \"import sysconfig; print(sysconfig.get_paths().get('purelib',''))\")\n")
-        script:write("if [ -n \"$PY_SITE\" ]; then\n")
-        script:write("  for d in \"$PY_SITE\"/nvidia/*/lib \"$PY_SITE\"/nvidia/*/lib64; do\n")
-        script:write("    if [ -d \"$d\" ]; then\n")
-        script:write("      case \":$LD_LIBRARY_PATH:\" in\n")
-        script:write("        *\":$d:\"*) ;;\n")
-        script:write("        *) LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$d\" ;;\n")
-        script:write("      esac\n")
-        script:write("    fi\n")
-        script:write("  done\n")
-        script:write("  export LD_LIBRARY_PATH\n")
-        script:write("fi\n")
-        script:write("(\n")
-        script:write('  "$PY" -u "$SEP" --list-devices-machine >"$OUT" 2>&1\n')
-        script:write("  rc=$?\n")
-        script:write('  if [ "$rc" -ne 0 ]; then "$PY" -u "$SEP" --list-devices >"$OUT" 2>&1; rc=$?; fi\n')
-        script:write('  echo "$rc" > "$RCFILE"\n')
-        script:write('  echo DONE > "$DONE"\n')
-        script:write(") &\n")
-        script:write('echo $! > "$PIDFILE"\n')
-        script:close()
-
-        os.execute("sh " .. quoteArg(launcherPath) .. " 2>/dev/null")
-    end
-
-    return true
-end
-
-local function extractCapabilityDeviceOutput(cap)
-    if not (cap and cap.raw) then return "" end
-
-    local deviceOut = cap.raw:match("DEVICES_OUTPUT_BEGIN\r?\n(.-)\r?\nDEVICES_OUTPUT_END")
-    if deviceOut and deviceOut ~= "" then
-        return deviceOut
-    end
-    if cap.raw:find("STEMWERK_CUDA_DEVICE", 1, true)
-        or cap.raw:find("STEMWERK_DML_DEVICE", 1, true)
-        or cap.raw:find("STEMWERK_MPS_DEVICE", 1, true)
-        or cap.raw:find("STEMWERK_DEVICE\t", 1, true)
-        or cap.raw:find("STEMWERK_ENV_JSON ", 1, true) then
-        return cap.raw
-    end
-
-    local kv = cap.kv or {}
-    local lines = {}
-    local envJson = tostring(kv.ENV_JSON or "")
-    local deviceNames = tostring(kv.DEVICE_NAMES or "")
-    local backend = tostring(kv.BACKEND or "")
-
-    if envJson ~= "" then
-        lines[#lines + 1] = "STEMWERK_ENV_JSON " .. envJson
-    end
-
-    local function addCsvDevices(prefix, idPrefix, fallbackLabel)
-        local idx = 0
-        for name in deviceNames:gmatch("[^,]+") do
-            local trimmed = tostring(name):gsub("^%s+", ""):gsub("%s+$", "")
-            if trimmed ~= "" then
-                lines[#lines + 1] = prefix .. "\t" .. idPrefix .. tostring(idx) .. "\t" .. trimmed
-                idx = idx + 1
-            end
-        end
-        if idx == 0 then
-            lines[#lines + 1] = prefix .. "\t" .. idPrefix .. "0\t" .. fallbackLabel
-        end
-    end
-
-    if backend == "cuda" then
-        addCsvDevices("STEMWERK_CUDA_DEVICE", "cuda:", "CUDA GPU 0")
-    elseif backend == "directml" then
-        addCsvDevices("STEMWERK_DML_DEVICE", "directml:", "DirectML GPU 0")
-        lines[#lines + 1] = "STEMWERK_DML_ALIAS\tdirectml\tdirectml:0"
-    elseif backend == "mps" then
-        lines[#lines + 1] = "STEMWERK_MPS_DEVICE\tmps\tApple MPS"
-    end
-
-    return table.concat(lines, "\n")
-end
-
-function pollRuntimeDeviceProbe()
-    if not (RUNTIME_DEVICE_PROBE and RUNTIME_DEVICE_PROBE.active) then return false end
-
-    local age = os.clock() - (RUNTIME_DEVICE_PROBE.startedAt or os.clock())
-    if age > 90 then
-        debugLog("Async device probe timed out after " .. tostring(age) .. "s")
-        RUNTIME_DEVICE_PROBE.active = false
-        applyRuntimeDevicesFromParsed(nil, nil, os.time())
-        return true
-    end
-
-    local df = io.open(RUNTIME_DEVICE_PROBE.doneFile, "r")
-    if not df then return false end
-    df:close()
-
-    local out = ""
-    local f = io.open(RUNTIME_DEVICE_PROBE.outFile, "r")
-    if f then
-        out = f:read("*a") or ""
-        f:close()
-    end
-
-    local devices, envJson, skipNote = parseDeviceListFromPythonOutput(out)
-    RUNTIME_DEVICE_SKIP_NOTE = skipNote
-    applyRuntimeDevicesFromParsed(devices, envJson, os.time())
-    RUNTIME_DEVICE_PROBE.active = false
-    debugLog("=== Device probe: async done (devices=" .. tostring(RUNTIME_DEVICES and #RUNTIME_DEVICES or 0) .. ") ===")
-    return true
-end
-
-local function refreshRuntimeDevices(force)
-    force = force or false
-    local now = os.time()
-    if not force and RUNTIME_DEVICES and (now - (RUNTIME_DEVICE_LAST_PROBE or 0) < 10) then
-        return
-    end
-
-    if not force and applyCachedRuntimeDevices() then
-        return
-    end
-
-    debugLog("=== Device probe: refreshRuntimeDevices() ===")
-    debugLog("  PYTHON_PATH=" .. tostring(PYTHON_PATH))
-    debugLog("  SEPARATOR_SCRIPT=" .. tostring(SEPARATOR_SCRIPT))
-
-    -- Probe via Python helper (preferred). If the installed script doesn't support the machine mode
-    -- flag yet, we fall back to the human-readable `--list-devices` output.
-    local devices, envJson = nil, nil
-    -- Importing torch can take a while on some systems; give this probe a generous timeout.
-    local PROBE_TIMEOUT_MS = 30000
-
-    -- Exec/capture helper: REAPER's ExecProcess sometimes returns empty output on some systems.
-    -- For probing, we can safely fall back to flatpak-spawn file capture or io.popen.
-    local function execCapture(cmd, timeoutMs)
-        local rc, out = exec_capture(cmd, timeoutMs)
-        out = out or ""
-        debugLog("  probe execCapture rc=" .. tostring(rc) .. " outLen=" .. tostring(#out))
-        if out ~= "" then
-            return rc, out
-        end
-        local h = io.popen(cmd .. " 2>&1")
-        if h then
-            local content = h:read("*a") or ""
-            local ok, _, code = h:close()
-            if ok == true then
-                rc = 0
-            elseif type(code) == "number" then
-                rc = code
-            else
-                rc = rc or -1
-            end
-            if content ~= "" then
-                debugLog("  probe io.popen used (rc=" .. tostring(rc) .. " outLen=" .. tostring(#content) .. ")")
-            end
-            return rc, content
-        end
-        return rc, out
-    end
-
-    local cmd1 = quoteArg(PYTHON_PATH) .. " -u " .. quoteArg(SEPARATOR_SCRIPT) .. " --list-devices-machine"
-    debugLog("  probe cmd1=" .. cmd1)
-    local rc1, out1 = execCapture(cmd1, PROBE_TIMEOUT_MS)
-    if rc1 == 0 then
-        if out1 and out1 ~= "" then
-            local snippet = out1
-            if #snippet > 900 then snippet = snippet:sub(1, 900) .. "\n...(truncated)..." end
-            debugLog("  probe cmd1 output:\n" .. snippet)
-        end
-        devices, envJson, RUNTIME_DEVICE_SKIP_NOTE = parseDeviceListFromPythonOutput(out1)
-        debugLog("  probe cmd1 parsed devices=" .. tostring(devices and #devices or 0))
-    end
-    if not devices then
-        local cmd2 = quoteArg(PYTHON_PATH) .. " -u " .. quoteArg(SEPARATOR_SCRIPT) .. " --list-devices"
-        debugLog("  probe cmd2=" .. cmd2)
-        local rc2, out2 = execCapture(cmd2, PROBE_TIMEOUT_MS)
-        if rc2 == 0 then
-            if out2 and out2 ~= "" then
-                local snippet = out2
-                if #snippet > 900 then snippet = snippet:sub(1, 900) .. "\n...(truncated)..." end
-                debugLog("  probe cmd2 output:\n" .. snippet)
-            end
-            devices, envJson, RUNTIME_DEVICE_SKIP_NOTE = parseDeviceListFromPythonOutput(out2)
-            debugLog("  probe cmd2 parsed devices=" .. tostring(devices and #devices or 0))
-        end
-    end
-    if not devices then
-        -- Final fallback: probe torch capabilities directly (works even with older installed scripts).
-        -- Emits STEMWERK_ENV_JSON plus STEMWERK_*_DEVICE lines we can parse without a JSON parser.
-        local py = [[
-import json, importlib.util
-env = {}
-try:
-    import torch
-    env['torch'] = getattr(torch, '__version__', '')
-    env['cuda_available'] = bool(torch.cuda.is_available())
-    env['cuda_count'] = int(torch.cuda.device_count()) if env['cuda_available'] else 0
-    env['cuda_names'] = [torch.cuda.get_device_name(i) for i in range(env['cuda_count'])] if env['cuda_available'] else []
-    try:
-        env['mps_available'] = bool(getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_available())
-    except Exception:
-        env['mps_available'] = False
-except Exception as e:
-    env['torch_error'] = str(e)
-    env['cuda_available'] = False
-    env['cuda_count'] = 0
-    env['cuda_names'] = []
-    env['mps_available'] = False
-env['directml_possible'] = importlib.util.find_spec('torch_directml') is not None
-print('STEMWERK_ENV_JSON ' + json.dumps(env, ensure_ascii=False))
-for i, n in enumerate(env.get('cuda_names', [])):
-    print(f'STEMWERK_CUDA_DEVICE\\tcuda:{i}\\t{n}')
-if env.get('mps_available'):
-    print('STEMWERK_MPS_DEVICE\\tmps\\tApple MPS')
-if env.get('directml_possible'):
-    try:
-        import torch_directml
-        c = torch_directml.device_count()
-        for i in range(c):
-            print(f'STEMWERK_DML_DEVICE\\tdirectml:{i}\\tDirectML GPU {i}')
-        if c == 1:
-            print('STEMWERK_DML_ALIAS\\tdirectml\\tdirectml:0')
-    except Exception:
-        pass
-]]
-        -- Avoid giant quoted -c strings (some shells/ExecProcess variants struggle with newlines).
-        -- NOTE: this runs early in the script; don't depend on helpers defined later in the file.
-        local function getTempDirEarly()
-            if OS == "Windows" then
-                return os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
-            end
-            local flatpakTemp = getFlatpakTempBase()
-            if flatpakTemp then return flatpakTemp end
-            return os.getenv("TMPDIR") or "/tmp"
-        end
-        local function makeDirEarly(path)
-            if reaper and reaper.RecursiveCreateDirectory then
-                reaper.RecursiveCreateDirectory(path, 0)
-                return
-            end
-            if OS == "Windows" then
-                os.execute('mkdir "' .. path .. '" 2>nul')
-            else
-                os.execute('mkdir -p "' .. path .. '" 2>/dev/null')
-            end
-        end
-        local function uniqueProbeDir()
-            local t = (reaper and reaper.time_precise) and reaper.time_precise() or os.clock() or 0
-            local ms = math.floor(t * 1000)
-            return getTempDirEarly() .. PATH_SEP .. "STEMwerk_probe_" .. tostring(os.time()) .. "_" .. tostring(ms)
-        end
-
-        local probeDir = uniqueProbeDir()
-        makeDirEarly(probeDir)
-        local probePath = probeDir .. PATH_SEP .. "stemwerk_probe_devices.py"
-        local f = io.open(probePath, "w")
-        if f then
-            f:write(py)
-            f:close()
-        end
-        local cmd3 = quoteArg(PYTHON_PATH) .. " " .. quoteArg(probePath)
-        debugLog("  probe cmd3=" .. cmd3)
-        local rc3, out3 = execCapture(cmd3, PROBE_TIMEOUT_MS)
-        if rc3 == 0 then
-            if out3 and out3 ~= "" then
-                local snippet = out3
-                if #snippet > 900 then snippet = snippet:sub(1, 900) .. "\n...(truncated)..." end
-                debugLog("  probe cmd3 output:\n" .. snippet)
-            end
-            devices, envJson, RUNTIME_DEVICE_SKIP_NOTE = parseDeviceListFromPythonOutput(out3)
-            debugLog("  probe cmd3 parsed devices=" .. tostring(devices and #devices or 0))
-        end
-    end
-
-    if not devices then
-        -- Probe failed. To avoid misleading choices, show a safe minimal list.
-        -- This is better UX than showing CUDA/DirectML when they won't work.
-        debugLog("  probe FAILED -> safe device list (Auto/CPU)")
-        RUNTIME_DEVICE_SKIP_NOTE = nil
-        RUNTIME_DIRECTML_POSSIBLE = nil
-        RUNTIME_CUDA_COUNT = nil
-        RUNTIME_DEVICES = {
-            { id = "auto", name = "Auto", type = "auto", desc = "Auto-select best available backend (or CPU fallback)." },
-            { id = "cpu", name = "CPU", type = "cpu", desc = "Force CPU processing (works everywhere; slower)." },
-        }
-        RUNTIME_DEVICE_NOTE_KEY = "device_note_probe_failed"
-        RUNTIME_DEVICE_PROBE_DEBUG = "probe_failed"
-        RUNTIME_DEVICE_LAST_PROBE = now
-        if SETTINGS.device ~= "auto" and SETTINGS.device ~= "cpu" then
-            SETTINGS.device = "auto"
-            saveSettings()
-        end
-        return
-    end
-
-    -- Ensure stable entries exist even if an older Python script didn't include them.
-    local function hasId(list, id)
-        for _, d in ipairs(list) do
-            if d.id == id then return true end
-        end
-        return false
-    end
-    if not hasId(devices, "auto") then
-        table.insert(devices, 1, { id = "auto", name = "Auto", type = "auto", desc = "" })
-    end
-    if not hasId(devices, "cpu") then
-        table.insert(devices, 2, { id = "cpu", name = "CPU", type = "cpu", desc = "" })
-    end
-
-    RUNTIME_DEVICE_PROBE_DEBUG = "ok"
-
-    local gpuOptionCount = 0
-    for _, dev in ipairs(devices) do
-        local id = tostring(dev.id or "")
-        if dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$") or id == "cuda" or id == "directml" then
-            gpuOptionCount = gpuOptionCount + 1
-        end
-    end
-
-    local function compactGpuLabel(id)
-        local sid = tostring(id or "")
-        if OS == "Windows" and gpuOptionCount <= 1 and (sid:match("^cuda") or sid:match("^directml")) then
-            return "GPU"
-        end
-        local idx = sid:match(":(%d+)$")
-        if idx then
-            return "GPU" .. idx
-        end
-        if sid == "cuda" or sid == "directml" then
-            return "GPU"
-        end
-        return sid
-    end
-
-    local function isPlaceholderGpuName(name)
-        local n = tostring(name or ""):lower()
-        if n == "" then return true end
-        if n:match("^cuda%s*%d*$") then return true end
-        if n:match("^cuda%s*gpu%s*%d*$") then return true end
-        if n:match("^directml%s*%d*$") then return true end
-        if n:match("^directml%s*gpu%s*%d*$") then return true end
-        if n:match("^gpu%s*%d*$") then return true end
-        return false
-    end
-
-    -- Filter out backends that can never work on this OS.
-    if OS ~= "Windows" then
-        local filtered = {}
-        for _, d in ipairs(devices) do
-            if d.type ~= "directml" and not (d.id and d.id:match("^directml")) then
-                filtered[#filtered + 1] = d
-            end
-        end
-        devices = filtered
-    end
-
-    local directmlPossible = envJsonBool(envJson, "directml_possible")
-    if OS ~= "Windows" then
-        directmlPossible = false
-    end
-    if directmlPossible == nil then
-        for _, d in ipairs(devices) do
-            if d.type == "directml" or (d.id and d.id:match("^directml")) then
-                directmlPossible = true
-                break
-            end
-        end
-    end
-    RUNTIME_DIRECTML_POSSIBLE = directmlPossible
-    if envJson and envJson ~= "" then
-        RUNTIME_CUDA_COUNT = tonumber(envJson:match('"cuda_count"%s*:%s*(%d+)')) or RUNTIME_CUDA_COUNT
-    else
-        RUNTIME_CUDA_COUNT = nil
-    end
-
-    -- Fill descriptions for tooltips (store translation keys, not English strings).
-    for _, d in ipairs(devices) do
-        d.fullName = d.name
-        if d.id and (d.id:match("^cuda:%d+$") or d.id:match("^directml:%d+$") or d.type == "cuda" or d.type == "directml") then
-            local short = sanitizeFriendlyName(d.fullName or d.name)
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = sanitizeFriendlyName(d.name)
-            end
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = compactGpuLabel(d.id)
-            end
-            d.uiName = short
-        else
-            d.uiName = d.name
-        end
-        if d.id == "auto" then
-            d.descKey = "device_auto_desc"
-        elseif d.id == "cpu" then
-            d.descKey = "device_cpu_desc"
-        elseif d.type == "cuda" then
-            d.descKey = "device_cuda_desc"
-        elseif d.type == "directml" then
-            d.descKey = "device_directml_desc"
-        elseif d.type == "mps" then
-            d.descKey = "device_mps_desc"
-        end
-    end
-
-    RUNTIME_DEVICES = devices
-    RUNTIME_DEVICE_NOTE_KEY = buildDeviceNoteFromEnvJson(envJson, devices)
-    RUNTIME_DEVICE_LAST_PROBE = now
-
-    -- If the saved device is no longer available, fall back to auto.
-    local ok = false
-    for _, d in ipairs(RUNTIME_DEVICES) do
-        if d.id == SETTINGS.device then ok = true; break end
-    end
-    if not ok then
-        SETTINGS.device = "auto"
-        saveSettings()
-    end
-end
-
-function applyCachedRuntimeDevices()
-    if type(readCapabilities) ~= "function" then
-        return false
-    end
-    local cap = readCapabilities()
-    if not cap then
-        return false
-    end
-
-    local cachedOut = extractCapabilityDeviceOutput(cap)
-    if cachedOut == "" then
-        return false
-    end
-
-    local devices, envJson, skipNote = parseDeviceListFromPythonOutput(cachedOut)
-    if not devices then
-        return false
-    end
-
-    local backendReason = cap.kv and cap.kv.BACKEND_REASON or ""
-    local backendReasonLabel = formatBackendReasonForUi(backendReason)
-    if backendReasonLabel ~= "" then
-        local backendLabel = "Backend"
-        if type(T) == "function" then
-            backendLabel = T("backend_label") or backendLabel
-        end
-        skipNote = (skipNote and (skipNote .. "\n\n") or "") .. backendLabel .. ": " .. tostring(backendReasonLabel)
-    end
-    RUNTIME_DEVICE_SKIP_NOTE = skipNote
-    applyRuntimeDevicesFromParsed(devices, envJson, os.time())
-    if cap.kv and cap.kv.PROFILE then
-        debugLog("Capabilities profile=" .. tostring(cap.kv.PROFILE) .. " backend=" .. tostring(cap.kv.BACKEND))
-    end
-    return true
-end
-
-function getTrustedWindowsRuntimeState()
-    if OS ~= "Windows" or type(readCapabilities) ~= "function" then
-        return nil
-    end
-    local cap = readCapabilities()
-    if not (cap and type(cap.kv) == "table") then
-        return nil
-    end
-
-    local function trimValue(v)
-        return tostring(v or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    end
-    local function lowerValue(v)
-        return string.lower(trimValue(v))
-    end
-
-    local verification = lowerValue(cap.kv.VERIFICATION)
-    local audioSeparator = lowerValue(cap.kv.AUDIO_SEPARATOR)
-    local stemwerkCore = lowerValue(cap.kv.STEMWERK_CORE)
-    local pythonPath = trimValue(cap.kv.PYTHON_PATH)
-    local ffmpegPath = trimValue(cap.kv.FFMPEG_PATH)
-
-    if verification ~= "ok" or audioSeparator ~= "ok" or stemwerkCore ~= "ok" then
-        return nil
-    end
-    if pythonPath == "" or ffmpegPath == "" then
-        return nil
-    end
-    if isAbsolutePath(pythonPath) and not fileExists(pythonPath) then
-        return nil
-    end
-    if isAbsolutePath(ffmpegPath) and not fileExists(ffmpegPath) then
-        return nil
-    end
-
-    return {
-        pythonPath = pythonPath,
-        ffmpegPath = ffmpegPath,
-        backend = trimValue(cap.kv.BACKEND),
-        profile = trimValue(cap.kv.PROFILE),
-    }
-end
-
-function applyTrustedWindowsRuntimeState(state)
-    if not state then return false end
-    if state.pythonPath and state.pythonPath ~= "" then
-        PYTHON_PATH = state.pythonPath
-    end
-    if state.ffmpegPath and state.ffmpegPath ~= "" then
-        FFMPEG_PATH = state.ffmpegPath
-    end
-    return true
-end
-
-function normalizeRequestedDeviceForRuntime(requestedDevice)
-    local req = tostring(requestedDevice or "auto")
-    if req == "" then return "auto" end
-    if req == "auto" or req == "cpu" or req == "mps" then return req end
-
-    local list = RUNTIME_DEVICES or DEVICES or {}
-    local function hasId(id)
-        for _, d in ipairs(list) do
-            if tostring(d.id or "") == tostring(id or "") then
-                return true
-            end
-        end
-        return false
-    end
-    local function firstNumbered(prefix)
-        for _, d in ipairs(list) do
-            local id = tostring(d.id or "")
-            if id:match("^" .. prefix .. ":%d+$") then
-                return id
-            end
-        end
-        return nil
-    end
-
-    if hasId(req) then
-        return req
-    end
-
-    if req == "directml" then
-        return firstNumbered("directml") or (hasId("directml") and "directml") or req
-    end
-    if req:match("^directml:%d+$") then
-        return (hasId("directml") and "directml") or firstNumbered("directml") or req
-    end
-
-    if req == "cuda" then
-        return firstNumbered("cuda") or (hasId("cuda") and "cuda") or req
-    end
-    if req:match("^cuda:%d+$") then
-        return firstNumbered("cuda") or (hasId("cuda") and "cuda") or req
-    end
-
-    return req
-end
+RUNTIME_DEVICE_NOTE_KEY = nil
+RUNTIME_DEVICE_SKIP_NOTE = nil
+RUNTIME_DEVICE_PROBE_DEBUG = nil
+RUNTIME_DEVICE_PROBE = nil
 
 -- Available models
 local MODELS = {
@@ -2603,15 +1215,6 @@ do
     end
 end
 
--- Settings (persist between runs)
-normalizeColorMode = function(mode)
-    mode = tostring(mode or "")
-    if mode == "no_track" or mode == "no_media" or mode == "off" then
-        return mode
-    end
-    return "both"
-end
-
 SETTINGS = {
     model = "htdemucs",
     createNewTracks = true,
@@ -2639,183 +1242,22 @@ SETTINGS = {
 }
 
 -- ========== INTERNATIONALIZATION (i18n) ==========
--- Load language strings from external file
-local LANGUAGES = nil
-local LANG = nil  -- Current language table
 
--- Load language file
-local function loadLanguages()
-    local function pathJoin(a, b)
-        if a == "" then return b end
-        local last = a:sub(-1)
-        if last == "/" or last == "\\" then
-            return a .. b
-        end
-        return a .. PATH_SEP .. b
-    end
-
-    local function getActionScriptDir()
-        if reaper and reaper.get_action_context then
-            local _, _, _, _, _, ctx = reaper.get_action_context()
-            if type(ctx) == "string" and ctx ~= "" then
-                local dir = ctx:match("@?(.*[/\\])")
-                if dir and dir ~= "" then return dir end
-            end
-        end
-        return script_path or ""
-    end
-
-    local baseDir = getActionScriptDir()
-    local bases = {
-        baseDir,
-        pathJoin(baseDir, ".."),
-        pathJoin(baseDir, ".." .. PATH_SEP .. ".."),
-    }
-
-    local function buildCandidates(filename)
-        local candidates, seen = {}, {}
-        for _, base in ipairs(bases) do
-            local p = pathJoin(base, "i18n" .. PATH_SEP .. filename)
-            if not seen[p] then
-                candidates[#candidates + 1] = p
-                seen[p] = true
-            end
-        end
-        return candidates
-    end
-
-    local triedWrapper, triedLang = {}, {}
-
-    -- Prefer the wrapper, which returns a LANGUAGES table.
-    for _, wrapper_file in ipairs(buildCandidates("stemwerk_language_wrapper.lua")) do
-        triedWrapper[#triedWrapper + 1] = wrapper_file
-        local f = io.open(wrapper_file, "r")
-        if f then
-            f:close()
-            local ok, result = pcall(dofile, wrapper_file)
-            if ok and type(result) == "table" then
-                LANGUAGES = result
-                debugLog("Loaded languages from " .. wrapper_file)
-                return true
-            else
-                debugLog("Failed to load languages via wrapper: " .. tostring(result))
-            end
-        end
-    end
-
-    -- Fallback: parse i18n/languages.lua (which defines `local LANGUAGES = {..}`).
-    for _, lang_file in ipairs(buildCandidates("languages.lua")) do
-        triedLang[#triedLang + 1] = lang_file
-        local f = io.open(lang_file, "r")
-        if f then
-            local content = f:read("*all")
-            f:close()
-
-            local table_str = content:match("local%s+LANGUAGES%s*=%s*(%b{})")
-            if table_str then
-                local env = {}
-                local chunk, err = load("LANGUAGES = " .. table_str, "languages", "t", env)
-                if chunk then
-                    local ok, result = pcall(chunk)
-                    if ok and env.LANGUAGES then
-                        LANGUAGES = env.LANGUAGES
-                        debugLog("Loaded languages from " .. lang_file)
-                        return true
-                    else
-                        debugLog("Failed to execute language table: " .. tostring(result))
-                    end
-                else
-                    debugLog("Failed to parse language table: " .. tostring(err))
-                end
-            else
-                debugLog("Could not extract LANGUAGES table from file: " .. lang_file)
-            end
-        end
-    end
-
-    debugLog("i18n files not found. Tried wrapper paths: " .. table.concat(triedWrapper, "; "))
-    debugLog("i18n files not found. Tried language paths: " .. table.concat(triedLang, "; "))
-    return false
+-- i18n: load from extracted module
+local I18N = dofile(script_path .. "_internal/STEMwerk_I18N.lua")
+local loadLanguages = I18N.loadLanguages
+local _setLanguageRaw = I18N.setLanguage
+local function setLanguage(code)
+    if SETTINGS then SETTINGS.language = code end
+    return _setLanguageRaw(code)
 end
-
--- Set active language
-local function setLanguage(lang_code)
-    if not LANGUAGES then loadLanguages() end
-    if LANGUAGES and LANGUAGES[lang_code] then
-        LANG = LANGUAGES[lang_code]
-        SETTINGS.language = lang_code
-        debugLog("Language set to: " .. lang_code)
-    else
-        -- Fallback to English
-        if LANGUAGES and LANGUAGES.en then
-            LANG = LANGUAGES.en
-        else
-            -- Ultimate fallback - empty table (strings will use hardcoded defaults)
-            LANG = {}
-        end
-        debugLog("Language fallback to English (requested: " .. tostring(lang_code) .. ")")
-    end
-end
-
--- Get translated string (with fallback to key)
-local function T(key)
-    if LANG and LANG[key] then
-        return LANG[key]
-    end
-    -- Fallback: return key with underscores replaced by spaces
-    return key:gsub("_", " ")
-end
-
-local function trPlural(count, singularKey, pluralKey, singularFallback, pluralFallback)
-    if (count or 0) == 1 then
-        return T(singularKey) or singularFallback or singularKey
-    end
-    return T(pluralKey) or pluralFallback or pluralKey
-end
+T = I18N.T
+local trPlural = I18N.trPlural
+local getAvailableLanguages = I18N.getAvailableLanguages
 
 -- Forward declare GUI so early helpers (e.g. handleArtAdvance) can reference it safely.
-local GUI
 
-local MIN_TRACK_HEIGHT = 72
-
-local function ensureTrackHeight(track)
-    if not (track and reaper.ValidatePtr(track, "MediaTrack*")) then return end
-    local current = reaper.GetMediaTrackInfo_Value(track, "I_HEIGHTOVERRIDE") or 0
-    if current < MIN_TRACK_HEIGHT then
-        reaper.SetMediaTrackInfo_Value(track, "I_HEIGHTOVERRIDE", MIN_TRACK_HEIGHT)
-    end
-end
-
-local function adjustTrackLayout()
-    if reaper.TrackList_AdjustWindows then
-        reaper.TrackList_AdjustWindows(false)
-    end
-    if reaper.UpdateTimeline then
-        reaper.UpdateTimeline()
-    end
-    reaper.UpdateArrange()
-end
-
-local function handleArtAdvance(state, mouseDown, char)
-    state = state or {}
-    local uiClicked = (GUI and GUI.uiClickedThisFrame) or false
-    if char == 32 then
-        generateNewArt()
-        return
-    end
-    if mouseDown and not state.artMouseDown then
-        state.artMouseDown = true
-        state.artClickBlocked = uiClicked
-    elseif not mouseDown and state.artMouseDown then
-        if not state.artClickBlocked and not uiClicked then
-            generateNewArt()
-        end
-        state.artMouseDown = false
-        state.artClickBlocked = nil
-    elseif mouseDown and state.artMouseDown and uiClicked then
-        state.artClickBlocked = true
-    end
-end
+local UI_Window = dofile(script_path .. "_internal/STEMwerk_UI_Window.lua")
 
 -- Get list of available languages
 local function getAvailableLanguages()
@@ -2830,206 +1272,25 @@ local function getAvailableLanguages()
     return langs
 end
 
--- Theme colors (will be set based on darkMode)
-local THEME = {}
-THEME_PRESET_ORDER = {"classic", "ember", "ice", "mono"}
-THEME_PRESETS = {
-    classic = {
-        nameKey = "theme_classic",
-        label = "Classic",
-    },
-    ember = {
-        nameKey = "theme_ember",
-        label = "Ember",
-        dark = {
-            accent = {0.75, 0.35, 0.25},
-            accentHover = {0.85, 0.45, 0.35},
-            checkboxChecked = {0.6, 0.35, 0.25},
-            button = {0.55, 0.25, 0.2},
-            buttonHover = {0.65, 0.35, 0.3},
-            buttonPrimary = {0.5, 0.35, 0.2},
-            buttonPrimaryHover = {0.6, 0.45, 0.3},
-            bgGradientTop = {0.11, 0.09, 0.08},
-            bgGradientBottom = {0.18, 0.14, 0.12},
-        },
-        light = {
-            accent = {0.7, 0.3, 0.2},
-            accentHover = {0.8, 0.4, 0.3},
-            checkboxChecked = {0.7, 0.35, 0.25},
-            button = {0.75, 0.4, 0.3},
-            buttonHover = {0.85, 0.5, 0.4},
-            buttonPrimary = {0.65, 0.4, 0.3},
-            buttonPrimaryHover = {0.75, 0.5, 0.4},
-            bgGradientTop = {0.98, 0.94, 0.92},
-            bgGradientBottom = {0.92, 0.88, 0.86},
-        },
-    },
-    ice = {
-        nameKey = "theme_ice",
-        label = "Ice",
-        dark = {
-            accent = {0.2, 0.65, 0.75},
-            accentHover = {0.3, 0.75, 0.85},
-            checkboxChecked = {0.2, 0.55, 0.65},
-            button = {0.2, 0.5, 0.6},
-            buttonHover = {0.3, 0.6, 0.7},
-            buttonPrimary = {0.2, 0.55, 0.55},
-            buttonPrimaryHover = {0.3, 0.65, 0.65},
-            bgGradientTop = {0.08, 0.1, 0.12},
-            bgGradientBottom = {0.14, 0.18, 0.2},
-        },
-        light = {
-            accent = {0.2, 0.55, 0.7},
-            accentHover = {0.3, 0.65, 0.8},
-            checkboxChecked = {0.25, 0.55, 0.7},
-            button = {0.3, 0.55, 0.7},
-            buttonHover = {0.4, 0.65, 0.8},
-            buttonPrimary = {0.25, 0.6, 0.6},
-            buttonPrimaryHover = {0.35, 0.7, 0.7},
-            bgGradientTop = {0.94, 0.97, 0.98},
-            bgGradientBottom = {0.88, 0.92, 0.94},
-        },
-    },
-    mono = {
-        nameKey = "theme_mono",
-        label = "Mono",
-        dark = {
-            accent = {0.55, 0.55, 0.6},
-            accentHover = {0.65, 0.65, 0.7},
-            checkboxChecked = {0.45, 0.45, 0.5},
-            button = {0.35, 0.35, 0.4},
-            buttonHover = {0.45, 0.45, 0.5},
-            buttonPrimary = {0.4, 0.4, 0.45},
-            buttonPrimaryHover = {0.5, 0.5, 0.55},
-            bgGradientTop = {0.11, 0.11, 0.12},
-            bgGradientBottom = {0.16, 0.16, 0.17},
-        },
-        light = {
-            accent = {0.4, 0.4, 0.45},
-            accentHover = {0.5, 0.5, 0.55},
-            checkboxChecked = {0.45, 0.45, 0.5},
-            button = {0.5, 0.5, 0.55},
-            buttonHover = {0.6, 0.6, 0.65},
-            buttonPrimary = {0.55, 0.55, 0.6},
-            buttonPrimaryHover = {0.65, 0.65, 0.7},
-            bgGradientTop = {0.96, 0.96, 0.97},
-            bgGradientBottom = {0.9, 0.9, 0.91},
-        },
-    },
-}
+SETTINGS_MOD = loadModule(script_path .. "_internal/STEMwerk_Settings.lua", "STEMwerk_Settings")
+DEVICE_RUNTIME = loadModule(script_path .. "_internal/STEMwerk_Devices.lua", "STEMwerk_Devices")
+local SW_UI = dofile(script_path .. "_internal/STEMwerk_UI.lua")
+-- No configure() needed: THEME, updateTheme, saveSettings, T, SETTINGS, LANG are globals.
 
-function normalizeThemePreset(preset)
-    if type(preset) ~= "string" then
-        return "classic"
-    end
-    if THEME_PRESETS[preset] then
-        return preset
-    end
-    return "classic"
-end
+normalizeColorMode = SETTINGS_MOD.normalizeColorMode
+runtimeDeviceSafeList = DEVICE_RUNTIME.runtimeDeviceSafeList
+backendTypeLabel = DEVICE_RUNTIME.backendTypeLabel
+applyRuntimeDevicesFromParsed = DEVICE_RUNTIME.applyRuntimeDevicesFromParsed
+startRuntimeDeviceProbeAsync = DEVICE_RUNTIME.startRuntimeDeviceProbeAsync
+pollRuntimeDeviceProbe = DEVICE_RUNTIME.pollRuntimeDeviceProbe
+refreshRuntimeDevices = DEVICE_RUNTIME.refreshRuntimeDevices
+applyCachedRuntimeDevices = DEVICE_RUNTIME.applyCachedRuntimeDevices
+getTrustedWindowsRuntimeState = DEVICE_RUNTIME.getTrustedWindowsRuntimeState
+applyTrustedWindowsRuntimeState = DEVICE_RUNTIME.applyTrustedWindowsRuntimeState
+normalizeRequestedDeviceForRuntime = DEVICE_RUNTIME.normalizeRequestedDeviceForRuntime
 
-function applyThemePreset(themeTable)
-    local presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
-    local preset = THEME_PRESETS[presetId]
-    if not preset then
-        return themeTable
-    end
-    local overrides = (SETTINGS and SETTINGS.darkMode) and preset.dark or preset.light
-    if overrides then
-        for key, value in pairs(overrides) do
-            themeTable[key] = value
-        end
-    end
-    return themeTable
-end
-
-local function updateTheme()
-    if SETTINGS.darkMode then
-        -- Dark theme
-        THEME = {
-            bg = {0.18, 0.18, 0.20},
-            bgGradientTop = {0.10, 0.10, 0.12},
-            bgGradientBottom = {0.18, 0.18, 0.20},
-            inputBg = {0.12, 0.12, 0.14},
-            text = {1, 1, 1},
-            textDim = {0.7, 0.7, 0.7},
-            textHint = {0.5, 0.5, 0.5},
-            accent = {0.3, 0.5, 0.8},
-            accentHover = {0.4, 0.6, 0.9},
-            checkbox = {0.3, 0.3, 0.3},
-            checkboxChecked = {0.3, 0.5, 0.7},
-            button = {0.2, 0.4, 0.7},
-            buttonHover = {0.3, 0.5, 0.8},
-            buttonPrimary = {0.2, 0.5, 0.3},
-            buttonPrimaryHover = {0.3, 0.6, 0.4},
-            border = {0.6, 0.6, 0.6},
-        }
-    else
-        -- Light theme
-        THEME = {
-            bg = {0.92, 0.92, 0.94},
-            bgGradientTop = {0.96, 0.96, 0.98},
-            bgGradientBottom = {0.88, 0.88, 0.90},
-            inputBg = {0.85, 0.85, 0.87},
-            text = {0.1, 0.1, 0.1},
-            textDim = {0.3, 0.3, 0.3},
-            textHint = {0.5, 0.5, 0.5},
-            accent = {0.2, 0.4, 0.7},
-            accentHover = {0.3, 0.5, 0.8},
-            checkbox = {0.8, 0.8, 0.8},
-            checkboxChecked = {0.3, 0.5, 0.7},
-            button = {0.3, 0.5, 0.75},
-            buttonHover = {0.4, 0.6, 0.85},
-            buttonPrimary = {0.25, 0.55, 0.35},
-            buttonPrimaryHover = {0.35, 0.65, 0.45},
-            border = {0.4, 0.4, 0.4},
-        }
-    end
-    applyThemePreset(THEME)
-end
-
--- Initialize theme
+-- Initialize theme (must run after SETTINGS is loaded)
 updateTheme()
-
-function getThemePresetLabel()
-    local presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
-    local preset = THEME_PRESETS[presetId] or THEME_PRESETS.classic
-    local key = preset and preset.nameKey
-    if LANG and key and LANG[key] then
-        return LANG[key]
-    end
-    return preset and preset.label or presetId
-end
-
-function getLangText(key, fallback)
-    if LANG and LANG[key] then
-        return LANG[key]
-    end
-    return fallback or key:gsub("_", " ")
-end
-
-function getThemeToggleTooltip()
-    local switchTip = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
-    local presetLabel = getLangText("theme_preset", "Theme")
-    local presetName = getThemePresetLabel()
-    local cycleHint = getLangText("tooltip_theme_cycle", "Right-click to cycle preset")
-    return string.format("%s  %s: %s (%s)", switchTip, presetLabel, presetName, cycleHint)
-end
-
-function cycleThemePreset()
-    local current = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
-    local idx = 1
-    for i, presetId in ipairs(THEME_PRESET_ORDER) do
-        if presetId == current then
-            idx = i
-            break
-        end
-    end
-    local nextId = THEME_PRESET_ORDER[(idx % #THEME_PRESET_ORDER) + 1]
-    SETTINGS.themePreset = nextId
-    updateTheme()
-    saveSettings()
-end
 
 -- GUI state
 GUI = {
@@ -3050,23 +1311,10 @@ GUI = {
     tooltipX = 0,
     tooltipY = 0,
 }
+_G.GUI = GUI
 
 -- Store last dialog position for subsequent windows (progress, result, messages)
 lastDialogX, lastDialogY, lastDialogW, lastDialogH = nil, nil, 840, 600
-
--- Load saved position and size from standard "window_pos" format (x,y,w,h)
-local savedPosMain = reaper.GetExtState(EXT_SECTION, "window_pos")
-if savedPosMain == "" then savedPosMain = reaper.GetExtState(EXT_SECTION, "window_pos_main") end
-
-if savedPosMain ~= "" then
-    local sx, sy, sw, sh = savedPosMain:match("([^,]+),([^,]+),([^,]+),([^,]+)")
-    if sx and sy and sw and sh then
-        lastDialogX = tonumber(sx)
-        lastDialogY = tonumber(sy)
-        lastDialogW = math.max(840, tonumber(sw)) -- Default to 840
-        lastDialogH = math.max(600, tonumber(sh)) -- Default to 600
-    end
-end
 
 -- Track auto-selected items and tracks for restore on cancel
 autoSelectedItems = {}
@@ -3091,380 +1339,80 @@ focusReaperAfterMainOpenOnce = false
 -- (lets user choose an explode mode after the run, without re-processing).
 postProcessCandidates = {}
 
-local function clearPostProcessCandidates()
-    postProcessCandidates = {}
-end
 
-local function addPostProcessCandidate(item)
-    if not item or not reaper.ValidatePtr(item, "MediaItem*") then return end
-    for _, existing in ipairs(postProcessCandidates) do
-        if existing == item then return end
-    end
-    postProcessCandidates[#postProcessCandidates + 1] = item
-end
+local GLUE_HELPERS = dofile(script_path .. "_internal/STEMwerk_Glue_Helpers.lua")
 
--- Load settings from ExtState
+clearPostProcessCandidates = GLUE_HELPERS.clearPostProcessCandidates
+addPostProcessCandidate = GLUE_HELPERS.addPostProcessCandidate
+
+SETTINGS_MOD.configure({
+    reaper = reaper,
+    EXT_SECTION = EXT_SECTION,
+    GUI = GUI,
+    SETTINGS = SETTINGS,
+    STEMS = STEMS,
+    refreshModelAvailability = refreshModelAvailability,
+    normalizeThemePreset = normalizeThemePreset,
+    updateTheme = updateTheme,
+    setLanguage = setLanguage,
+    ensureSelectedModelIsAvailable = ensureSelectedModelIsAvailable,
+    getWindowState = function()
+        return lastDialogX, lastDialogY, lastDialogW, lastDialogH
+    end,
+    setWindowState = function(x, y, w, h)
+        lastDialogX, lastDialogY, lastDialogW, lastDialogH = x, y, w, h
+    end,
+})
+DEVICE_RUNTIME.configure({
+    DEVICES = DEVICES,
+    T = T,
+    PATH_SEP = PATH_SEP,
+    script_path = script_path,
+    repo_root = repo_root,
+    getHome = getHome,
+    getFlatpakTempBase = getFlatpakTempBase,
+    exec_capture = exec_capture,
+    quoteArg = quoteArg,
+    fileExists = fileExists,
+    isAbsolutePath = isAbsolutePath,
+    readCapabilities = readCapabilities,
+})
+SETTINGS_MOD.loadSavedMainWindowPos()
+
 local function loadSettings()
-    refreshModelAvailability()
-
-    local model = reaper.GetExtState(EXT_SECTION, "model")
-    if model ~= "" then SETTINGS.model = model end
-
-    local createNewTracks = reaper.GetExtState(EXT_SECTION, "createNewTracks")
-    if createNewTracks ~= "" then SETTINGS.createNewTracks = (createNewTracks == "1") end
-
-    local createFolder = reaper.GetExtState(EXT_SECTION, "createFolder")
-    if createFolder ~= "" then SETTINGS.createFolder = (createFolder == "1") end
-
-    local colorMode = reaper.GetExtState(EXT_SECTION, "colorMode")
-    if colorMode ~= "" then
-        SETTINGS.colorMode = normalizeColorMode(colorMode)
-    else
-    local applyTrackColors = reaper.GetExtState(EXT_SECTION, "applyTrackColors")
-        if applyTrackColors ~= "" then
-            SETTINGS.colorMode = (applyTrackColors == "1") and "both" or "no_track"
-        end
-    end
-    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
-
-    local stemFileDestination = reaper.GetExtState(EXT_SECTION, "stemFileDestination")
-    if stemFileDestination ~= "" then SETTINGS.stemFileDestination = stemFileDestination end
-
-    local customStemDir = reaper.GetExtState(EXT_SECTION, "customStemDir")
-    if customStemDir ~= "" then SETTINGS.customStemDir = customStemDir end
-
-    local postProcessTakes = reaper.GetExtState(EXT_SECTION, "postProcessTakes")
-    if postProcessTakes ~= "" then SETTINGS.postProcessTakes = postProcessTakes end
-
-    local muteOriginal = reaper.GetExtState(EXT_SECTION, "muteOriginal")
-    if muteOriginal ~= "" then SETTINGS.muteOriginal = (muteOriginal == "1") end
-
-    local muteSelection = reaper.GetExtState(EXT_SECTION, "muteSelection")
-    if muteSelection ~= "" then SETTINGS.muteSelection = (muteSelection == "1") end
-
-    local deleteOriginal = reaper.GetExtState(EXT_SECTION, "deleteOriginal")
-    if deleteOriginal ~= "" then SETTINGS.deleteOriginal = (deleteOriginal == "1") end
-
-    local deleteSelection = reaper.GetExtState(EXT_SECTION, "deleteSelection")
-    if deleteSelection ~= "" then SETTINGS.deleteSelection = (deleteSelection == "1") end
-
-    local deleteOriginalTrack = reaper.GetExtState(EXT_SECTION, "deleteOriginalTrack")
-    if deleteOriginalTrack ~= "" then SETTINGS.deleteOriginalTrack = (deleteOriginalTrack == "1") end
-
-    local darkMode = reaper.GetExtState(EXT_SECTION, "darkMode")
-    if darkMode ~= "" then SETTINGS.darkMode = (darkMode == "1") end
-    local themePreset = reaper.GetExtState(EXT_SECTION, "themePreset")
-    if themePreset ~= "" then SETTINGS.themePreset = themePreset end
-    SETTINGS.themePreset = normalizeThemePreset(SETTINGS.themePreset)
-    updateTheme()
-
-    local parallelProcessing = reaper.GetExtState(EXT_SECTION, "parallelProcessing")
-    if parallelProcessing ~= "" then SETTINGS.parallelProcessing = (parallelProcessing == "1") end
-
-    local visualFX = reaper.GetExtState(EXT_SECTION, "visualFX")
-    if visualFX ~= "" then SETTINGS.visualFX = (visualFX == "1") end
-
-    local tooltips = reaper.GetExtState(EXT_SECTION, "tooltips")
-    if tooltips ~= "" then SETTINGS.tooltips = (tooltips == "1") end
-
-    -- Load window position into globals only once (startup fallback).
-    if not (GUI and GUI.windowPosLoaded) then
-        local savedPos = reaper.GetExtState(EXT_SECTION, "window_pos_main")
-        if savedPos == "" then savedPos = reaper.GetExtState(EXT_SECTION, "window_pos") end
-        if savedPos ~= "" then
-            local sx, sy, sw, sh = savedPos:match("([^,]+),([^,]+),([^,]+),([^,]+)")
-            if sx and sy then
-                lastDialogX = tonumber(sx)
-                lastDialogY = tonumber(sy)
-                lastDialogW = tonumber(sw) or 840
-                lastDialogH = tonumber(sh) or 600
-
-                -- Also update GUI table if it exists
-                if GUI then
-                    GUI.savedX = lastDialogX
-                    GUI.savedY = lastDialogY
-                    GUI.savedW = lastDialogW
-                    GUI.savedH = lastDialogH
-                end
-            end
-        end
-        if GUI then
-            GUI.windowPosLoaded = true
-        end
-    end
-
-    local keepTempFiles = reaper.GetExtState(EXT_SECTION, "keepTempFiles")
-    if keepTempFiles ~= "" then SETTINGS.keepTempFiles = (keepTempFiles == "1") end
-
-    local device = reaper.GetExtState(EXT_SECTION, "device")
-    if device ~= "" then SETTINGS.device = device end
-
-    -- Load language setting and initialize i18n
-    local language = reaper.GetExtState(EXT_SECTION, "language")
-    if language ~= "" then SETTINGS.language = language end
-    setLanguage(SETTINGS.language)
-
-    -- Load stem selections
-    for i, stem in ipairs(STEMS) do
-        local sel = reaper.GetExtState(EXT_SECTION, "stem_" .. stem.name)
-        if sel ~= "" then STEMS[i].selected = (sel == "1") end
-    end
-
-    -- Sanitize: if user is not on the 6-stem model, ensure 6-stem-only stems are not selected.
-    -- (These can remain "on" from older saved settings, but they're not valid for 4-stem models.)
-    if tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
-        for _, stem in ipairs(STEMS) do
-            if stem.sixStemOnly then
-                stem.selected = false
-            end
-        end
-    end
-
-    if ensureSelectedModelIsAvailable() and tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
-        for _, stem in ipairs(STEMS) do
-            if stem.sixStemOnly then
-                stem.selected = false
-            end
-        end
-    end
+    return SETTINGS_MOD.load()
 end
 
--- Save settings to ExtState
 saveSettings = function()
-    -- Do NOT recapture geometry here. On OS-close (window manager X), the gfx
-    -- window may already be invalid and return bogus 0,0 or outer-window sizes.
-    -- Persist only the last known-good geometry that was captured while alive.
-
-    reaper.SetExtState(EXT_SECTION, "model", SETTINGS.model, true)
-    reaper.SetExtState(EXT_SECTION, "createNewTracks", SETTINGS.createNewTracks and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "createFolder", SETTINGS.createFolder and "1" or "0", true)
-    SETTINGS.colorMode = normalizeColorMode(SETTINGS.colorMode)
-    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
-    reaper.SetExtState(EXT_SECTION, "applyTrackColors", SETTINGS.applyTrackColors and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "colorMode", SETTINGS.colorMode, true)
-    reaper.SetExtState(EXT_SECTION, "stemFileDestination", tostring(SETTINGS.stemFileDestination or "temp"), true)
-    reaper.SetExtState(EXT_SECTION, "customStemDir", tostring(SETTINGS.customStemDir or ""), true)
-    reaper.SetExtState(EXT_SECTION, "postProcessTakes", tostring(SETTINGS.postProcessTakes or "none"), true)
-    reaper.SetExtState(EXT_SECTION, "muteOriginal", SETTINGS.muteOriginal and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "muteSelection", SETTINGS.muteSelection and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "deleteOriginal", SETTINGS.deleteOriginal and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "deleteSelection", SETTINGS.deleteSelection and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "deleteOriginalTrack", SETTINGS.deleteOriginalTrack and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "darkMode", SETTINGS.darkMode and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "themePreset", tostring(SETTINGS.themePreset or "classic"), true)
-    reaper.SetExtState(EXT_SECTION, "parallelProcessing", SETTINGS.parallelProcessing and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "visualFX", SETTINGS.visualFX and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "tooltips", SETTINGS.tooltips and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "keepTempFiles", SETTINGS.keepTempFiles and "1" or "0", true)
-    reaper.SetExtState(EXT_SECTION, "language", SETTINGS.language, true)
-    reaper.SetExtState(EXT_SECTION, "device", SETTINGS.device, true)
-
-    for _, stem in ipairs(STEMS) do
-        reaper.SetExtState(EXT_SECTION, "stem_" .. stem.name, stem.selected and "1" or "0", true)
-    end
-
-    persistWindowPos()
+    return SETTINGS_MOD.save()
 end
 
 -- Register exit function (now that saveSettings is defined)
 reaper.atexit(saveSettings)
 
 -- Preset functions
-local function applyPresetKaraoke()
-    -- Instrumental only (no vocals) - includes Guitar+Piano in 6-stem mode
-    STEMS[1].selected = false  -- Vocals OFF
-    STEMS[2].selected = true   -- Drums
-    STEMS[3].selected = true   -- Bass
-    STEMS[4].selected = true   -- Other
-    if STEMS[5] then STEMS[5].selected = true end   -- Guitar (6-stem)
-    if STEMS[6] then STEMS[6].selected = true end   -- Piano (6-stem)
-end
 
-local function applyPresetInstrumental()
-    -- Same as karaoke but clearer name
-    applyPresetKaraoke()
-end
-
-local function applyPresetDrumsOnly()
-    STEMS[1].selected = false  -- Vocals
-    STEMS[2].selected = true   -- Drums ONLY
-    STEMS[3].selected = false  -- Bass
-    STEMS[4].selected = false  -- Other
-    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
-    if STEMS[6] then STEMS[6].selected = false end  -- Piano
-end
-
-local function applyPresetVocalsOnly()
-    STEMS[1].selected = true   -- Vocals ONLY
-    STEMS[2].selected = false  -- Drums
-    STEMS[3].selected = false  -- Bass
-    STEMS[4].selected = false  -- Other
-    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
-    if STEMS[6] then STEMS[6].selected = false end  -- Piano
-end
-
-local function applyPresetBassOnly()
-    STEMS[1].selected = false  -- Vocals
-    STEMS[2].selected = false  -- Drums
-    STEMS[3].selected = true   -- Bass ONLY
-    STEMS[4].selected = false  -- Other
-    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
-    if STEMS[6] then STEMS[6].selected = false end  -- Piano
-end
-
-local function applyPresetOtherOnly()
-    STEMS[1].selected = false  -- Vocals
-    STEMS[2].selected = false  -- Drums
-    STEMS[3].selected = false  -- Bass
-    STEMS[4].selected = true   -- Other ONLY
-    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
-    if STEMS[6] then STEMS[6].selected = false end  -- Piano
-end
-
-local function applyPresetGuitarOnly()
-    -- Only works with 6-stem model
-    STEMS[1].selected = false  -- Vocals
-    STEMS[2].selected = false  -- Drums
-    STEMS[3].selected = false  -- Bass
-    STEMS[4].selected = false  -- Other
-    STEMS[5].selected = true   -- Guitar ONLY
-    STEMS[6].selected = false  -- Piano
-end
-
-local function applyPresetPianoOnly()
-    -- Only works with 6-stem model
-    STEMS[1].selected = false  -- Vocals
-    STEMS[2].selected = false  -- Drums
-    STEMS[3].selected = false  -- Bass
-    STEMS[4].selected = false  -- Other
-    STEMS[5].selected = false  -- Guitar
-    STEMS[6].selected = true   -- Piano ONLY
-end
-
-local function applyPresetAll()
-    for i = 1, #STEMS do
-        STEMS[i].selected = true
-    end
-end
+applyPresetKaraoke = function() GLUE_HELPERS.applyPresetKaraoke(STEMS) end
+applyPresetInstrumental = function() GLUE_HELPERS.applyPresetInstrumental(STEMS) end
+applyPresetDrumsOnly = function() GLUE_HELPERS.applyPresetDrumsOnly(STEMS) end
+applyPresetVocalsOnly = function() GLUE_HELPERS.applyPresetVocalsOnly(STEMS) end
+applyPresetBassOnly = function() GLUE_HELPERS.applyPresetBassOnly(STEMS) end
+applyPresetOtherOnly = function() GLUE_HELPERS.applyPresetOtherOnly(STEMS) end
+applyPresetGuitarOnly = function() GLUE_HELPERS.applyPresetGuitarOnly(STEMS) end
+applyPresetPianoOnly = function() GLUE_HELPERS.applyPresetPianoOnly(STEMS) end
+applyPresetAll = function() GLUE_HELPERS.applyPresetAll(STEMS) end
 
 local function rgbToReaperColor(r, g, b)
     return reaper.ColorToNative(r, g, b) | 0x1000000
 end
 
--- Get monitor bounds at a specific screen position (for multi-monitor support)
--- Returns screenLeft, screenTop, screenRight, screenBottom
-local function getMonitorBoundsAt(x, y)
-    local screenLeft, screenTop, screenRight, screenBottom = nil, nil, nil, nil
+local WINDOW = loadModule(script_path .. "_internal/STEMwerk_Window.lua", "STEMwerk_Window")
+local clampToScreen = WINDOW.clampToScreen
 
-    -- Ensure integer coordinates
-    x = math.floor(x)
-    y = math.floor(y)
-
-    -- Method 1: SWS BR_Win32_GetMonitorRectFromRect (most reliable for multi-monitor)
-    if reaper.BR_Win32_GetMonitorRectFromRect then
-        local retval, mLeft, mTop, mRight, mBottom = reaper.BR_Win32_GetMonitorRectFromRect(true, x, y, x+1, y+1)
-        if retval and mLeft and mTop and mRight and mBottom and mRight > mLeft and mBottom > mTop then
-            return mLeft, mTop, mRight, mBottom
-        end
-    end
-
-    -- Method 2: JS_Window API to find monitor from point
-    if reaper.JS_Window_GetRect then
-        local mainHwnd = reaper.GetMainHwnd()
-        if mainHwnd then
-            local retval, left, top, right, bottom = reaper.JS_Window_GetRect(mainHwnd)
-            if retval and left and top and right and bottom then
-                -- Check if mouse is within REAPER main window area
-                if x >= left and x <= right and y >= top and y <= bottom then
-                    screenLeft, screenTop = left, top
-                    screenRight, screenBottom = right, bottom
-                else
-                    -- Mouse is on a different monitor - estimate based on mouse position
-                    -- Assume standard monitor size around the mouse position
-                    local monitorW, monitorH = 1920, 1080
-                    screenLeft = math.floor(x / monitorW) * monitorW
-                    screenTop = math.floor(y / monitorH) * monitorH
-                    screenRight = screenLeft + monitorW
-                    screenBottom = screenTop + monitorH
-                end
-            end
-        end
-    end
-
-    -- Fallback: estimate monitor based on mouse position
-    if not screenLeft then
-        local monitorW, monitorH = 1920, 1080
-        -- Handle negative coordinates (monitors to the left/above primary)
-        if x >= 0 then
-            screenLeft = math.floor(x / monitorW) * monitorW
-        else
-            screenLeft = math.floor((x + 1) / monitorW) * monitorW - monitorW
-        end
-        if y >= 0 then
-            screenTop = math.floor(y / monitorH) * monitorH
-        else
-            screenTop = math.floor((y + 1) / monitorH) * monitorH - monitorH
-        end
-        screenRight = screenLeft + monitorW
-        screenBottom = screenTop + monitorH
-    end
-
-    return screenLeft, screenTop, screenRight, screenBottom
-end
-
--- Clamp window position to stay fully on screen
-local function clampToScreen(winX, winY, winW, winH, refX, refY)
-    local screenLeft, screenTop, screenRight, screenBottom = getMonitorBoundsAt(refX, refY)
-    local margin = 20
-
-    winX = math.max(screenLeft + margin, winX)
-    winY = math.max(screenTop + margin, winY)
-    winX = math.min(screenRight - winW - margin, winX)
-    winY = math.min(screenBottom - winH - margin, winY)
-
-    return winX, winY
-end
-
-GUI.getLiveGeometry = function(defaultW, defaultH)
-    local winW = (lastDialogW and lastDialogW > 0) and lastDialogW or (defaultW or 840)
-    local winH = (lastDialogH and lastDialogH > 0) and lastDialogH or (defaultH or 600)
-    local winX, winY = lastDialogX, lastDialogY
-    if not winX or not winY then
-        local mouseX, mouseY = reaper.GetMousePosition()
-        winX = mouseX - winW / 2
-        winY = mouseY - winH / 2
-        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
-    end
-    return winW, winH, winX, winY
-end
-
-GUI.applyLiveGeometry = function(defaultW, defaultH)
-    local winW, winH, winX, winY = GUI.getLiveGeometry(defaultW, defaultH)
-    lastDialogX, lastDialogY, lastDialogW, lastDialogH = winX, winY, winW, winH
-    return winW, winH, winX, winY
-end
-
-GUI.snapshotMainGeometry = function()
-    if lastDialogX and lastDialogY and lastDialogW and lastDialogH then
-        GUI.mainSnapshot = {
-            x = lastDialogX,
-            y = lastDialogY,
-            w = lastDialogW,
-            h = lastDialogH,
-        }
-    else
-        GUI.mainSnapshot = nil
-    end
-end
-
-GUI.restoreMainSnapshot = function()
-    if GUI.mainSnapshot then
-        lastDialogX = GUI.mainSnapshot.x
-        lastDialogY = GUI.mainSnapshot.y
-        lastDialogW = GUI.mainSnapshot.w
-        lastDialogH = GUI.mainSnapshot.h
-    end
-end
+GUI.getLiveGeometry = WINDOW.getLiveGeometry
+GUI.applyLiveGeometry = WINDOW.applyLiveGeometry
+GUI.snapshotMainGeometry = WINDOW.snapshotMainGeometry
+GUI.restoreMainSnapshot = WINDOW.restoreMainSnapshot
 
 -- Check if there's a valid time selection
 local function hasTimeSelection()
@@ -3649,14 +1597,10 @@ function HELPERS.getSelectionMonitorState()
 end
 
 -- Message window state (for errors, warnings, info)
-local messageWindowState = {
-    title = "",
-    message = "",
-    icon = "info",  -- "info", "warning", "error"
-    wasMouseDown = false,
-    startTime = 0,
-    monitorSelection = false,  -- When true, auto-close and open main dialog on selection
-}
+
+-- Message/dialog helpers extracted to module
+local MESSAGES = dofile(script_path .. "_internal/STEMwerk_Messages.lua")
+messageWindowState = MESSAGES.messageWindowState
 
 -- Forward declarations (functions defined later in file)
 local main
@@ -3667,7 +1611,7 @@ local getRuntimeModeLabel
 local buildFooterLines
 
 -- STEM colors for window borders (used by all windows)
-local STEM_BORDER_COLORS = {
+STEM_BORDER_COLORS = {
     {255, 100, 100},  -- Red (Vocals)
     {100, 200, 255},  -- Blue (Drums)
     {150, 100, 255},  -- Purple (Bass)
@@ -3675,35 +1619,23 @@ local STEM_BORDER_COLORS = {
 }
 
 -- Shared tooltip helpers (used across windows) --------------------------------
--- We keep tooltips consistent everywhere: wrapped text + stem-color top bar.
-local function _wrapTextToWidth(text, maxWidth)
-    -- Preserve explicit newlines and blank lines, but wrap long lines by words.
-    local out = {}
-    for raw in (tostring(text or "") .. "\n"):gmatch("(.-)\n") do
-        if raw == "" then
-            out[#out + 1] = ""
-        else
-            local line = ""
-            for word in raw:gmatch("%S+") do
-                if line == "" then
-                    line = word
-                else
-                    local candidate = line .. " " .. word
-                    if gfx.measurestr(candidate) <= maxWidth then
-                        line = candidate
-                    else
-                        out[#out + 1] = line
-                        line = word
-                    end
-                end
-            end
-            if line ~= "" then out[#out + 1] = line end
-        end
+
+-- Draw/tooltip helpers extracted to module
+local UI_DRAW = dofile(script_path .. "_internal/STEMwerk_UI_Draw.lua")
+_wrapTextToWidth = UI_DRAW._wrapTextToWidth
+drawTooltipStyled = UI_DRAW.drawTooltipStyled
+drawTooltip = UI_DRAW.drawTooltip
+drawCheckbox = UI_DRAW.drawCheckbox
+drawRadio = UI_DRAW.drawRadio
+drawToggleButton = UI_DRAW.drawToggleButton
+drawButton = UI_DRAW.drawButton
+fitTextToBox = UI_DRAW.fitTextToBox
+
+local function getTooltipPalette()
+    if SETTINGS and SETTINGS.darkMode then
+        return {0.14, 0.14, 0.17}, {0.55, 0.55, 0.60}, {0.96, 0.96, 0.98}, 0.985
     end
-    if #out > 0 and out[#out] == "" then
-        out[#out] = nil
-    end
-    return out
+    return {0.95, 0.95, 0.97}, {0.42, 0.42, 0.46}, {0.10, 0.10, 0.12}, 0.995
 end
 
 -- Draw a tooltip box with stem-color top bar. Caller must set font before calling.
@@ -3736,8 +1668,9 @@ local function drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, pa
     if tx < padding then tx = padding end
     if ty < padding then ty = padding end
 
-    -- Background (theme-aware)
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+    -- Background (theme-aware, but with explicit contrast safeguards per mode)
+    local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
+    gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
     gfx.rect(tx, ty, boxW, boxH, 1)
 
     -- Colored top border (STEM colors gradient)
@@ -3749,12 +1682,12 @@ local function drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, pa
         gfx.line(tx + i, ty, tx + i, ty + 2)
     end
 
-    -- Border (theme-aware)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    -- Border
+    gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
     gfx.rect(tx, ty, boxW, boxH, 0)
 
     -- Text
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    gfx.set(ttText[1], ttText[2], ttText[3], 1)
     local y = ty + padding
     for _, ln in ipairs(lines) do
         gfx.x = tx + padding
@@ -4333,17 +2266,26 @@ local function drawProceduralArtInternal(x, y, w, h, time, rotation, skipBackgro
         return math.max(0, math.min(1, r)), math.max(0, math.min(1, g)), math.max(0, math.min(1, b))
     end
 
-    -- STEM colors for art
-    local colors = {
-        {1.0, 0.4, 0.4},   -- Vocals red
-        {0.4, 0.8, 1.0},   -- Drums blue
-        {0.6, 0.4, 1.0},   -- Bass purple
-        {0.4, 1.0, 0.6},   -- Other green
-    }
+    -- STEM colors for art (synced with STEM_BORDER_COLORS which is global)
+    local colors = {}
+    if STEM_BORDER_COLORS then
+        for i=1, 4 do
+            local c = STEM_BORDER_COLORS[i]
+            colors[i] = {c[1]/255, c[2]/255, c[3]/255}
+        end
+    else
+        colors = {
+            {1.0, 0.4, 0.4},   -- Vocals red
+            {0.4, 0.8, 1.0},   -- Drums blue
+            {0.6, 0.4, 1.0},   -- Bass purple
+            {0.4, 1.0, 0.6},   -- Other green
+        }
+    end
 
     -- Dark semi-transparent background for art area (unless caller handles it)
     if not skipBackground then
-        gfx.set(0.05, 0.05, 0.08, 0.95)
+        local bg = THEME and THEME.bg or {0.05, 0.05, 0.08}
+        gfx.set(bg[1], bg[2], bg[3], 0.95)
         gfx.rect(x, y, w, h, 1)
     end
 
@@ -6946,13 +4888,22 @@ local function drawArtGallery()
         if isActive or hover then
             gfx.set(tabColor[1], tabColor[2], tabColor[3], bgAlpha)
         else
-            gfx.set(0.3, 0.3, 0.35, bgAlpha)
+            if SETTINGS.darkMode then
+                gfx.set(0.3, 0.3, 0.35, bgAlpha)
+            else
+                gfx.set(0.72, 0.72, 0.76, math.max(bgAlpha, 0.72 * controlsOpacity))
+            end
         end
         gfx.rect(tabX, tabY, tabWidths[i], tabH, 1)
 
         -- Tab text
-        local textAlpha = (isActive and 1 or 0.7) * controlsOpacity
-        gfx.set(1, 1, 1, textAlpha)
+        local textAlpha = (isActive and 1 or 0.82) * controlsOpacity
+        if SETTINGS.darkMode then
+            gfx.set(1, 1, 1, textAlpha)
+        else
+            local tc = isActive and {0.10, 0.10, 0.12} or {0.20, 0.20, 0.24}
+            gfx.set(tc[1], tc[2], tc[3], textAlpha)
+        end
         local textW = gfx.measurestr(tab)
         gfx.x = tabX + (tabWidths[i] - textW) / 2
         gfx.y = tabY + (tabH - gfx.texth) / 2
@@ -8326,7 +6277,11 @@ local function drawArtGallery()
         local proTipText = T("help_pro_tip")
         gfx.setfont(1, "Arial", PS(13), string.byte('b'))
         local blink = 0.6 + math.sin(time * 4) * 0.4
-        gfx.set(stemColors[4][1], stemColors[4][2], stemColors[4][3], blink)
+        if SETTINGS.darkMode then
+            gfx.set(stemColors[4][1], stemColors[4][2], stemColors[4][3], blink)
+        else
+            gfx.set(stemColors[4][1] * 0.7, stemColors[4][2] * 0.7, stemColors[4][3] * 0.7, 0.9)
+        end
         local ptW = gfx.measurestr(proTipText)
         gfx.x = (w - ptW) / 2 + textOffsetX
         gfx.y = panelY + panelH - PS(30)
@@ -9090,134 +7045,9 @@ end
 local showStemSelectionDialog
 local captureWindowGeometry
 
--- Update lastDialogX/Y/W/H from the current gfx window using a consistent
--- geometry model. The key rule is: store the same kind of size that gfx.init()
--- expects on reopen. Using JS_Window_GetRect() width/height (outer frame size)
--- mixed with gfx.w/gfx.h (client/framebuffer size) causes "window creep".
-local function estimateTitlebarHeight()
-    if OS == "Windows" then return 30 end
-    if OS == "macOS" then return 24 end
-    return 28
-end
-
-local function isGfxWindowVisible()
-    if not (gfx and gfx.getchar) then return true end
-    local ok, flags = pcall(gfx.getchar, 65537)
-    if not ok or type(flags) ~= "number" then return true end
-    if flags < 0 then return false end
-    -- Only trust the visibility bit when present.
-    if flags > 255 and (flags & 4) ~= 4 then return false end
-    return true
-end
-
-local function rememberDialogGeometry(x, y, w, h)
-    x, y, w, h = tonumber(x), tonumber(y), tonumber(w), tonumber(h)
-    if not x or not y or not w or not h then return false end
-    if w <= 0 or h <= 0 then return false end
-
-    x = math.floor(x)
-    y = math.floor(y)
-    w = math.floor(w)
-    h = math.floor(h)
-
-    -- Ignore the classic late-close bogus reset to 0,0 if we already had a
-    -- more plausible previous position.
-    if x == 0 and y == 0 and lastDialogX and lastDialogY and (lastDialogX ~= 0 or lastDialogY ~= 0) then
-        return false
-    end
-
-    lastDialogX = x
-    lastDialogY = y
-    lastDialogW = w
-    lastDialogH = h
-    return true
-end
-
-local function rememberDialogGeometryFromRect(left, top, right, bottom)
-    -- Keep X/Y from the native window rect, but prefer gfx.w/gfx.h for W/H so
-    -- we store the same client/framebuffer size that gfx.init() expects.
-    local w = (gfx and gfx.w and gfx.w > 0) and gfx.w or ((lastDialogW and lastDialogW > 0) and lastDialogW or ((right and left) and (right - left) or nil))
-    local h = (gfx and gfx.h and gfx.h > 0) and gfx.h or ((lastDialogH and lastDialogH > 0) and lastDialogH or ((bottom and top) and (bottom - top) or nil))
-    return rememberDialogGeometry(left, top, w, h)
-end
-
-persistWindowPos = function()
-    local saveW = (lastDialogW and lastDialogW > 0) and lastDialogW or ((gfx and gfx.w and gfx.w > 0) and gfx.w or nil)
-    local saveH = (lastDialogH and lastDialogH > 0) and lastDialogH or ((gfx and gfx.h and gfx.h > 0) and gfx.h or nil)
-    if lastDialogX and lastDialogY and saveW and saveH then
-        local posStr = string.format("%d,%d,%d,%d", math.floor(lastDialogX), math.floor(lastDialogY), math.floor(saveW), math.floor(saveH))
-        reaper.SetExtState(EXT_SECTION, "window_pos", posStr, true)
-        reaper.SetExtState(EXT_SECTION, "window_pos_main", posStr, true)
-        if GUI then
-            GUI.windowPosLoaded = true
-        end
-
-        -- Cleanup old individual keys
-        reaper.DeleteExtState(EXT_SECTION, "windowX", true)
-        reaper.DeleteExtState(EXT_SECTION, "windowY", true)
-        reaper.DeleteExtState(EXT_SECTION, "windowWidth", true)
-        reaper.DeleteExtState(EXT_SECTION, "windowHeight", true)
-    end
-end
-
-local function updateDialogPosFromGfx()
-    if not (gfx and gfx.w and gfx.h and gfx.w > 0 and gfx.h > 0) then return false end
-    if not isGfxWindowVisible() then return false end
-
-    -- Best source inside REAPER: ask gfx itself for the undocked window rect.
-    if gfx.dock then
-        local dockState, wx, wy, ww, wh = gfx.dock(-1, 0, 0, 0, 0)
-        if dockState and wx and wy and ww and wh and ww > 0 and wh > 0 then
-            if rememberDialogGeometry(wx, wy, ww, wh) then
-                persistWindowPos()
-                return true
-            end
-        end
-    end
-
-    if gfx.clienttoscreen then
-        local points = {
-            {0, 0},
-            {1, 1},
-            {math.floor(gfx.w / 2), math.floor(gfx.h / 2)},
-        }
-        for _, pt in ipairs(points) do
-            local px, py = pt[1], pt[2]
-            local sx, sy = gfx.clienttoscreen(px, py)
-            if sx and sy and not (sx == 0 and sy == 0) then
-                if rememberDialogGeometry(sx - px, math.max(0, (sy - py) - estimateTitlebarHeight()), gfx.w, gfx.h) then
-                    persistWindowPos()
-                    return true
-                end
-            end
-        end
-    end
-
-    local mx, my = gfx.mouse_x, gfx.mouse_y
-    if mx and my and mx >= 0 and my >= 0 and mx <= gfx.w and my <= gfx.h then
-        local sx, sy = reaper.GetMousePosition()
-        if sx and sy then
-            return rememberDialogGeometry(sx - mx, math.max(0, (sy - my) - estimateTitlebarHeight()), gfx.w, gfx.h)
-        end
-    end
-    return false
-end
-
-captureWindowGeometry = function(title)
-    if updateDialogPosFromGfx() then return true end
-
-    if title and reaper and reaper.JS_Window_Find and reaper.JS_Window_GetRect then
-        local hwnd = reaper.JS_Window_Find(title, true)
-        if hwnd then
-            local ok, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
-            if ok then
-                return rememberDialogGeometryFromRect(left, top, right, bottom)
-            end
-        end
-    end
-
-    return false
-end
+local rememberDialogGeometryFromRect = WINDOW.rememberDialogGeometryFromRect
+local updateDialogPosFromGfx = WINDOW.updateDialogPosFromGfx
+captureWindowGeometry = WINDOW.captureWindowGeometry
 
 -- Art Gallery window loop
 local function artGalleryLoop()
@@ -9987,82 +7817,7 @@ local function messageWindowLoop()
 end
 
 -- Show a styled message window (replacement for reaper.MB)
--- icon: "info", "warning", "error"
--- monitorSelection: if true, window will auto-close and open main dialog when user makes a selection
-showMessage = function(title, message, icon, monitorSelection, onClose)
-    -- Load settings to get current theme
-    loadSettings()
-    updateTheme()
-
-    -- Selection-monitoring mode is used as a safe landing screen (start/cancel).
-    -- Make sure no stale processing lock prevents the next run.
-    if monitorSelection then
-        isProcessingActive = false
-        if multiTrackQueue then
-            multiTrackQueue.active = false
-        end
-    end
-
-    messageWindowState.title = title or "STEMwerk"
-    messageWindowState.message = message or ""
-    messageWindowState.icon = icon or "info"
-    messageWindowState.wasMouseDown = false
-    messageWindowState.startTime = os.clock()
-    messageWindowState.nextFrameAt = 0
-    messageWindowState.nextSelectionCheckAt = 0
-    messageWindowState.monitorSelection = monitorSelection or false
-    messageWindowState.onClose = onClose
-
-    if messageWindowState.monitorSelection then
-        local overrideTitle = nil
-        local overrideMessage = nil
-        if hasTimeSelection() then
-            local res = resolveTimeSelectionTargets and resolveTimeSelectionTargets() or nil
-            if res and (res.rawOverlap or 0) > 0 and #(res.items or {}) == 0 then
-                overrideTitle = HELPERS.getNoAudibleTargetsTitle()
-                overrideMessage = HELPERS.getNoAudibleTargetsMessage()
-            end
-        end
-        if not overrideTitle and (reaper.CountSelectedTracks(0) or 0) > 0 then
-            local soloActive = getProcessingSoloActive()
-            local anyAudibleTrack = false
-            for t = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
-                local tr = reaper.GetSelectedTrack(0, t)
-                if tr and AUDIBILITY.isTrackAudible(tr, soloActive) then
-                    anyAudibleTrack = true
-                    break
-                end
-            end
-            if not anyAudibleTrack then
-                overrideTitle = HELPERS.getNoAudibleTargetsTitle()
-                overrideMessage = HELPERS.getNoAudibleTargetsMessage()
-            end
-        end
-        if overrideTitle then
-            messageWindowState.title = overrideTitle
-            messageWindowState.message = overrideMessage
-            messageWindowState.icon = "info"
-        end
-    end
-
-    local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init(SCRIPT_NAME, winW, winH, 0, winX, winY)
-
-    -- In selection-monitoring mode, don't steal focus from REAPER.
-    if monitorSelection then
-        reaper.defer(function()
-            local mainHwnd = reaper.GetMainHwnd()
-            if mainHwnd and reaper.JS_Window_SetFocus then
-                reaper.JS_Window_SetFocus(mainHwnd)
-            end
-        end)
-    end
-    if OS == "Windows" then
-        messageWindowLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
-    else
-        reaper.defer(messageWindowLoop)
-    end
-end
+showMessage = MESSAGES.showMessage
 
 -- Scaling helper: converts base coordinates to current scale
 local function S(val)
@@ -10277,8 +8032,8 @@ local function drawTooltip()
         if tx + tw > gfx.w then tx = gfx.w - tw - S(5) end
         if ty + th > gfx.h then ty = GUI.tooltipY - th - S(20) end
 
-        -- Background (theme-aware)
-        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+        local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
+        gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
         gfx.rect(tx, ty, tw, th, 1)
 
         -- Colored top border (stem colors gradient)
@@ -10290,8 +8045,7 @@ local function drawTooltip()
             gfx.line(tx + i, ty, tx + i, ty + 2)
         end
 
-        -- Border (theme-aware)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
         gfx.rect(tx, ty, tw, th, 0)
 
         local labelX = tx + padding
@@ -10461,8 +8215,8 @@ local function drawTooltip()
             ty = GUI.tooltipY - th - S(20)
         end
 
-        -- Background (theme-aware)
-        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+        local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
+        gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
         gfx.rect(tx, ty, tw, th, 1)
 
         -- Colored top border (stem colors gradient)
@@ -10474,12 +8228,10 @@ local function drawTooltip()
             gfx.line(tx + i, ty, tx + i, ty + 2)
         end
 
-        -- Border (theme-aware)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
         gfx.rect(tx, ty, tw, th, 0)
 
-        -- Text (theme-aware)
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.set(ttText[1], ttText[2], ttText[3], 1)
         local x = tx + padding
         local y = ty + padding + S(2)
         for _, line in ipairs(lines) do
@@ -10513,8 +8265,8 @@ local function drawTooltip()
             ty = GUI.tooltipY - th - S(20)
         end
 
-        -- Background (theme-aware)
-        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+        local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
+        gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
         gfx.rect(tx, ty, tw, th, 1)
 
         -- Colored top border (stem colors gradient)
@@ -10526,12 +8278,10 @@ local function drawTooltip()
             gfx.line(tx + i, ty, tx + i, ty + 2)
         end
 
-        -- Border (theme-aware)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
         gfx.rect(tx, ty, tw, th, 0)
 
-        -- Text (theme-aware)
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.set(ttText[1], ttText[2], ttText[3], 1)
         gfx.x = tx + padding
         gfx.y = ty + padding + S(2)
         gfx.drawstr(st.text .. " ")
@@ -10897,9 +8647,10 @@ function renderResultMessageBox(ctx)
     local w, h, PS = ctx.w, ctx.h, ctx.PS
     local msgBoxY = PS(170)
     local msgBoxH = PS(70)
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.3)
+    local resultBoxAlpha = (SETTINGS and SETTINGS.darkMode) and 0.30 or 0.82
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], resultBoxAlpha)
     gfx.rect(PS(20), msgBoxY, w - PS(40), msgBoxH, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.6)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], (SETTINGS and SETTINGS.darkMode) and 0.6 or 0.9)
     gfx.rect(PS(20), msgBoxY, w - PS(40), msgBoxH, 0)
 
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
@@ -11579,9 +9330,9 @@ function drawMainDialogModalOverlay()
     GUI.uiClickedThisFrame = true
 
     -- Keep the "cool background FX" alive even while the modal is open (dialogLoop() returns early).
-    -- Match main dialog day/night: pure black in dark mode, pure white in light mode.
-    local bg = (SETTINGS and SETTINGS.darkMode) and 0 or 1
-    gfx.set(bg, bg, bg, 1)
+    -- Match main dialog background color from THEME
+    local bg = THEME and THEME.bg or {0.18, 0.18, 0.2}
+    gfx.set(bg[1], bg[2], bg[3], 1)
     gfx.rect(0, 0, gfx.w, gfx.h, 1)
 
     if proceduralArt and proceduralArt.seed == 0 then
@@ -14188,8 +11939,11 @@ function finalizeDialogLoop(ctx)
             end)
             if not ok then
                 debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
+                if SW_LOG and SW_LOG.logExecResult then
+                    SW_LOG.logExecResult("workflow_crash", -1, tostring(err))
+                end
                 isProcessingActive = false
-                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG.logPath), "error")
+                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(getCrashLogPath()), "error")
             end
         end)
     else
@@ -14215,6 +11969,14 @@ end
 
 function dialogLoop()
     local loopNow = uiNow()
+    
+    -- Check for theme updates from Editor
+    local lastRefresh = reaper.GetExtState("STEMwerk", "THEME_REFRESH")
+    if lastRefresh ~= "" and lastRefresh ~= GUI._lastThemeRefresh then
+        GUI._lastThemeRefresh = lastRefresh
+        updateTheme()
+    end
+
     if OS ~= "Windows" or (loopNow - (GUI.windowOpenedAt or 0)) >= 0.35 then
         makeWindowResizable()
     end
@@ -14329,17 +12091,6 @@ showStemSelectionDialog = function()
     dialogLoop()
 end
 
--- Get temp directory (cross-platform)
-local function getTempDir()
-    if OS == "Windows" then
-        return os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
-    else
-        local flatpakTemp = getFlatpakTempBase()
-        if flatpakTemp then return flatpakTemp end
-        return os.getenv("TMPDIR") or "/tmp"
-    end
-end
-
 -- Unique temp folder helper (avoid collisions when running twice within the same second)
 local TEMP_RUN_COUNTER = 0
 local function makeUniqueTempSubdir(prefix)
@@ -14348,37 +12099,6 @@ local function makeUniqueTempSubdir(prefix)
     local ms = math.floor(t * 1000)
     local base = getTempDir() .. PATH_SEP .. (prefix or "STEMwerk")
     return base .. "_" .. tostring(os.time()) .. "_" .. tostring(ms) .. "_" .. tostring(TEMP_RUN_COUNTER)
-end
-
--- Create directory (cross-platform)
-local function makeDir(path)
-    if reaper and reaper.RecursiveCreateDirectory then
-        reaper.RecursiveCreateDirectory(path, 0)
-        return
-    end
-    if OS == "Windows" then
-        os.execute('mkdir "' .. path .. '" 2>nul')
-    else
-        os.execute('mkdir -p "' .. path .. '"')
-    end
-end
-
--- Suppress stderr (cross-platform)
-local function suppressStderr()
-    return OS == "Windows" and " 2>nul" or " 2>/dev/null"
-end
-
--- Cleanup temp working files (keep output stems)
-local function normalizePath(p)
-    if not p then return "" end
-    local norm = tostring(p)
-    if OS == "Windows" then
-        norm = norm:gsub("/", "\\")
-        norm = norm:lower()
-    else
-        norm = norm:gsub("\\", "/")
-    end
-    return norm
 end
 
 local function isSafeTempDir(path)
@@ -14635,63 +12355,6 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
     return true, nil
 end
 
-
--- Execute command without showing a window (Windows-specific)
--- On Windows, os.execute() shows a brief CMD flash. This avoids that.
-function execHidden(cmd)
-    debugLog("execHidden called")
-    debugLog("  Command: " .. cmd:sub(1, 200) .. (cmd:len() > 200 and ".." or ""))
-    if OS == "Windows" then
-        local directCmd = tostring(cmd or "")
-        directCmd = directCmd:gsub("%s+2>nul%s*$", "")
-
-        if reaper and reaper.ExecProcess and not SW_LOG.commandNeedsWindowsShell(directCmd) then
-            debugLog("  Using reaper.ExecProcess (direct, no shell)")
-            reaper.ExecProcess(directCmd, 0)
-            debugLog("  Command completed")
-            return
-        end
-
-        -- Fall back to a temporary VBS wrapper and execute the original command string
-        -- directly, without nesting it inside another cmd.exe /c layer.
-        local tempDir = os.getenv("TEMP") or os.getenv("TMP") or "."
-        local vbsPath = tempDir .. "\\STEMwerk_exec_" .. os.time() .. ".vbs"
-        debugLog("  VBS path: " .. vbsPath)
-        local vbsFile = io.open(vbsPath, "w")
-        if vbsFile then
-            vbsFile:write('On Error Resume Next\n')
-            vbsFile:write('Dim sh, p\n')
-            vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
-            vbsFile:write('Set p = sh.Exec("' .. directCmd:gsub('"', '""') .. '")\n')
-            vbsFile:write('Do While p.Status = 0\n')
-            vbsFile:write('  WScript.Sleep 50\n')
-            vbsFile:write('Loop\n')
-            vbsFile:close()
-            debugLog("  VBS file created")
-
-            if reaper.ExecProcess then
-                debugLog("  Using reaper.ExecProcess via hidden wscript wrapper")
-                reaper.ExecProcess('wscript "' .. vbsPath .. '"', 0)  -- 0 = wait for completion
-            else
-                debugLog("  Using os.execute via hidden wscript wrapper")
-                os.execute('wscript "' .. vbsPath .. '"')
-            end
-            debugLog("  Command completed")
-
-            -- Clean up VBS file
-            os.remove(vbsPath)
-            debugLog("  VBS file cleaned up")
-        else
-            -- Fallback to os.execute if VBS creation fails
-            debugLog("  VBS creation failed, falling back to os.execute")
-            os.execute(cmd)
-        end
-    else
-        debugLog("  Non-Windows, using os.execute")
-        os.execute(cmd)
-    end
-    debugLog("execHidden done")
-end
 
 -- Render selected item to a temporary WAV file
 -- If time selection exists and overlaps item, only render that portion
@@ -16169,1172 +13832,44 @@ WORKFLOW = WORKFLOW or {}
 HELPERS = HELPERS or {}
 UI = UI or {}
 
-function HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stemName)
-    local trackBase = tostring(sourceTrackName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    local itemBase = tostring(sourceItemName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    local stemBase = tostring(stemName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-
-    if trackBase == "" then trackBase = "Track" end
-    if itemBase == "" then itemBase = trackBase end
-    if stemBase == "" then stemBase = "Stem" end
-
-    local takeName = itemBase .. " - " .. stemBase
-    local folderBase = trackBase
-    if itemBase ~= "" and itemBase ~= trackBase then
-        folderBase = trackBase .. " - " .. itemBase
-    end
-
-    return {
-        folderBase = folderBase,
-        trackName = folderBase .. " - " .. stemBase,
-        takeName = takeName,
-    }
-end
-
-function HELPERS.trimString(s)
-    s = tostring(s or "")
-    return s:gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-function HELPERS.getUiLanguageCode()
-    local lang = tostring((SETTINGS and SETTINGS.language) or "en"):lower()
-    if lang:find("nl", 1, true) == 1 then return "nl" end
-    if lang:find("de", 1, true) == 1 then return "de" end
-    return "en"
-end
-
-function HELPERS.getColorMode()
-    SETTINGS.colorMode = normalizeColorMode(SETTINGS.colorMode)
-    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
-    return SETTINGS.colorMode
-end
-
-function HELPERS.setColorMode(mode)
-    SETTINGS.colorMode = normalizeColorMode(mode)
-    SETTINGS.applyTrackColors = (SETTINGS.colorMode ~= "no_track" and SETTINGS.colorMode ~= "off")
-end
-
-function HELPERS.cycleColorMode()
-    local order = {
-        both = "no_track",
-        no_track = "off",
-        off = "no_media",
-        no_media = "both",
-    }
-    HELPERS.setColorMode(order[HELPERS.getColorMode()] or "both")
-end
-
-function HELPERS.isTrackColoringEnabled()
-    local mode = HELPERS.getColorMode()
-    return mode ~= "no_track" and mode ~= "off"
-end
-
-function HELPERS.isMediaColoringEnabled()
-    local mode = HELPERS.getColorMode()
-    return mode ~= "no_media" and mode ~= "off"
-end
-
-function HELPERS.getColorModeButtonLabel()
-    local mode = HELPERS.getColorMode()
-    if mode == "no_track" then
-        return "Clr -T"
-    elseif mode == "no_media" then
-        return "Clr -M"
-    elseif mode == "off" then
-        return "Clr Off"
-    end
-    return "Clr T+M"
-end
-
-function HELPERS.getColorModeButtonColor()
-    if HELPERS.getColorMode() == "off" then
-        return {120, 120, 120}
-    end
-    return nil
-end
-
-function HELPERS.getColorModeTooltip()
-    local mode = HELPERS.getColorMode()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then
-        if mode == "no_track" then
-            return "Trackkleur uit. Item/media-kleur blijft aan. Klik om te wisselen."
-        elseif mode == "no_media" then
-            return "Item/media-kleur uit. Trackkleur blijft aan. Klik om te wisselen."
-        elseif mode == "off" then
-            return "Track- en item/media-kleur uit. Klik om te wisselen."
-        end
-        return "Track- en item/media-kleur aan. Klik om te wisselen."
-    elseif lang == "de" then
-        if mode == "no_track" then
-            return "Track-Farbe aus. Item/Medien-Farbe bleibt an. Klicken zum Wechseln."
-        elseif mode == "no_media" then
-            return "Item/Medien-Farbe aus. Track-Farbe bleibt an. Klicken zum Wechseln."
-        elseif mode == "off" then
-            return "Track- und Item/Medien-Farbe aus. Klicken zum Wechseln."
-        end
-        return "Track- und Item/Medien-Farbe an. Klicken zum Wechseln."
-    end
-    if mode == "no_track" then
-        return "Track colors off. Item/media colors stay on. Click to cycle."
-    elseif mode == "no_media" then
-        return "Item/media colors off. Track colors stay on. Click to cycle."
-    elseif mode == "off" then
-        return "Track and item/media colors off. Click to cycle."
-    end
-    return "Track and item/media colors on. Click to cycle."
-end
-
-function HELPERS.applyTrackColorIfEnabled(track, color)
-    if not (track and reaper.ValidatePtr(track, "MediaTrack*")) then return end
-    if not HELPERS.isTrackColoringEnabled() then
-        reaper.SetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR", 0)
-        return
-    end
-    if color and color ~= 0 then
-        reaper.SetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR", color)
-    end
-end
-
-function HELPERS.applyItemColorIfEnabled(item, color)
-    if not (item and reaper.ValidatePtr(item, "MediaItem*")) then return end
-    if not HELPERS.isMediaColoringEnabled() then
-        reaper.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", 0)
-        return
-    end
-    if color and color ~= 0 then
-        reaper.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", color)
-    end
-end
-
-function HELPERS.applyTakeColorIfEnabled(take, color)
-    if not (take and reaper.ValidatePtr(take, "MediaItem_Take*")) then return end
-    if not HELPERS.isMediaColoringEnabled() then
-        reaper.SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", 0)
-        return
-    end
-    if color and color ~= 0 then
-        reaper.SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", color)
-    end
-end
-
-function HELPERS.getStemFileDestinationLabel()
-    local mode = tostring(SETTINGS.stemFileDestination or "temp")
-    if mode == "project_media" then
-        return HELPERS.getStemFileProjectLabel and HELPERS.getStemFileProjectLabel() or "Project"
-    elseif mode == "custom" then
-        return HELPERS.getStemFileCustomLabel and HELPERS.getStemFileCustomLabel() or "Custom"
-    end
-    return "Temp"
-end
-
-function HELPERS.getStemFilesHeaderLabel()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "de" then return "Stem-Dateien:" end
-    return "Stem files:"
-end
-
-function HELPERS.getStemFileProjectLabel()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "de" then return "Projekt" end
-    return "Project"
-end
-
-function HELPERS.getStemFileCustomLabel()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Eigen" end
-    if lang == "de" then return "Eigen" end
-    return "Custom"
-end
-
-function HELPERS.getSetCustomPathLabel()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Kies map" end
-    if lang == "de" then return "Ordner" end
-    return "Set folder"
-end
-
-function HELPERS.getCustomFolderPromptTitle()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "STEMwerk aangepaste stemmap" end
-    if lang == "de" then return "STEMwerk Stem-Ordner" end
-    return "STEMwerk custom stem folder"
-end
-
-function HELPERS.getCustomFolderPromptLabel()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Mappad:" end
-    if lang == "de" then return "Ordnerpfad:" end
-    return "Folder path:"
-end
-
-function HELPERS.getStemFilesTempTooltip()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Bewaar de gemaakte stemfiles in de tijdelijke STEMwerk-map." end
-    if lang == "de" then return "Speichert die erzeugten Stem-Dateien im temporaeren STEMwerk-Ordner." end
-    return "Keep generated stem files in STEMwerk temp folders."
-end
-
-function HELPERS.getStemFilesProjectTooltip()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Verplaats de gemaakte stemfiles eerst naar de huidige REAPER-projectmap en importeer ze daarna." end
-    if lang == "de" then return "Verschiebt die erzeugten Stem-Dateien zuerst in den aktuellen REAPER-Projektordner und importiert sie dann." end
-    return "Move generated stem files to the current REAPER project path before importing."
-end
-
-function HELPERS.getStemFilesCustomTooltip()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Verplaats de gemaakte stemfiles eerst naar een eigen map en importeer ze daarna." end
-    if lang == "de" then return "Verschiebt die erzeugten Stem-Dateien zuerst in einen eigenen Ordner und importiert sie dann." end
-    return "Move generated stem files to a custom folder before importing."
-end
-
-function HELPERS.getStemFilesCustomPathTooltip()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Vul de doelmap voor de definitieve stemfiles in." end
-    if lang == "de" then return "Zielordner fuer die finalen Stem-Dateien eingeben." end
-    return "Enter the destination folder for final stem files."
-end
-
-function HELPERS.getStemFilesWarningTitle()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Stem files" end
-    if lang == "de" then return "Stem-Dateien" end
-    return "Stem files"
-end
-
-function HELPERS.getStemFilesMissingCustomWarning()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Stel eerst een eigen stemmap in, of zet Stem files terug op Temp/Project." end
-    if lang == "de" then return "Zuerst einen eigenen Stem-Ordner festlegen, oder Stem-Dateien auf Temp/Projekt zuruecksetzen." end
-    return "Set a custom stem folder first, or switch Stem files back to Temp/Project."
-end
-
-function HELPERS.getStemFilesProjectUnavailableWarning()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Project is niet beschikbaar voor dit project. Sla het project eerst op, of gebruik Temp/Custom." end
-    if lang == "de" then return "Projekt ist fuer dieses Projekt nicht verfuegbar. Projekt zuerst speichern, oder Temp/Custom verwenden." end
-    return "Project is unavailable for this project. Save the project first, or use Temp/Custom."
-end
-
-function HELPERS.getNoAudibleTargetsTitle()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then return "Geen hoorbare doelwitten" end
-    if lang == "de" then return "Keine hoerbaren Ziele" end
-    return "No audible targets"
-end
-
-function HELPERS.getNoAudibleTargetsMessage()
-    local lang = HELPERS.getUiLanguageCode()
-    if lang == "nl" then
-        return "Er is wel audio binnen de huidige selectie, maar alle overeenkomende tracks/items zijn gemute of niet solo-hoorbaar.\n\nUnmute de relevante track of item, of pas de solo-status aan, en probeer opnieuw."
-    end
-    if lang == "de" then
-        return "Innerhalb der aktuellen Auswahl gibt es Audio, aber alle passenden Tracks/Items sind stummgeschaltet oder wegen Solo nicht hoerbar.\n\nRelevanten Track oder Item entstummen oder den Solo-Status anpassen und erneut versuchen."
-    end
-    return "There is audio inside the current selection, but all matching tracks/items are muted or not solo-audible.\n\nUnmute the relevant track or item, or adjust solo state, then try again."
-end
-
-function HELPERS.isNoAudibleTargetsError(err)
-    local s = string.lower(tostring(err or ""))
-    if s == "" then return false end
-    if s:find("no audible targets overlap", 1, true) then return true end
-    if s:find("muted or not solo%-audible") then return true end
-    if s:find("geen hoorbare doelwitten", 1, true) then return true end
-    if s:find("keine hoerbaren ziele", 1, true) then return true end
-    return false
-end
-
-function HELPERS.getSelectionMonitorPrompt()
-    local state = HELPERS.getSelectionMonitorState()
-    local lang = HELPERS.getUiLanguageCode()
-    if state and state.hasSource and not state.actionable then
-        if lang == "nl" then
-            return HELPERS.getNoAudibleTargetsTitle(), "Selecteer audio of maak tracks/items hoorbaar in REAPER."
-        end
-        if lang == "de" then
-            return HELPERS.getNoAudibleTargetsTitle(), "Audio auswaehlen oder Tracks/Items in REAPER hoerbar machen."
-        end
-        return HELPERS.getNoAudibleTargetsTitle(), "Select audio or make tracks/items audible in REAPER."
-    end
-    if lang == "nl" then
-        return "Start", "Selecteer audio in REAPER"
-    end
-    if lang == "de" then
-        return "Start", "Audio in REAPER auswaehlen"
-    end
-    return "Start", "Select audio in REAPER"
-end
-
-function HELPERS.getProjectMediaDir()
-    local projectPath = nil
-    if reaper and reaper.GetProjectPathEx then
-        local ok, result = pcall(reaper.GetProjectPathEx, 0, "")
-        if ok and type(result) == "string" and result ~= "" then
-            projectPath = result
-        end
-    end
-    if (not projectPath or projectPath == "") and reaper and reaper.GetProjectPath then
-        local ok, result = pcall(reaper.GetProjectPath, "")
-        if ok and type(result) == "string" and result ~= "" then
-            projectPath = result
-        end
-    end
-    projectPath = HELPERS.trimString(projectPath)
-    if projectPath == "" then return nil end
-    return projectPath
-end
-
-function HELPERS.resolveFinalStemOutputDir()
-    local mode = tostring(SETTINGS.stemFileDestination or "temp")
-    if mode == "project_media" then
-        return HELPERS.getProjectMediaDir()
-    elseif mode == "custom" then
-        local customDir = HELPERS.trimString(SETTINGS.customStemDir)
-        if customDir ~= "" then
-            return customDir
-        end
-        return nil
-    end
-    return nil
-end
-
-function HELPERS.sanitizeStemFilenamePart(name)
-    local s = HELPERS.trimString(name)
-    if s == "" then s = "Stem" end
-    s = s:gsub("[<>:\"/\\|%?%*]", "_")
-    s = s:gsub("[%c]", "_")
-    s = s:gsub("%s+", " ")
-    s = s:gsub("^%.+", "")
-    s = s:gsub("%.+$", "")
-    s = s:gsub("%s+$", "")
-    if s == "" then s = "Stem" end
-    return s
-end
-
-function HELPERS.makeUniqueFilePath(dir, baseName, ext)
-    local safeBase = HELPERS.sanitizeStemFilenamePart(baseName)
-    local safeExt = ext or ""
-    local candidate = dir .. PATH_SEP .. safeBase .. safeExt
-    local counter = 2
-    while fileExists(candidate) do
-        candidate = dir .. PATH_SEP .. safeBase .. "_" .. tostring(counter) .. safeExt
-        counter = counter + 1
-    end
-    return candidate
-end
-
-function HELPERS.copyFile(src, dst)
-    local inFile = io.open(src, "rb")
-    if not inFile then return false end
-    local outFile = io.open(dst, "wb")
-    if not outFile then
-        inFile:close()
-        return false
-    end
-    local data = inFile:read("*all")
-    inFile:close()
-    if not data then
-        outFile:close()
-        os.remove(dst)
-        return false
-    end
-    outFile:write(data)
-    outFile:close()
-    return true
-end
-
-function HELPERS.moveFile(src, dst)
-    if src == dst then return true end
-    local ok = os.rename(src, dst)
-    if ok then return true end
-    if HELPERS.copyFile(src, dst) then
-        os.remove(src)
-        return true
-    end
-    return false
-end
-
-function HELPERS.getStemNamingContextForItem(item, fallbackTrackName, fallbackItemName)
-    local trackName = HELPERS.trimString(fallbackTrackName)
-    local itemName = HELPERS.trimString(fallbackItemName)
-    if item and reaper.ValidatePtr(item, "MediaItem*") then
-        local track = reaper.GetMediaItem_Track(item)
-        if track then
-            local _, tn = reaper.GetTrackName(track)
-            trackName = HELPERS.trimString(tn)
-        end
-        local display = getItemDisplayNameForTakes(item)
-        if display and display ~= "" then
-            itemName = HELPERS.trimString(display)
-        end
-    end
-    if trackName == "" then trackName = "Track" end
-    if itemName == "" then itemName = fallbackItemName or trackName end
-    return trackName, itemName
-end
-
-function HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
-    local finalDir = HELPERS.resolveFinalStemOutputDir()
-    if not finalDir or finalDir == "" then
-        return stems, nil
-    end
-
-    makeDir(finalDir)
-    local moved = {}
-    local relocated = {}
-    for _, stem in ipairs(STEMS) do
-        local key = stem.name:lower()
-        local src = stems[key]
-        if src then
-            local names = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
-            local dst = HELPERS.makeUniqueFilePath(finalDir, names.takeName, ".wav")
-            if HELPERS.moveFile(src, dst) then
-                relocated[key] = dst
-                moved[#moved + 1] = dst
-            else
-                relocated[key] = src
-            end
-        end
-    end
-    return relocated, moved
-end
-
-function HELPERS.refreshImportedMediaItems(items, sourcePaths)
-    local seenTracks = {}
-    for _, path in ipairs(sourcePaths or {}) do
-        if path and path ~= "" and reaper.GetPeakFileName then
-            local ok, peakPath = pcall(reaper.GetPeakFileName, path)
-            if ok and type(peakPath) == "string" and peakPath ~= "" then
-                os.remove(peakPath)
-            end
-        end
-    end
-    if reaper.ClearPeakCache then
-        pcall(reaper.ClearPeakCache)
-    end
-    for _, item in ipairs(items or {}) do
-        if item and reaper.ValidatePtr(item, "MediaItem*") then
-            local takeCount = reaper.CountTakes(item) or 0
-            for takeIdx = 0, takeCount - 1 do
-                local take = reaper.GetTake(item, takeIdx)
-                if take and reaper.ValidatePtr(take, "MediaItem_Take*") and reaper.PCM_Source_BuildPeaks then
-                    local src = reaper.GetMediaItemTake_Source(take)
-                    if src then
-                        local okStart, remaining = pcall(reaper.PCM_Source_BuildPeaks, src, 0)
-                        if okStart and tonumber(remaining or 0) and tonumber(remaining or 0) > 0 then
-                            local guard = 0
-                            repeat
-                                local okRun, runRemaining = pcall(reaper.PCM_Source_BuildPeaks, src, 1)
-                                if not okRun then break end
-                                remaining = tonumber(runRemaining or 0) or 0
-                                guard = guard + 1
-                            until remaining <= 0 or guard > 20000
-                            pcall(reaper.PCM_Source_BuildPeaks, src, 2)
-                        end
-                    end
-                end
-            end
-            local track = reaper.GetMediaItem_Track(item)
-            if track and reaper.ValidatePtr(track, "MediaTrack*") then
-                local trackKey = tostring(track)
-                if not seenTracks[trackKey] then
-                    seenTracks[trackKey] = track
-                end
-            end
-            if reaper.UpdateItemInProject then
-                pcall(reaper.UpdateItemInProject, item)
-            end
-        end
-    end
-    for _, track in pairs(seenTracks) do
-        if reaper.MarkTrackItemsDirty then
-            pcall(reaper.MarkTrackItemsDirty, track, nil)
-        end
-    end
-    adjustTrackLayout()
-end
-
-function HELPERS.forceArrangeRefresh()
-    if reaper.PreventUIRefresh then
-        pcall(reaper.PreventUIRefresh, 1)
-    end
-    adjustTrackLayout()
-    if reaper.PreventUIRefresh then
-        pcall(reaper.PreventUIRefresh, -1)
-    end
-    adjustTrackLayout()
-end
-
-function HELPERS.scheduleResultWindowRefresh()
-    local step = 0
-    local function tick()
-        step = step + 1
-        HELPERS.forceArrangeRefresh()
-
-        if reaper.JS_Window_SetFocus then
-            local mainHwnd = reaper.GetMainHwnd and reaper.GetMainHwnd() or nil
-            if mainHwnd then
-                pcall(reaper.JS_Window_SetFocus, mainHwnd)
-            end
-        end
-
-        if step < 6 then
-            reaper.defer(tick)
-        end
-    end
-
-    reaper.defer(tick)
-end
-
--- Read latest progress from stdout file
-function WORKFLOW.updateProgressFromFile()
-    if not progressState.stdoutFile or progressState.stdoutFile == "" then return end
-    local f = io.open(progressState.stdoutFile, "r")
-    if not f then return end
-
-    local lastProgress = nil
-    for line in f:lines() do
-        local percent, stage = line:match("PROGRESS:(%d+):(.+)")
-        if percent then
-            lastProgress = { percent = tonumber(percent), stage = stage }
-        end
-    end
-    f:close()
-
-    if lastProgress then
-        progressState.percent = lastProgress.percent
-        progressState.stage = lastProgress.stage
-    end
-end
-
--- Check if separation process is done (check for done.txt marker file)
-function WORKFLOW.checkSeparationDone()
-    if not progressState.outputDir or progressState.outputDir == "" then
-        return false
-    end
-    -- Check for done marker file
-    local doneFile = io.open(progressState.outputDir .. PATH_SEP .. "done.txt", "r")
-    if doneFile then
-        doneFile:close()
-        return true
-    end
-    -- Also check if progress hit 100%
-    return progressState.percent >= 100
-end
-
--- Best-effort: kill a Windows process tree from a pid file
-function HELPERS.killWindowsProcessFromPidFile(pidFile)
-    if OS ~= "Windows" then return false end
-    if not pidFile or pidFile == "" then return false end
-    local f = io.open(pidFile, "r")
-    if not f then return false end
-    local pidStr = (f:read("*l") or ""):match("%d+")
-    f:close()
-    local pid = tonumber(pidStr)
-    if not pid or pid <= 0 then return false end
-
-    local cmd = string.format('taskkill /PID %d /T /F', pid)
-    debugLog("Killing process tree: " .. cmd)
-    if reaper and reaper.ExecProcess then
-        reaper.ExecProcess(cmd, 0)
-    else
-        os.execute(cmd .. " >nul 2>nul")
-    end
-    return true
-end
-
--- Best-effort: kill a Unix process from a pid file
-function HELPERS.killUnixProcessFromPidFile(pidFile)
-    if OS == "Windows" then return false end
-    if not pidFile or pidFile == "" then return false end
-    local f = io.open(pidFile, "r")
-    if not f then return false end
-    local pidStr = (f:read("*l") or ""):match("%d+")
-    f:close()
-    local pid = tonumber(pidStr)
-    if not pid or pid <= 0 then return false end
-
-    -- Try TERM first; if the process ignores it, the user can cancel again / wait for cleanup.
-    os.execute("kill -TERM " .. tostring(pid) .. " 2>/dev/null")
-    return true
-end
-
--- Cross-platform kill wrapper
-function HELPERS.killProcessFromPidFile(pidFile)
-    if OS == "Windows" then
-        return HELPERS.killWindowsProcessFromPidFile(pidFile)
-    end
-        return HELPERS.killUnixProcessFromPidFile(pidFile)
-end
-
-function SW_LOG.writeExitCode(path, code)
-    if not path or path == "" then return end
-    local f = io.open(path, "w")
-    if f then
-        f:write(tostring(code or ""))
-        f:close()
-    end
-end
-
-function SW_LOG.readExitCode(path)
-    if not path or path == "" then return nil end
-    local f = io.open(path, "r")
-    if not f then return nil end
-    local v = f:read("*l") or ""
-    f:close()
-    local n = tonumber(v)
-    return n or v
-end
-
-function SW_LOG.readFileSnippet(path, maxChars)
-    maxChars = maxChars or 1200
-    if not path or path == "" then return nil end
-    local f = io.open(path, "r")
-    if not f then return nil end
-    local content = f:read("*a") or ""
-    f:close()
-    if content == "" then return nil end
-    if #content > maxChars then
-        content = content:sub(1, maxChars) .. "\n...(truncated)..."
-    end
-    return content
-end
-
--- Start separation process in background (Windows)
-function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
-    refreshPythonPathFromExtState()
-    local trustedWindowsRuntime = nil
-    if OS == "Windows" then
-        trustedWindowsRuntime = getTrustedWindowsRuntimeState()
-        applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
-    end
-    local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
-    local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
-    local doneFile = outputDir .. PATH_SEP .. "done.txt"
-    local pidFile = outputDir .. PATH_SEP .. "pid.txt"
-    local exitCodeFile = outputDir .. PATH_SEP .. "exit_code.txt"
-
-    debugLog("startSeparationProcess")
-    debugLog("  inputFile=" .. tostring(inputFile))
-    debugLog("  outputDir=" .. tostring(outputDir))
-    debugLog("  model=" .. tostring(model))
-    debugLog("  python=" .. tostring(PYTHON_PATH))
-    debugLog("  separator=" .. tostring(SEPARATOR_SCRIPT))
-
-    -- Store for progress tracking
-    progressState.outputDir = outputDir
-    progressState.stdoutFile = stdoutFile
-    progressState.logFile = logFile
-    progressState.pidFile = pidFile
-    progressState.exitCodeFile = exitCodeFile
-    progressState.percent = 0
-    progressState.stage = "Starting.."
-    progressState.startTime = os.time()
-    progressState.execLogPath = SW_LOG.getLogPath()
-
-    -- Preflight checks so failures show up clearly in logs/UI.
-    local function fileExists(p)
-        if not p then return false end
-        local f = io.open(p, "r")
-        if f then f:close(); return true end
-        return false
-    end
-    local function fileSizeBytes(p)
-        if not p then return -1 end
-        local f = io.open(p, "rb")
-        if not f then return -1 end
-        local sz = f:seek("end")
-        f:close()
-        return tonumber(sz) or -1
-    end
-
-    if not fileExists(inputFile) then
-        local msg = "Input file missing: " .. tostring(inputFile)
-        debugLog(msg)
-        SW_LOG.logExecResult("preflight: missing input", -1, msg)
-        local lf = io.open(logFile, "w")
-        if lf then lf:write(msg .. "\n"); lf:close() end
-        local df = io.open(doneFile, "w")
-        if df then df:write("DONE\n"); df:close() end
-        SW_LOG.writeExitCode(exitCodeFile, -1)
-        return
-    end
-    local inSz = fileSizeBytes(inputFile)
-    if not inSz or inSz <= 1024 then
-        local msg = "Input WAV is empty (0 samples): " .. tostring(inputFile)
-        debugLog(msg)
-        SW_LOG.logExecResult("preflight: empty input", -1, msg)
-        local lf = io.open(logFile, "w")
-        if lf then
-            lf:write(msg .. "\n")
-            lf:write("Hint: make a longer time selection / ensure selection overlaps items.\n")
-            lf:close()
-        end
-        local df = io.open(doneFile, "w")
-        if df then df:write("DONE\n"); df:close() end
-        SW_LOG.writeExitCode(exitCodeFile, -1)
-        return
-    end
-    if not trustedWindowsRuntime then
-        local pythonAvailable = false
-        if isAbsolutePath(PYTHON_PATH) then
-            pythonAvailable = fileExists(PYTHON_PATH)
-        else
-            pythonAvailable = canRunPython(PYTHON_PATH)
-        end
-
-        if not pythonAvailable then
-            local msg =
-                "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
-                .. "Run STEMwerk-SETUP.lua to repair the runtime."
-            debugLog(msg)
-            SW_LOG.logExecResult("preflight: python missing", -1, msg)
-            local lf = io.open(logFile, "w")
-            if lf then lf:write(msg .. "\n"); lf:close() end
-            local df = io.open(doneFile, "w")
-            if df then df:write("DONE\n"); df:close() end
-            SW_LOG.writeExitCode(exitCodeFile, -1)
-            return
-        end
-        local numpyOk, numpyErr = checkNumpyCompat(PYTHON_PATH)
-        if not numpyOk then
-            local msg =
-                "NumPy compatibility issue.\n\n"
-                .. tostring(numpyErr or "Unknown error") .. "\n\n"
-                .. "Fix (command):\n"
-                .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
-            debugLog(msg)
-            SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
-            local lf = io.open(logFile, "w")
-            if lf then lf:write(msg .. "\n"); lf:close() end
-            local df = io.open(doneFile, "w")
-            if df then df:write("DONE\n"); df:close() end
-            SW_LOG.writeExitCode(exitCodeFile, -1)
-            if reaper and reaper.ShowMessageBox then
-                reaper.ShowMessageBox(msg, "Missing Dependency", 0)
-            end
-            return false
-        end
-        if not canRunFfmpeg() then
-            if not ensureDependenciesInteractive() then
-                return false
-            end
-        end
-    end
-    if not fileExists(SEPARATOR_SCRIPT) then
-        local msg = "Separator script not found at: " .. tostring(SEPARATOR_SCRIPT)
-        debugLog(msg)
-        SW_LOG.logExecResult("preflight: separator missing", -1, msg)
-        local lf = io.open(logFile, "w")
-        if lf then lf:write(msg .. "\n"); lf:close() end
-        local df = io.open(doneFile, "w")
-        if df then df:write("DONE\n"); df:close() end
-        SW_LOG.writeExitCode(exitCodeFile, -1)
-        return
-    end
-
-    if OS == "Windows" then
-        -- Create empty progress/log files (Python writes to these directly)
-        local sf = io.open(stdoutFile, "w")
-        if sf then sf:close() end
-        local lf = io.open(logFile, "w")
-        if lf then lf:close() end
-
-        -- Launch Python hidden WITHOUT a .bat/.cmd (prevents console windows).
-        -- Use WMI Win32_Process.Create to get a PID for proper cancel.
-        local requestedDeviceArg = SETTINGS.device or "auto"
-        local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
-        local pythonCmd = string.format(
-            '%s -u %s %s %s --model %s --device %s',
-            quoteArg(PYTHON_PATH),
-            quoteArg(SEPARATOR_SCRIPT),
-            quoteArg(inputFile),
-            quoteArg(outputDir),
-            quoteArg(model),
-            quoteArg(deviceArg)
-        )
-        progressState.lastCmd = pythonCmd
-        SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
-        if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
-            debugLog("  device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
-        else
-            debugLog("  device=" .. tostring(deviceArg))
-        end
-
-        -- Write a tiny VBS launcher that runs PowerShell invisibly via wscript
-        -- PowerShell will Start-Process the Python worker and write its PID to pidFile
-        local vbsPath = outputDir .. PATH_SEP .. "run_hidden.vbs"
-        local vbsFile = io.open(vbsPath, "w")
-        if vbsFile then
-            local function escPS(s)
-                s = tostring(s or "")
-                s = s:gsub("'", "''")
-                return s
-            end
-            local python = escPS(PYTHON_PATH)
-            local sep = escPS(SEPARATOR_SCRIPT)
-            local inF = escPS(inputFile)
-            local outD = escPS(outputDir)
-            local m = escPS(model)
-            local dev = escPS(deviceArg)
-            local stdoutF = escPS(stdoutFile)
-            local stderrF = escPS(logFile)
-            local pidF = escPS(pidFile)
-            local doneF = escPS(doneFile)
-            local exitF = escPS(exitCodeFile)
-
-            -- Build the PowerShell command that Start-Process the Python worker and writes PID
-            local psInner =
-                "$py='" .. python .. "';" ..
-                "$sep='" .. sep .. "';" ..
-                "$in='" .. inF .. "';" ..
-                "$out='" .. outD .. "';" ..
-                "$model='" .. m .. "';" ..
-                "$dev='" .. dev .. "';" ..
-                "$dq=[char]34;" ..
-                "$sepq=$dq + $sep + $dq;" ..
-                "$inq=$dq + $in + $dq;" ..
-                "$outq=$dq + $out + $dq;" ..
-                "$modelq=$dq + $model + $dq;" ..
-                "$devq=$dq + $dev + $dq;" ..
-                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "'; " ..
-                "Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii; " ..
-                "Wait-Process -Id $p.Id; " ..
-                "$ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii; " ..
-                "Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii"
-
-            -- VBS: create shell and run PowerShell command invisibly (0 = hidden window)
-            vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
-            vbsFile:write('cmd = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""' .. psInner .. '"""\n')
-            vbsFile:write('sh.Run cmd, 0, False\n')
-            vbsFile:close()
-        end
-
-        local wscriptCmd = 'wscript "' .. vbsPath .. '"'
-        if reaper.ExecProcess then
-            debugLog('Calling reaper.ExecProcess: ' .. wscriptCmd)
-            reaper.ExecProcess(wscriptCmd, -1)
-            debugLog('reaper.ExecProcess called')
-        else
-            debugLog('Calling io.popen for: ' .. wscriptCmd)
-            local handle = io.popen(wscriptCmd)
-            if handle then handle:close() end
-            debugLog('io.popen returned')
-        end
-    else
-        -- Unix: run in background so REAPER stays responsive and the progress window can update.
-        -- Launch a tiny sh script that starts the Python worker in the background, writes a pid.txt,
-        -- and writes done.txt only when the worker exits successfully.
-        local requestedDeviceArg = tostring(SETTINGS.device or "auto")
-        local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
-        local modelArg  = tostring(model or SETTINGS.model or "htdemucs")
-        local pythonCmd = string.format(
-            '%s -u %s %s %s --model %s --device %s',
-            quoteArg(PYTHON_PATH),
-            quoteArg(SEPARATOR_SCRIPT),
-            quoteArg(inputFile),
-            quoteArg(outputDir),
-            quoteArg(modelArg),
-            quoteArg(deviceArg)
-        )
-        progressState.lastCmd = pythonCmd
-        SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
-        if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
-            debugLog("  device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
-        end
-
-        -- Create empty progress/log files (Python writes to these directly)
-        local sf = io.open(stdoutFile, "w")
-        if sf then sf:close() end
-        local lf = io.open(logFile, "w")
-        if lf then lf:close() end
-
-        local launcherPath = outputDir .. PATH_SEP .. "run_bg.sh"
-        local script = io.open(launcherPath, "w")
-          if script then
-              script:write("#!/bin/sh\n")
-              script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
-              script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
-              if OS == "macOS" then
-                  local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath")
-                  if ffmpegPath and ffmpegPath ~= "" then
-                      script:write("FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\n")
-                      script:write("IMAGEIO_FFMPEG_EXE=" .. quoteArg(ffmpegPath) .. "\n")
-                      script:write("export FFMPEG_PATH IMAGEIO_FFMPEG_EXE\n")
-                      script:write("FFMPEG_DIR=$(dirname \"$FFMPEG_PATH\")\n")
-                      script:write("PATH=\"$FFMPEG_DIR:${PATH}\"\n")
-                      script:write("export PATH\n")
-                  end
-              end
-              script:write("IN=" .. quoteArg(inputFile) .. "\n")
-              script:write("OUT=" .. quoteArg(outputDir) .. "\n")
-              script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
-              script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
-            script:write("STDOUT=" .. quoteArg(stdoutFile) .. "\n")
-            script:write("STDERR=" .. quoteArg(logFile) .. "\n")
-            script:write("DONE=" .. quoteArg(doneFile) .. "\n")
-            script:write("PIDFILE=" .. quoteArg(pidFile) .. "\n")
-            script:write("EXITCODE=" .. quoteArg(exitCodeFile) .. "\n")
-            script:write("PY_SITE=$(\"$PY\" -c \"import sysconfig; print(sysconfig.get_paths().get('purelib',''))\")\n")
-            script:write("if [ -n \"$PY_SITE\" ]; then\n")
-            script:write("  for d in \"$PY_SITE\"/nvidia/*/lib \"$PY_SITE\"/nvidia/*/lib64; do\n")
-            script:write("    if [ -d \"$d\" ]; then\n")
-            script:write("      case \":$LD_LIBRARY_PATH:\" in\n")
-            script:write("        *\":$d:\"*) ;;\n")
-            script:write("        *) LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$d\" ;;\n")
-            script:write("      esac\n")
-            script:write("    fi\n")
-            script:write("  done\n")
-            script:write("  export LD_LIBRARY_PATH\n")
-            script:write("fi\n")
-            script:write("(\n")
-            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR"\n')
-            script:write("  rc=$?\n")
-            script:write('  echo "$rc" > "$EXITCODE"\n')
-            script:write('  if [ "$rc" -ne 0 ]; then echo "EXIT:$rc" >> "$STDERR"; fi\n')
-            script:write('  echo DONE > "$DONE"\n')
-            script:write(") &\n")
-            script:write('echo $! > "$PIDFILE"\n')
-            script:close()
-
-            local cmd = "sh " .. quoteArg(launcherPath) .. suppressStderr()
-            debugLog("Executing (background) launcher: " .. cmd)
-            os.execute(cmd)
-        else
-            -- If we couldn't write the launcher, fall back to a direct foreground run (old behavior).
-            local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s >%s 2>%s && echo DONE > %s',
-                quoteArg(PYTHON_PATH),
-                quoteArg(SEPARATOR_SCRIPT),
-                quoteArg(inputFile),
-                quoteArg(outputDir),
-                quoteArg(modelArg),
-                quoteArg(deviceArg),
-                quoteArg(stdoutFile),
-                quoteArg(logFile),
-                quoteArg(doneFile)
-            )
-            debugLog("Unix launcher write failed; executing (foreground) command: " .. cmd)
-            local ok, _, code = os.execute(cmd)
-            local rc = (ok == true or ok == 0) and 0 or (code or 1)
-            SW_LOG.writeExitCode(exitCodeFile, rc)
-            debugLog("Command finished with rc=" .. tostring(rc))
-        end
-    end
-    return true
-end
-
--- Progress loop with UI
-function WORKFLOW.progressLoop()
-    local loopNow = uiNow()
-
-    if loopNow >= (progressState.nextPollAt or 0) then
-        progressState.nextPollAt = loopNow + UI_PACING.progressPollInterval
-        WORKFLOW.updateProgressFromFile()
-    end
-
-    if loopNow >= (progressState.nextFrameAt or 0) then
-        progressState.nextFrameAt = loopNow + pacingFrameInterval("progressFrameInterval", "progressFrameIntervalFx")
-        drawProgressWindow()
-    end
-
-    local char = gfx.getchar()
-    local mouseDown = gfx.mouse_cap & 1 == 1
-    handleArtAdvance(progressState, mouseDown, char)
-    if char == 26161 then  -- F1 key code
-        -- Reserved (no-op for now). Keep input handling centralized here so ESC is never consumed elsewhere.
-    end
-    if char == -1 or char == 27 then  -- Window closed or ESC pressed
-        -- Window closed by user
-        progressState.running = false
-        isProcessingActive = false  -- Reset guard so workflow can be restarted
-
-        -- Remember any size/position changes made during processing
-        captureWindowGeometry(WINDOW_PROCESSING)
-        saveSettings()
-
-        -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
-        HELPERS.killProcessFromPidFile(progressState.pidFile)
-
-        gfx.quit()
-        progressState.windowOpen = false
-
-        -- After cancel, go back to the start/selection monitoring window.
-        -- This lets the user quickly pick a new item/time selection without reopening the full dialog.
-        showMessage("Cancelled", T("separation_cancelled"), "info", true)
-        return
-    end
-
-    if WORKFLOW.checkSeparationDone() then
-        -- Done!
-        progressState.running = false
-
-        -- Remember any size/position changes made during processing
-        captureWindowGeometry(WINDOW_PROCESSING)
-        saveSettings()
-
-        gfx.quit()
-        progressState.windowOpen = false
-        WORKFLOW.finishSeparationCallback()
-        return
-    end
-
-    -- Check timeout (10 minutes max)
-    if os.time() - progressState.startTime > 600 then
-        progressState.running = false
-        isProcessingActive = false  -- Reset guard so workflow can be restarted
-
-        -- Remember any size/position changes made during processing
-        captureWindowGeometry(WINDOW_PROCESSING)
-        saveSettings()
-
-        gfx.quit()
-        progressState.windowOpen = false
-        showMessage("Timeout", "Separation timed out after 10 minutes.", "error", true)
-        return
-    end
-
-    reaper.defer(WORKFLOW.progressLoop)
-end
-
--- Finish separation after progress completes
-function WORKFLOW.finishSeparationCallback()
-    -- Small delay to ensure files are written
-    local checkCount = 0
-    local function checkFiles()
-        checkCount = checkCount + 1
-        local stems = {}
-        for _, stem in ipairs(STEMS) do
-            if stem.selected then
-                local stemPath = progressState.outputDir .. PATH_SEP .. stem.file
-                local f = io.open(stemPath, "r")
-                if f then f:close(); stems[stem.name:lower()] = stemPath end
-            end
-        end
-
-        if next(stems) then
-            -- Success - process stems
-            isProcessingActive = false  -- Reset guard so workflow can be restarted after result
-            processStemsResult(stems)
-            cleanupTempWorkDir(progressState.outputDir)
-        elseif checkCount < 10 then
-            -- Retry
-            reaper.defer(checkFiles)
-        else
-            -- Failed
-            isProcessingActive = false  -- Reset guard so workflow can be restarted
-            local exitCode = SW_LOG.readExitCode(progressState.exitCodeFile)
-            local logSnippet = SW_LOG.readFileSnippet(progressState.logFile, 2000) or "(no log output found)"
-            local stdoutSnippet = SW_LOG.readFileSnippet(progressState.stdoutFile, 1200)
-            local errMsg = "No stems created"
-                .. "\n\nExit code: " .. tostring(exitCode or "unknown")
-                .. "\nCommand: " .. tostring(progressState.lastCmd or "unknown")
-                .. "\nLog file: " .. tostring(progressState.logFile or "unknown")
-                .. "\nDebug log: " .. tostring(progressState.execLogPath or SW_LOG.getLogPath())
-                .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
-            if stdoutSnippet then
-                errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
-            end
-            showMessage("Separation Failed", errMsg, "error", true)
-        end
-    end
-    checkFiles()
-end
+dofile(script_path .. "_internal/STEMwerk_Helpers.lua")
+HELPERS.configure({ makeDir = makeDir, adjustTrackLayout = UI_Window.adjustTrackLayout })
+
+dofile(script_path .. "_internal/STEMwerk_Workflow.lua")
+WORKFLOW.configure({
+    progressState                 = progressState,
+    GUI                           = GUI,
+    T                             = T,
+    showMessage                   = showMessage,
+    captureWindowGeometry         = captureWindowGeometry,
+    saveSettings                  = saveSettings,
+    ensureDependenciesInteractive = ensureDependenciesInteractive,
+    getExtStateValue              = getExtStateValue,
+    isAbsolutePath                = isAbsolutePath,
+    quoteArg                      = quoteArg,
+    canRunPython                  = canRunPython,
+    handleArtAdvance              = UI_Window.handleArtAdvance,
+    updateTheme                   = updateTheme,
+    loadSettings                  = loadSettings,
+    rgbToReaperColor              = rgbToReaperColor,
+    suppressStderr                = suppressStderr,
+    cleanupTempWorkDir            = cleanupTempWorkDir,
+    drawProgressWindow            = drawProgressWindow,
+    refreshPythonPathFromExtState = refreshPythonPathFromExtState,
+})
+
+MESSAGES.configure({
+    loadSettings                 = loadSettings,
+    messageWindowLoop            = messageWindowLoop,
+    hasTimeSelection             = hasTimeSelection,
+    getProcessingSoloActive      = getProcessingSoloActive,
+    AUDIBILITY                   = AUDIBILITY,
+    resolveTimeSelectionTargets  = resolveTimeSelectionTargets,
+    multiTrackQueue              = multiTrackQueue,
+})
 
 -- Store callback reference
 finishSeparation = WORKFLOW.finishSeparationCallback
-
--- Run separation with progress UI
-function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
-    -- Load settings to get current theme
-    loadSettings()
-    updateTheme()
-
-    if OS == "Windows" and progressState.windowOpen then
-        showProcessingPlaceholderWindow("Initializing...")
-    end
-
-    -- Start the process
-    local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
-    if ok == false then
-        if OS == "Windows" and progressState.windowOpen then
-            closeProcessingWindow()
-        end
-        isProcessingActive = false
-        return
-    end
-
-    -- Capture main window geometry and snapshot for cancel -> main restore
-    captureWindowGeometry(SCRIPT_NAME)
-    GUI.snapshotMainGeometry()
-
-    if not progressState.windowOpen then
-        ensureProcessingWindowOpen()
-    end
-    progressState.stage = type(T) == "function" and (T("starting") or "Starting...") or "Starting..."
-
-    progressState.running = true
-
-    if OS == "Windows" then
-        WORKFLOW.progressLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
-    else
-        reaper.defer(WORKFLOW.progressLoop)
-    end
-end
-
--- Legacy synchronous separation (fallback)
-function WORKFLOW.runSeparation(inputFile, outputDir, model)
-    local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
-    local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
-
-    local cmd
-    if OS == "Windows" then
-        local vbsPath = outputDir .. PATH_SEP .. "run_hidden.vbs"
-        local vbsFile = io.open(vbsPath, "w")
-        if vbsFile then
-            local pythonCmd = string.format(
-                '"%s" -u "%s" "%s" "%s" --model %s',
-                PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model
-            )
-            pythonCmd = pythonCmd:gsub('"', '""')
-            vbsFile:write('Set WshShell = CreateObject("WScript.Shell")\n')
-            vbsFile:write('WshShell.Run "cmd /c ' .. pythonCmd .. ' >""' .. stdoutFile .. '"" 2>""' .. logFile .. '""", 0, True\n')
-            vbsFile:close()
-            cmd = 'cscript //nologo "' .. vbsPath .. '"'
-        end
-    else
-        cmd = string.format(
-            '"%s" -u "%s" "%s" "%s" --model %s >"%s" 2>"%s"',
-            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, stdoutFile, logFile
-        )
-    end
-
-    os.execute(cmd)
-
-    local stems = {}
-    for _, stem in ipairs(STEMS) do
-        if stem.selected then
-            local stemPath = outputDir .. PATH_SEP .. stem.file
-            local f = io.open(stemPath, "r")
-            if f then f:close(); stems[stem.name:lower()] = stemPath end
-        end
-    end
-
-    if next(stems) == nil then
-        local errLog = io.open(logFile, "r")
-        local errMsg = "No stems created"
-        if errLog then
-            local content = errLog:read("*a")
-            errLog:close()
-            if content and content ~= "" then
-                errMsg = errMsg .. "\n\nLog:\n" .. content:sub(1, 500)
-            end
-        end
-        return nil, errMsg
-    end
-    return stems
-end
 
 -- Replace only a portion of an item with stems (for time selection mode)
 -- Splits the item at selection boundaries and replaces only the selected portion
@@ -17362,224 +13897,6 @@ function getItemDisplayNameForTakes(item)
         end
     end
     return "Item"
-end
-
-function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameBase)
-    local track = reaper.GetMediaItem_Track(item)
-    local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-    local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-    local replaceStart = math.max(tonumber(selStart) or origItemPos, origItemPos)
-    local replaceEnd = math.min(tonumber(selEnd) or origItemEnd, origItemEnd)
-
-    if replaceEnd <= replaceStart then
-        return 0, nil
-    end
-
-    reaper.Undo_BeginBlock()
-
-    -- We need to split the item at selection boundaries
-    -- First, deselect all items and select only our target item
-    reaper.SelectAllMediaItems(0, false)
-    reaper.SetMediaItemSelected(item, true)
-
-    local leftItem = nil   -- Part before selection (if any)
-    local middleItem = item -- Part to replace
-    local rightItem = nil  -- Part after selection (if any)
-
-    -- Split at selection start if it's inside the item
-    if replaceStart > origItemPos and replaceStart < origItemEnd then
-        middleItem = reaper.SplitMediaItem(item, replaceStart)
-        leftItem = item
-        if middleItem then
-            reaper.SetMediaItemSelected(leftItem, false)
-            reaper.SetMediaItemSelected(middleItem, true)
-        else
-            -- Split failed, middle is still the original item
-            middleItem = item
-            leftItem = nil
-        end
-    end
-
-    -- Split at selection end if it's inside what remains
-    if middleItem then
-        local midPos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
-        local midEnd = midPos + reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
-
-        if replaceEnd > midPos and replaceEnd < midEnd then
-            rightItem = reaper.SplitMediaItem(middleItem, replaceEnd)
-            if rightItem then
-                reaper.SetMediaItemSelected(rightItem, false)
-            end
-        end
-    end
-
-    -- Now delete the middle item and insert stems in its place
-    local selLen = replaceEnd - replaceStart
-    if middleItem then
-        reaper.DeleteTrackMediaItem(track, middleItem)
-    end
-
-    -- Create stem items at the selection position
-    local items = {}
-    local stemEntries = {}
-    for _, stem in ipairs(STEMS) do
-        if stem.selected then
-            local stemPath = stemPaths[stem.name:lower()]
-            if stemPath then
-                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
-            end
-        end
-    end
-    local totalStems = #stemEntries
-    local baseName = nameBase or getItemDisplayNameForTakes(item)
-    local importedItems = {}
-    local importedPaths = {}
-    for idx, entry in ipairs(stemEntries) do
-        local stem = entry.stem
-        local stemPath = entry.path
-        local newItem = reaper.AddMediaItemToTrack(track)
-        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", replaceStart)
-        reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
-
-        local take = reaper.AddTakeToMediaItem(newItem)
-        local source = reaper.PCM_Source_CreateFromFile(stemPath)
-        reaper.SetMediaItemTake_Source(take, source)
-        local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
-        reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
-        -- Ensure take volume is at unity (1.0 = 0dB)
-        reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
-
-        local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-        HELPERS.applyItemColorIfEnabled(newItem, stemColor)
-
-        items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
-        importedItems[#importedItems + 1] = newItem
-        importedPaths[#importedPaths + 1] = stemPath
-    end
-
-    -- Merge into takes on the first item
-    if #items > 1 then
-        local mainItem = items[1].item
-        -- Set main item color to first stem color
-        HELPERS.applyItemColorIfEnabled(mainItem, items[1].color)
-
-        for i = 2, #items do
-            local srcTake = reaper.GetActiveTake(items[i].item)
-            if srcTake then
-                local newTake = reaper.AddTakeToMediaItem(mainItem)
-                reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(srcTake))
-                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
-                -- Ensure take volume is at unity (1.0 = 0dB)
-                reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
-            end
-            reaper.DeleteTrackMediaItem(track, items[i].item)
-        end
-
-        -- Now set the color for each take based on its stem
-        -- Iterate through all takes and set their colors
-        local numTakes = reaper.CountTakes(mainItem)
-        for t = 0, numTakes - 1 do
-            local take = reaper.GetTake(mainItem, t)
-            if take then
-                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
-                -- Find the matching stem color
-                for _, stemData in ipairs(items) do
-                    if stemData.name == takeName then
-                        -- Set take color (I_CUSTOMCOLOR on the take)
-                        HELPERS.applyTakeColorIfEnabled(take, stemData.color)
-                        break
-                    end
-                end
-            end
-        end
-    end
-
-    HELPERS.refreshImportedMediaItems({ ((#items >= 1) and items[1].item or nil) }, importedPaths)
-    reaper.Undo_EndBlock("STEMwerk: Replace selection in-place", -1)
-    local mainItem = (#items >= 1) and items[1].item or nil
-    return #items, mainItem
-end
-
--- Replace item in-place with stems as takes
-function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
-    local track = reaper.GetMediaItem_Track(item)
-    reaper.Undo_BeginBlock()
-    reaper.DeleteTrackMediaItem(track, item)
-
-    local items = {}
-    local stemEntries = {}
-    for _, stem in ipairs(STEMS) do
-        if stem.selected then
-            local stemPath = stemPaths[stem.name:lower()]
-            if stemPath then
-                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
-            end
-        end
-    end
-    local totalStems = #stemEntries
-    local baseName = nameBase or getItemDisplayNameForTakes(item)
-    local importedPaths = {}
-    for idx, entry in ipairs(stemEntries) do
-        local stem = entry.stem
-        local stemPath = entry.path
-        local newItem = reaper.AddMediaItemToTrack(track)
-        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
-        reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
-
-        local take = reaper.AddTakeToMediaItem(newItem)
-        local source = reaper.PCM_Source_CreateFromFile(stemPath)
-        reaper.SetMediaItemTake_Source(take, source)
-        local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
-        reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
-        -- Ensure take volume is at unity (1.0 = 0dB)
-        reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
-
-        local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-        HELPERS.applyItemColorIfEnabled(newItem, stemColor)
-
-        items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
-        importedPaths[#importedPaths + 1] = stemPath
-    end
-
-    -- Merge into takes
-    if #items > 1 then
-        local mainItem = items[1].item
-        -- Set main item color to first stem color
-        HELPERS.applyItemColorIfEnabled(mainItem, items[1].color)
-
-        for i = 2, #items do
-            local srcTake = reaper.GetActiveTake(items[i].item)
-            if srcTake then
-                local newTake = reaper.AddTakeToMediaItem(mainItem)
-                reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(srcTake))
-                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
-                -- Ensure take volume is at unity (1.0 = 0dB)
-                reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
-            end
-            reaper.DeleteTrackMediaItem(track, items[i].item)
-        end
-
-        -- Now set the color for each take based on its stem
-        local numTakes = reaper.CountTakes(mainItem)
-        for t = 0, numTakes - 1 do
-            local take = reaper.GetTake(mainItem, t)
-            if take then
-                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
-                -- Find the matching stem color
-                for _, stemData in ipairs(items) do
-                    if stemData.name == takeName then
-                        HELPERS.applyTakeColorIfEnabled(take, stemData.color)
-                        break
-                    end
-                end
-            end
-        end
-    end
-
-    HELPERS.refreshImportedMediaItems({ ((#items >= 1) and items[1].item or nil) }, importedPaths)
-    reaper.Undo_EndBlock("STEMwerk: Replace in-place", -1)
-    local mainItem = (#items >= 1) and items[1].item or nil
-    return #items, mainItem
 end
 
 -- Post-processing: explode takes created by in-place output
@@ -17645,7 +13962,7 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
 
                 reaper.InsertTrackAtIndex(insertIdx, true)
                 local newTrack = reaper.GetTrack(0, insertIdx)
-                ensureTrackHeight(newTrack)
+                UI_Window.ensureTrackHeight(newTrack)
                 insertIdx = insertIdx + 1
                 if newTrack then
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", takeName, true)
@@ -17789,7 +14106,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
         reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
         reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
         HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
-        ensureTrackHeight(folderTrack)
+        UI_Window.ensureTrackHeight(folderTrack)
         trackIdx = trackIdx + 1
     end
 
@@ -17800,7 +14117,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
             if stemPath then
                 reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
                 local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
-                ensureTrackHeight(newTrack)
+                UI_Window.ensureTrackHeight(newTrack)
 
                 local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
                 reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
@@ -18276,7 +14593,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 if stemPath then
                     reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
                     local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
-                    ensureTrackHeight(newTrack)
+                    UI_Window.ensureTrackHeight(newTrack)
                     local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
@@ -18347,7 +14664,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
-            ensureTrackHeight(folderTrack)
+            UI_Window.ensureTrackHeight(folderTrack)
             trackIdx = trackIdx + 1
         end
 
@@ -18361,7 +14678,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 if stemPath then
                     reaper.InsertTrackAtIndex(trackIdx + createdForThisItem, true)
                     local newTrack = reaper.GetTrack(0, trackIdx + createdForThisItem)
-                ensureTrackHeight(newTrack)
+                UI_Window.ensureTrackHeight(newTrack)
                     local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
@@ -18403,6 +14720,7 @@ WORKFLOW_TEMP_INPUT = nil
 
 -- Process stems after separation completes (called from progress UI)
 function processStemsResult(stems)
+    SW_LOG.logExecResult("timing:finalize_start single", nil, "")
     local count
     local mainItem
     local resultMsg
@@ -18425,7 +14743,9 @@ function processStemsResult(stems)
 
             local itemsOverride = timeSelectionResolvedItems
             -- Create stems first so the selection-based cleanup doesn't disturb placement
+            SW_LOG.logExecResult("timing:import_start mode=new_tracks single=time_selection", nil, "")
             count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
+            SW_LOG.logExecResult("timing:import_end mode=new_tracks single=time_selection created=" .. tostring(count), nil, "")
             if lastNoAudibleOverlap and count == 0 then
                 showMessage(HELPERS.getNoAudibleTargetsTitle(), noAudibleOverlapMsg, "info", true)
                 return
@@ -18485,7 +14805,9 @@ function processStemsResult(stems)
             -- In-place mode: replace only the selected portion of the item
             if timeSelectionSourceItem then
                 -- Use partial replacement - splits the item and replaces only the selected part
+                SW_LOG.logExecResult("timing:import_start mode=in_place_partial single=time_selection", nil, "")
                 count, mainItem = WORKFLOW.replaceInPlacePartial(timeSelectionSourceItem, stems, timeSelectionStart, timeSelectionEnd)
+                SW_LOG.logExecResult("timing:import_end mode=in_place_partial single=time_selection created=" .. tostring(count), nil, "")
                 local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
                 if exploded > 0 then
                     resultMsg = "Selection replaced and takes exploded."
@@ -18517,7 +14839,9 @@ function processStemsResult(stems)
                 -- Fallback: create new tracks if no source item
                 local sourceTrack = multiTrackQueue.active and multiTrackQueue.currentSourceTrack or nil
                 local itemsOverride = timeSelectionResolvedItems
+                SW_LOG.logExecResult("timing:import_start mode=new_tracks single=time_selection_fallback", nil, "")
                 count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
+                SW_LOG.logExecResult("timing:import_end mode=new_tracks single=time_selection_fallback created=" .. tostring(count), nil, "")
                 if lastNoAudibleOverlap and count == 0 then
                     showMessage(HELPERS.getNoAudibleTargetsTitle(), noAudibleOverlapMsg, "info", true)
                     return
@@ -18535,7 +14859,9 @@ function processStemsResult(stems)
             end
         end
     elseif SETTINGS.createNewTracks then
+        SW_LOG.logExecResult("timing:import_start mode=new_tracks single=items", nil, "")
         count = createStemTracks(selectedItem, stems, itemPos, itemLen)
+        SW_LOG.logExecResult("timing:import_end mode=new_tracks single=items created=" .. tostring(count), nil, "")
         local actionKey = SETTINGS.deleteOriginalTrack and "result_track_deleted" or
                           (SETTINGS.deleteOriginal and "result_item_deleted" or
                           (SETTINGS.deleteSelection and "result_selection_deleted" or
@@ -18557,7 +14883,9 @@ function processStemsResult(stems)
         -- Check if we processed a sub-selection of the item
         if itemSubSelection then
             -- Use partial replacement - splits the item and replaces only the selected part
+            SW_LOG.logExecResult("timing:import_start mode=in_place_partial single=item_sub_selection", nil, "")
             count, mainItem = WORKFLOW.replaceInPlacePartial(selectedItem, stems, itemSubSelStart, itemSubSelEnd)
+            SW_LOG.logExecResult("timing:import_end mode=in_place_partial single=item_sub_selection created=" .. tostring(count), nil, "")
             local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
             if exploded > 0 then
                 resultMsg = "Selection replaced and takes exploded."
@@ -18574,7 +14902,9 @@ function processStemsResult(stems)
                 resultData = { kind = "single", mainKey = (count == 1) and "result_selection_replaced_single" or "result_selection_replaced_takes_hint" }
             end
         else
+            SW_LOG.logExecResult("timing:import_start mode=in_place single=item_full", nil, "")
             count, mainItem = WORKFLOW.replaceInPlace(selectedItem, stems, itemPos, itemLen)
+            SW_LOG.logExecResult("timing:import_end mode=in_place single=item_full created=" .. tostring(count), nil, "")
             local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
             if exploded > 0 then
                 resultMsg = "Stems created and takes exploded."
@@ -18627,6 +14957,7 @@ function processStemsResult(stems)
     reaper.UpdateArrange()
 
     -- Show custom result window
+    SW_LOG.logExecResult("timing:finalize_end single", nil, "")
     showResultWindow(selectedStemData, resultData or resultMsg)
 end
 
@@ -18806,7 +15137,7 @@ function drawResultWindow()
     resultWindowState.wasRightMouseDown = (gfx.mouse_cap & 2 == 2)
 
     local char = gfx.getchar()
-    handleArtAdvance(resultWindowState, mouseDown, char)
+    UI_Window.handleArtAdvance(resultWindowState, mouseDown, char)
     if char == -1 or char == 27 or char == 13 then  -- Window closed, ESC, Enter
         return true  -- Close
     end
@@ -18839,6 +15170,13 @@ function resultWindowLoop()
         end
     end
 
+    -- Check for theme updates from Editor
+    local lastRefresh = reaper.GetExtState("STEMwerk", "THEME_REFRESH")
+    if lastRefresh ~= "" and lastRefresh ~= GUI._lastThemeRefresh then
+        GUI._lastThemeRefresh = lastRefresh
+        updateTheme()
+    end
+    
     if drawResultWindow() then
         -- Remember any size/position changes made in the complete window
         captureWindowGeometry(WINDOW_COMPLETE)
@@ -19474,6 +15812,12 @@ runSingleTrackSeparation = function(trackList)
         multiTrackQueue.currentJobIndex = 1
     end
 
+    SW_LOG.logExecResult(
+        "timing:workers_launched count=" .. tostring(#trackJobs) .. " mode=" .. (multiTrackQueue.sequentialMode and "sequential" or "parallel"),
+        nil,
+        ""
+    )
+
     -- Show progress window that monitors all jobs
     showMultiTrackProgressWindow()
 end
@@ -19499,6 +15843,8 @@ startSeparationProcessForJob = function(job, segmentSize)
     job.pidFile = pidFile
     job.exitCodeFile = exitCodeFile
     job.execLogPath = SW_LOG.getLogPath()
+    local execLogPath = job.execLogPath or SW_LOG.getLogPath()
+    local jobTag = "item_" .. tostring(job.index or 0)
     job.percent = 0
     job.stage = "Starting.."
     job.startTime = os.time()
@@ -19612,6 +15958,8 @@ startSeparationProcessForJob = function(job, segmentSize)
             local pidF = escPS(pidFile)
             local doneF = escPS(doneFile)
             local exitF = escPS(exitCodeFile)
+            local logPath = escPS(execLogPath)
+            local jobTagEsc = escPS(jobTag)
 
             local psInner =
                 "$py='" .. python .. "';" ..
@@ -19620,6 +15968,10 @@ startSeparationProcessForJob = function(job, segmentSize)
                 "$out='" .. outD .. "';" ..
                 "$model='" .. m .. "';" ..
                 "$dev='" .. dev .. "';" ..
+                "$logPath='" .. logPath .. "';" ..
+                "$jobTag='" .. jobTagEsc .. "';" ..
+                "$env:STEMWERK_LOG_PATH=$logPath;" ..
+                "$env:STEMWERK_JOB_TAG=$jobTag;" ..
                 "$dq=[char]34;" ..
                 "$sepq=$dq + $sep + $dq;" ..
                 "$inq=$dq + $in + $dq;" ..
@@ -19671,7 +16023,7 @@ startSeparationProcessForJob = function(job, segmentSize)
               script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
               script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
               if OS == "macOS" then
-                  local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath")
+                  local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath") or getExtStateValue("FFMPEG_PATH")
                   if ffmpegPath and ffmpegPath ~= "" then
                       script:write("FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\n")
                       script:write("IMAGEIO_FFMPEG_EXE=" .. quoteArg(ffmpegPath) .. "\n")
@@ -19682,9 +16034,12 @@ startSeparationProcessForJob = function(job, segmentSize)
                   end
               end
               script:write("IN=" .. quoteArg(job.inputFile) .. "\n")
-            script:write("OUT=" .. quoteArg(job.trackDir) .. "\n")
-            script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
-            script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
+              script:write("OUT=" .. quoteArg(job.trackDir) .. "\n")
+              script:write("STEMWERK_LOG_PATH=" .. quoteArg(execLogPath) .. "\n")
+              script:write("STEMWERK_JOB_TAG=" .. quoteArg(jobTag) .. "\n")
+              script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG\n")
+              script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
+              script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
             script:write("STDOUT=" .. quoteArg(stdoutFile) .. "\n")
             script:write("STDERR=" .. quoteArg(logFile) .. "\n")
             script:write("DONE=" .. quoteArg(doneFile) .. "\n")
@@ -19764,6 +16119,11 @@ updateAllJobsProgress = function()
                 doneFile:close()
                 if not job.done then
                     job.done = true
+                    SW_LOG.logExecResult(
+                        "timing:job_done job=" .. tostring(job.index) .. " dir=" .. tostring(job.trackDir),
+                        nil,
+                        ""
+                    )
                     -- In sequential mode, start the next job when this one completes
                     if multiTrackQueue.sequentialMode then
                         local nextIndex = multiTrackQueue.currentJobIndex + 1
@@ -20848,7 +17208,7 @@ function drawMultiTrackProgressWindow()
 
     -- Allow new art via click/space (anywhere that isn't UI)
     local char = gfx.getchar()
-    handleArtAdvance(multiTrackQueue, mouseDown, char)
+    UI_Window.handleArtAdvance(multiTrackQueue, mouseDown, char)
 
     -- Check for cancel
     if char == -1 or char == 27 then
@@ -20932,6 +17292,7 @@ end
 
 -- Process all stems after parallel jobs complete
 processAllStemsResult = function()
+    SW_LOG.logExecResult("timing:finalize_start multi", nil, "")
     reaper.Undo_BeginBlock()
 
     local actionCount = 0
@@ -21008,6 +17369,14 @@ processAllStemsResult = function()
             end
         end
         debugLog("  Selected stems: " .. selectedCount .. ", Found: " .. foundCount)
+        if foundCount > 0 and not job.outputDetected then
+            job.outputDetected = true
+            SW_LOG.logExecResult(
+                "timing:output_detected job=" .. tostring(job.index) .. " found=" .. tostring(foundCount) .. " dir=" .. tostring(job.trackDir),
+                nil,
+                ""
+            )
+        end
 
         -- Create stems based on output mode
         if next(stems) then
@@ -21046,7 +17415,17 @@ processAllStemsResult = function()
                     end
                 end
                 local useItemNameForTrack = (job and job.perItem) or false
+                SW_LOG.logExecResult(
+                    "timing:import_start job=" .. tostring(job.index) .. " mode=new_tracks",
+                    nil,
+                    ""
+                )
                 local count = createStemTracksForSelection(stems, jobSelPos, jobSelLen, job.track, itemsOverride, useItemNameForTrack)
+                SW_LOG.logExecResult(
+                    "timing:import_end job=" .. tostring(job.index) .. " created=" .. tostring(count),
+                    nil,
+                    ""
+                )
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
                 if count > 0 then
@@ -21070,7 +17449,17 @@ processAllStemsResult = function()
                         local selEnd = job.selPos + job.selLen
                         debugLog("  Per-item time selection: replacing selection at " .. selStart .. " len=" .. job.selLen)
                         local nameBase = job.sourceItemName or job.sourceItemDisplayName or getItemDisplayNameForTakes(sourceItem)
+                        SW_LOG.logExecResult(
+                            "timing:import_start job=" .. tostring(job.index) .. " mode=in_place_partial",
+                            nil,
+                            ""
+                        )
                         local count, mainItem = WORKFLOW.replaceInPlacePartial(sourceItem, stems, selStart, selEnd, nameBase)
+                        SW_LOG.logExecResult(
+                            "timing:import_end job=" .. tostring(job.index) .. " created=" .. tostring(count),
+                            nil,
+                            ""
+                        )
                         debugLog("  Replaced with " .. count .. " stems as takes")
                         local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes, nil, nameBase)
                         if exploded > 0 then
@@ -21120,8 +17509,18 @@ processAllStemsResult = function()
                         local srcItemLen = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH")
                         local nameBase = job.sourceItemName or job.sourceItemDisplayName or getItemDisplayNameForTakes(sourceItem)
                         debugLog("  Replacing item at pos=" .. srcItemPos .. ", len=" .. srcItemLen)
+                        SW_LOG.logExecResult(
+                            "timing:import_start job=" .. tostring(job.index) .. " mode=in_place",
+                            nil,
+                            ""
+                        )
                         local count, mainItem = WORKFLOW.replaceInPlace(sourceItem, stems, srcItemPos, srcItemLen, nameBase)
-                    debugLog("  Replaced with " .. count .. " stems as takes")
+                        SW_LOG.logExecResult(
+                            "timing:import_end job=" .. tostring(job.index) .. " created=" .. tostring(count),
+                            nil,
+                            ""
+                        )
+                        debugLog("  Replaced with " .. count .. " stems as takes")
                     local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes, nil, nameBase)
                     if exploded > 0 then
                         debugLog("  Post: exploded takes (" .. tostring(SETTINGS.postProcessTakes) .. ") => " .. tostring(exploded) .. " items")
@@ -21326,7 +17725,7 @@ processAllStemsResult = function()
     end
 
     reaper.Undo_EndBlock("STEMwerk: Multi-track stem separation", -1)
-    adjustTrackLayout()
+    UI_Window.adjustTrackLayout()
 
     -- Calculate total processing time
     local totalTime = os.time() - (multiTrackQueue.globalStartTime or os.time())
@@ -21444,6 +17843,7 @@ processAllStemsResult = function()
     -- Reset processing guard
     isProcessingActive = false
 
+    SW_LOG.logExecResult("timing:finalize_end multi", nil, "")
     showResultWindow(selectedStemData, resultData)
 end
 
@@ -21656,7 +18056,7 @@ function runSeparationWorkflow()
             isProcessingActive = false
             return
         end
-    adjustTrackLayout()
+    UI_Window.adjustTrackLayout()
         selectedItem = reaper.GetSelectedMediaItem(0, 0)
         debugLog("After auto-select, selected item: " .. tostring(selectedItem))
     end
@@ -21966,10 +18366,7 @@ function runSeparationWorkflow()
             and HELPERS.getNoAudibleTargetsMessage()
             or ("Failed to extract audio.\n\n" .. detail .. "\n\nMake sure the items/tracks you want to process overlap your time selection.")
         showMessage(title, message, noAudibleTargets and "info" or "warning", false, function()
-            if noAudibleTargets then
-                local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
-                showMessage(promptTitle, promptMessage, "info", true)
-            elseif hasTimeSelection() or hasAnySelection() then
+            if hasTimeSelection() or hasAnySelection() then
                 showStemSelectionDialog()
             else
                 local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
@@ -22148,8 +18545,11 @@ main = function()
             end)
             if not ok then
                 debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
+                if SW_LOG and SW_LOG.logExecResult then
+                    SW_LOG.logExecResult("workflow_crash", -1, tostring(err))
+                end
                 isProcessingActive = false
-                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(DEBUG.logPath), "error")
+                showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(getCrashLogPath()), "error")
             end
         end)
     else

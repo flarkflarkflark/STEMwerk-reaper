@@ -1,0 +1,880 @@
+local C = {}
+
+-- Helper: append a line to workflow_diag.log in outputDir with timestamp and job id
+local function append_diag_log(msg)
+    local dir = C.progressState and C.progressState.outputDir or nil
+    if not dir or dir == "" then return end
+    local path = dir .. PATH_SEP .. "workflow_diag.log"
+    local job = (C.progressState and C.progressState.jobTag) or (C.jobTag) or ""
+    local ts = os.date("%Y-%m-%d %H:%M:%S")
+    local line = string.format("[%s] %s%s%s", ts, msg, job ~= "" and " job=" or "", job ~= "" and job or "")
+    local f = io.open(path, "a")
+    if f then f:write(line .. "\n"); f:close() end
+end
+-- STEMwerk_Workflow.lua
+-- WORKFLOW module: separation process management, progress loop, in-place replace.
+-- Loaded via dofile() from STEMwerk.lua; populates the global WORKFLOW table.
+-- Globals (STEMS, SETTINGS, OS, PATH_SEP, PYTHON_PATH, SEPARATOR_SCRIPT, SW_LOG,
+--   HELPERS, WINDOW_PROCESSING, UI_PACING, FFMPEG_PATH, isProcessingActive, uiNow,
+--   pacingFrameInterval, processStemsResult, canRunFfmpeg, checkNumpyCompat,
+--   refreshPythonPathFromExtState, getTrustedWindowsRuntimeState,
+--   applyTrustedWindowsRuntimeState, normalizeRequestedDeviceForRuntime,
+--   ensureProcessingWindowOpen, showProcessingPlaceholderWindow, closeProcessingWindow,
+--   getItemDisplayNameForTakes, reaper, gfx, io, os, string, math) are accessed directly.
+-- Locals from STEMwerk.lua are injected via WORKFLOW.configure(ctx).
+
+WORKFLOW = WORKFLOW or {}
+
+local C = {}
+
+function WORKFLOW.configure(ctx)
+    for k, v in pairs(ctx) do C[k] = v end
+end
+
+function WORKFLOW.updateProgressFromFile()
+    if not C.progressState.stdoutFile or C.progressState.stdoutFile == "" then return end
+    local f = io.open(C.progressState.stdoutFile, "r")
+    if not f then return end
+
+    local lastProgress = nil
+    for line in f:lines() do
+        local percent, stage = line:match("PROGRESS:(%d+):(.+)")
+        if percent then
+            lastProgress = { percent = tonumber(percent), stage = stage }
+        end
+    end
+    f:close()
+
+    if lastProgress then
+        C.progressState.percent = lastProgress.percent
+        C.progressState.stage = lastProgress.stage
+    end
+end
+
+-- Check if separation process is done (check for done.txt marker file)
+function WORKFLOW.checkSeparationDone()
+    if not C.progressState.outputDir or C.progressState.outputDir == "" then
+        return false
+    end
+    -- Check for done marker file
+    local doneFile = io.open(C.progressState.outputDir .. PATH_SEP .. "done.txt", "r")
+    if doneFile then
+        doneFile:close()
+        return true
+    end
+    -- Also check if progress hit 100%
+    return C.progressState.percent >= 100
+end
+
+-- Start separation process in background (Windows)
+function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
+        append_diag_log("[workflow] start")
+        append_diag_log("[workflow] outputDir=" .. tostring(outputDir))
+        append_diag_log("[workflow] stdoutFile=" .. tostring(outputDir .. PATH_SEP .. "stdout.txt"))
+        append_diag_log("[workflow] separationLogFile=" .. tostring(outputDir .. PATH_SEP .. "separation_log.txt"))
+    C.refreshPythonPathFromExtState()
+    local trustedWindowsRuntime = nil
+    if OS == "Windows" then
+        trustedWindowsRuntime = getTrustedWindowsRuntimeState()
+        applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
+    end
+    local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
+    local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
+    local doneFile = outputDir .. PATH_SEP .. "done.txt"
+    local pidFile = outputDir .. PATH_SEP .. "pid.txt"
+    local exitCodeFile = outputDir .. PATH_SEP .. "exit_code.txt"
+
+    debugLog("startSeparationProcess")
+    debugLog("  inputFile=" .. tostring(inputFile))
+    debugLog("  outputDir=" .. tostring(outputDir))
+    debugLog("  model=" .. tostring(model))
+    debugLog("  python=" .. tostring(PYTHON_PATH))
+    debugLog("  separator=" .. tostring(SEPARATOR_SCRIPT))
+    debugLog("  [LOG] outputDir=" .. tostring(outputDir))
+    debugLog("  [LOG] stdoutFile=" .. tostring(stdoutFile))
+    debugLog("  [LOG] separationLogFile=" .. tostring(logFile))
+
+    -- Store for progress tracking
+    C.progressState.outputDir = outputDir
+    C.progressState.stdoutFile = stdoutFile
+    C.progressState.logFile = logFile
+    C.progressState.pidFile = pidFile
+    C.progressState.exitCodeFile = exitCodeFile
+    C.progressState.percent = 0
+    C.progressState.stage = "Starting.."
+    C.progressState.startTime = os.time()
+    C.progressState.execLogPath = SW_LOG.getLogPath()
+    local execLogPath = C.progressState.execLogPath or SW_LOG.getLogPath()
+    local jobTag = "single"
+
+    -- Preflight checks so failures show up clearly in logs/UI.
+    local function fileExistsLocal(p)
+        if not p then return false end
+        local f = io.open(p, "r")
+        if f then f:close(); return true end
+        return false
+    end
+    local function fileSizeBytes(p)
+        if not p then return -1 end
+        local f = io.open(p, "rb")
+        if not f then return -1 end
+        local sz = f:seek("end")
+        f:close()
+        return tonumber(sz) or -1
+    end
+
+    if not fileExistsLocal(inputFile) then
+        local msg = "Input file missing: " .. tostring(inputFile)
+        debugLog(msg)
+        SW_LOG.logExecResult("preflight: missing input", -1, msg)
+        local lf = io.open(logFile, "w")
+        if lf then lf:write(msg .. "\n"); lf:close() end
+        local df = io.open(doneFile, "w")
+        if df then df:write("DONE\n"); df:close() end
+        SW_LOG.writeExitCode(exitCodeFile, -1)
+        return
+    end
+    local inSz = fileSizeBytes(inputFile)
+    if not inSz or inSz <= 1024 then
+        local msg = "Input WAV is empty (0 samples): " .. tostring(inputFile)
+        debugLog(msg)
+        SW_LOG.logExecResult("preflight: empty input", -1, msg)
+        local lf = io.open(logFile, "w")
+        if lf then
+            lf:write(msg .. "\n")
+            lf:write("Hint: make a longer time selection / ensure selection overlaps items.\n")
+            lf:close()
+        end
+        local df = io.open(doneFile, "w")
+        if df then df:write("DONE\n"); df:close() end
+        SW_LOG.writeExitCode(exitCodeFile, -1)
+        return
+    end
+    if not trustedWindowsRuntime then
+        local pythonAvailable = false
+        if C.isAbsolutePath(PYTHON_PATH) then
+            pythonAvailable = fileExistsLocal(PYTHON_PATH)
+        else
+            pythonAvailable = C.canRunPython(PYTHON_PATH)
+        end
+
+        if not pythonAvailable then
+            local msg =
+                "Python not found at: " .. tostring(PYTHON_PATH) .. "\n\n"
+                .. "Run STEMwerk-SETUP.lua to repair the runtime."
+            debugLog(msg)
+            SW_LOG.logExecResult("preflight: python missing", -1, msg)
+            local lf = io.open(logFile, "w")
+            if lf then lf:write(msg .. "\n"); lf:close() end
+            local df = io.open(doneFile, "w")
+            if df then df:write("DONE\n"); df:close() end
+            SW_LOG.writeExitCode(exitCodeFile, -1)
+            return
+        end
+        local numpyOk, numpyErr = checkNumpyCompat(PYTHON_PATH)
+        if not numpyOk then
+            local msg =
+                "NumPy compatibility issue.\n\n"
+                .. tostring(numpyErr or "Unknown error") .. "\n\n"
+                .. "Fix (command):\n"
+                .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
+            debugLog(msg)
+            SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
+            local lf = io.open(logFile, "w")
+            if lf then lf:write(msg .. "\n"); lf:close() end
+            local df = io.open(doneFile, "w")
+            if df then df:write("DONE\n"); df:close() end
+            SW_LOG.writeExitCode(exitCodeFile, -1)
+            if reaper and reaper.ShowMessageBox then
+                reaper.ShowMessageBox(msg, "Missing Dependency", 0)
+            end
+            return false
+        end
+        if not canRunFfmpeg() then
+            if not C.ensureDependenciesInteractive() then
+                return false
+            end
+        end
+    end
+    if not fileExistsLocal(SEPARATOR_SCRIPT) then
+        local msg = "Separator script not found at: " .. tostring(SEPARATOR_SCRIPT)
+        debugLog(msg)
+        SW_LOG.logExecResult("preflight: separator missing", -1, msg)
+        local lf = io.open(logFile, "w")
+        if lf then lf:write(msg .. "\n"); lf:close() end
+        local df = io.open(doneFile, "w")
+        if df then df:write("DONE\n"); df:close() end
+        SW_LOG.writeExitCode(exitCodeFile, -1)
+        return
+    end
+
+    if OS == "Windows" then
+        -- Create empty progress/log files (Python writes to these directly)
+        local sf = io.open(stdoutFile, "w")
+        if sf then sf:close() end
+        local lf = io.open(logFile, "w")
+        if lf then lf:close() end
+
+        -- Launch Python hidden WITHOUT a .bat/.cmd (prevents console windows).
+        -- Use WMI Win32_Process.Create to get a PID for proper cancel.
+        local requestedDeviceArg = SETTINGS.device or "auto"
+        local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
+        local pythonCmd = string.format(
+            '%s -u %s %s %s --model %s --device %s',
+            C.quoteArg(PYTHON_PATH),
+            C.quoteArg(SEPARATOR_SCRIPT),
+            C.quoteArg(inputFile),
+            C.quoteArg(outputDir),
+            C.quoteArg(model),
+            C.quoteArg(deviceArg)
+        )
+        C.progressState.lastCmd = pythonCmd
+        SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
+        if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
+            debugLog("  device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
+        else
+            debugLog("  device=" .. tostring(deviceArg))
+        end
+
+        -- Write a tiny VBS launcher that runs PowerShell invisibly via wscript
+        -- PowerShell will Start-Process the Python worker and write its PID to pidFile
+        local vbsPath = outputDir .. PATH_SEP .. "run_hidden.vbs"
+        local vbsFile = io.open(vbsPath, "w")
+        if vbsFile then
+            local function escPS(s)
+                s = tostring(s or "")
+                s = s:gsub("'", "''")
+                return s
+            end
+            local python = escPS(PYTHON_PATH)
+            local sep = escPS(SEPARATOR_SCRIPT)
+            local inF = escPS(inputFile)
+            local outD = escPS(outputDir)
+            local m = escPS(model)
+            local dev = escPS(deviceArg)
+            local stdoutF = escPS(stdoutFile)
+            local stderrF = escPS(logFile)
+            local pidF = escPS(pidFile)
+            local doneF = escPS(doneFile)
+            local exitF = escPS(exitCodeFile)
+            local logPath = escPS(execLogPath)
+            local jobTagEsc = escPS(jobTag)
+
+            -- Build the PowerShell command that Start-Process the Python worker and writes PID
+            local psInner =
+                "$py='" .. python .. "';" ..
+                "$sep='" .. sep .. "';" ..
+                "$in='" .. inF .. "';" ..
+                "$out='" .. outD .. "';" ..
+                "$model='" .. m .. "';" ..
+                "$dev='" .. dev .. "';" ..
+                "$logPath='" .. logPath .. "';" ..
+                "$jobTag='" .. jobTagEsc .. "';" ..
+                "$env:STEMWERK_LOG_PATH=$logPath;" ..
+                "$env:STEMWERK_JOB_TAG=$jobTag;" ..
+                "$dq=[char]34;" ..
+                "$sepq=$dq + $sep + $dq;" ..
+                "$inq=$dq + $in + $dq;" ..
+                "$outq=$dq + $out + $dq;" ..
+                "$modelq=$dq + $model + $dq;" ..
+                "$devq=$dq + $dev + $dq;" ..
+                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "'; " ..
+                "Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii; " ..
+                "Wait-Process -Id $p.Id; " ..
+                "$ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii; " ..
+                "Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii"
+
+            -- VBS: create shell and run PowerShell command invisibly (0 = hidden window)
+            vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
+            vbsFile:write('cmd = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""' .. psInner .. '"""\n')
+            vbsFile:write('sh.Run cmd, 0, False\n')
+            vbsFile:close()
+        end
+
+        local wscriptCmd = 'wscript "' .. vbsPath .. '"'
+        if reaper.ExecProcess then
+            debugLog('Calling reaper.ExecProcess: ' .. wscriptCmd)
+            reaper.ExecProcess(wscriptCmd, -1)
+            debugLog('reaper.ExecProcess called')
+        else
+            debugLog('Calling io.popen for: ' .. wscriptCmd)
+            local handle = io.popen(wscriptCmd)
+            if handle then handle:close() end
+            debugLog('io.popen returned')
+        end
+    else
+        -- Unix: run in background so REAPER stays responsive and the progress window can update.
+        -- Launch a tiny sh script that starts the Python worker in the background, writes a pid.txt,
+        -- and writes done.txt only when the worker exits successfully.
+        local requestedDeviceArg = tostring(SETTINGS.device or "auto")
+        local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
+        local modelArg  = tostring(model or SETTINGS.model or "htdemucs")
+        local pythonCmd = string.format(
+            '%s -u %s %s %s --model %s --device %s',
+            C.quoteArg(PYTHON_PATH),
+            C.quoteArg(SEPARATOR_SCRIPT),
+            C.quoteArg(inputFile),
+            C.quoteArg(outputDir),
+            C.quoteArg(modelArg),
+            C.quoteArg(deviceArg)
+        )
+        C.progressState.lastCmd = pythonCmd
+        SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
+        if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
+            debugLog("  device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
+        end
+
+        -- Create empty progress/log files (Python writes to these directly)
+        local sf = io.open(stdoutFile, "w")
+        if sf then sf:close() end
+        local lf = io.open(logFile, "w")
+        if lf then lf:close() end
+
+        local launcherPath = outputDir .. PATH_SEP .. "run_bg.sh"
+        local script = io.open(launcherPath, "w")
+        if script then
+              script:write("#!/bin/sh\n")
+              script:write("PY=" .. C.quoteArg(PYTHON_PATH) .. "\n")
+              script:write("SEP=" .. C.quoteArg(SEPARATOR_SCRIPT) .. "\n")
+            if OS == "macOS" then
+                local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath") or getExtStateValue("FFMPEG_PATH")
+                if ffmpegPath and ffmpegPath ~= "" then
+                    script:write("FFMPEG_PATH=" .. C.quoteArg(ffmpegPath) .. "\n")
+                    script:write("IMAGEIO_FFMPEG_EXE=" .. C.quoteArg(ffmpegPath) .. "\n")
+                    script:write("export FFMPEG_PATH IMAGEIO_FFMPEG_EXE\n")
+                    script:write("FFMPEG_DIR=$(dirname \"$FFMPEG_PATH\")\n")
+                    script:write("PATH=\"$FFMPEG_DIR:${PATH}\"\n")
+                    script:write("export PATH\n")
+                end
+            end
+            if OS == "Windows" then
+                local vbsPath = outputDir .. PATH_SEP .. "run_hidden.vbs"
+                local vbsFile = io.open(vbsPath, "w")
+                if vbsFile then
+                    local logPath = SW_LOG and SW_LOG.getLogPath and SW_LOG.getLogPath() or ""
+                    local jobTag = "single"
+                    -- Append CLI args for log path and job tag
+                    local pythonCmd = string.format(
+                        '"%s" -u "%s" "%s" "%s" --model %s --stemwerk-log-path "%s" --stemwerk-job-tag "%s"',
+                        PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, logPath, jobTag
+                    )
+                    pythonCmd = pythonCmd:gsub('"', '""')
+                    vbsFile:write('Set WshShell = CreateObject("WScript.Shell")\n')
+                    vbsFile:write('WshShell.Run "cmd /c ' .. pythonCmd .. ' >""' .. stdoutFile .. '"" 2>""' .. logFile .. '""", 0, True\n')
+                    vbsFile:close()
+                    cmd = 'cscript //nologo "' .. vbsPath .. '"'
+                end
+            else
+            script:write("IN=" .. C.quoteArg(inputFile) .. "\n")
+            script:write("OUT=" .. C.quoteArg(outputDir) .. "\n")
+            script:write("MODEL=" .. C.quoteArg(modelArg) .. "\n")
+            script:write("DEVICE=" .. C.quoteArg(deviceArg) .. "\n")
+            script:write("STDOUT=" .. C.quoteArg(stdoutFile) .. "\n")
+            script:write("STDERR=" .. C.quoteArg(logFile) .. "\n")
+            script:write("DONE=" .. C.quoteArg(doneFile) .. "\n")
+            script:write("PIDFILE=" .. C.quoteArg(pidFile) .. "\n")
+            script:write("EXITCODE=" .. C.quoteArg(exitCodeFile) .. "\n")
+            script:write("PY_SITE=$(\"$PY\" -c \"import sysconfig; print(sysconfig.get_paths().get('purelib',''))\")\n")
+            script:write("if [ -n \"$PY_SITE\" ]; then\n")
+            script:write("  for d in \"$PY_SITE\"/nvidia/*/lib \"$PY_SITE\"/nvidia/*/lib64; do\n")
+            script:write("    if [ -d \"$d\" ]; then\n")
+            script:write("      case \":$LD_LIBRARY_PATH:\" in\n")
+            script:write("        *\":$d:\"*) ;;\n")
+            script:write("        *) LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$d\" ;;\n")
+            script:write("      esac\n")
+            script:write("    fi\n")
+            script:write("  done\n")
+            script:write("  export LD_LIBRARY_PATH\n")
+            script:write("fi\n")
+            script:write("(\n")
+            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR"\n')
+            script:write("  rc=$?\n")
+            script:write('  echo "$rc" > "$EXITCODE"\n')
+            script:write('  if [ "$rc" -ne 0 ]; then echo "EXIT:$rc" >> "$STDERR"; fi\n')
+            script:write('  echo DONE > "$DONE"\n')
+            script:write(") &\n")
+            script:write('echo $! > "$PIDFILE"\n')
+            script:close()
+
+            local cmd = "sh " .. C.quoteArg(launcherPath) .. C.suppressStderr()
+            debugLog("Executing (background) launcher: " .. cmd)
+            os.execute(cmd)
+            end -- if OS == "Windows"
+        else
+            -- If we couldn't write the launcher, fall back to a direct foreground run (old behavior).
+            local cmd = string.format(
+                '%s -u %s %s %s --model %s --device %s >%s 2>%s && echo DONE > %s',
+                C.quoteArg(PYTHON_PATH),
+                C.quoteArg(SEPARATOR_SCRIPT),
+                C.quoteArg(inputFile),
+                C.quoteArg(outputDir),
+                C.quoteArg(modelArg),
+                C.quoteArg(deviceArg),
+                C.quoteArg(stdoutFile),
+                C.quoteArg(logFile),
+                C.quoteArg(doneFile)
+            )
+            debugLog("Unix launcher write failed; executing (foreground) command: " .. cmd)
+            local ok, _, code = os.execute(cmd)
+            local rc = (ok == true or ok == 0) and 0 or (code or 1)
+            SW_LOG.writeExitCode(exitCodeFile, rc)
+            debugLog("Command finished with rc=" .. tostring(rc))
+        end
+    end
+    return true
+end
+
+-- Progress loop with UI
+function WORKFLOW.progressLoop()
+    local loopNow = uiNow()
+
+    if loopNow >= (C.progressState.nextPollAt or 0) then
+        C.progressState.nextPollAt = loopNow + UI_PACING.progressPollInterval
+        local prevPercent = C.progressState.percent or 0
+        WORKFLOW.updateProgressFromFile()
+        if prevPercent < 87 and C.progressState.percent >= 87 then
+            debugLog("[LOG] Progress reached ~87% (" .. tostring(C.progressState.percent) .. ") stage=" .. tostring(C.progressState.stage))
+        end
+    end
+
+    if loopNow >= (C.progressState.nextFrameAt or 0) then
+        C.progressState.nextFrameAt = loopNow + pacingFrameInterval("progressFrameInterval", "progressFrameIntervalFx")
+        C.drawProgressWindow()
+    end
+
+    local char = gfx.getchar()
+    local mouseDown = gfx.mouse_cap & 1 == 1
+    C.handleArtAdvance(C.progressState, mouseDown, char)
+    if char == 26161 then  -- F1 key code
+        -- Reserved (no-op for now). Keep input handling centralized here so ESC is never consumed elsewhere.
+    end
+    if char == -1 or char == 27 then  -- Window closed or ESC pressed
+        -- Window closed by user
+        C.progressState.running = false
+        isProcessingActive = false  -- Reset guard so workflow can be restarted
+
+        -- Remember any size/position changes made during processing
+        C.captureWindowGeometry(WINDOW_PROCESSING)
+        C.saveSettings()
+
+        -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
+        HELPERS.killProcessFromPidFile(C.progressState.pidFile)
+
+        gfx.quit()
+        C.progressState.windowOpen = false
+
+        -- After cancel, go back to the start/selection monitoring window.
+        -- This lets the user quickly pick a new item/time selection without reopening the full dialog.
+        C.showMessage("Cancelled", C.T("separation_cancelled"), "info", true)
+        return
+    end
+
+    if WORKFLOW.checkSeparationDone() then
+        -- Done!
+        C.progressState.running = false
+
+        -- Remember any size/position changes made during processing
+        C.captureWindowGeometry(WINDOW_PROCESSING)
+        C.saveSettings()
+
+        gfx.quit()
+        C.progressState.windowOpen = false
+        WORKFLOW.finishSeparationCallback()
+        return
+    end
+
+    -- Check timeout (10 minutes max)
+    if os.time() - C.progressState.startTime > 600 then
+        C.progressState.running = false
+        isProcessingActive = false  -- Reset guard so workflow can be restarted
+
+        -- Remember any size/position changes made during processing
+        C.captureWindowGeometry(WINDOW_PROCESSING)
+        C.saveSettings()
+
+        gfx.quit()
+        C.progressState.windowOpen = false
+        C.showMessage("Timeout", "Separation timed out after 10 minutes.", "error", true)
+        return
+    end
+
+    reaper.defer(WORKFLOW.progressLoop)
+end
+
+-- Finish separation after progress completes
+function WORKFLOW.finishSeparationCallback()
+    -- Small delay to ensure files are written
+    local checkCount = 0
+    debugLog("[LOG] finishSeparationCallback: stdoutFile=" .. tostring(C.progressState.stdoutFile) .. ", separationLogFile=" .. tostring(C.progressState.logFile) .. ", outputDir=" .. tostring(C.progressState.outputDir))
+    local function checkFiles()
+        checkCount = checkCount + 1
+        local stems = {}
+        for _, stem in ipairs(STEMS) do
+            if stem.selected then
+                local stemPath = C.progressState.outputDir .. PATH_SEP .. stem.file
+                local f = io.open(stemPath, "r")
+                if f then f:close(); stems[stem.name:lower()] = stemPath end
+            end
+        end
+
+        if next(stems) then
+            debugLog("[LOG] Output detected for job (finishSeparationCallback)")
+            -- Success - process stems
+            isProcessingActive = false  -- Reset guard so workflow can be restarted after result
+            debugLog("[LOG] Import start (processStemsResult)")
+            processStemsResult(stems)
+            debugLog("[LOG] Import end (processStemsResult)")
+            debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
+            C.cleanupTempWorkDir(C.progressState.outputDir)
+            debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
+        elseif checkCount < 10 then
+            -- Retry
+            reaper.defer(checkFiles)
+        else
+            -- Failed
+            isProcessingActive = false  -- Reset guard so workflow can be restarted
+            local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
+            local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 2000) or "(no log output found)"
+            local stdoutSnippet = SW_LOG.readFileSnippet(C.progressState.stdoutFile, 1200)
+            local errMsg = "No stems created"
+                .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+                .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")
+                .. "\nLog file: " .. tostring(C.progressState.logFile or "unknown")
+                .. "\nDebug log: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
+                .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
+            if stdoutSnippet then
+                errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+            end
+            C.showMessage("Separation Failed", errMsg, "error", true)
+        end
+    end
+    checkFiles()
+end
+
+-- Run separation with progress UI
+function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
+    -- Load settings to get current theme
+    C.loadSettings()
+    C.updateTheme()
+
+    if OS == "Windows" and C.progressState.windowOpen then
+        showProcessingPlaceholderWindow("Initializing...")
+    end
+
+    -- Start the process
+    local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
+    if ok == false then
+        if OS == "Windows" and C.progressState.windowOpen then
+            closeProcessingWindow()
+        end
+        isProcessingActive = false
+        return
+    end
+    debugLog("[LOG] All workers launched (runSeparationWithProgress)")
+
+    -- Capture main window geometry and snapshot for cancel -> main restore
+    C.captureWindowGeometry(SCRIPT_NAME)
+    C.GUI.snapshotMainGeometry()
+
+    if not C.progressState.windowOpen then
+        ensureProcessingWindowOpen()
+    end
+    C.progressState.stage = type(C.T) == "function" and (C.T("starting") or "Starting...") or "Starting..."
+
+    C.progressState.running = true
+    -- DEBUG: Write launcher_debug.txt with all relevant details before generating VBS launcher
+    local debug_path = outputDir .. "\\launcher_debug.txt"
+    local debug_file = io.open(debug_path, "w")
+    if debug_file then
+        debug_file:write("[STEMwerk WORKFLOW.runSeparation launcher debug]\n")
+        debug_file:write("outputDir: " .. tostring(outputDir) .. "\n")
+        debug_file:write("pythonExe: " .. tostring(PYTHON_PATH) .. "\n")
+        debug_file:write("scriptPath: " .. tostring(SEPARATOR_SCRIPT) .. "\n")
+        debug_file:write("args: " .. table.concat({inputFile, outputDir, model}, " ") .. "\n")
+        debug_file:close()
+    end
+
+    if OS == "Windows" then
+        WORKFLOW.progressLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
+    else
+        reaper.defer(WORKFLOW.progressLoop)
+    end
+end
+
+-- Legacy synchronous separation (fallback)
+function WORKFLOW.runSeparation(inputFile, outputDir, model)
+    local logFile = outputDir .. PATH_SEP .. "separation_log.txt"
+    local stdoutFile = outputDir .. PATH_SEP .. "stdout.txt"
+
+    local cmd
+    if OS == "Windows" then
+        local vbsPath = outputDir .. PATH_SEP .. "run_hidden.vbs"
+        local vbsFile = io.open(vbsPath, "w")
+        if vbsFile then
+            local logPath = SW_LOG and SW_LOG.getLogPath and SW_LOG.getLogPath() or ""
+            local jobTag = "single"
+            local pythonCmd = string.format(
+                '"%s" -u "%s" "%s" "%s" --model %s',
+                PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model
+            )
+            pythonCmd = pythonCmd:gsub('"', '""')
+            -- Prepend set commands for env vars
+            local envPrefix = 'set STEMWERK_LOG_PATH=' .. logPath .. ' && set STEMWERK_JOB_TAG=' .. jobTag .. ' && '
+            envPrefix = envPrefix:gsub('"', '""')
+            vbsFile:write('Set WshShell = CreateObject("WScript.Shell")\n')
+            vbsFile:write('WshShell.Run "cmd /c ' .. envPrefix .. pythonCmd .. ' >""' .. stdoutFile .. '"" 2>""' .. logFile .. '""", 0, True\n')
+            vbsFile:close()
+            cmd = 'cscript //nologo "' .. vbsPath .. '"'
+        end
+    else
+        cmd = string.format(
+            '"%s" -u "%s" "%s" "%s" --model %s >"%s" 2>"%s"',
+            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, stdoutFile, logFile
+        )
+    end
+
+    os.execute(cmd)
+
+    local stems = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = outputDir .. PATH_SEP .. stem.file
+            local f = io.open(stemPath, "r")
+            if f then f:close(); stems[stem.name:lower()] = stemPath end
+        end
+    end
+
+    if next(stems) == nil then
+        local errLog = io.open(logFile, "r")
+        local errMsg = "No stems created"
+        if errLog then
+            local content = errLog:read("*a")
+            errLog:close()
+            if content and content ~= "" then
+                errMsg = errMsg .. "\n\nLog:\n" .. content:sub(1, 500)
+            end
+        end
+        return nil, errMsg
+    end
+    return stems
+end
+
+-- Replace only a portion of an item with stems (for time selection mode)
+-- Splits the item at selection boundaries and replaces only the selected portion
+function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameBase)
+    local track = reaper.GetMediaItem_Track(item)
+    local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    local replaceStart = math.max(tonumber(selStart) or origItemPos, origItemPos)
+    local replaceEnd = math.min(tonumber(selEnd) or origItemEnd, origItemEnd)
+
+    if replaceEnd <= replaceStart then
+        return 0, nil
+    end
+
+    reaper.Undo_BeginBlock()
+
+    -- We need to split the item at selection boundaries
+    -- First, deselect all items and select only our target item
+    reaper.SelectAllMediaItems(0, false)
+    reaper.SetMediaItemSelected(item, true)
+
+    local leftItem = nil   -- Part before selection (if any)
+    local middleItem = item -- Part to replace
+    local rightItem = nil  -- Part after selection (if any)
+
+    -- Split at selection start if it's inside the item
+    if replaceStart > origItemPos and replaceStart < origItemEnd then
+        middleItem = reaper.SplitMediaItem(item, replaceStart)
+        leftItem = item
+        if middleItem then
+            reaper.SetMediaItemSelected(leftItem, false)
+            reaper.SetMediaItemSelected(middleItem, true)
+        else
+            -- Split failed, middle is still the original item
+            middleItem = item
+            leftItem = nil
+        end
+    end
+
+    -- Split at selection end if it's inside what remains
+    if middleItem then
+        local midPos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
+        local midEnd = midPos + reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
+
+        if replaceEnd > midPos and replaceEnd < midEnd then
+            rightItem = reaper.SplitMediaItem(middleItem, replaceEnd)
+            if rightItem then
+                reaper.SetMediaItemSelected(rightItem, false)
+            end
+        end
+    end
+
+    -- Now delete the middle item and insert stems in its place
+    local selLen = replaceEnd - replaceStart
+    if middleItem then
+        reaper.DeleteTrackMediaItem(track, middleItem)
+    end
+
+    -- Create stem items at the selection position
+    local items = {}
+    local stemEntries = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
+            end
+        end
+    end
+    local totalStems = #stemEntries
+    local baseName = nameBase or getItemDisplayNameForTakes(item)
+    local importedItems = {}
+    local importedPaths = {}
+    for idx, entry in ipairs(stemEntries) do
+        local stem = entry.stem
+        local stemPath = entry.path
+        local newItem = reaper.AddMediaItemToTrack(track)
+        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", replaceStart)
+        reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
+
+        local take = reaper.AddTakeToMediaItem(newItem)
+        local source = reaper.PCM_Source_CreateFromFile(stemPath)
+        reaper.SetMediaItemTake_Source(take, source)
+        local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
+        reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
+        -- Ensure take volume is at unity (1.0 = 0dB)
+        reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+
+        local stemColor = C.rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+        HELPERS.applyItemColorIfEnabled(newItem, stemColor)
+
+        items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
+        importedItems[#importedItems + 1] = newItem
+        importedPaths[#importedPaths + 1] = stemPath
+    end
+
+    -- Merge into takes on the first item
+    if #items > 1 then
+        local mainItem = items[1].item
+        -- Set main item color to first stem color
+        HELPERS.applyItemColorIfEnabled(mainItem, items[1].color)
+
+        for i = 2, #items do
+            local srcTake = reaper.GetActiveTake(items[i].item)
+            if srcTake then
+                local newTake = reaper.AddTakeToMediaItem(mainItem)
+                reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(srcTake))
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
+                -- Ensure take volume is at unity (1.0 = 0dB)
+                reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
+            end
+            reaper.DeleteTrackMediaItem(track, items[i].item)
+        end
+
+        -- Now set the color for each take based on its stem
+        -- Iterate through all takes and set their colors
+        local numTakes = reaper.CountTakes(mainItem)
+        for t = 0, numTakes - 1 do
+            local take = reaper.GetTake(mainItem, t)
+            if take then
+                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                -- Find the matching stem color
+                for _, stemData in ipairs(items) do
+                    if stemData.name == takeName then
+                        -- Set take color (I_CUSTOMCOLOR on the take)
+                        HELPERS.applyTakeColorIfEnabled(take, stemData.color)
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    HELPERS.refreshImportedMediaItems({ ((#items >= 1) and items[1].item or nil) }, importedPaths)
+    reaper.Undo_EndBlock("STEMwerk: Replace selection in-place", -1)
+    local mainItem = (#items >= 1) and items[1].item or nil
+    return #items, mainItem
+end
+
+-- Replace item in-place with stems as takes
+function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
+    local track = reaper.GetMediaItem_Track(item)
+    reaper.Undo_BeginBlock()
+    reaper.DeleteTrackMediaItem(track, item)
+
+    local items = {}
+    local stemEntries = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
+            end
+        end
+    end
+    local totalStems = #stemEntries
+    local baseName = nameBase or getItemDisplayNameForTakes(item)
+    local importedPaths = {}
+    for idx, entry in ipairs(stemEntries) do
+        local stem = entry.stem
+        local stemPath = entry.path
+        local newItem = reaper.AddMediaItemToTrack(track)
+        reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+        reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+
+        local take = reaper.AddTakeToMediaItem(newItem)
+        local source = reaper.PCM_Source_CreateFromFile(stemPath)
+        reaper.SetMediaItemTake_Source(take, source)
+        local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
+        reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
+        -- Ensure take volume is at unity (1.0 = 0dB)
+        reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+
+        local stemColor = C.rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+        HELPERS.applyItemColorIfEnabled(newItem, stemColor)
+
+        items[#items + 1] = { item = newItem, take = take, color = stemColor, name = takeLabel }
+        importedPaths[#importedPaths + 1] = stemPath
+    end
+
+    -- Merge into takes
+    if #items > 1 then
+        local mainItem = items[1].item
+        -- Set main item color to first stem color
+        HELPERS.applyItemColorIfEnabled(mainItem, items[1].color)
+
+        for i = 2, #items do
+            local srcTake = reaper.GetActiveTake(items[i].item)
+            if srcTake then
+                local newTake = reaper.AddTakeToMediaItem(mainItem)
+                reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(srcTake))
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
+                -- Ensure take volume is at unity (1.0 = 0dB)
+                reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
+            end
+            reaper.DeleteTrackMediaItem(track, items[i].item)
+        end
+
+        -- Now set the color for each take based on its stem
+        local numTakes = reaper.CountTakes(mainItem)
+        for t = 0, numTakes - 1 do
+            local take = reaper.GetTake(mainItem, t)
+            if take then
+                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                -- Find the matching stem color
+                for _, stemData in ipairs(items) do
+                    if stemData.name == takeName then
+                        HELPERS.applyTakeColorIfEnabled(take, stemData.color)
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    HELPERS.refreshImportedMediaItems({ ((#items >= 1) and items[1].item or nil) }, importedPaths)
+    reaper.Undo_EndBlock("STEMwerk: Replace in-place", -1)
+    local mainItem = (#items >= 1) and items[1].item or nil
+    return #items, mainItem
+end
