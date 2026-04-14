@@ -207,8 +207,10 @@ VENV_PY=""
 # Conservative default on macOS to avoid GPU extras with limited wheel support.
 PACKAGE="audio-separator==0.23.0"
 ONNX_PACKAGE="onnxruntime"
+ONNX_FALLBACK_PACKAGE=""
 if [ "$(uname -m)" = "arm64" ]; then
   ONNX_PACKAGE="onnxruntime-silicon"
+  ONNX_FALLBACK_PACKAGE="onnxruntime"
 fi
 PROFILE="mac-cpu"
 BACKEND="cpu"
@@ -331,9 +333,18 @@ else
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
       "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "audio_separator_install_failed"
 
-    log "Installing ${ONNX_PACKAGE}"
-    "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || \
-      "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "onnxruntime_install_failed"
+    if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
+      log "Installing ${ONNX_PACKAGE}"
+      if ! "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1; then
+        if [ -n "${ONNX_FALLBACK_PACKAGE}" ] && [ "${ONNX_FALLBACK_PACKAGE}" != "${ONNX_PACKAGE}" ]; then
+          log "WARN: ${ONNX_PACKAGE} install failed; falling back to ${ONNX_FALLBACK_PACKAGE}"
+          printf "WARN: %s install failed; falling back to %s\n" "${ONNX_PACKAGE}" "${ONNX_FALLBACK_PACKAGE}" >&2
+          "${VENV_PY}" -m pip install "${ONNX_FALLBACK_PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "onnxruntime_install_failed"
+        else
+          set_status "deps_failed" "onnxruntime_install_failed"
+        fi
+      fi
+    fi
   fi
 fi
 
