@@ -33,4 +33,4 @@ This installer is a new, standalone tool. It does not modify or replace any exis
 
 ---
 
-(c) STEMwerk/flarkAUDIO — v2.2.1.8 and later
+(c) STEMwerk/flarkAUDIO — v2.2.1.9 and later
