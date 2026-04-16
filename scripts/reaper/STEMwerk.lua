@@ -379,25 +379,8 @@ local function canRunPython(pythonCmd)
             local cmd = quoteArg(pythonCmd) .. " --version"
             local rc, out = execProcess(cmd, 12000)
             debugLog("canRunPython Windows: cmd=" .. tostring(cmd) .. " rc=" .. tostring(rc) .. " out=" .. tostring(out))
-            if rc == 0 then
-                if out and out:find("Python") then
-                    runnable = true
-                else
-                    local captureCmd = SW_LOG.isWindows() and SW_LOG.wrapCmdForWindows(cmd) or (cmd .. " 2>&1")
-                    local h = io.popen(captureCmd)
-                    if h then
-                        local content = h:read("*a") or ""
-                        local ok, _, code = h:close()
-                        debugLog("canRunPython popen rc=" .. tostring(code) .. " outLen=" .. tostring(#content))
-                        if content and content:find("Python") then
-                            runnable = true
-                        end
-                    end
-                    if not runnable then
-                        -- No output but exit code 0 -> treat as runnable
-                        runnable = true
-                    end
-                end
+            if rc == 0 and out and out:find("Python") then
+                runnable = true
             else
                 debugLog("canRunPython Windows: failed to run python, output: " .. tostring(out))
                 return false
@@ -1122,6 +1105,19 @@ MODEL_AVAILABILITY = {
 do
     local function directoryHasAnyFiles(path)
         if not path or path == "" then return false end
+
+        local hasEnumFiles = reaper and type(reaper.EnumerateFiles) == "function"
+        local hasEnumDirs = reaper and type(reaper.EnumerateSubdirectories) == "function"
+        if hasEnumFiles or hasEnumDirs then
+            if hasEnumFiles and reaper.EnumerateFiles(path, 0) then
+                return true
+            end
+            if hasEnumDirs and reaper.EnumerateSubdirectories(path, 0) then
+                return true
+            end
+            return false
+        end
+
         local cmd
         if OS == "Windows" then
             cmd = 'dir /b ' .. quoteArg(path) .. ' 2>nul'
@@ -12078,7 +12074,11 @@ showStemSelectionDialog = function()
     perfMark("showStemSelectionDialog(): gfx.init done (window visible)")
 
     reaper.defer(function()
-        if applyCachedRuntimeDevices() then
+        local cacheOpts = nil
+        if OS == "Windows" and getTrustedWindowsRuntimeState and getTrustedWindowsRuntimeState() then
+            cacheOpts = { skipQuickBench = true }
+        end
+        if applyCachedRuntimeDevices(cacheOpts) then
             perfMark("showStemSelectionDialog(): cached devices applied")
         else
             perfMark("showStemSelectionDialog(): cached devices unavailable")

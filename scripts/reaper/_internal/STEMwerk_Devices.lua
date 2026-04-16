@@ -189,8 +189,10 @@ local function envJsonBool(envJson, key)
     return nil
 end
 
-function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now)
+function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opts)
     now = now or os.time()
+    opts = opts or {}
+    local skipQuickBench = (OS == "Windows") and (opts.skipQuickBench == true)
 
     if not devices then
         debugLog("  probe FAILED -> safe device list (Auto/CPU)")
@@ -453,7 +455,9 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now)
         end
     end
 
-    pcall(function() autoSelectBestDevice(RUNTIME_DEVICES) end)
+    if not skipQuickBench then
+        pcall(function() autoSelectBestDevice(RUNTIME_DEVICES) end)
+    end
 
     if SETTINGS and SETTINGS.device then
         local ok = false
@@ -1015,7 +1019,7 @@ if env.get('directml_possible'):
     end
 end
 
-function DEVICE_RUNTIME.applyCachedRuntimeDevices()
+function DEVICE_RUNTIME.applyCachedRuntimeDevices(opts)
     if type(C.readCapabilities) ~= "function" then
         return false
     end
@@ -1044,7 +1048,7 @@ function DEVICE_RUNTIME.applyCachedRuntimeDevices()
         skipNote = (skipNote and (skipNote .. "\n\n") or "") .. backendLabel .. ": " .. tostring(backendReasonLabel)
     end
     RUNTIME_DEVICE_SKIP_NOTE = skipNote
-    DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, os.time())
+    DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, os.time(), opts)
     if cap.kv and cap.kv.PROFILE then
         debugLog("Capabilities profile=" .. tostring(cap.kv.PROFILE) .. " backend=" .. tostring(cap.kv.BACKEND))
     end
