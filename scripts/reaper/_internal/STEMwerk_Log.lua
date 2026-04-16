@@ -19,6 +19,10 @@ end
 
 function SW_LOG.ensureDir(path)
     if not path or path == "" then return end
+    if reaper and reaper.RecursiveCreateDirectory then
+        reaper.RecursiveCreateDirectory(path, 0)
+        return true
+    end
     if SW_LOG.isWindows() then
         os.execute('mkdir "' .. path .. '" 2>nul')
     else
