@@ -6009,6 +6009,9 @@ local function drawArtGallery()
     elseif helpState.currentTab == 1 then
         -- === WELCOME TAB - FULL WINDOW EXPERIENCE + AUDIO REACTIVE ===
 
+        -- Anchor for Welcome background/art/effects (not affected by text pan)
+        local welcomeArtY = contentY - textOffsetY
+
         -- Update audio reactivity
         updateAudioReactivity()
         local audioPeak = audioReactive.smoothPeakMono or 0
@@ -6024,7 +6027,7 @@ local function drawArtGallery()
                 local angle = bgTime * 0.2 + (i - 1) * math.pi / 2 + audioPeak * 0.3
                 local radius = math.min(w, h) * (0.4 + audioBass * 0.15)
                 local cx = w / 2 + math.cos(angle) * radius * 0.4
-                local cy = contentY + contentH / 2 + math.sin(angle) * radius * 0.3
+                local cy = welcomeArtY + contentH / 2 + math.sin(angle) * radius * 0.3
                 -- Larger, more visible background circles - pulse with audio
                 local maxR = PS(120 + audioBass * 60)
                 for r = maxR, PS(40), -PS(20) do
@@ -6038,7 +6041,7 @@ local function drawArtGallery()
             local particleCount = 20 + math.floor(audioPeak * 15)
             for i = 1, particleCount do
                 local px = (math.sin(bgTime * 0.5 + i * 1.3 + audioHigh * 0.5) * 0.5 + 0.5) * w
-                local py = contentY + ((math.cos(bgTime * 0.3 + i * 0.7 + audioMid * 0.3) * 0.5 + 0.5) * contentH * 0.8)
+                local py = welcomeArtY + ((math.cos(bgTime * 0.3 + i * 0.7 + audioMid * 0.3) * 0.5 + 0.5) * contentH * 0.8)
                 local col = stemColors[(i % 4) + 1]
                 local particleAlpha = 0.15 + audioBeat * 0.2
                 local particleSize = PS(3 + (i % 4) + audioPeak * 4)
@@ -6049,7 +6052,7 @@ local function drawArtGallery()
             -- Audio waveform ring in center (MilkDrop-style!)
             if audioPeak > 0.05 then
                 local waveRadius = PS(80 + audioBass * 40)
-                local wcx, wcy = w / 2, contentY + contentH / 2
+                local wcx, wcy = w / 2, welcomeArtY + contentH / 2
                 for i = 0, 59 do
                     local angle = (i / 60) * math.pi * 2
                     local waveVal = audioReactive.waveformHistory[((audioReactive.waveformIndex + i) % audioReactive.waveformSize) + 1] or audioPeak
@@ -6288,6 +6291,7 @@ local function drawArtGallery()
 
     elseif helpState.currentTab == 3 then
         -- === STEMS TAB - COMPREHENSIVE STEM INFO ===
+        local stemsArtY = contentY - textOffsetY
 
         -- Update audio reactivity for sound-driven animation
         updateAudioReactivity()
@@ -6307,7 +6311,7 @@ local function drawArtGallery()
 
             -- === PSYCHEDELIC PLASMA WAVES ===
             local vortexCenterX = w / 2
-            local vortexCenterY = contentY + contentH / 2
+            local vortexCenterY = stemsArtY + contentH / 2
 
             -- Rainbow color cycling function
             local function rainbowColor(phase, baseColor)
@@ -6355,13 +6359,13 @@ local function drawArtGallery()
                 -- Cascading fall with wave distortion + AUDIO SPEED BOOST
                 local fallSpeed = (0.4 + (i % 7) * 0.08) * (1 + audioMid * 0.5)
                 local waveX = math.sin(bgTime * 2 + i * 0.3) * PS(50) * (1 + audioHigh * 0.5)
-                local fallY = contentY + ((bgTime * fallSpeed * 120 + i * 40) % contentH)
+                local fallY = stemsArtY + ((bgTime * fallSpeed * 120 + i * 40) % contentH)
                 local driftX = w * (i / 31) + waveX
 
                 local rainSize = PS(18 + (i % 4) * 10 + audioPeak * 8)
 
                 -- Pulsing fade with color shift + BEAT BRIGHTNESS
-                local fadeProgress = (fallY - contentY) / contentH
+                local fadeProgress = (fallY - stemsArtY) / contentH
                 local rainAlpha = (0.06 + audioBeat * 0.08) * math.sin(fadeProgress * math.pi) * (1 + math.sin(bgTime * 5 + i) * 0.3)
 
                 local r, g, b = rainbowColor(bgTime * 3 + i * 0.5 + audioPeak * 2, stemColors[letterIdx])
@@ -6371,10 +6375,10 @@ local function drawArtGallery()
 
             -- === ETHEREAL CORNER ORBS (audio-reactive!) ===
             local corners = {
-                {x = PS(60), y = contentY + PS(40), idx = 1},
-                {x = w - PS(60), y = contentY + PS(40), idx = 2},
-                {x = PS(60), y = contentY + contentH - PS(50), idx = 3},
-                {x = w - PS(60), y = contentY + contentH - PS(50), idx = 4},
+                {x = PS(60), y = stemsArtY + PS(40), idx = 1},
+                {x = w - PS(60), y = stemsArtY + PS(40), idx = 2},
+                {x = PS(60), y = stemsArtY + contentH - PS(50), idx = 3},
+                {x = w - PS(60), y = stemsArtY + contentH - PS(50), idx = 4},
             }
             for _, corner in ipairs(corners) do
                 local cphase = bgTime * 1.5 + corner.idx * 1.5
@@ -6468,7 +6472,7 @@ local function drawArtGallery()
             -- === MILKDROP PLASMA WAVES (horizontal sine interference) ===
             local plasmaRows = 8
             for row = 1, plasmaRows do
-                local rowY = contentY + (row / (plasmaRows + 1)) * contentH
+                local rowY = stemsArtY + (row / (plasmaRows + 1)) * contentH
                 local rowPhase = bgTime * 1.5 + row * 0.4
 
                 for i = 0, w, PS(8) do
@@ -6556,7 +6560,7 @@ local function drawArtGallery()
             if audioBeat > 0.3 then
                 local flashAlpha = audioBeat * 0.08
                 gfx.set(1, 1, 1, flashAlpha)
-                gfx.rect(0, contentY, w, contentH, 1)
+                gfx.rect(0, stemsArtY, w, contentH, 1)
             end
 
             -- === BEAT COLOR INVERSION (MilkDrop hardcut style) ===
@@ -6568,7 +6572,7 @@ local function drawArtGallery()
                 else
                     gfx.set(0, 0, 0, invAlpha)
                 end
-                gfx.rect(0, contentY, w, contentH, 1)
+                gfx.rect(0, stemsArtY, w, contentH, 1)
             end
         end
 
