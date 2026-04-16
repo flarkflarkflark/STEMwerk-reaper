@@ -4558,6 +4558,8 @@ local STEMwerkArt = {
 
 -- Forward declaration for showMessage
 local showMessage
+-- Forward declaration for shared font-size cache helper used by earlier UI paths (e.g. About/Gallery).
+local getUniformFontSizeCached
 
 -- Draw Art Gallery window - SPECTACULAR GRAPHICAL ANIMATIONS
 local function drawArtGallery()
@@ -6749,14 +6751,18 @@ local function drawArtGallery()
 
     elseif helpState.currentTab == 6 then
         -- === ABOUT TAB ===
+        local aboutTokens = (UI_TOKENS and UI_TOKENS.about) or {}
+        local aboutSpacing = aboutTokens.spacing or {}
+        local aboutPadding = aboutTokens.padding or {}
+        local aboutFonts = aboutTokens.fonts or {}
         -- Fullscreen procedural art background with zoom/pan (like Gallery)
-        local tabAreaH = UI(40)
+        local tabAreaH = UI(aboutSpacing.tabAreaHeight or 40)
 
         -- Define art display area (below tabs)
         local artX = 0
         local artY = tabAreaH
         local artW = w
-        local artH = h - tabAreaH - UI(50)  -- Leave room for close button
+        local artH = h - tabAreaH - UI(aboutSpacing.artBottomReserve or 50)  -- Leave room for close button
 
         -- Apply zoom and pan to art area (fly-through effect!)
         local zoomedW = artW * zoom
@@ -6771,11 +6777,11 @@ local function drawArtGallery()
 
         -- Content
         local centerX = w / 2 + textOffsetX
-        local contentY = tabAreaH + PS(30) + textOffsetY
+        local contentY = tabAreaH + PS(aboutSpacing.contentTop or 30) + textOffsetY
 
         -- Title (big animated STEMwerk)
         do
-            local fontSize = PS(34)
+            local fontSize = PS(aboutFonts.title or 34)
             local titleW = measureStemwerkLogo(fontSize, "Arial", true)
             local titleX = centerX - titleW / 2
             local titleY = contentY
@@ -6794,10 +6800,10 @@ local function drawArtGallery()
             })
         end
 
-        contentY = contentY + PS(36)
+        contentY = contentY + PS(aboutSpacing.titleToSubtitleGap or 36)
 
         -- Subtitle
-        gfx.setfont(1, "Arial", PS(12))
+        gfx.setfont(1, "Arial", PS(aboutFonts.subtitle or 12))
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         local subtitle = T("about_subtitle")
         local subW = gfx.measurestr(subtitle)
@@ -6805,14 +6811,14 @@ local function drawArtGallery()
         gfx.y = contentY
         gfx.drawstr(subtitle)
 
-        contentY = contentY + PS(24)
+        contentY = contentY + PS(aboutSpacing.subtitleToFeaturesGap or 24)
         -- Give the tab title/subtitle area a bit more breathing room before "Features".
-        contentY = contentY + PS(10)
+        contentY = contentY + PS(aboutSpacing.preFeaturesGap or 10)
 
         -- (Credits moved to bottom corners - see after content section)
 
         -- Features section
-        gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+        gfx.setfont(1, "Arial", PS(aboutFonts.featuresTitle or 12), string.byte('b'))
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
         local featuresTitle = T("about_features_title")
         local ftW = gfx.measurestr(featuresTitle)
@@ -6820,10 +6826,10 @@ local function drawArtGallery()
         gfx.y = contentY
         gfx.drawstr(featuresTitle)
 
-        contentY = contentY + PS(20)
+        contentY = contentY + PS(aboutSpacing.featuresTitleToListGap or 20)
 
         -- Feature list (centered per line)
-        gfx.setfont(1, "Arial", PS(10))
+        gfx.setfont(1, "Arial", PS(aboutFonts.feature or 10))
         local features = {
             {color = stemColors[1], text = T("about_feature_1")},
             {color = stemColors[2], text = T("about_feature_2")},
@@ -6834,7 +6840,7 @@ local function drawArtGallery()
 
         local bullet = "●"
         local bulletW = gfx.measurestr(bullet)
-        local gap = PS(10)
+        local gap = PS(aboutSpacing.featureBulletGap or 10)
 
         for _, feat in ipairs(features) do
             local textW = gfx.measurestr(feat.text)
@@ -6847,27 +6853,27 @@ local function drawArtGallery()
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.x = x0 + bulletW + gap
             gfx.drawstr(feat.text)
-            contentY = contentY + PS(16)
+            contentY = contentY + PS(aboutSpacing.featureRowGap or 16)
         end
 
-        contentY = contentY + PS(20)
+        contentY = contentY + PS(aboutSpacing.featuresToCreditsGap or 20)
 
         -- (Tip removed; replaced by tooltip on the help hint icon)
 
         -- Bottom credits (left/right corners)
         do
             -- Place credits flush at the very bottom edge of the window.
-            local creditY = h - UI(18)
-            gfx.setfont(1, "Arial", UI(10))
+            local creditY = h - UI(aboutSpacing.creditsBottom or 18)
+            gfx.setfont(1, "Arial", UI(aboutFonts.credits or 10))
 
             -- Left: Conceived by flarkAUDIO
             local conceivedBy = (T("about_conceived") or "by") .. " "
-            gfx.x = UI(6)
+            gfx.x = UI(aboutPadding.creditsLeft or 6)
             gfx.y = creditY
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.85)
             gfx.drawstr(conceivedBy)
             local prefixW = gfx.measurestr(conceivedBy)
-            gfx.x = UI(6) + prefixW
+            gfx.x = UI(aboutPadding.creditsLeft or 6) + prefixW
             gfx.y = creditY
             gfx.set(1.0, 0.5, 0.3, 0.95)  -- flark orange
             gfx.drawstr("flarkAUDIO")
@@ -6875,11 +6881,11 @@ local function drawArtGallery()
             -- Right: Powered by Meta's Demucs
             local poweredBy = (T("about_powered_by") or "Powered by") .. " "
             local demucsName = (T("about_demucs") or "Meta's Demucs")
-            gfx.setfont(1, "Arial", UI(10))
+            gfx.setfont(1, "Arial", UI(aboutFonts.credits or 10))
             local poweredW = gfx.measurestr(poweredBy)
             local demucsW = gfx.measurestr(demucsName)
             local totalW = poweredW + demucsW
-            local x0 = w - totalW - UI(12)
+            local x0 = w - totalW - UI(aboutPadding.creditsRight or 12)
             gfx.x = x0
             gfx.y = creditY
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.85)
@@ -6892,8 +6898,8 @@ local function drawArtGallery()
 
         -- Click on art generates new art
         if not mouseDown and helpState.wasMouseDown and not helpState.wasDrag then
-            local tabAreaBottom = UI(40)
-            local closeBtnTop = h - UI(50)
+            local tabAreaBottom = UI(aboutSpacing.tabAreaHeight or 40)
+            local closeBtnTop = h - UI(aboutSpacing.artBottomReserve or 50)
             if helpState.clickStartY > tabAreaBottom and helpState.clickStartY < closeBtnTop then
                 generateNewArt()
             end
@@ -6942,7 +6948,9 @@ local function drawArtGallery()
         local hintY = btnY + (btnH - hintSize) / 2
         -- On About, place the hint slightly above the Back button (credits live at the very bottom).
         if helpState.currentTab == 6 then
-            hintY = btnY - UI(22)
+            local aboutTokens = (UI_TOKENS and UI_TOKENS.about) or {}
+            local aboutSpacing = aboutTokens.spacing or {}
+            hintY = btnY - UI(aboutSpacing.hintLiftAboveBack or 22)
         end
         local hintHover = mx >= hintX and mx <= hintX + hintSize and my >= hintY and my <= hintY + hintSize
 
@@ -9054,7 +9062,7 @@ local function calcUniformRadioFontSize(labels, boxW, reservedLeft)
     return fontSize
 end
 
-local function getUniformFontSizeCached(cacheId, labels, boxW, reservedLeft)
+getUniformFontSizeCached = function(cacheId, labels, boxW, reservedLeft)
     GUI.fontSizeCache = GUI.fontSizeCache or {}
 
     local parts = { tostring(boxW or ""), tostring(reservedLeft or "") }

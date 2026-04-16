@@ -61,4 +61,32 @@ TOKENS.result = {
     },
 }
 
+TOKENS.about = {
+    spacing = {
+        tabAreaHeight = 40,
+        artBottomReserve = 50,
+        contentTop = 30,
+        titleToSubtitleGap = 36,
+        subtitleToFeaturesGap = 24,
+        preFeaturesGap = 10,
+        featuresTitleToListGap = 20,
+        featureBulletGap = 10,
+        featureRowGap = 16,
+        featuresToCreditsGap = 20,
+        creditsBottom = 18,
+        hintLiftAboveBack = 22,
+    },
+    padding = {
+        creditsLeft = 6,
+        creditsRight = 12,
+    },
+    fonts = {
+        title = 34,
+        subtitle = 12,
+        featuresTitle = 12,
+        feature = 10,
+        credits = 10,
+    },
+}
+
 return TOKENS
