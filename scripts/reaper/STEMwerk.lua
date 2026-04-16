@@ -1254,6 +1254,7 @@ local getAvailableLanguages = I18N.getAvailableLanguages
 -- Forward declare GUI so early helpers (e.g. handleArtAdvance) can reference it safely.
 
 local UI_Window = dofile(script_path .. "_internal/STEMwerk_UI_Window.lua")
+local UI_TOKENS = dofile(script_path .. "_internal/STEMwerk_UI_Tokens.lua")
 
 -- Get list of available languages
 local function getAvailableLanguages()
@@ -8442,15 +8443,20 @@ function drawResultWindowControls(ctx)
     local tooltipText = ctx.tooltipText
     local tooltipX = ctx.tooltipX
     local tooltipY = ctx.tooltipY
+    local resultTokens = (UI_TOKENS and UI_TOKENS.result) or {}
+    local controls = resultTokens.controls or {}
+    local gaps = resultTokens.sectionGaps or {}
+    local spacing = resultTokens.spacing or {}
+    local fonts = resultTokens.fonts or {}
 
-    local iconScale = 0.66
-    local themeSize = math.max(PS(12), math.floor(PS(20) * iconScale + 0.5))
-    local themeX = w - themeSize - PS(10)
-    local themeY = PS(8)
+    local iconScale = controls.iconScale or 0.66
+    local themeSize = math.max(PS(controls.themeSizeMin or 12), math.floor(PS(controls.themeSizeBase or 20) * iconScale + 0.5))
+    local themeX = w - themeSize - PS(controls.themeRight or 10)
+    local themeY = PS(controls.themeTop or 8)
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
 
-    local controlsLeft = themeX - PS(60)
-    local controlsBottom = themeY + themeSize + PS(30)
+    local controlsLeft = themeX - PS(gaps.controlsLeftPad or 60)
+    local controlsBottom = themeY + themeSize + PS(gaps.controlsBottomPad or 30)
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
     local controlsOpacity = updateControlsOpacity(resultWindowState, mouseInControls)
 
@@ -8487,13 +8493,13 @@ function drawResultWindowControls(ctx)
     end
     if themeHover and controlsOpacity > 0.3 then
         tooltipText = getThemeToggleTooltip()
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
     end
 
-    local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
+    local fxSize = math.max(PS(controls.fxSizeMin or 10), math.floor(PS(controls.fxSizeBase or 16) * iconScale + 0.5))
     local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(3)
-    local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
+    local fxY = themeY + themeSize + PS(gaps.fxOffsetY or 3)
+    local fxHover = mx >= fxX - PS(controls.fxHitPad or 2) and mx <= fxX + fxSize + PS(controls.fxHitPad or 2) and my >= fxY - PS(controls.fxHitPad or 2) and my <= fxY + fxSize + PS(controls.fxHitPad or 2)
 
     local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
     if SETTINGS.visualFX then
@@ -8501,7 +8507,7 @@ function drawResultWindowControls(ctx)
     else
         gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
     end
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+    gfx.setfont(1, "Arial", PS(fonts.controls or 9), string.byte('b'))
     local fxText = "FX"
     local fxTextW = gfx.measurestr(fxText)
     gfx.x = fxX + (fxSize - fxTextW) / 2
@@ -8521,16 +8527,16 @@ function drawResultWindowControls(ctx)
     end
     if fxHover and controlsOpacity > 0.3 then
         tooltipText = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
     end
 
-    local langW = PS(22)
-    local langH = PS(14)
-    local langX = themeX - langW - PS(6)
+    local langW = PS(controls.langWidth or 22)
+    local langH = PS(controls.langHeight or 14)
+    local langX = themeX - langW - PS(gaps.langGap or 6)
     local langY = themeY + (themeSize - langH) / 2
     local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
 
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+    gfx.setfont(1, "Arial", PS(fonts.controls or 9), string.byte('b'))
     local langCode = string.upper(SETTINGS.language or "EN")
     local langTextW = gfx.measurestr(langCode)
 
@@ -8538,7 +8544,7 @@ function drawResultWindowControls(ctx)
         gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
         if controlsOpacity > 0.3 then
             tooltipText = T("tooltip_change_language") or "Click to change language"
-            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+            tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
             local rightMouseDown = gfx.mouse_cap & 2 == 2
             if rightMouseDown and not (resultWindowState.wasRightMouseDown or false) then
                 SETTINGS.tooltips = not SETTINGS.tooltips
@@ -8570,10 +8576,13 @@ end
 function renderResultTitleArea(ctx)
     local w, PS = ctx.w, ctx.PS
     local selectedStems = resultWindowState.selectedStems or {}
+    local resultTokens = (UI_TOKENS and UI_TOKENS.result) or {}
+    local spacing = resultTokens.spacing or {}
+    local fonts = resultTokens.fonts or {}
 
     local iconX = w / 2
-    local iconY = PS(60)
-    local iconR = PS(28)
+    local iconY = PS(spacing.iconY or 60)
+    local iconR = PS(spacing.iconRadius or 28)
 
     gfx.set(0.2, 0.65, 0.35, 1)
     gfx.circle(iconX, iconY, iconR, 1, 1)
@@ -8588,7 +8597,7 @@ function renderResultTitleArea(ctx)
     gfx.line(x2, y2, x3, y3)
     gfx.line(x2, y2+1, x3, y3+1)
 
-    gfx.setfont(1, "Arial", PS(18), string.byte('b'))
+    gfx.setfont(1, "Arial", PS(fonts.title or 18), string.byte('b'))
     local stemLetterColors = {
         {255, 100, 100},
         {100, 200, 255},
@@ -8601,7 +8610,7 @@ function renderResultTitleArea(ctx)
     local restW = gfx.measurestr(restPart)
     local totalW = stemW + restW
     local titleX = (w - totalW) / 2
-    local titleY = PS(100)
+    local titleY = PS(spacing.titleY or 100)
 
     local charX = titleX
     for i = 1, 4 do
@@ -8619,46 +8628,51 @@ function renderResultTitleArea(ctx)
     gfx.y = titleY
     gfx.drawstr(restPart)
 
-    local stemY = PS(125)
+    local stemY = PS(spacing.stemRowY or 125)
     local stemBoxSize = PS(14)
-    gfx.setfont(1, "Arial", PS(11))
+    gfx.setfont(1, "Arial", PS(fonts.stem or 11))
     local totalStemWidth = 0
     for _, stem in ipairs(selectedStems) do
-        totalStemWidth = totalStemWidth + stemBoxSize + gfx.measurestr(stem.name) + PS(16)
+        totalStemWidth = totalStemWidth + stemBoxSize + gfx.measurestr(stem.name) + PS(spacing.stemItemGap or 16)
     end
     local stemX = (w - totalStemWidth) / 2
     for _, stem in ipairs(selectedStems) do
         gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
         gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        gfx.x = stemX + stemBoxSize + PS(5)
+        gfx.x = stemX + stemBoxSize + PS(spacing.stemLabelGap or 5)
         gfx.y = stemY + PS(1)
         gfx.drawstr(stem.name)
-        stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(16)
+        stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(spacing.stemItemGap or 16)
     end
 
 end
 
 function renderResultMessageBox(ctx)
     local w, h, PS = ctx.w, ctx.h, ctx.PS
-    local msgBoxY = PS(170)
-    local msgBoxH = PS(70)
+    local resultTokens = (UI_TOKENS and UI_TOKENS.result) or {}
+    local padding = resultTokens.padding or {}
+    local fonts = resultTokens.fonts or {}
+    local msgBoxY = PS(padding.messageBoxTop or 170)
+    local msgBoxH = PS(padding.messageBoxHeight or 70)
+    local msgBoxX = PS(padding.messageBoxX or 20)
+    local msgBoxW = w - (msgBoxX * 2)
     local resultBoxAlpha = (SETTINGS and SETTINGS.darkMode) and 0.30 or 0.82
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], resultBoxAlpha)
-    gfx.rect(PS(20), msgBoxY, w - PS(40), msgBoxH, 1)
+    gfx.rect(msgBoxX, msgBoxY, msgBoxW, msgBoxH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], (SETTINGS and SETTINGS.darkMode) and 0.6 or 0.9)
-    gfx.rect(PS(20), msgBoxY, w - PS(40), msgBoxH, 0)
+    gfx.rect(msgBoxX, msgBoxY, msgBoxW, msgBoxH, 0)
 
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-    gfx.setfont(1, "Arial", PS(11))
+    gfx.setfont(1, "Arial", PS(fonts.message or 11))
     local msgLines = buildResultMessageLines()
-    local msgY = msgBoxY + PS(8)
+    local msgY = msgBoxY + PS(padding.messageTextTop or 8)
     for _, line in ipairs(msgLines) do
         local lineW = gfx.measurestr(line)
         gfx.x = (w - lineW) / 2
         gfx.y = msgY
         gfx.drawstr(line)
-        msgY = msgY + PS(13)
+        msgY = msgY + PS(padding.messageLineStep or 13)
     end
 end
 
@@ -15009,6 +15023,11 @@ end
 -- Draw result window (clean style matching main app)
 function drawResultWindow()
     local w, h = gfx.w, gfx.h
+    local resultTokens = (UI_TOKENS and UI_TOKENS.result) or {}
+    local spacing = resultTokens.spacing or {}
+    local padding = resultTokens.padding or {}
+    local button = resultTokens.button or {}
+    local fonts = resultTokens.fonts or {}
 
     -- Calculate scale
     local scale = math.min(w / 380, h / 340)
@@ -15062,10 +15081,10 @@ function drawResultWindow()
     renderResultMessageBox({ w = w, h = h, PS = PS })
 
     -- OK button (rounded pill style like main app)
-    local btnW = PS(70)
-    local btnH = PS(20)
+    local btnW = PS(button.width or 70)
+    local btnH = PS(button.height or 20)
     local btnX = (w - btnW) / 2
-    local btnY = h - PS(40)
+    local btnY = h - PS(button.bottomOffset or 40)
 
     local hover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
 
@@ -15077,7 +15096,7 @@ function drawResultWindow()
     drawGlossyPill(btnX, btnY, btnW, btnH, okR, okG, okB)
 
     -- Button text
-    gfx.setfont(1, "Arial", PS(13), string.byte('b'))
+    gfx.setfont(1, "Arial", PS(fonts.okButton or 13), string.byte('b'))
     local okText = T("ok") or "OK"
     local okW = gfx.measurestr(okText)
     local okX = btnX + (btnW - okW) / 2
@@ -15095,31 +15114,31 @@ function drawResultWindow()
 
     -- Hint at very bottom edge
     gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
-    gfx.setfont(1, "Arial", PS(9))
+    gfx.setfont(1, "Arial", PS(fonts.hint or 9))
     local hint = T("complete_hint_keys") or "Enter / ESC"
     local hintW = gfx.measurestr(hint)
     gfx.x = (w - hintW) / 2
-    gfx.y = h - PS(12)
+    gfx.y = h - PS(spacing.hintBottom or 12)
     gfx.drawstr(hint)
 
     -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
-    gfx.setfont(1, "Arial", PS(10))
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10))
     local flarkPart = "flark"
     local flarkPartW = gfx.measurestr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10), string.byte('b'))
     local audioPart = "AUDIO"
     local audioPartW = gfx.measurestr(audioPart)
     local totalLogoW = flarkPartW + audioPartW
     local logoStartX = (w - totalLogoW) / 2
     -- Orange text, 50% translucent
     gfx.set(1.0, 0.5, 0.1, 0.5)
-    gfx.setfont(1, "Arial", PS(10))
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10))
     gfx.x = logoStartX
-    gfx.y = PS(3)
+    gfx.y = PS(spacing.logoTop or 3)
     gfx.drawstr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10), string.byte('b'))
     gfx.x = logoStartX + flarkPartW
-    gfx.y = PS(3)
+    gfx.y = PS(spacing.logoTop or 3)
     gfx.drawstr(audioPart)
 
     gfx.update()
@@ -15130,7 +15149,7 @@ function drawResultWindow()
     end
     if hover then
         tooltipText = T("complete_ok_tooltip") or "Close (Enter / ESC)"
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
     end
 
     resultWindowState.wasMouseDown = mouseDown
@@ -15144,11 +15163,11 @@ function drawResultWindow()
 
     -- Tooltip draw (match main style: stem-color bar + wrapping)
     if tooltipText then
-        gfx.setfont(1, "Arial", PS(11))
-        local padding = PS(8)
-        local lineH = PS(14)
-        local maxTextW = math.min(w * 0.62, PS(520))
-        drawTooltipStyled(tooltipText, tooltipX, tooltipY, w, h, padding, lineH, maxTextW)
+        gfx.setfont(1, "Arial", PS(fonts.tooltip or 11))
+        local tooltipPad = PS(padding.tooltipPadding or 8)
+        local lineH = PS(padding.tooltipLineHeight or 14)
+        local maxTextW = math.min(w * 0.62, PS(padding.tooltipMaxTextW or 520))
+        drawTooltipStyled(tooltipText, tooltipX, tooltipY, w, h, tooltipPad, lineH, maxTextW)
     end
 
     return false  -- Keep open
