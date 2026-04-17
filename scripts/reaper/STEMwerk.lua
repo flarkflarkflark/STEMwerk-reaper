@@ -4833,14 +4833,11 @@ local function drawArtGallery()
 
     -- Reserve space for the top-right controls so tabs never overlap EN/FX.
     local iconScale = 0.66
-    local themeSize = math.max(UI(14), math.floor(UI(24) * iconScale + 0.5))
+    local themeSize = math.max(UI(12), math.floor(UI(20) * iconScale + 0.5))
     local themeX = w - themeSize - UI(10)
-    local themeY = UI(6)
-
-    local langCode = string.upper(SETTINGS.language or "EN")
-    gfx.setfont(1, "Arial", UI(10), string.byte('b'))
-    local langW = gfx.measurestr(langCode)
-    local langX = themeX - langW - UI(12)
+    local themeY = UI(8)
+    local langW = UI(22)
+    local langX = themeX - langW - UI(6)
 
     local leftSafe = UI(10)
     local rightSafe = langX - UI(10)

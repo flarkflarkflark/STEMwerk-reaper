@@ -42,13 +42,14 @@ local function drawHelpControls(ctx)
 
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
     if SETTINGS.darkMode then
-        gfx.set(0.8, 0.8, 0.5, (themeHover and 1 or 0.7) * controlsOpacity)
-        gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 3, 1, 1)
-        gfx.set(0.12, 0.12, 0.14, controlsOpacity)
-        gfx.circle(themeX + themeSize / 2 + 4, themeY + themeSize / 2 - 3, themeSize / 2 - 5, 1, 1)
+        gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
+        gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
+        gfx.set(0, 0, 0, 1 * controlsOpacity)
+        gfx.circle(themeX + themeSize / 2 + 4, themeY + themeSize / 2 - 3, themeSize / 2 - 3, 1, 1)
     else
-        gfx.set(1.0, 0.8, 0.2, (themeHover and 1 or 0.85) * controlsOpacity)
+        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 3, 1, 1)
+        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
         for i = 0, 7 do
             local angle = i * math.pi / 4
             local x1 = themeX + themeSize / 2 + math.cos(angle) * (themeSize / 3 + 2)
@@ -72,19 +73,22 @@ local function drawHelpControls(ctx)
         end
     end
 
-    local langCode = string.upper(SETTINGS.language or "EN")
-    gfx.setfont(1, "Arial", S(10), string.byte("b"))
-    local langW = gfx.measurestr(langCode)
-    local langX = themeX - langW - S(12)
-    local langY = themeY + S(6)
-    local langHover = mx >= langX - S(4) and mx <= langX + langW + S(4) and my >= langY - S(3) and my <= langY + S(16)
+    local langW = S(22)
+    local langH = S(14)
+    local langX = themeX - langW - S(6)
+    local langY = themeY + (themeSize - langH) / 2
+    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
 
-    if langHover and controlsOpacity > 0.3 then
-        gfx.set(0.3, 0.4, 0.6, 0.5 * controlsOpacity)
-        gfx.rect(langX - S(4), langY - S(2), langW + S(8), S(18), 1)
+    gfx.setfont(1, "Arial", S(9), string.byte("b"))
+    local langCode = string.upper(SETTINGS.language or "EN")
+    local langTextW = gfx.measurestr(langCode)
+
+    if langHover then
+        gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
+    else
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
     end
-    gfx.set(0.5, 0.7, 1.0, (langHover and 1 or 0.75) * controlsOpacity)
-    gfx.x = langX
+    gfx.x = langX + (langW - langTextW) / 2
     gfx.y = langY
     gfx.drawstr(langCode)
 
@@ -100,9 +104,9 @@ local function drawHelpControls(ctx)
         cycleLanguageSetting(ctx.setLanguageFn)
     end
 
-    local fxSize = math.max(S(12), math.floor(S(20) * iconScale + 0.5))
+    local fxSize = math.max(S(10), math.floor(S(16) * iconScale + 0.5))
     local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + S(4)
+    local fxY = themeY + themeSize + S(3)
     local fxHover = mx >= fxX - S(2) and mx <= fxX + fxSize + S(2) and my >= fxY - S(2) and my <= fxY + fxSize + S(2)
 
     local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
@@ -111,21 +115,20 @@ local function drawHelpControls(ctx)
     else
         gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
     end
-    gfx.setfont(1, "Arial", math.max(S(8), math.floor(S(11) * iconScale + 0.5)), string.byte("b"))
+    gfx.setfont(1, "Arial", S(9), string.byte("b"))
     local fxText = "FX"
     local fxTextW = gfx.measurestr(fxText)
     gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + S(2)
+    gfx.y = fxY + S(1)
     gfx.drawstr(fxText)
 
     if SETTINGS.visualFX then
         gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        local starSize = S(2)
-        gfx.circle(fxX - S(2), fxY + S(3), starSize, 1, 1)
-        gfx.circle(fxX + fxSize + S(1), fxY + fxSize - S(3), starSize, 1, 1)
+        gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
+        gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
     else
         gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - S(2), fxY + fxSize / 2, fxX + fxSize + S(2), fxY + fxSize / 2)
+        gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
     end
 
     if fxHover and controlsOpacity > 0.3 then
