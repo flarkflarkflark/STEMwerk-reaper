@@ -8075,6 +8075,7 @@ function drawResultWindowControls(ctx)
     ctx.profile = "result"
     ctx.S = ctx.PS
     ctx.setLanguageFn = setLanguage
+    ctx.updateControlsOpacityFn = updateControlsOpacity
     ctx.state = resultWindowState
     UI_CONTROLS.drawTopRightControls(ctx)
 end

@@ -170,7 +170,16 @@ local function drawResultControls(ctx)
     local controlsLeft = themeX - S(gaps.controlsLeftPad or 60)
     local controlsBottom = themeY + themeSize + S(gaps.controlsBottomPad or 30)
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
-    local controlsOpacity = updateControlsOpacity(state, mouseInControls)
+    local applyControlsOpacity = ctx.updateControlsOpacityFn
+    if type(applyControlsOpacity) ~= "function" then
+        applyControlsOpacity = _G.updateControlsOpacity
+    end
+    local controlsOpacity
+    if type(applyControlsOpacity) == "function" then
+        controlsOpacity = applyControlsOpacity(state, mouseInControls)
+    else
+        controlsOpacity = mouseInControls and 1.0 or 0.0
+    end
 
     if themeHover then
         GUI.uiClickedThisFrame = true
