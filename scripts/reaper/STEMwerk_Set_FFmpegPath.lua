@@ -70,7 +70,6 @@ local function findFfmpeg()
         table.insert(runtimeCandidates, runtimeBase .. "/ffmpeg/bin/ffmpeg")
     end
 
-    if OS == "Windows" then
     local candidates = {}
     for _, p in ipairs(runtimeCandidates) do
         table.insert(candidates, p)
