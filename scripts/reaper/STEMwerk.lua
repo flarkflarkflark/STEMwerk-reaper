@@ -1256,6 +1256,7 @@ local getAvailableLanguages = I18N.getAvailableLanguages
 local UI_Window = dofile(script_path .. "_internal/STEMwerk_UI_Window.lua")
 local UI_TOKENS = dofile(script_path .. "_internal/STEMwerk_UI_Tokens.lua")
 local UI_CONTROLS = dofile(script_path .. "_internal/STEMwerk_UI_Controls.lua")
+local UI_BACKGROUNDS = dofile(script_path .. "_internal/STEMwerk_UI_Backgrounds.lua")
 
 -- Get list of available languages
 local function getAvailableLanguages()
@@ -5913,62 +5914,19 @@ local function drawArtGallery()
         local welcomeSpacing = welcomeTokens.spacing or {}
         local welcomeFonts = welcomeTokens.fonts or {}
 
-        -- Anchor for Welcome background/art/effects (not affected by text pan)
-        local welcomeArtY = contentY - textOffsetY
-
-        -- Update audio reactivity
-        updateAudioReactivity()
-        local audioPeak = audioReactive.smoothPeakMono or 0
-        local audioBass = audioReactive.smoothBass or 0
-        local audioMid = audioReactive.smoothMid or 0
-        local audioHigh = audioReactive.smoothHigh or 0
-        local audioBeat = audioReactive.beatDecay or 0
-
-        -- Animated background elements (behind text) - gated by FX toggle
-        local bgTime = os.clock() - helpState.startTime
-        if SETTINGS.visualFX then
-            for i = 1, 4 do
-                local angle = bgTime * 0.2 + (i - 1) * math.pi / 2 + audioPeak * 0.3
-                local radius = math.min(w, h) * (0.4 + audioBass * 0.15)
-                local cx = w / 2 + math.cos(angle) * radius * 0.4
-                local cy = welcomeArtY + contentH / 2 + math.sin(angle) * radius * 0.3
-                -- Larger, more visible background circles - pulse with audio
-                local maxR = PS(120 + audioBass * 60)
-                for r = maxR, PS(40), -PS(20) do
-                    local alpha = 0.03 + (maxR - r) / PS(400) + audioBeat * 0.05
-                    gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], math.min(0.3, alpha))
-                    gfx.circle(cx, cy, r, 1, 1)
-                end
-            end
-
-            -- Floating particles in background - AUDIO REACTIVE
-            local particleCount = 20 + math.floor(audioPeak * 15)
-            for i = 1, particleCount do
-                local px = (math.sin(bgTime * 0.5 + i * 1.3 + audioHigh * 0.5) * 0.5 + 0.5) * w
-                local py = welcomeArtY + ((math.cos(bgTime * 0.3 + i * 0.7 + audioMid * 0.3) * 0.5 + 0.5) * contentH * 0.8)
-                local col = stemColors[(i % 4) + 1]
-                local particleAlpha = 0.15 + audioBeat * 0.2
-                local particleSize = PS(3 + (i % 4) + audioPeak * 4)
-                gfx.set(col[1], col[2], col[3], math.min(0.5, particleAlpha))
-                gfx.circle(px, py, particleSize, 1, 1)
-            end
-
-            -- Audio waveform ring in center (MilkDrop-style!)
-            if audioPeak > 0.05 then
-                local waveRadius = PS(80 + audioBass * 40)
-                local wcx, wcy = w / 2, welcomeArtY + contentH / 2
-                for i = 0, 59 do
-                    local angle = (i / 60) * math.pi * 2
-                    local waveVal = audioReactive.waveformHistory[((audioReactive.waveformIndex + i) % audioReactive.waveformSize) + 1] or audioPeak
-                    local r = waveRadius * (1 + waveVal * 0.4)
-                    local wx = wcx + math.cos(angle + bgTime * 0.5) * r
-                    local wy = wcy + math.sin(angle + bgTime * 0.5) * r
-                    local col = stemColors[(math.floor(i / 15) % 4) + 1]
-                    gfx.set(col[1], col[2], col[3], 0.2 + waveVal * 0.3)
-                    gfx.circle(wx, wy, PS(2 + waveVal * 4), 1, 1)
-                end
-            end
-        end
+        UI_BACKGROUNDS.drawWelcomeBackground({
+            w = w,
+            h = h,
+            contentY = contentY,
+            contentH = contentH,
+            textOffsetY = textOffsetY,
+            stemColors = stemColors,
+            PS = PS,
+            helpStartTime = helpState.startTime,
+            updateAudioReactivity = updateAudioReactivity,
+            audioReactive = audioReactive,
+            SETTINGS = SETTINGS,
+        })
 
         -- === TEXT CONTENT (drawn AFTER background) ===
 
@@ -6055,83 +6013,35 @@ local function drawArtGallery()
     elseif helpState.currentTab == 2 then
         -- === QUICK START TAB + AUDIO REACTIVE ===
 
-        -- Add subtle procedural art background (requested) - gated by FX toggle
-        if SETTINGS.visualFX then
-            local artAreaY = UI(40)
-            local artAreaH = h - artAreaY - UI(50)
-            drawProceduralArtInternal(0, artAreaY, w, artAreaH, time * 0.6, 0, true, 0.22)
-        end
+        local quickStartAudio = UI_BACKGROUNDS.drawQuickStartBackground({
+            w = w,
+            h = h,
+            contentY = contentY,
+            contentH = contentH,
+            time = time,
+            PS = PS,
+            UI = UI,
+            stemColors = stemColors,
+            helpStartTime = helpState.startTime,
+            updateAudioReactivity = updateAudioReactivity,
+            audioReactive = audioReactive,
+            drawProceduralArtInternal = drawProceduralArtInternal,
+            SETTINGS = SETTINGS,
+        })
+        local audioPeak = quickStartAudio.audioPeak or 0
 
-        -- Update audio reactivity
-        updateAudioReactivity()
-        local audioPeak = audioReactive.smoothPeakMono or 0
-        local audioBass = audioReactive.smoothBass or 0
-        local audioMid = audioReactive.smoothMid or 0
-        local audioHigh = audioReactive.smoothHigh or 0
-        local audioBeat = audioReactive.beatDecay or 0
-
-        -- Flowing steps background animation (gated by FX toggle)
-        local bgTime = os.clock() - helpState.startTime
-        if SETTINGS.visualFX then
-            -- Flowing number particles (1, 2, 3) - AUDIO REACTIVE
-            local stepNums = {"1", "2", "3"}
-            local numCount = 25 + math.floor(audioPeak * 10)
-            for i = 1, numCount do
-                local numIdx = ((i - 1) % 3) + 1
-                local num = stepNums[numIdx]
-
-                -- Gentle floating motion - audio reactive
-                local floatPhase = bgTime * (0.8 + audioMid * 0.4) + i * 0.7
-                local fx = w * (i / (numCount + 1)) + math.sin(floatPhase * 0.6 + i) * PS(40 + audioBass * 30)
-                local fy = contentY + (contentH * 0.5) + math.cos(floatPhase * 0.4 + i * 0.5) * PS(80 + audioHigh * 40)
-
-                -- Size pulses with audio
-                local fsize = PS(30 + math.sin(floatPhase) * 15 + audioPeak * 20)
-                gfx.setfont(1, "Arial", fsize, string.byte('b'))
-
-                -- Subtle color with audio-reactive alpha
-                local falpha = 0.04 + math.sin(floatPhase * 2) * 0.02 + audioBeat * 0.08
-                gfx.set(stemColors[numIdx][1], stemColors[numIdx][2], stemColors[numIdx][3], math.min(0.25, falpha))
-
-                local fw = gfx.measurestr(num)
-                gfx.x = fx - fw / 2
-                gfx.y = fy - fsize / 2
-                gfx.drawstr(num)
-            end
-
-            -- Connecting dotted paths - AUDIO REACTIVE
-            for i = 1, 8 do
-                local pathPhase = bgTime * (0.5 + audioMid * 0.3) + i * 0.9
-                local dotCount = 12 + math.floor(audioPeak * 6)
-                for dot = 1, dotCount do
-                    local dotPhase = pathPhase + dot * 0.2
-                    local dotX = w * 0.2 + (w * 0.6) * (dot / dotCount) + math.sin(dotPhase) * PS(20 + audioHigh * 15)
-                    local dotY = contentY + contentH * 0.3 + i * PS(30) + math.cos(dotPhase * 1.3) * PS(15 + audioBass * 20)
-
-                    local dotAlpha = 0.03 + math.sin(dotPhase * 3) * 0.015 + audioBeat * 0.04
-                    local colorIdx = ((dot - 1) % 3) + 1
-                    local dotSize = PS(2 + math.sin(dotPhase * 2) * 1 + audioPeak * 2)
-                    gfx.set(stemColors[colorIdx][1], stemColors[colorIdx][2], stemColors[colorIdx][3], math.min(0.15, dotAlpha))
-                    gfx.circle(dotX, dotY, dotSize, 1, 1)
-                end
-            end
-
-            -- Audio waveform visualization (subtle, behind content)
-            if audioPeak > 0.05 then
-                local waveY = contentY + contentH * 0.85
-                local waveW = w * 0.8
-                local waveX = w * 0.1
-                for i = 0, 59 do
-                    local histIdx = ((audioReactive.waveformIndex or 1) + i * 2) % (audioReactive.waveformSize or 60) + 1
-                    local waveVal = (audioReactive.waveformHistory and audioReactive.waveformHistory[histIdx]) or audioPeak * 0.3
-                    local wx = waveX + (i / 60) * waveW
-                    local wh = waveVal * PS(30)
-                    local colorIdx = (math.floor(i / 15) % 3) + 1
-                    gfx.set(stemColors[colorIdx][1], stemColors[colorIdx][2], stemColors[colorIdx][3], 0.1 + waveVal * 0.15)
-                    gfx.rect(wx, waveY - wh/2, PS(4), wh, 1)
-                end
-            end
-        end
+        UI_BACKGROUNDS.handleStandardHelpBackgroundClick({
+            mouseDown = mouseDown,
+            wasMouseDown = helpState.wasMouseDown,
+            mx = mx,
+            my = my,
+            clickStartX = helpState.clickStartX,
+            clickStartY = helpState.clickStartY,
+            h = h,
+            UI = UI,
+            PS = PS,
+            onGenerateArt = generateNewArt,
+        })
 
         drawHelpQuickStartHeader(w, contentY, textOffsetX, PS)
 
@@ -6206,290 +6116,28 @@ local function drawArtGallery()
 
     elseif helpState.currentTab == 3 then
         -- === STEMS TAB - COMPREHENSIVE STEM INFO ===
-        local stemsArtY = contentY - textOffsetY
+        -- Subtle procedural art background (aligned with standard Help tabs)
+        UI_BACKGROUNDS.drawStandardHelpBackground({
+            w = w,
+            h = h,
+            time = time,
+            UI = UI,
+            drawProceduralArt = drawProceduralArt,
+            SETTINGS = SETTINGS,
+        })
 
-        -- Update audio reactivity for sound-driven animation
-        updateAudioReactivity()
-
-        -- Animated background (gated by FX toggle)
-        if SETTINGS.visualFX then
-            -- SUPER FREAKY STEM letter morphing background (now audio-reactive!)
-            local bgTime = os.clock() - helpState.startTime
-            local stemLettersBg = {"S", "T", "E", "M"}
-
-            -- Audio reactive values (use smoothed values for animation)
-            local audioPeak = audioReactive.smoothPeakMono
-            local audioBass = audioReactive.smoothBass
-            local audioMid = audioReactive.smoothMid
-            local audioHigh = audioReactive.smoothHigh
-            local audioBeat = audioReactive.beatDecay
-
-            -- === PSYCHEDELIC PLASMA WAVES ===
-            local vortexCenterX = w / 2
-            local vortexCenterY = stemsArtY + contentH / 2
-
-            -- Rainbow color cycling function
-            local function rainbowColor(phase, baseColor)
-                local hueShift = math.sin(phase) * 0.3
-                local r = baseColor[1] + math.sin(phase) * 0.3
-                local g = baseColor[2] + math.sin(phase + 2.1) * 0.3
-                local b = baseColor[3] + math.sin(phase + 4.2) * 0.3
-                return math.max(0, math.min(1, r)), math.max(0, math.min(1, g)), math.max(0, math.min(1, b))
-            end
-
-            -- === HYPNOTIC SPIRALING VORTEX (audio-reactive!) ===
-            -- NOTE: Big animated letters were replaced with abstract dots for readability.
-            for ring = 1, 7 do
-                for i = 1, 12 do
-                    local letterIdx = ((i - 1) % 4) + 1
-
-                    -- Warped spiral motion with breathing + AUDIO REACTIVE
-                    local breathe = 1 + math.sin(bgTime * 2) * 0.2 + audioBass * 0.4
-                    local angle = bgTime * (0.5 + ring * 0.15 + audioPeak * 0.3) + (i - 1) * (math.pi / 6) + ring * 0.7
-                    local warpAngle = angle + math.sin(bgTime * 3 + ring) * 0.5 + audioHigh * 0.3
-                    local radius = (PS(40 + ring * 35) + math.sin(bgTime * 2.5 + ring * 0.8) * PS(30) + audioBass * PS(40)) * breathe
-
-                    local lx = vortexCenterX + math.cos(warpAngle) * radius
-                    local ly = vortexCenterY + math.sin(warpAngle) * radius * 0.5
-
-                    -- Trippy size pulsation + AUDIO BOOST
-                    local sizePulse = math.sin(bgTime * 4 + i * 0.5 + ring) * 0.5 + 0.5
-                    local dotSize = PS(25 + ring * 12 + sizePulse * 20 + audioPeak * 15)
-
-                    -- Color cycling with phase shift + BEAT FLASH
-                    local colorPhase = bgTime * 2 + ring * 0.5 + i * 0.3 + audioPeak * 2
-                    local r, g, b = rainbowColor(colorPhase, stemColors[letterIdx])
-                    local lalpha = (0.15 - ring * 0.015) * (0.7 + math.sin(bgTime * 3 + i) * 0.3) + audioBeat * 0.15
-                    gfx.set(r, g, b, math.min(1, lalpha))
-
-                    gfx.circle(lx, ly, math.max(PS(2), dotSize * 0.14), 1, 1)
-                end
-            end
-
-            -- === MATRIX RAIN with color trails (audio-reactive!) ===
-            -- NOTE: Big animated letters were replaced with abstract dots for readability.
-            for i = 1, 30 do
-                local letterIdx = ((i - 1) % 4) + 1
-
-                -- Cascading fall with wave distortion + AUDIO SPEED BOOST
-                local fallSpeed = (0.4 + (i % 7) * 0.08) * (1 + audioMid * 0.5)
-                local waveX = math.sin(bgTime * 2 + i * 0.3) * PS(50) * (1 + audioHigh * 0.5)
-                local fallY = stemsArtY + ((bgTime * fallSpeed * 120 + i * 40) % contentH)
-                local driftX = w * (i / 31) + waveX
-
-                local rainSize = PS(18 + (i % 4) * 10 + audioPeak * 8)
-
-                -- Pulsing fade with color shift + BEAT BRIGHTNESS
-                local fadeProgress = (fallY - stemsArtY) / contentH
-                local rainAlpha = (0.06 + audioBeat * 0.08) * math.sin(fadeProgress * math.pi) * (1 + math.sin(bgTime * 5 + i) * 0.3)
-
-                local r, g, b = rainbowColor(bgTime * 3 + i * 0.5 + audioPeak * 2, stemColors[letterIdx])
-                gfx.set(r, g, b, math.min(1, rainAlpha))
-                gfx.circle(driftX, fallY, math.max(PS(1), rainSize * 0.12), 1, 1)
-            end
-
-            -- === ETHEREAL CORNER ORBS (audio-reactive!) ===
-            local corners = {
-                {x = PS(60), y = stemsArtY + PS(40), idx = 1},
-                {x = w - PS(60), y = stemsArtY + PS(40), idx = 2},
-                {x = PS(60), y = stemsArtY + contentH - PS(50), idx = 3},
-                {x = w - PS(60), y = stemsArtY + contentH - PS(50), idx = 4},
-            }
-            for _, corner in ipairs(corners) do
-                local cphase = bgTime * 1.5 + corner.idx * 1.5
-
-                -- Soft pulsing rings + AUDIO EXPANSION
-                for ring = 4, 1, -1 do
-                    local ringPhase = cphase + ring * 0.4
-                    local ringRadius = PS(15 + ring * 12 + math.sin(ringPhase) * 8) * (1 + audioBass * 0.4)
-                    local ringAlpha = (0.03 / ring * (0.8 + math.sin(ringPhase * 2) * 0.2)) + audioBeat * 0.02
-
-                    local r, g, b = rainbowColor(ringPhase + audioPeak, stemColors[corner.idx])
-                    gfx.set(r, g, b, math.min(0.3, ringAlpha))
-                    gfx.circle(corner.x, corner.y, ringRadius, 0, 1)
-                end
-
-                -- Glowing core + BEAT PULSE
-                local coreAlpha = 0.06 + math.sin(cphase * 3) * 0.03 + audioBeat * 0.15
-                local coreSize = PS(4 + math.sin(cphase * 2) * 2 + audioPeak * 6)
-                local r, g, b = rainbowColor(cphase * 2 + audioPeak * 2, stemColors[corner.idx])
-                gfx.set(r, g, b, math.min(0.5, coreAlpha))
-                gfx.circle(corner.x, corner.y, coreSize, 1, 1)
-            end
-
-            -- === LASER BEAMS (audio-reactive!) ===
-            for i = 1, 6 do
-                local phase1 = bgTime * 0.8 + i * 1.05 + audioHigh * 0.5
-                local phase2 = bgTime * 0.8 + ((i % 6) + 1) * 1.05 + audioHigh * 0.5
-
-                local radius1 = PS(120 + math.sin(phase1 * 2) * 40 + audioBass * 60)
-                local radius2 = PS(120 + math.sin(phase2 * 2) * 40 + audioBass * 60)
-                local x1 = vortexCenterX + math.cos(phase1) * radius1
-                local y1 = vortexCenterY + math.sin(phase1) * radius1 * 0.5
-                local x2 = vortexCenterX + math.cos(phase2 + math.pi/3) * radius2
-                local y2 = vortexCenterY + math.sin(phase2 + math.pi/3) * radius2 * 0.5
-
-                local lineAlpha = 0.08 + math.sin(bgTime * 4 + i) * 0.04 + audioBeat * 0.15
-                local colorIdx = ((i - 1) % 4) + 1
-                local r, g, b = rainbowColor(bgTime * 2 + i + audioPeak * 3, stemColors[colorIdx])
-                gfx.set(r, g, b, math.min(0.5, lineAlpha))
-                gfx.line(x1, y1, x2, y2)
-                -- Double line for glow effect
-                gfx.set(r, g, b, math.min(0.25, lineAlpha * 0.5))
-                gfx.line(x1 + 1, y1 + 1, x2 + 1, y2 + 1)
-            end
-
-            -- === FLOATING PARTICLES (audio-reactive!) ===
-            for i = 1, 15 do
-                local pphase = bgTime * 1.5 + i * 0.8
-                local px = vortexCenterX + math.sin(pphase * 0.7 + i) * PS(150 + audioBass * 50)
-                local py = vortexCenterY + math.cos(pphase * 0.5 + i * 0.5) * PS(80 + audioMid * 30)
-                local psize = PS(8 + math.sin(pphase * 3) * 4 + audioPeak * 8)
-
-                local colorIdx = ((i - 1) % 4) + 1
-                local r, g, b = rainbowColor(pphase * 2 + audioPeak * 2, stemColors[colorIdx])
-                local palpha = 0.15 + math.sin(pphase * 4) * 0.1 + audioBeat * 0.2
-                gfx.set(r, g, b, math.min(0.6, palpha))
-                gfx.circle(px, py, psize, 1, 1)
-            end
-
-            -- === MILKDROP FEEDBACK TUNNEL (zooming concentric shapes) ===
-            local tunnelRings = 10
-            for ring = tunnelRings, 1, -1 do
-                local ringPhase = (bgTime * 0.8 + ring * 0.12) % 1
-                local ringRadius = (1 - ringPhase) * math.min(w, contentH) * 0.6
-
-                -- Warp distortion based on audio
-                local warpAmt = 0.15 + audioMid * 0.25
-                local sides = 4 + (ring % 3)  -- Varying polygon sides
-
-                local col = stemColors[(ring % 4) + 1]
-                local r, g, b = rainbowColor(bgTime * 2 + ring * 0.4 + audioPeak * 3, col)
-                local alpha = ringPhase * 0.12 + audioBeat * 0.08
-                gfx.set(r, g, b, math.min(0.4, alpha))
-
-                -- Draw warped polygon
-                for j = 0, sides do
-                    local angle1 = (j / sides) * math.pi * 2 + bgTime * 0.3
-                    local angle2 = ((j + 1) / sides) * math.pi * 2 + bgTime * 0.3
-                    local warp1 = 1 + math.sin(angle1 * 3 + bgTime * 2) * warpAmt * (1 + audioBass * 0.5)
-                    local warp2 = 1 + math.sin(angle2 * 3 + bgTime * 2) * warpAmt * (1 + audioBass * 0.5)
-
-                    local x1 = vortexCenterX + math.cos(angle1) * ringRadius * warp1
-                    local y1 = vortexCenterY + math.sin(angle1) * ringRadius * warp1 * 0.6
-                    local x2 = vortexCenterX + math.cos(angle2) * ringRadius * warp2
-                    local y2 = vortexCenterY + math.sin(angle2) * ringRadius * warp2 * 0.6
-
-                    gfx.line(x1, y1, x2, y2)
-                end
-            end
-
-            -- === MILKDROP PLASMA WAVES (horizontal sine interference) ===
-            local plasmaRows = 8
-            for row = 1, plasmaRows do
-                local rowY = stemsArtY + (row / (plasmaRows + 1)) * contentH
-                local rowPhase = bgTime * 1.5 + row * 0.4
-
-                for i = 0, w, PS(8) do
-                    local t = i / w
-                    -- Multiple sine waves combined (plasma effect)
-                    local wave1 = math.sin(t * 8 + rowPhase + audioBass * 2) * PS(15)
-                    local wave2 = math.sin(t * 12 - rowPhase * 1.3 + audioMid) * PS(10)
-                    local wave3 = math.sin(t * 4 + rowPhase * 0.7 + audioHigh * 3) * PS(20)
-                    local combinedWave = (wave1 + wave2 + wave3) * (0.5 + audioPeak * 0.5)
-
-                    local px = i
-                    local py = rowY + combinedWave
-
-                    -- Color based on wave height
-                    local colorPhase = bgTime * 2 + t * 4 + combinedWave * 0.02
-                    local colorIdx = ((row - 1) % 4) + 1
-                    local r, g, b = rainbowColor(colorPhase, stemColors[colorIdx])
-                    local alpha = 0.06 + math.abs(combinedWave) * 0.002 + audioBeat * 0.04
-                    gfx.set(r, g, b, math.min(0.25, alpha))
-                    gfx.circle(px, py, PS(2 + audioPeak * 2), 1, 1)
-                end
-            end
-
-            -- === MILKDROP AUDIO SCOPE (waveform display) ===
-            if audioPeak > 0.03 then
-                local scopeY = vortexCenterY
-                local scopeW = w * 0.7
-                local scopeX = (w - scopeW) / 2
-                local scopeH = PS(60 + audioBass * 40)
-
-                -- Draw waveform from history buffer
-                local prevX, prevY
-                local points = audioReactive.waveformSize or 60
-                for i = 0, points - 1 do
-                    local histIdx = ((audioReactive.waveformIndex or 1) + i) % points + 1
-                    local waveVal = (audioReactive.waveformHistory and audioReactive.waveformHistory[histIdx]) or 0
-
-                    local sx = scopeX + (i / points) * scopeW
-                    local sy = scopeY + waveVal * scopeH * (0.5 + audioHigh * 0.5)
-
-                    local colorIdx = (math.floor(i / (points / 4)) % 4) + 1
-                    local r, g, b = rainbowColor(bgTime * 3 + i * 0.1, stemColors[colorIdx])
-                    local alpha = 0.15 + waveVal * 0.3 + audioBeat * 0.1
-                    gfx.set(r, g, b, math.min(0.5, alpha))
-
-                    if prevX then
-                        gfx.line(prevX, prevY, sx, sy)
-                    end
-                    prevX, prevY = sx, sy
-
-                    -- Glow dots at peaks
-                    if waveVal > 0.3 then
-                        gfx.set(r, g, b, alpha * 0.5)
-                        gfx.circle(sx, sy, PS(3 + waveVal * 4), 1, 1)
-                    end
-                end
-            end
-
-            -- === MILKDROP MOTION VECTORS (trailing lines) ===
-            local mvCount = 12
-            for i = 1, mvCount do
-                local mvPhase = bgTime * 0.6 + i * 0.52
-                local startAngle = (i / mvCount) * math.pi * 2 + bgTime * 0.2
-                local mvLen = PS(40 + audioBass * 60 + math.sin(mvPhase * 2) * 20)
-
-                local startR = PS(50 + audioMid * 30)
-                local sx = vortexCenterX + math.cos(startAngle) * startR
-                local sy = vortexCenterY + math.sin(startAngle) * startR * 0.5
-                local ex = sx + math.cos(startAngle + math.sin(mvPhase) * 0.5) * mvLen
-                local ey = sy + math.sin(startAngle + math.sin(mvPhase) * 0.5) * mvLen * 0.5
-
-                local colorIdx = ((i - 1) % 4) + 1
-                local r, g, b = rainbowColor(mvPhase * 2 + audioPeak * 2, stemColors[colorIdx])
-
-                -- Draw motion trail with fade
-                for trail = 0, 4 do
-                    local trailAlpha = (0.08 - trail * 0.015) * (1 + audioBeat * 0.5)
-                    local trailOffset = trail * PS(3)
-                    gfx.set(r, g, b, math.min(0.3, trailAlpha))
-                    gfx.line(sx - trailOffset, sy, ex - trailOffset, ey)
-                end
-            end
-
-            -- === BEAT FLASH OVERLAY (on strong beats) ===
-            if audioBeat > 0.3 then
-                local flashAlpha = audioBeat * 0.08
-                gfx.set(1, 1, 1, flashAlpha)
-                gfx.rect(0, stemsArtY, w, contentH, 1)
-            end
-
-            -- === BEAT COLOR INVERSION (MilkDrop hardcut style) ===
-            if audioBeat > 0.6 then
-                -- Brief inverted color flash on strong beats
-                local invAlpha = (audioBeat - 0.6) * 0.15
-                if SETTINGS.darkMode then
-                    gfx.set(1, 1, 1, invAlpha)
-                else
-                    gfx.set(0, 0, 0, invAlpha)
-                end
-                gfx.rect(0, stemsArtY, w, contentH, 1)
-            end
-        end
+        UI_BACKGROUNDS.handleStandardHelpBackgroundClick({
+            mouseDown = mouseDown,
+            wasMouseDown = helpState.wasMouseDown,
+            mx = mx,
+            my = my,
+            clickStartX = helpState.clickStartX,
+            clickStartY = helpState.clickStartY,
+            h = h,
+            UI = UI,
+            PS = PS,
+            onGenerateArt = generateNewArt,
+        })
 
         -- Title (theme-aware)
         gfx.setfont(1, "Arial", PS(28), string.byte('b'))
@@ -6598,11 +6246,14 @@ local function drawArtGallery()
         -- === REAPER FILES TAB ===
 
         -- Subtle procedural art background (gated by FX toggle)
-        if SETTINGS.visualFX then
-            local artAreaY = UI(40)
-            local artAreaH = h - artAreaY - UI(50)
-            drawProceduralArt(0, artAreaY, w, artAreaH, time, 0, true)
-        end
+        UI_BACKGROUNDS.drawStandardHelpBackground({
+            w = w,
+            h = h,
+            time = time,
+            UI = UI,
+            drawProceduralArt = drawProceduralArt,
+            SETTINGS = SETTINGS,
+        })
 
         -- Click for new art (same area rules as Gallery)
         if not mouseDown and helpState.wasMouseDown then
