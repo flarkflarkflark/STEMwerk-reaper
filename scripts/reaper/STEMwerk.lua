@@ -1257,6 +1257,7 @@ local UI_Window = dofile(script_path .. "_internal/STEMwerk_UI_Window.lua")
 local UI_TOKENS = dofile(script_path .. "_internal/STEMwerk_UI_Tokens.lua")
 local UI_CONTROLS = dofile(script_path .. "_internal/STEMwerk_UI_Controls.lua")
 local UI_BACKGROUNDS = dofile(script_path .. "_internal/STEMwerk_UI_Backgrounds.lua")
+local UI_HELP_LAYOUT = dofile(script_path .. "_internal/STEMwerk_UI_HelpLayout.lua")
 
 -- Get list of available languages
 local function getAvailableLanguages()
@@ -4979,7 +4980,7 @@ local function drawArtGallery()
         if not SETTINGS.visualFX then
             gfx.setfont(1, "Arial", UI(14))
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.3)
-            local offText = "Visual FX Off - Click FX to enable"
+            local offText = T("gallery_fx_off_message")
             local offW = gfx.measurestr(offText)
             gfx.x = (w - offW) / 2
             -- Uniform per column: preset button labels share a stable font size.
@@ -6009,6 +6010,7 @@ local function drawArtGallery()
 
     elseif helpState.currentTab == 2 then
         -- === QUICK START TAB + AUDIO REACTIVE ===
+        local helpLayoutTokens = (UI_TOKENS and UI_TOKENS.helpLayout) or {}
 
         local quickStartAudio = UI_BACKGROUNDS.drawQuickStartBackground({
             w = w,
@@ -6042,10 +6044,17 @@ local function drawArtGallery()
 
         drawHelpQuickStartHeader(w, contentY, textOffsetX, PS)
 
-        local panelX = PS(30) + textOffsetX
-        local panelY = contentY + PS(70) + textOffsetY
-        local panelW = w - PS(60)
-        local panelH = h - panelY - UI(60)
+        local quickStartFrame = UI_HELP_LAYOUT.computeContentFrame({
+            tokens = helpLayoutTokens,
+            S = PS,
+            w = w,
+            h = h,
+            contentY = contentY,
+            textOffsetX = textOffsetX,
+        })
+        local panelX = quickStartFrame.x
+        local panelY = quickStartFrame.y
+        local panelH = quickStartFrame.h
 
         -- Steps - LARGER with more detail (all translated)
         local steps = {
@@ -6113,6 +6122,7 @@ local function drawArtGallery()
 
     elseif helpState.currentTab == 3 then
         -- === STEMS TAB - COMPREHENSIVE STEM INFO ===
+        local helpLayoutTokens = (UI_TOKENS and UI_TOKENS.helpLayout) or {}
         -- Subtle procedural art background (aligned with standard Help tabs)
         UI_BACKGROUNDS.drawStandardHelpBackground({
             w = w,
@@ -6136,23 +6146,49 @@ local function drawArtGallery()
             onGenerateArt = generateNewArt,
         })
 
-        -- Title (theme-aware)
-        gfx.setfont(1, "Arial", PS(28), string.byte('b'))
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
         local stemTitle = T("help_stems_title")
-        local stW = gfx.measurestr(stemTitle)
-        gfx.x = (w - stW) / 2 + textOffsetX
-        gfx.y = contentY + PS(10)
+        local subText = T("help_stems_sub")
+        local stemsHeader = UI_HELP_LAYOUT.computeHeaderLayout({
+            tokens = helpLayoutTokens,
+            S = PS,
+            w = w,
+            contentY = contentY,
+            textOffsetX = textOffsetX,
+            title = stemTitle,
+            subtitle = subText,
+        })
+
+        -- Title (theme-aware)
+        gfx.setfont(1, "Arial", stemsHeader.titleFont, string.byte('b'))
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = stemsHeader.titleX
+        gfx.y = stemsHeader.titleY
         gfx.drawstr(stemTitle)
 
         -- Subtitle (translated, theme-aware)
-        gfx.setfont(1, "Arial", PS(13))
+        gfx.setfont(1, "Arial", stemsHeader.subtitleFont)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        local subText = T("help_stems_sub")
-        local subW = gfx.measurestr(subText)
-        gfx.x = (w - subW) / 2 + textOffsetX
-        gfx.y = contentY + PS(42)
+        gfx.x = stemsHeader.subtitleX
+        gfx.y = stemsHeader.subtitleY
         gfx.drawstr(subText)
+
+        local stemsFrame = UI_HELP_LAYOUT.computeContentFrame({
+            tokens = helpLayoutTokens,
+            S = PS,
+            w = w,
+            h = h,
+            contentY = contentY,
+            textOffsetX = textOffsetX,
+        })
+        local stemsBody = UI_HELP_LAYOUT.computeBodyColumn({
+            tokens = helpLayoutTokens,
+            S = PS,
+            frame = stemsFrame,
+            bodyWrapWidth = helpLayoutTokens.stemsBodyWrapWidth or helpLayoutTokens.bodyWrapWidth,
+        })
+        local cardX = stemsBody.x
+        local cardCenterX = cardX + PS(35)
+        local textX = cardX + PS(70)
 
         -- Stem explanations - All translated
         local stems = {
@@ -6166,25 +6202,25 @@ local function drawArtGallery()
              uses = T("help_stem_other_uses")},
         }
 
-        local stemY = contentY + PS(70)
+        local stemY = stemsFrame.y
         local cardH = PS(65)
         local cardGap = PS(10)
 
         for i, stem in ipairs(stems) do
             -- Color accent bar on left (no card background)
             gfx.set(stem.color[1], stem.color[2], stem.color[3], 1)
-            gfx.rect(PS(25) + textOffsetX, stemY, PS(8), cardH, 1)
+            gfx.rect(cardX, stemY, PS(8), cardH, 1)
 
             -- Stem icon circle
             gfx.set(stem.color[1], stem.color[2], stem.color[3], 0.9)
-            gfx.circle(PS(60) + textOffsetX, stemY + cardH/2, PS(20), 1, 1)
+            gfx.circle(cardCenterX, stemY + cardH/2, PS(20), 1, 1)
 
             -- Letter in circle (always white for contrast on colored circle)
             gfx.set(1, 1, 1, 1)
             gfx.setfont(1, "Arial", PS(16), string.byte('b'))
             local letter = stem.name:sub(1, 1)
             local lW = gfx.measurestr(letter)
-            gfx.x = PS(60) + textOffsetX - lW/2
+            gfx.x = cardCenterX - lW/2
             gfx.y = stemY + cardH/2 - PS(9)
             gfx.drawstr(letter)
 
@@ -6195,14 +6231,14 @@ local function drawArtGallery()
                 gfx.set(stem.color[1] * 0.7, stem.color[2] * 0.7, stem.color[3] * 0.7, 1)
             end
             gfx.setfont(1, "Arial", PS(18), string.byte('b'))
-            gfx.x = PS(95) + textOffsetX
+            gfx.x = textX
             gfx.y = stemY + PS(8)
             gfx.drawstr(stem.name)
 
             -- Contains description (theme-aware)
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.setfont(1, "Arial", PS(12))
-            gfx.x = PS(95) + textOffsetX
+            gfx.x = textX
             gfx.y = stemY + PS(28)
             gfx.drawstr(stem.desc)
 
@@ -6210,7 +6246,7 @@ local function drawArtGallery()
             if contentH > PS(350) then
                 gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.9)
                 gfx.setfont(1, "Arial", PS(10))
-                gfx.x = PS(95) + textOffsetX
+                gfx.x = textX
                 gfx.y = stemY + PS(45)
                 gfx.drawstr(stem.uses)
             end
@@ -6220,13 +6256,14 @@ local function drawArtGallery()
 
         -- 6-stem model note (translated, better styled)
         if contentH > PS(400) then
+            local stemsCenterX = stemsBody.x + stemsBody.w / 2
             -- Blinking indicator
             local blink6 = 0.7 + math.sin(time * 3) * 0.3
             gfx.setfont(1, "Arial", PS(13), string.byte('b'))
             gfx.set(stemColors[4][1], stemColors[4][2], stemColors[4][3], blink6)
             local model6Title = T("help_6stem_title")
             local m6W = gfx.measurestr(model6Title)
-            gfx.x = (w - m6W) / 2 + textOffsetX
+            gfx.x = stemsCenterX - m6W / 2
             gfx.y = stemY + PS(10)
             gfx.drawstr(model6Title)
 
@@ -6234,13 +6271,14 @@ local function drawArtGallery()
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             local model6Desc = T("help_6stem_desc")
             local m6dW = gfx.measurestr(model6Desc)
-            gfx.x = (w - m6dW) / 2 + textOffsetX
+            gfx.x = stemsCenterX - m6dW / 2
             gfx.y = stemY + PS(28)
             gfx.drawstr(model6Desc)
         end
 
     elseif helpState.currentTab == 4 then
         -- === REAPER FILES TAB ===
+        local helpLayoutTokens = (UI_TOKENS and UI_TOKENS.helpLayout) or {}
 
         -- Subtle procedural art background (gated by FX toggle)
         UI_BACKGROUNDS.drawStandardHelpBackground({
@@ -6267,16 +6305,29 @@ local function drawArtGallery()
             end
         end
 
-        drawHelpReaperHeader(w, contentY, textOffsetX, textOffsetY, PS)
+        drawHelpReaperHeader(w, contentY, textOffsetX, PS)
 
-        local panelX = PS(30) + textOffsetX
-        local panelY = contentY + PS(70) + textOffsetY
-        local panelW = w - PS(60)
-        local panelH = h - panelY - UI(60)
+        local reaperFrame = UI_HELP_LAYOUT.computeContentFrame({
+            tokens = helpLayoutTokens,
+            S = PS,
+            w = w,
+            h = h,
+            contentY = contentY,
+            textOffsetX = textOffsetX,
+        })
+        local panelX = reaperFrame.x
+        local panelY = reaperFrame.y
 
-        local sectionX = panelX + PS(15)
-        local sectionY = panelY + PS(15)
-        local maxW = panelW - PS(30)
+        local bodyColumn = UI_HELP_LAYOUT.computeBodyColumn({
+            tokens = helpLayoutTokens,
+            S = PS,
+            frame = reaperFrame,
+            bodyWrapWidth = helpLayoutTokens.reaperBodyWrapWidth or helpLayoutTokens.bodyWrapWidth,
+        })
+        local sectionX = bodyColumn.x
+        local sectionY = panelY + PS(helpLayoutTokens.panelInnerPadding or 15)
+        local maxW = bodyColumn.w
+        local sectionGap = PS(helpLayoutTokens.sectionGap or 12)
 
         local reaperHelpFallbacks = {
             help_reaper_selection_title = "Selection & Items",
@@ -6315,7 +6366,7 @@ local function drawArtGallery()
                 gfx.drawstr(ln)
                 sectionY = sectionY + PS(16)
             end
-            sectionY = sectionY + PS(12)
+            sectionY = sectionY + sectionGap
         end
 
         drawHelpSection("help_reaper_selection_title", "help_reaper_selection_body")
@@ -9586,39 +9637,57 @@ end
 
 drawHelpQuickStartHeader = function(w, contentY, textOffsetX, PS)
     local function PX(val) return (PS and PS(val)) or val end
-    gfx.setfont(1, "Arial", PX(28), string.byte('b'))
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     local qsTitle = getLangText("help_quickstart_title", "Quick Start")
-    local qtW = gfx.measurestr(qsTitle)
-    gfx.x = (w - qtW) / 2 + textOffsetX
-    gfx.y = contentY + PX(15)
+    local subText = getLangText("help_quickstart_sub", "A fast guide to getting stems in REAPER.")
+    local helpLayoutTokens = (UI_TOKENS and UI_TOKENS.helpLayout) or {}
+    local header = UI_HELP_LAYOUT.computeHeaderLayout({
+        tokens = helpLayoutTokens,
+        S = PX,
+        w = w,
+        contentY = contentY,
+        textOffsetX = textOffsetX,
+        title = qsTitle,
+        subtitle = subText,
+    })
+
+    gfx.setfont(1, "Arial", header.titleFont, string.byte('b'))
+    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    gfx.x = header.titleX
+    gfx.y = header.titleY
     gfx.drawstr(qsTitle)
 
-    gfx.setfont(1, "Arial", PX(14))
+    gfx.setfont(1, "Arial", header.subtitleFont)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    local subText = getLangText("help_quickstart_sub", "A fast guide to getting stems in REAPER.")
-    local subW = gfx.measurestr(subText)
-    gfx.x = (w - subW) / 2 + textOffsetX
-    gfx.y = contentY + PX(50)
+    gfx.x = header.subtitleX
+    gfx.y = header.subtitleY
     gfx.drawstr(subText)
 end
 
-drawHelpReaperHeader = function(w, contentY, textOffsetX, textOffsetY, PS)
+drawHelpReaperHeader = function(w, contentY, textOffsetX, PS)
     local function PX(val) return (PS and PS(val)) or val end
-    gfx.setfont(1, "Arial", PX(26), string.byte('b'))
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     local repTitle = getLangText("help_reaper_title", "REAPER")
-    local repW = gfx.measurestr(repTitle)
-    gfx.x = (w - repW) / 2 + textOffsetX
-    gfx.y = contentY + PX(10) + textOffsetY
+    local repSub = getLangText("help_reaper_sub", "Selection, temp files, and cleanup")
+    local helpLayoutTokens = (UI_TOKENS and UI_TOKENS.helpLayout) or {}
+    local header = UI_HELP_LAYOUT.computeHeaderLayout({
+        tokens = helpLayoutTokens,
+        S = PX,
+        w = w,
+        contentY = contentY,
+        textOffsetX = textOffsetX,
+        title = repTitle,
+        subtitle = repSub,
+    })
+
+    gfx.setfont(1, "Arial", header.titleFont, string.byte('b'))
+    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    gfx.x = header.titleX
+    gfx.y = header.titleY
     gfx.drawstr(repTitle)
 
-    gfx.setfont(1, "Arial", PX(13))
+    gfx.setfont(1, "Arial", header.subtitleFont)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    local repSub = getLangText("help_reaper_sub", "Selection, temp files, and cleanup")
-    local repSubW = gfx.measurestr(repSub)
-    gfx.x = (w - repSubW) / 2 + textOffsetX
-    gfx.y = contentY + PX(40) + textOffsetY
+    gfx.x = header.subtitleX
+    gfx.y = header.subtitleY
     gfx.drawstr(repSub)
 end
 

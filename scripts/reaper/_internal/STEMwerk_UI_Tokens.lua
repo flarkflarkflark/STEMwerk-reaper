@@ -89,4 +89,45 @@ TOKENS.about = {
     },
 }
 
+TOKENS.welcome = {
+    spacing = {
+        titleTop = 12,
+        subtitleTop = 60,
+        dividerTop = 85,
+        dividerXStartFactor = 0.2,
+        dividerXEndFactor = 0.8,
+        featuresTop = 100,
+        featureSpacing = 50,
+        leftCol = 40,
+        badgeOffsetX = 15,
+        badgeOffsetY = 12,
+        badgeRadius = 18,
+        featureTextOffsetX = 45,
+        featureDescOffsetY = 22,
+    },
+    fonts = {
+        title = 44,
+        subtitle = 16,
+        featureTitle = 16,
+        featureDesc = 13,
+    },
+}
+
+TOKENS.helpLayout = {
+    contentTop = 0,
+    contentBottomReserve = 60,
+    contentMaxWidth = 860,
+    sidePadding = 36,
+    titleFont = 27,
+    subtitleFont = 13,
+    titleTop = 12,
+    subtitleGap = 32,
+    bodyTopGap = 70,
+    sectionGap = 14,
+    bodyWrapWidth = 720,
+    reaperBodyWrapWidth = 680,
+    stemsBodyWrapWidth = 760,
+    panelInnerPadding = 18,
+}
+
 return TOKENS

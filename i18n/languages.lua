@@ -297,7 +297,7 @@ local LANGUAGES = {
 
         -- About tab
         about_title = "About STEMwerk",
-        about_subtitle = "AI-Powered Stem Separation for REAPER",
+        about_subtitle = "Stem Separation for REAPER",
         about_version = "Version",
         about_author = "Created with",
         about_claude = "Claude AI",
@@ -315,7 +315,7 @@ local LANGUAGES = {
 
         -- Welcome tab
         help_welcome_title = "Welcome to STEMwerk",
-        help_welcome_sub = "AI-powered stem separation for REAPER",
+        help_welcome_sub = "Stem Separation for REAPER",
         help_feature_vocals = "Extract vocals for remixes or karaoke",
         help_feature_drums = "Isolate drums for sampling or practice",
         help_feature_bass = "Separate bass for mixing or transcription",
@@ -676,7 +676,7 @@ local LANGUAGES = {
 
         -- About tab
         about_title = "Over STEMwerk",
-        about_subtitle = "AI-Gestuurde Stem Separatie voor REAPER",
+        about_subtitle = "Stem Separatie voor REAPER",
         about_version = "Versie",
         about_author = "Gemaakt met",
         about_claude = "Claude AI",
@@ -694,7 +694,7 @@ local LANGUAGES = {
 
         -- Welcome tab
         help_welcome_title = "Welkom bij STEMwerk",
-        help_welcome_sub = "AI-gestuurde stem-separatie voor REAPER",
+        help_welcome_sub = "Stem Separatie voor REAPER",
         help_feature_vocals = "Haal zang eruit voor remixes of karaoke",
         help_feature_drums = "Isoleer drums voor sampling of oefenen",
         help_feature_bass = "Separeer bas voor mixen of transcriptie",
@@ -1053,7 +1053,7 @@ local LANGUAGES = {
 
         -- About tab
         about_title = "Ueber STEMwerk",
-        about_subtitle = "KI-Gesteuerte Stem-Trennung fuer REAPER",
+        about_subtitle = "Stem Separation für REAPER",
         about_version = "Version",
         about_author = "Erstellt mit",
         about_claude = "Claude AI",
@@ -1071,7 +1071,7 @@ local LANGUAGES = {
 
         -- Welcome tab
         help_welcome_title = "Willkommen bei STEMwerk",
-        help_welcome_sub = "KI-gesteuerte Stem-Trennung fuer REAPER",
+        help_welcome_sub = "Stem Separation für REAPER",
         help_feature_vocals = "Gesang fuer Remixes oder Karaoke extrahieren",
         help_feature_drums = "Schlagzeug zum Samplen oder Ueben isolieren",
         help_feature_bass = "Bass zum Mischen oder Transkribieren trennen",

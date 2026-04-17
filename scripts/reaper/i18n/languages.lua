@@ -282,6 +282,7 @@ local LANGUAGES = {
         hint_nav = "< > Navigate | Scroll to zoom | Right-drag to pan | ESC to close",
         hint_cancel = "Press ESC or close window to cancel",
         click_new_art = "Click for new art",
+        gallery_fx_off_message = "Visual FX Off - Click FX to enable",
         help_gallery_controls_tip = "Gallery controls:\n- Mouse wheel: Zoom\n- Left drag: Pan\n- Right drag: Rotate\n- Double-click: Reset view\n- Space: New art\n- Left/Right: Switch tabs",
         help_about_controls_tip = "About controls:\n- Mouse wheel: Zoom\n- Left drag: Pan\n- Right drag: Rotate\n- Double-click: Reset view\n- Space: New art\n- Left/Right: Switch tabs",
         help_text_controls_tip = "Help controls:\n- Mouse wheel: Zoom text\n- Left drag: Move content\n- Right/Middle drag: Pan\n- Double-click: Reset view\n- Left/Right: Switch tabs\n- Enter: Start STEMwerk\n- ESC: Close",
@@ -297,7 +298,7 @@ local LANGUAGES = {
 
         -- About tab
         about_title = "About STEMwerk",
-        about_subtitle = "AI-Powered Stem Separation for REAPER",
+        about_subtitle = "Stem Separation for REAPER",
         about_version = "Version",
         about_author = "Created with",
         about_claude = "Claude AI",
@@ -315,7 +316,7 @@ local LANGUAGES = {
 
         -- Welcome tab
         help_welcome_title = "Welcome to STEMwerk",
-        help_welcome_sub = "AI-powered stem separation for REAPER",
+        help_welcome_sub = "Stem Separation for REAPER",
         help_feature_vocals = "Extract vocals for remixes or karaoke",
         help_feature_drums = "Isolate drums for sampling or practice",
         help_feature_bass = "Separate bass for mixing or transcription",
@@ -661,6 +662,7 @@ local LANGUAGES = {
         hint_nav = "< > Navigeer | Scroll om te zoomen | Rechts-slepen om te pannen | ESC om te sluiten",
         hint_cancel = "Druk ESC of sluit venster om te annuleren",
         click_new_art = "Klik voor nieuwe kunst",
+        gallery_fx_off_message = "Visuele FX uit - Klik op FX om in te schakelen",
         help_gallery_controls_tip = "Gallery bediening:\n- Muiswiel: Zoom\n- Links slepen: Pan\n- Rechts slepen: Rotatie\n- Dubbelklik: Reset view\n- Spatie: Nieuwe kunst\n- Links/Rechts: Wissel tabs",
         help_about_controls_tip = "About bediening:\n- Muiswiel: Zoom\n- Links slepen: Pan\n- Rechts slepen: Rotatie\n- Dubbelklik: Reset view\n- Spatie: Nieuwe kunst\n- Links/Rechts: Wissel tabs",
         help_text_controls_tip = "Help bediening:\n- Muiswiel: Zoom tekst\n- Links slepen: Verplaats content\n- Rechts/Midden slepen: Pan\n- Dubbelklik: Reset view\n- Links/Rechts: Wissel tabs\n- Enter: Start STEMwerk\n- ESC: Sluiten",
@@ -676,7 +678,7 @@ local LANGUAGES = {
 
         -- About tab
         about_title = "Over STEMwerk",
-        about_subtitle = "AI-Gestuurde Stem Separatie voor REAPER",
+        about_subtitle = "Stem Separatie voor REAPER",
         about_version = "Versie",
         about_author = "Gemaakt met",
         about_claude = "Claude AI",
@@ -694,7 +696,7 @@ local LANGUAGES = {
 
         -- Welcome tab
         help_welcome_title = "Welkom bij STEMwerk",
-        help_welcome_sub = "AI-gestuurde stem-separatie voor REAPER",
+        help_welcome_sub = "Stem Separatie voor REAPER",
         help_feature_vocals = "Haal zang eruit voor remixes of karaoke",
         help_feature_drums = "Isoleer drums voor sampling of oefenen",
         help_feature_bass = "Separeer bas voor mixen of transcriptie",
@@ -1038,6 +1040,7 @@ local LANGUAGES = {
         hint_nav = "< > Navigieren | Scrollen zum Zoomen | Rechts ziehen zum Schwenken | ESC zum Schliessen",
         hint_cancel = "ESC druecken oder Fenster schliessen zum Abbrechen",
         click_new_art = "Klicken fuer neue Kunst",
+        gallery_fx_off_message = "Visuelle FX aus - Klicke auf FX zum Aktivieren",
         help_gallery_controls_tip = "Gallery Bedienung:\n- Mausrad: Zoom\n- Links ziehen: Pan\n- Rechts ziehen: Rotation\n- Doppelklick: Reset View\n- Leertaste: Neue Kunst\n- Links/Rechts: Tabs wechseln",
         help_about_controls_tip = "About Bedienung:\n- Mausrad: Zoom\n- Links ziehen: Pan\n- Rechts ziehen: Rotation\n- Doppelklick: Reset View\n- Leertaste: Neue Kunst\n- Links/Rechts: Tabs wechseln",
         help_text_controls_tip = "Hilfe Bedienung:\n- Mausrad: Text zoomen\n- Links ziehen: Inhalt bewegen\n- Rechts/Mitte ziehen: Pan\n- Doppelklick: Reset View\n- Links/Rechts: Tabs wechseln\n- Enter: STEMwerk starten\n- ESC: Schliessen",
@@ -1053,7 +1056,7 @@ local LANGUAGES = {
 
         -- About tab
         about_title = "Ueber STEMwerk",
-        about_subtitle = "KI-Gesteuerte Stem-Trennung fuer REAPER",
+        about_subtitle = "Stem Separation für REAPER",
         about_version = "Version",
         about_author = "Erstellt mit",
         about_claude = "Claude AI",
@@ -1071,7 +1074,7 @@ local LANGUAGES = {
 
         -- Welcome tab
         help_welcome_title = "Willkommen bei STEMwerk",
-        help_welcome_sub = "KI-gesteuerte Stem-Trennung fuer REAPER",
+        help_welcome_sub = "Stem Separation für REAPER",
         help_feature_vocals = "Gesang fuer Remixes oder Karaoke extrahieren",
         help_feature_drums = "Schlagzeug zum Samplen oder Ueben isolieren",
         help_feature_bass = "Bass zum Mischen oder Transkribieren trennen",
