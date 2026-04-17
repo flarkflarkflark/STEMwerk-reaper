@@ -105,6 +105,23 @@ end
 
 local SW_SETUP = dofile(script_path .. "_internal/STEMwerk_Runtime_Setup.lua")
 
+-- Runtime/setup helper functions are delegated to SW_SETUP. Because several
+-- functions defined below (canRunFfmpeg, findPython, etc.) reference these names
+-- before the SW_SETUP.configure() call binds them, the forward declarations must
+-- be visible at parse time - otherwise Lua resolves the names as globals and
+-- crashes with "attempt to call a nil value" at runtime.
+local ensureWritableDir
+local getRuntimeBase
+local getRuntimePaths
+local resolveCommandPath
+local persistPythonPath
+local canImportAudioSeparator
+local safeDofile
+local isPythonAvailable
+local runSetup
+local verifyRuntimeAfterBootstrap
+local ensureDependenciesInteractive
+
 local function isAbsolutePath(p)
     if not p or p == "" then return false end
     if p:match("^%a:[/\\]") then return true end -- Windows drive
@@ -895,19 +912,6 @@ local function getHome()
         return os.getenv("HOME") or "/tmp"
     end
 end
-
--- Runtime/setup helper functions are now delegated to a dedicated module.
-local ensureWritableDir
-local getRuntimeBase
-local getRuntimePaths
-local resolveCommandPath
-local persistPythonPath
-local canImportAudioSeparator
-local safeDofile
-local isPythonAvailable
-local runSetup
-local verifyRuntimeAfterBootstrap
-local ensureDependenciesInteractive
 
 -- Shorten vendor-prefixed GPU names for UI (e.g. "AMD Radeon RX 9070" -> "RX 9070").
 local function sanitizeFriendlyName(name)
