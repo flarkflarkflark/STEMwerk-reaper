@@ -10,6 +10,12 @@ _DEVICE_SKIPS: List[Dict[str, str]] = []
 _ROCMINFO_ARCHES: Optional[List[str]] = None
 
 
+def _windows_no_window_kwargs() -> Dict[str, int]:
+    if platform.system() == "Windows" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def _rocm_arches_from_rocminfo() -> List[str]:
     """Best-effort list of GPU arch names (gfx...) in enumeration order."""
     try:
@@ -85,6 +91,7 @@ def _windows_gpu_names() -> List[str]:
             capture_output=True,
             text=True,
             timeout=3.0,
+            **_windows_no_window_kwargs(),
         )
         for line in (proc.stdout or "").splitlines():
             line = line.strip()
@@ -109,6 +116,7 @@ def _windows_gpu_names() -> List[str]:
             capture_output=True,
             text=True,
             timeout=3.0,
+            **_windows_no_window_kwargs(),
         )
         for line in (proc.stdout or "").splitlines():
             line = line.strip()

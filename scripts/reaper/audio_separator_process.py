@@ -73,6 +73,12 @@ class _TeeTextIO:
 _progress_file = None
 
 
+def _windows_no_window_kwargs() -> Dict[str, int]:
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 @contextmanager
 def _working_directory(path: Path):
     previous = Path.cwd()
@@ -302,7 +308,13 @@ def _clean_env() -> Dict[str, str]:
 
 def _run_cmd_lines(cmd: List[str]) -> List[str]:
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, env=_clean_env())
+        out = subprocess.check_output(
+            cmd,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=_clean_env(),
+            **_windows_no_window_kwargs(),
+        )
     except Exception:
         return []
     return [line.strip() for line in out.splitlines() if line.strip()]
