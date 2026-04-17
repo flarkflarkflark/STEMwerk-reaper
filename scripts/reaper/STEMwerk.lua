@@ -6727,8 +6727,15 @@ local function drawArtGallery()
         }
 
         local function drawHelpSection(titleKey, bodyKey)
-            local title = getLangText(titleKey, reaperHelpFallbacks[titleKey])
-            local body = getLangText(bodyKey, reaperHelpFallbacks[bodyKey] or "")
+            local function safeT(key, fallback)
+                local val = T(key)
+                if not val or val == "" or val == key then
+                    return fallback
+                end
+                return val
+            end
+            local title = safeT(titleKey, reaperHelpFallbacks[titleKey])
+            local body = safeT(bodyKey, reaperHelpFallbacks[bodyKey] or "")
             gfx.setfont(1, "Arial", PS(16), string.byte('b'))
             gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
             gfx.x = sectionX
