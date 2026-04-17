@@ -1255,6 +1255,7 @@ local getAvailableLanguages = I18N.getAvailableLanguages
 
 local UI_Window = dofile(script_path .. "_internal/STEMwerk_UI_Window.lua")
 local UI_TOKENS = dofile(script_path .. "_internal/STEMwerk_UI_Tokens.lua")
+local UI_CONTROLS = dofile(script_path .. "_internal/STEMwerk_UI_Controls.lua")
 
 -- Get list of available languages
 local function getAvailableLanguages()
@@ -4916,129 +4917,29 @@ local function drawArtGallery()
         tabX = tabX + tabWidths[i]
     end
 
-    -- === THEME TOGGLE (top right) - uses UI(), does NOT zoom ===
-    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-
-    if SETTINGS.darkMode then
-        gfx.set(0.8, 0.8, 0.5, (themeHover and 1 or 0.7) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 3, 1, 1)
-        gfx.set(0.12, 0.12, 0.14, controlsOpacity)
-        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 5, 1, 1)
-    else
-        gfx.set(1.0, 0.8, 0.2, (themeHover and 1 or 0.85) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    -- Theme click handling and tooltip
-    if themeHover and controlsOpacity > 0.3 then
-        tooltipText = getThemeToggleTooltip()
-        tooltipX, tooltipY = mx + UI(10), my + UI(15)
-        if rightMouseDown and not helpState.wasRightMouseDown then
-            cycleThemePreset()
-        end
-        if mouseDown and not helpState.wasMouseDown then
-            SETTINGS.darkMode = not SETTINGS.darkMode
-            updateTheme()
-            saveSettings()
-        end
-    end
-
-    -- === LANGUAGE TOGGLE (next to theme) - uses UI(), does NOT zoom ===
-    local langCode = string.upper(SETTINGS.language or "EN")
-    gfx.setfont(1, "Arial", UI(10), string.byte('b'))
-    local langW = gfx.measurestr(langCode)
-    local langX = themeX - langW - UI(12)
-    local langY = themeY + UI(6)
-    local langHover = mx >= langX - UI(4) and mx <= langX + langW + UI(4) and my >= langY - UI(3) and my <= langY + UI(16)
-
-    -- Draw language badge background
-    if langHover and controlsOpacity > 0.3 then
-        gfx.set(0.3, 0.4, 0.6, 0.5 * controlsOpacity)
-        gfx.rect(langX - UI(4), langY - UI(2), langW + UI(8), UI(18), 1)
-    end
-    gfx.set(0.5, 0.7, 1.0, (langHover and 1 or 0.75) * controlsOpacity)
-    gfx.x = langX
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    -- Language tooltip
-    if langHover and controlsOpacity > 0.3 then
-        tooltipText = T("tooltip_change_language")
-        tooltipX, tooltipY = mx + UI(10), my + UI(15)
-    end
-
-    if langHover and (gfx.mouse_cap & 2 == 2) and not helpState.wasRightMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.tooltips = not SETTINGS.tooltips
-        saveSettings()
-    end
-
-    if langHover and mouseDown and not helpState.wasMouseDown and controlsOpacity > 0.3 then
-        local langs = {"en", "nl", "de"}
-        local currentIdx = 1
-        for i, l in ipairs(langs) do
-            if l == SETTINGS.language then currentIdx = i break end
-        end
-        local nextIdx = (currentIdx % #langs) + 1
-        setLanguage(langs[nextIdx])
-        saveSettings()
-    end
-
-    -- === FX TOGGLE (below theme icon) - uses UI(), does NOT zoom ===
-    local fxSize = math.max(UI(12), math.floor(UI(20) * iconScale + 0.5))
-    local fxX = themeX + (themeSize - fxSize) / 2  -- Center under theme icon
-    local fxY = themeY + themeSize + UI(4)
-    local fxHover = mx >= fxX - UI(2) and mx <= fxX + fxSize + UI(2) and my >= fxY - UI(2) and my <= fxY + fxSize + UI(2)
-
-    -- Draw FX icon (stylized "FX" text or sparkle icon)
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
-    if SETTINGS.visualFX then
-        -- FX enabled: bright colored
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)  -- Green when on
-    else
-        -- FX disabled: dim/grey
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-
-    -- Draw "FX" text
-    gfx.setfont(1, "Arial", math.max(UI(8), math.floor(UI(11) * iconScale + 0.5)), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + UI(2)
-    gfx.drawstr(fxText)
-
-    -- Draw sparkle/star decorations when enabled
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)  -- Yellow sparkles
-        -- Small stars around FX
-        local starSize = UI(2)
-        gfx.circle(fxX - UI(2), fxY + UI(3), starSize, 1, 1)
-        gfx.circle(fxX + fxSize + UI(1), fxY + fxSize - UI(3), starSize, 1, 1)
-    else
-        -- Draw strikethrough when disabled
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - UI(2), fxY + fxSize / 2, fxX + fxSize + UI(2), fxY + fxSize / 2)
-    end
-
-    -- FX tooltip
-    if fxHover and controlsOpacity > 0.3 then
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX, tooltipY = mx + UI(10), my + UI(15)
-    end
-
-    -- FX click handling
-    if fxHover and mouseDown and not helpState.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
-    end
+    local topRightControlsCtx = {
+        profile = "help",
+        w = w,
+        S = UI,
+        setLanguageFn = setLanguage,
+        mx = mx,
+        my = my,
+        mouseDown = mouseDown,
+        rightMouseDown = rightMouseDown,
+        state = helpState,
+        controlsOpacity = controlsOpacity,
+        iconScale = iconScale,
+        themeX = themeX,
+        themeY = themeY,
+        themeSize = themeSize,
+        tooltipText = tooltipText,
+        tooltipX = tooltipX,
+        tooltipY = tooltipY,
+    }
+    UI_CONTROLS.drawTopRightControls(topRightControlsCtx)
+    tooltipText = topRightControlsCtx.tooltipText
+    tooltipX = topRightControlsCtx.tooltipX
+    tooltipY = topRightControlsCtx.tooltipY
 
     -- Content area starts below tabs
     local contentY = tabY + tabH + UI(10)
@@ -6008,6 +5909,9 @@ local function drawArtGallery()
 
     elseif helpState.currentTab == 1 then
         -- === WELCOME TAB - FULL WINDOW EXPERIENCE + AUDIO REACTIVE ===
+        local welcomeTokens = (UI_TOKENS and UI_TOKENS.welcome) or {}
+        local welcomeSpacing = welcomeTokens.spacing or {}
+        local welcomeFonts = welcomeTokens.fonts or {}
 
         -- Anchor for Welcome background/art/effects (not affected by text pan)
         local welcomeArtY = contentY - textOffsetY
@@ -6070,10 +5974,10 @@ local function drawArtGallery()
 
         -- Large animated STEMwerk title (replaces old "STEMperator" typography)
         do
-            local fontSize = PS(44)
+            local fontSize = PS(welcomeFonts.title or 44)
             local titleW = measureStemwerkLogo(fontSize, "Arial", true)
             local titleX = (w - titleW) / 2 + textOffsetX
-            local titleY = contentY + PS(12)
+            local titleY = contentY + PS(welcomeSpacing.titleTop or 12)
             drawWavingStemwerkLogo({
                 x = titleX,
                 y = titleY,
@@ -6090,17 +5994,22 @@ local function drawArtGallery()
         end
 
         -- Subtitle
-        gfx.setfont(1, "Arial", PS(16))
+        gfx.setfont(1, "Arial", PS(welcomeFonts.subtitle or 16))
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         local welcomeSub = T("help_welcome_sub")
         local wsW = gfx.measurestr(welcomeSub)
         gfx.x = (w - wsW) / 2 + textOffsetX
-        gfx.y = contentY + PS(60)
+        gfx.y = contentY + PS(welcomeSpacing.subtitleTop or 60)
         gfx.drawstr(welcomeSub)
 
         -- Divider line
         gfx.set(0.4, 0.4, 0.5, 0.5)
-        gfx.line(w * 0.2 + textOffsetX, contentY + PS(85), w * 0.8 + textOffsetX, contentY + PS(85))
+        gfx.line(
+            w * (welcomeSpacing.dividerXStartFactor or 0.2) + textOffsetX,
+            contentY + PS(welcomeSpacing.dividerTop or 85),
+            w * (welcomeSpacing.dividerXEndFactor or 0.8) + textOffsetX,
+            contentY + PS(welcomeSpacing.dividerTop or 85)
+        )
 
         -- Features list - LARGER and more descriptive
         local features = {
@@ -6109,27 +6018,33 @@ local function drawArtGallery()
             {icon = "≡", color = stemColors[3], title = T("help_feature_bass"), desc = "Bass guitar, synth bass, low frequencies"},
             {icon = "✦", color = stemColors[4], title = T("help_feature_other"), desc = "Guitar, keys, strings, synths, effects"},
         }
-        local featureY = contentY + PS(100)
-        local featureSpacing = PS(50)
-        local leftCol = PS(40) + textOffsetX
+        local featureY = contentY + PS(welcomeSpacing.featuresTop or 100)
+        local featureSpacing = PS(welcomeSpacing.featureSpacing or 50)
+        local leftCol = PS(welcomeSpacing.leftCol or 40) + textOffsetX
 
         for i, feat in ipairs(features) do
             -- Colored icon/badge
             gfx.set(feat.color[1], feat.color[2], feat.color[3], 0.9)
-            gfx.circle(leftCol + PS(15), featureY + PS(12), PS(18), 1, 1)
+            gfx.circle(
+                leftCol + PS(welcomeSpacing.badgeOffsetX or 15),
+                featureY + PS(welcomeSpacing.badgeOffsetY or 12),
+                PS(welcomeSpacing.badgeRadius or 18),
+                1,
+                1
+            )
 
             -- Feature title (theme-aware)
             gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-            gfx.setfont(1, "Arial", PS(16), string.byte('b'))
-            gfx.x = leftCol + PS(45)
+            gfx.setfont(1, "Arial", PS(welcomeFonts.featureTitle or 16), string.byte('b'))
+            gfx.x = leftCol + PS(welcomeSpacing.featureTextOffsetX or 45)
             gfx.y = featureY
             gfx.drawstr(feat.title)
 
             -- Feature description (theme-aware)
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.9)
-            gfx.setfont(1, "Arial", PS(13))
-            gfx.x = leftCol + PS(45)
-            gfx.y = featureY + PS(22)
+            gfx.setfont(1, "Arial", PS(welcomeFonts.featureDesc or 13))
+            gfx.x = leftCol + PS(welcomeSpacing.featureTextOffsetX or 45)
+            gfx.y = featureY + PS(welcomeSpacing.featureDescOffsetY or 22)
             gfx.drawstr(feat.desc)
 
             featureY = featureY + featureSpacing
@@ -6925,9 +6840,9 @@ local function drawArtGallery()
     local btnY = h - UI(32)
     local closeHover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
 
-    local backR, backG, backB = 0.5, 0.2, 0.2
+    local backR, backG, backB = THEME.button[1], THEME.button[2], THEME.button[3]
     if closeHover then
-        backR, backG, backB = 0.9, 0.3, 0.3
+        backR, backG, backB = THEME.buttonHover[1], THEME.buttonHover[2], THEME.buttonHover[3]
     end
     drawGlossyPill(btnX, btnY, btnW, btnH, backR, backG, backB, controlsOpacity)
     gfx.setfont(1, "Arial", UI(11), string.byte('b'))
@@ -7025,6 +6940,7 @@ local function drawArtGallery()
         end
     end
     helpState.wasMouseDown = mouseDown
+    helpState.wasRightMouseDown = rightMouseDown
 
     -- Keyboard navigation
     local char = gfx.getchar()
@@ -7176,6 +7092,7 @@ local function showArtGallery()
 
     artGalleryState.currentArt = 1
     artGalleryState.wasMouseDown = false
+    artGalleryState.wasRightMouseDown = false
     artGalleryState.startTime = os.clock()
     -- Reset camera
     artGalleryState.zoom = 1.0
@@ -8456,140 +8373,11 @@ local function drawColumnHeader(text, x, width, fontSize, y)
 end
 
 function drawResultWindowControls(ctx)
-    local w, PS = ctx.w, ctx.PS
-    local mx, my, mouseDown = ctx.mx, ctx.my, ctx.mouseDown
-    local rightMouseDown = gfx.mouse_cap & 2 == 2
-    local tooltipText = ctx.tooltipText
-    local tooltipX = ctx.tooltipX
-    local tooltipY = ctx.tooltipY
-    local resultTokens = (UI_TOKENS and UI_TOKENS.result) or {}
-    local controls = resultTokens.controls or {}
-    local gaps = resultTokens.sectionGaps or {}
-    local spacing = resultTokens.spacing or {}
-    local fonts = resultTokens.fonts or {}
-
-    local iconScale = controls.iconScale or 0.66
-    local themeSize = math.max(PS(controls.themeSizeMin or 12), math.floor(PS(controls.themeSizeBase or 20) * iconScale + 0.5))
-    local themeX = w - themeSize - PS(controls.themeRight or 10)
-    local themeY = PS(controls.themeTop or 8)
-    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-
-    local controlsLeft = themeX - PS(gaps.controlsLeftPad or 60)
-    local controlsBottom = themeY + themeSize + PS(gaps.controlsBottomPad or 30)
-    local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
-    local controlsOpacity = updateControlsOpacity(resultWindowState, mouseInControls)
-
-    if themeHover then GUI.uiClickedThisFrame = true end
-    if fxHover then GUI.uiClickedThisFrame = true end
-    if langHover then GUI.uiClickedThisFrame = true end
-
-    if SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)
-        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
-    else
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    if themeHover and rightMouseDown and not (resultWindowState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
-        cycleThemePreset()
-    end
-    if themeHover and mouseDown and not resultWindowState.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.darkMode = not SETTINGS.darkMode
-        updateTheme()
-        saveSettings()
-    end
-    if themeHover and controlsOpacity > 0.3 then
-        tooltipText = getThemeToggleTooltip()
-        tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
-    end
-
-    local fxSize = math.max(PS(controls.fxSizeMin or 10), math.floor(PS(controls.fxSizeBase or 16) * iconScale + 0.5))
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(gaps.fxOffsetY or 3)
-    local fxHover = mx >= fxX - PS(controls.fxHitPad or 2) and mx <= fxX + fxSize + PS(controls.fxHitPad or 2) and my >= fxY - PS(controls.fxHitPad or 2) and my <= fxY + fxSize + PS(controls.fxHitPad or 2)
-
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", PS(fonts.controls or 9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + PS(1)
-    gfx.drawstr(fxText)
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
-    end
-    if fxHover and mouseDown and not resultWindowState.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
-    end
-    if fxHover and controlsOpacity > 0.3 then
-        tooltipText = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
-        tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
-    end
-
-    local langW = PS(controls.langWidth or 22)
-    local langH = PS(controls.langHeight or 14)
-    local langX = themeX - langW - PS(gaps.langGap or 6)
-    local langY = themeY + (themeSize - langH) / 2
-    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
-
-    gfx.setfont(1, "Arial", PS(fonts.controls or 9), string.byte('b'))
-    local langCode = string.upper(SETTINGS.language or "EN")
-    local langTextW = gfx.measurestr(langCode)
-
-    if langHover then
-        gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
-        if controlsOpacity > 0.3 then
-            tooltipText = T("tooltip_change_language") or "Click to change language"
-            tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
-            local rightMouseDown = gfx.mouse_cap & 2 == 2
-            if rightMouseDown and not (resultWindowState.wasRightMouseDown or false) then
-                SETTINGS.tooltips = not SETTINGS.tooltips
-                saveSettings()
-            end
-            if mouseDown and not resultWindowState.wasMouseDown then
-                local langs = {"en", "nl", "de"}
-                local currentIdx = 1
-                for i, l in ipairs(langs) do
-                    if l == SETTINGS.language then currentIdx = i; break end
-                end
-                local nextIdx = (currentIdx % #langs) + 1
-                setLanguage(langs[nextIdx])
-                saveSettings()
-            end
-        end
-    else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
-    end
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    ctx.tooltipText = tooltipText
-    ctx.tooltipX = tooltipX
-    ctx.tooltipY = tooltipY
+    ctx.profile = "result"
+    ctx.S = ctx.PS
+    ctx.setLanguageFn = setLanguage
+    ctx.state = resultWindowState
+    UI_CONTROLS.drawTopRightControls(ctx)
 end
 
 function renderResultTitleArea(ctx)
