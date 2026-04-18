@@ -17,6 +17,38 @@ THEME_PRESETS = {
     classic = {
         nameKey = "theme_classic",
         label = "Classic",
+        dark = {
+            semantic = {
+                panelBg = {0.18, 0.19, 0.21},
+                panelAltBg = {0.18, 0.18, 0.20},
+                cardBg = {0.12, 0.12, 0.14},
+                border = {0.56, 0.56, 0.60},
+                textSecondary = {0.72, 0.72, 0.76},
+                textMuted = {0.56, 0.56, 0.60},
+                iconPrimary = {0.92, 0.92, 0.95},
+                iconMuted = {0.58, 0.58, 0.62},
+            },
+            style = {
+                cornerRadius = 6,
+                glossStrength = 0.55,
+            },
+        },
+        light = {
+            semantic = {
+                panelBg = {0.92, 0.92, 0.94},
+                panelAltBg = {0.88, 0.88, 0.90},
+                cardBg = {0.85, 0.85, 0.87},
+                border = {0.40, 0.40, 0.44},
+                textSecondary = {0.29, 0.29, 0.33},
+                textMuted = {0.42, 0.42, 0.46},
+                iconPrimary = {0.12, 0.12, 0.14},
+                iconMuted = {0.44, 0.44, 0.48},
+            },
+            style = {
+                cornerRadius = 6,
+                glossStrength = 0.50,
+            },
+        },
     },
     ember = {
         nameKey = "theme_ember",
@@ -31,6 +63,20 @@ THEME_PRESETS = {
             buttonPrimaryHover = {0.6, 0.45, 0.3},
             bgGradientTop = {0.11, 0.09, 0.08},
             bgGradientBottom = {0.18, 0.14, 0.12},
+            semantic = {
+                panelBg = {0.17, 0.11, 0.09},
+                panelAltBg = {0.18, 0.14, 0.12},
+                cardBg = {0.13, 0.08, 0.07},
+                border = {0.66, 0.42, 0.30},
+                textSecondary = {0.80, 0.66, 0.55},
+                textMuted = {0.62, 0.48, 0.37},
+                iconPrimary = {0.95, 0.74, 0.53},
+                iconMuted = {0.70, 0.51, 0.39},
+            },
+            style = {
+                cornerRadius = 8,
+                glossStrength = 0.74,
+            },
         },
         light = {
             accent = {0.78, 0.34, 0.24},
@@ -42,6 +88,20 @@ THEME_PRESETS = {
             buttonPrimaryHover = {0.84, 0.5, 0.36},
             bgGradientTop = {0.99, 0.95, 0.92},
             bgGradientBottom = {0.93, 0.88, 0.84},
+            semantic = {
+                panelBg = {0.95, 0.89, 0.84},
+                panelAltBg = {0.93, 0.88, 0.84},
+                cardBg = {0.87, 0.79, 0.72},
+                border = {0.69, 0.43, 0.30},
+                textSecondary = {0.44, 0.28, 0.20},
+                textMuted = {0.57, 0.39, 0.30},
+                iconPrimary = {0.70, 0.35, 0.20},
+                iconMuted = {0.58, 0.40, 0.30},
+            },
+            style = {
+                cornerRadius = 8,
+                glossStrength = 0.72,
+            },
         },
     },
     ice = {
@@ -57,6 +117,20 @@ THEME_PRESETS = {
             buttonPrimaryHover = {0.3, 0.65, 0.65},
             bgGradientTop = {0.08, 0.1, 0.12},
             bgGradientBottom = {0.14, 0.18, 0.2},
+            semantic = {
+                panelBg = {0.10, 0.14, 0.17},
+                panelAltBg = {0.14, 0.18, 0.20},
+                cardBg = {0.09, 0.16, 0.20},
+                border = {0.33, 0.63, 0.73},
+                textSecondary = {0.66, 0.84, 0.90},
+                textMuted = {0.47, 0.70, 0.78},
+                iconPrimary = {0.71, 0.93, 0.98},
+                iconMuted = {0.49, 0.72, 0.79},
+            },
+            style = {
+                cornerRadius = 7,
+                glossStrength = 0.80,
+            },
         },
         light = {
             accent = {0.14, 0.62, 0.78},
@@ -68,6 +142,20 @@ THEME_PRESETS = {
             buttonPrimaryHover = {0.26, 0.82, 0.80},
             bgGradientTop = {0.93, 0.98, 0.99},
             bgGradientBottom = {0.86, 0.93, 0.96},
+            semantic = {
+                panelBg = {0.89, 0.96, 0.98},
+                panelAltBg = {0.86, 0.93, 0.96},
+                cardBg = {0.80, 0.91, 0.95},
+                border = {0.27, 0.61, 0.72},
+                textSecondary = {0.20, 0.39, 0.45},
+                textMuted = {0.31, 0.56, 0.63},
+                iconPrimary = {0.11, 0.61, 0.73},
+                iconMuted = {0.30, 0.55, 0.63},
+            },
+            style = {
+                cornerRadius = 7,
+                glossStrength = 0.78,
+            },
         },
     },
     mono = {
@@ -83,6 +171,19 @@ THEME_PRESETS = {
             buttonPrimaryHover = {0.5, 0.5, 0.55},
             bgGradientTop = {0.11, 0.11, 0.12},
             bgGradientBottom = {0.16, 0.16, 0.17},
+            semantic = {
+                panelBg = {0.13, 0.13, 0.14},
+                panelAltBg = {0.16, 0.16, 0.17},
+                cardBg = {0.11, 0.11, 0.12},
+                border = {0.52, 0.52, 0.55},
+                textSecondary = {0.73, 0.73, 0.76},
+                textMuted = {0.58, 0.58, 0.61},
+                iconPrimary = {0.86, 0.86, 0.89},
+                iconMuted = {0.60, 0.60, 0.63},
+            },
+            style = {
+                glossStrength = 0.18,
+            },
         },
         light = {
             accent = {0.42, 0.42, 0.48},
@@ -94,6 +195,19 @@ THEME_PRESETS = {
             buttonPrimaryHover = {0.64, 0.64, 0.70},
             bgGradientTop = {0.96, 0.96, 0.97},
             bgGradientBottom = {0.90, 0.90, 0.92},
+            semantic = {
+                panelBg = {0.95, 0.95, 0.96},
+                panelAltBg = {0.90, 0.90, 0.92},
+                cardBg = {0.88, 0.88, 0.90},
+                border = {0.43, 0.43, 0.46},
+                textSecondary = {0.29, 0.29, 0.32},
+                textMuted = {0.42, 0.42, 0.46},
+                iconPrimary = {0.16, 0.16, 0.18},
+                iconMuted = {0.41, 0.41, 0.45},
+            },
+            style = {
+                glossStrength = 0.16,
+            },
         },
     },
     studio = {
@@ -133,7 +247,7 @@ THEME_PRESETS = {
                 warning = {0.74, 0.60, 0.34},
             },
             style = {
-                cornerRadius = 4,
+                cornerRadius = 3,
                 borderWeight = 1,
                 fxIntensity = 0.88,
                 shadowStrength = 0.03,
@@ -174,7 +288,7 @@ THEME_PRESETS = {
                 warning = {0.73, 0.56, 0.28},
             },
             style = {
-                cornerRadius = 4,
+                cornerRadius = 3,
                 borderWeight = 1,
                 fxIntensity = 0.84,
                 shadowStrength = 0.02,
@@ -219,7 +333,7 @@ THEME_PRESETS = {
                 warning = {0.63, 0.86, 0.44},
             },
             style = {
-                cornerRadius = 12,
+                cornerRadius = 14,
                 borderWeight = 2,
                 fxIntensity = 1.10,
                 shadowStrength = 0.18,
@@ -260,7 +374,7 @@ THEME_PRESETS = {
                 warning = {0.58, 0.74, 0.32},
             },
             style = {
-                cornerRadius = 12,
+                cornerRadius = 14,
                 borderWeight = 2,
                 fxIntensity = 1.02,
                 shadowStrength = 0.14,
@@ -305,7 +419,7 @@ THEME_PRESETS = {
                 warning = {0.95, 0.68, 0.32},
             },
             style = {
-                cornerRadius = 8,
+                cornerRadius = 9,
                 borderWeight = 2,
                 fxIntensity = 0.95,
                 shadowStrength = 0.12,
@@ -346,7 +460,7 @@ THEME_PRESETS = {
                 warning = {0.90, 0.62, 0.28},
             },
             style = {
-                cornerRadius = 8,
+                cornerRadius = 9,
                 borderWeight = 2,
                 fxIntensity = 0.90,
                 shadowStrength = 0.10,
