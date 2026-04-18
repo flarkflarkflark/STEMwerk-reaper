@@ -1638,6 +1638,125 @@ local function getTooltipPalette()
     return {0.95, 0.95, 0.97}, {0.42, 0.42, 0.46}, {0.10, 0.10, 0.12}, 0.995
 end
 
+local function getActiveThemeColors()
+    return (ACTIVE_THEME and ACTIVE_THEME.colors) or {}
+end
+
+local function getActiveThemeStyle()
+    return (ACTIVE_THEME and ACTIVE_THEME.style) or {}
+end
+
+local function getThemeStyleNumber(key, fallback)
+    local style = getActiveThemeStyle()
+    local value = style[key]
+    if type(value) == "number" then
+        return value
+    end
+    return fallback
+end
+
+local function getThemeRadius(scaleFn, fallback, maxRadius)
+    local radius = getThemeStyleNumber("cornerRadius", fallback or 0) or 0
+    if scaleFn then
+        radius = scaleFn(radius)
+    end
+    radius = math.max(0, math.floor(radius + 0.5))
+    if maxRadius then
+        radius = math.min(radius, maxRadius)
+    end
+    return radius
+end
+
+local function getThemeBorderWeight(scaleFn, fallback)
+    local weight = getThemeStyleNumber("borderWeight", fallback or 1) or 1
+    if scaleFn then
+        weight = scaleFn(weight)
+    end
+    return math.max(1, math.floor(weight + 0.5))
+end
+
+-- glossStrength
+local function getThemeGlossStrength(fallback)
+    local value = getThemeStyleNumber("glossStrength", fallback or 1) or 1
+    if value < 0 then return 0 end
+    if value > 1.5 then return 1.5 end
+    return value
+end
+
+local function mixColor(a, b, t)
+    return {
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    }
+end
+
+local function getThemeShadowColor()
+    local colors = getActiveThemeColors()
+    local accent = colors.accent or THEME.accent or {0.35, 0.65, 0.95}
+    local muted = colors.iconMuted or colors.textMuted or THEME.textHint or {0.45, 0.45, 0.5}
+    local mode = (ACTIVE_THEME and ACTIVE_THEME.meta and ACTIVE_THEME.meta.mode) or ((SETTINGS and SETTINGS.darkMode) and "dark" or "light")
+    if mode == "light" then
+        return mixColor({0.22, 0.20, 0.18}, accent, 0.12)
+    end
+    return mixColor({0.00, 0.00, 0.00}, mixColor(muted, accent, 0.25), 0.75)
+end
+
+local function drawRoundedFill(x, y, w, h, radius)
+    w = math.floor(w or 0)
+    h = math.floor(h or 0)
+    if w <= 0 or h <= 0 then return end
+    radius = math.max(0, math.min(radius or 0, math.floor(math.min(w, h) / 2)))
+    if radius <= 0 then
+        gfx.rect(x, y, w, h, 1)
+        return
+    end
+    for i = 0, h - 1 do
+        local inset = 0
+        if i < radius then
+            inset = radius - math.sqrt(math.max(0, radius * radius - (radius - i) * (radius - i)))
+        elseif i > h - 1 - radius then
+            local di = i - (h - 1 - radius)
+            inset = radius - math.sqrt(math.max(0, radius * radius - di * di))
+        end
+        gfx.line(x + inset, y + i, x + w - inset, y + i)
+    end
+end
+
+local function drawThemeShadow(x, y, w, h, radius, alphaMult)
+    local shadowStrength = getThemeStyleNumber("shadowStrength", 0) or 0
+    if shadowStrength <= 0.001 or w <= 0 or h <= 0 then
+        return
+    end
+    local shadowColor = getThemeShadowColor()
+    local sr, sg, sb = shadowColor[1], shadowColor[2], shadowColor[3]
+    local passes = math.max(1, math.min(4, math.floor(1 + shadowStrength * 18)))
+    local offset = math.max(1, math.floor(1 + shadowStrength * 10))
+    local baseAlpha = math.max(0.015, shadowStrength * 0.22) * (alphaMult or 1)
+    for i = passes, 1, -1 do
+        local passAlpha = baseAlpha * (i / passes) * 0.7
+        gfx.set(sr, sg, sb, passAlpha)
+        drawRoundedFill(x + offset, y + offset + math.floor(i / 2), w, h, radius)
+    end
+end
+
+local function drawThemeSurfaceBox(x, y, w, h, fillColor, borderColor, fillAlpha, borderAlpha, radius, borderWeight, shadowAlpha)
+    if w <= 0 or h <= 0 then return end
+    radius = math.max(0, math.min(radius or 0, math.floor(math.min(w, h) / 2)))
+    borderWeight = math.max(1, math.floor(borderWeight or 1))
+    drawThemeShadow(x, y, w, h, radius, shadowAlpha or 1)
+    gfx.set(borderColor[1], borderColor[2], borderColor[3], borderAlpha or 1)
+    drawRoundedFill(x, y, w, h, radius)
+    local innerX = x + borderWeight
+    local innerY = y + borderWeight
+    local innerW = w - borderWeight * 2
+    local innerH = h - borderWeight * 2
+    if innerW > 0 and innerH > 0 then
+        gfx.set(fillColor[1], fillColor[2], fillColor[3], fillAlpha or 1)
+        drawRoundedFill(innerX, innerY, innerW, innerH, math.max(0, radius - borderWeight))
+    end
+end
+
 -- Draw a tooltip box with stem-color top bar. Caller must set font before calling.
 -- padding/lineH/maxTextW are already scaled (S/UI/PS).
 local function drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, padding, lineH, maxTextW)
@@ -1670,8 +1789,9 @@ local function drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, pa
 
     -- Background (theme-aware, but with explicit contrast safeguards per mode)
     local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
-    gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
-    gfx.rect(tx, ty, boxW, boxH, 1)
+    local radius = getThemeRadius(nil, 6, math.floor(math.min(boxW, boxH) / 2))
+    local borderWeight = getThemeBorderWeight(nil, 1)
+    drawThemeSurfaceBox(tx, ty, boxW, boxH, ttBg, ttBorder, ttAlpha, 1, radius, borderWeight, 0.75)
 
     -- Colored top border (STEM colors gradient)
     for i = 0, boxW - 1 do
@@ -1681,10 +1801,6 @@ local function drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, pa
         gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
         gfx.line(tx + i, ty, tx + i, ty + 2)
     end
-
-    -- Border
-    gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
-    gfx.rect(tx, ty, boxW, boxH, 0)
 
     -- Text
     gfx.set(ttText[1], ttText[2], ttText[3], 1)
@@ -7665,8 +7781,9 @@ local function drawTooltip()
         if ty + th > gfx.h then ty = GUI.tooltipY - th - S(20) end
 
         local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
-        gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
-        gfx.rect(tx, ty, tw, th, 1)
+        local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
+        local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
+        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75)
 
         -- Colored top border (stem colors gradient)
         for i = 0, tw - 1 do
@@ -7676,10 +7793,6 @@ local function drawTooltip()
             gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
             gfx.line(tx + i, ty, tx + i, ty + 2)
         end
-
-        gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
-        gfx.rect(tx, ty, tw, th, 0)
-
         local labelX = tx + padding
         local valueX = tx + padding + labelColW
         local currentY = ty + padding + S(2)
@@ -7848,8 +7961,9 @@ local function drawTooltip()
         end
 
         local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
-        gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
-        gfx.rect(tx, ty, tw, th, 1)
+        local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
+        local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
+        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75)
 
         -- Colored top border (stem colors gradient)
         for i = 0, tw - 1 do
@@ -7859,10 +7973,6 @@ local function drawTooltip()
             gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
             gfx.line(tx + i, ty, tx + i, ty + 2)
         end
-
-        gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
-        gfx.rect(tx, ty, tw, th, 0)
-
         gfx.set(ttText[1], ttText[2], ttText[3], 1)
         local x = tx + padding
         local y = ty + padding + S(2)
@@ -7898,8 +8008,9 @@ local function drawTooltip()
         end
 
         local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
-        gfx.set(ttBg[1], ttBg[2], ttBg[3], ttAlpha)
-        gfx.rect(tx, ty, tw, th, 1)
+        local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
+        local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
+        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75)
 
         -- Colored top border (stem colors gradient)
         for i = 0, tw - 1 do
@@ -7909,10 +8020,6 @@ local function drawTooltip()
             gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
             gfx.line(tx + i, ty, tx + i, ty + 2)
         end
-
-        gfx.set(ttBorder[1], ttBorder[2], ttBorder[3], 1)
-        gfx.rect(tx, ty, tw, th, 0)
-
         gfx.set(ttText[1], ttText[2], ttText[3], 1)
         gfx.x = tx + padding
         gfx.y = ty + padding + S(2)
@@ -7969,15 +8076,13 @@ function drawModelLoadNoteBox(x, y, w, h, mx, my)
     local border = THEME.border or {0.35, 0.35, 0.4}
     local accent = THEME.accent or {0.35, 0.65, 0.95}
     local textColor = THEME.textDim or THEME.text or {0.85, 0.85, 0.9}
+    local radius = getThemeRadius(S, 6, math.floor(math.min(w, h) / 2))
+    local borderWeight = getThemeBorderWeight(S, 1)
 
-    gfx.set(bg[1], bg[2], bg[3], hover and 0.96 or 0.88)
-    gfx.rect(x, y, w, h, 1)
-
-    gfx.set(border[1], border[2], border[3], hover and 1 or 0.85)
-    gfx.rect(x, y, w, h, 0)
+    drawThemeSurfaceBox(x, y, w, h, bg, border, hover and 0.96 or 0.88, hover and 1 or 0.85, radius, borderWeight, 0.8)
 
     gfx.set(accent[1], accent[2], accent[3], 0.9)
-    gfx.rect(x, y, math.max(2, math.floor(h * 0.16)), h, 1)
+    drawRoundedFill(x + borderWeight, y + borderWeight, math.max(borderWeight + 1, math.floor(h * 0.16)), math.max(1, h - borderWeight * 2), math.max(0, radius - borderWeight))
 
     local fontSize = math.max(8, math.floor(h * 0.5))
     gfx.setfont(1, "Arial", fontSize)
@@ -8023,10 +8128,6 @@ local function drawCheckbox(x, y, checked, label, r, g, b, fixedW, fontSizeOverr
         baseR, baseG, baseB = brightness, brightness, brightness
     end
     drawGlossyRect(x, y, boxW, boxH, baseR, baseG, baseB, 1)
-
-    -- Border
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(x, y, boxW, boxH, 0)
 
     -- Text - white for contrast
     local textAlpha = checked and 1 or (hover and 0.95 or 0.85)
@@ -8165,10 +8266,9 @@ function renderResultMessageBox(ctx)
     local msgBoxX = PS(padding.messageBoxX or 20)
     local msgBoxW = w - (msgBoxX * 2)
     local resultBoxAlpha = (SETTINGS and SETTINGS.darkMode) and 0.30 or 0.82
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], resultBoxAlpha)
-    gfx.rect(msgBoxX, msgBoxY, msgBoxW, msgBoxH, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], (SETTINGS and SETTINGS.darkMode) and 0.6 or 0.9)
-    gfx.rect(msgBoxX, msgBoxY, msgBoxW, msgBoxH, 0)
+    local msgBoxRadius = getThemeRadius(PS, 10, math.floor(math.min(msgBoxW, msgBoxH) / 2))
+    local msgBoxBorderWeight = getThemeBorderWeight(PS, 1)
+    drawThemeSurfaceBox(msgBoxX, msgBoxY, msgBoxW, msgBoxH, THEME.inputBg, THEME.border, resultBoxAlpha, (SETTINGS and SETTINGS.darkMode) and 0.6 or 0.9, msgBoxRadius, msgBoxBorderWeight, 0.85)
 
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.setfont(1, "Arial", PS(fonts.message or 11))
@@ -8285,53 +8385,68 @@ end
 
 drawGlossyPill = function(x, y, w, h, baseR, baseG, baseB, baseA)
     baseA = baseA or 1
-    local radius = h / 2
-    local function drawPillLineAt(i)
+    local borderWeight = getThemeBorderWeight(nil, 1)
+    local radius = getThemeRadius(nil, h / 2, math.floor(h / 2))
+    local gloss = getThemeGlossStrength(1)
+    local function drawPillLineAt(px, py, pw, ph, pr, i)
         local inset = 0
-        if i < radius then
-            inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
-        elseif i > h - radius then
-            inset = radius - math.sqrt(radius * radius - (i - (h - radius)) * (i - (h - radius)))
+        if i < pr then
+            inset = pr - math.sqrt(math.max(0, pr * pr - (pr - i) * (pr - i)))
+        elseif i > ph - pr then
+            inset = pr - math.sqrt(math.max(0, pr * pr - (i - (ph - pr)) * (i - (ph - pr))))
         end
-        gfx.line(x + inset, y + i, x + w - inset, y + i)
+        gfx.line(px + inset, py + i, px + pw - inset, py + i)
+    end
+
+    drawThemeShadow(x, y, w, h, radius, 0.9)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], baseA)
+    drawRoundedFill(x, y, w, h, radius)
+
+    local innerX = x + borderWeight
+    local innerY = y + borderWeight
+    local innerW = w - borderWeight * 2
+    local innerH = h - borderWeight * 2
+    local innerRadius = math.max(0, radius - borderWeight)
+    if innerW <= 0 or innerH <= 0 then
+        return true
     end
 
     gfx.set(baseR, baseG, baseB, baseA)
-    for i = 0, h - 1 do
-        drawPillLineAt(i)
+    for i = 0, innerH - 1 do
+        drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, i)
     end
 
     local hiR = math.min(1, baseR + 0.3)
     local hiG = math.min(1, baseG + 0.3)
     local hiB = math.min(1, baseB + 0.3)
-    local highlightH = math.max(1, math.floor(h * 0.42))
+    local highlightH = math.max(1, math.floor(innerH * 0.42))
     for i = 0, highlightH - 1 do
         local t = 1 - (i / math.max(1, highlightH - 1))
-        gfx.set(hiR, hiG, hiB, 0.25 * t * baseA)
-        drawPillLineAt(i)
+        gfx.set(hiR, hiG, hiB, 0.25 * t * baseA * gloss)
+        drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, i)
     end
 
-    local bandY = math.floor(h * 0.18)
-    local bandH = math.max(1, math.floor(h * 0.22))
+    local bandY = math.floor(innerH * 0.18)
+    local bandH = math.max(1, math.floor(innerH * 0.22))
     for i = 0, bandH - 1 do
         local t = 1 - (i / math.max(1, bandH - 1))
-        gfx.set(1, 1, 1, 0.12 * t * baseA)
-        drawPillLineAt(bandY + i)
+        gfx.set(1, 1, 1, 0.12 * t * baseA * gloss)
+        drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, bandY + i)
     end
 
     local shR, shG, shB = baseR * 0.6, baseG * 0.6, baseB * 0.6
-    local shadowH = math.max(1, math.floor(h * 0.35))
+    local shadowH = math.max(1, math.floor(innerH * 0.35))
     for i = 0, shadowH - 1 do
         local t = i / math.max(1, shadowH - 1)
-        gfx.set(shR, shG, shB, 0.18 * t * baseA)
-        drawPillLineAt(h - 1 - i)
+        gfx.set(shR, shG, shB, 0.18 * t * baseA * gloss)
+        drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, innerH - 1 - i)
     end
 
     local innerR, innerG, innerB = baseR * 0.7, baseG * 0.7, baseB * 0.7
-    for i = 0, h - 1 do
-        if i < 2 or i > h - 3 then
-            gfx.set(innerR, innerG, innerB, 0.2 * baseA)
-            drawPillLineAt(i)
+    for i = 0, innerH - 1 do
+        if i < 2 or i > innerH - 3 then
+            gfx.set(innerR, innerG, innerB, 0.2 * baseA * gloss)
+            drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, i)
         end
     end
     return true
@@ -8339,38 +8454,54 @@ end
 
 drawGlossyRect = function(x, y, w, h, baseR, baseG, baseB, baseA)
     baseA = baseA or 1
+    local borderWeight = getThemeBorderWeight(nil, 1)
+    local radius = getThemeRadius(nil, 0, math.floor(math.min(w, h) / 2))
+    local gloss = getThemeGlossStrength(1)
+    drawThemeShadow(x, y, w, h, radius, 0.7)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], baseA)
+    drawRoundedFill(x, y, w, h, radius)
+
+    local innerX = x + borderWeight
+    local innerY = y + borderWeight
+    local innerW = w - borderWeight * 2
+    local innerH = h - borderWeight * 2
+    local innerRadius = math.max(0, radius - borderWeight)
+    if innerW <= 0 or innerH <= 0 then
+        return
+    end
+
     gfx.set(baseR, baseG, baseB, baseA)
-    gfx.rect(x, y, w, h, 1)
+    drawRoundedFill(innerX, innerY, innerW, innerH, innerRadius)
 
     local hiR = math.min(1, baseR + 0.3)
     local hiG = math.min(1, baseG + 0.3)
     local hiB = math.min(1, baseB + 0.3)
-    local highlightH = math.max(1, math.floor(h * 0.42))
+    local highlightH = math.max(1, math.floor(innerH * 0.42))
     for i = 0, highlightH - 1 do
         local t = 1 - (i / math.max(1, highlightH - 1))
-        gfx.set(hiR, hiG, hiB, 0.25 * t * baseA)
-        gfx.rect(x, y + i, w, 1, 1)
+        gfx.set(hiR, hiG, hiB, 0.25 * t * baseA * gloss)
+        drawRoundedFill(innerX, innerY + i, innerW, 1, math.max(0, math.min(innerRadius, i)))
     end
 
-    local bandY = math.floor(h * 0.18)
-    local bandH = math.max(1, math.floor(h * 0.22))
+    local bandY = math.floor(innerH * 0.18)
+    local bandH = math.max(1, math.floor(innerH * 0.22))
     for i = 0, bandH - 1 do
         local t = 1 - (i / math.max(1, bandH - 1))
-        gfx.set(1, 1, 1, 0.12 * t * baseA)
-        gfx.rect(x, y + bandY + i, w, 1, 1)
+        gfx.set(1, 1, 1, 0.12 * t * baseA * gloss)
+        drawRoundedFill(innerX, innerY + bandY + i, innerW, 1, math.max(0, math.min(innerRadius, bandY + i)))
     end
 
     local shR, shG, shB = baseR * 0.6, baseG * 0.6, baseB * 0.6
-    local shadowH = math.max(1, math.floor(h * 0.35))
+    local shadowH = math.max(1, math.floor(innerH * 0.35))
     for i = 0, shadowH - 1 do
         local t = i / math.max(1, shadowH - 1)
-        gfx.set(shR, shG, shB, 0.18 * t * baseA)
-        gfx.rect(x, y + (h - 1 - i), w, 1, 1)
+        gfx.set(shR, shG, shB, 0.18 * t * baseA * gloss)
+        drawRoundedFill(innerX, innerY + (innerH - 1 - i), innerW, 1, math.max(0, math.min(innerRadius, innerH - 1 - i)))
     end
 
-    gfx.set(baseR * 0.7, baseG * 0.7, baseB * 0.7, 0.2 * baseA)
-    gfx.rect(x, y, w, 1, 1)
-    gfx.rect(x, y + h - 1, w, 1, 1)
+    gfx.set(baseR * 0.7, baseG * 0.7, baseB * 0.7, 0.2 * baseA * gloss)
+    drawRoundedFill(innerX, innerY, innerW, 1, math.min(innerRadius, 1))
+    drawRoundedFill(innerX, innerY + innerH - 1, innerW, 1, math.min(innerRadius, 1))
 end
 
 -- Draw a radio button as a toggle box (like stems/presets) and return if it was clicked (scaled)
@@ -8416,10 +8547,6 @@ local function drawRadio(x, y, selected, label, color, fixedW, attentionMult, ic
         end
     end
     drawGlossyRect(x, y, boxW, boxH, baseR, baseG, baseB, baseA)
-
-    -- Border
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(x, y, boxW, boxH, 0)
 
     -- Text - white for contrast
     local textAlpha = selected and 1 or (hover and 0.95 or 0.85)
@@ -8725,14 +8852,6 @@ local function drawToggleButton(x, y, w, h, label, selected, color, fontSizeOver
     end
     drawGlossyRect(x, y, w, h, baseR, baseG, baseB, 1)
 
-    -- Border - brighter when selected
-    if selected then
-        gfx.set(1, 1, 1, 0.5)
-    else
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    end
-    gfx.rect(x, y, w, h, 0)
-
     -- Button text
     -- Keep text readable even when unselected; match Output column readability.
     local textAlpha = selected and 1 or (hover and 0.9 or 0.75)
@@ -8901,33 +9020,9 @@ function drawMainDialogModalOverlay()
     local boxX = (gfx.w - boxW) / 2
     local boxY = (gfx.h - boxH) / 2
 
-    -- Rounded rect fill (scanline)
-    local r = S(12)
-    local function roundedFill(x, y, w, h, radius)
-        w = math.floor(w)
-        h = math.floor(h)
-        radius = math.max(0, math.min(radius, math.floor(math.min(w, h) / 2)))
-        for i = 0, h - 1 do
-            local inset = 0
-            if i < radius then
-                inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
-            elseif i > h - 1 - radius then
-                local di = i - (h - 1 - radius)
-                inset = radius - math.sqrt(radius * radius - di * di)
-            end
-            gfx.line(x + inset, y + i, x + w - inset, y + i)
-        end
-    end
-
-    -- Panel shadow
-    gfx.set(0, 0, 0, 0.35 * fade)
-    roundedFill(boxX + S(2), boxY + S(3), boxW, boxH, r)
-
-    -- Panel border + bg (rounded, no square outline)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.95)
-    roundedFill(boxX, boxY, boxW, boxH, r)
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.985)
-    roundedFill(boxX + 1, boxY + 1, boxW - 2, boxH - 2, math.max(0, r - 1))
+    local r = getThemeRadius(S, 12, math.floor(math.min(boxW, boxH) / 2))
+    local borderWeight = getThemeBorderWeight(S, 1)
+    drawThemeSurfaceBox(boxX, boxY, boxW, boxH, THEME.inputBg, THEME.border, 0.985, 0.95, r, borderWeight, 1.25 * fade)
 
     -- Stem-color top bar (like tooltips)
     for i = 0, math.floor(boxW) - 1 do
@@ -8989,11 +9084,9 @@ function drawMainDialogModalOverlay()
         gfx.drawstr(inputLabel)
 
         local valueY = inputY + inputLabelH
-        local ir = math.floor(inputH / 2)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.95)
-        roundedFill(inputX, valueY, inputW, inputH, ir)
-        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
-        roundedFill(inputX + 1, valueY + 1, inputW - 2, inputH - 2, math.max(0, ir - 1))
+        local ir = getThemeRadius(S, math.floor(inputH / 2), math.floor(inputH / 2))
+        local inputBorderWeight = getThemeBorderWeight(S, 1)
+        drawThemeSurfaceBox(inputX, valueY, inputW, inputH, THEME.inputBg, THEME.border, 0.98, 0.95, ir, inputBorderWeight, 0.5)
 
         if char == 8 or char == 127 or char == 6579564 then
             modal.inputValue = inputValue:sub(1, math.max(0, #inputValue - 1))
@@ -9028,12 +9121,9 @@ function drawMainDialogModalOverlay()
     local hover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
     local col = hover and THEME.buttonPrimaryHover or THEME.buttonPrimary
 
-    -- Draw a proper pill border (no square rect): outer border pill then inner fill pill.
-    local br = math.floor(btnH / 2)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.95)
-    roundedFill(btnX, btnY, btnW, btnH, br)
-    gfx.set(col[1], col[2], col[3], 1)
-    roundedFill(btnX + 1, btnY + 1, btnW - 2, btnH - 2, math.max(0, br - 1))
+    local br = getThemeRadius(S, math.floor(btnH / 2), math.floor(btnH / 2))
+    local buttonBorderWeight = getThemeBorderWeight(S, 1)
+    drawThemeSurfaceBox(btnX, btnY, btnW, btnH, col, THEME.border, 1, 0.95, br, buttonBorderWeight, 0.95)
 
     gfx.set(1, 1, 1, 1)
     gfx.setfont(1, "Arial", S(12), string.byte('b'))
@@ -9048,10 +9138,7 @@ function drawMainDialogModalOverlay()
         cancelX = btnX + btnW + btnGap
         cancelHover = mx >= cancelX and mx <= cancelX + btnW and my >= btnY and my <= btnY + btnH
         local cancelCol = cancelHover and THEME.buttonHover or THEME.button
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.95)
-        roundedFill(cancelX, btnY, btnW, btnH, br)
-        gfx.set(cancelCol[1], cancelCol[2], cancelCol[3], 1)
-        roundedFill(cancelX + 1, btnY + 1, btnW - 2, btnH - 2, math.max(0, br - 1))
+        drawThemeSurfaceBox(cancelX, btnY, btnW, btnH, cancelCol, THEME.border, 1, 0.95, br, buttonBorderWeight, 0.95)
 
         local cancelText = T("cancel") or "Cancel"
         local cancelW = gfx.measurestr(cancelText)
@@ -12839,10 +12926,9 @@ local function drawProgressWindow()
     local badgeX = barX + barW - modelW
     local badgeY = barY + math.floor((barH - PS(18)) / 2)
     local badgeH = PS(18)
-    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
-    gfx.rect(badgeX, badgeY, modelW, badgeH, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(badgeX, badgeY, modelW, badgeH, 0)
+    local badgeRadius = getThemeRadius(PS, 8, math.floor(badgeH / 2))
+    local badgeBorderWeight = getThemeBorderWeight(PS, 1)
+    drawThemeSurfaceBox(badgeX, badgeY, modelW, badgeH, THEME.inputBg, THEME.border, 1, 1, badgeRadius, badgeBorderWeight, 0.55)
     gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
     gfx.x = badgeX + PS(8)
     gfx.y = badgeY + PS(2)

@@ -3,6 +3,19 @@
 
 local M = {}
 
+local function getActiveThemeColors()
+    return (ACTIVE_THEME and ACTIVE_THEME.colors) or {}
+end
+
+local function getColorOrFallback(key, fallback)
+    local colors = getActiveThemeColors()
+    local color = colors[key]
+    if type(color) == "table" then
+        return color
+    end
+    return fallback
+end
+
 local function cycleLanguageSetting(setLanguageFn)
     local langs = {"en", "nl", "de"}
     local currentIdx = 1
@@ -41,15 +54,20 @@ local function drawHelpControls(ctx)
     local tooltipY = ctx.tooltipY
 
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
+    local iconPrimary = getColorOrFallback("iconPrimary", {0.9, 0.7, 0.2})
+    local iconMuted = getColorOrFallback("iconMuted", {0.7, 0.7, 0.5})
+    local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
+    local success = getColorOrFallback("success", {0.4, 0.9, 0.5})
+    local warning = getColorOrFallback("warning", {0.8, 0.3, 0.3})
     if SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
+        gfx.set(iconMuted[1], iconMuted[2], iconMuted[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
         gfx.set(0, 0, 0, 1 * controlsOpacity)
         gfx.circle(themeX + themeSize / 2 + 4, themeY + themeSize / 2 - 3, themeSize / 2 - 3, 1, 1)
     else
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 3, 1, 1)
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
         for i = 0, 7 do
             local angle = i * math.pi / 4
             local x1 = themeX + themeSize / 2 + math.cos(angle) * (themeSize / 3 + 2)
@@ -84,7 +102,7 @@ local function drawHelpControls(ctx)
     local langTextW = gfx.measurestr(langCode)
 
     if langHover then
-        gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
+        gfx.set(accent[1], accent[2], accent[3], 1 * controlsOpacity)
     else
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
     end
@@ -111,7 +129,7 @@ local function drawHelpControls(ctx)
 
     local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
     if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
+        gfx.set(success[1], success[2], success[3], fxAlpha)
     else
         gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
     end
@@ -123,11 +141,11 @@ local function drawHelpControls(ctx)
     gfx.drawstr(fxText)
 
     if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
+        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], fxAlpha * 0.8)
         gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
         gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
     else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
+        gfx.set(warning[1], warning[2], warning[3], fxAlpha)
         gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
     end
 
@@ -185,15 +203,21 @@ local function drawResultControls(ctx)
         GUI.uiClickedThisFrame = true
     end
 
+    local iconPrimary = getColorOrFallback("iconPrimary", {0.9, 0.7, 0.2})
+    local iconMuted = getColorOrFallback("iconMuted", {0.7, 0.7, 0.5})
+    local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
+    local success = getColorOrFallback("success", {0.4, 0.9, 0.5})
+    local warning = getColorOrFallback("warning", {0.8, 0.3, 0.3})
+
     if SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
+        gfx.set(iconMuted[1], iconMuted[2], iconMuted[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
         gfx.set(0, 0, 0, 1 * controlsOpacity)
         gfx.circle(themeX + themeSize / 2 + 4, themeY + themeSize / 2 - 3, themeSize / 2 - 3, 1, 1)
     else
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 3, 1, 1)
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
         for i = 0, 7 do
             local angle = i * math.pi / 4
             local x1 = themeX + themeSize / 2 + math.cos(angle) * (themeSize / 3 + 2)
@@ -225,7 +249,7 @@ local function drawResultControls(ctx)
 
     local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
     if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
+        gfx.set(success[1], success[2], success[3], fxAlpha)
     else
         gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
     end
@@ -236,11 +260,11 @@ local function drawResultControls(ctx)
     gfx.y = fxY + S(1)
     gfx.drawstr(fxText)
     if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
+        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], fxAlpha * 0.8)
         gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
         gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
     else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
+        gfx.set(warning[1], warning[2], warning[3], fxAlpha)
         gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
     end
     if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
@@ -263,7 +287,7 @@ local function drawResultControls(ctx)
     local langTextW = gfx.measurestr(langCode)
 
     if langHover then
-        gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
+        gfx.set(accent[1], accent[2], accent[3], 1 * controlsOpacity)
         if controlsOpacity > 0.3 then
             tooltipText = T("tooltip_change_language") or "Click to change language"
             tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)

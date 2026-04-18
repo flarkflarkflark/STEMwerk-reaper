@@ -11,7 +11,7 @@ ACTIVE_THEME = ACTIVE_THEME or nil
 
 -- ── Theme preset registry ──────────────────────────────────────────────────────
 
-THEME_PRESET_ORDER = {"classic", "ember", "ice", "mono"}
+THEME_PRESET_ORDER = {"classic", "ember", "ice", "mono", "studio", "aurora", "copper"}
 
 THEME_PRESETS = {
     classic = {
@@ -94,6 +94,264 @@ THEME_PRESETS = {
             buttonPrimaryHover = {0.64, 0.64, 0.70},
             bgGradientTop = {0.96, 0.96, 0.97},
             bgGradientBottom = {0.90, 0.90, 0.92},
+        },
+    },
+    studio = {
+        nameKey = "theme_studio",
+        label = "Studio",
+        dark = {
+            bg = {0.15, 0.16, 0.18},
+            bgGradientTop = {0.10, 0.11, 0.12},
+            bgGradientBottom = {0.14, 0.15, 0.17},
+            inputBg = {0.12, 0.13, 0.15},
+            text = {0.94, 0.95, 0.96},
+            textDim = {0.64, 0.67, 0.70},
+            textHint = {0.47, 0.50, 0.54},
+            accent = {0.44, 0.56, 0.70},
+            accentHover = {0.52, 0.64, 0.78},
+            checkbox = {0.28, 0.30, 0.33},
+            checkboxChecked = {0.38, 0.50, 0.63},
+            button = {0.23, 0.29, 0.38},
+            buttonHover = {0.29, 0.35, 0.45},
+            buttonPrimary = {0.26, 0.37, 0.33},
+            buttonPrimaryHover = {0.32, 0.44, 0.39},
+            border = {0.39, 0.42, 0.46},
+            semantic = {
+                panelBg = {0.12, 0.13, 0.15},
+                panelAltBg = {0.15, 0.16, 0.18},
+                cardBg = {0.10, 0.11, 0.13},
+                border = {0.39, 0.42, 0.46},
+                textSecondary = {0.64, 0.67, 0.70},
+                textMuted = {0.47, 0.50, 0.54},
+                tooltipBg = {0.10, 0.11, 0.12},
+                tooltipBorder = {0.47, 0.50, 0.54},
+                tooltipText = {0.94, 0.95, 0.96},
+                iconPrimary = {0.68, 0.72, 0.77},
+                iconMuted = {0.44, 0.47, 0.51},
+                buttonText = {0.93, 0.94, 0.95},
+                success = {0.38, 0.58, 0.47},
+                warning = {0.74, 0.60, 0.34},
+            },
+            style = {
+                cornerRadius = 4,
+                borderWeight = 1,
+                fxIntensity = 0.88,
+                shadowStrength = 0.03,
+                glossStrength = 0.2,
+            },
+        },
+        light = {
+            bg = {0.90, 0.91, 0.93},
+            bgGradientTop = {0.95, 0.96, 0.97},
+            bgGradientBottom = {0.87, 0.88, 0.90},
+            inputBg = {0.85, 0.86, 0.88},
+            text = {0.11, 0.12, 0.13},
+            textDim = {0.34, 0.36, 0.39},
+            textHint = {0.47, 0.49, 0.53},
+            accent = {0.37, 0.49, 0.63},
+            accentHover = {0.45, 0.57, 0.71},
+            checkbox = {0.79, 0.80, 0.82},
+            checkboxChecked = {0.39, 0.51, 0.64},
+            button = {0.50, 0.58, 0.68},
+            buttonHover = {0.58, 0.66, 0.76},
+            buttonPrimary = {0.42, 0.58, 0.52},
+            buttonPrimaryHover = {0.50, 0.66, 0.60},
+            border = {0.41, 0.43, 0.47},
+            semantic = {
+                panelBg = {0.88, 0.89, 0.91},
+                panelAltBg = {0.85, 0.86, 0.88},
+                cardBg = {0.84, 0.85, 0.87},
+                border = {0.41, 0.43, 0.47},
+                textSecondary = {0.34, 0.36, 0.39},
+                textMuted = {0.47, 0.49, 0.53},
+                tooltipBg = {0.88, 0.89, 0.91},
+                tooltipBorder = {0.44, 0.46, 0.49},
+                tooltipText = {0.11, 0.12, 0.13},
+                iconPrimary = {0.29, 0.34, 0.39},
+                iconMuted = {0.43, 0.46, 0.50},
+                buttonText = {0.11, 0.12, 0.13},
+                success = {0.36, 0.56, 0.46},
+                warning = {0.73, 0.56, 0.28},
+            },
+            style = {
+                cornerRadius = 4,
+                borderWeight = 1,
+                fxIntensity = 0.84,
+                shadowStrength = 0.02,
+                glossStrength = 0.2,
+            },
+        },
+    },
+    aurora = {
+        nameKey = "theme_aurora",
+        label = "Aurora",
+        dark = {
+            bg = {0.09, 0.14, 0.17},
+            bgGradientTop = {0.05, 0.10, 0.12},
+            bgGradientBottom = {0.10, 0.17, 0.20},
+            inputBg = {0.07, 0.15, 0.18},
+            text = {0.92, 0.98, 0.99},
+            textDim = {0.62, 0.80, 0.84},
+            textHint = {0.41, 0.66, 0.72},
+            accent = {0.21, 0.75, 0.82},
+            accentHover = {0.33, 0.87, 0.92},
+            checkbox = {0.16, 0.24, 0.27},
+            checkboxChecked = {0.19, 0.63, 0.69},
+            button = {0.13, 0.39, 0.48},
+            buttonHover = {0.20, 0.50, 0.59},
+            buttonPrimary = {0.12, 0.53, 0.48},
+            buttonPrimaryHover = {0.19, 0.66, 0.60},
+            border = {0.25, 0.60, 0.67},
+            semantic = {
+                panelBg = {0.07, 0.12, 0.15},
+                panelAltBg = {0.10, 0.18, 0.21},
+                cardBg = {0.05, 0.14, 0.17},
+                border = {0.25, 0.60, 0.67},
+                textSecondary = {0.62, 0.80, 0.84},
+                textMuted = {0.41, 0.66, 0.72},
+                tooltipBg = {0.07, 0.12, 0.15},
+                tooltipBorder = {0.30, 0.71, 0.75},
+                tooltipText = {0.93, 0.98, 0.99},
+                iconPrimary = {0.54, 0.91, 0.96},
+                iconMuted = {0.37, 0.66, 0.72},
+                buttonText = {0.93, 0.98, 0.99},
+                success = {0.20, 0.72, 0.62},
+                warning = {0.63, 0.86, 0.44},
+            },
+            style = {
+                cornerRadius = 12,
+                borderWeight = 2,
+                fxIntensity = 1.10,
+                shadowStrength = 0.18,
+                glossStrength = 1.0,
+            },
+        },
+        light = {
+            bg = {0.89, 0.95, 0.97},
+            bgGradientTop = {0.94, 0.99, 0.99},
+            bgGradientBottom = {0.83, 0.93, 0.96},
+            inputBg = {0.81, 0.92, 0.95},
+            text = {0.08, 0.16, 0.18},
+            textDim = {0.22, 0.40, 0.45},
+            textHint = {0.34, 0.56, 0.61},
+            accent = {0.13, 0.63, 0.74},
+            accentHover = {0.23, 0.75, 0.84},
+            checkbox = {0.78, 0.89, 0.91},
+            checkboxChecked = {0.16, 0.60, 0.70},
+            button = {0.22, 0.68, 0.79},
+            buttonHover = {0.32, 0.78, 0.89},
+            buttonPrimary = {0.18, 0.73, 0.63},
+            buttonPrimaryHover = {0.28, 0.83, 0.73},
+            border = {0.23, 0.61, 0.68},
+            semantic = {
+                panelBg = {0.87, 0.95, 0.97},
+                panelAltBg = {0.81, 0.92, 0.95},
+                cardBg = {0.79, 0.91, 0.95},
+                border = {0.23, 0.61, 0.68},
+                textSecondary = {0.22, 0.40, 0.45},
+                textMuted = {0.34, 0.56, 0.61},
+                tooltipBg = {0.90, 0.97, 0.98},
+                tooltipBorder = {0.24, 0.64, 0.69},
+                tooltipText = {0.08, 0.16, 0.18},
+                iconPrimary = {0.10, 0.62, 0.72},
+                iconMuted = {0.29, 0.56, 0.61},
+                buttonText = {0.08, 0.16, 0.18},
+                success = {0.20, 0.69, 0.58},
+                warning = {0.58, 0.74, 0.32},
+            },
+            style = {
+                cornerRadius = 12,
+                borderWeight = 2,
+                fxIntensity = 1.02,
+                shadowStrength = 0.14,
+                glossStrength = 1.0,
+            },
+        },
+    },
+    copper = {
+        nameKey = "theme_copper",
+        label = "Copper",
+        dark = {
+            bg = {0.18, 0.12, 0.09},
+            bgGradientTop = {0.10, 0.07, 0.05},
+            bgGradientBottom = {0.20, 0.14, 0.10},
+            inputBg = {0.16, 0.10, 0.07},
+            text = {0.98, 0.94, 0.90},
+            textDim = {0.82, 0.69, 0.56},
+            textHint = {0.64, 0.49, 0.34},
+            accent = {0.82, 0.49, 0.28},
+            accentHover = {0.92, 0.59, 0.36},
+            checkbox = {0.34, 0.22, 0.17},
+            checkboxChecked = {0.72, 0.42, 0.24},
+            button = {0.47, 0.24, 0.17},
+            buttonHover = {0.58, 0.32, 0.22},
+            buttonPrimary = {0.58, 0.34, 0.19},
+            buttonPrimaryHover = {0.69, 0.43, 0.27},
+            border = {0.73, 0.45, 0.24},
+            semantic = {
+                panelBg = {0.16, 0.11, 0.08},
+                panelAltBg = {0.22, 0.15, 0.10},
+                cardBg = {0.14, 0.09, 0.06},
+                border = {0.73, 0.45, 0.24},
+                textSecondary = {0.82, 0.69, 0.56},
+                textMuted = {0.64, 0.49, 0.34},
+                tooltipBg = {0.13, 0.09, 0.07},
+                tooltipBorder = {0.76, 0.49, 0.30},
+                tooltipText = {0.98, 0.94, 0.90},
+                iconPrimary = {0.92, 0.67, 0.39},
+                iconMuted = {0.69, 0.49, 0.32},
+                buttonText = {0.99, 0.95, 0.91},
+                success = {0.73, 0.45, 0.23},
+                warning = {0.95, 0.68, 0.32},
+            },
+            style = {
+                cornerRadius = 8,
+                borderWeight = 2,
+                fxIntensity = 0.95,
+                shadowStrength = 0.12,
+                glossStrength = 0.65,
+            },
+        },
+        light = {
+            bg = {0.95, 0.90, 0.86},
+            bgGradientTop = {0.99, 0.95, 0.92},
+            bgGradientBottom = {0.90, 0.83, 0.77},
+            inputBg = {0.89, 0.82, 0.76},
+            text = {0.16, 0.10, 0.08},
+            textDim = {0.42, 0.27, 0.18},
+            textHint = {0.55, 0.37, 0.24},
+            accent = {0.74, 0.42, 0.20},
+            accentHover = {0.84, 0.52, 0.28},
+            checkbox = {0.84, 0.75, 0.69},
+            checkboxChecked = {0.72, 0.40, 0.19},
+            button = {0.79, 0.48, 0.30},
+            buttonHover = {0.89, 0.58, 0.38},
+            buttonPrimary = {0.84, 0.54, 0.28},
+            buttonPrimaryHover = {0.94, 0.64, 0.36},
+            border = {0.72, 0.43, 0.21},
+            semantic = {
+                panelBg = {0.93, 0.88, 0.83},
+                panelAltBg = {0.89, 0.82, 0.76},
+                cardBg = {0.88, 0.80, 0.74},
+                border = {0.72, 0.43, 0.21},
+                textSecondary = {0.42, 0.27, 0.18},
+                textMuted = {0.55, 0.37, 0.24},
+                tooltipBg = {0.96, 0.92, 0.88},
+                tooltipBorder = {0.72, 0.44, 0.25},
+                tooltipText = {0.16, 0.10, 0.08},
+                iconPrimary = {0.73, 0.39, 0.16},
+                iconMuted = {0.58, 0.36, 0.23},
+                buttonText = {0.16, 0.10, 0.08},
+                success = {0.70, 0.43, 0.22},
+                warning = {0.90, 0.62, 0.28},
+            },
+            style = {
+                cornerRadius = 8,
+                borderWeight = 2,
+                fxIntensity = 0.90,
+                shadowStrength = 0.10,
+                glossStrength = 0.65,
+            },
         },
     },
 }
@@ -202,10 +460,21 @@ local function applyThemePreset(themeTable, mode, presetId)
   local overrides = (mode == "dark") and preset.dark or preset.light
   if overrides then
         for key, value in pairs(overrides) do
-            themeTable[key] = value
+            if key ~= "semantic" and key ~= "style" then
+                themeTable[key] = value
+            end
         end
     end
     return themeTable
+end
+
+local function getThemePresetLayer(mode, presetId)
+    local resolvedPresetId = normalizeThemePreset(presetId)
+    local preset = THEME_PRESETS[resolvedPresetId]
+    if not preset then
+        return nil
+    end
+    return (mode == "dark") and preset.dark or preset.light
 end
 
 local function applyThemeEditorOverrides(legacyTheme, selection)
@@ -275,7 +544,7 @@ local function deriveSemanticTheme(legacyTheme, selection, editorOverrides)
     local checkboxBg = cloneColor(legacyTheme.checkbox)
     local checkboxCheckedBg = cloneColor(legacyTheme.checkboxChecked)
 
-    return {
+    local activeTheme = {
         meta = {
             mode = selection.mode,
             presetId = selection.presetId,
@@ -321,6 +590,7 @@ local function deriveSemanticTheme(legacyTheme, selection, editorOverrides)
             layoutDensity = "normal",
             fxIntensity = (SETTINGS and SETTINGS.visualFX) and 1 or 0,
             shadowStrength = 0,
+            glossStrength = 1.0,
         },
         derived = {
             contrastMode = selection.mode,
@@ -331,6 +601,20 @@ local function deriveSemanticTheme(legacyTheme, selection, editorOverrides)
             colors = editorOverrides,
         },
     }
+
+    local presetLayer = getThemePresetLayer(selection.mode, selection.presetId)
+    if presetLayer and type(presetLayer.semantic) == "table" then
+        for key, value in pairs(presetLayer.semantic) do
+            activeTheme.colors[key] = cloneColor(value)
+        end
+    end
+    if presetLayer and type(presetLayer.style) == "table" then
+        for key, value in pairs(presetLayer.style) do
+            activeTheme.style[key] = value
+        end
+    end
+
+    return activeTheme
 end
 
 local function buildLegacyThemeFromSemantic(activeTheme)
