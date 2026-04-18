@@ -1,6 +1,6 @@
 -- @description Stemwerk: Drums Only
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.8R
+-- @version 2.2.2-dev
 -- @changelog
 --   Quick preset: drums only.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

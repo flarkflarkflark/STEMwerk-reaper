@@ -1,6 +1,6 @@
 -- @description STEMwerk (compat wrapper)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.1.8R
+-- @version 2.2.2-dev
 -- @changelog
 --   Wrapper: old script name kept for backwards compatibility.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
