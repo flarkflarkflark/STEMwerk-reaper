@@ -7,6 +7,7 @@
 -- Draw primitive functions (drawButton, drawCheckbox, etc.) are in STEMwerk.lua for now.
 
 UI = UI or {}
+ACTIVE_THEME = ACTIVE_THEME or nil
 
 -- ── Theme preset registry ──────────────────────────────────────────────────────
 
@@ -109,50 +110,50 @@ function normalizeThemePreset(preset)
     return "classic"
 end
 
-function applyThemePreset(themeTable, darkMode)
-  local presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
-  local preset = THEME_PRESETS[presetId]
-  if not preset then
-      return themeTable
-  end
-  local overrides = darkMode and preset.dark or preset.light
-    if overrides then
-        for key, value in pairs(overrides) do
-            themeTable[key] = value
-        end
-    end
-    return themeTable
-end
-
--- ── Base colors (dark / light) + preset overlay ───────────────────────────────
--- Edit these values to change the look of STEMwerk's UI.
--- Keys used by draw functions: bg, bgGradientTop, bgGradientBottom, inputBg,
---   text, textDim, textHint, accent, accentHover, checkbox, checkboxChecked,
---   button, buttonHover, buttonPrimary, buttonPrimaryHover, border.
-
-local function shouldApplyThemeEditorOverrides()
-    return reaper.GetExtState("STEMwerk", "THEME_USE_EXT_OVERRIDES") == "1"
+local function cloneColor(color)
+    if type(color) ~= "table" then return color end
+    return {color[1], color[2], color[3]}
 end
 
 local function avg3(c)
     return ((c and c[1] or 0) + (c and c[2] or 0) + (c and c[3] or 0)) / 3
 end
 
-function updateTheme()
-  local darkMode = true
-  if SETTINGS and SETTINGS.darkMode ~= nil then
-      darkMode = SETTINGS.darkMode
-  end
+local function shouldApplyThemeEditorOverrides()
+    return reaper.GetExtState("STEMwerk", "THEME_USE_EXT_OVERRIDES") == "1"
+end
 
-  local useThemeEditorOverrides = shouldApplyThemeEditorOverrides()
-  if useThemeEditorOverrides then
-      local extDarkMode = reaper.GetExtState("STEMwerk", "THEME_darkMode")
-      if extDarkMode == "1" then darkMode = true
-      elseif extDarkMode == "0" then darkMode = false end
-  end
+local function resolveThemeSelection()
+    local settingsDarkMode = true
+    if SETTINGS and SETTINGS.darkMode ~= nil then
+        settingsDarkMode = SETTINGS.darkMode
+    end
 
-  if darkMode then
-        THEME = {
+    local resolved = {
+        mode = settingsDarkMode and "dark" or "light",
+        presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset),
+        overridesEnabled = shouldApplyThemeEditorOverrides(),
+        settingsDarkMode = settingsDarkMode,
+        editorDarkMode = nil,
+    }
+
+    if resolved.overridesEnabled then
+        local extDarkMode = reaper.GetExtState("STEMwerk", "THEME_darkMode")
+        if extDarkMode == "1" then
+            resolved.mode = "dark"
+            resolved.editorDarkMode = true
+        elseif extDarkMode == "0" then
+            resolved.mode = "light"
+            resolved.editorDarkMode = false
+        end
+    end
+
+    return resolved
+end
+
+local function buildBaseLegacyPalette(mode)
+    if mode == "dark" then
+        return {
             bg = {0.18, 0.18, 0.2},
             bgGradientTop = {0.1, 0.1, 0.12},
             bgGradientBottom = {0.18, 0.18, 0.2},
@@ -170,85 +171,220 @@ function updateTheme()
             buttonPrimaryHover = {0.3, 0.6, 0.4},
             border = {0.6, 0.6, 0.6},
         }
-    else
-        -- Light theme base colors
-        THEME = {
-            bg = {0.92, 0.92, 0.94},
-            bgGradientTop = {0.96, 0.96, 0.98},
-            bgGradientBottom = {0.88, 0.88, 0.9},
-            inputBg = {0.85, 0.85, 0.87},
-            text = {0.1, 0.1, 0.1},
-            textDim = {0.3, 0.3, 0.3},
-            textHint = {0.5, 0.5, 0.5},
-            accent = {0.2, 0.4, 0.7},
-            accentHover = {0.3, 0.5, 0.8},
-            checkbox = {0.8, 0.8, 0.8},
-            checkboxChecked = {0.3, 0.5, 0.7},
-            button = {0.3, 0.5, 0.75},
-            buttonHover = {0.4, 0.6, 0.85},
-            buttonPrimary = {0.25, 0.55, 0.35},
-            buttonPrimaryHover = {0.35, 0.65, 0.45},
-            border = {0.4, 0.4, 0.4},
-        }
     end
-    applyThemePreset(THEME, darkMode)
 
-    local ext_prefix = "THEME_"
+    return {
+        bg = {0.92, 0.92, 0.94},
+        bgGradientTop = {0.96, 0.96, 0.98},
+        bgGradientBottom = {0.88, 0.88, 0.9},
+        inputBg = {0.85, 0.85, 0.87},
+        text = {0.1, 0.1, 0.1},
+        textDim = {0.3, 0.3, 0.3},
+        textHint = {0.5, 0.5, 0.5},
+        accent = {0.2, 0.4, 0.7},
+        accentHover = {0.3, 0.5, 0.8},
+        checkbox = {0.8, 0.8, 0.8},
+        checkboxChecked = {0.3, 0.5, 0.7},
+        button = {0.3, 0.5, 0.75},
+        buttonHover = {0.4, 0.6, 0.85},
+        buttonPrimary = {0.25, 0.55, 0.35},
+        buttonPrimaryHover = {0.35, 0.65, 0.45},
+        border = {0.4, 0.4, 0.4},
+    }
+end
 
-    -- Optional Theme Editor overrides (disabled unless explicitly enabled)
-    if useThemeEditorOverrides then
-        local keys = {
-            "text", "accent", "button", "buttonPrimary", "bg"
-        }
-        for _, k in ipairs(keys) do
-            local val = reaper.GetExtState("STEMwerk", ext_prefix .. k)
-            if val and val ~= "" then
-                local r, g, b = val:match("([^,]+),([^,]+),([^,]+)")
-                if r and g and b then
-                    THEME[k] = {tonumber(r), tonumber(g), tonumber(b)}
-                    if k == "accent" then
-                        THEME.accentHover = {math.min(1, THEME[k][1]+0.1), math.min(1, THEME[k][2]+0.1), math.min(1, THEME[k][3]+0.1)}
-                        THEME.checkboxChecked = THEME[k]
-                    end
-                    if k == "button" then
-                        THEME.buttonHover = {math.min(1, THEME[k][1]+0.1), math.min(1, THEME[k][2]+0.1), math.min(1, THEME[k][3]+0.1)}
-                    end
-                    if k == "bg" then
-                        THEME.bgGradientTop = {math.max(0, THEME[k][1]-0.05), math.max(0, THEME[k][2]-0.05), math.max(0, THEME[k][3]-0.05)}
-                        THEME.bgGradientBottom = THEME[k]
-                    end
+local function applyThemePreset(themeTable, mode, presetId)
+  local resolvedPresetId = normalizeThemePreset(presetId)
+  local preset = THEME_PRESETS[resolvedPresetId]
+  if not preset then
+      return themeTable
+  end
+  local overrides = (mode == "dark") and preset.dark or preset.light
+  if overrides then
+        for key, value in pairs(overrides) do
+            themeTable[key] = value
+        end
+    end
+    return themeTable
+end
+
+local function applyThemeEditorOverrides(legacyTheme, selection)
+    local extPrefix = "THEME_"
+    local applied = {}
+
+    if not selection.overridesEnabled then
+        return applied
+    end
+
+    local keys = {"text", "accent", "button", "buttonPrimary", "bg"}
+    for _, key in ipairs(keys) do
+        local val = reaper.GetExtState("STEMwerk", extPrefix .. key)
+        if val and val ~= "" then
+            local r, g, b = val:match("([^,]+),([^,]+),([^,]+)")
+            if r and g and b then
+                local color = {tonumber(r), tonumber(g), tonumber(b)}
+                legacyTheme[key] = color
+                applied[key] = cloneColor(color)
+                if key == "accent" then
+                    legacyTheme.accentHover = {math.min(1, color[1] + 0.1), math.min(1, color[2] + 0.1), math.min(1, color[3] + 0.1)}
+                    legacyTheme.checkboxChecked = cloneColor(color)
+                end
+                if key == "button" then
+                    legacyTheme.buttonHover = {math.min(1, color[1] + 0.1), math.min(1, color[2] + 0.1), math.min(1, color[3] + 0.1)}
+                end
+                if key == "bg" then
+                    legacyTheme.bgGradientTop = {math.max(0, color[1] - 0.05), math.max(0, color[2] - 0.05), math.max(0, color[3] - 0.05)}
+                    legacyTheme.bgGradientBottom = cloneColor(color)
                 end
             end
         end
     end
 
-    -- Contrast/readability safety net
-    if darkMode then
-        if avg3(THEME.text) < 0.75 then THEME.text = {0.94, 0.94, 0.96} end
-        if avg3(THEME.textDim) < 0.55 then THEME.textDim = {0.74, 0.74, 0.78} end
-        if avg3(THEME.textHint) < 0.4 then THEME.textHint = {0.60, 0.60, 0.64} end
-        if avg3(THEME.border) < 0.35 then THEME.border = {0.52, 0.52, 0.56} end
+    return applied
+end
+
+local function applyContrastSafetyNet(legacyTheme, mode)
+    if mode == "dark" then
+        if avg3(legacyTheme.text) < 0.75 then legacyTheme.text = {0.94, 0.94, 0.96} end
+        if avg3(legacyTheme.textDim) < 0.55 then legacyTheme.textDim = {0.74, 0.74, 0.78} end
+        if avg3(legacyTheme.textHint) < 0.4 then legacyTheme.textHint = {0.60, 0.60, 0.64} end
+        if avg3(legacyTheme.border) < 0.35 then legacyTheme.border = {0.52, 0.52, 0.56} end
     else
-        if avg3(THEME.text) > 0.35 then THEME.text = {0.10, 0.10, 0.12} end
-        if avg3(THEME.textDim) > 0.45 then THEME.textDim = {0.26, 0.26, 0.30} end
-        if avg3(THEME.textHint) > 0.55 then THEME.textHint = {0.38, 0.38, 0.44} end
-        if avg3(THEME.border) > 0.65 then THEME.border = {0.42, 0.42, 0.46} end
-        if avg3(THEME.inputBg) > 0.95 then THEME.inputBg = {0.94, 0.94, 0.96} end
+        if avg3(legacyTheme.text) > 0.35 then legacyTheme.text = {0.10, 0.10, 0.12} end
+        if avg3(legacyTheme.textDim) > 0.45 then legacyTheme.textDim = {0.26, 0.26, 0.30} end
+        if avg3(legacyTheme.textHint) > 0.55 then legacyTheme.textHint = {0.38, 0.38, 0.44} end
+        if avg3(legacyTheme.border) > 0.65 then legacyTheme.border = {0.42, 0.42, 0.46} end
+        if avg3(legacyTheme.inputBg) > 0.95 then legacyTheme.inputBg = {0.94, 0.94, 0.96} end
+    end
+end
+
+local function deriveSemanticTheme(legacyTheme, selection, editorOverrides)
+    local panelBg = cloneColor(legacyTheme.bg)
+    local panelAltBg = cloneColor(legacyTheme.bgGradientBottom)
+    local cardBg = cloneColor(legacyTheme.inputBg)
+    local accent = cloneColor(legacyTheme.accent)
+    local accentHover = cloneColor(legacyTheme.accentHover)
+    local border = cloneColor(legacyTheme.border)
+    local textPrimary = cloneColor(legacyTheme.text)
+    local textSecondary = cloneColor(legacyTheme.textDim)
+    local textMuted = cloneColor(legacyTheme.textHint)
+    local buttonBg = cloneColor(legacyTheme.button)
+    local buttonHoverBg = cloneColor(legacyTheme.buttonHover)
+    local primaryButtonBg = cloneColor(legacyTheme.buttonPrimary)
+    local primaryButtonHoverBg = cloneColor(legacyTheme.buttonPrimaryHover)
+    local checkboxBg = cloneColor(legacyTheme.checkbox)
+    local checkboxCheckedBg = cloneColor(legacyTheme.checkboxChecked)
+
+    return {
+        meta = {
+            mode = selection.mode,
+            presetId = selection.presetId,
+            preset = selection.presetId,
+            overridesEnabled = selection.overridesEnabled,
+            source = {
+                mode = selection.editorDarkMode == nil and "settings" or "editor",
+                preset = "settings",
+                overrides = selection.overridesEnabled and "editor" or "none",
+            },
+        },
+        colors = {
+            appBg = cloneColor(legacyTheme.bg),
+            panelBg = panelBg,
+            panelAltBg = panelAltBg,
+            cardBg = cardBg,
+            buttonBg = buttonBg,
+            buttonHoverBg = buttonHoverBg,
+            buttonPrimaryBg = primaryButtonBg,
+            buttonPrimaryHoverBg = primaryButtonHoverBg,
+            buttonText = textPrimary,
+            accent = accent,
+            accentHover = accentHover,
+            border = border,
+            textPrimary = textPrimary,
+            textSecondary = textSecondary,
+            textMuted = textMuted,
+            tooltipBg = cloneColor(cardBg),
+            tooltipBorder = cloneColor(border),
+            tooltipText = cloneColor(textPrimary),
+            iconPrimary = cloneColor(textPrimary),
+            iconMuted = cloneColor(textMuted),
+            success = cloneColor(primaryButtonBg),
+            warning = cloneColor(accent),
+            checkboxBg = checkboxBg,
+            checkboxCheckedBg = checkboxCheckedBg,
+            bgGradientTop = cloneColor(legacyTheme.bgGradientTop),
+            bgGradientBottom = cloneColor(legacyTheme.bgGradientBottom),
+        },
+        style = {
+            cornerRadius = 0,
+            borderWeight = 1,
+            layoutDensity = "normal",
+            fxIntensity = (SETTINGS and SETTINGS.visualFX) and 1 or 0,
+            shadowStrength = 0,
+        },
+        derived = {
+            contrastMode = selection.mode,
+            legacyShape = "v1",
+        },
+        overrides = {
+            darkMode = selection.editorDarkMode,
+            colors = editorOverrides,
+        },
+    }
+end
+
+local function buildLegacyThemeFromSemantic(activeTheme)
+    local colors = (activeTheme and activeTheme.colors) or {}
+    return {
+        bg = cloneColor(colors.appBg),
+        bgGradientTop = cloneColor(colors.bgGradientTop),
+        bgGradientBottom = cloneColor(colors.bgGradientBottom),
+        inputBg = cloneColor(colors.cardBg),
+        text = cloneColor(colors.textPrimary),
+        textDim = cloneColor(colors.textSecondary),
+        textHint = cloneColor(colors.textMuted),
+        accent = cloneColor(colors.accent),
+        accentHover = cloneColor(colors.accentHover),
+        checkbox = cloneColor(colors.checkboxBg),
+        checkboxChecked = cloneColor(colors.checkboxCheckedBg),
+        button = cloneColor(colors.buttonBg),
+        buttonHover = cloneColor(colors.buttonHoverBg),
+        buttonPrimary = cloneColor(colors.buttonPrimaryBg),
+        buttonPrimaryHover = cloneColor(colors.buttonPrimaryHoverBg),
+        border = cloneColor(colors.border),
+    }
+end
+
+local function applyStemBorderOverrides()
+    if not STEM_BORDER_COLORS then
+        return
     end
 
-    -- Override STEM Stem colors (the rainbow border)
-    if STEM_BORDER_COLORS then
-        local stems = {"vocals", "drums", "bass", "other"}
-        for i, s in ipairs(stems) do
-            local val = reaper.GetExtState("STEMwerk", ext_prefix .. s)
-            if val and val ~= "" then
-                local r, g, b = val:match("([^,]+),([^,]+),([^,]+)")
-                if r and g and b then
-                    STEM_BORDER_COLORS[i] = {tonumber(r)*255, tonumber(g)*255, tonumber(b)*255}
-                end
+    local extPrefix = "THEME_"
+    local stems = {"vocals", "drums", "bass", "other"}
+    for i, stemName in ipairs(stems) do
+        local val = reaper.GetExtState("STEMwerk", extPrefix .. stemName)
+        if val and val ~= "" then
+            local r, g, b = val:match("([^,]+),([^,]+),([^,]+)")
+            if r and g and b then
+                STEM_BORDER_COLORS[i] = {tonumber(r) * 255, tonumber(g) * 255, tonumber(b) * 255}
             end
         end
     end
+end
+
+function updateTheme()
+  local selection = resolveThemeSelection()
+  local legacyTheme = buildBaseLegacyPalette(selection.mode)
+  applyThemePreset(legacyTheme, selection.mode, selection.presetId)
+  local editorOverrides = applyThemeEditorOverrides(legacyTheme, selection)
+  applyContrastSafetyNet(legacyTheme, selection.mode)
+
+  ACTIVE_THEME = deriveSemanticTheme(legacyTheme, selection, editorOverrides)
+  ACTIVE_THEME.legacy = buildLegacyThemeFromSemantic(ACTIVE_THEME)
+  THEME = ACTIVE_THEME.legacy
+
+  applyStemBorderOverrides()
 end
 
 -- ── Theme UI helpers ───────────────────────────────────────────────────────────
