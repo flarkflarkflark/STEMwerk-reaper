@@ -62,6 +62,32 @@ Risk: extra shadow passes may cost FPS on progress and result windows (many simu
   - `forest`: deep desaturated green, medium round, long-session calm
   - `soft`: large cornerRadius, no hard borders, elevation-only separation (architecture stress-test)
 
+## Audio-Reactive Guardrails (future background/art theming)
+
+Dynamic background/artwork FX are partly audio-reactive and must stay that way.
+
+Theme work may affect:
+- color bias
+- hue/saturation modulation
+- opacity bias
+- background mood
+
+Theme work must not affect:
+- motion
+- pulse behavior
+- density
+- beat emphasis
+- animation timing
+- any other audio-driven behavior
+
+Future resolution order for artwork theming:
+1. base artwork color
+2. audio-reactive behavior modulation
+3. theme color/alpha modulation
+4. visibility/contrast guardrails
+
+Core rule: theme shapes mood, audio drives behavior.
+
 ## Out of scope for theming work
 
 - `textPrimary` stays near-white in all themes (readability non-negotiable)
@@ -78,4 +104,3 @@ Risk: extra shadow passes may cost FPS on progress and result windows (many simu
 3. Evaluate for a week on the dev branch with real use
 4. Pass B (shadow bump) — only if Pass A lands cleanly
 5. Pass C items deferred to later releases
-
