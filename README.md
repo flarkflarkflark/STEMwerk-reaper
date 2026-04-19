@@ -2,11 +2,14 @@
 	<img src="docs/assets/STEMwerk.gif" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
 </p>
 
-Demucs stem separation directly inside REAPER, no round-tripping (open source, ReaPack)<br>
-Split vocals, drums, bass, and more directly inside your DAW with GPU acceleration where available.
+Local-first stem separation inside REAPER (open source, ReaPack).<br>
+Split vocals, drums, bass, and more directly in your DAW for practical production, editing, remix, and karaoke workflows.
 
 ## What is STEMwerk-reaper?
 STEMwerk-reaper is a REAPER script that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend (audio-separator/Demucs) and keeps processing on your machine.
+
+### Stable release note
+This README describes the public stable release behavior. Ongoing refactor and UI polish work happens on separate development branches and may not be in the latest stable release yet.
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
@@ -27,7 +30,7 @@ STEMwerk-reaper is a REAPER script that runs high-quality stem separation on sel
 
 ## Requirements
 - 64-bit REAPER
-- 64-bit Windows, macOS, or Linux
+- 64-bit Windows, Linux, or macOS
 - Internet access for first-time setup and first model download
 - Enough free disk space for the runtime, package cache, temporary files, and model cache
 
@@ -36,7 +39,7 @@ Recommended free space:
 - Windows bundled installer: fewer first-time downloads, but similar runtime/model space is still needed
 - Additional space is needed for downloaded models and separated stem files
 
-## What The Installer Does
+## What the installer does
 STEMwerk uses a Python runtime for separation. On first setup it may:
 
 - create a dedicated Python virtual environment
@@ -48,17 +51,19 @@ On Windows, the installer handles the runtime/bootstrap work outside REAPER.
 On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side setup and repair entry point.
 
 ## Internet And Offline Use
-Internet is normally required for:
+For most users, internet is needed on first install for:
 
-- first-time runtime setup
+- runtime/bootstrap setup
 - backend package installation
-- first-time model download
+- first model download
 
-After setup is complete and the model is cached locally, normal separation usually works offline.
+After runtime setup is complete and your model is cached, normal separation is typically offline.
 
-For releasing pre-zipped offline model packs (`Fast`, `Quality`, `6-Stem`, `All`), see `docs/OFFLINE_MODEL_PACKS.md`.
+Windows release assets may also include bundled or offline-oriented installers for specific stable versions. Those reduce or remove first-run downloads, but you should still run `STEMwerk-SETUP.lua` when asked to verify/repair the runtime inside REAPER.
 
 ## Backend Support
+Windows and Linux are the primary day-to-day validated environments. macOS is supported, but backend parity can vary by system and Python/backend package availability.
+
 ### CPU
 - Windows: supported
 - macOS: supported
@@ -78,46 +83,53 @@ For releasing pre-zipped offline model packs (`Fast`, `Quality`, `6-Stem`, `All`
 - Platform-specific acceleration should be treated as best-effort unless explicitly documented otherwise
 
 ## Download Expectations
-Installer/runtime size and model size are separate.
+Use this quick guide:
 
-Windows installers:
-- `STEMwerk-Setup-<version>.exe`: thin installer
+- Fresh Windows install: use the current Windows installer release asset.
+- Existing Windows bundled/offline install (including 2.2.1.4-era installs): use the matching offline patch/update installer when available for that release line.
+- Linux/macOS stable users: use ReaPack or manual script install, then run `STEMwerk-SETUP.lua`.
+
+Windows installer asset types you may see:
+- `STEMwerk-Setup-<version>.exe`: thin/online installer
 - `STEMwerk-Setup-<version>-bundled.exe`: bundled Python + FFmpeg installer
-- `STEMwerk-<version>-offline-patch.exe`: small patch installer for existing offline installs
+- `STEMwerk-<version>-offline-patch.exe`: patch installer for existing offline/bundled installs
 
-Approximate first-use model downloads:
+Approximate first-use model downloads (when not already bundled/cached):
 - `Fast` (`htdemucs`): about 84 MB
 - `Quality` (`htdemucs_ft`): about 337 MB
 - `6-Stem` (`htdemucs_6s`): about 55 MB
 
-These model downloads are the same for CPU and GPU. Only the runtime/backend packages differ.
-
-Note: the 6-stem model is not necessarily larger than the 4-stem models. Model size depends on the checkpoint set used by the model, not just the number of output stems.
+Model size is separate from runtime/bootstrap size, and model download size is not a direct indicator of how many stems a model outputs.
 
 ## Windows Notes
 - The installer is the recommended setup path on Windows.
 - ReaPack is not recommended for first-time Windows setup because it installs scripts only, not the full runtime.
-- During first-time setup, the installer may appear to pause for several minutes while Python packages are resolved and installed. This is most noticeable during the `audio-separator` step and can take longer on slower systems or virtual machines.
-- Windows setup now verifies ONNX Runtime automatically and installs the required backend package when needed.
-- For a normal Windows first run, the installer is the canonical setup path. `STEMwerk-SETUP.lua` is a REAPER-side verify/repair path, not a replacement for the installer bootstrap.
+- During first-time setup, installer steps can appear paused for several minutes while Python/backend packages are resolved.
+- For stable releases around `2.2.1.4` and newer hotfixes, offline/bundled users may also get a small offline patch installer path.
+- `STEMwerk-SETUP.lua` is a REAPER-side verify/repair tool. It does not replace the Windows installer bootstrap path.
+
+### Updating from older Windows offline installs (2.2.1.4+)
+- If you already use an older bundled/offline Windows install, prefer the matching `*-offline-patch.exe` for that same release line when available.
+- If no matching patch asset exists, use the current full Windows installer for your target version.
+- Quick release links: [v2.2.1.4](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.1.4), [v2.2.1.5](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.1.5), [current stable](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/latest).
+- After any installer update, run `STEMwerk-SETUP.lua` once to verify paths/runtime state.
+- If setup still reports missing runtime/bootstrap pieces, rerun the installer first, then rerun `STEMwerk-SETUP.lua`.
 
 ## Installation
 
-### Recommended (Installer)
-1. Download the latest installer for your platform (Windows/macOS/Linux).
-2. Run the installer.
-3. Open REAPER.
-4. If the scripts are not visible yet in the Action List, use Actions -> ReaScript -> Load ReaScript... and load `STEMwerk-SETUP.lua`, `STEMwerk.lua`, or `STEMwerk_Setup_Toolbar.lua` from `REAPER/Scripts/STEMwerk-reaper/`.
-5. On macOS and Linux, run `STEMwerk-SETUP.lua` first.
-6. Then run `STEMwerk.lua` (shown in REAPER as `Stemwerk: Main`).
+### Recommended (Stable users)
+1. Windows: use the current Windows installer release asset (`.exe`).
+2. Linux/macOS: install via ReaPack (or manual install), then run `STEMwerk-SETUP.lua`.
+3. Open REAPER and ensure `STEMwerk-SETUP.lua` and `STEMwerk.lua` are present in the Action List.
+4. Run `STEMwerk-SETUP.lua` first when prompted (or after updates/repairs), then run `STEMwerk.lua`.
 
-On Windows, the installer handles the runtime/bootstrap work outside REAPER.
-On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side bootstrap and repair entry point.
-
-On Windows, `STEMwerk-SETUP.lua` does not replace the installer bootstrap. If the runtime is incomplete, re-run the Windows installer first.
+Notes:
+- Windows installer flow is the canonical bootstrap path for stable Windows use.
+- On Linux/macOS, `STEMwerk-SETUP.lua` is the normal in-REAPER setup/repair entry point.
+- On Windows, if runtime/bootstrap is incomplete, rerun the installer first, then verify with `STEMwerk-SETUP.lua`.
 
 ### Manual / Developer (Advanced)
-1. Install a 64-bit Python 3.x and ensure it is on your PATH.
+1. Install a supported 64-bit Python 3 version and ensure it is on your PATH.
 2. Clone or download this repository.
 3. In REAPER: Actions -> Show action list -> ReaScript: Load ReaScript...
 4. Load and run `scripts/reaper/STEMwerk-SETUP.lua` for guided setup.
@@ -148,13 +160,24 @@ Example workflow:
 ### REAPER Action List: which scripts to use
 To avoid confusion, only these are meant for normal use:
 - `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) — use this for manual installs, ReaPack installs, and the normal bootstrap/repair flow on macOS/Linux.
-- `Stemwerk: Main` (`STEMwerk.lua`) — the main UI.
-- `Stemwerk: Karaoke`, `Stemwerk: Vocals Only`, `Stemwerk: Drums Only`, `Stemwerk: Bass Only`, `Stemwerk: All Stems` — optional presets.
+- `STEMwerk: Main` (`STEMwerk.lua`) — the main UI.
+- `STEMwerk: Karaoke`, `STEMwerk: Vocals Only`, `STEMwerk: Drums Only`, `STEMwerk: Bass Only`, `STEMwerk: All Stems` — optional presets.
 
 Internal/troubleshooting (not for regular use):
 - everything under `scripts/reaper/_internal/` — runtime helpers used by the public scripts
 
 Note: REAPER does not auto-register scripts in the Action List. Use Actions → ReaScript → Load ReaScript… or run `STEMwerk_Setup_Toolbar.lua` to register the standard actions.
+
+## First-run expectations
+- First run can take a while: STEMwerk may need to create or verify its runtime, install backend packages, and download the selected model.
+- Setup time depends on OS, backend path (CPU/GPU), internet speed, and package resolver speed.
+- This is expected behavior for a first install or major update, not a normal "per-track" processing delay.
+
+## Troubleshooting setup/runtime
+- If setup fails or runtime looks incomplete, run `STEMwerk-SETUP.lua` to verify/repair the install.
+- Check the STEMwerk logs shown by setup/runtime diagnostics to identify the failing step (Python, FFmpeg, backend package, model download, permissions, etc.).
+- Backend behavior differs by system and drivers: CPU is the safest fallback, while CUDA/DirectML/ROCm availability depends on hardware and compatible packages.
+- On Windows, if bootstrap/runtime files are missing, re-run the installer first, then verify with `STEMwerk-SETUP.lua`.
 
 ## REAPER workflows
 - New tracks: Create dedicated stem tracks, optionally grouped in a folder
