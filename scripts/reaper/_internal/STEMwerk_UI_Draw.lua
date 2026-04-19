@@ -88,6 +88,12 @@ function M.fitTextToBox(text, availableW, baseFontSize, minFontSize)
     return text, tw, fontSize
 end
 
+local function fitControlLabel(label, availableW, baseFontSize, minScale, hardMin)
+    local minByScale = math.floor((baseFontSize or 0) * (minScale or 0.84) + 0.5)
+    local minFontSize = math.max(hardMin or 0, minByScale)
+    return M.fitTextToBox(label, availableW, baseFontSize, minFontSize)
+end
+
 -- Draw a tooltip box with stem-color top bar. Caller must set font before calling.
 -- padding/lineH/maxTextW are already scaled (S/UI/PS).
 function M.drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, padding, lineH, maxTextW)
@@ -600,9 +606,9 @@ function M.drawCheckbox(x, y, checked, label, r, g, b, fixedW, fontSizeOverride)
 
     local textAlpha = checked and 1 or (hover and 0.95 or 0.85)
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = S(9)
+    local minFontSize = math.max(S(10), math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
-    local labelText, tw, usedFontSize = M.fitTextToBox(label, boxW - padding * 2, baseFontSize, minFontSize)
+    local labelText, tw, usedFontSize = fitControlLabel(label, boxW - padding * 2, baseFontSize, 0.86, minFontSize)
     local textX = x + (boxW - tw) / 2
     local textH = gfx.texth
     local textY = y + (boxH - textH) / 2
@@ -683,7 +689,7 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
 
     local textAlpha = selected and 1 or (hover and 0.95 or 0.85)
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = lockFontSize and baseFontSize or S(9)
+    local minFontSize = lockFontSize and baseFontSize or math.max(S(10), math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
 
     if icon == "explode" then
@@ -698,7 +704,7 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
 
         local size = math.max(6, boxH * 0.52)
         local reservedLeft = S(5) + size + S(8)
-        local labelText, tw, usedFontSize = M.fitTextToBox(label, boxW - reservedLeft - padding, baseFontSize, minFontSize)
+        local labelText, tw, usedFontSize = fitControlLabel(label, boxW - reservedLeft - padding, baseFontSize, 0.88, minFontSize)
         local labelX = x + boxW - padding - tw
         local labelY = y + S(2)
         gfx.set(0, 0, 0, 0.35 * textAlpha)
@@ -772,7 +778,7 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
         end
         gfx.circle(cx, cy, (size * 0.16) * pulse, 1, 1)
     else
-        local labelText, tw, usedFontSize = M.fitTextToBox(label, boxW - padding * 2, baseFontSize, minFontSize)
+        local labelText, tw, usedFontSize = fitControlLabel(label, boxW - padding * 2, baseFontSize, 0.86, minFontSize)
         local textX = x + (boxW - tw) / 2
         local textH = gfx.texth
         local textY = y + (boxH - textH) / 2
@@ -837,9 +843,9 @@ function M.drawToggleButton(x, y, w, h, label, selected, color, fontSizeOverride
 
     local textAlpha = selected and 1 or (hover and 0.9 or 0.75)
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = S(9)
+    local minFontSize = math.max(S(10), math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
-    local labelText, tw, usedFontSize = M.fitTextToBox(label, w - padding * 2, baseFontSize, minFontSize)
+    local labelText, tw, usedFontSize = fitControlLabel(label, w - padding * 2, baseFontSize, 0.86, minFontSize)
     local textX = x + (w - tw) / 2
     local textH = gfx.texth
     local textY = y + (h - textH) / 2
@@ -914,9 +920,9 @@ function M.drawButton(x, y, w, h, label, isDefault, color, fontSizeOverride)
     drawGlossyPill(x, y, w, h, baseR, baseG, baseB)
 
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = S(9)
+    local minFontSize = math.max(S(10), math.floor(baseFontSize * 0.84 + 0.5))
     local padding = S(4)
-    local labelText, tw, usedFontSize = M.fitTextToBox(label, w - padding * 2, baseFontSize, minFontSize)
+    local labelText, tw, usedFontSize = fitControlLabel(label, w - padding * 2, baseFontSize, 0.84, minFontSize)
     local textX = x + (w - tw) / 2
     local textH = gfx.texth
     local textY = y + (h - textH) / 2

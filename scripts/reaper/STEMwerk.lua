@@ -1251,6 +1251,21 @@ T = I18N.T
 local trPlural = I18N.trPlural
 local getAvailableLanguages = I18N.getAvailableLanguages
 
+local function getProcessingWindowTitle()
+    local label = (type(T) == "function" and T("window_title_processing")) or "Processing.."
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+end
+
+local function getCompleteWindowTitle()
+    local label = (type(T) == "function" and T("window_title_complete")) or "Complete"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+end
+
+local function getMultiTrackWindowTitle()
+    local label = (type(T) == "function" and T("window_title_multi_track")) or "Multi-Track Progress"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+end
+
 -- Forward declare GUI so early helpers (e.g. handleArtAdvance) can reference it safely.
 
 local UI_Window = dofile(script_path .. "_internal/STEMwerk_UI_Window.lua")
@@ -7786,7 +7801,7 @@ function renderResultTitleArea(ctx)
         {100, 255, 150},
     }
     local stemPart = "STEM"
-    local restPart = "werk Complete!"
+    local restPart = T("complete_title_suffix") or "werk Complete!"
     local stemW = gfx.measurestr(stemPart)
     local restW = gfx.measurestr(restPart)
     local totalW = stemW + restW
@@ -10209,38 +10224,45 @@ function renderMainColumns(ctx)
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
-    local presetsColFontSize = getUniformFontSizeCached("main_presets_col", presetLabels, colW)
-    local commonBtnFontSize = presetsColFontSize
+    local presetsBtnFontSize = getUniformFontSizeCached("main_presets_col", presetLabels, colW)
+
+    local processingLabels = {
+        T("parallel") or "Parallel",
+        T("sequential") or "Sequential",
+        T("temp_files_keep") or "Keep",
+        T("temp_files_delete") or "Delete",
+    }
+    local processingBtnFontSize = getUniformFontSizeCached("main_processing_col", processingLabels, modelColW)
 
     local presetY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
 
-    if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, {80, 80, 90}, commonBtnFontSize) then applyPresetKaraoke() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, {80, 80, 90}, presetsBtnFontSize) then applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelAll, false, {80, 80, 90}, commonBtnFontSize) then applyPresetAll() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelAll, false, {80, 80, 90}, presetsBtnFontSize) then applyPresetAll() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
 
     presetY = presetY + S(28)
 
-    if drawButton(col1X, presetY, colW, btnH, presetLabelVocals, false, {255, 100, 100}, commonBtnFontSize) then applyPresetVocalsOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelVocals, false, {255, 100, 100}, presetsBtnFontSize) then applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelDrums, false, {100, 200, 255}, commonBtnFontSize) then applyPresetDrumsOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelDrums, false, {100, 200, 255}, presetsBtnFontSize) then applyPresetDrumsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelBass, false, {150, 100, 255}, commonBtnFontSize) then applyPresetBassOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelBass, false, {150, 100, 255}, presetsBtnFontSize) then applyPresetBassOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelOther, false, {100, 255, 150}, commonBtnFontSize) then applyPresetOtherOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelOther, false, {100, 255, 150}, presetsBtnFontSize) then applyPresetOtherOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
     if is6Stem then
-        if drawButton(col1X, presetY, colW, btnH, presetLabelPiano, false, {255, 120, 200}, commonBtnFontSize) then applyPresetPianoOnly() end
+        if drawButton(col1X, presetY, colW, btnH, presetLabelPiano, false, {255, 120, 200}, presetsBtnFontSize) then applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + S(22)
-        if drawButton(col1X, presetY, colW, btnH, presetLabelGuitar, false, {255, 180, 100}, commonBtnFontSize) then applyPresetGuitarOnly() end
+        if drawButton(col1X, presetY, colW, btnH, presetLabelGuitar, false, {255, 180, 100}, presetsBtnFontSize) then applyPresetGuitarOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + S(22)
     end
@@ -10266,14 +10288,14 @@ function renderMainColumns(ctx)
             stemLabels[#stemLabels + 1] = tostring(dn) .. " (" .. st.key .. ")"
         end
     end
-    getUniformFontSizeCached("main_stems_col", stemLabels, colW)
+    local stemsBtnFontSize = getUniformFontSizeCached("main_stems_col", stemLabels, colW)
 
     for i, stem in ipairs(STEMS) do
         if not stem.sixStemOnly or is6Stem then
             local k = tostring(stem.name or ""):lower()
             local displayName = T(k) or stem.name
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
-            if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, commonBtnFontSize) then
+            if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize) then
                 STEMS[i].selected = not STEMS[i].selected
             end
             local tooltipKey = stemTooltipKeys[stem.name] or "tooltip_stem_other"
@@ -10293,7 +10315,7 @@ function renderMainColumns(ctx)
     end
     modelLabels[#modelLabels + 1] = T("parallel")
     modelLabels[#modelLabels + 1] = T("sequential")
-    getUniformFontSizeCached("main_model_col", modelLabels, modelBoxW)
+    local modelBtnFontSize = getUniformFontSizeCached("main_model_col", modelLabels, modelBoxW)
 
     local modelY = contentTop + S(20)
     local modelDescKeys = {
@@ -10309,7 +10331,7 @@ function renderMainColumns(ctx)
     for _, model in ipairs(MODELS) do
         local modelAvailable = isModelAvailableInCurrentMode(model.id)
         local modelColor = modelAvailable and nil or {120, 120, 120}
-        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, nil, modelBoxW, nil, nil, commonBtnFontSize) and modelAvailable then
+        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, nil, modelBoxW, nil, nil, modelBtnFontSize) and modelAvailable then
             local prevModel = SETTINGS.model
             SETTINGS.model = model.id
             if prevModel ~= SETTINGS.model then
@@ -10340,12 +10362,12 @@ function renderMainColumns(ctx)
         w = modelBoxW,
         btnH = btnH,
         headerFont = mainHeaderFont,
-        btnFont = commonBtnFontSize,
+        btnFont = processingBtnFontSize,
     }
     renderProcessingHeader(ctx)
     ctx.proc = nil
 
-    drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFontSize, mainHeaderFont)
+    drawDeviceColumn(col4X, deviceColW, contentTop, btnH, modelBtnFontSize, mainHeaderFont)
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("output"), col5X, outputColW, mainHeaderFont, contentTop)
@@ -10366,7 +10388,7 @@ function renderMainColumns(ctx)
     local outBoxH = S(20)
     local iconSize = math.max(6, outBoxH * 0.52)
     local reservedLeftForIcon = S(5) + iconSize + S(8)
-    getUniformFontSizeCached("main_output_col", {
+    local outputBtnFontSize = getUniformFontSizeCached("main_output_col", {
         T("new_track"),
         T("new_tracks"),
         inPlaceLabel,
@@ -10375,6 +10397,9 @@ function renderMainColumns(ctx)
         HELPERS.getStemFileProjectLabel(),
         "Custom",
         HELPERS.getSetCustomPathLabel(),
+    }, outBoxW)
+
+    local afterBtnFontSize = getUniformFontSizeCached("main_after_col", {
         "Clr T+M",
         "Clr -T",
         "Clr Off",
@@ -10392,13 +10417,13 @@ function renderMainColumns(ctx)
     }, outBoxW, reservedLeftForIcon)
 
     local outY = contentTop + S(20)
-    if drawRadio(col5X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW, nil, nil, commonBtnFontSize) then
+    if drawRadio(col5X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW, nil, nil, outputBtnFontSize) then
         SETTINGS.createNewTracks = true
         SETTINGS.postProcessTakes = "none"
     end
     setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
     outY = outY + S(22)
-    if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW, nil, nil, commonBtnFontSize) then
+    if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW, nil, nil, outputBtnFontSize) then
         SETTINGS.createNewTracks = false
     end
     setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
@@ -10409,19 +10434,19 @@ function renderMainColumns(ctx)
     gfx.setfont(1, "Arial", S(13))
 
     outY = outY + S(20)
-    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "temp", "Temp", nil, outBoxW, nil, nil, commonBtnFontSize) then
+    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "temp", "Temp", nil, outBoxW, nil, nil, outputBtnFontSize) then
         SETTINGS.stemFileDestination = "temp"
     end
     setTooltip(col5X, outY, outBoxW, btnH, HELPERS.getStemFilesTempTooltip())
 
     outY = outY + S(22)
-    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "project_media", HELPERS.getStemFileProjectLabel(), nil, outBoxW, nil, nil, commonBtnFontSize) then
+    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "project_media", HELPERS.getStemFileProjectLabel(), nil, outBoxW, nil, nil, outputBtnFontSize) then
         SETTINGS.stemFileDestination = "project_media"
     end
     setTooltip(col5X, outY, outBoxW, btnH, HELPERS.getStemFilesProjectTooltip())
 
     outY = outY + S(22)
-    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "custom", HELPERS.getStemFileCustomLabel(), nil, outBoxW, nil, nil, commonBtnFontSize) then
+    if drawRadio(col5X, outY, SETTINGS.stemFileDestination == "custom", HELPERS.getStemFileCustomLabel(), nil, outBoxW, nil, nil, outputBtnFontSize) then
         SETTINGS.stemFileDestination = "custom"
     end
     setTooltip(col5X, outY, outBoxW, btnH, HELPERS.getStemFilesCustomTooltip())
@@ -10434,7 +10459,7 @@ function renderMainColumns(ctx)
         elseif #customPathLabel > 24 then
             customPathLabel = "..." .. customPathLabel:sub(-21)
         end
-        if drawButton(col5X, outY, outBoxW, btnH, customPathLabel, false, {80, 80, 90}, commonBtnFontSize) then
+        if drawButton(col5X, outY, outBoxW, btnH, customPathLabel, false, {80, 80, 90}, outputBtnFontSize) then
             openCustomFolderDialog()
         end
         setTooltip(col5X, outY, outBoxW, btnH, HELPERS.trimString(SETTINGS.customStemDir) ~= "" and SETTINGS.customStemDir or HELPERS.getStemFilesCustomPathTooltip())
@@ -10451,19 +10476,19 @@ function renderMainColumns(ctx)
         drawColumnHeader(T("after"), col6X, afterBoxW, mainHeaderFont, contentTop)
         gfx.setfont(1, "Arial", S(13))
 
-        if drawCheckbox(col6X, afterY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, afterBoxW, commonBtnFontSize) then
+        if drawCheckbox(col6X, afterY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
             SETTINGS.createFolder = not SETTINGS.createFolder
         end
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_create_folder"))
 
         afterY = afterY + S(22)
-        if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, commonBtnFontSize) then
+        if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, afterBtnFontSize) then
             HELPERS.cycleColorMode()
         end
         setTooltip(col6X, afterY, afterBoxW, btnH, HELPERS.getColorModeTooltip())
 
         afterY = afterY + S(22)
-        if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, commonBtnFontSize) then
+        if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
             SETTINGS.muteOriginal = not SETTINGS.muteOriginal
             if SETTINGS.muteOriginal then
                 SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
@@ -10474,7 +10499,7 @@ function renderMainColumns(ctx)
 
         afterY = afterY + S(22)
         local delItemColor = SETTINGS.deleteOriginal and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], afterBoxW, commonBtnFontSize) then
+        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], afterBoxW, afterBtnFontSize) then
             SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
             if SETTINGS.deleteOriginal then
                 SETTINGS.muteOriginal = false
@@ -10485,7 +10510,7 @@ function renderMainColumns(ctx)
 
         afterY = afterY + S(22)
         local delTrackColor = SETTINGS.deleteOriginalTrack and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], afterBoxW, commonBtnFontSize) then
+        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], afterBoxW, afterBtnFontSize) then
             SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
             if SETTINGS.deleteOriginalTrack then
                 SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false
@@ -10497,7 +10522,7 @@ function renderMainColumns(ctx)
         local hasTimeSel = hasTimeSelection()
         if hasTimeSel then
             afterY = afterY + S(22)
-            if drawCheckbox(col6X, afterY, SETTINGS.muteSelection, T("mute_selection"), posR, posG, posB, afterBoxW, commonBtnFontSize) then
+            if drawCheckbox(col6X, afterY, SETTINGS.muteSelection, T("mute_selection"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
                 SETTINGS.muteSelection = not SETTINGS.muteSelection
                 if SETTINGS.muteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
@@ -10508,7 +10533,7 @@ function renderMainColumns(ctx)
 
             afterY = afterY + S(22)
             local delSelColor = SETTINGS.deleteSelection and {255, 120, 120} or {160, 160, 160}
-            if drawCheckbox(col6X, afterY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], afterBoxW, commonBtnFontSize) then
+            if drawCheckbox(col6X, afterY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], afterBoxW, afterBtnFontSize) then
                 SETTINGS.deleteSelection = not SETTINGS.deleteSelection
                 if SETTINGS.deleteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
@@ -10536,19 +10561,19 @@ function renderMainColumns(ctx)
             gfx.drawstr(T("direct_explode_now") or "Explode selected takes now")
 
             afterY = afterY + S(20)
-            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_to_new_tracks")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
+            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_to_new_tracks")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
                 applyPostProcessToSelectedCandidates("explode_new_tracks")
             end
             setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_new_tracks"))
 
             afterY = afterY + S(22)
-            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_place")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
+            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_place")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
                 applyPostProcessToSelectedCandidates("explode_in_place")
             end
             setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_in_place"))
 
             afterY = afterY + S(22)
-            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_order")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
+            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_order")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
                 applyPostProcessToSelectedCandidates("explode_in_order")
             end
             setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_in_order"))
@@ -10569,14 +10594,14 @@ function renderMainColumns(ctx)
 
         local mode = tostring(SETTINGS.postProcessTakes or "none")
 
-        if drawRadio(col6X, afterY, mode == "none", T("keep_takes"), nil, afterBoxW, nil, nil, commonBtnFontSize) then
+        if drawRadio(col6X, afterY, mode == "none", T("keep_takes"), nil, afterBoxW, nil, nil, afterBtnFontSize) then
             SETTINGS.postProcessTakes = "none"
             mode = "none"
         end
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_keep_takes"))
 
         afterY = afterY + S(22)
-        if drawRadio(col6X, afterY, mode == "explode_new_tracks", stripExplodePrefix(T("explode_to_new_tracks")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
+        if drawRadio(col6X, afterY, mode == "explode_new_tracks", stripExplodePrefix(T("explode_to_new_tracks")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
             SETTINGS.postProcessTakes = "explode_new_tracks"
             mode = "explode_new_tracks"
             applyPostProcessToSelectedCandidates(mode)
@@ -10584,7 +10609,7 @@ function renderMainColumns(ctx)
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_explode_to_new_tracks"))
 
         afterY = afterY + S(22)
-        if drawRadio(col6X, afterY, mode == "explode_in_place", stripExplodePrefix(T("explode_in_place")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
+        if drawRadio(col6X, afterY, mode == "explode_in_place", stripExplodePrefix(T("explode_in_place")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
             SETTINGS.postProcessTakes = "explode_in_place"
             mode = "explode_in_place"
             applyPostProcessToSelectedCandidates(mode)
@@ -10592,7 +10617,7 @@ function renderMainColumns(ctx)
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_explode_in_place"))
 
         afterY = afterY + S(22)
-        if drawRadio(col6X, afterY, mode == "explode_in_order", stripExplodePrefix(T("explode_in_order")), nil, afterBoxW, pulseMult, "explode", commonBtnFontSize) then
+        if drawRadio(col6X, afterY, mode == "explode_in_order", stripExplodePrefix(T("explode_in_order")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
             SETTINGS.postProcessTakes = "explode_in_order"
             mode = "explode_in_order"
             applyPostProcessToSelectedCandidates(mode)
@@ -11820,7 +11845,8 @@ end
 function ensureProcessingWindowOpen()
     if progressState.windowOpen then return end
     local winW, winH, winX, winY = getProcessingWindowGeometry()
-    gfx.init(WINDOW_PROCESSING, winW, winH, 0, winX, winY)
+    progressState.windowTitle = getProcessingWindowTitle()
+    gfx.init(progressState.windowTitle, winW, winH, 0, winX, winY)
     progressWindowResizableSet = false
     progressState.windowOpen = true
     progressState.nextFrameAt = 0
@@ -11906,7 +11932,7 @@ end
 
 function closeProcessingWindow()
     if not progressState.windowOpen then return end
-    captureWindowGeometry(WINDOW_PROCESSING)
+    captureWindowGeometry(progressState.windowTitle or getProcessingWindowTitle())
     saveSettings()
     gfx.quit()
     progressState.windowOpen = false
@@ -12069,7 +12095,7 @@ local function makeProgressWindowResizable()
     if progressWindowResizableSet then return true end
     if not reaper.JS_Window_Find then return false end
 
-    local hwnd = reaper.JS_Window_Find(WINDOW_PROCESSING, true)
+    local hwnd = reaper.JS_Window_Find(progressState.windowTitle or getProcessingWindowTitle(), true)
     if not hwnd then return false end
 
     local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
@@ -12730,7 +12756,9 @@ local function drawProgressWindow()
     end
 
     local segValue = "30"
-    local modelDisplay = (SETTINGS.model == "htdemucs_ft") and "Quality" or ((SETTINGS.model == "htdemucs_6s") and "6-Stem" or "Fast")
+    local modelDisplay = (SETTINGS.model == "htdemucs_ft")
+        and (T("model_label_quality") or "Quality")
+        or ((SETTINGS.model == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
@@ -14189,7 +14217,7 @@ end
 function resultWindowLoop()
     -- Save window position for next time
     if reaper.JS_Window_GetRect then
-        local hwnd = reaper.JS_Window_Find(WINDOW_COMPLETE, true)
+        local hwnd = reaper.JS_Window_Find(resultWindowState.windowTitle or getCompleteWindowTitle(), true)
         if hwnd then
             local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
             if retval then
@@ -14210,7 +14238,7 @@ function resultWindowLoop()
     
     if drawResultWindow() then
         -- Remember any size/position changes made in the complete window
-        captureWindowGeometry(WINDOW_COMPLETE)
+        captureWindowGeometry(resultWindowState.windowTitle or getCompleteWindowTitle())
         saveSettings()
         gfx.quit()
         -- Ensure the user immediately sees what was created/changed in REAPER (no extra click required).
@@ -14252,7 +14280,8 @@ function showResultWindow(selectedStems, message)
     -- Intentionally do not change playhead position or playback state.
 
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
-    gfx.init(WINDOW_COMPLETE, winW, winH, 0, winX, winY)
+    resultWindowState.windowTitle = getCompleteWindowTitle()
+    gfx.init(resultWindowState.windowTitle, winW, winH, 0, winX, winY)
 
     -- Best-effort: force an arrange repaint while the Complete window is open.
     -- This makes the processing result visible immediately (without needing to close the window).
@@ -16147,7 +16176,9 @@ function drawMultiTrackProgressWindow()
         etaText = string.format(" | %s %d:%02d", tostring(etaLabel), etaMins, etaSecs)
     end
     
-    local modelDisplay = (SETTINGS.model == "htdemucs_ft") and "Quality" or (is6Stem and "6-Stem" or "Fast")
+    local modelDisplay = (SETTINGS.model == "htdemucs_ft")
+        and (T("model_label_quality") or "Quality")
+        or (is6Stem and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local leftParts = {
         string.format("%s: %d:%02d%s", mtTime, totalMins, totalSecs, etaText),
         string.format("%s: %s%s", mtSeg, segSize, modeStr),
@@ -16275,7 +16306,7 @@ function multiTrackProgressLoop()
 
     if result == "cancel" then
         -- Remember any size/position changes made during processing
-        captureWindowGeometry(WINDOW_MULTI_TRACK)
+        captureWindowGeometry(multiTrackQueue.windowTitle or getMultiTrackWindowTitle())
         saveSettings()
 
         gfx.quit()
@@ -16295,7 +16326,7 @@ function multiTrackProgressLoop()
 
     if allJobsDone() then
         -- Remember any size/position changes made during processing
-        captureWindowGeometry(WINDOW_MULTI_TRACK)
+        captureWindowGeometry(multiTrackQueue.windowTitle or getMultiTrackWindowTitle())
         saveSettings()
 
         gfx.quit()
@@ -16319,7 +16350,8 @@ showMultiTrackProgressWindow = function()
     multiTrackQueue.listScroll = 0
     multiTrackQueue.nextFrameAt = 0
     multiTrackQueue.nextPollAt = 0
-    gfx.init(WINDOW_MULTI_TRACK, winW, winH, 0, winX, winY)
+    multiTrackQueue.windowTitle = getMultiTrackWindowTitle()
+    gfx.init(multiTrackQueue.windowTitle, winW, winH, 0, winX, winY)
     if OS == "Windows" then
         multiTrackProgressLoop()  -- Paint first frame immediately so Windows does not show a blank client area.
     else
