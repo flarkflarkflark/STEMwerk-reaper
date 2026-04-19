@@ -195,23 +195,25 @@ Note: REAPER does not auto-register scripts in the Action List. Use Actions → 
 - Theme: day/night mode (light/dark) with persistent settings.
 
 ## Parallel vs Sequential (Multi-track)
-STEMwerk can run multi-track jobs in parallel when Parallel is enabled and more than one job is queued. It will automatically fall back to Sequential in two cases:
-- Per-item time selection jobs (for correctness and isolation).
-- Explicit `DirectML` multi-job runs on Windows (current stability safeguard).
-- Device = Auto with no GPU backends detected (CPU-only is faster and safer).
+Parallel mode is used when `Parallel` is enabled. Sequential mode is used when `Parallel` is disabled.
 
-Examples where pure parallel does happen:
-- You select 3 tracks with items, no time selection, Parallel on, device = `cuda:0`. -> 3 jobs at once (per track).
-- You select 5 tracks, Parallel on, device = `auto`, and a GPU is detected. -> 5 jobs at once.
-- You select multiple items across multiple tracks (no time selection), Parallel on, device = `cuda`. -> per-track jobs in parallel.
+When `Parallel` is enabled and multiple jobs are queued, STEMwerk still forces Sequential in these cases:
+- Explicit `DirectML` device selection on multi-job runs (Windows stability safeguard).
+- `device = auto` with no detected GPU backend (`Auto device, no GPU`).
 
-Examples where it does not run in parallel:
-- Time selection with multiple items on one track -> per-item jobs -> sequential forced ("Per-item multi-track isolation").
-- Explicit `DirectML` with multiple queued jobs -> sequential forced ("DirectML multi-track stability mode").
-- Parallel on, device = `auto`, but no GPU backend -> sequential forced ("Auto device (no GPU)").
-- Only 1 job (1 track) -> sequential by definition.
+If those safeguards do not apply, both per-track and per-item multi-job queues can run in parallel.
 
-The progress window shows the active mode and the reason when a fallback happens.
+Examples where parallel runs:
+- 3 tracks queued, `Parallel` on, device = `cuda:0` -> jobs run in parallel.
+- Multiple selected items across tracks, no time selection, `Parallel` on, device = `cuda` -> per-item jobs run in parallel.
+- `device = auto` with a detected GPU backend and multiple queued jobs -> parallel.
+
+Examples where sequential is used:
+- `Parallel` is switched off by the user.
+- Explicit `DirectML` with multiple queued jobs -> sequential (`DirectML multi-track stability mode`).
+- `Parallel` on + `device = auto` with no detected GPU backend -> sequential (`Auto device, no GPU`).
+
+The progress window shows the active mode and, when applicable, the forced-sequential reason.
 
 ## Relationship to STEMwerk-core
 STEMwerk-reaper bundles the same separation pipeline used by STEMwerk-core via `scripts/reaper/audio_separator_process.py` and the `tools/` utilities. The REAPER layer handles DAW integration, UI, and item or track management, while the core handles model execution and device selection.
