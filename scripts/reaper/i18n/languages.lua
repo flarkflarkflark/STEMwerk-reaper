@@ -207,6 +207,7 @@ local LANGUAGES = {
         result_item_muted = "Item muted.",
         result_selection_muted = "Selection muted.",
         result_time_line = "Time: %s",
+        result_time_speed_line = "Time: %s | Speed: %s realtime",
         result_track_info = " [Track %d/%d: %s]",
 
         -- Processing/Complete window strings
@@ -218,7 +219,12 @@ local LANGUAGES = {
         best_device_label = "Best device",
         chosen_device_label = "Chosen device",
         terminal_output_title = "DEMUCS OUTPUT",
+        terminal_output_section_title = "---- Output ----",
         terminal_hint_return_to_art = "Click >_ to return to art",
+        resize_window_for_terminal = "Tip: resize this window taller to view Terminal / Art",
+        progress_checking_runtime = "Checking runtime...",
+        progress_preparing_audio = "Preparing audio...",
+        scroll_wheel_hint = "wheel",
         complete_hint_keys = "Enter / ESC",
         complete_target_prefix = "Target:",
         complete_ok_tooltip = "Close (Enter / ESC)",
@@ -318,9 +324,13 @@ local LANGUAGES = {
         help_welcome_title = "Welcome to STEMwerk",
         help_welcome_sub = "Stem Separation for REAPER",
         help_feature_vocals = "Extract vocals for remixes or karaoke",
+        help_feature_vocals_desc = "Lead vocals, backing vocals, speech",
         help_feature_drums = "Isolate drums for sampling or practice",
+        help_feature_drums_desc = "Kick, snare, hi-hats, percussion",
         help_feature_bass = "Separate bass for mixing or transcription",
+        help_feature_bass_desc = "Bass guitar, synth bass, low frequencies",
         help_feature_other = "Get other instruments cleanly",
+        help_feature_other_desc = "Guitar, keys, strings, synths, effects",
 
         -- Quick Start tab
         help_quickstart_title = "Getting Started",
@@ -587,6 +597,7 @@ local LANGUAGES = {
         result_item_muted = "Item gedempt.",
         result_selection_muted = "Selectie gedempt.",
         result_time_line = "Tijd: %s",
+        result_time_speed_line = "Tijd: %s | Snelheid: %s realtime",
         result_track_info = " [Track %d/%d: %s]",
 
         -- Processing/Complete window strings
@@ -598,7 +609,12 @@ local LANGUAGES = {
         best_device_label = "Beste apparaat",
         chosen_device_label = "Gekozen apparaat",
         terminal_output_title = "DEMUCS OUTPUT",
+        terminal_output_section_title = "---- Uitvoer ----",
         terminal_hint_return_to_art = "Klik >_ om terug te gaan naar art",
+        resize_window_for_terminal = "Tip: maak dit venster hoger om Terminal / Art te zien",
+        progress_checking_runtime = "Runtime controleren...",
+        progress_preparing_audio = "Audio voorbereiden...",
+        scroll_wheel_hint = "wiel",
         complete_hint_keys = "Enter / ESC",
         complete_target_prefix = "Doel:",
         complete_ok_tooltip = "Sluiten (Enter / ESC)",
@@ -698,9 +714,13 @@ local LANGUAGES = {
         help_welcome_title = "Welkom bij STEMwerk",
         help_welcome_sub = "Stem Separatie voor REAPER",
         help_feature_vocals = "Haal zang eruit voor remixes of karaoke",
+        help_feature_vocals_desc = "Lead vocals, backing vocals, spraak",
         help_feature_drums = "Isoleer drums voor sampling of oefenen",
+        help_feature_drums_desc = "Kick, snare, hi-hats, percussie",
         help_feature_bass = "Separeer bas voor mixen of transcriptie",
+        help_feature_bass_desc = "Basgitaar, synthbas, lage frequenties",
         help_feature_other = "Krijg andere instrumenten schoon",
+        help_feature_other_desc = "Gitaar, keys, strijkers, synths, effecten",
 
         -- Quick Start tab
         help_quickstart_title = "Aan de Slag",
@@ -965,6 +985,7 @@ local LANGUAGES = {
         result_item_muted = "Item stumm.",
         result_selection_muted = "Auswahl stumm.",
         result_time_line = "Zeit: %s",
+        result_time_speed_line = "Zeit: %s | Geschwindigkeit: %s Echtzeit",
         result_track_info = " [Track %d/%d: %s]",
 
         -- Processing/Complete window strings
@@ -976,7 +997,12 @@ local LANGUAGES = {
         best_device_label = "Bestes Geraet",
         chosen_device_label = "Gewaehltes Geraet",
         terminal_output_title = "DEMUCS OUTPUT",
+        terminal_output_section_title = "---- Ausgabe ----",
         terminal_hint_return_to_art = "Klick >_ fuer Art-Ansicht",
+        resize_window_for_terminal = "Tipp: Fenster hoeher ziehen, um Terminal / Art zu sehen",
+        progress_checking_runtime = "Runtime wird geprueft...",
+        progress_preparing_audio = "Audio wird vorbereitet...",
+        scroll_wheel_hint = "Mausrad",
         complete_hint_keys = "Enter / ESC",
         complete_target_prefix = "Ziel:",
         complete_ok_tooltip = "Schliessen (Enter / ESC)",
@@ -1076,9 +1102,13 @@ local LANGUAGES = {
         help_welcome_title = "Willkommen bei STEMwerk",
         help_welcome_sub = "Stem Separation für REAPER",
         help_feature_vocals = "Gesang fuer Remixes oder Karaoke extrahieren",
+        help_feature_vocals_desc = "Leadgesang, Backing-Vocals, Sprache",
         help_feature_drums = "Schlagzeug zum Samplen oder Ueben isolieren",
+        help_feature_drums_desc = "Kick, Snare, Hi-Hats, Percussion",
         help_feature_bass = "Bass zum Mischen oder Transkribieren trennen",
+        help_feature_bass_desc = "Bassgitarre, Synth-Bass, tiefe Frequenzen",
         help_feature_other = "Andere Instrumente sauber erhalten",
+        help_feature_other_desc = "Gitarre, Keys, Streicher, Synths, Effekte",
 
         -- Quick Start tab
         help_quickstart_title = "Erste Schritte",

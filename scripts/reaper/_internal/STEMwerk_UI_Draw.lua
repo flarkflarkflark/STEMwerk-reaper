@@ -181,13 +181,39 @@ function M.drawTooltip()
         local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
         local padding = S(8)
         local lineH = S(14)
+        local stemNameKeyById = {
+            vocals = "stem_vocals",
+            drums = "stem_drums",
+            bass = "stem_bass",
+            other = "stem_other",
+            guitar = "stem_guitar",
+            piano = "stem_piano",
+        }
+
+        local function stemDisplayName(stemOrName)
+            local raw = stemOrName
+            if type(stemOrName) == "table" then
+                raw = stemOrName.name or stemOrName.file or ""
+            end
+            raw = tostring(raw or "")
+            if raw == "" then return "" end
+            local id = raw:lower():gsub("%.wav$", "")
+            local key = stemNameKeyById[id]
+            if key and type(T) == "function" then
+                local translated = T(key)
+                if translated and translated ~= "" and translated ~= key then
+                    return translated
+                end
+            end
+            return raw
+        end
 
         local titleColors = STEM_BORDER_COLORS
 
         local selectedStems = {}
         for _, stem in ipairs(STEMS) do
             if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
-                table.insert(selectedStems, { name = stem.name, color = stem.color })
+                table.insert(selectedStems, { name = stemDisplayName(stem), color = stem.color })
             end
         end
 
@@ -356,11 +382,12 @@ function M.drawTooltip()
             gfx.setfont(1, "Arial", S(10), string.byte("b"))
             local stemX = valueX
             for i, stem in ipairs(activeStems) do
+                local stemLabel = stemDisplayName(stem)
                 gfx.set(stem.color[1] / 255, stem.color[2] / 255, stem.color[3] / 255, 1)
                 gfx.x = stemX
                 gfx.y = currentY
-                gfx.drawstr(stem.name)
-                stemX = stemX + gfx.measurestr(stem.name)
+                gfx.drawstr(stemLabel)
+                stemX = stemX + gfx.measurestr(stemLabel)
                 if i < #activeStems then
                     gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
                     gfx.x = stemX

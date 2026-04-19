@@ -54,6 +54,7 @@ THEME_PRESETS = {
             },
             style = {
                 cornerRadius = 6,
+                shadowStrength = 0.08,
                 glossStrength = 0.50,
             },
         },
@@ -112,6 +113,7 @@ THEME_PRESETS = {
             },
             style = {
                 cornerRadius = 8,
+                shadowStrength = 0.10,
                 glossStrength = 0.72,
             },
         },
@@ -170,6 +172,7 @@ THEME_PRESETS = {
             },
             style = {
                 cornerRadius = 7,
+                shadowStrength = 0.09,
                 glossStrength = 0.78,
             },
         },
@@ -226,6 +229,7 @@ THEME_PRESETS = {
                 iconMuted = {0.41, 0.41, 0.45},
             },
             style = {
+                shadowStrength = 0.05,
                 glossStrength = 0.16,
             },
         },
@@ -311,7 +315,7 @@ THEME_PRESETS = {
                 cornerRadius = 3,
                 borderWeight = 1,
                 fxIntensity = 0.84,
-                shadowStrength = 0.02,
+                shadowStrength = 0.08,
                 glossStrength = 0.10,
             },
         },
@@ -397,7 +401,7 @@ THEME_PRESETS = {
                 cornerRadius = 14,
                 borderWeight = 2,
                 fxIntensity = 1.02,
-                shadowStrength = 0.14,
+                shadowStrength = 0.18,
                 glossStrength = 1.20,
             },
         },
@@ -483,7 +487,7 @@ THEME_PRESETS = {
                 cornerRadius = 9,
                 borderWeight = 2,
                 fxIntensity = 0.90,
-                shadowStrength = 0.10,
+                shadowStrength = 0.13,
                 glossStrength = 0.80,
             },
         },

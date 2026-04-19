@@ -16,6 +16,19 @@ local function getColorOrFallback(key, fallback)
     return fallback
 end
 
+local function getFunctionalIconPalette()
+    return {
+        sun = {0.92, 0.72, 0.22},
+        sunRays = {0.96, 0.79, 0.30},
+        moon = {0.74, 0.76, 0.80},
+        moonCutout = {0.00, 0.00, 0.00},
+        fxOn = {0.34, 0.82, 0.50},
+        fxOff = {0.50, 0.50, 0.54},
+        fxOffSlash = {0.80, 0.32, 0.32},
+        fxSpark = {0.98, 0.98, 0.96},
+    }
+end
+
 local function cycleLanguageSetting(setLanguageFn)
     local langs = {"en", "nl", "de"}
     local currentIdx = 1
@@ -54,20 +67,17 @@ local function drawHelpControls(ctx)
     local tooltipY = ctx.tooltipY
 
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-    local iconPrimary = getColorOrFallback("iconPrimary", {0.9, 0.7, 0.2})
-    local iconMuted = getColorOrFallback("iconMuted", {0.7, 0.7, 0.5})
+    local iconPalette = getFunctionalIconPalette()
     local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
-    local success = getColorOrFallback("success", {0.4, 0.9, 0.5})
-    local warning = getColorOrFallback("warning", {0.8, 0.3, 0.3})
     if SETTINGS.darkMode then
-        gfx.set(iconMuted[1], iconMuted[2], iconMuted[3], (themeHover and 1 or 0.6) * controlsOpacity)
+        gfx.set(iconPalette.moon[1], iconPalette.moon[2], iconPalette.moon[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)
+        gfx.set(iconPalette.moonCutout[1], iconPalette.moonCutout[2], iconPalette.moonCutout[3], 1 * controlsOpacity)
         gfx.circle(themeX + themeSize / 2 + 4, themeY + themeSize / 2 - 3, themeSize / 2 - 3, 1, 1)
     else
-        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPalette.sun[1], iconPalette.sun[2], iconPalette.sun[3], (themeHover and 1 or 0.8) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 3, 1, 1)
-        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPalette.sunRays[1], iconPalette.sunRays[2], iconPalette.sunRays[3], (themeHover and 1 or 0.8) * controlsOpacity)
         for i = 0, 7 do
             local angle = i * math.pi / 4
             local x1 = themeX + themeSize / 2 + math.cos(angle) * (themeSize / 3 + 2)
@@ -129,9 +139,9 @@ local function drawHelpControls(ctx)
 
     local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
     if SETTINGS.visualFX then
-        gfx.set(success[1], success[2], success[3], fxAlpha)
+        gfx.set(iconPalette.fxOn[1], iconPalette.fxOn[2], iconPalette.fxOn[3], fxAlpha)
     else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
+        gfx.set(iconPalette.fxOff[1], iconPalette.fxOff[2], iconPalette.fxOff[3], fxAlpha * 0.6)
     end
     gfx.setfont(1, "Arial", S(9), string.byte("b"))
     local fxText = "FX"
@@ -141,11 +151,11 @@ local function drawHelpControls(ctx)
     gfx.drawstr(fxText)
 
     if SETTINGS.visualFX then
-        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], fxAlpha * 0.8)
+        gfx.set(iconPalette.fxSpark[1], iconPalette.fxSpark[2], iconPalette.fxSpark[3], fxAlpha * 0.8)
         gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
         gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
     else
-        gfx.set(warning[1], warning[2], warning[3], fxAlpha)
+        gfx.set(iconPalette.fxOffSlash[1], iconPalette.fxOffSlash[2], iconPalette.fxOffSlash[3], fxAlpha)
         gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
     end
 
@@ -203,21 +213,18 @@ local function drawResultControls(ctx)
         GUI.uiClickedThisFrame = true
     end
 
-    local iconPrimary = getColorOrFallback("iconPrimary", {0.9, 0.7, 0.2})
-    local iconMuted = getColorOrFallback("iconMuted", {0.7, 0.7, 0.5})
+    local iconPalette = getFunctionalIconPalette()
     local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
-    local success = getColorOrFallback("success", {0.4, 0.9, 0.5})
-    local warning = getColorOrFallback("warning", {0.8, 0.3, 0.3})
 
     if SETTINGS.darkMode then
-        gfx.set(iconMuted[1], iconMuted[2], iconMuted[3], (themeHover and 1 or 0.6) * controlsOpacity)
+        gfx.set(iconPalette.moon[1], iconPalette.moon[2], iconPalette.moon[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)
+        gfx.set(iconPalette.moonCutout[1], iconPalette.moonCutout[2], iconPalette.moonCutout[3], 1 * controlsOpacity)
         gfx.circle(themeX + themeSize / 2 + 4, themeY + themeSize / 2 - 3, themeSize / 2 - 3, 1, 1)
     else
-        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPalette.sun[1], iconPalette.sun[2], iconPalette.sun[3], (themeHover and 1 or 0.8) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 3, 1, 1)
-        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], (themeHover and 1 or 0.8) * controlsOpacity)
+        gfx.set(iconPalette.sunRays[1], iconPalette.sunRays[2], iconPalette.sunRays[3], (themeHover and 1 or 0.8) * controlsOpacity)
         for i = 0, 7 do
             local angle = i * math.pi / 4
             local x1 = themeX + themeSize / 2 + math.cos(angle) * (themeSize / 3 + 2)
@@ -249,9 +256,9 @@ local function drawResultControls(ctx)
 
     local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
     if SETTINGS.visualFX then
-        gfx.set(success[1], success[2], success[3], fxAlpha)
+        gfx.set(iconPalette.fxOn[1], iconPalette.fxOn[2], iconPalette.fxOn[3], fxAlpha)
     else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
+        gfx.set(iconPalette.fxOff[1], iconPalette.fxOff[2], iconPalette.fxOff[3], fxAlpha * 0.6)
     end
     gfx.setfont(1, "Arial", S(fonts.controls or 9), string.byte("b"))
     local fxText = "FX"
@@ -260,11 +267,11 @@ local function drawResultControls(ctx)
     gfx.y = fxY + S(1)
     gfx.drawstr(fxText)
     if SETTINGS.visualFX then
-        gfx.set(iconPrimary[1], iconPrimary[2], iconPrimary[3], fxAlpha * 0.8)
+        gfx.set(iconPalette.fxSpark[1], iconPalette.fxSpark[2], iconPalette.fxSpark[3], fxAlpha * 0.8)
         gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
         gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
     else
-        gfx.set(warning[1], warning[2], warning[3], fxAlpha)
+        gfx.set(iconPalette.fxOffSlash[1], iconPalette.fxOffSlash[2], iconPalette.fxOffSlash[3], fxAlpha)
         gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
     end
     if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then

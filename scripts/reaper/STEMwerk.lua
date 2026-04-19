@@ -1716,24 +1716,34 @@ local function getThemePresetId()
     return "classic"
 end
 
-local function getLightElevationRoleMult(role)
+local function getLightElevationProfile(role)
     if not isThemeLightMode() then
-        return 1
+        return nil
     end
 
-    local multByRole = {
-        tooltip = 1.65,
-        card = 1.35,
-        button = 1.20,
-        process = 1.12,
+    local profiles = {
+        tooltip = { shadow = 1.95, rim = 0.23, highlight = 0.16, bevel = 0.14 },
+        card = { shadow = 1.55, rim = 0.18, highlight = 0.11, bevel = 0.11 },
+        button = { shadow = 1.34, rim = 0.16, highlight = 0.10, bevel = 0.13 },
+        process = { shadow = 1.18, rim = 0.10, highlight = 0.06, bevel = 0.08 },
+        ["default"] = { shadow = 1.08, rim = 0.07, highlight = 0.04, bevel = 0.06 },
     }
-    local mult = multByRole[tostring(role or "")] or 1
+    local src = profiles[tostring(role or "")] or profiles["default"]
+    local profile = {
+        shadow = src.shadow,
+        rim = src.rim,
+        highlight = src.highlight,
+        bevel = src.bevel,
+    }
 
     -- Keep mono visibly more restrained than other themes in light mode.
     if getThemePresetId() == "mono" then
-        mult = mult * 0.82
+        profile.shadow = profile.shadow * 0.78
+        profile.rim = profile.rim * 0.72
+        profile.highlight = profile.highlight * 0.70
+        profile.bevel = profile.bevel * 0.75
     end
-    return mult
+    return profile
 end
 
 local function drawRoundedFill(x, y, w, h, radius)
@@ -1762,7 +1772,8 @@ local function drawThemeShadow(x, y, w, h, radius, alphaMult, role)
     if shadowStrength <= 0.001 or w <= 0 or h <= 0 then
         return
     end
-    local roleMult = getLightElevationRoleMult(role)
+    local profile = getLightElevationProfile(role)
+    local roleMult = (profile and profile.shadow) or 1
     local shadowColor = getThemeShadowColor()
     local sr, sg, sb = shadowColor[1], shadowColor[2], shadowColor[3]
     local passes = math.max(1, math.min(4, math.floor(1 + shadowStrength * 18)))
@@ -1772,6 +1783,38 @@ local function drawThemeShadow(x, y, w, h, radius, alphaMult, role)
         local passAlpha = baseAlpha * (i / passes) * 0.7
         gfx.set(sr, sg, sb, passAlpha)
         drawRoundedFill(x + offset, y + offset + math.floor(i / 2), w, h, radius)
+    end
+end
+
+local function drawLightSurfaceFinish(innerX, innerY, innerW, innerH, innerRadius, role, alphaMult)
+    local profile = getLightElevationProfile(role)
+    if not profile or innerW <= 2 or innerH <= 2 then
+        return
+    end
+    local alpha = alphaMult or 1
+
+    -- Lifted top rim + short highlight rolloff.
+    gfx.set(1, 1, 1, math.min(0.22, profile.rim) * alpha)
+    drawRoundedFill(innerX, innerY, innerW, 1, math.min(innerRadius, 1))
+    local topLines = math.max(1, math.min(3, math.floor(innerH * 0.14)))
+    for i = 1, topLines do
+        local t = 1 - ((i - 1) / math.max(1, topLines - 1))
+        gfx.set(1, 1, 1, math.min(0.18, profile.highlight * t) * alpha)
+        drawRoundedFill(innerX, innerY + i, innerW, 1, math.max(0, math.min(innerRadius, i + 1)))
+    end
+
+    -- Subtle lower-face separation / bevel.
+    local bevelLines = math.max(1, math.min(3, math.floor(innerH * 0.16)))
+    for i = 0, bevelLines - 1 do
+        local t = (i / math.max(1, bevelLines - 1))
+        gfx.set(0, 0, 0, math.min(0.14, profile.bevel * (0.55 + 0.45 * t)) * alpha)
+        drawRoundedFill(
+            innerX,
+            innerY + innerH - 1 - i,
+            innerW,
+            1,
+            math.max(0, math.min(innerRadius, innerH - 1 - i))
+        )
     end
 end
 
@@ -1788,7 +1831,9 @@ local function drawThemeSurfaceBox(x, y, w, h, fillColor, borderColor, fillAlpha
     local innerH = h - borderWeight * 2
     if innerW > 0 and innerH > 0 then
         gfx.set(fillColor[1], fillColor[2], fillColor[3], fillAlpha or 1)
-        drawRoundedFill(innerX, innerY, innerW, innerH, math.max(0, radius - borderWeight))
+        local innerRadius = math.max(0, radius - borderWeight)
+        drawRoundedFill(innerX, innerY, innerW, innerH, innerRadius)
+        drawLightSurfaceFinish(innerX, innerY, innerW, innerH, innerRadius, shadowRole, fillAlpha or 1)
     end
 end
 
@@ -6070,10 +6115,10 @@ local function drawArtGallery()
 
         -- Features list - LARGER and more descriptive
         local features = {
-            {icon = "♪", color = stemColors[1], title = T("help_feature_vocals"), desc = "Lead vocals, backing vocals, speech"},
-            {icon = "●", color = stemColors[2], title = T("help_feature_drums"), desc = "Kick, snare, hi-hats, percussion"},
-            {icon = "≡", color = stemColors[3], title = T("help_feature_bass"), desc = "Bass guitar, synth bass, low frequencies"},
-            {icon = "✦", color = stemColors[4], title = T("help_feature_other"), desc = "Guitar, keys, strings, synths, effects"},
+            {icon = "♪", color = stemColors[1], title = T("help_feature_vocals"), desc = T("help_feature_vocals_desc")},
+            {icon = "●", color = stemColors[2], title = T("help_feature_drums"), desc = T("help_feature_drums_desc")},
+            {icon = "≡", color = stemColors[3], title = T("help_feature_bass"), desc = T("help_feature_bass_desc")},
+            {icon = "✦", color = stemColors[4], title = T("help_feature_other"), desc = T("help_feature_other_desc")},
         }
         local featureY = contentY + PS(welcomeSpacing.featuresTop or 100)
         local featureSpacing = PS(welcomeSpacing.featureSpacing or 50)
@@ -6430,27 +6475,9 @@ local function drawArtGallery()
         local maxW = bodyColumn.w
         local sectionGap = PS(helpLayoutTokens.sectionGap or 12)
 
-        local reaperHelpFallbacks = {
-            help_reaper_selection_title = "Selection & Items",
-            help_reaper_selection_body = "STEMwerk uses selected items or tracks. If nothing is selected, make a time selection.",
-            help_reaper_temp_title = "Temp Files",
-            help_reaper_temp_body = "Temporary audio is stored during processing. You can keep or delete it in the Output options.",
-            help_reaper_logs_title = "Logs",
-            help_reaper_logs_body = "Processing logs are saved in the runtime state folder for troubleshooting.",
-            help_reaper_cleanup_title = "Cleanup",
-            help_reaper_cleanup_body = "Cleanup options control what happens to the original items and temporary files.",
-        }
-
         local function drawHelpSection(titleKey, bodyKey)
-            local function safeT(key, fallback)
-                local val = T(key)
-                if not val or val == "" or val == key then
-                    return fallback
-                end
-                return val
-            end
-            local title = safeT(titleKey, reaperHelpFallbacks[titleKey])
-            local body = safeT(bodyKey, reaperHelpFallbacks[bodyKey] or "")
+            local title = T(titleKey)
+            local body = T(bodyKey)
             gfx.setfont(1, "Arial", PS(16), string.byte('b'))
             gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
             gfx.x = sectionX
@@ -7725,6 +7752,8 @@ function drawResultWindowControls(ctx)
     UI_CONTROLS.drawTopRightControls(ctx)
 end
 
+local getStemDisplayName
+
 function renderResultTitleArea(ctx)
     local w, PS = ctx.w, ctx.PS
     local selectedStems = resultWindowState.selectedStems or {}
@@ -7785,17 +7814,19 @@ function renderResultTitleArea(ctx)
     gfx.setfont(1, "Arial", PS(fonts.stem or 11))
     local totalStemWidth = 0
     for _, stem in ipairs(selectedStems) do
-        totalStemWidth = totalStemWidth + stemBoxSize + gfx.measurestr(stem.name) + PS(spacing.stemItemGap or 16)
+        local stemLabel = getStemDisplayName(stem)
+        totalStemWidth = totalStemWidth + stemBoxSize + gfx.measurestr(stemLabel) + PS(spacing.stemItemGap or 16)
     end
     local stemX = (w - totalStemWidth) / 2
     for _, stem in ipairs(selectedStems) do
+        local stemLabel = getStemDisplayName(stem)
         gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
         gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         gfx.x = stemX + stemBoxSize + PS(spacing.stemLabelGap or 5)
         gfx.y = stemY + PS(1)
-        gfx.drawstr(stem.name)
-        stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(spacing.stemItemGap or 16)
+        gfx.drawstr(stemLabel)
+        stemX = stemX + stemBoxSize + gfx.measurestr(stemLabel) + PS(spacing.stemItemGap or 16)
     end
 
 end
@@ -7907,7 +7938,7 @@ function buildResultMessageLines()
         local speed = tonumber(data.realtimeFactor or 0) or 0
         if speed > 0 then
             local speedStr = string.format("%.2fx", speed)
-            table.insert(lines, string.format("Time: %s | Speed: %s realtime", timeStr, speedStr))
+            table.insert(lines, string.format(T("result_time_speed_line") or "Time: %s | Speed: %s realtime", timeStr, speedStr))
         else
             table.insert(lines, string.format(T("result_time_line") or "Time: %s", timeStr))
         end
@@ -7993,6 +8024,24 @@ drawGlossyPill = function(x, y, w, h, baseR, baseG, baseB, baseA)
             drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, i)
         end
     end
+
+    -- Light-mode technical finish: crisp rim + face separation for clearer depth.
+    if isThemeLightMode() then
+        local p = getLightElevationProfile("button")
+        if p then
+            gfx.set(1, 1, 1, math.min(0.18, p.rim * 0.9) * baseA)
+            drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, 0)
+            if innerH > 3 then
+                gfx.set(1, 1, 1, math.min(0.12, p.highlight * 0.8) * baseA)
+                drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, 1)
+            end
+            local midY = math.max(0, math.floor(innerH * 0.48))
+            gfx.set(1, 1, 1, math.min(0.08, p.highlight * 0.55) * baseA)
+            drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, midY)
+            gfx.set(0, 0, 0, math.min(0.12, p.bevel * 0.8) * baseA)
+            drawPillLineAt(innerX, innerY, innerW, innerH, innerRadius, math.max(0, innerH - 1))
+        end
+    end
     return true
 end
 
@@ -8046,6 +8095,24 @@ drawGlossyRect = function(x, y, w, h, baseR, baseG, baseB, baseA)
     gfx.set(baseR * 0.7, baseG * 0.7, baseB * 0.7, 0.2 * baseA * gloss)
     drawRoundedFill(innerX, innerY, innerW, 1, math.min(innerRadius, 1))
     drawRoundedFill(innerX, innerY + innerH - 1, innerW, 1, math.min(innerRadius, 1))
+
+    -- Light-mode technical finish: top rim and lower-face split to avoid flat controls.
+    if isThemeLightMode() then
+        local p = getLightElevationProfile("button")
+        if p then
+            gfx.set(1, 1, 1, math.min(0.18, p.rim * 0.9) * baseA)
+            drawRoundedFill(innerX, innerY, innerW, 1, math.min(innerRadius, 1))
+            if innerH > 3 then
+                gfx.set(1, 1, 1, math.min(0.11, p.highlight * 0.8) * baseA)
+                drawRoundedFill(innerX, innerY + 1, innerW, 1, math.min(innerRadius, 2))
+            end
+            local midY = innerY + math.max(0, math.floor(innerH * 0.46))
+            gfx.set(1, 1, 1, math.min(0.07, p.highlight * 0.5) * baseA)
+            drawRoundedFill(innerX, midY, innerW, 1, math.max(0, math.min(innerRadius, midY - innerY)))
+            gfx.set(0, 0, 0, math.min(0.12, p.bevel * 0.8) * baseA)
+            drawRoundedFill(innerX, innerY + innerH - 1, innerW, 1, math.min(innerRadius, 1))
+        end
+    end
 end
 
 UI_DRAW.configure({
@@ -9079,6 +9146,34 @@ drawHelpReaperHeader = function(w, contentY, textOffsetX, PS)
     gfx.x = header.subtitleX
     gfx.y = header.subtitleY
     gfx.drawstr(repSub)
+end
+
+local STEM_NAME_KEY_BY_ID = {
+    vocals = "stem_vocals",
+    drums = "stem_drums",
+    bass = "stem_bass",
+    other = "stem_other",
+    guitar = "stem_guitar",
+    piano = "stem_piano",
+}
+
+getStemDisplayName = function(stemOrName)
+    local raw = stemOrName
+    if type(stemOrName) == "table" then
+        raw = stemOrName.name or stemOrName.file or ""
+    end
+    raw = tostring(raw or "")
+    if raw == "" then return "" end
+
+    local id = raw:lower():gsub("%.wav$", "")
+    local key = STEM_NAME_KEY_BY_ID[id]
+    if key then
+        local translated = T(key)
+        if translated and translated ~= "" and translated ~= key then
+            return translated
+        end
+    end
+    return raw
 end
 
 getRuntimeModeLabel = function(queue)
@@ -12283,8 +12378,9 @@ local function drawProgressWindow()
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.x = stemX + stemBoxSize + PS(6)
             gfx.y = stemY + PS(1)
-            gfx.drawstr(stem.name)
-            stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(20)
+            local stemLabel = getStemDisplayName(stem)
+            gfx.drawstr(stemLabel)
+            stemX = stemX + stemBoxSize + gfx.measurestr(stemLabel) + PS(20)
         end
     end
 
@@ -12295,6 +12391,7 @@ local function drawProgressWindow()
     gfx.rect(barX, barY, barW, barH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
     gfx.rect(barX, barY, barW, barH, 0)
+    drawLightSurfaceFinish(barX + 1, barY + 1, math.max(1, barW - 2), math.max(1, barH - 2), math.max(0, mainBarRadius - 1), "process", 1)
 
     -- Progress bar fill with stem color gradient
     local fillWidth = math.floor(barW * progressState.percent / 100)
@@ -13868,7 +13965,7 @@ function processStemsResult(stems)
     local totalMins = math.floor(totalTime / 60)
     local totalSecs = totalTime % 60
     local timeStr = string.format("%d:%02d", totalMins, totalSecs)
-    resultMsg = resultMsg .. "\nTime: " .. timeStr
+    resultMsg = resultMsg .. "\n" .. string.format(T("result_time_line") or "Time: %s", timeStr)
     if resultData then
         local processedAudioDur = 0
         if itemSubSelection and itemSubSelEnd and itemSubSelStart and itemSubSelEnd > itemSubSelStart then
@@ -15341,8 +15438,9 @@ function drawMultiTrackProgressWindow()
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.x = stemX + stemBoxSize + PS(5)
             gfx.y = stemRowY + PS(1)
-            gfx.drawstr(stem.name)
-            stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(16)
+            local stemLabel = getStemDisplayName(stem)
+            gfx.drawstr(stemLabel)
+            stemX = stemX + stemBoxSize + gfx.measurestr(stemLabel) + PS(16)
         end
     end
 
@@ -15380,6 +15478,7 @@ function drawMultiTrackProgressWindow()
     end
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
     gfx.rect(barX, barY, barW, barH, 0)
+    drawLightSurfaceFinish(barX + 1, barY + 1, math.max(1, barW - 2), math.max(1, barH - 2), math.max(0, overallBarRadius - 1), "process", 1)
 
     -- Progress fill with the same stem color gradient as the single-track window.
     local fillW = math.floor(barW * overallProgress / 100)
@@ -15642,7 +15741,8 @@ function drawMultiTrackProgressWindow()
                     shown = shown + 1
                     if shown > maxJobsToShow then break end
                     -- Prefix with [i] so per-track coloring can apply consistently
-                    local header = string.format("[%d] ---- Track %d: %s ----", i, i, tostring(job.trackName or ""))
+                    local trackPrefix = T("track_prefix") or "Track"
+                    local header = string.format("[%d] ---- %s %d: %s ----", i, trackPrefix, i, tostring(job.trackName or ""))
                     table.insert(multiTrackQueue.terminalLines, header)
                     local lines = tailFileLines(job.stdoutFile, 60)
                     for _, line in ipairs(lines) do
@@ -15659,7 +15759,7 @@ function drawMultiTrackProgressWindow()
             if not anyActive then
                 local first = multiTrackQueue.jobs[1]
                 if first then
-                    table.insert(multiTrackQueue.terminalLines, "---- Output ----")
+                    table.insert(multiTrackQueue.terminalLines, T("terminal_output_section_title") or "---- Output ----")
                     local lines = tailFileLines(first.stdoutFile, 120)
                     for _, line in ipairs(lines) do
                         local formatted = formatProgressLine(line, 1)
@@ -15853,6 +15953,7 @@ function drawMultiTrackProgressWindow()
             gfx.rect(tBarX, yPos, tBarW, tBarH, 1)
             gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
             gfx.rect(tBarX, yPos, tBarW, tBarH, 0)
+            drawLightSurfaceFinish(tBarX + 1, yPos + 1, math.max(1, tBarW - 2), math.max(1, tBarH - 2), math.max(0, trackBarRadius - 1), "process", 0.95)
 
             -- Fill
             local tFillW = math.floor(tBarW * (job.percent or 0) / 100)
@@ -15908,7 +16009,8 @@ function drawMultiTrackProgressWindow()
 
             gfx.setfont(1, "Arial", PS(8))
             gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.9)
-            local scrollLabel = string.format("%d-%d/%d  wheel", visibleStart, visibleEnd, numJobs)
+            local scrollWheelHint = T("scroll_wheel_hint") or "wheel"
+            local scrollLabel = string.format("%d-%d/%d  %s", visibleStart, visibleEnd, numJobs, scrollWheelHint)
             local scrollLabelW = gfx.measurestr(scrollLabel)
             gfx.x = math.max(barX, displayX + displayW - scrollLabelW - PS(10))
             gfx.y = infoY - PS(12)
@@ -16796,7 +16898,7 @@ function runSeparationWorkflow()
     debugLog("=== runSeparationWorkflow started ===")
 
     if OS == "Windows" then
-        showProcessingPlaceholderWindow("Checking runtime...")
+        showProcessingPlaceholderWindow(T("progress_checking_runtime") or "Checking runtime...")
     end
 
     local trustedWindowsRuntime = nil
@@ -17095,7 +17197,7 @@ function runSeparationWorkflow()
     PROCESS_SELECTION_SNAPSHOT = nil
 
     if OS == "Windows" then
-        showProcessingPlaceholderWindow("Preparing audio...")
+        showProcessingPlaceholderWindow(T("progress_preparing_audio") or "Preparing audio...")
     end
 
     WORKFLOW_TEMP_DIR = makeUniqueTempSubdir("STEMwerk")
