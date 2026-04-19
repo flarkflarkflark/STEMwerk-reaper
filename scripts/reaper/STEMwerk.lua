@@ -1695,6 +1695,47 @@ local function getThemeShadowColor()
     return mixColor({0.00, 0.00, 0.00}, mixColor(muted, accent, 0.25), 0.75)
 end
 
+local function isThemeLightMode()
+    local mode = (ACTIVE_THEME and ACTIVE_THEME.meta and ACTIVE_THEME.meta.mode)
+    if mode == "light" then
+        return true
+    end
+    if mode == "dark" then
+        return false
+    end
+    return not (SETTINGS and SETTINGS.darkMode)
+end
+
+local function getThemePresetId()
+    if ACTIVE_THEME and ACTIVE_THEME.meta and ACTIVE_THEME.meta.presetId then
+        return tostring(ACTIVE_THEME.meta.presetId)
+    end
+    if SETTINGS and SETTINGS.themePreset then
+        return tostring(SETTINGS.themePreset)
+    end
+    return "classic"
+end
+
+local function getLightElevationRoleMult(role)
+    if not isThemeLightMode() then
+        return 1
+    end
+
+    local multByRole = {
+        tooltip = 1.65,
+        card = 1.35,
+        button = 1.20,
+        process = 1.12,
+    }
+    local mult = multByRole[tostring(role or "")] or 1
+
+    -- Keep mono visibly more restrained than other themes in light mode.
+    if getThemePresetId() == "mono" then
+        mult = mult * 0.82
+    end
+    return mult
+end
+
 local function drawRoundedFill(x, y, w, h, radius)
     w = math.floor(w or 0)
     h = math.floor(h or 0)
@@ -1716,16 +1757,17 @@ local function drawRoundedFill(x, y, w, h, radius)
     end
 end
 
-local function drawThemeShadow(x, y, w, h, radius, alphaMult)
+local function drawThemeShadow(x, y, w, h, radius, alphaMult, role)
     local shadowStrength = getThemeStyleNumber("shadowStrength", 0) or 0
     if shadowStrength <= 0.001 or w <= 0 or h <= 0 then
         return
     end
+    local roleMult = getLightElevationRoleMult(role)
     local shadowColor = getThemeShadowColor()
     local sr, sg, sb = shadowColor[1], shadowColor[2], shadowColor[3]
     local passes = math.max(1, math.min(4, math.floor(1 + shadowStrength * 18)))
     local offset = math.max(1, math.floor(1 + shadowStrength * 10))
-    local baseAlpha = math.max(0.015, shadowStrength * 0.22) * (alphaMult or 1)
+    local baseAlpha = math.max(0.015, shadowStrength * 0.22) * (alphaMult or 1) * roleMult
     for i = passes, 1, -1 do
         local passAlpha = baseAlpha * (i / passes) * 0.7
         gfx.set(sr, sg, sb, passAlpha)
@@ -1733,11 +1775,11 @@ local function drawThemeShadow(x, y, w, h, radius, alphaMult)
     end
 end
 
-local function drawThemeSurfaceBox(x, y, w, h, fillColor, borderColor, fillAlpha, borderAlpha, radius, borderWeight, shadowAlpha)
+local function drawThemeSurfaceBox(x, y, w, h, fillColor, borderColor, fillAlpha, borderAlpha, radius, borderWeight, shadowAlpha, shadowRole)
     if w <= 0 or h <= 0 then return end
     radius = math.max(0, math.min(radius or 0, math.floor(math.min(w, h) / 2)))
     borderWeight = math.max(1, math.floor(borderWeight or 1))
-    drawThemeShadow(x, y, w, h, radius, shadowAlpha or 1)
+    drawThemeShadow(x, y, w, h, radius, shadowAlpha or 1, shadowRole)
     gfx.set(borderColor[1], borderColor[2], borderColor[3], borderAlpha or 1)
     drawRoundedFill(x, y, w, h, radius)
     local innerX = x + borderWeight
@@ -7631,7 +7673,7 @@ function drawModelLoadNoteBox(x, y, w, h, mx, my)
     local radius = getThemeRadius(S, 6, math.floor(math.min(w, h) / 2))
     local borderWeight = getThemeBorderWeight(S, 1)
 
-    drawThemeSurfaceBox(x, y, w, h, bg, border, hover and 0.96 or 0.88, hover and 1 or 0.85, radius, borderWeight, 0.8)
+    drawThemeSurfaceBox(x, y, w, h, bg, border, hover and 0.96 or 0.88, hover and 1 or 0.85, radius, borderWeight, 0.8, "card")
 
     gfx.set(accent[1], accent[2], accent[3], 0.9)
     drawRoundedFill(x + borderWeight, y + borderWeight, math.max(borderWeight + 1, math.floor(h * 0.16)), math.max(1, h - borderWeight * 2), math.max(0, radius - borderWeight))
@@ -7770,7 +7812,7 @@ function renderResultMessageBox(ctx)
     local resultBoxAlpha = (SETTINGS and SETTINGS.darkMode) and 0.30 or 0.82
     local msgBoxRadius = getThemeRadius(PS, 10, math.floor(math.min(msgBoxW, msgBoxH) / 2))
     local msgBoxBorderWeight = getThemeBorderWeight(PS, 1)
-    drawThemeSurfaceBox(msgBoxX, msgBoxY, msgBoxW, msgBoxH, THEME.inputBg, THEME.border, resultBoxAlpha, (SETTINGS and SETTINGS.darkMode) and 0.6 or 0.9, msgBoxRadius, msgBoxBorderWeight, 0.85)
+    drawThemeSurfaceBox(msgBoxX, msgBoxY, msgBoxW, msgBoxH, THEME.inputBg, THEME.border, resultBoxAlpha, (SETTINGS and SETTINGS.darkMode) and 0.6 or 0.9, msgBoxRadius, msgBoxBorderWeight, 0.85, "card")
 
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.setfont(1, "Arial", PS(fonts.message or 11))
@@ -7900,7 +7942,7 @@ drawGlossyPill = function(x, y, w, h, baseR, baseG, baseB, baseA)
         gfx.line(px + inset, py + i, px + pw - inset, py + i)
     end
 
-    drawThemeShadow(x, y, w, h, radius, 0.9)
+    drawThemeShadow(x, y, w, h, radius, 0.9, "button")
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], baseA)
     drawRoundedFill(x, y, w, h, radius)
 
@@ -7959,7 +8001,7 @@ drawGlossyRect = function(x, y, w, h, baseR, baseG, baseB, baseA)
     local borderWeight = getThemeBorderWeight(nil, 1)
     local radius = getThemeRadius(nil, 0, math.floor(math.min(w, h) / 2))
     local gloss = getThemeGlossStrength(1)
-    drawThemeShadow(x, y, w, h, radius, 0.7)
+    drawThemeShadow(x, y, w, h, radius, 0.7, "button")
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], baseA)
     drawRoundedFill(x, y, w, h, radius)
 
@@ -8282,7 +8324,7 @@ function drawMainDialogModalOverlay()
 
     local r = getThemeRadius(S, 12, math.floor(math.min(boxW, boxH) / 2))
     local borderWeight = getThemeBorderWeight(S, 1)
-    drawThemeSurfaceBox(boxX, boxY, boxW, boxH, THEME.inputBg, THEME.border, 0.985, 0.95, r, borderWeight, 1.25 * fade)
+    drawThemeSurfaceBox(boxX, boxY, boxW, boxH, THEME.inputBg, THEME.border, 0.985, 0.95, r, borderWeight, 1.25 * fade, "card")
 
     -- Stem-color top bar (like tooltips)
     for i = 0, math.floor(boxW) - 1 do
@@ -8346,7 +8388,7 @@ function drawMainDialogModalOverlay()
         local valueY = inputY + inputLabelH
         local ir = getThemeRadius(S, math.floor(inputH / 2), math.floor(inputH / 2))
         local inputBorderWeight = getThemeBorderWeight(S, 1)
-        drawThemeSurfaceBox(inputX, valueY, inputW, inputH, THEME.inputBg, THEME.border, 0.98, 0.95, ir, inputBorderWeight, 0.5)
+        drawThemeSurfaceBox(inputX, valueY, inputW, inputH, THEME.inputBg, THEME.border, 0.98, 0.95, ir, inputBorderWeight, 0.5, "card")
 
         if char == 8 or char == 127 or char == 6579564 then
             modal.inputValue = inputValue:sub(1, math.max(0, #inputValue - 1))
@@ -8383,7 +8425,7 @@ function drawMainDialogModalOverlay()
 
     local br = getThemeRadius(S, math.floor(btnH / 2), math.floor(btnH / 2))
     local buttonBorderWeight = getThemeBorderWeight(S, 1)
-    drawThemeSurfaceBox(btnX, btnY, btnW, btnH, col, THEME.border, 1, 0.95, br, buttonBorderWeight, 0.95)
+    drawThemeSurfaceBox(btnX, btnY, btnW, btnH, col, THEME.border, 1, 0.95, br, buttonBorderWeight, 0.95, "button")
 
     gfx.set(1, 1, 1, 1)
     gfx.setfont(1, "Arial", S(12), string.byte('b'))
@@ -8398,7 +8440,7 @@ function drawMainDialogModalOverlay()
         cancelX = btnX + btnW + btnGap
         cancelHover = mx >= cancelX and mx <= cancelX + btnW and my >= btnY and my <= btnY + btnH
         local cancelCol = cancelHover and THEME.buttonHover or THEME.button
-        drawThemeSurfaceBox(cancelX, btnY, btnW, btnH, cancelCol, THEME.border, 1, 0.95, br, buttonBorderWeight, 0.95)
+        drawThemeSurfaceBox(cancelX, btnY, btnW, btnH, cancelCol, THEME.border, 1, 0.95, br, buttonBorderWeight, 0.95, "button")
 
         local cancelText = T("cancel") or "Cancel"
         local cancelW = gfx.measurestr(cancelText)
@@ -12188,7 +12230,7 @@ local function drawProgressWindow()
     local badgeH = PS(18)
     local badgeRadius = getThemeRadius(PS, 8, math.floor(badgeH / 2))
     local badgeBorderWeight = getThemeBorderWeight(PS, 1)
-    drawThemeSurfaceBox(badgeX, badgeY, modelW, badgeH, THEME.inputBg, THEME.border, 1, 1, badgeRadius, badgeBorderWeight, 0.55)
+    drawThemeSurfaceBox(badgeX, badgeY, modelW, badgeH, THEME.inputBg, THEME.border, 1, 1, badgeRadius, badgeBorderWeight, 0.55, "process")
     gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
     gfx.x = badgeX + PS(8)
     gfx.y = badgeY + PS(2)
@@ -12247,6 +12289,8 @@ local function drawProgressWindow()
     end
 
     -- Progress bar background
+    local mainBarRadius = getThemeRadius(PS, 4, math.floor(barH / 2))
+    drawThemeShadow(barX, barY, barW, barH, mainBarRadius, 0.6, "process")
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
     gfx.rect(barX, barY, barW, barH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
@@ -15326,6 +15370,8 @@ function drawMultiTrackProgressWindow()
     local animTime = proceduralArt.time or 0
 
     -- Progress bar background with subtle gradient
+    local overallBarRadius = getThemeRadius(PS, 4, math.floor(barH / 2))
+    drawThemeShadow(barX, barY, barW, barH, overallBarRadius, 0.58, "process")
     for i = 0, barH - 1 do
         local shade = 0.1 + (i / barH) * 0.05
         if not SETTINGS.darkMode then shade = 0.85 - (i / barH) * 0.05 end
@@ -15801,6 +15847,8 @@ function drawMultiTrackProgressWindow()
             local tBarH = math.max(PS(14), math.min(PS(18), trackSpacing - PS(6)))
 
             -- Progress bar background
+            local trackBarRadius = getThemeRadius(PS, 3, math.floor(tBarH / 2))
+            drawThemeShadow(tBarX, yPos, tBarW, tBarH, trackBarRadius, 0.48, "process")
             gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
             gfx.rect(tBarX, yPos, tBarW, tBarH, 1)
             gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)

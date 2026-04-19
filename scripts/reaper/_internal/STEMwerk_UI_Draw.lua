@@ -141,7 +141,7 @@ function M.drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, paddin
     local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
     local radius = getThemeRadius(nil, 6, math.floor(math.min(boxW, boxH) / 2))
     local borderWeight = getThemeBorderWeight(nil, 1)
-    drawThemeSurfaceBox(tx, ty, boxW, boxH, ttBg, ttBorder, ttAlpha, 1, radius, borderWeight, 0.75)
+    drawThemeSurfaceBox(tx, ty, boxW, boxH, ttBg, ttBorder, ttAlpha, 1, radius, borderWeight, 0.75, "tooltip")
 
     for i = 0, boxW - 1 do
         local colorIdx = math.floor(i / boxW * 4) + 1
@@ -297,7 +297,7 @@ function M.drawTooltip()
         local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
         local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
         local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
-        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75)
+        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
 
         for i = 0, tw - 1 do
             local colorIdx = math.floor(i / tw * 4) + 1
@@ -468,7 +468,7 @@ function M.drawTooltip()
         local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
         local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
         local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
-        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75)
+        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
 
         for i = 0, tw - 1 do
             local colorIdx = math.floor(i / tw * 4) + 1
@@ -511,7 +511,7 @@ function M.drawTooltip()
         local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
         local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
         local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
-        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75)
+        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
 
         for i = 0, tw - 1 do
             local colorIdx = math.floor(i / tw * 4) + 1
