@@ -11,6 +11,58 @@ function SETTINGS_MOD.configure(ctx)
     end
 end
 
+local function normalizeLanguageCode(value)
+    local v = tostring(value or ""):lower()
+    if v == "" then return nil end
+
+    if v:find("nl", 1, true) == 1 then return "nl" end
+    if v:find("de", 1, true) == 1 then return "de" end
+    if v:find("en", 1, true) == 1 then return "en" end
+
+    if v:find("dutch", 1, true) or v:find("neder", 1, true) then return "nl" end
+    if v:find("german", 1, true) or v:find("deutsch", 1, true) then return "de" end
+    if v:find("english", 1, true) then return "en" end
+
+    if v:find("nl_", 1, true) or v:find("_nl", 1, true) or v:find("nl-", 1, true) then return "nl" end
+    if v:find("de_", 1, true) or v:find("_de", 1, true) or v:find("de-", 1, true) then return "de" end
+    if v:find("en_", 1, true) or v:find("_en", 1, true) or v:find("en-", 1, true) then return "en" end
+
+    return nil
+end
+
+local function detectSystemLanguage()
+    local candidates = {}
+    local function addCandidate(v)
+        if type(v) == "string" and v ~= "" then
+            candidates[#candidates + 1] = v
+        end
+    end
+
+    if os and os.setlocale then
+        local okCtype, ctypeLocale = pcall(function() return os.setlocale(nil, "ctype") end)
+        if okCtype then addCandidate(ctypeLocale) end
+        local okDefault, defaultLocale = pcall(function() return os.setlocale() end)
+        if okDefault then addCandidate(defaultLocale) end
+    end
+
+    if os and os.getenv then
+        addCandidate(os.getenv("LC_ALL"))
+        addCandidate(os.getenv("LC_MESSAGES"))
+        addCandidate(os.getenv("LANGUAGE"))
+        addCandidate(os.getenv("LANG"))
+        addCandidate(os.getenv("PreferredUILanguages"))
+    end
+
+    for _, raw in ipairs(candidates) do
+        local detected = normalizeLanguageCode(raw)
+        if detected then
+            return detected
+        end
+    end
+
+    return "en"
+end
+
 function SETTINGS_MOD.normalizeColorMode(mode)
     mode = tostring(mode or "")
     if mode == "no_track" or mode == "no_media" or mode == "off" then
@@ -87,6 +139,9 @@ function SETTINGS_MOD.load()
     local deleteOriginalTrack = C.reaper.GetExtState(C.EXT_SECTION, "deleteOriginalTrack")
     if deleteOriginalTrack ~= "" then C.SETTINGS.deleteOriginalTrack = (deleteOriginalTrack == "1") end
 
+    local muteOriginalTrack = C.reaper.GetExtState(C.EXT_SECTION, "muteOriginalTrack")
+    if muteOriginalTrack ~= "" then C.SETTINGS.muteOriginalTrack = (muteOriginalTrack == "1") end
+
     local darkMode = C.reaper.GetExtState(C.EXT_SECTION, "darkMode")
     if darkMode ~= "" then C.SETTINGS.darkMode = (darkMode == "1") end
 
@@ -136,8 +191,19 @@ function SETTINGS_MOD.load()
     if device ~= "" then C.SETTINGS.device = device end
 
     local language = C.reaper.GetExtState(C.EXT_SECTION, "language")
-    if language ~= "" then C.SETTINGS.language = language end
-    C.setLanguage(C.SETTINGS.language)
+    if language ~= "" then
+        C.SETTINGS.language = language
+    else
+        C.SETTINGS.language = detectSystemLanguage()
+        C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
+    end
+
+    local appliedLanguage = C.setLanguage(C.SETTINGS.language)
+    if not appliedLanguage then
+        C.SETTINGS.language = "en"
+        C.setLanguage(C.SETTINGS.language)
+        C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
+    end
 
     for i, stem in ipairs(C.STEMS) do
         local sel = C.reaper.GetExtState(C.EXT_SECTION, "stem_" .. stem.name)
@@ -196,6 +262,7 @@ function SETTINGS_MOD.save()
     C.reaper.SetExtState(C.EXT_SECTION, "deleteOriginal", C.SETTINGS.deleteOriginal and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "deleteSelection", C.SETTINGS.deleteSelection and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "deleteOriginalTrack", C.SETTINGS.deleteOriginalTrack and "1" or "0", true)
+    C.reaper.SetExtState(C.EXT_SECTION, "muteOriginalTrack", C.SETTINGS.muteOriginalTrack and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "darkMode", C.SETTINGS.darkMode and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "themePreset", tostring(C.SETTINGS.themePreset or "classic"), true)
     C.reaper.SetExtState(C.EXT_SECTION, "parallelProcessing", C.SETTINGS.parallelProcessing and "1" or "0", true)

@@ -3,8 +3,10 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2-dev
+-- @version 2.2.2-rc1
 -- @changelog
+--   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
+--   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
 --   2026-03-24: Local working build saved as v2.2.1.1 for installer follow-up.
 --   2026-03-13: Release v2.2.1: Major UI Polish & Engine Refactor.
 --   2026-03-13: Comprehensive UI synchronization: footers and tooltips now accurately mirror button states (In-place/Takes).
@@ -52,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.2-dev"
+local APP_VERSION = "2.2.2-rc1"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -1173,11 +1175,13 @@ do
         local hasBundledPayload = directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "wheels")
             or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "ffmpeg")
             or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "python")
-        MODEL_AVAILABILITY.bundledLimited = hasBundledPayload
+        local modelDir = getModelCacheDirForUi()
+        local hasOfflineModelManifest = (modelDir ~= "") and fileExists(modelDir .. PATH_SEP .. "download_checks.json")
+        local limitToInstalledModelFiles = hasBundledPayload and hasOfflineModelManifest
+        MODEL_AVAILABILITY.bundledLimited = limitToInstalledModelFiles
 
         local byId = {}
-        if hasBundledPayload then
-            local modelDir = getModelCacheDirForUi()
+        if limitToInstalledModelFiles then
             for _, model in ipairs(MODELS) do
                 local yaml = modelDir .. PATH_SEP .. tostring(model.id) .. ".yaml"
                 byId[model.id] = fileExists(yaml)
@@ -1227,6 +1231,7 @@ SETTINGS = {
     deleteOriginal = false,
     deleteSelection = false,   -- Delete only the selection portion (splits item)
     deleteOriginalTrack = false,
+    muteOriginalTrack = false, -- Mute original track(s) after separation
     darkMode = true,           -- Dark/Light theme toggle
     themePreset = "classic",   -- Theme accent preset (classic/ember/ice/mono)
     parallelProcessing = true, -- Process multiple tracks in parallel (uses more GPU memory)
@@ -9847,7 +9852,7 @@ buildFooterLines = function()
         local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
         selLine = tostring(promptTitle or "Start")
         outLine = tostring(promptMessage or "Select audio in REAPER")
-        locLine = T("tooltip_start") or "Choose audio in REAPER, then start STEMwerk."
+        locLine = T("select_audio_tooltip") or "Choose audio in REAPER, then start STEMwerk."
     end
 
     local isWarning = (stemsPerTrack == 0)
@@ -10491,7 +10496,7 @@ function renderMainColumns(ctx)
         if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
             SETTINGS.muteOriginal = not SETTINGS.muteOriginal
             if SETTINGS.muteOriginal then
-                SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
+                SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
@@ -10502,7 +10507,7 @@ function renderMainColumns(ctx)
         if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], afterBoxW, afterBtnFontSize) then
             SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
             if SETTINGS.deleteOriginal then
-                SETTINGS.muteOriginal = false
+                SETTINGS.muteOriginal = false; SETTINGS.muteOriginalTrack = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
@@ -10513,11 +10518,22 @@ function renderMainColumns(ctx)
         if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], afterBoxW, afterBtnFontSize) then
             SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
             if SETTINGS.deleteOriginalTrack then
-                SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false
+                SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false; SETTINGS.muteOriginalTrack = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_track"))
+
+        afterY = afterY + S(22)
+        local muteTrackColor = SETTINGS.muteOriginalTrack and {posR, posG, posB} or {160, 160, 160}
+        if drawCheckbox(col6X, afterY, SETTINGS.muteOriginalTrack, T("mute_track"), muteTrackColor[1], muteTrackColor[2], muteTrackColor[3], afterBoxW, afterBtnFontSize) then
+            SETTINGS.muteOriginalTrack = not SETTINGS.muteOriginalTrack
+            if SETTINGS.muteOriginalTrack then
+                SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
+                SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
+            end
+        end
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_track"))
 
         local hasTimeSel = hasTimeSelection()
         if hasTimeSel then
@@ -10525,7 +10541,7 @@ function renderMainColumns(ctx)
             if drawCheckbox(col6X, afterY, SETTINGS.muteSelection, T("mute_selection"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
                 SETTINGS.muteSelection = not SETTINGS.muteSelection
                 if SETTINGS.muteSelection then
-                    SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
+                    SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
                     SETTINGS.deleteSelection = false
                 end
             end
@@ -10536,7 +10552,7 @@ function renderMainColumns(ctx)
             if drawCheckbox(col6X, afterY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], afterBoxW, afterBtnFontSize) then
                 SETTINGS.deleteSelection = not SETTINGS.deleteSelection
                 if SETTINGS.deleteSelection then
-                    SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
+                    SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
                     SETTINGS.muteSelection = false
                 end
             end
@@ -11421,10 +11437,12 @@ local function renderItemToWav(item, outputPath, explicitRenderStart, explicitRe
     local itemEnd = itemPos + itemLen
     local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
     local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+    local pitch = reaper.GetMediaItemTakeInfo_Value(take, "D_PITCH")
     if not playrate or playrate < 0.0001 then
         debugLog("renderItemToWav: suspicious take playrate=" .. tostring(playrate) .. " -> using 1.0")
         playrate = 1.0
     end
+    pitch = tonumber(pitch) or 0.0
 
     -- Check for time selection that overlaps the item (only when time selection mode is active)
     local timeSelStart, timeSelEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
@@ -11460,6 +11478,7 @@ local function renderItemToWav(item, outputPath, explicitRenderStart, explicitRe
     end
 
     local isPartialSlice = (math.abs(renderStart - itemPos) > 0.0001) or (math.abs(renderEnd - itemEnd) > 0.0001)
+    local hasPlaybackTransform = (math.abs((tonumber(playrate) or 1.0) - 1.0) > 0.0001) or (math.abs(pitch) > 0.0001)
     if isPartialSlice then
         debugLog(string.format(
             "renderItemToWav partial slice: itemPos=%.6f itemEnd=%.6f renderStart=%.6f renderEnd=%.6f takeOffset=%.6f playrate=%.6f sourceOffset=%.6f duration=%.6f source=%s",
@@ -11475,22 +11494,37 @@ local function renderItemToWav(item, outputPath, explicitRenderStart, explicitRe
         ))
     end
 
-    -- Partial slices must reflect the item/take as arranged in REAPER, including split
-    -- context and item-local offsets. Prefer AudioAccessor there; keep ffmpeg as the fast
-    -- path for full-item extracts.
+    -- Partial slices with non-default playback should prefer ffmpeg first so the extracted
+    -- file remains in source-time and we can safely restore take playback metadata later.
+    -- For default playback, prefer AudioAccessor to better reflect split context/arrangement.
     if isPartialSlice then
-        local accOk, accErr = renderTakeAccessorToWav(take, renderStart, renderEnd, outputPath)
-        if accOk and fileSizeBytes(outputPath) > 1024 then
-            return outputPath, nil, renderStart, renderEnd - renderStart
+        if hasPlaybackTransform then
+            local ok, ffmpegLog = runFfmpegExtract(sourceFile, renderOffset, renderDuration, outputPath)
+            if ok then
+                return outputPath, nil, renderStart, renderEnd - renderStart
+            end
+            local accOk, accErr = renderTakeAccessorToWav(take, renderStart, renderEnd, outputPath)
+            if accOk and fileSizeBytes(outputPath) > 1024 then
+                return outputPath, nil, renderStart, renderEnd - renderStart
+            end
+            if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
+                os.remove(outputPath)
+            end
+            return nil, "Failed to extract partial audio slice. ffmpeg log: " .. tostring(ffmpegLog) .. "; AudioAccessor: " .. tostring(accErr), nil
+        else
+            local accOk, accErr = renderTakeAccessorToWav(take, renderStart, renderEnd, outputPath)
+            if accOk and fileSizeBytes(outputPath) > 1024 then
+                return outputPath, nil, renderStart, renderEnd - renderStart
+            end
+            if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
+                os.remove(outputPath)
+            end
+            local ok, ffmpegLog = runFfmpegExtract(sourceFile, renderOffset, renderDuration, outputPath)
+            if ok then
+                return outputPath, nil, renderStart, renderEnd - renderStart
+            end
+            return nil, "Failed to extract partial audio slice. AudioAccessor: " .. tostring(accErr) .. "; ffmpeg log: " .. tostring(ffmpegLog), nil
         end
-        if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
-            os.remove(outputPath)
-        end
-        local ok, ffmpegLog = runFfmpegExtract(sourceFile, renderOffset, renderDuration, outputPath)
-        if ok then
-            return outputPath, nil, renderStart, renderEnd - renderStart
-        end
-        return nil, "Failed to extract partial audio slice. AudioAccessor: " .. tostring(accErr) .. "; ffmpeg log: " .. tostring(ffmpegLog), nil
     end
 
     -- Prefer ffmpeg (fast). If it fails, fall back to REAPER AudioAccessor (robust).
@@ -12953,6 +12987,52 @@ function getItemDisplayNameForTakes(item)
     return "Item"
 end
 
+local function snapshotTakePlaybackState(take)
+    if not take or not reaper.ValidatePtr(take, "MediaItem_Take*") then return nil end
+    local playrate = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")) or 1.0
+    if playrate < 0.0001 then playrate = 1.0 end
+    local pitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PITCH")) or 0.0
+    local preservePitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "B_PPITCH")) or 0
+    preservePitch = (preservePitch ~= 0) and 1 or 0
+    return {
+        playrate = playrate,
+        pitch = pitch,
+        preservePitch = preservePitch
+    }
+end
+
+local function snapshotItemPlaybackState(item)
+    if not item or not reaper.ValidatePtr(item, "MediaItem*") then return nil end
+    return snapshotTakePlaybackState(reaper.GetActiveTake(item))
+end
+
+local function applyTakePlaybackState(take, state, itemLen)
+    if not take or not state then return end
+    if not reaper.ValidatePtr(take, "MediaItem_Take*") then return end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    local sourceLen = nil
+    if source and reaper.GetMediaSourceLength then
+        local len = reaper.GetMediaSourceLength(source)
+        sourceLen = tonumber(len)
+    end
+
+    -- Imported separator output is normally already rendered in project-time.
+    -- Only transfer playback-state when source duration matches the expected
+    -- pre-baked length (itemLen * playrate), otherwise we double-apply stretch.
+    if sourceLen and itemLen and itemLen > 0 then
+        local expected = itemLen * (state.playrate or 1.0)
+        local tolerance = math.max(0.01, expected * 0.01)
+        if math.abs(sourceLen - expected) > tolerance then
+            return
+        end
+    end
+
+    reaper.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", state.playrate or 1.0)
+    reaper.SetMediaItemTakeInfo_Value(take, "D_PITCH", state.pitch or 0.0)
+    reaper.SetMediaItemTakeInfo_Value(take, "B_PPITCH", state.preservePitch or 0)
+end
+
 -- Post-processing: explode takes created by in-place output
 -- mode: "none", "explode_new_tracks", "explode_in_place", "explode_in_order"
 explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
@@ -13004,6 +13084,23 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
         baseName = getItemDisplayNameForTakes(item)
     end
 
+    local function copyTakePlaybackState(srcTake, dstTake)
+        if not srcTake or not dstTake then return end
+        if not reaper.ValidatePtr(srcTake, "MediaItem_Take*") or not reaper.ValidatePtr(dstTake, "MediaItem_Take*") then return end
+
+        local playrate = tonumber(reaper.GetMediaItemTakeInfo_Value(srcTake, "D_PLAYRATE")) or 1.0
+        if playrate < 0.0001 then playrate = 1.0 end
+        local pitch = tonumber(reaper.GetMediaItemTakeInfo_Value(srcTake, "D_PITCH")) or 0.0
+        local preservePitch = tonumber(reaper.GetMediaItemTakeInfo_Value(srcTake, "B_PPITCH")) or 0
+        preservePitch = (preservePitch ~= 0) and 1 or 0
+        local startOffset = tonumber(reaper.GetMediaItemTakeInfo_Value(srcTake, "D_STARTOFFS")) or 0.0
+
+        reaper.SetMediaItemTakeInfo_Value(dstTake, "D_PLAYRATE", playrate)
+        reaper.SetMediaItemTakeInfo_Value(dstTake, "D_PITCH", pitch)
+        reaper.SetMediaItemTakeInfo_Value(dstTake, "B_PPITCH", preservePitch)
+        reaper.SetMediaItemTakeInfo_Value(dstTake, "D_STARTOFFS", startOffset)
+    end
+
     if mode == "explode_new_tracks" then
         -- Insert tracks after the source track
         local insertIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
@@ -13032,6 +13129,7 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
                         local newTake = reaper.AddTakeToMediaItem(newItem)
                         if newTake then
                             reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(take))
+                            copyTakePlaybackState(take, newTake)
                             reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
                             if takeColor and takeColor ~= 0 then
                                 HELPERS.applyTakeColorIfEnabled(newTake, takeColor)
@@ -13074,6 +13172,7 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
                     local newTake = reaper.AddTakeToMediaItem(newItem)
                     if newTake then
                         reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(take))
+                        copyTakePlaybackState(take, newTake)
                         -- Use the original take name for each new take (temporary)
                         reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
                         if takeColor and takeColor ~= 0 then
@@ -13141,6 +13240,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
             end
         end
     end
+    local sourcePlaybackState = snapshotTakePlaybackState(take)
 
     reaper.Undo_BeginBlock()
 
@@ -13186,6 +13286,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
                 local newTake = reaper.AddTakeToMediaItem(newItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
+                applyTakePlaybackState(newTake, sourcePlaybackState, itemLen)
                 HELPERS.applyItemColorIfEnabled(newItem, color)
 
                 importedItems[#importedItems + 1] = newItem
@@ -13201,6 +13302,8 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
 
     if SETTINGS.deleteOriginalTrack then
         reaper.DeleteTrack(track)
+    elseif SETTINGS.muteOriginalTrack then
+        reaper.SetMediaTrackInfo_Value(track, "B_MUTE", 1)
     elseif SETTINGS.deleteOriginal then
         reaper.DeleteTrackMediaItem(track, item)
     elseif SETTINGS.muteOriginal then
@@ -13692,6 +13795,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if tn and tn ~= "" then sourceTrackName = tn end
         
         local sourceItemName = info.sourceItemName or sourceTrackName
+        local sourcePlaybackState = snapshotItemPlaybackState(item)
         local take = reaper.GetActiveTake(item)
         if take and not info.sourceItemName then
             local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
@@ -13744,6 +13848,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     local newTake = reaper.AddTakeToMediaItem(newItem)
                     reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                     reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
+                    applyTakePlaybackState(newTake, sourcePlaybackState, ilen)
                     HELPERS.applyItemColorIfEnabled(newItem, color)
 
                     importedItems[#importedItems + 1] = newItem
@@ -13814,7 +13919,30 @@ function processStemsResult(stems)
                 return getItemsInTimeRangeAuto(timeSelectionStart, timeSelectionEnd, sourceTrack)
             end
 
-            if SETTINGS.muteOriginal then
+            local function getCleanupTracks()
+                local tracks = {}
+                local function addTrack(track)
+                    if not (track and reaper.ValidatePtr(track, "MediaTrack*")) then return end
+                    for _, existing in ipairs(tracks) do
+                        if existing == track then return end
+                    end
+                    tracks[#tracks + 1] = track
+                end
+                addTrack(sourceTrack)
+                for _, item in ipairs(getCleanupItems()) do
+                    addTrack(reaper.GetMediaItem_Track(item))
+                end
+                return tracks
+            end
+
+            if SETTINGS.muteOriginalTrack then
+                local tracks = getCleanupTracks()
+                for _, track in ipairs(tracks) do
+                    reaper.SetMediaTrackInfo_Value(track, "B_MUTE", 1)
+                end
+                local trackWord = #tracks == 1 and "track" or "tracks"
+                actionMsg = "\n" .. #tracks .. " " .. trackWord .. " muted."
+            elseif SETTINGS.muteOriginal then
                 local items = getCleanupItems()
                 for _, item in ipairs(items) do
                     reaper.SetMediaItemInfo_Value(item, "B_MUTE", 1)
@@ -13917,10 +14045,11 @@ function processStemsResult(stems)
         count = createStemTracks(selectedItem, stems, itemPos, itemLen)
         SW_LOG.logExecResult("timing:import_end mode=new_tracks single=items created=" .. tostring(count), nil, "")
         local actionKey = SETTINGS.deleteOriginalTrack and "result_track_deleted" or
+                          (SETTINGS.muteOriginalTrack and "result_track_muted" or
                           (SETTINGS.deleteOriginal and "result_item_deleted" or
                           (SETTINGS.deleteSelection and "result_selection_deleted" or
                           (SETTINGS.muteOriginal and "result_item_muted" or
-                          (SETTINGS.muteSelection and "result_selection_muted" or nil))))
+                          (SETTINGS.muteSelection and "result_selection_muted" or nil)))))
         local trackWord = count == 1 and "track" or "tracks"
         resultMsg = count .. " stem " .. trackWord .. " created."
         if actionKey then resultMsg = resultMsg .. "\n" .. (T(actionKey) or "") end
@@ -16181,7 +16310,7 @@ function drawMultiTrackProgressWindow()
         or (is6Stem and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local leftParts = {
         string.format("%s: %d:%02d%s", mtTime, totalMins, totalSecs, etaText),
-        string.format("%s: %s%s", mtSeg, segSize, modeStr),
+        string.format("%s: %s %s", mtSeg, segSize, modeStr),
         modelDisplay,
     }
     local rightParts = {}
@@ -16370,7 +16499,7 @@ processAllStemsResult = function()
     local actionCount = 0
     local actionData = nil
 
-    -- Skip item-level processing if deleteOriginalTrack is set (tracks will be deleted after stems created)
+    -- Skip item-level processing if track-level cleanup is set (tracks handled after stems are created)
     -- Also skip muteSelection/deleteSelection for in-place + time selection mode
     -- (the selection portion will be replaced by stems, splitting is done there)
     local applyCleanup = SETTINGS.createNewTracks
@@ -16668,12 +16797,12 @@ processAllStemsResult = function()
 
         multiTrackQueue.active = false
         isProcessingActive = false
-        showMessage("Separation Failed", msg, "error", true)
+        showMessage("Separation Failed", msg, "error", false)
         return
     end
 
     -- Handle delete/mute options AFTER stems are created (so placement isn't disturbed)
-    if applyCleanup and not SETTINGS.deleteOriginalTrack then
+    if applyCleanup and not (SETTINGS.deleteOriginalTrack or SETTINGS.muteOriginalTrack) then
         if SETTINGS.muteOriginal and not skipSelectionProcessing then
             for _, item in ipairs(allItems) do
                 if reaper.ValidatePtr(item, "MediaItem*") then
@@ -16766,33 +16895,48 @@ processAllStemsResult = function()
         end
     end
 
-    -- Handle deleteOriginalTrack AFTER stems are created (deletes entire source tracks)
-    if applyCleanup and SETTINGS.deleteOriginalTrack then
-        -- Collect unique tracks from jobs (delete in reverse order to avoid index issues)
-        local tracksToDelete = {}
+    -- Handle track-level cleanup AFTER stems are created.
+    if applyCleanup and (SETTINGS.deleteOriginalTrack or SETTINGS.muteOriginalTrack) then
+        -- Collect unique tracks from jobs.
+        local sourceTracks = {}
         for _, job in ipairs(multiTrackQueue.jobs) do
             if job.track and reaper.ValidatePtr(job.track, "MediaTrack*") then
                 -- Check if track is not already in list
                 local found = false
-                for _, t in ipairs(tracksToDelete) do
+                for _, t in ipairs(sourceTracks) do
                     if t == job.track then found = true; break end
                 end
                 if not found then
-                    table.insert(tracksToDelete, job.track)
+                    table.insert(sourceTracks, job.track)
                 end
             end
         end
-        -- Delete tracks in reverse order (higher indices first)
-        local trackDeleteCount = 0
-        for i = #tracksToDelete, 1, -1 do
-            local track = tracksToDelete[i]
-            if reaper.ValidatePtr(track, "MediaTrack*") then
-                reaper.DeleteTrack(track)
-                trackDeleteCount = trackDeleteCount + 1
+
+        if SETTINGS.deleteOriginalTrack then
+            -- Delete tracks in reverse order (higher indices first).
+            local trackDeleteCount = 0
+            for i = #sourceTracks, 1, -1 do
+                local track = sourceTracks[i]
+                if reaper.ValidatePtr(track, "MediaTrack*") then
+                    reaper.DeleteTrack(track)
+                    trackDeleteCount = trackDeleteCount + 1
+                end
             end
-        end
-        if trackDeleteCount > 0 then
-            actionData = { kind = "tracks", key = "result_action_tracks_deleted", count = trackDeleteCount }
+            if trackDeleteCount > 0 then
+                actionData = { kind = "tracks", key = "result_action_tracks_deleted", count = trackDeleteCount }
+            end
+        elseif SETTINGS.muteOriginalTrack then
+            local trackMuteCount = 0
+            for i = 1, #sourceTracks do
+                local track = sourceTracks[i]
+                if reaper.ValidatePtr(track, "MediaTrack*") then
+                    reaper.SetMediaTrackInfo_Value(track, "B_MUTE", 1)
+                    trackMuteCount = trackMuteCount + 1
+                end
+            end
+            if trackMuteCount > 0 then
+                actionData = { kind = "tracks", key = "result_action_tracks_muted", count = trackMuteCount }
+            end
         end
     end
 
@@ -17513,6 +17657,43 @@ function checkQuickPreset()
     return false
 end
 
+-- Check for quick command mode (called from toolbar scripts)
+function checkQuickCommand()
+    local cmd = reaper.GetExtState(EXT_SECTION, "quick_command")
+    if cmd == "" then
+        return false
+    end
+
+    -- Clear one-shot command flag
+    reaper.DeleteExtState(EXT_SECTION, "quick_command", false)
+
+    local valid = {
+        explode_new_tracks = true,
+        explode_in_place = true,
+        explode_in_order = true,
+    }
+    if not valid[cmd] then
+        return false
+    end
+
+    local created = applyPostProcessToSelectedCandidates(cmd)
+    if created <= 0 then
+        local multiTakeCount, hasTimeSel = getSelectedMultiTakeCountRespectingTimeSelection()
+        local hint
+        if hasTimeSel then
+            hint = "Select at least one multi-take item that overlaps the time selection."
+        else
+            hint = "Select at least one multi-take item first."
+        end
+        reaper.ShowMessageBox(
+            "No eligible multi-take items found.\n\n" .. hint,
+            "STEMwerk: Explode Takes",
+            0
+        )
+    end
+    return true
+end
+
 -- Main
 main = function()
     debugLog("=== main() called ===")
@@ -17523,7 +17704,10 @@ main = function()
     end
 
     -- If a toolbar preset requested an immediate run, bypass the focus-only guard.
-    local quickRunRequested = (reaper and reaper.GetExtState and reaper.GetExtState(EXT_SECTION, "quick_run") == "1")
+    local quickRunRequested = (reaper and reaper.GetExtState and (
+        reaper.GetExtState(EXT_SECTION, "quick_run") == "1" or
+        reaper.GetExtState(EXT_SECTION, "quick_command") ~= ""
+    ))
 
     -- Check if STEMwerk window is already open - if so, just bring it to focus
     if not quickRunRequested and not skipExistingWindowCheckOnce and reaper.JS_Window_Find then
@@ -17545,6 +17729,11 @@ main = function()
     -- Load settings first (needed for window position in error messages)
     loadSettings()
     perfMark("loadSettings() done")
+
+    -- Quick command mode (toolbar direct tools): run and exit without opening the main UI.
+    if checkQuickCommand() then
+        return
+    end
 
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
     timeSelectionMode = false
