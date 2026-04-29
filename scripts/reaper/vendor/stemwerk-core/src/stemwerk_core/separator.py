@@ -274,6 +274,14 @@ class StemSeparator:
             except Exception as exc:
                 warnings.warn(f"Failed to force DirectML device: {exc}")
 
+        # audio-separator auto-detects MPS on Apple Silicon inside
+        # setup_torch_device() and can ignore demucs_params["device"]. Force the
+        # Separator back to CPU when the selected or fallback device is CPU.
+        if separator_device == "cpu" or effective_device_id == "cpu":
+            separator.torch_device = torch.device("cpu")
+            separator.torch_device_cpu = separator.torch_device
+            separator.torch_device_mps = None
+
         self._emit_progress(1.0, f"Initializing [{effective_device_name}]")
 
         if created:
