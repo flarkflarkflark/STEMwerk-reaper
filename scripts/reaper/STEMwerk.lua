@@ -17384,7 +17384,7 @@ function getItemDisplayNameForTakes(item)
     return "Item"
 end
 
-local function snapshotTakePlaybackState(take)
+function WORKFLOW.snapshotTakePlaybackState(take)
     if not take or not reaper.ValidatePtr(take, "MediaItem_Take*") then return nil end
     local playrate = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")) or 1.0
     if playrate < 0.0001 then playrate = 1.0 end
@@ -17398,12 +17398,12 @@ local function snapshotTakePlaybackState(take)
     }
 end
 
-local function snapshotItemPlaybackState(item)
+function WORKFLOW.snapshotItemPlaybackState(item)
     if not item or not reaper.ValidatePtr(item, "MediaItem*") then return nil end
-    return snapshotTakePlaybackState(reaper.GetActiveTake(item))
+    return WORKFLOW.snapshotTakePlaybackState(reaper.GetActiveTake(item))
 end
 
-local function applyTakePlaybackState(take, state, itemLen)
+function WORKFLOW.applyTakePlaybackState(take, state, itemLen)
     if not take or not state then return end
     if not reaper.ValidatePtr(take, "MediaItem_Take*") then return end
 
@@ -17436,7 +17436,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
     local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
     local replaceStart = math.max(tonumber(selStart) or origItemPos, origItemPos)
     local replaceEnd = math.min(tonumber(selEnd) or origItemEnd, origItemEnd)
-    local sourcePlaybackState = snapshotItemPlaybackState(item)
+    local sourcePlaybackState = WORKFLOW.snapshotItemPlaybackState(item)
 
     if replaceEnd <= replaceStart then
         return 0, nil
@@ -17513,7 +17513,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
         reaper.SetMediaItemTake_Source(take, source)
         local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
         reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
-        applyTakePlaybackState(take, sourcePlaybackState, selLen)
+        WORKFLOW.applyTakePlaybackState(take, sourcePlaybackState, selLen)
         -- Ensure take volume is at unity (1.0 = 0dB)
         reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
 
@@ -17537,7 +17537,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
                 local newTake = reaper.AddTakeToMediaItem(mainItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(srcTake))
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
-                applyTakePlaybackState(newTake, sourcePlaybackState, selLen)
+                WORKFLOW.applyTakePlaybackState(newTake, sourcePlaybackState, selLen)
                 -- Ensure take volume is at unity (1.0 = 0dB)
                 reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
             end
@@ -17572,7 +17572,7 @@ end
 -- Replace item in-place with stems as takes
 function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
     local track = reaper.GetMediaItem_Track(item)
-    local sourcePlaybackState = snapshotItemPlaybackState(item)
+    local sourcePlaybackState = WORKFLOW.snapshotItemPlaybackState(item)
     reaper.Undo_BeginBlock()
     reaper.DeleteTrackMediaItem(track, item)
 
@@ -17601,7 +17601,7 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
         reaper.SetMediaItemTake_Source(take, source)
         local takeLabel = string.format("Take %d/%d: %s - %s", idx, math.max(1, totalStems), baseName, stem.name)
         reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
-        applyTakePlaybackState(take, sourcePlaybackState, itemLen)
+        WORKFLOW.applyTakePlaybackState(take, sourcePlaybackState, itemLen)
         -- Ensure take volume is at unity (1.0 = 0dB)
         reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
 
@@ -17624,7 +17624,7 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
                 local newTake = reaper.AddTakeToMediaItem(mainItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(srcTake))
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
-                applyTakePlaybackState(newTake, sourcePlaybackState, itemLen)
+                WORKFLOW.applyTakePlaybackState(newTake, sourcePlaybackState, itemLen)
                 -- Ensure take volume is at unity (1.0 = 0dB)
                 reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
             end
@@ -17861,7 +17861,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
             end
         end
     end
-    local sourcePlaybackState = snapshotTakePlaybackState(take)
+    local sourcePlaybackState = WORKFLOW.snapshotTakePlaybackState(take)
 
     reaper.Undo_BeginBlock()
 
@@ -17907,7 +17907,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
                 local newTake = reaper.AddTakeToMediaItem(newItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
-                applyTakePlaybackState(newTake, sourcePlaybackState, itemLen)
+                WORKFLOW.applyTakePlaybackState(newTake, sourcePlaybackState, itemLen)
                 HELPERS.applyItemColorIfEnabled(newItem, color)
 
                 importedItems[#importedItems + 1] = newItem
@@ -18414,7 +18414,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if tn and tn ~= "" then sourceTrackName = tn end
         
         local sourceItemName = info.sourceItemName or sourceTrackName
-        local sourcePlaybackState = snapshotItemPlaybackState(item)
+        local sourcePlaybackState = WORKFLOW.snapshotItemPlaybackState(item)
         local take = reaper.GetActiveTake(item)
         if take and not info.sourceItemName then
             local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
@@ -18467,7 +18467,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     local newTake = reaper.AddTakeToMediaItem(newItem)
                     reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                     reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
-                    applyTakePlaybackState(newTake, sourcePlaybackState, ilen)
+                    WORKFLOW.applyTakePlaybackState(newTake, sourcePlaybackState, ilen)
                     HELPERS.applyItemColorIfEnabled(newItem, color)
 
                     importedItems[#importedItems + 1] = newItem
