@@ -7618,11 +7618,22 @@ end
 
 -- Track if we've made window resizable
 local windowResizableSet = false
+local missingJsWindowStyleApiWarnings = {}
+
+local function warnMissingJsWindowStyleApi(context)
+    if missingJsWindowStyleApiWarnings[context] then return end
+    missingJsWindowStyleApiWarnings[context] = true
+    debugLog("WARNING: js_ReaScriptAPI window style functions unavailable; skipping " .. tostring(context))
+end
 
 -- Make window resizable using JS_ReaScriptAPI (if available)
 local function makeWindowResizable()
     if windowResizableSet then return true end
     if not reaper.JS_Window_Find then return false end
+    if not reaper.JS_Window_GetLong or not reaper.JS_Window_SetLong then
+        warnMissingJsWindowStyleApi("main window resize setup")
+        return false
+    end
 
     -- Find the gfx window
     local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
@@ -7640,6 +7651,7 @@ local function makeWindowResizable()
     else
         -- Windows: add WS_THICKFRAME and WS_MAXIMIZEBOX
         local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
+        if not style then return false end
         local WS_THICKFRAME = 0x00040000
         local WS_MAXIMIZEBOX = 0x00010000
         reaper.JS_Window_SetLong(hwnd, "STYLE", style | WS_THICKFRAME | WS_MAXIMIZEBOX)
@@ -12128,6 +12140,10 @@ local progressWindowResizableSet = false
 local function makeProgressWindowResizable()
     if progressWindowResizableSet then return true end
     if not reaper.JS_Window_Find then return false end
+    if not reaper.JS_Window_GetLong or not reaper.JS_Window_SetLong then
+        warnMissingJsWindowStyleApi("progress window resize setup")
+        return false
+    end
 
     local hwnd = reaper.JS_Window_Find(progressState.windowTitle or getProcessingWindowTitle(), true)
     if not hwnd then return false end
