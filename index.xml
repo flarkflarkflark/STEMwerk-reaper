@@ -2,12 +2,10 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.1.10" author="flarkAUDIO" time="1775481055">
+      <version name="2.2.1.11" author="flarkAUDIO" time="1777482211">
         <changelog><![CDATA[
-- macOS bootstrap now accepts only Python 3.10, 3.11, or 3.12
-- Python 3.13+ is explicitly rejected on macOS, including bare python3 fallbacks
-- Existing macOS virtual environments are reused only when their Python version is still supported
-- macOS bootstrap now aborts immediately after stemwerk-core install failure
+- macOS runtime now pins torch 2.4.1 during audio-separator install to keep Demucs checkpoint loading compatible on Apple Silicon
+- Added macOS constraints payload for runtime bootstrap
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
@@ -30,6 +28,7 @@
         <source file="../constraints/base.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/base.txt</source>
         <source file="../constraints/cuda.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/cuda.txt</source>
         <source file="../constraints/directml.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/directml.txt</source>
+        <source file="../constraints/macos.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/macos.txt</source>
         <source file="../vendor/stemwerk-core/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/README.txt</source>
         <source file="../vendor/stemwerk-core/pyproject.toml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/pyproject.toml</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py</source>
