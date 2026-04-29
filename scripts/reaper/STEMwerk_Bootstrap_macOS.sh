@@ -3,6 +3,7 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
+MACOS_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -331,7 +332,14 @@ else
       log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
-      "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "audio_separator_install_failed"
+      {
+        if [ -f "${MACOS_CONSTRAINTS_FILE}" ]; then
+          log "Installing ${PACKAGE} with macOS constraints from ${MACOS_CONSTRAINTS_FILE}"
+          "${VENV_PY}" -m pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}" >> "${LOG_FILE}" 2>&1
+        else
+          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1
+        fi
+      } || set_status "deps_failed" "audio_separator_install_failed"
 
     if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
       log "Installing ${ONNX_PACKAGE}"
