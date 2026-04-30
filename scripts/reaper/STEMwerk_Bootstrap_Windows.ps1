@@ -654,7 +654,7 @@ function EnsureJuliusRuntime([string]$PythonPath) {
     }
 
     LogProgress "Installing bundled julius fallback"
-    InstallWithPip $PythonPath @("--upgrade", "--force-reinstall", "--no-build-isolation", $bundledJuliusDir) "Install julius fallback"
+    InstallWithPip $PythonPath @("--upgrade", "--force-reinstall", "--no-build-isolation", "--no-deps", $bundledJuliusDir) "Install julius fallback"
     if ($LASTEXITCODE -ne 0) {
         return $false
     }
