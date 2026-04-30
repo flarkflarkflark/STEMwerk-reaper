@@ -5,15 +5,6 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 ## Current
 
 - [ ] Kijken of onderstaande todo-lijst nog actueel is, welke zaken zijn aangepakt, welke moeten nog, etc. (volgende keer)
-- [ ] Urgent release follow-up: verify that `v2.2.1.1` Windows assets install `stemwerk-core` from bundled source, not the old `0.1.0` wheel
-	- Source of truth: issue `#6` bootstrap log showed `Installing stemwerk-core from bundled wheel`
-	- Confirm new Windows assets now contain `vendor/stemwerk-core/pyproject.toml` and `src/stemwerk_core/*`
-	- Re-test on the Windows NVIDIA laptop after reinstall / clean runtime
-- [ ] Re-test DirectML behavior after the source-bundle release fix
-	- Verify whether explicit `DirectML` still falls back to CPU
-	- Verify whether `AUTO` vs explicit `DirectML` now behave consistently
-	- Re-check whether the old DirectML multi-job instability remains once the packaging mismatch is gone
-- [ ] CI: build GitHub Actions pipeline for installers/artifacts on tag push
 - [ ] Themes: investigate user-themable UI (fonts/colors/styles) vs current look
 	- Define theme tokens (palette, fonts, sizes)
 	- Apply tokens in UI draw helpers (buttons, headers, panels)
@@ -71,12 +62,6 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 	- Run short separation test (time selection) and confirm log says `Using GPU`
 	- Validate multi-track mode + cancel behavior
 	- Validate tooltips + i18n + window placement on both OSes
-
-- [ ] ASAP: Build downloadable installers for testing on macOS + Windows + Linux
-	- Goal: download from GitHub (Releases/Artifacts), install, and run setup + REAPER scripts
-	- Windows: .msi or .exe
-	- macOS: .pkg
-	- Linux: AppImage and/or .deb
 
 - [ ] Windows installer: explore semi-bundled installer
 	- Bundle Python installer payload into the Windows setup flow
