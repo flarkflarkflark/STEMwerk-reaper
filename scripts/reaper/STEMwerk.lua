@@ -12241,9 +12241,9 @@ local function drawProgressWindow()
 
     -- === THEME TOGGLE (top right) ===
     local iconScale = 0.66
-    local themeSize = math.max(PS(11), math.floor(PS(18) * iconScale + 0.5))
-    local themeX = w - themeSize - PS(8)
-    local themeY = PS(6)
+    local themeSize = math.max(PS(12), math.floor(PS(20) * iconScale + 0.5))
+    local themeX = w - themeSize - PS(10)
+    local themeY = PS(8)
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
 
     local controlsLeft = themeX - PS(60)
@@ -12287,13 +12287,15 @@ local function drawProgressWindow()
 
     -- === LANGUAGE TOGGLE (next to theme) ===
     local langCode = string.upper(SETTINGS.language or "EN")
-    gfx.setfont(1, "Arial", PS(8))
-    local langW = gfx.measurestr(langCode)
-    local langX = themeX - langW - PS(10)
-    local langY = themeY + PS(3)
-    local langHover = mx >= langX - PS(3) and mx <= langX + langW + PS(3) and my >= langY - PS(2) and my <= langY + PS(10)
+    local langW = PS(22)
+    local langH = PS(14)
+    local langX = themeX - langW - PS(6)
+    local langY = themeY + (themeSize - langH) / 2
+    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
+    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+    local langTextW = gfx.measurestr(langCode)
     gfx.set(0.5, 0.6, 0.8, (langHover and 1 or 0.4) * controlsOpacity)
-    gfx.x = langX
+    gfx.x = langX + (langW - langTextW) / 2
     gfx.y = langY
     gfx.drawstr(langCode)
 
@@ -15411,9 +15413,9 @@ function drawMultiTrackProgressWindow()
 
     -- === THEME TOGGLE (top right) ===
     local iconScale = 0.66
-    local themeSize = math.max(PS(11), math.floor(PS(18) * iconScale + 0.5))
-    local themeX = w - themeSize - PS(8)
-    local themeY = PS(6)
+    local themeSize = math.max(PS(12), math.floor(PS(20) * iconScale + 0.5))
+    local themeX = w - themeSize - PS(10)
+    local themeY = PS(8)
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
 
     local controlsLeft = themeX - PS(60)
@@ -15539,9 +15541,9 @@ function drawMultiTrackProgressWindow()
     gfx.drawstr(string.format(" - %s (%d %s)", runtimeMode, titleJobCount, jobUnitLabel(titleJobCount)))
 
     -- Language toggle (left of theme toggle)
-    local langW = PS(20)
+    local langW = PS(22)
     local langH = PS(14)
-    local langX = themeX - langW - PS(8)
+    local langX = themeX - langW - PS(6)
     local langY = themeY + (themeSize - langH) / 2
     local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
 
