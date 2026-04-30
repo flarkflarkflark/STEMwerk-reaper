@@ -1105,60 +1105,47 @@ MODEL_AVAILABILITY = {
 }
 
 do
-    local function directoryHasAnyFiles(path)
-        if not path or path == "" then return false end
+    local KNOWN_MODEL_IDS = {
+        htdemucs = true,
+        htdemucs_ft = true,
+        htdemucs_6s = true,
+    }
 
-        local hasEnumFiles = reaper and type(reaper.EnumerateFiles) == "function"
-        local hasEnumDirs = reaper and type(reaper.EnumerateSubdirectories) == "function"
-        if hasEnumFiles or hasEnumDirs then
-            if hasEnumFiles and reaper.EnumerateFiles(path, 0) then
-                return true
+    local function parseModelAllowlist(raw)
+        if not raw or raw == "" then return nil end
+        local out = {}
+        for token in tostring(raw):gmatch("[^,%s]+") do
+            local modelId = tostring(token):gsub("^['\"]", ""):gsub("['\"]$", "")
+            if KNOWN_MODEL_IDS[modelId] then
+                out[modelId] = true
             end
-            if hasEnumDirs and reaper.EnumerateSubdirectories(path, 0) then
-                return true
-            end
-            return false
         end
-
-        local cmd
-        if OS == "Windows" then
-            cmd = 'dir /b ' .. quoteArg(path) .. ' 2>nul'
-        else
-            cmd = 'ls -1 ' .. quoteArg(path) .. ' 2>/dev/null'
+        if next(out) then
+            return out
         end
-        local h = io.popen(cmd)
-        if not h then return false end
-        local out = h:read("*a") or ""
-        h:close()
-        return out:match("%S") ~= nil
+        return nil
     end
 
-    local function getModelCacheDirForUi()
-        local override = os.getenv("AUDIO_SEPARATOR_MODEL_DIR")
-        if override and override ~= "" then
-            return override
+    local function readModelAllowlistFromFile(path)
+        if not path or path == "" then return nil end
+        local f = io.open(path, "r")
+        if not f then return nil end
+        local raw = f:read("*a") or ""
+        f:close()
+        return parseModelAllowlist(raw)
+    end
+
+    local function getInstallerModelAllowlist()
+        -- Restrict models only when an explicit allowlist is present.
+        local envAllow = parseModelAllowlist(os.getenv("STEMWERK_MODEL_ALLOWLIST"))
+        if envAllow then
+            return envAllow
         end
 
-        local home = os.getenv("HOME") or ""
-        if OS == "Windows" then
-            local localAppData = os.getenv("LOCALAPPDATA") or ""
-            if localAppData ~= "" then
-                return localAppData .. "\\STEMwerk\\models"
-            end
-            if home ~= "" then
-                return home .. "\\AppData\\Local\\STEMwerk\\models"
-            end
-            return ""
-        end
-        if OS == "macOS" then
-            return home .. "/Library/Application Support/STEMwerk/models"
-        end
-
-        local xdg = os.getenv("XDG_DATA_HOME") or ""
-        if xdg ~= "" then
-            return xdg .. "/STEMwerk/models"
-        end
-        return home .. "/.local/share/STEMwerk/models"
+        local bundledRoot = script_path .. "_bundled"
+        local allowlist = readModelAllowlistFromFile(bundledRoot .. PATH_SEP .. "model_allowlist.txt")
+            or readModelAllowlistFromFile(bundledRoot .. PATH_SEP .. "model-allowlist.txt")
+        return allowlist
     end
 
     local function getFirstAvailableModelId()
@@ -1171,19 +1158,14 @@ do
     end
 
     function refreshModelAvailability()
-        local bundledRoot = script_path .. "_bundled"
-        local hasBundledPayload = directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "wheels")
-            or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "ffmpeg")
-            or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "python")
-        local modelDir = getModelCacheDirForUi()
-        local limitToInstalledModelFiles = hasBundledPayload
-        MODEL_AVAILABILITY.bundledLimited = limitToInstalledModelFiles
+        local allowlist = getInstallerModelAllowlist()
+        local limitToAllowlist = allowlist ~= nil
+        MODEL_AVAILABILITY.bundledLimited = limitToAllowlist
 
         local byId = {}
-        if limitToInstalledModelFiles then
+        if limitToAllowlist then
             for _, model in ipairs(MODELS) do
-                local yaml = modelDir .. PATH_SEP .. tostring(model.id) .. ".yaml"
-                byId[model.id] = fileExists(yaml)
+                byId[model.id] = allowlist[model.id] and true or false
             end
         else
             for _, model in ipairs(MODELS) do
@@ -1217,7 +1199,7 @@ do
     end
 
     function unavailableModelTooltipSuffix()
-        return "Not included in this bundled installer variant."
+        return T("model_unavailable_variant_suffix") or "Not included in this installer variant."
     end
 end
 
@@ -10259,12 +10241,12 @@ function renderMainColumns(ctx)
     local mainHeaderFont = S(10)
 
     local gutter = S(10)
-    local presetsW = S(58)
-    local stemsW = S(58)
-    local modelColW = S(68)
-    local deviceColW = S(58)
-    local outputColW = S(60)
-    local afterColW = S(60)
+    local presetsW = S(64)
+    local stemsW = S(64)
+    local modelColW = S(72)
+    local deviceColW = S(62)
+    local outputColW = S(78)
+    local afterColW = S(80)
 
     local col1X = S(10)
     local col2X = col1X + presetsW + gutter
@@ -10292,7 +10274,7 @@ function renderMainColumns(ctx)
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
-    local presetsBtnFontSize = getUniformFontSizeCached("main_presets_col", presetLabels, colW)
+    local presetsBtnFontSize = S(13)
 
     local processingLabels = {
         T("parallel") or "Parallel",
@@ -10300,7 +10282,7 @@ function renderMainColumns(ctx)
         T("temp_files_keep") or "Keep",
         T("temp_files_delete") or "Delete",
     }
-    local processingBtnFontSize = getUniformFontSizeCached("main_processing_col", processingLabels, modelColW)
+    local processingBtnFontSize = S(13)
 
     local presetY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
@@ -10356,7 +10338,7 @@ function renderMainColumns(ctx)
             stemLabels[#stemLabels + 1] = tostring(dn) .. " (" .. st.key .. ")"
         end
     end
-    local stemsBtnFontSize = getUniformFontSizeCached("main_stems_col", stemLabels, colW)
+    local stemsBtnFontSize = S(13)
 
     for i, stem in ipairs(STEMS) do
         if not stem.sixStemOnly or is6Stem then
@@ -10383,7 +10365,7 @@ function renderMainColumns(ctx)
     end
     modelLabels[#modelLabels + 1] = T("parallel")
     modelLabels[#modelLabels + 1] = T("sequential")
-    local modelBtnFontSize = getUniformFontSizeCached("main_model_col", modelLabels, modelBoxW)
+    local modelBtnFontSize = S(13)
 
     local modelY = contentTop + S(20)
     local modelDescKeys = {
@@ -10453,36 +10435,8 @@ function renderMainColumns(ctx)
     local newTracksLabel = stemPlural and T("new_tracks") or T("new_track")
     local inPlaceLabel = T("in_place")
 
-    local outBoxH = S(20)
-    local iconSize = math.max(6, outBoxH * 0.52)
-    local reservedLeftForIcon = S(5) + iconSize + S(8)
-    local outputBtnFontSize = getUniformFontSizeCached("main_output_col", {
-        T("new_track"),
-        T("new_tracks"),
-        inPlaceLabel,
-        HELPERS.getStemFilesHeaderLabel(),
-        "Temp",
-        HELPERS.getStemFileProjectLabel(),
-        "Custom",
-        HELPERS.getSetCustomPathLabel(),
-    }, outBoxW)
-
-    local afterBtnFontSize = getUniformFontSizeCached("main_after_col", {
-        "Clr T+M",
-        "Clr -T",
-        "Clr Off",
-        "Clr -M",
-        T("keep_takes"),
-        T("create_folder"),
-        T("mute_original"),
-        T("delete_original"),
-        T("delete_track"),
-        T("mute_selection"),
-        T("delete_selection"),
-        stripExplodePrefix(T("explode_to_new_tracks")),
-        stripExplodePrefix(T("explode_in_place")),
-        stripExplodePrefix(T("explode_in_order")),
-    }, outBoxW, reservedLeftForIcon)
+    local outputBtnFontSize = S(13)
+    local afterBtnFontSize = S(13)
 
     local outY = contentTop + S(20)
     if drawRadio(col5X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW, nil, nil, outputBtnFontSize) then
@@ -10622,41 +10576,6 @@ function renderMainColumns(ctx)
             setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_selection"))
         end
 
-        local selectedMultiTakeCount = getSelectedMultiTakeCountRespectingTimeSelection()
-        if (selectedMultiTakeCount or 0) > 0 then
-            local t = os.clock() or 0
-            local pulseMult = 0.85 + 0.25 * (0.5 + 0.5 * math.sin(t * 6.0))
-
-            afterY = afterY + S(28)
-            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-            gfx.x = col6X
-            gfx.y = afterY
-            gfx.drawstr(T("direct") or "Direct")
-
-            afterY = afterY + S(16)
-            gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
-            gfx.x = col6X
-            gfx.y = afterY
-            gfx.drawstr(T("direct_explode_now") or "Explode selected takes now")
-
-            afterY = afterY + S(20)
-            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_to_new_tracks")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
-                applyPostProcessToSelectedCandidates("explode_new_tracks")
-            end
-            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_new_tracks"))
-
-            afterY = afterY + S(22)
-            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_place")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
-                applyPostProcessToSelectedCandidates("explode_in_place")
-            end
-            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_in_place"))
-
-            afterY = afterY + S(22)
-            if drawRadio(col6X, afterY, false, stripExplodePrefix(T("explode_in_order")), nil, afterBoxW, pulseMult, "explode", afterBtnFontSize) then
-                applyPostProcessToSelectedCandidates("explode_in_order")
-            end
-            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_direct_explode_in_order"))
-        end
     else
         local afterY = contentTop + S(20)
         local afterBoxW = afterColW
@@ -10906,9 +10825,11 @@ canStartProcessingFromDialog = function()
         return false
     end
     if not isModelAvailableInCurrentMode(tostring(SETTINGS.model or "")) then
+        local unavailableTitle = T("model_unavailable_title") or "Model unavailable"
+        local unavailableMessage = T("model_unavailable_message") or "The selected model is not available in this installer variant."
         openDialogWarning(
-            T("model_label") or "Model unavailable",
-            (T("model_unavailable_message") or "The selected model is not available in this installer.") .. "\n\n" .. unavailableModelTooltipSuffix()
+            unavailableTitle,
+            unavailableMessage .. "\n\n" .. unavailableModelTooltipSuffix()
         )
         return false
     end

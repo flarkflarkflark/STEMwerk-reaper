@@ -268,6 +268,9 @@ local LANGUAGES = {
         model_label_fast = "Fast",
         model_label_quality = "Quality",
         model_label_6stem = "6-Stem",
+        model_unavailable_title = "Model unavailable",
+        model_unavailable_message = "The selected model is not available in this installer variant.",
+        model_unavailable_variant_suffix = "Not included in this installer variant.",
 
         -- Preset tooltips
         tooltip_preset_karaoke = "Everything except vocals",
@@ -669,6 +672,9 @@ local LANGUAGES = {
         model_label_fast = "Snel",
         model_label_quality = "Kwaliteit",
         model_label_6stem = "6-Stem",
+        model_unavailable_title = "Model niet beschikbaar",
+        model_unavailable_message = "Het geselecteerde model is niet beschikbaar in deze installer-variant.",
+        model_unavailable_variant_suffix = "Niet inbegrepen in deze installer-variant.",
 
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles behalve zang",
@@ -870,7 +876,7 @@ local LANGUAGES = {
 
         -- Stems
         vocals = "Gesang",
-        drums = "Schlagzeug",
+        drums = "Drums",
         bass = "Bass",
         other = "Sonstige",
         guitar = "Gitarre",
@@ -954,7 +960,7 @@ local LANGUAGES = {
         rich_takes_label = "Takes",
         rich_target_label = "Ziel",
         direct = "Direkt",
-        direct_explode_now = "Ausgewaehlte Takes jetzt explodieren",
+        direct_explode_now = "Takes jetzt explodieren",
         tooltip_direct_explode_new_tracks = "Ausgewaehlte Multi-Take Items in neue Tracks explodieren.",
         tooltip_direct_explode_in_place = "Ausgewaehlte Multi-Take Items als einzelne Items auf derselben Spur explodieren.",
         tooltip_direct_explode_in_order = "Ausgewaehlte Multi-Take Items nacheinander in der Zeit explodieren.",
@@ -1068,6 +1074,9 @@ local LANGUAGES = {
         model_label_fast = "Schnell",
         model_label_quality = "Qualitaet",
         model_label_6stem = "6-Stem",
+        model_unavailable_title = "Modell nicht verfuegbar",
+        model_unavailable_message = "Das ausgewaehlte Modell ist in dieser Installer-Variante nicht verfuegbar.",
+        model_unavailable_variant_suffix = "In dieser Installer-Variante nicht enthalten.",
 
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles ausser Gesang",
@@ -1190,7 +1199,7 @@ local LANGUAGES = {
 
         -- Stem names for help
         stem_vocals = "Gesang",
-        stem_drums = "Schlagzeug",
+        stem_drums = "Drums",
         stem_bass = "Bass",
         stem_other = "Sonstige",
         stem_guitar = "Gitarre",
