@@ -10,19 +10,16 @@ RAW_VERSION_VALUE="${STEMWERK_VERSION:-$(cat "$REPO_DIR/VERSION")}"
 VERSION_VALUE="$(printf '%s' "$RAW_VERSION_VALUE" | tr -d '\r\n')"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 VARIANT_FILTER="${STEMWERK_VARIANTS:-all}"
+if [[ -z "${VARIANT_FILTER// }" ]]; then
+	VARIANT_FILTER="allmodels"
+fi
 
 should_build_variant() {
 	local variant="$1"
-	if [[ "$VARIANT_FILTER" == "all" ]]; then
-		return 0
+	if [[ "$variant" != "allmodels" ]]; then
+		return 1
 	fi
-	IFS=',' read -r -a requested <<< "$VARIANT_FILTER"
-	for v in "${requested[@]}"; do
-		if [[ "${v// /}" == "$variant" ]]; then
-			return 0
-		fi
-	done
-	return 1
+	return 0
 }
 
 require_file() {
@@ -41,6 +38,15 @@ copy_variant_files() {
 		require_file "$MODEL_CACHE_DIR/$rel"
 		cp -f "$MODEL_CACHE_DIR/$rel" "$dest_dir/"
 	done
+}
+
+warn_if_non_allmodels_requested() {
+	local raw="${VARIANT_FILTER,,}"
+	local compact="${raw// /}"
+	if [[ "$compact" == "allmodels" || "$compact" == "all" ]]; then
+		return
+	fi
+	echo "Warning: only 'allmodels' is supported for offline-bundled installers; ignoring requested variants: $VARIANT_FILTER" >&2
 }
 
 build_variant() {
@@ -85,48 +91,15 @@ build_flavor() {
 	echo "Preparing offline wheelhouse for $flavor..."
 	prepare_wheelhouse "$wheel_subdir" "$include_cuda" "$include_directml"
 
-	if should_build_variant "fast"; then
-		build_variant "$FAST_SUBDIR" "fast" "$wheel_subdir" "$offline_tag"
-	fi
-	if should_build_variant "quality"; then
-		build_variant "$QUALITY_SUBDIR" "quality" "$wheel_subdir" "$offline_tag"
-	fi
-	if should_build_variant "6stem"; then
-		build_variant "$SIXSTEM_SUBDIR" "6stem" "$wheel_subdir" "$offline_tag"
-	fi
 	if should_build_variant "allmodels"; then
 		build_variant "$ALL_SUBDIR" "allmodels" "$wheel_subdir" "$offline_tag"
 	fi
 }
 
 BASE_PAYLOAD_DIR="$ROOT_DIR/payload"
-FAST_SUBDIR="models-$STAMP-fast"
-QUALITY_SUBDIR="models-$STAMP-quality"
-SIXSTEM_SUBDIR="models-$STAMP-6stem"
 ALL_SUBDIR="models-$STAMP-allmodels"
 
-FAST_DIR="$BASE_PAYLOAD_DIR/$FAST_SUBDIR"
-QUALITY_DIR="$BASE_PAYLOAD_DIR/$QUALITY_SUBDIR"
-SIXSTEM_DIR="$BASE_PAYLOAD_DIR/$SIXSTEM_SUBDIR"
 ALL_DIR="$BASE_PAYLOAD_DIR/$ALL_SUBDIR"
-
-copy_variant_files "$FAST_DIR" \
-	htdemucs.yaml \
-	955717e8-8726e21a.th \
-	download_checks.json
-
-copy_variant_files "$QUALITY_DIR" \
-	htdemucs_ft.yaml \
-	f7e0c4bc-ba3fe64a.th \
-	d12395a8-e57c48e6.th \
-	92cfc3b6-ef3bcb9c.th \
-	04573f0d-f3cf25b2.th \
-	download_checks.json
-
-copy_variant_files "$SIXSTEM_DIR" \
-	htdemucs_6s.yaml \
-	5c90dfd2-34c22ccb.th \
-	download_checks.json
 
 copy_variant_files "$ALL_DIR" \
 	htdemucs.yaml \
@@ -139,6 +112,8 @@ copy_variant_files "$ALL_DIR" \
 	04573f0d-f3cf25b2.th \
 	5c90dfd2-34c22ccb.th \
 	download_checks.json
+
+warn_if_non_allmodels_requested
 
 build_flavor "nvidia" "wheels-nvidia" "offline-bundled-nvidia-gpu" "1" "0"
 build_flavor "amd" "wheels-directml" "offline-bundled-amd-gpu" "0" "1"

@@ -1,5 +1,5 @@
 param(
-    [string]$Variants = ""
+    [string]$Variants = "allmodels"
 )
 
 Set-StrictMode -Version Latest
@@ -18,13 +18,15 @@ if ([string]::IsNullOrWhiteSpace($Variants)) {
     $Variants = $env:STEMWERK_VARIANTS
 }
 if ([string]::IsNullOrWhiteSpace($Variants)) {
-    $Variants = "all"
+    $Variants = "allmodels"
 }
-
-function Should-BuildVariant([string]$Name) {
-    if ($Variants -eq "all") { return $true }
-    $requested = $Variants.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-    return $requested -contains $Name
+$normalizedVariants = @(
+    ($Variants -split ",") |
+        ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        Where-Object { $_ -ne "" }
+)
+if (($normalizedVariants.Count -gt 1) -or ($normalizedVariants.Count -eq 1 -and $normalizedVariants[0] -ne "allmodels")) {
+    Write-Warning "Only 'allmodels' is supported for offline-bundled installers. Ignoring requested variants: $Variants"
 }
 
 function Resolve-IsccPath {
@@ -71,16 +73,6 @@ function Resolve-ModelStamp {
     }
     $stamp = (Get-Date -Format "yyyyMMdd_HHmmss")
 
-    $requiredFast = @("htdemucs.yaml", "955717e8-8726e21a.th", "download_checks.json")
-    $requiredQuality = @(
-        "htdemucs_ft.yaml",
-        "f7e0c4bc-ba3fe64a.th",
-        "d12395a8-e57c48e6.th",
-        "92cfc3b6-ef3bcb9c.th",
-        "04573f0d-f3cf25b2.th",
-        "download_checks.json"
-    )
-    $requiredSix = @("htdemucs_6s.yaml", "5c90dfd2-34c22ccb.th", "download_checks.json")
     $requiredAll = @(
         "htdemucs.yaml",
         "htdemucs_ft.yaml",
@@ -96,9 +88,6 @@ function Resolve-ModelStamp {
 
     if ($modelCache -and (Test-Path $modelCache)) {
         Write-Host "Copying models from: $modelCache"
-        Copy-VariantFiles $modelCache (Join-Path $payloadDir "models-$stamp-fast") $requiredFast
-        Copy-VariantFiles $modelCache (Join-Path $payloadDir "models-$stamp-quality") $requiredQuality
-        Copy-VariantFiles $modelCache (Join-Path $payloadDir "models-$stamp-6stem") $requiredSix
         Copy-VariantFiles $modelCache (Join-Path $payloadDir "models-$stamp-allmodels") $requiredAll
         return $stamp
     }
@@ -113,17 +102,15 @@ function Resolve-ModelStamp {
         throw "Unexpected model payload name: $($existing.Name)"
     }
 
-    foreach ($suffix in @("fast", "quality", "6stem", "allmodels")) {
-        $dir = Join-Path $payloadDir ("models-$stamp-$suffix")
-        if (-not (Test-Path $dir)) {
-            throw "Missing payload directory: $dir"
-        }
+    $allDir = Join-Path $payloadDir ("models-$stamp-allmodels")
+    if (-not (Test-Path $allDir)) {
+        throw "Missing payload directory: $allDir"
     }
     Write-Host "Using existing model payload stamp: $stamp"
     return $stamp
 }
 
-function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$VariantName, [string]$WheelSubdir, [string]$OfflineTag) {
+function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$WheelSubdir, [string]$OfflineTag) {
     $baseName = "STEMwerk-Setup-$version"
     $tempOutDir = Join-Path $payloadDir ("_tmp-out-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $tempOutDir | Out-Null
@@ -133,14 +120,10 @@ function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$Varia
     $env:STEMWERK_MODEL_PAYLOAD_SUBDIR = $PayloadSubdir
     $env:STEMWERK_WHEEL_PAYLOAD_SUBDIR = $WheelSubdir
 
-    Write-Host "Building variant: $VariantName (payload: $PayloadSubdir)"
+    Write-Host "Building variant: allmodels (payload: $PayloadSubdir)"
     & $IsccPath "/O$($tempOutDir)" "/F$($baseName)" $issPath | Out-Null
 
-    if ($VariantName -eq "allmodels") {
-        $variantTag = "$OfflineTag-allmodels"
-    } else {
-        $variantTag = "$OfflineTag-model-$VariantName"
-    }
+    $variantTag = "$OfflineTag-allmodels"
     $variantOut = Join-Path $distDir ("STEMwerk-Setup-$version-$variantTag.exe")
     $baseOut = Join-Path $tempOutDir ("$baseName.exe")
     Require-File $baseOut
@@ -155,18 +138,7 @@ function Build-Flavor([string]$Name, [string]$WheelSubdir, [string]$OfflineTag, 
     $env:STEMWERK_INCLUDE_DIRECTML_WHEELS = $IncludeDirectml
     & (Join-Path $rootDir "fetch_runtime_assets.ps1")
 
-    if (Should-BuildVariant "fast") {
-        Build-Variant $isccPath "models-$Stamp-fast" "fast" $WheelSubdir $OfflineTag
-    }
-    if (Should-BuildVariant "quality") {
-        Build-Variant $isccPath "models-$Stamp-quality" "quality" $WheelSubdir $OfflineTag
-    }
-    if (Should-BuildVariant "6stem") {
-        Build-Variant $isccPath "models-$Stamp-6stem" "6stem" $WheelSubdir $OfflineTag
-    }
-    if (Should-BuildVariant "allmodels") {
-        Build-Variant $isccPath "models-$Stamp-allmodels" "allmodels" $WheelSubdir $OfflineTag
-    }
+    Build-Variant $isccPath "models-$Stamp-allmodels" $WheelSubdir $OfflineTag
 }
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null

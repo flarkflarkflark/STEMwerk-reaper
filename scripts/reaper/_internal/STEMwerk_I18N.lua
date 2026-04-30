@@ -89,6 +89,9 @@ local function T(key)
     if LANG and LANG[key] then
         return LANG[key]
     end
+    if LANGUAGES and LANGUAGES.en and LANGUAGES.en[key] then
+        return LANGUAGES.en[key]
+    end
     return (key:gsub("_", " "))
 end
 

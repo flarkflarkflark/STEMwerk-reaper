@@ -22,6 +22,11 @@ If you downloaded an offline bundled installer, the filename tells you which GPU
 
 If the installer cannot verify a GPU runtime, STEMwerk will fall back to CPU.
 
+Offline NVIDIA note (issue #11 context):
+- If processing works online but fails offline, verify that models are present in `%LOCALAPPDATA%\\STEMwerk\\models`.
+- Offline bundled installers now ship as `allmodels` variants only.
+- In bundled/offline installers, the "cleanup models" pre-setup task is intentionally disabled to avoid deleting freshly bundled model payloads.
+
 ## What to do next
 
 1. Open REAPER.
@@ -85,6 +90,7 @@ Normal use:
 - `Stemwerk: Drums Only`
 - `Stemwerk: Bass Only`
 - `Stemwerk: All Stems`
+- `Stemwerk: Explode Takes (In Place)` (for selected multi-take items)
 
 Support / repair paths:
 

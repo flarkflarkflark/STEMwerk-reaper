@@ -31,10 +31,19 @@
   #define WheelPayloadSubdir "wheels"
 #endif
 
+#if BundleRuntime == "1"
+  #define MinimumFreeSpaceMB "12288"
+  #define ExtraDiskSpaceRequiredBytes "2147483648"
+#else
+  #define MinimumFreeSpaceMB "3072"
+  #define ExtraDiskSpaceRequiredBytes "3221225472"
+#endif
+
 [Setup]
 AppId={{9A6BDA0D-6A2A-4B36-9C3B-1D4C77E5D0A3}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} v{#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
@@ -45,7 +54,9 @@ SetupIconFile=..\assets\stemwerk.ico
 #if FileExists('..\assets\stemwerk-wizard.bmp')
 WizardImageFile=..\assets\stemwerk-wizard.bmp
 #endif
-; Small wizard image removed to avoid overlap with status text
+#if FileExists('..\assets\stemwerk-wizard-small-opt-stemwerk-colors-v2-centered-widewerk.bmp')
+WizardSmallImageFile=..\assets\stemwerk-wizard-small-opt-stemwerk-colors-v2-centered-widewerk.bmp
+#endif
 DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
 DisableProgramGroupPage=yes
@@ -53,11 +64,41 @@ OutputDir=dist
 OutputBaseFilename=STEMwerk-Setup-{#MyAppVersion}{#OutputSuffix}
 Compression=lzma
 SolidCompression=yes
-WizardStyle=modern
+WizardStyle=classic
 PrivilegesRequired=lowest
+DisableWelcomePage=no
+LicenseFile=STEMwerk_License_Agreement.txt
+ShowLanguageDialog=auto
+LanguageDetectionMethod=uilanguage
+UsePreviousLanguage=yes
+ExtraDiskSpaceRequired={#ExtraDiskSpaceRequiredBytes}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "dutch"; MessagesFile: "compiler:Languages\Dutch.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+
+[CustomMessages]
+english.TaskCleanupRuntime=Before setup: clean previous runtime state/logs/.venv/cache
+english.TaskCleanupModels=Also remove cached models (larger re-download on first use)
+english.RunOpenGuide=Open Windows setup guide
+english.RunOpenLog=Open setup log
+
+dutch.TaskCleanupRuntime=Voor setup: verwijder vorige runtime-state/logs/.venv/cache
+dutch.TaskCleanupModels=Verwijder ook modelcache (grotere herdownload bij eerste gebruik)
+dutch.RunOpenGuide=Open Windows setup-handleiding
+dutch.RunOpenLog=Open setup-log
+
+german.TaskCleanupRuntime=Vor Setup: vorherigen Runtime-Status/Logs/.venv/Cache bereinigen
+german.TaskCleanupModels=Auch Modell-Cache entfernen (größerer Re-Download bei erster Nutzung)
+german.RunOpenGuide=Windows-Setup-Anleitung öffnen
+german.RunOpenLog=Setup-Log öffnen
+
+[Tasks]
+Name: "cleanup_runtime"; Description: "{cm:TaskCleanupRuntime}"; Flags: unchecked
+#if BundleRuntime != "1"
+Name: "cleanup_models"; Description: "{cm:TaskCleanupModels}"; Flags: unchecked
+#endif
 
 [Files]
 ; Core files needed to run in REAPER
@@ -81,21 +122,37 @@ Source: "payload\{#ModelPayloadSubdir}\*"; DestDir: "{localappdata}\STEMwerk\mod
 
 ; Helpful docs
 Source: "STEMwerk_Windows_Setup_Guide.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "STEMwerk_Windows_Setup_Guide.nl.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "STEMwerk_Windows_Setup_Guide.de.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "STEMwerk_License_Agreement.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\TODO.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\STEMwerk\Open install folder"; Filename: "{app}"
-Name: "{userprograms}\STEMwerk\Windows setup guide"; Filename: "{app}\STEMwerk_Windows_Setup_Guide.md"
+Name: "{userprograms}\STEMwerk\{cm:RunOpenGuide}"; Filename: "{code:GetLocalizedGuidePath}"
+Name: "{userprograms}\STEMwerk\License agreement"; Filename: "{app}\STEMwerk_License_Agreement.txt"
 
 [Run]
-Filename: "{app}\STEMwerk_Windows_Setup_Guide.md"; Description: "Open Windows setup guide"; Flags: postinstall shellexec skipifsilent
-Filename: "{sys}\notepad.exe"; Parameters: """{localappdata}\STEMwerk\logs\bootstrap.log"""; Description: "Open setup log"; Flags: postinstall skipifsilent unchecked
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\STEMwerk_Installer_Windows.ps1"""; StatusMsg: "Preparing STEMwerk runtime..."; Flags: runhidden waituntilterminated
+Filename: "{code:GetLocalizedGuidePath}"; Description: "{cm:RunOpenGuide}"; Flags: postinstall shellexec skipifsilent
+Filename: "{sys}\notepad.exe"; Parameters: """{localappdata}\STEMwerk\logs\bootstrap.log"""; Description: "{cm:RunOpenLog}"; Flags: postinstall skipifsilent unchecked
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\STEMwerk_Installer_Windows.ps1""{code:GetInstallerScriptArgs}"; StatusMsg: "Preparing STEMwerk runtime..."; Flags: runhidden waituntilterminated
 
 [Code]
 var
+  WelcomeTitlePrefixLabel: TNewStaticText;
+  WelcomeTitleStemS: TNewStaticText;
+  WelcomeTitleStemT: TNewStaticText;
+  WelcomeTitleStemE: TNewStaticText;
+  WelcomeTitleStemM: TNewStaticText;
+  WelcomeTitleSuffixLabel: TNewStaticText;
+  WelcomeInfoLabel: TNewStaticText;
+  TasksBrandLabel: TNewStaticText;
+  TasksInfoLabel: TNewStaticText;
+  TasksWelcomeLabel: TNewStaticText;
+  TasksWelcomeSubLabel: TNewStaticText;
   LogMemo: TNewMemo;
   StatusPrefixLabel: TNewStaticText;
   StatusStemS: TNewStaticText;
@@ -104,11 +161,7 @@ var
   StatusStemM: TNewStaticText;
   StatusSuffixLabel: TNewStaticText;
   FinishedPrefixLabel: TNewStaticText;
-  FinishedStemS: TNewStaticText;
-  FinishedStemT: TNewStaticText;
-  FinishedStemE: TNewStaticText;
-  FinishedStemM: TNewStaticText;
-  FinishedSuffixLabel: TNewStaticText;
+  FinishedBrandLabel: TNewStaticText;
   StatusDetailLabel: TNewStaticText;
   ProgressOverlayLabel: TNewStaticText;
   StepLabelS: TNewStaticText;
@@ -128,6 +181,8 @@ var
   LastLogText: string;
   LastProgress: Integer;
   LastStep: Integer;
+  UninstallCleanupRuntime: Boolean;
+  UninstallCleanupModels: Boolean;
 
 const
   WM_VSCROLL = $0115;
@@ -176,6 +231,133 @@ begin
   Result := ExpandConstant('{localappdata}\STEMwerk\logs\bootstrap.log');
 end;
 
+function GetLocalizedGuidePath(Param: string): string;
+var
+  BasePath: string;
+  CandidatePath: string;
+begin
+  BasePath := ExpandConstant('{app}');
+  CandidatePath := BasePath + '\STEMwerk_Windows_Setup_Guide.md';
+
+  if ActiveLanguage = 'dutch' then
+    CandidatePath := BasePath + '\STEMwerk_Windows_Setup_Guide.nl.md'
+  else if ActiveLanguage = 'german' then
+    CandidatePath := BasePath + '\STEMwerk_Windows_Setup_Guide.de.md';
+
+  if FileExists(CandidatePath) then
+    Result := CandidatePath
+  else
+    Result := BasePath + '\STEMwerk_Windows_Setup_Guide.md';
+end;
+
+function GetRuntimeBasePath: string;
+begin
+  Result := ExpandConstant('{localappdata}\STEMwerk');
+end;
+
+procedure CleanupRuntimeArtifacts(RemoveModels: Boolean);
+var
+  RuntimeBase: string;
+begin
+  RuntimeBase := GetRuntimeBasePath;
+
+  if DirExists(RuntimeBase + '\state') then
+    DelTree(RuntimeBase + '\state', True, True, True);
+  if DirExists(RuntimeBase + '\logs') then
+    DelTree(RuntimeBase + '\logs', True, True, True);
+  if DirExists(RuntimeBase + '\.venv') then
+    DelTree(RuntimeBase + '\.venv', True, True, True);
+  if DirExists(RuntimeBase + '\.venv-gpu') then
+    DelTree(RuntimeBase + '\.venv-gpu', True, True, True);
+  if DirExists(RuntimeBase + '\cache') then
+    DelTree(RuntimeBase + '\cache', True, True, True);
+  if DirExists(RuntimeBase + '\tmp') then
+    DelTree(RuntimeBase + '\tmp', True, True, True);
+  if DirExists(RuntimeBase + '\temp') then
+    DelTree(RuntimeBase + '\temp', True, True, True);
+  if DirExists(RuntimeBase + '\bin') then
+    DelTree(RuntimeBase + '\bin', True, True, True);
+  if DirExists(RuntimeBase + '\ffmpeg') then
+    DelTree(RuntimeBase + '\ffmpeg', True, True, True);
+  if DirExists(RuntimeBase + '\python') then
+    DelTree(RuntimeBase + '\python', True, True, True);
+
+  if RemoveModels and DirExists(RuntimeBase + '\models') then
+    DelTree(RuntimeBase + '\models', True, True, True);
+end;
+
+function GetInstallerScriptArgs(Param: string): string;
+begin
+  Result := '';
+  if WizardIsTaskSelected('cleanup_runtime') then
+    Result := Result + ' -CleanRuntime';
+  #if BundleRuntime != "1"
+  if WizardIsTaskSelected('cleanup_models') then
+    Result := Result + ' -CleanModels';
+  #endif
+end;
+
+function LText(const EnText, NlText, DeText: string): string;
+begin
+  if ActiveLanguage = 'dutch' then
+    Result := NlText
+  else if ActiveLanguage = 'german' then
+    Result := DeText
+  else
+    Result := EnText;
+end;
+
+function VersionTag: string;
+begin
+  Result := 'v{#MyAppVersion}';
+end;
+
+procedure ApplyUnifiedWizardBranding;
+begin
+  if WizardForm.WizardBitmapImage <> nil then
+  begin
+    WizardForm.WizardBitmapImage.Visible := True;
+    WizardForm.WizardBitmapImage.SendToBack;
+  end;
+end;
+
+function BuildFinishedSummaryText: string;
+var
+  CleanupLines: string;
+begin
+  CleanupLines := '';
+  if WizardIsTaskSelected('cleanup_runtime') then
+    CleanupLines := CleanupLines + LText(
+      '- Cleared previous runtime state/logs/.venv/cache before setup.',
+      '- Vorige runtime state/logs/.venv/cache opgeschoond voor setup.',
+      '- Vorherigen Runtime-Status/Logs/.venv/Cache vor dem Setup bereinigt.') + #13#10;
+  #if BundleRuntime != "1"
+  if WizardIsTaskSelected('cleanup_models') then
+    CleanupLines := CleanupLines + LText(
+      '- Cleared cached models folder before setup.',
+      '- Modelcache-map opgeschoond voor setup.',
+      '- Modell-Cache-Ordner vor dem Setup bereinigt.') + #13#10;
+  #endif
+  if CleanupLines = '' then
+    CleanupLines := LText(
+      '- Kept existing runtime cache and models.',
+      '- Bestaande runtime-cache en modellen behouden.',
+      '- Vorhandener Runtime-Cache und Modelle beibehalten.') + #13#10;
+
+  Result :=
+    LText('STEMwerk setup completed.', 'STEMwerk setup voltooid.', 'STEMwerk Setup abgeschlossen.') +
+    ' (' + VersionTag + ')' + #13#10 + #13#10 +
+    LText('What was done:', 'Wat is gedaan:', 'Was wurde gemacht:') + #13#10 +
+    LText('- Installed/updated REAPER scripts in:', '- REAPER scripts geinstalleerd/bijgewerkt in:', '- REAPER-Skripte installiert/aktualisiert in:') + #13#10 +
+    '  ' + ExpandConstant('{app}') + #13#10 +
+    CleanupLines +
+    LText('- Prepared runtime at %LOCALAPPDATA%\STEMwerk via bootstrap.',
+      '- Runtime onder %LOCALAPPDATA%\STEMwerk voorbereid via bootstrap.',
+      '- Runtime unter %LOCALAPPDATA%\STEMwerk per Bootstrap vorbereitet.') + #13#10 + #13#10 +
+    LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
+    '  ' + GetLogPath;
+end;
+
 function FindLastPos(const SubStr, S: string): Integer;
 var
   i: Integer;
@@ -195,14 +377,26 @@ end;
 
 function DefaultStatusDetailText: string;
 begin
-  Result := 'First-time setup can take several minutes.' + #13#10 +
-    'STEMwerk prepares the runtime, creates the Python environment, checks FFmpeg, and installs the core packages.';
+  Result := LText(
+    'First-time setup can take several minutes.',
+    'De eerste setup kan enkele minuten duren.',
+    'Die erste Einrichtung kann mehrere Minuten dauern.') + #13#10 +
+    LText(
+      'STEMwerk prepares the runtime, creates the Python environment, checks FFmpeg, and installs the core packages.',
+      'STEMwerk bereidt de runtime voor, maakt de Python-omgeving aan, controleert FFmpeg en installeert kernpakketten.',
+      'STEMwerk bereitet die Runtime vor, erstellt die Python-Umgebung, prüft FFmpeg und installiert Kernpakete.');
 end;
 
 function ExtractingStatusDetailText: string;
 begin
-  Result := 'Extracting installer components.' + #13#10 +
-    'This can take a few minutes on slower disks.';
+  Result := LText(
+    'Extracting installer components.',
+    'Installercomponenten worden uitgepakt.',
+    'Installer-Komponenten werden entpackt.') + #13#10 +
+    LText(
+      'This can take a few minutes on slower disks.',
+      'Dit kan enkele minuten duren op tragere schijven.',
+      'Dies kann auf langsameren Laufwerken einige Minuten dauern.');
 end;
 
 function ExtractStatusDetail(const Text: string): string;
@@ -224,6 +418,107 @@ begin
   if EolPos > 0 then
     Tail := Copy(Tail, 1, EolPos - 1);
   Result := Trim(Tail);
+end;
+
+function LocalizeStatusDetail(const Detail: string): string;
+var
+  Prefix, Suffix, PolicyValue: string;
+begin
+  Result := Detail;
+  if Detail = '' then
+    Exit;
+
+  if Detail = 'Applying requested pre-setup cleanup.' then
+    Result := LText(
+      'Applying requested pre-setup cleanup.',
+      'Gevraagde opschoning voor de setup wordt toegepast.',
+      'Angeforderte Vorab-Bereinigung wird angewendet.')
+  else if Detail = 'Removed previous runtime state/logs/venv/cache folders.' then
+    Result := LText(
+      'Removed previous runtime state/logs/venv/cache folders.',
+      'Vorige runtime state/logs/venv/cache-mappen verwijderd.',
+      'Vorherige Runtime-Status/Logs/venv/Cache-Ordner entfernt.')
+  else if Detail = 'Removed cached models folder (%LOCALAPPDATA%\\STEMwerk\\models).' then
+    Result := LText(
+      'Removed cached models folder (%LOCALAPPDATA%\\STEMwerk\\models).',
+      'Gecachte modellenmap verwijderd (%LOCALAPPDATA%\\STEMwerk\\models).',
+      'Zwischengespeicherter Modellordner entfernt (%LOCALAPPDATA%\\STEMwerk\\models).')
+  else if Detail = 'Keeping existing runtime cache and model folders.' then
+    Result := LText(
+      'Keeping existing runtime cache and model folders.',
+      'Bestaande runtime-cache en modelmappen blijven behouden.',
+      'Bestehender Runtime-Cache und Modellordner werden beibehalten.')
+  else if Detail = 'Installing audio-separator into the venv. This can take several minutes on slower systems or VMs.' then
+    Result := LText(
+      'Installing audio-separator into the venv. This can take several minutes on slower systems or VMs.',
+      'Audio-separator wordt in de venv geinstalleerd. Dit kan enkele minuten duren op tragere systemen of VM''s.',
+      'Audio-separator wird in die venv installiert. Das kann auf langsameren Systemen oder VMs einige Minuten dauern.')
+  else if Detail = 'Installing audio-separator into the venv. Pip may still be resolving dependencies or unpacking wheels.' then
+    Result := LText(
+      'Installing audio-separator into the venv. Pip may still be resolving dependencies or unpacking wheels.',
+      'Audio-separator wordt in de venv geinstalleerd. Pip kan nog afhankelijkheden oplossen of wheels uitpakken.',
+      'Audio-separator wird in die venv installiert. Pip loest moeglicherweise noch Abhaengigkeiten auf oder entpackt Wheels.')
+  else if Detail = 'Installing DirectML runtime packages (torch-directml and onnxruntime-directml).' then
+    Result := LText(
+      'Installing DirectML runtime packages (torch-directml and onnxruntime-directml).',
+      'DirectML-runtimepakketten worden geinstalleerd (torch-directml en onnxruntime-directml).',
+      'DirectML-Runtimepakete werden installiert (torch-directml und onnxruntime-directml).')
+  else if Detail = 'Installing CUDA-enabled PyTorch packages into the venv.' then
+    Result := LText(
+      'Installing CUDA-enabled PyTorch packages into the venv.',
+      'CUDA-geschikte PyTorch-pakketten worden in de venv geinstalleerd.',
+      'CUDA-faehige PyTorch-Pakete werden in die venv installiert.')
+  else if Detail = 'Installing the ONNX Runtime package required by the separator backend.' then
+    Result := LText(
+      'Installing the ONNX Runtime package required by the separator backend.',
+      'Het ONNX Runtime-pakket dat nodig is voor de separator-backend wordt geinstalleerd.',
+      'Das fuer das Separator-Backend benoetigte ONNX-Runtime-Paket wird installiert.')
+  else if Detail = 'Installing the bundled stemwerk-core package into the Python environment.' then
+    Result := LText(
+      'Installing the bundled stemwerk-core package into the Python environment.',
+      'Het meegeleverde stemwerk-core-pakket wordt in de Python-omgeving geinstalleerd.',
+      'Das gebuendelte stemwerk-core-Paket wird in die Python-Umgebung installiert.')
+  else if Detail = 'Creating the Python virtual environment used by STEMwerk.' then
+    Result := LText(
+      'Creating the Python virtual environment used by STEMwerk.',
+      'De door STEMwerk gebruikte Python-virtualenv wordt aangemaakt.',
+      'Die von STEMwerk verwendete Python-virtuelle Umgebung wird erstellt.')
+  else if Detail = 'Installing Python for the STEMwerk runtime.' then
+    Result := LText(
+      'Installing Python for the STEMwerk runtime.',
+      'Python voor de STEMwerk-runtime wordt geinstalleerd.',
+      'Python fuer die STEMwerk-Runtime wird installiert.')
+  else if Detail = 'Installing separator runtime packages.' then
+    Result := LText(
+      'Installing separator runtime packages.',
+      'Separator-runtimepakketten worden geinstalleerd.',
+      'Separator-Runtimepakete werden installiert.')
+  else if Detail = 'samplerate dependency is missing. Attempting automatic repair.' then
+    Result := LText(
+      'samplerate dependency is missing. Attempting automatic repair.',
+      'De samplerate-afhankelijkheid ontbreekt. Automatisch herstel wordt geprobeerd.',
+      'Die samplerate-Abhaengigkeit fehlt. Automatische Reparatur wird versucht.')
+  else if Detail = 'samplerate is still missing. Separation may fail for some models; check bootstrap.log for details.' then
+    Result := LText(
+      'samplerate is still missing. Separation may fail for some models; check bootstrap.log for details.',
+      'samplerate ontbreekt nog steeds. Separatie kan voor sommige modellen mislukken; zie bootstrap.log voor details.',
+      'samplerate fehlt weiterhin. Die Separation kann bei einigen Modellen fehlschlagen; siehe bootstrap.log fuer Details.')
+  else
+  begin
+    Prefix := 'PowerShell policy is restrictive (';
+    Suffix := '). Manual script runs may need CurrentUser RemoteSigned.';
+    if (Pos(Prefix, Detail) = 1) and
+       (Length(Detail) > Length(Prefix) + Length(Suffix)) and
+       (Copy(Detail, Length(Detail) - Length(Suffix) + 1, Length(Suffix)) = Suffix) then
+    begin
+      PolicyValue := Copy(Detail, Length(Prefix) + 1,
+        Length(Detail) - Length(Prefix) - Length(Suffix));
+      Result := LText(
+        'PowerShell policy is restrictive (' + PolicyValue + '). Manual script runs may need CurrentUser RemoteSigned.',
+        'PowerShell-beleid is restrictief (' + PolicyValue + '). Voor handmatige script-runs is mogelijk CurrentUser RemoteSigned nodig.',
+        'PowerShell-Richtlinie ist restriktiv (' + PolicyValue + '). Fuer manuelle Skriptstarts kann CurrentUser RemoteSigned noetig sein.');
+    end;
+  end;
 end;
 
 function FilterVisibleLogText(const Text: string): string;
@@ -362,7 +657,10 @@ var
 begin
   if ProgressOverlayLabel = nil then Exit;
   if WaitingForBootstrap then
-    CaptionText := 'Extracting installer components...'
+    CaptionText := LText(
+      'Extracting installer components...',
+      'Installercomponenten worden uitgepakt...',
+      'Installer-Komponenten werden entpackt...')
   else
     CaptionText := '';
 
@@ -413,9 +711,18 @@ begin
   Text := ReadLogTail(Path, 12000);
   WaitingForBootstrap := Text = '';
   if Text = '' then
-    Text := 'Extracting installer components...' + #13#10 +
-            'Waiting for bootstrap log at:' + #13#10 + Path + #13#10 +
-            'Installer will update this view automatically... after extraction.';
+    Text := LText(
+              'Extracting installer components...',
+              'Installercomponenten worden uitgepakt...',
+              'Installer-Komponenten werden entpackt...') + #13#10 +
+            LText(
+              'Waiting for bootstrap log at:',
+              'Wachten op bootstrap-log op:',
+              'Warte auf Bootstrap-Log unter:') + #13#10 + Path + #13#10 +
+            LText(
+              'Installer will update this view automatically... after extraction.',
+              'Installer werkt dit venster automatisch bij... na het uitpakken.',
+              'Der Installer aktualisiert diese Ansicht automatisch... nach dem Entpacken.');
   VisibleText := FilterVisibleLogText(Text);
   if VisibleText <> LastLogText then
   begin
@@ -433,8 +740,12 @@ begin
     if WaitingForBootstrap then
       StatusDetailLabel.Caption := ExtractingStatusDetailText
     else if Detail <> '' then
-      StatusDetailLabel.Caption := 'Current task:' + #13#10 + Detail + #13#10 +
-        'Long package installs are normal on slower systems and VMs.'
+      StatusDetailLabel.Caption := LText('Current task:', 'Huidige taak:', 'Aktuelle Aufgabe:') + #13#10 +
+        LocalizeStatusDetail(Detail) + #13#10 +
+        LText(
+          'Package installation can take several minutes...',
+          'Pakketinstallatie kan enkele minuten duren...',
+          'Die Paketinstallation kann mehrere Minuten dauern...')
     else
       StatusDetailLabel.Caption := DefaultStatusDetailText;
   end;
@@ -462,7 +773,255 @@ var
   x: Integer;
   y: Integer;
   StepTop: Integer;
+  WelcomeX: Integer;
+  WelcomeY: Integer;
+  WelcomeTitleY: Integer;
+  TasksX: Integer;
+  TasksY: Integer;
+  TasksWelcomeStemS: TNewStaticText;
+  TasksWelcomeStemT: TNewStaticText;
+  TasksWelcomeStemE: TNewStaticText;
+  TasksWelcomeStemM: TNewStaticText;
+  TasksWelcomeSuffixLabel: TNewStaticText;
 begin
+  WelcomeX := ScaleX(16);
+  WelcomeTitleY := ScaleY(16);
+  WizardForm.Caption := '{#MyAppName} Setup ' + VersionTag;
+  ApplyUnifiedWizardBranding;
+
+  if WizardForm.WelcomeLabel1 <> nil then
+  begin
+    WelcomeX := WizardForm.WelcomeLabel1.Left;
+    WelcomeTitleY := WizardForm.WelcomeLabel1.Top;
+    WizardForm.WelcomeLabel1.Visible := False;
+
+    WelcomeTitlePrefixLabel := TNewStaticText.Create(WizardForm);
+    WelcomeTitlePrefixLabel.Parent := WizardForm.WelcomePage;
+    WelcomeTitlePrefixLabel.AutoSize := True;
+    WelcomeTitlePrefixLabel.Font.Size := 15;
+    WelcomeTitlePrefixLabel.Font.Style := [fsBold];
+    WelcomeTitlePrefixLabel.Font.Color := RGBColor(20, 20, 20);
+    WelcomeTitlePrefixLabel.Caption := LText('Welcome to ', 'Welkom bij ', 'Willkommen bei ');
+    WelcomeTitlePrefixLabel.Left := WelcomeX;
+    WelcomeTitlePrefixLabel.Top := WelcomeTitleY;
+    x := WelcomeTitlePrefixLabel.Left + WelcomeTitlePrefixLabel.Width;
+
+    WelcomeTitleStemS := TNewStaticText.Create(WizardForm);
+    WelcomeTitleStemS.Parent := WizardForm.WelcomePage;
+    WelcomeTitleStemS.AutoSize := True;
+    WelcomeTitleStemS.Font.Size := 15;
+    WelcomeTitleStemS.Font.Style := [fsBold];
+    WelcomeTitleStemS.Font.Color := RGBColor(255, 100, 100);
+    WelcomeTitleStemS.Caption := 'S';
+    WelcomeTitleStemS.Left := x;
+    WelcomeTitleStemS.Top := WelcomeTitleY;
+    x := WelcomeTitleStemS.Left + WelcomeTitleStemS.Width;
+
+    WelcomeTitleStemT := TNewStaticText.Create(WizardForm);
+    WelcomeTitleStemT.Parent := WizardForm.WelcomePage;
+    WelcomeTitleStemT.AutoSize := True;
+    WelcomeTitleStemT.Font.Size := 15;
+    WelcomeTitleStemT.Font.Style := [fsBold];
+    WelcomeTitleStemT.Font.Color := RGBColor(100, 200, 255);
+    WelcomeTitleStemT.Caption := 'T';
+    WelcomeTitleStemT.Left := x;
+    WelcomeTitleStemT.Top := WelcomeTitleY;
+    x := WelcomeTitleStemT.Left + WelcomeTitleStemT.Width;
+
+    WelcomeTitleStemE := TNewStaticText.Create(WizardForm);
+    WelcomeTitleStemE.Parent := WizardForm.WelcomePage;
+    WelcomeTitleStemE.AutoSize := True;
+    WelcomeTitleStemE.Font.Size := 15;
+    WelcomeTitleStemE.Font.Style := [fsBold];
+    WelcomeTitleStemE.Font.Color := RGBColor(150, 100, 255);
+    WelcomeTitleStemE.Caption := 'E';
+    WelcomeTitleStemE.Left := x;
+    WelcomeTitleStemE.Top := WelcomeTitleY;
+    x := WelcomeTitleStemE.Left + WelcomeTitleStemE.Width;
+
+    WelcomeTitleStemM := TNewStaticText.Create(WizardForm);
+    WelcomeTitleStemM.Parent := WizardForm.WelcomePage;
+    WelcomeTitleStemM.AutoSize := True;
+    WelcomeTitleStemM.Font.Size := 15;
+    WelcomeTitleStemM.Font.Style := [fsBold];
+    WelcomeTitleStemM.Font.Color := RGBColor(100, 255, 150);
+    WelcomeTitleStemM.Caption := 'M';
+    WelcomeTitleStemM.Left := x;
+    WelcomeTitleStemM.Top := WelcomeTitleY;
+    x := WelcomeTitleStemM.Left + WelcomeTitleStemM.Width;
+
+    WelcomeTitleSuffixLabel := TNewStaticText.Create(WizardForm);
+    WelcomeTitleSuffixLabel.Parent := WizardForm.WelcomePage;
+    WelcomeTitleSuffixLabel.AutoSize := True;
+    WelcomeTitleSuffixLabel.Font.Size := 15;
+    WelcomeTitleSuffixLabel.Font.Style := [fsBold];
+    WelcomeTitleSuffixLabel.Font.Color := RGBColor(20, 20, 20);
+    WelcomeTitleSuffixLabel.Caption := 'werk SETUP';
+    WelcomeTitleSuffixLabel.Left := x;
+    WelcomeTitleSuffixLabel.Top := WelcomeTitleY;
+  end;
+
+  if WizardForm.WelcomeLabel2 <> nil then
+    WizardForm.WelcomeLabel2.Visible := False;
+
+  if WelcomeTitlePrefixLabel <> nil then
+    WelcomeY := WelcomeTitlePrefixLabel.Top + WelcomeTitlePrefixLabel.Height + ScaleY(8)
+  else
+    WelcomeY := WizardForm.WelcomeLabel1.Top + WizardForm.WelcomeLabel1.Height + ScaleY(8);
+
+  WelcomeInfoLabel := TNewStaticText.Create(WizardForm);
+  WelcomeInfoLabel.Parent := WizardForm.WelcomePage;
+  WelcomeInfoLabel.AutoSize := False;
+  WelcomeInfoLabel.WordWrap := True;
+  WelcomeInfoLabel.Font.Size := 9;
+  WelcomeInfoLabel.Font.Color := RGBColor(80, 80, 80);
+  WelcomeInfoLabel.Left := WelcomeX;
+  WelcomeInfoLabel.Top := WelcomeY;
+  WelcomeInfoLabel.Width := WizardForm.WelcomePage.ClientWidth - WelcomeX - ScaleX(10);
+  WelcomeInfoLabel.Height := ScaleY(120);
+  WelcomeInfoLabel.Caption :=
+    LText('Version: ', 'Versie: ', 'Version: ') + VersionTag + #13#10 + #13#10 +
+    LText(
+      'This installer will guide you through a clean STEMwerk setup.',
+      'Deze installer begeleidt je door een schone STEMwerk setup.',
+      'Dieser Installer führt durch ein sauberes STEMwerk Setup.') + #13#10 + #13#10 +
+    LText(
+      'In the next steps it will:',
+      'In de volgende stappen zal het:',
+      'In den nächsten Schritten wird:') + #13#10 +
+    LText(
+      '- Copy/update the REAPER STEMwerk scripts.',
+      '- De REAPER STEMwerk scripts kopieren/bijwerken.',
+      '- Die REAPER STEMwerk Skripte kopieren/aktualisieren.') + #13#10 +
+    LText(
+      '- Optionally clean previous runtime/model cache if you select those tasks.',
+      '- Optioneel oude runtime/modelcache opschonen als je die taken aanvinkt.',
+      '- Optional alten Runtime-/Modell-Cache bereinigen, wenn diese Aufgaben ausgewählt sind.') + #13#10 +
+    LText(
+      '- Prepare the local Python runtime and verify backend dependencies.',
+      '- De lokale Python runtime voorbereiden en backend-afhankelijkheden verifieren.',
+      '- Die lokale Python Runtime vorbereiten und Backend-Abhängigkeiten prüfen.') + #13#10 + #13#10 +
+    LText(
+      'Tip: after setup, use "Open setup log" to review exactly what was done.',
+      'Tip: gebruik na setup "Open setup-log" om precies te zien wat is gedaan.',
+      'Tipp: Nach dem Setup "Setup-Log öffnen" nutzen, um genau zu sehen, was gemacht wurde.');
+
+  if WizardForm.SelectTasksLabel <> nil then
+  begin
+    TasksWelcomeLabel := TNewStaticText.Create(WizardForm);
+    TasksWelcomeLabel.Parent := WizardForm.SelectTasksPage;
+    TasksWelcomeLabel.AutoSize := True;
+    TasksWelcomeLabel.Font.Size := 14;
+    TasksWelcomeLabel.Font.Style := [fsBold];
+    TasksWelcomeLabel.Font.Color := RGBColor(30, 30, 30);
+    TasksWelcomeLabel.Caption := LText('Welcome to ', 'Welkom bij ', 'Willkommen beim ');
+    TasksWelcomeLabel.Left := WizardForm.SelectTasksLabel.Left;
+    TasksWelcomeLabel.Top := WizardForm.SelectTasksLabel.Top;
+    x := TasksWelcomeLabel.Left + TasksWelcomeLabel.Width;
+
+    TasksWelcomeStemS := TNewStaticText.Create(WizardForm);
+    TasksWelcomeStemS.Parent := WizardForm.SelectTasksPage;
+    TasksWelcomeStemS.AutoSize := True;
+    TasksWelcomeStemS.Font.Size := 14;
+    TasksWelcomeStemS.Font.Style := [fsBold];
+    TasksWelcomeStemS.Font.Color := RGBColor(255, 100, 100);
+    TasksWelcomeStemS.Caption := 'S';
+    TasksWelcomeStemS.Left := x;
+    TasksWelcomeStemS.Top := TasksWelcomeLabel.Top;
+    x := TasksWelcomeStemS.Left + TasksWelcomeStemS.Width;
+
+    TasksWelcomeStemT := TNewStaticText.Create(WizardForm);
+    TasksWelcomeStemT.Parent := WizardForm.SelectTasksPage;
+    TasksWelcomeStemT.AutoSize := True;
+    TasksWelcomeStemT.Font.Size := 14;
+    TasksWelcomeStemT.Font.Style := [fsBold];
+    TasksWelcomeStemT.Font.Color := RGBColor(100, 200, 255);
+    TasksWelcomeStemT.Caption := 'T';
+    TasksWelcomeStemT.Left := x;
+    TasksWelcomeStemT.Top := TasksWelcomeLabel.Top;
+    x := TasksWelcomeStemT.Left + TasksWelcomeStemT.Width;
+
+    TasksWelcomeStemE := TNewStaticText.Create(WizardForm);
+    TasksWelcomeStemE.Parent := WizardForm.SelectTasksPage;
+    TasksWelcomeStemE.AutoSize := True;
+    TasksWelcomeStemE.Font.Size := 14;
+    TasksWelcomeStemE.Font.Style := [fsBold];
+    TasksWelcomeStemE.Font.Color := RGBColor(150, 100, 255);
+    TasksWelcomeStemE.Caption := 'E';
+    TasksWelcomeStemE.Left := x;
+    TasksWelcomeStemE.Top := TasksWelcomeLabel.Top;
+    x := TasksWelcomeStemE.Left + TasksWelcomeStemE.Width;
+
+    TasksWelcomeStemM := TNewStaticText.Create(WizardForm);
+    TasksWelcomeStemM.Parent := WizardForm.SelectTasksPage;
+    TasksWelcomeStemM.AutoSize := True;
+    TasksWelcomeStemM.Font.Size := 14;
+    TasksWelcomeStemM.Font.Style := [fsBold];
+    TasksWelcomeStemM.Font.Color := RGBColor(100, 255, 150);
+    TasksWelcomeStemM.Caption := 'M';
+    TasksWelcomeStemM.Left := x;
+    TasksWelcomeStemM.Top := TasksWelcomeLabel.Top;
+    x := TasksWelcomeStemM.Left + TasksWelcomeStemM.Width;
+
+    TasksWelcomeSuffixLabel := TNewStaticText.Create(WizardForm);
+    TasksWelcomeSuffixLabel.Parent := WizardForm.SelectTasksPage;
+    TasksWelcomeSuffixLabel.AutoSize := True;
+    TasksWelcomeSuffixLabel.Font.Size := 14;
+    TasksWelcomeSuffixLabel.Font.Style := [fsBold];
+    TasksWelcomeSuffixLabel.Font.Color := RGBColor(30, 30, 30);
+    TasksWelcomeSuffixLabel.Caption := 'werk SETUP';
+    TasksWelcomeSuffixLabel.Left := x;
+    TasksWelcomeSuffixLabel.Top := TasksWelcomeLabel.Top;
+
+    TasksWelcomeSubLabel := TNewStaticText.Create(WizardForm);
+    TasksWelcomeSubLabel.Parent := WizardForm.SelectTasksPage;
+    TasksWelcomeSubLabel.AutoSize := True;
+    TasksWelcomeSubLabel.Font.Size := 9;
+    TasksWelcomeSubLabel.Font.Color := RGBColor(80, 80, 80);
+    TasksWelcomeSubLabel.Caption := LText(
+      'Choose cleanup options for old runtime files before continuing.',
+      'Kies opschoonopties voor oude runtimebestanden voordat je doorgaat.',
+      'Vor dem Fortfahren Bereinigungsoptionen für alte Runtime-Dateien wählen.');
+    TasksWelcomeSubLabel.Left := TasksWelcomeLabel.Left;
+    TasksWelcomeSubLabel.Top := TasksWelcomeLabel.Top + TasksWelcomeLabel.Height + ScaleY(4);
+
+    WizardForm.SelectTasksLabel.Font.Size := 10;
+    WizardForm.SelectTasksLabel.Font.Style := [fsBold];
+    WizardForm.SelectTasksLabel.Caption := LText(
+      'Cleanup options before setup. Select what should be removed from previous installs.',
+      'Opschoonopties voor setup. Kies wat verwijderd moet worden van eerdere installaties.',
+      'Bereinigungsoptionen vor dem Setup. Auswählen, was von früheren Installationen entfernt werden soll.');
+    WizardForm.SelectTasksLabel.Top := TasksWelcomeSubLabel.Top + TasksWelcomeSubLabel.Height + ScaleY(10);
+  end;
+
+  TasksX := WizardForm.SelectTasksLabel.Left;
+  TasksY := WizardForm.SelectTasksLabel.Top + WizardForm.SelectTasksLabel.Height + ScaleY(8);
+
+  TasksBrandLabel := TNewStaticText.Create(WizardForm);
+  TasksBrandLabel.Parent := WizardForm.SelectTasksPage;
+  TasksBrandLabel.AutoSize := True;
+  TasksBrandLabel.Font.Size := 13;
+  TasksBrandLabel.Font.Style := [fsBold];
+  TasksBrandLabel.Font.Color := RGBColor(35, 35, 35);
+  TasksBrandLabel.Caption := LText('STEMwerk cleanup', 'STEMwerk opschonen', 'STEMwerk bereinigen');
+  TasksBrandLabel.Left := TasksX;
+  TasksBrandLabel.Top := TasksY;
+
+  TasksInfoLabel := TNewStaticText.Create(WizardForm);
+  TasksInfoLabel.Parent := WizardForm.SelectTasksPage;
+  TasksInfoLabel.AutoSize := True;
+  TasksInfoLabel.Font.Size := 8;
+  TasksInfoLabel.Font.Color := RGBColor(95, 95, 95);
+  TasksInfoLabel.Caption := LText(
+    'Safe defaults: keep models unchecked unless you want a full clean reset.',
+    'Veilige standaard: laat modellen uitgevinkt tenzij je een volledige schone reset wilt.',
+    'Sichere Standardwerte: Modelle abgewählt lassen, außer bei gewünschtem Komplett-Reset.');
+  TasksInfoLabel.Left := TasksX;
+  TasksInfoLabel.Top := TasksY + ScaleY(20);
+
+  if WizardForm.TasksList <> nil then
+    WizardForm.TasksList.Top := TasksInfoLabel.Top + TasksInfoLabel.Height + ScaleY(10);
+
   WizardForm.StatusLabel.Visible := False;
   y := WizardForm.StatusLabel.Top - ScaleY(18);
   PageW := WizardForm.InstallingPage.ClientWidth;
@@ -530,7 +1089,7 @@ begin
   StatusSuffixLabel.Font.Style := [fsBold];
   StatusSuffixLabel.Font.Color := RGBColor(30, 30, 30);
   StatusSuffixLabel.Font.Size := 12;
-  StatusSuffixLabel.Caption := 'werk runtime';
+  StatusSuffixLabel.Caption := 'werk runtime ' + VersionTag;
   StatusSuffixLabel.Left := x;
   StatusSuffixLabel.Top := y;
 
@@ -704,7 +1263,10 @@ begin
   ProgressOverlayLabel.Font.Size := 9;
   ProgressOverlayLabel.Font.Style := [fsBold];
   ProgressOverlayLabel.Font.Color := RGBColor(30, 30, 30);
-  ProgressOverlayLabel.Caption := 'Extracting installer components...';
+  ProgressOverlayLabel.Caption := LText(
+    'Extracting installer components...',
+    'Installercomponenten worden uitgepakt...',
+    'Installer-Komponenten werden entpackt...');
   ProgressOverlayLabel.Left := WizardForm.ProgressGauge.Left +
     (WizardForm.ProgressGauge.Width - ProgressOverlayLabel.Width) div 2;
   ProgressOverlayLabel.Top := WizardForm.ProgressGauge.Top + ScaleY(3);
@@ -725,7 +1287,10 @@ begin
   LogMemo.Enabled := True;
   LogMemo.Font.Name := 'Consolas';
   LogMemo.Font.Size := 9;
-  LogMemo.Lines.Text := 'Extracting installer components...';
+  LogMemo.Lines.Text := LText(
+    'Extracting installer components...',
+    'Installercomponenten worden uitgepakt...',
+    'Installer-Komponenten werden entpackt...');
 
   LogTimerId := 0;
   LogTimerProc := 0;
@@ -744,69 +1309,26 @@ begin
     FinishedPrefixLabel.Font.Size := 12;
     FinishedPrefixLabel.Font.Style := [fsBold];
     FinishedPrefixLabel.Font.Color := RGBColor(30, 30, 30);
-    FinishedPrefixLabel.Caption := 'Completing the ';
+    FinishedPrefixLabel.Caption := LText('Completing the ', 'Afronden van ', 'Abschluss des ');
     FinishedPrefixLabel.Left := x;
     FinishedPrefixLabel.Top := y;
     x := FinishedPrefixLabel.Left + FinishedPrefixLabel.Width;
 
-    FinishedStemS := TNewStaticText.Create(WizardForm);
-    FinishedStemS.Parent := WizardForm.FinishedPage;
-    FinishedStemS.AutoSize := True;
-    FinishedStemS.Font.Size := 12;
-    FinishedStemS.Font.Style := [fsBold];
-    FinishedStemS.Font.Color := RGBColor(255, 100, 100);
-    FinishedStemS.Caption := 'S';
-    FinishedStemS.Left := x;
-    FinishedStemS.Top := y;
-    x := FinishedStemS.Left + FinishedStemS.Width;
-
-    FinishedStemT := TNewStaticText.Create(WizardForm);
-    FinishedStemT.Parent := WizardForm.FinishedPage;
-    FinishedStemT.AutoSize := True;
-    FinishedStemT.Font.Size := 12;
-    FinishedStemT.Font.Style := [fsBold];
-    FinishedStemT.Font.Color := RGBColor(100, 200, 255);
-    FinishedStemT.Caption := 'T';
-    FinishedStemT.Left := x;
-    FinishedStemT.Top := y;
-    x := FinishedStemT.Left + FinishedStemT.Width;
-
-    FinishedStemE := TNewStaticText.Create(WizardForm);
-    FinishedStemE.Parent := WizardForm.FinishedPage;
-    FinishedStemE.AutoSize := True;
-    FinishedStemE.Font.Size := 12;
-    FinishedStemE.Font.Style := [fsBold];
-    FinishedStemE.Font.Color := RGBColor(150, 100, 255);
-    FinishedStemE.Caption := 'E';
-    FinishedStemE.Left := x;
-    FinishedStemE.Top := y;
-    x := FinishedStemE.Left + FinishedStemE.Width;
-
-    FinishedStemM := TNewStaticText.Create(WizardForm);
-    FinishedStemM.Parent := WizardForm.FinishedPage;
-    FinishedStemM.AutoSize := True;
-    FinishedStemM.Font.Size := 12;
-    FinishedStemM.Font.Style := [fsBold];
-    FinishedStemM.Font.Color := RGBColor(100, 255, 150);
-    FinishedStemM.Caption := 'M';
-    FinishedStemM.Left := x;
-    FinishedStemM.Top := y;
-    x := FinishedStemM.Left + FinishedStemM.Width;
-
-    FinishedSuffixLabel := TNewStaticText.Create(WizardForm);
-    FinishedSuffixLabel.Parent := WizardForm.FinishedPage;
-    FinishedSuffixLabel.AutoSize := True;
-    FinishedSuffixLabel.Font.Size := 12;
-    FinishedSuffixLabel.Font.Style := [fsBold];
-    FinishedSuffixLabel.Font.Color := RGBColor(30, 30, 30);
-    FinishedSuffixLabel.Caption := 'werk Setup Wizard';
-    FinishedSuffixLabel.Left := x;
-    FinishedSuffixLabel.Top := y;
+    FinishedBrandLabel := TNewStaticText.Create(WizardForm);
+    FinishedBrandLabel.Parent := WizardForm.FinishedPage;
+    FinishedBrandLabel.AutoSize := True;
+    FinishedBrandLabel.Font.Size := 12;
+    FinishedBrandLabel.Font.Style := [fsBold];
+    FinishedBrandLabel.Font.Color := RGBColor(30, 30, 30);
+    FinishedBrandLabel.Caption := LText('STEMwerk Setup Wizard', 'STEMwerk Setup Wizard', 'STEMwerk Setup-Assistent') + ' ' + VersionTag;
+    FinishedBrandLabel.Left := x;
+    FinishedBrandLabel.Top := y;
   end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  ApplyUnifiedWizardBranding;
   if CurPageID = wpInstalling then
   begin
     LastLogText := '';
@@ -823,11 +1345,60 @@ begin
     end;
   end
   else
+  begin
     if LogTimerId <> 0 then
     begin
       KillTimer(0, LogTimerId);
       LogTimerId := 0;
     end;
+    if CurPageID = wpFinished then
+    begin
+      if WizardForm.FinishedLabel <> nil then
+        WizardForm.FinishedLabel.Caption := BuildFinishedSummaryText;
+    end;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  FreeMB: Cardinal;
+  TotalMB: Cardinal;
+  RequiredMB: Cardinal;
+  RuntimePath: string;
+  PromptText: string;
+begin
+  Result := '';
+  RuntimePath := GetRuntimeBasePath;
+  RequiredMB := {#MinimumFreeSpaceMB};
+
+  if GetSpaceOnDisk(RuntimePath, True, FreeMB, TotalMB) then
+  begin
+    if FreeMB < RequiredMB then
+    begin
+      PromptText := LText(
+        'Low free disk space detected for STEMwerk runtime setup.' + #13#10 + #13#10 +
+        'Runtime path: ' + RuntimePath + #13#10 +
+        'Required (recommended): ' + IntToStr(RequiredMB) + ' MB' + #13#10 +
+        'Currently free: ' + IntToStr(FreeMB) + ' MB' + #13#10 + #13#10 +
+        'Continue anyway?',
+        'Er is weinig vrije schijfruimte voor STEMwerk runtime setup.' + #13#10 + #13#10 +
+        'Runtime-pad: ' + RuntimePath + #13#10 +
+        'Vereist (aanbevolen): ' + IntToStr(RequiredMB) + ' MB' + #13#10 +
+        'Nu vrij: ' + IntToStr(FreeMB) + ' MB' + #13#10 + #13#10 +
+        'Toch doorgaan?',
+        'Wenig freier Speicherplatz für das STEMwerk Runtime-Setup erkannt.' + #13#10 + #13#10 +
+        'Runtime-Pfad: ' + RuntimePath + #13#10 +
+        'Erforderlich (empfohlen): ' + IntToStr(RequiredMB) + ' MB' + #13#10 +
+        'Aktuell frei: ' + IntToStr(FreeMB) + ' MB' + #13#10 + #13#10 +
+        'Trotzdem fortfahren?');
+
+      if SuppressibleMsgBox(PromptText, mbConfirmation, MB_YESNO, IDNO) = IDNO then
+        Result := LText(
+          'Installation canceled due to low free disk space.',
+          'Installatie geannuleerd door te weinig vrije schijfruimte.',
+          'Installation wegen zu wenig freiem Speicherplatz abgebrochen.');
+    end;
+  end;
 end;
 
 procedure DeinitializeSetup;
@@ -836,5 +1407,54 @@ begin
   begin
     KillTimer(0, LogTimerId);
     LogTimerId := 0;
+  end;
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := True;
+
+  MsgBox(
+    LText(
+      'Uninstall always removes STEMwerk scripts from the REAPER Scripts folder.' + #13#10 + #13#10 +
+      'Next you can choose whether runtime components should also be removed.',
+      'De-installatie verwijdert altijd STEMwerk scripts uit de REAPER Scripts-map.' + #13#10 + #13#10 +
+      'Hierna kies je of runtime-componenten ook verwijderd moeten worden.',
+      'Die Deinstallation entfernt immer STEMwerk Skripte aus dem REAPER-Scripts-Ordner.' + #13#10 + #13#10 +
+      'Als Nächstes kann gewählt werden, ob Runtime-Komponenten ebenfalls entfernt werden sollen.'),
+    mbInformation, MB_OK);
+
+  UninstallCleanupRuntime :=
+    MsgBox(
+      LText('Also remove runtime environment under:',
+        'Ook runtime-omgeving verwijderen onder:',
+        'Runtime-Umgebung ebenfalls entfernen unter:') + #13#10 +
+      GetRuntimeBasePath + #13#10 + #13#10 +
+      LText('This removes logs/cache and local runtime folders (.venv, python, ffmpeg, bin).',
+        'Dit verwijdert logs/cache en lokale runtime-mappen (.venv, python, ffmpeg, bin).',
+        'Dies entfernt Logs/Cache und lokale Runtime-Ordner (.venv, python, ffmpeg, bin).'),
+      mbConfirmation, MB_YESNO) = IDYES;
+
+  UninstallCleanupModels := False;
+  if UninstallCleanupRuntime then
+  begin
+    UninstallCleanupModels :=
+      MsgBox(
+        LText('Also remove cached AI models?',
+          'Ook gecachete AI-modellen verwijderen?',
+          'Auch zwischengespeicherte AI-Modelle entfernen?') + #13#10 +
+        LText('This frees disk space but requires re-download on first use.',
+          'Dit maakt schijfruimte vrij maar vereist herdownload bij eerste gebruik.',
+          'Das schafft Speicherplatz, erfordert aber einen erneuten Download bei erster Nutzung.'),
+        mbConfirmation, MB_YESNO) = IDYES;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    if UninstallCleanupRuntime then
+      CleanupRuntimeArtifacts(UninstallCleanupModels);
   end;
 end;

@@ -218,13 +218,7 @@ function SETTINGS_MOD.load()
         end
     end
 
-    if C.ensureSelectedModelIsAvailable() and tostring(C.SETTINGS.model or "") ~= "htdemucs_6s" then
-        for _, stem in ipairs(C.STEMS) do
-            if stem.sixStemOnly then
-                stem.selected = false
-            end
-        end
-    end
+    -- Keep the saved model selection intact here; run/start validation handles availability.
 end
 
 function SETTINGS_MOD.persistWindowPos()

@@ -1,5 +1,7 @@
 param(
-    [string]$RuntimeBase = ""
+    [string]$RuntimeBase = "",
+    [switch]$CleanRuntime,
+    [switch]$CleanModels
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -8,6 +10,15 @@ function LogLine([string]$Message, [string]$Path) {
     if (-not [string]::IsNullOrWhiteSpace($Path)) {
         Add-Content -Path $Path -Value $Message -Encoding ascii
     }
+}
+
+function Remove-ChildDirectory([string]$BasePath, [string]$ChildName) {
+    if ([string]::IsNullOrWhiteSpace($BasePath)) { return $false }
+    if ([string]::IsNullOrWhiteSpace($ChildName)) { return $false }
+    $target = Join-Path $BasePath $ChildName
+    if (-not (Test-Path $target)) { return $false }
+    Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    return (-not (Test-Path $target))
 }
 
 if ([string]::IsNullOrWhiteSpace($RuntimeBase)) {
@@ -21,10 +32,23 @@ if ([string]::IsNullOrWhiteSpace($RuntimeBase)) {
     exit 1
 }
 
+$cleanRuntimeRequested = $CleanRuntime.IsPresent -or ($env:STEMWERK_CLEAN_RUNTIME -eq "1")
+$cleanModelsRequested = $CleanModels.IsPresent -or ($env:STEMWERK_CLEAN_MODELS -eq "1")
+
 $stateDir = Join-Path $RuntimeBase "state"
 $logDir = Join-Path $RuntimeBase "logs"
 $stateFile = Join-Path $stateDir "bootstrap.env"
 $logFile = Join-Path $logDir "bootstrap.log"
+
+if ($cleanRuntimeRequested) {
+    $runtimeTargets = @("state", "logs", ".venv", ".venv-gpu", "cache", "tmp", "temp", "bin", "ffmpeg", "python")
+    foreach ($target in $runtimeTargets) {
+        Remove-ChildDirectory -BasePath $RuntimeBase -ChildName $target | Out-Null
+    }
+}
+if ($cleanModelsRequested) {
+    Remove-ChildDirectory -BasePath $RuntimeBase -ChildName "models" | Out-Null
+}
 
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -47,6 +71,17 @@ $env:STEMWERK_INSTALLER = "1"
 LogLine "Installer bootstrap started" $logFile
 LogLine ("RUNTIME_BASE=" + $RuntimeBase) $logFile
 LogLine ("Installer progress log: " + $logFile) $logFile
+if ($cleanRuntimeRequested -or $cleanModelsRequested) {
+    LogLine "STEMWERK_STATUS detail=Applying requested pre-setup cleanup." $logFile
+    if ($cleanRuntimeRequested) {
+        LogLine "STEMWERK_STATUS detail=Removed previous runtime state/logs/venv/cache folders." $logFile
+    }
+    if ($cleanModelsRequested) {
+        LogLine "STEMWERK_STATUS detail=Removed cached models folder (%LOCALAPPDATA%\\STEMwerk\\models)." $logFile
+    }
+} else {
+    LogLine "STEMWERK_STATUS detail=Keeping existing runtime cache and model folders." $logFile
+}
 LogLine "Bootstrap will report step-by-step progress below." $logFile
 
 $argList = @(

@@ -1,35 +1,65 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
-    <reapack name="STEMwerk-reaper" type="script" desc="STEMwerk stem separation scripts for REAPER.">
-      <version name="2.2.2-dev" author="flarkAUDIO" time="1775481055">
+    <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
+      <version name="2.2.2-rc3" author="flarkAUDIO" time="1775481055">
         <changelog><![CDATA[
 - macOS bootstrap now accepts only Python 3.10, 3.11, or 3.12
+- Refactored the REAPER layer into smaller internal modules for easier maintenance and safer future updates
+- Fixed in-place stem take playback-state restore: imported stem takes now preserve source take playback rate and pitch behavior (D_PLAYRATE/D_PITCH/B_PPITCH)
 - Python 3.13+ is explicitly rejected on macOS, including bare python3 fallbacks
 - Existing macOS virtual environments are reused only when their Python version is still supported
 - macOS bootstrap now aborts immediately after stemwerk-core install failure
+- Added toolbar quick-command path for direct "Explode Takes" actions without opening STEMwerk main UI
+- Added/registered dedicated "Stemwerk: Explode Takes (In Place)" action for expert toolbar workflows
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
         <source file="../STEMwerk_AI_Separate.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_AI_Separate.lua</source>
         <source file="../STEMwerk_Setup_Toolbar.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
+        <source file="../STEMwerk_Explode_Takes.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Explode_Takes.lua</source>
         <source file="../STEMwerk_All_Stems.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_All_Stems.lua</source>
         <source file="../STEMwerk_Vocals_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Vocals_Only.lua</source>
         <source file="../STEMwerk_Drums_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Drums_Only.lua</source>
         <source file="../STEMwerk_Bass_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bass_Only.lua</source>
         <source file="../STEMwerk_Karaoke.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Karaoke.lua</source>
-        <source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua</source>
-        <source file="../_internal/STEMwerk_Runtime_Setup.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua</source>
-        <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
-        <source file="../_internal/STEMwerk_Linux_Setup_Guide.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Linux_Setup_Guide.txt</source>
+
         <source file="../STEMwerk_Bootstrap_Windows.ps1" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Windows.ps1</source>
         <source file="../STEMwerk_Bootstrap_macOS.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_macOS.sh</source>
         <source file="../STEMwerk_Bootstrap_Linux.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux.sh</source>
         <source file="../STEMwerk_Bootstrap_Linux_Launcher.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh</source>
         <source file="../audio_separator_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/audio_separator_process.py</source>
+
+        <source file="../_internal/STEMwerk_Devices.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Devices.lua</source>
+        <source file="../_internal/STEMwerk_ExtState.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_ExtState.lua</source>
+        <source file="../_internal/STEMwerk_Glue_Helpers.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Glue_Helpers.lua</source>
+        <source file="../_internal/STEMwerk_Helpers.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Helpers.lua</source>
+        <source file="../_internal/STEMwerk_I18N.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_I18N.lua</source>
+        <source file="../_internal/STEMwerk_Linux_Setup_Guide.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Linux_Setup_Guide.txt</source>
+        <source file="../_internal/STEMwerk_Log.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Log.lua</source>
+        <source file="../_internal/STEMwerk_Messages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Messages.lua</source>
+        <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
+        <source file="../_internal/STEMwerk_Platform.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Platform.lua</source>
+        <source file="../_internal/STEMwerk_Runtime_Setup.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua</source>
+        <source file="../_internal/STEMwerk_Settings.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Settings.lua</source>
+        <source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua</source>
+        <source file="../_internal/STEMwerk_System.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_System.lua</source>
+        <source file="../_internal/STEMwerk_UI.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI.lua</source>
+        <source file="../_internal/STEMwerk_UI_Backgrounds.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI_Backgrounds.lua</source>
+        <source file="../_internal/STEMwerk_UI_Controls.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI_Controls.lua</source>
+        <source file="../_internal/STEMwerk_UI_Draw.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI_Draw.lua</source>
+        <source file="../_internal/STEMwerk_UI_HelpLayout.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI_HelpLayout.lua</source>
+        <source file="../_internal/STEMwerk_UI_Tokens.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI_Tokens.lua</source>
+        <source file="../_internal/STEMwerk_UI_Window.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI_Window.lua</source>
+        <source file="../_internal/STEMwerk_Window.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Window.lua</source>
+        <source file="../_internal/STEMwerk_Workflow.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Workflow.lua</source>
+
         <source file="../constraints/base.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/base.txt</source>
         <source file="../constraints/cuda.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/cuda.txt</source>
         <source file="../constraints/directml.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/directml.txt</source>
+
+        <source file="../vendor/julius/pyproject.toml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/julius/pyproject.toml</source>
+        <source file="../vendor/julius/src/julius.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/julius/src/julius.py</source>
         <source file="../vendor/stemwerk-core/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/README.txt</source>
         <source file="../vendor/stemwerk-core/pyproject.toml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/pyproject.toml</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py</source>
@@ -37,10 +67,80 @@
         <source file="../vendor/stemwerk-core/src/stemwerk_core/models.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/models.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
+
         <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/stemwerk_language_wrapper.lua</source>
         <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>
         <source file="../i18n/language_checks.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/language_checks.py</source>
+
+        <source file="../themes/DeepSea.stemtheme" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/themes/DeepSea.stemtheme</source>
+        <source file="../themes/Forest.stemtheme" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/themes/Forest.stemtheme</source>
+
+        <source file="../assets/toolbar_icons/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/README.txt</source>
+        <source file="../assets/toolbar_icons/stemwerk_all_stems.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_all_stems.png</source>
+        <source file="../assets/toolbar_icons/stemwerk_bass_only.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_bass_only.png</source>
+        <source file="../assets/toolbar_icons/stemwerk_drums_only.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_drums_only.png</source>
+        <source file="../assets/toolbar_icons/stemwerk_explode_takes.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_explode_takes.png</source>
+        <source file="../assets/toolbar_icons/stemwerk_karaoke.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_karaoke.png</source>
+        <source file="../assets/toolbar_icons/stemwerk_main.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_main.png</source>
+        <source file="../assets/toolbar_icons/stemwerk_setup.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_setup.png</source>
+        <source file="../assets/toolbar_icons/stemwerk_vocals_only.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_vocals_only.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_all_stems_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_all_stems_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_all_stems_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_all_stems_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_all_stems_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_64.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_bass_only_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_bass_only_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_bass_only_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_bass_only_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_bass_only_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_bass_only_64.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_drums_only_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_drums_only_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_drums_only_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_drums_only_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_drums_only_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_drums_only_64.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_explode_takes_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_explode_takes_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_explode_takes_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_explode_takes_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_explode_takes_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_explode_takes_64.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_karaoke_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_karaoke_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_karaoke_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_karaoke_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_karaoke_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_karaoke_64.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_main_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_main_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_main_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_main_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_main_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_main_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_main_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_main_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_main_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_main_64.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_setup_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_setup_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_setup_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_setup_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_setup_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_setup_64.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_24.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_30.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_36.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_48.png</source>
+        <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_64.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_main_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_main_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_setup_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_setup_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_karaoke_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_karaoke_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_vocals_only_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_vocals_only_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_drums_only_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_drums_only_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_bass_only_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_bass_only_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_all_stems_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_all_stems_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_explode_takes_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_explode_takes_90x30.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_main_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_main_180x60.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_setup_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_setup_180x60.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_karaoke_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_karaoke_180x60.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_vocals_only_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_vocals_only_180x60.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_drums_only_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_drums_only_180x60.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_bass_only_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_bass_only_180x60.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_all_stems_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_all_stems_180x60.png</source>
+        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_explode_takes_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_explode_takes_180x60.png</source>
       </version>
     </reapack>
   </category>

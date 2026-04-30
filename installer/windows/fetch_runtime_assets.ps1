@@ -19,6 +19,7 @@ if ([string]::IsNullOrWhiteSpace($wheelhouseSubdir)) {
 $wheelsDir = Join-Path $payloadDir $wheelhouseSubdir
 $includeCuda = if ($env:STEMWERK_INCLUDE_CUDA_WHEELS) { [int]$env:STEMWERK_INCLUDE_CUDA_WHEELS } else { 1 }
 $includeDirectml = if ($env:STEMWERK_INCLUDE_DIRECTML_WHEELS) { [int]$env:STEMWERK_INCLUDE_DIRECTML_WHEELS } else { 0 }
+$skipWheelhouse = if ($env:STEMWERK_SKIP_WHEELHOUSE) { [int]$env:STEMWERK_SKIP_WHEELHOUSE } else { 0 }
 
 $pythonFile = "python-3.11.8-amd64.exe"
 $pythonUrl = "https://www.python.org/ftp/python/3.11.8/$pythonFile"
@@ -82,27 +83,35 @@ function Download-IfMissing([string]$Url, [string]$OutPath) {
 
 New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
-New-Item -ItemType Directory -Force -Path $wheelsDir | Out-Null
+if ($skipWheelhouse -eq 0) {
+    New-Item -ItemType Directory -Force -Path $wheelsDir | Out-Null
+}
 
 Download-IfMissing $pythonUrl (Join-Path $pythonDir $pythonFile)
 Download-IfMissing $ffmpegUrl (Join-Path $ffmpegDir $ffmpegFile)
 
-Ensure-Packaging
-Get-ChildItem -Path $wheelsDir -Filter "*.whl" -File -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
+if ($skipWheelhouse -eq 0) {
+    Ensure-Packaging
+    Get-ChildItem -Path $wheelsDir -Filter "*.whl" -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 
-$wheelhouseScript = Join-Path $RootDir "..\\..\\tools\\build_windows_wheelhouse.py"
-Write-Host "Building wheelhouse ($wheelhouseSubdir)..."
-Invoke-Python @(
-    $wheelhouseScript,
-    "--output-dir", $wheelsDir,
-    "--include-cuda-wheels", $includeCuda,
-    "--include-directml-wheels", $includeDirectml
-)
+    $wheelhouseScript = Join-Path $RootDir "..\\..\\tools\\build_windows_wheelhouse.py"
+    Write-Host "Building wheelhouse ($wheelhouseSubdir)..."
+    Invoke-Python @(
+        $wheelhouseScript,
+        "--output-dir", $wheelsDir,
+        "--include-cuda-wheels", $includeCuda,
+        "--include-directml-wheels", $includeDirectml
+    )
+} else {
+    Write-Host "Skipping wheelhouse build (STEMWERK_SKIP_WHEELHOUSE=1)."
+}
 
 Write-Host ""
 Write-Host "Bundled runtime assets ready:"
 Get-Item (Join-Path $pythonDir $pythonFile), (Join-Path $ffmpegDir $ffmpegFile) | Format-Table -AutoSize
-Write-Host ""
-Write-Host "Bundled wheels ready ($wheelhouseSubdir):"
-Get-ChildItem -Path $wheelsDir -File | Select-Object -First 8 | Format-Table -AutoSize
+if ($skipWheelhouse -eq 0) {
+    Write-Host ""
+    Write-Host "Bundled wheels ready ($wheelhouseSubdir):"
+    Get-ChildItem -Path $wheelsDir -File | Select-Object -First 8 | Format-Table -AutoSize
+}

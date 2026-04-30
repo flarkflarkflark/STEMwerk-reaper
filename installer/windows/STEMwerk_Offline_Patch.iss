@@ -96,12 +96,34 @@ begin
   end;
 end;
 
+function BuildPatchFinishedSummary: string;
+begin
+  Result :=
+    'Patch completed successfully.' + #13#10 + #13#10 +
+    'What was updated:' + #13#10 +
+    '- REAPER scripts in:' + #13#10 +
+    '  ' + WizardDirValue + #13#10 +
+    '- Language files in:' + #13#10 +
+    '  ' + AddBackslash(WizardDirValue) + 'i18n' + #13#10 + #13#10 +
+    'What was kept as-is:' + #13#10 +
+    '- Runtime folder: %LOCALAPPDATA%\STEMwerk' + #13#10 +
+    '- Cached models and downloaded dependencies';
+end;
+
 procedure InitializeWizard;
 begin
   WizardForm.WelcomeLabel1.Caption := 'STEMwerk offline patch';
   WizardForm.WelcomeLabel2.Caption :=
     'This small patch updates an existing offline STEMwerk install without replacing your bundled models or runtime.';
-  WizardForm.FinishedHeadingLabel.Caption := 'Patch applied';
-  WizardForm.FinishedLabel.Caption :=
-    'STEMwerk scripts and language files were updated in your existing install folder.';
+  WizardForm.FinishedHeadingLabel.Caption := 'Patch applied successfully';
+  WizardForm.FinishedLabel.Caption := BuildPatchFinishedSummary;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpFinished then
+  begin
+    WizardForm.FinishedHeadingLabel.Caption := 'Patch applied successfully';
+    WizardForm.FinishedLabel.Caption := BuildPatchFinishedSummary;
+  end;
 end;

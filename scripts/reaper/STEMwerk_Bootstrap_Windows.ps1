@@ -122,6 +122,46 @@ function WriteBootstrapGuard([string]$GuardStatus, [string]$GuardReason) {
     $lines | Out-File -FilePath $guardPath -Encoding ascii
 }
 
+function TestRuntimeWritable([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+        $probe = Join-Path $Path ".stemwerk_write_test"
+        Set-Content -Path $probe -Value "ok" -Encoding ascii -Force
+        Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function LogExecutionPolicyStatus {
+    try {
+        $effective = [string](Get-ExecutionPolicy)
+        if ([string]::IsNullOrWhiteSpace($effective)) { $effective = "Unknown" }
+        LogProgress ("PowerShell execution policy (effective): " + $effective)
+
+        $policyList = Get-ExecutionPolicy -List
+        if ($policyList) {
+            $parts = @()
+            foreach ($entry in $policyList) {
+                if ($entry -and $entry.Scope -and $entry.ExecutionPolicy) {
+                    $parts += ($entry.Scope + "=" + $entry.ExecutionPolicy)
+                }
+            }
+            if ($parts.Count -gt 0) {
+                LogLine ("Execution policy list: " + ($parts -join "; "))
+            }
+        }
+
+        if ($effective -eq "Restricted" -or $effective -eq "AllSigned") {
+            LogStatusDetail ("PowerShell policy is restrictive (" + $effective + "). Manual script runs may need CurrentUser RemoteSigned.")
+        }
+    } catch {
+        LogLine "Execution policy check failed"
+    }
+}
+
 function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue) {
     $lines = @()
     $lines += "CAP_VERSION=1"
@@ -620,6 +660,30 @@ function EnsureJuliusRuntime([string]$PythonPath) {
     return ($LASTEXITCODE -eq 0)
 }
 
+function EnsureSamplerateRuntime([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
+
+    RunHidden $PythonPath @("-c", "import samplerate") "Verify samplerate runtime" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    LogStatusDetail "samplerate dependency is missing. Attempting automatic repair."
+    $samplerateArgs = @("--upgrade")
+    $samplerateArgs += GetAudioConstraints $BackendName
+    $samplerateArgs += "samplerate==0.1.0"
+    InstallWithPip $PythonPath $samplerateArgs "Install samplerate runtime"
+
+    RunHidden $PythonPath @("-c", "import samplerate") "Verify samplerate runtime" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    LogLine "samplerate runtime is still missing after repair attempt."
+    LogStatusDetail "samplerate is still missing. Separation may fail for some models; check bootstrap.log for details."
+    return $false
+}
+
 function EnsureOnnxRuntime([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
 
@@ -684,6 +748,10 @@ function InstallAndVerifyAudioSeparator([string]$PythonPath, [string]$BackendNam
         return "julius_install_failed"
     }
 
+    if (-not (EnsureSamplerateRuntime $PythonPath $BackendName)) {
+        LogLine "samplerate runtime remains unavailable; continuing with remaining checks."
+    }
+
     if (-not (EnsureOnnxRuntime $PythonPath $BackendName)) {
         return "onnxruntime_install_failed"
     }
@@ -717,6 +785,26 @@ $candidates += (Join-Path $programFilesX86 "Python310\\python.exe")
 Step "step_1_runtime" "runtime initialization"
 LogProgress "Runtime directories prepared"
 WriteBootstrapGuard "running" "bootstrap_running"
+if (-not (TestRuntimeWritable $RuntimeBase)) {
+    LogLine ("Runtime base is not writable: " + $RuntimeBase)
+    Set-Status "deps_failed" "runtime_write_test_failed"
+    WriteBootstrapGuard "failed" "runtime_write_test_failed"
+    exit 1
+}
+if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "state"))) {
+    LogLine ("Runtime state directory is not writable: " + (Join-Path $RuntimeBase "state"))
+    Set-Status "deps_failed" "runtime_write_test_failed"
+    WriteBootstrapGuard "failed" "runtime_write_test_failed"
+    exit 1
+}
+if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "logs"))) {
+    LogLine ("Runtime logs directory is not writable: " + (Join-Path $RuntimeBase "logs"))
+    Set-Status "deps_failed" "runtime_write_test_failed"
+    WriteBootstrapGuard "failed" "runtime_write_test_failed"
+    exit 1
+}
+LogProgress ("Runtime write test passed: " + $RuntimeBase)
+LogExecutionPolicyStatus
 
 Step "step_2_python" "python + venv"
 LogProgress "Looking for existing Python installations"

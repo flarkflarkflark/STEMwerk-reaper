@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2-dev
+-- @version 2.2.2-rc3
 -- @changelog
 --   2026-03-15: Route setup to the internal setup bootstrap flow.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

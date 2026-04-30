@@ -1,0 +1,67 @@
+STEMwerk License Agreement
+Version: 2.2.2-rc1
+Date: 2026-04-23
+
+======================================================================
+1. STEMwerk License (MIT)
+======================================================================
+
+MIT License
+
+Copyright (c) 2025 flarkAUDIO <flarkaudio@pm.me>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+======================================================================
+2. Third-Party Notices Summary
+======================================================================
+
+STEMwerk uses and/or redistributes third-party components.
+Those components remain licensed by their respective owners.
+
+Bundled or downloaded runtime components include:
+- Python (CPython) 3.11.x  https://www.python.org/
+- FFmpeg (Windows builds from gyan.dev)  https://www.gyan.dev/ffmpeg/builds/
+  Upstream: https://ffmpeg.org/
+
+Python packages installed by bootstrap (online or bundled wheels) can include:
+- audio-separator
+- torch / torchvision / torch-directml
+- onnxruntime / onnxruntime-directml
+- numpy / scipy / librosa / soundfile
+- onnx / onnx2torch
+- requests / pydub / tqdm / samplerate
+
+The exact set depends on backend and installer flavor.
+
+Local vendored components include:
+- scripts/reaper/vendor/stemwerk-core
+- scripts/reaper/vendor/julius
+
+For exact installed metadata and license files, inspect:
+- %LOCALAPPDATA%\STEMwerk\.venv\Lib\site-packages\*dist-info\METADATA
+- %LOCALAPPDATA%\STEMwerk\.venv\Lib\site-packages\*dist-info\LICENSE*
+- %LOCALAPPDATA%\STEMwerk\logs\bootstrap.log
+
+If bundled wheels are present, inspect:
+- {app}\_bundled\wheels
+
+Trademarks and product names belong to their respective owners.
+Report attribution issues:
+- https://github.com/flarkflarkflark/STEMwerk-reaper/issues

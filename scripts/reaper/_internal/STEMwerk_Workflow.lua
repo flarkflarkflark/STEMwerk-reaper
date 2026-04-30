@@ -31,6 +31,68 @@ function WORKFLOW.configure(ctx)
     for k, v in pairs(ctx) do C[k] = v end
 end
 
+local function snapshotActiveTakePlaybackState(item)
+    if not item or not reaper.ValidatePtr(item, "MediaItem*") then
+        return nil
+    end
+    local take = reaper.GetActiveTake(item)
+    if not take or not reaper.ValidatePtr(take, "MediaItem_Take*") then
+        return nil
+    end
+
+    local playrate = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")) or 1.0
+    if playrate < 0.0001 then
+        playrate = 1.0
+    end
+
+    local pitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PITCH")) or 0.0
+    local preservePitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "B_PPITCH")) or 0
+    if preservePitch ~= 0 then preservePitch = 1 else preservePitch = 0 end
+
+    return {
+        playrate = playrate,
+        pitch = pitch,
+        preservePitch = preservePitch
+    }
+end
+
+local function applyPlaybackStateToTake(take, playbackState)
+    if not take or not reaper.ValidatePtr(take, "MediaItem_Take*") then
+        return
+    end
+    if not playbackState then
+        return
+    end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    local sourceLen = nil
+    if source and reaper.GetMediaSourceLength then
+        local len = reaper.GetMediaSourceLength(source)
+        sourceLen = tonumber(len)
+    end
+
+    local itemLen = nil
+    local item = reaper.GetMediaItemTake_Item and reaper.GetMediaItemTake_Item(take) or nil
+    if item and reaper.ValidatePtr(item, "MediaItem*") then
+        itemLen = tonumber(reaper.GetMediaItemInfo_Value(item, "D_LENGTH"))
+    end
+
+    -- Imported stem WAVs are usually already baked in project-time.
+    -- Only transfer playback-state when source duration matches the expected
+    -- pre-baked length (itemLen * playrate), otherwise we would double-stretch.
+    if sourceLen and itemLen and itemLen > 0 then
+        local expected = itemLen * (playbackState.playrate or 1.0)
+        local tolerance = math.max(0.01, expected * 0.01)
+        if math.abs(sourceLen - expected) > tolerance then
+            return
+        end
+    end
+
+    reaper.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", playbackState.playrate or 1.0)
+    reaper.SetMediaItemTakeInfo_Value(take, "D_PITCH", playbackState.pitch or 0.0)
+    reaper.SetMediaItemTakeInfo_Value(take, "B_PPITCH", playbackState.preservePitch or 0)
+end
+
 function WORKFLOW.updateProgressFromFile()
     if not C.progressState.stdoutFile or C.progressState.stdoutFile == "" then return end
     local f = io.open(C.progressState.stdoutFile, "r")
@@ -494,7 +556,7 @@ function WORKFLOW.progressLoop()
 
         gfx.quit()
         C.progressState.windowOpen = false
-        C.showMessage("Timeout", "Separation timed out after 10 minutes.", "error", true)
+        C.showMessage("Timeout", "Separation timed out after 10 minutes.", "error", false)
         return
     end
 
@@ -545,7 +607,9 @@ function WORKFLOW.finishSeparationCallback()
             if stdoutSnippet then
                 errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
             end
-            C.showMessage("Separation Failed", errMsg, "error", true)
+            -- Keep this visible until user closes it; auto-monitor mode can immediately
+            -- bounce back to the main window and hide actionable error details.
+            C.showMessage("Separation Failed", errMsg, "error", false)
         end
     end
     checkFiles()
@@ -663,6 +727,7 @@ end
 -- Splits the item at selection boundaries and replaces only the selected portion
 function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameBase)
     local track = reaper.GetMediaItem_Track(item)
+    local sourcePlaybackState = snapshotActiveTakePlaybackState(item)
     local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
     local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
     local replaceStart = math.max(tonumber(selStart) or origItemPos, origItemPos)
@@ -745,6 +810,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
         reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
         -- Ensure take volume is at unity (1.0 = 0dB)
         reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+        applyPlaybackStateToTake(take, sourcePlaybackState)
 
         local stemColor = C.rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
         HELPERS.applyItemColorIfEnabled(newItem, stemColor)
@@ -768,6 +834,7 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
                 -- Ensure take volume is at unity (1.0 = 0dB)
                 reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
+                applyPlaybackStateToTake(newTake, sourcePlaybackState)
             end
             reaper.DeleteTrackMediaItem(track, items[i].item)
         end
@@ -800,6 +867,7 @@ end
 -- Replace item in-place with stems as takes
 function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
     local track = reaper.GetMediaItem_Track(item)
+    local sourcePlaybackState = snapshotActiveTakePlaybackState(item)
     reaper.Undo_BeginBlock()
     reaper.DeleteTrackMediaItem(track, item)
 
@@ -830,6 +898,7 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
         reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", takeLabel, true)
         -- Ensure take volume is at unity (1.0 = 0dB)
         reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+        applyPlaybackStateToTake(take, sourcePlaybackState)
 
         local stemColor = C.rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
         HELPERS.applyItemColorIfEnabled(newItem, stemColor)
@@ -852,6 +921,7 @@ function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", items[i].name, true)
                 -- Ensure take volume is at unity (1.0 = 0dB)
                 reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", 1.0)
+                applyPlaybackStateToTake(newTake, sourcePlaybackState)
             end
             reaper.DeleteTrackMediaItem(track, items[i].item)
         end

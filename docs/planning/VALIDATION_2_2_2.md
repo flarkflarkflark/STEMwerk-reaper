@@ -69,7 +69,7 @@ These are accepted as non-blockers for 2.2.2 and must be called out in
 release notes:
 
 - **Windows window flicker / console flicker** — pre-existing behavior; no regression introduced in 2.2.2
-- **Playback-rate alignment issue** — pre-existing limitation; not changed in Route B scope
+- **Playback-rate alignment (in-place takes)** — fixed in 2.2.2-rc1 by restoring source take playback-state (`D_PLAYRATE`, `D_PITCH`, `B_PPITCH`) on imported stem takes
 - **macOS async-spawn behavior** — known, intentionally deferred to 2.2.3; Intel CPU-mode works
 - **Light-mode elevation parity** — Pass A brings improvements; full parity across all surfaces is a future pass
 - **Setup edge cases on non-standard Python paths** — improved error messaging in 2.2.2 but not fully resolved

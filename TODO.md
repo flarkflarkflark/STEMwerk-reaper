@@ -104,6 +104,16 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 	- Verify `import onnxruntime` and `from audio_separator.separator import Separator` in setup/runtime validation paths
 	- Add a regression case for Windows DirectML where `audio_separator` imports but ONNX Runtime is missing or lacks `DmlExecutionProvider`
 
+- [ ] Long-file safety: detect unusually long source items before separation
+	- Warn users that `Quality` / `6-Stem` may exceed RAM/VRAM or fail mid-run on long recordings
+	- Suggest trying `Fast` first for long recordings
+	- Improve failure reporting when processing exits early so long-track memory/runtime crashes are surfaced clearly instead of silently returning
+
+- [ ] Investigate chunked separation workflow for long recordings
+	- Target live sets, DJ mixes, concerts, rehearsals, and other long continuous recordings
+	- Split input into time chunks, process each chunk separately, then reconstruct outputs
+	- Goal: reduce memory pressure and improve stability for long-track separation
+
 ### REAPER UI scaling/status checklist
 
 - [ ] Open `Stemwerk: Main` and resize the window (corners + edges)

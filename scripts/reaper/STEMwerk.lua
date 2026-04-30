@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2-rc1
+-- @version 2.2.2-rc3
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.2-rc1"
+local APP_VERSION = "2.2.2-rc3"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -1176,8 +1176,7 @@ do
             or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "ffmpeg")
             or directoryHasAnyFiles(bundledRoot .. PATH_SEP .. "python")
         local modelDir = getModelCacheDirForUi()
-        local hasOfflineModelManifest = (modelDir ~= "") and fileExists(modelDir .. PATH_SEP .. "download_checks.json")
-        local limitToInstalledModelFiles = hasBundledPayload and hasOfflineModelManifest
+        local limitToInstalledModelFiles = hasBundledPayload
         MODEL_AVAILABILITY.bundledLimited = limitToInstalledModelFiles
 
         local byId = {}
@@ -1203,6 +1202,13 @@ do
     end
 
     function ensureSelectedModelIsAvailable()
+        if isModelAvailableInCurrentMode(SETTINGS and SETTINGS.model) then
+            return false
+        end
+        return false
+    end
+
+    function ensureSelectedModelIsAvailableAndFallback()
         if isModelAvailableInCurrentMode(SETTINGS and SETTINGS.model) then
             return false
         end
@@ -1358,6 +1364,51 @@ focusReaperAfterMainOpenOnce = false
 -- Items eligible for one-shot post-processing after in-place separation
 -- (lets user choose an explode mode after the run, without re-processing).
 postProcessCandidates = {}
+
+-- Forward declaration for run-config helpers (actual table is initialized later).
+local multiTrackQueue
+
+-- Run configuration snapshot: keeps model/device/mode stable for one workflow run.
+local ACTIVE_RUN_CONFIG = nil
+local function captureActiveRunConfig()
+    ACTIVE_RUN_CONFIG = {
+        model = tostring(SETTINGS and SETTINGS.model or "htdemucs"),
+        device = tostring(SETTINGS and SETTINGS.device or "auto"),
+        requestedParallel = (SETTINGS and SETTINGS.parallelProcessing) and true or false,
+    }
+end
+
+local function hasActiveRunConfig()
+    if not ACTIVE_RUN_CONFIG then return false end
+    if isProcessingActive then return true end
+    if multiTrackQueue and multiTrackQueue.active then return true end
+    return false
+end
+
+local function effectiveRunModel()
+    if hasActiveRunConfig() then
+        return tostring(ACTIVE_RUN_CONFIG.model or "htdemucs")
+    end
+    return tostring(SETTINGS and SETTINGS.model or "htdemucs")
+end
+
+local function effectiveRunDevice()
+    if hasActiveRunConfig() then
+        return tostring(ACTIVE_RUN_CONFIG.device or "auto")
+    end
+    return tostring(SETTINGS and SETTINGS.device or "auto")
+end
+
+local function effectiveRunRequestedParallel()
+    if hasActiveRunConfig() then
+        return ACTIVE_RUN_CONFIG.requestedParallel and true or false
+    end
+    return (SETTINGS and SETTINGS.parallelProcessing) and true or false
+end
+
+local function isEffectiveRun6Stem()
+    return effectiveRunModel() == "htdemucs_6s"
+end
 
 
 local GLUE_HELPERS = dofile(script_path .. "_internal/STEMwerk_Glue_Helpers.lua")
@@ -10854,8 +10905,15 @@ canStartProcessingFromDialog = function()
         openDialogWarning(promptTitle, promptMessage)
         return false
     end
+    if not isModelAvailableInCurrentMode(tostring(SETTINGS.model or "")) then
+        openDialogWarning(
+            T("model_label") or "Model unavailable",
+            (T("model_unavailable_message") or "The selected model is not available in this installer.") .. "\n\n" .. unavailableModelTooltipSuffix()
+        )
+        return false
+    end
 
-    local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+    local is6Stem = isEffectiveRun6Stem()
     local validSelected = false
     for _, stem in ipairs(STEMS) do
         if stem.selected and ((not stem.sixStemOnly) or is6Stem) then
@@ -11128,6 +11186,7 @@ end
 
 -- Show stem selection dialog
 showStemSelectionDialog = function()
+    ACTIVE_RUN_CONFIG = nil
     loadSettings()
     PROCESS_AUDIBILITY_SOLO_ACTIVE = nil
     perfMark("showStemSelectionDialog(): loadSettings done")
@@ -11986,7 +12045,7 @@ function closeProcessingWindow()
 end
 
 -- Multi-track queue state (declared early for access in drawProgressWindow)
-local multiTrackQueue = {
+multiTrackQueue = {
     tracks = {},           -- List of tracks to process
     currentIndex = 0,      -- Current track being processed
     totalTracks = 0,       -- Total number of tracks
@@ -12380,8 +12439,10 @@ local function drawProgressWindow()
 
     -- Get selected stems for colors
     local selectedStems = {}
+    local runModel = effectiveRunModel()
+    local runIs6Stem = (runModel == "htdemucs_6s")
     for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
+        if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
             table.insert(selectedStems, stem)
         end
     end
@@ -12393,7 +12454,7 @@ local function drawProgressWindow()
     local barH = PS(24)
 
     -- Model badge (align with progress bar at right side)
-    local modelText = SETTINGS.model or "htdemucs"
+    local modelText = runModel
     gfx.setfont(1, "Arial", PS(11))
     local modelW = gfx.measurestr(modelText) + PS(16)
     local badgeX = barX + barW - modelW
@@ -12446,7 +12507,7 @@ local function drawProgressWindow()
     local stemBoxSize = PS(14)
     gfx.setfont(1, "Arial", PS(11))
     for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
+        if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
             -- Stem color box
             gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
             gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
@@ -12806,9 +12867,10 @@ local function drawProgressWindow()
     end
 
     local segValue = "30"
-    local modelDisplay = (SETTINGS.model == "htdemucs_ft")
+    local footerModel = effectiveRunModel()
+    local modelDisplay = (footerModel == "htdemucs_ft")
         and (T("model_label_quality") or "Quality")
-        or ((SETTINGS.model == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+        or ((footerModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
@@ -14124,7 +14186,7 @@ function processStemsResult(stems)
 
     local selectedNames = {}
     local selectedStemData = {}
-    local is6Stem = (SETTINGS.model == "htdemucs_6s")
+    local is6Stem = isEffectiveRun6Stem()
     for _, stem in ipairs(STEMS) do
         -- Only include stems that were actually processed (respect sixStemOnly flag)
         if stem.selected and (not stem.sixStemOnly or is6Stem) then
@@ -14149,8 +14211,9 @@ function processStemsResult(stems)
         local realtimeFactor = (processedAudioDur > 0 and totalTime > 0) and (processedAudioDur / totalTime) or 0
         resultData.totalTimeSec = totalTime
         resultData.realtimeFactor = realtimeFactor
-        resultData.sequentialMode = SETTINGS.parallelProcessing and false or true
-        resultData.requestedParallel = SETTINGS.parallelProcessing and true or false
+        local requestedParallel = effectiveRunRequestedParallel()
+        resultData.sequentialMode = requestedParallel and false or true
+        resultData.requestedParallel = requestedParallel and true or false
     end
 
     reaper.UpdateArrange()
@@ -14401,8 +14464,7 @@ end
 
 -- Show result window
 function showResultWindow(selectedStems, message)
-    -- Load settings to get current theme
-    loadSettings()
+    -- Keep run choices stable until the workflow is complete.
     updateTheme()
 
     -- Ensure newly created/changed tracks/items are visible in REAPER *before* showing the Complete window.
@@ -14489,7 +14551,7 @@ runSingleTrackSeparation = function(trackList)
     -- Check if we have a time selection
     local hasTimeSel = (timeSelectionMode and timeSelectionStart and timeSelectionEnd and timeSelectionEnd > timeSelectionStart)
 
-    local is6Stem = (SETTINGS.model == "htdemucs_6s")
+    local is6Stem = isEffectiveRun6Stem()
     local selectedStemCount = 0
     for _, stem in ipairs(STEMS) do
         if stem.selected and (not stem.sixStemOnly or is6Stem) then
@@ -14946,7 +15008,9 @@ runSingleTrackSeparation = function(trackList)
     -- Default: follow user's parallel/sequential preference.
     -- However, on Windows CPU-only (device=cpu/auto), parallel multi-job runs can be MUCH slower
     -- because each job loads the model separately and they compete for CPU/RAM/disk.
-    multiTrackQueue.sequentialMode = not SETTINGS.parallelProcessing
+    local requestedParallel = effectiveRunRequestedParallel()
+    multiTrackQueue.requestedParallel = requestedParallel and true or false
+    multiTrackQueue.sequentialMode = not requestedParallel
     multiTrackQueue.forceSequentialReason = nil
     local hasPerItemJobs = false
     for _, job in ipairs(trackJobs) do
@@ -14955,7 +15019,7 @@ runSingleTrackSeparation = function(trackList)
             break
         end
     end
-    if SETTINGS.parallelProcessing and #trackJobs > 1 then
+    if requestedParallel and #trackJobs > 1 then
         local function hasRuntimeGpuBackends()
             local list = RUNTIME_DEVICES or DEVICES or {}
             for _, d in ipairs(list) do
@@ -14980,7 +15044,7 @@ runSingleTrackSeparation = function(trackList)
             return false
         end
 
-        local dev = string.lower(tostring(SETTINGS.device or "auto"))
+        local dev = string.lower(effectiveRunDevice())
         local explicitDirectml = dev:find("directml", 1, true) ~= nil
         local directmlMultiJob = explicitDirectml
 
@@ -15124,9 +15188,9 @@ startSeparationProcessForJob = function(job, segmentSize)
     local lf = io.open(logFile, "w")
     if lf then lf:close() end
 
-    local requestedDeviceArg = tostring(SETTINGS.device or "auto")
+    local requestedDeviceArg = effectiveRunDevice()
     local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
-    local modelArg  = tostring(SETTINGS.model or "htdemucs")
+    local modelArg = effectiveRunModel()
     local pythonCmd = string.format(
         '%s -u %s %s %s --model %s --device %s',
         quoteArg(PYTHON_PATH),
@@ -15595,8 +15659,9 @@ function drawMultiTrackProgressWindow()
 
     -- Stem indicators (simple colored boxes, like single-track)
     local selectedStems = {}
+    local runIs6Stem = isEffectiveRun6Stem()
     for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
+        if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
             table.insert(selectedStems, stem)
         end
     end
@@ -16321,9 +16386,10 @@ function drawMultiTrackProgressWindow()
         etaText = string.format(" | %s %d:%02d", tostring(etaLabel), etaMins, etaSecs)
     end
     
-    local modelDisplay = (SETTINGS.model == "htdemucs_ft")
+    local runModel = effectiveRunModel()
+    local modelDisplay = (runModel == "htdemucs_ft")
         and (T("model_label_quality") or "Quality")
-        or (is6Stem and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+        or ((runModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local leftParts = {
         string.format("%s: %d:%02d%s", mtTime, totalMins, totalSecs, etaText),
         string.format("%s: %s %s", mtSeg, segSize, modeStr),
@@ -16485,8 +16551,7 @@ end
 
 -- Show multi-track progress window
 showMultiTrackProgressWindow = function()
-    -- Load settings to get current theme
-    loadSettings()
+    -- Keep processing settings unchanged while jobs are running.
     updateTheme()
 
     captureWindowGeometry(SCRIPT_NAME)
@@ -16552,7 +16617,7 @@ processAllStemsResult = function()
     debugLog("itemPos: " .. tostring(itemPos) .. ", itemLen: " .. tostring(itemLen))
     debugLog("createNewTracks: " .. tostring(SETTINGS.createNewTracks))
 
-    local is6Stem = (SETTINGS.model == "htdemucs_6s")
+    local is6Stem = isEffectiveRun6Stem()
 
     -- Use a stable selection range for item placement (avoid any stale globals).
     local globalSelPos = itemPos
@@ -16982,7 +17047,7 @@ processAllStemsResult = function()
         bf:write(string.format("\n=== Benchmark Result ===\n"))
         bf:write(string.format("Date: %s\n", os.date("%Y-%m-%d %H:%M:%S")))
         bf:write(string.format("Mode: %s (segment size: %s)\n", modeStr, segSize))
-        bf:write(string.format("Model: %s\n", SETTINGS.model or "?"))
+        bf:write(string.format("Model: %s\n", effectiveRunModel()))
         bf:write(string.format("Tracks: %d\n", #multiTrackQueue.jobs))
         bf:write(string.format("Audio duration: %.1fs\n", totalAudioDur))
         bf:write(string.format("Processing time: %d:%02d (%ds)\n", totalMins, totalSecs, totalTime))
@@ -16996,7 +17061,7 @@ processAllStemsResult = function()
 
     -- Show result
     local selectedStemData = {}
-    local is6Stem = (SETTINGS.model == "htdemucs_6s")
+    local is6Stem = isEffectiveRun6Stem()
     for _, stem in ipairs(STEMS) do
         if stem.selected and (not stem.sixStemOnly or is6Stem) then
             table.insert(selectedStemData, stem)
@@ -17032,7 +17097,7 @@ processAllStemsResult = function()
             realtimeFactor = realtimeFactor,
             sequentialMode = multiTrackQueue.sequentialMode and true or false,
             forceSequentialReason = multiTrackQueue.forceSequentialReason,
-            requestedParallel = SETTINGS.parallelProcessing and true or false,
+            requestedParallel = effectiveRunRequestedParallel() and true or false,
         }
     else
         local itemCount = #multiTrackQueue.jobs
@@ -17043,7 +17108,7 @@ processAllStemsResult = function()
             realtimeFactor = realtimeFactor,
             sequentialMode = multiTrackQueue.sequentialMode and true or false,
             forceSequentialReason = multiTrackQueue.forceSequentialReason,
-            requestedParallel = SETTINGS.parallelProcessing and true or false,
+            requestedParallel = effectiveRunRequestedParallel() and true or false,
         }
     end
     resultData.action = actionData
@@ -17088,6 +17153,7 @@ function runSeparationWorkflow()
     end
     isProcessingActive = true
     debugLog("=== runSeparationWorkflow started ===")
+    captureActiveRunConfig()
 
     if OS == "Windows" then
         showProcessingPlaceholderWindow(T("progress_checking_runtime") or "Checking runtime...")
@@ -17198,7 +17264,7 @@ function runSeparationWorkflow()
     -- Guard: don't run if user selected 0 stems (it would produce no outputs and confuse users).
     local selectedStemCount = 0
     for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
+        if stem.selected and (not stem.sixStemOnly or isEffectiveRun6Stem()) then
             selectedStemCount = selectedStemCount + 1
         end
     end

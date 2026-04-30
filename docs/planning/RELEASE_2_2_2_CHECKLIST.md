@@ -87,7 +87,7 @@ Items below are acknowledged and documented but are **not release blockers**
 for 2.2.2:
 
 - **Windows window flicker / console flicker** — existing behavior, no regression introduced in 2.2.2; tracked for future work
-- **Playback-rate alignment issue** — pre-existing; not introduced in Route B scope
+- **Playback-rate alignment (in-place takes)** — fixed in 2.2.2-rc1 by restoring source take playback-state (`D_PLAYRATE`, `D_PITCH`, `B_PPITCH`) on imported stem takes
 - **macOS async-spawn behavior** — known, intentionally deferred to 2.2.3; must be called out clearly in release notes
 - **Setup edge cases on non-standard Python paths** — existing surface; 2.2.2 improves error messaging but does not fully resolve all path-resolution edge cases
 - **Light-mode elevation visual parity** — Pass A brings improvements but full parity across all surfaces may take further passes
@@ -138,7 +138,7 @@ setup feedback.
 - macOS async-spawn behavior is unchanged in this release; fix is planned for 2.2.3
 - Python 3.13 is not validated in this release
 - Windows window flicker is a pre-existing behavior and is not resolved in 2.2.2
-- Playback-rate alignment is a pre-existing limitation; not changed in this release
+- In-place stem takes now preserve source playback-rate/pitch behavior (`D_PLAYRATE`, `D_PITCH`, `B_PPITCH`)
 
 ---
 

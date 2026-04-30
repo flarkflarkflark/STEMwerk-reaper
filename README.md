@@ -162,11 +162,20 @@ To avoid confusion, only these are meant for normal use:
 - `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) — use this for manual installs, ReaPack installs, and the normal bootstrap/repair flow on macOS/Linux.
 - `STEMwerk: Main` (`STEMwerk.lua`) — the main UI.
 - `STEMwerk: Karaoke`, `STEMwerk: Vocals Only`, `STEMwerk: Drums Only`, `STEMwerk: Bass Only`, `STEMwerk: All Stems` — optional presets.
+- `Stemwerk: Explode Takes (In Place)` (`STEMwerk_Explode_Takes.lua`) — quick tool for selected multi-take items.
 
 Internal/troubleshooting (not for regular use):
 - everything under `scripts/reaper/_internal/` — runtime helpers used by the public scripts
 
 Note: REAPER does not auto-register scripts in the Action List. Use Actions → ReaScript → Load ReaScript… or run `STEMwerk_Setup_Toolbar.lua` to register the standard actions.
+
+### Toolbar icons (manual assign)
+- STEMwerk ships a language-neutral icon pack under `scripts/reaper/assets/toolbar_icons/`.
+- Recommended REAPER formats:
+  - `strips_90x30/` for standard DPI toolbars (3-state strip: normal/hover/active)
+  - `strips_180x60/` for hiDPI/retina toolbars
+  - `single/` for custom/manual icon assignment sizes (24/30/36/48/64)
+- Icons are optional and do not edit `reaper-menu.ini`; assign them manually in toolbar customize dialogs.
 
 ## First-run expectations
 - First run can take a while: STEMwerk may need to create or verify its runtime, install backend packages, and download the selected model.
@@ -178,6 +187,10 @@ Note: REAPER does not auto-register scripts in the Action List. Use Actions → 
 - Check the STEMwerk logs shown by setup/runtime diagnostics to identify the failing step (Python, FFmpeg, backend package, model download, permissions, etc.).
 - Backend behavior differs by system and drivers: CPU is the safest fallback, while CUDA/DirectML/ROCm availability depends on hardware and compatible packages.
 - On Windows, if bootstrap/runtime files are missing, re-run the installer first, then verify with `STEMwerk-SETUP.lua`.
+- NVIDIA offline bundled troubleshooting (related to issue #11):
+  - If separation works online but fails offline, verify models are present in `%LOCALAPPDATA%\\STEMwerk\\models` and that the installed variant actually includes the model set you selected.
+  - Re-run the matching offline bundled installer variant (for example `...-offline-bundled-nvidia-gpu-allmodels.exe`) and test once with internet disabled to confirm the offline path.
+  - Bundled/offline installers intentionally disable the pre-setup "cleanup models" task to avoid deleting freshly bundled model payloads.
 
 ## REAPER workflows
 - New tracks: Create dedicated stem tracks, optionally grouped in a folder

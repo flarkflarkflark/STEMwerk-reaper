@@ -1,8 +1,9 @@
 -- @description Stemwerk: Setup Toolbar
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2-dev
+-- @version 2.2.2-rc3
 -- @changelog
 --   Adds/refreshes STEMwerk scripts in the Action List and guides toolbar setup.
+--   Registers the dedicated "Stemwerk: Explode Takes (In Place)" quick action.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
 
 local function msgBox(title, text, type)
@@ -19,6 +20,7 @@ local scriptDir = getScriptDir()
 local scriptFiles = {
     "STEMwerk.lua",
     "STEMwerk-SETUP.lua",
+    "STEMwerk_Explode_Takes.lua",
     "STEMwerk_Karaoke.lua",
     "STEMwerk_Vocals_Only.lua",
     "STEMwerk_Drums_Only.lua",
@@ -36,6 +38,6 @@ end
 
 msgBox(
     "Stemwerk: Setup Toolbar",
-    "Scripts are ready.\n\nTo add toolbar buttons:\n1) Open Actions → Show action list\n2) Filter for 'STEMwerk:'\n3) Select a script (e.g. 'STEMwerk: Karaoke')\n4) Add it to a toolbar (right-click toolbar → Customize)\n\nTip: Run 'STEMwerk: Setup' if separation fails or components are missing.",
+    "Scripts are ready.\n\nTo add toolbar buttons:\n1) Open Actions -> Show action list\n2) Filter for 'STEMwerk:'\n3) Select a script (e.g. 'STEMwerk: Karaoke')\n4) Add it to a toolbar (right-click toolbar -> Customize)\n\nOptional icon pack:\n" .. scriptDir .. "assets/toolbar_icons/\n- Use strips_90x30 for standard DPI\n- Use strips_180x60 for hiDPI/retina\n\nTip: Run 'STEMwerk: Setup' if separation fails or components are missing.",
     0
 )

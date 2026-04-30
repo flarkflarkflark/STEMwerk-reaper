@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2-dev
+-- @version 2.2.2-rc3
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -327,6 +327,149 @@ local function trim(s)
     t = t:gsub("^%s+", "")
     t = t:gsub("%s+$", "")
     return t
+end
+
+local function humanizeToken(token)
+    local value = trim(token)
+    if value == "" then return "" end
+    value = value:gsub("_", " ")
+    value = value:gsub("%s+", " ")
+    value = value:gsub("^%l", string.upper)
+    return value
+end
+
+local function prettySetupStatus(status)
+    local lower = trim(status):lower()
+    if lower == "" then return "Unknown" end
+    if lower == "ok" then return "Completed" end
+    if lower == "running" then return "Running" end
+    if lower == "missing_python" then return "Missing Python" end
+    if lower == "missing_ffmpeg" then return "Missing FFmpeg" end
+    if lower == "deps_failed" then return "Dependency setup failed" end
+    if lower == "venv_failed" then return "Virtual environment setup failed" end
+    if lower == "pip_failed" then return "Pip setup failed" end
+    if lower == "disabled" then return "Disabled" end
+    if lower == "failed" then return "Failed" end
+    return humanizeToken(status)
+end
+
+local function prettySetupReason(reason)
+    if not reason or reason == "" then return "" end
+    local parts = {}
+    local seen = {}
+    for raw in tostring(reason):gmatch("[^;]+") do
+        local part = trim(raw)
+        local lower = part:lower()
+        if lower == "python_install_failed" then
+            part = "Python install failed"
+        elseif lower == "python_not_found" then
+            part = "No supported Python found"
+        elseif lower == "python_unsupported" or lower == "unsupported_python_version" then
+            part = "Python version is unsupported (need 3.10-3.12 on macOS/Linux or 3.11-3.12 on Windows)"
+        elseif lower == "venv_create_failed" then
+            part = "Could not create Python virtual environment"
+        elseif lower == "pip_upgrade_failed" then
+            part = "Could not upgrade pip/setuptools/wheel"
+        elseif lower == "ffmpeg_install_failed" then
+            part = "FFmpeg install failed"
+        elseif lower == "ffmpeg_shim_path" then
+            part = "Windows shim FFmpeg path detected (install a real ffmpeg.exe)"
+        elseif lower == "stemwerk_core_bundle_incomplete" then
+            part = "Bundled stemwerk-core package is incomplete"
+        elseif lower == "stemwerk_core_install_failed" then
+            part = "stemwerk-core install failed"
+        elseif lower == "stemwerk_core_missing" or lower == "stemwerk_core_missing_after_setup" then
+            part = "stemwerk-core is missing after setup"
+        elseif lower == "audio_separator_install_failed" then
+            part = "audio-separator install failed"
+        elseif lower == "audio_runtime_deps_install_failed" then
+            part = "Audio runtime dependencies install failed"
+        elseif lower == "julius_install_failed" then
+            part = "julius dependency install failed"
+        elseif lower == "onnxruntime_install_failed" then
+            part = "ONNX Runtime install failed"
+        elseif lower == "onnxruntime_missing_after_setup" then
+            part = "ONNX Runtime is missing after setup"
+        elseif lower == "audio_separator_runtime_check_failed" then
+            part = "audio-separator runtime verification failed"
+        elseif lower == "audio_separator_missing_after_setup" then
+            part = "audio-separator is missing after setup"
+        elseif lower == "backend_runtime_install_failed" then
+            part = "GPU backend runtime install failed; CPU fallback used"
+        elseif lower == "backend_runtime_verify_failed" then
+            part = "GPU backend runtime verification failed; CPU fallback used"
+        elseif lower == "backend_install_failed" then
+            part = "Backend install failed; CPU fallback used"
+        elseif lower == "backend_force_cpu" then
+            part = "CPU fallback forced"
+        elseif lower == "bootstrap_timeout" then
+            part = "Bootstrap timed out"
+        elseif lower == "bootstrap_process_exited" then
+            part = "Bootstrap process exited unexpectedly"
+        elseif lower == "launch_failed" then
+            part = "Bootstrap launch failed"
+        elseif lower == "missing_bootstrap" then
+            part = "Bootstrap script is missing"
+        elseif lower == "windows_installer_only" then
+            part = "On Windows, setup is handled by the installer"
+        elseif lower == "postbootstrap_failed" then
+            part = "Post-bootstrap reporting step failed"
+        elseif lower == "runtime_write_test_failed" then
+            part = "Runtime directory write test failed"
+        elseif lower == "execution_policy_restricted" then
+            part = "PowerShell execution policy is restrictive for script execution"
+        end
+        local key = part:lower()
+        if key ~= "" and not seen[key] then
+            seen[key] = true
+            parts[#parts + 1] = part
+        end
+    end
+    return table.concat(parts, "; ")
+end
+
+local function prettyCheckError(err)
+    local lower = trim(err):lower()
+    if lower == "" then return "" end
+    if lower == "python_missing" then return "Python path is missing" end
+    if lower == "python_unsupported" then return "Python version is unsupported" end
+    if lower == "python_unusable" then return "Python executable is unusable" end
+    if lower == "ffmpeg_missing" then return "FFmpeg path is missing" end
+    if lower == "ffmpeg_unusable" then return "FFmpeg executable is unusable" end
+    if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
+    if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
+    return humanizeToken(err)
+end
+
+local function formatCheckErrors(errors)
+    local out = {}
+    local seen = {}
+    for _, e in ipairs(errors or {}) do
+        local label = prettyCheckError(e)
+        local key = label:lower()
+        if key ~= "" and not seen[key] then
+            seen[key] = true
+            out[#out + 1] = label
+        end
+    end
+    if #out == 0 then
+        return "none"
+    end
+    return table.concat(out, ", ")
+end
+
+local function extractLastLogLine(logLines)
+    for i = #(logLines or {}), 1, -1 do
+        local line = trim(logLines[i] or "")
+        if line ~= "" then
+            line = line:gsub("^STEMWERK_STATUS%s+detail=", "")
+            line = line:gsub("^STEMWERK_STATUS%s+", "")
+            if line ~= "" then
+                return line
+            end
+        end
+    end
+    return ""
 end
 
 local function prettyBackendReason(reason)
@@ -1016,11 +1159,16 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
         local state = parseStateFile(stateFile)
         local msg = finalMessage
         if not msg or msg == "" then
+            local tail = readTail(logFile, 24)
+            local lastLogLine = extractLastLogLine(tail)
             local lines = {
-                "Setup status: " .. tostring(state.STATUS or "unknown"),
+                "Setup status: " .. prettySetupStatus(state.STATUS or "unknown"),
             }
             if state.STATUS_REASON and state.STATUS_REASON ~= "" then
-                lines[#lines + 1] = "Reason: " .. tostring(state.STATUS_REASON)
+                lines[#lines + 1] = "Reason: " .. tostring(prettySetupReason(state.STATUS_REASON))
+            end
+            if lastLogLine ~= "" then
+                lines[#lines + 1] = "Last log line: " .. tostring(lastLogLine)
             end
             if state.PYTHON_PATH or state.VENV_PYTHON then
                 lines[#lines + 1] = "Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or "")
@@ -1046,8 +1194,10 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
     while running do
         local state = parseStateFile(stateFile)
         local lines = readTail(logFile, 16)
-        local stateLine = "Status: " .. (state.STATUS and tostring(state.STATUS) or "running")
-        local reasonLine = state.STATUS_REASON and ("Reason: " .. tostring(state.STATUS_REASON)) or ""
+        local lastLogLine = extractLastLogLine(lines)
+        local stateLine = "Status: " .. prettySetupStatus(state.STATUS and tostring(state.STATUS) or "running")
+        local reasonLine = state.STATUS_REASON and ("Reason: " .. tostring(prettySetupReason(state.STATUS_REASON))) or ""
+        local lastLogLabel = lastLogLine ~= "" and ("Last log line: " .. tostring(lastLogLine)) or ""
         local stepLine = formatStepStatus(state)
         local pythonLine = "Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or "")
         local ffmpegLine = "FFmpeg: " .. tostring(state.FFMPEG_PATH or "")
@@ -1073,6 +1223,10 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
         if stepLine ~= "" then
             gfx.y = gfx.y + 22
             gfx.drawstr(stepLine)
+        end
+        if lastLogLabel ~= "" then
+            gfx.y = gfx.y + 22
+            gfx.drawstr(lastLogLabel)
         end
         gfx.y = gfx.y + 26
         gfx.drawstr(pythonLine)
@@ -1255,6 +1409,7 @@ local WINDOWS_SETUP = nil
 
 local function windowsDrawStatus(state, logLines, pidAlive, pid)
     local w, h = gfx.w, gfx.h
+    local lastLogLine = extractLastLogLine(logLines or {})
     gfx.set(0, 0, 0, 1)
     gfx.rect(0, 0, w, h, 1)
     gfx.set(1, 1, 1, 1)
@@ -1274,7 +1429,7 @@ local function windowsDrawStatus(state, logLines, pidAlive, pid)
     gfx.drawstr("Phase: " .. ((state.STATUS == "running" or state.STATUS == "" or not state.STATUS) and "Bootstrapping" or "Finalizing"))
     y = y + 22
 
-    local statusLine = "Status: " .. tostring(state.STATUS or "running")
+    local statusLine = "Status: " .. tostring(prettySetupStatus(state.STATUS or "running"))
     gfx.x = 18
     gfx.y = y
     gfx.drawstr(statusLine)
@@ -1282,7 +1437,13 @@ local function windowsDrawStatus(state, logLines, pidAlive, pid)
     if state.STATUS_REASON and state.STATUS_REASON ~= "" then
         gfx.x = 18
         gfx.y = y
-        gfx.drawstr("Reason: " .. tostring(state.STATUS_REASON))
+        gfx.drawstr("Reason: " .. tostring(prettySetupReason(state.STATUS_REASON)))
+        y = y + 20
+    end
+    if lastLogLine ~= "" then
+        gfx.x = 18
+        gfx.y = y
+        gfx.drawstr("Last log: " .. tostring(lastLogLine))
         y = y + 20
     end
 
@@ -1778,12 +1939,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
 
     finalMessage[#finalMessage + 1] = "Setup was not completely successful."
     finalMessage[#finalMessage + 1] = ""
-    finalMessage[#finalMessage + 1] = "Status: " .. tostring(state.STATUS or "unknown")
+    finalMessage[#finalMessage + 1] = "Status: " .. tostring(prettySetupStatus(state.STATUS or "unknown"))
     if state.STATUS_REASON and state.STATUS_REASON ~= "" then
-        finalMessage[#finalMessage + 1] = "Reason: " .. tostring(state.STATUS_REASON)
+        finalMessage[#finalMessage + 1] = "Reason: " .. tostring(prettySetupReason(state.STATUS_REASON))
     end
     finalMessage[#finalMessage + 1] = "Failure: " .. failureClass
-    finalMessage[#finalMessage + 1] = "Checks: " .. ( (#errors > 0) and table.concat(errors, ", ") or "none")
+    finalMessage[#finalMessage + 1] = "Checks: " .. formatCheckErrors(errors)
     finalMessage[#finalMessage + 1] = ""
     finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)
     finalMessage[#finalMessage + 1] = "FFmpeg path: " .. tostring(verification.ffmpegPath)
@@ -1827,8 +1988,8 @@ safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSucces
         finalMessage = {
             "Setup was not completely successful.",
             "",
-            "Status: " .. tostring(state.STATUS or "unknown"),
-            "Reason: postbootstrap_failed",
+            "Status: " .. tostring(prettySetupStatus(state.STATUS or "unknown")),
+            "Reason: " .. tostring(prettySetupReason("postbootstrap_failed")),
             "",
             "An internal setup reporting step failed.",
             "Please run STEMwerk-SETUP.lua again.",
@@ -1866,9 +2027,9 @@ end
 local function summarizeInstallerState(state)
     local lines = {}
     if state and next(state) ~= nil then
-        lines[#lines + 1] = "Installer status: " .. tostring(state.STATUS or "unknown")
+        lines[#lines + 1] = "Installer status: " .. tostring(prettySetupStatus(state.STATUS or "unknown"))
         if state.STATUS_REASON and state.STATUS_REASON ~= "" then
-            lines[#lines + 1] = "Installer reason: " .. tostring(state.STATUS_REASON)
+            lines[#lines + 1] = "Installer reason: " .. tostring(prettySetupReason(state.STATUS_REASON))
         end
         if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
             lines[#lines + 1] = "Python: " .. tostring(state.PYTHON_PATH)
@@ -2501,7 +2662,7 @@ local function normalizeLinuxUiState(state, pidAlive)
     return out
 end
 
-local function buildLinuxStatusRows(state, pidAlive, pid)
+local function buildLinuxStatusRows(state, pidAlive, pid, lastLogLine)
     local rows = {}
     local stepLine = formatStepStatus(state)
     local note = prettyBackendNote(state.BACKEND_NOTE or "")
@@ -2513,9 +2674,12 @@ local function buildLinuxStatusRows(state, pidAlive, pid)
     }
     rows[#rows + 1] = {
         label = "Status",
-        value = tostring(state.STATUS or "running") .. ((LINUX_SETUP and LINUX_SETUP.spinner) and (" [" .. LINUX_SETUP.spinner .. "]") or ""),
+        value = prettySetupStatus(state.STATUS or "running") .. ((LINUX_SETUP and LINUX_SETUP.spinner) and (" [" .. LINUX_SETUP.spinner .. "]") or ""),
         kind = (trim(state.STATUS or "") == "ok") and "status_ok" or "muted",
     }
+    if trim(state.STATUS_REASON or "") ~= "" then
+        rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted" }
+    end
     if stepLine ~= "" then
         rows[#rows + 1] = { label = "Step", value = stepLine:gsub("^Step%s*", ""), kind = "muted" }
     end
@@ -2527,6 +2691,9 @@ local function buildLinuxStatusRows(state, pidAlive, pid)
     end
     rows[#rows + 1] = { label = "Python", value = resolveLinuxPythonPath(state), kind = "python_path" }
     rows[#rows + 1] = { label = "FFmpeg", value = resolveLinuxFfmpegPath(state), kind = "ffmpeg_path" }
+    if trim(lastLogLine or "") ~= "" then
+        rows[#rows + 1] = { label = "Last Log", value = tostring(lastLogLine), kind = "muted" }
+    end
     rows[#rows + 1] = { label = "PID", value = tostring(pid or "") .. " (alive: " .. tostring(pidAlive) .. ")", kind = "muted" }
     rows[#rows + 1] = { label = "Log", value = tostring(LINUX_SETUP and LINUX_SETUP.logFile or ""), kind = "log_path" }
     if note ~= "" then
@@ -2579,12 +2746,13 @@ local function drawLinuxLogPanel(logX, logY, logW, logH, logLines, footerText)
 
     local logInnerPad = 14
     local scrollbarW = 24
-    local logBodyY = logHeaderY + linuxLineHeight(22)
-    local footerH = linuxLineHeight(28)
-    local logBodyH = logH - (logBodyY - logY) - footerH - logInnerPad
+    local logBodyY = logHeaderY + 22
+    local footerH = 28
+    local availableBodyH = logH - (logBodyY - logY) - footerH - logInnerPad
+    local logBodyH = math.max(80, availableBodyH)
     local logTextX = logX + logInnerPad
     local logTextY = logBodyY
-    local logTextW = logW - (logInnerPad * 2) - scrollbarW - 8
+    local logTextW = math.max(120, logW - (logInnerPad * 2) - scrollbarW - 8)
     local logLineH = linuxLineHeight(14)
     local wrapWidth = linuxWrapWidth(132)
     local displayLines = buildLinuxLogDisplayLines(logLines, wrapWidth)
@@ -2834,46 +3002,91 @@ end
 local function linuxCurrentStep(state)
     local idx = tonumber(trim(state.STEP_INDEX or ""))
     if idx and idx >= 1 and idx <= 4 then
+        if LINUX_SETUP and LINUX_SETUP.lastStepIndex and idx < LINUX_SETUP.lastStepIndex then
+            return LINUX_SETUP.lastStepIndex
+        end
+        if LINUX_SETUP then
+            LINUX_SETUP.lastStepIndex = idx
+        end
         return idx
     end
     if trim(state.STATUS or "") == "ok" then
+        if LINUX_SETUP then
+            LINUX_SETUP.lastStepIndex = 4
+        end
         return 4
+    end
+    if LINUX_SETUP and LINUX_SETUP.lastStepIndex and LINUX_SETUP.lastStepIndex >= 1 then
+        return LINUX_SETUP.lastStepIndex
     end
     return 1
 end
 
 local function linuxActiveStepFill(state, logLines)
     if trim(state.STATUS or "") == "ok" then
+        if LINUX_SETUP then
+            LINUX_SETUP.stepFillByIndex = LINUX_SETUP.stepFillByIndex or {}
+            LINUX_SETUP.stepFillByIndex[4] = 1
+        end
         return 1
     end
-
+    local stepIndex = linuxCurrentStep(state)
+    local stepFillByIndex = nil
+    local cachedFill = 0.08
+    if LINUX_SETUP then
+        LINUX_SETUP.stepFillByIndex = LINUX_SETUP.stepFillByIndex or {}
+        stepFillByIndex = LINUX_SETUP.stepFillByIndex
+        cachedFill = tonumber(stepFillByIndex[stepIndex] or 0.08) or 0.08
+        for s = 1, stepIndex - 1 do
+            stepFillByIndex[s] = 1
+        end
+    end
     for i = #logLines, 1, -1 do
         local line = tostring(logLines[i] or "")
         local pct = tonumber(line:match("(%d+)%%"))
         if pct and pct >= 0 and pct <= 100 then
-            return clamp(pct / 100, 0.08, 1.0)
+            local fill = math.max(cachedFill, clamp(pct / 100, 0.08, 1.0))
+            if stepFillByIndex then
+                stepFillByIndex[stepIndex] = fill
+            end
+            return fill
         end
         local current, total = line:match("([%d%.]+)%s*/%s*([%d%.]+)%s*GB")
         current = tonumber(current)
         total = tonumber(total)
         if current and total and total > 0 then
-            return clamp(current / total, 0.08, 1.0)
+            local fill = math.max(cachedFill, clamp(current / total, 0.08, 1.0))
+            if stepFillByIndex then
+                stepFillByIndex[stepIndex] = fill
+            end
+            return fill
         end
     end
-
-    local pulse = (((LINUX_SETUP and LINUX_SETUP.spinnerIndex) or 1) - 1) % 6
-    return 0.18 + (pulse / 5) * 0.62
+    local creepFill = clamp(cachedFill + 0.006, 0.08, 0.92)
+    if stepFillByIndex then
+        stepFillByIndex[stepIndex] = creepFill
+    end
+    return creepFill
 end
 
 local function linuxProgressPercent(state, logLines)
     if trim(state.STATUS or "") == "ok" then
+        if LINUX_SETUP then
+            LINUX_SETUP.lastProgressPct = 100
+        end
         return 100, 1
     end
     local idx = linuxCurrentStep(state)
     local activeFill = linuxActiveStepFill(state, logLines or {})
     local segment = 100 / 4
     local completed = (idx - 1) * segment
-    return math.floor(completed + (activeFill * segment) + 0.5), activeFill
+    local pct = completed + (activeFill * segment)
+    if LINUX_SETUP then
+        local prev = tonumber(LINUX_SETUP.lastProgressPct or 0) or 0
+        pct = math.max(prev, pct)
+        LINUX_SETUP.lastProgressPct = pct
+    end
+    return math.floor(pct + 0.5), activeFill
 end
 
 local function linuxStageColor(stepIndex)
@@ -2949,6 +3162,7 @@ end
 
 local function linuxDrawStatus(state, logLines, pidAlive, pid)
     local uiState = normalizeLinuxUiState(state, pidAlive)
+    local lastLogLine = extractLastLogLine(logLines or {})
     local w, h = gfx.w, gfx.h
     gfx.set(0.03, 0.03, 0.04, 1)
     gfx.rect(0, 0, w, h, 1)
@@ -2967,7 +3181,7 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
         "STEMwerk is preparing the runtime, creating the Python environment, checking FFmpeg, and finalizing the runtime.",
         "",
     }
-    local infoRows = buildLinuxStatusRows(uiState, pidAlive, pid)
+    local infoRows = buildLinuxStatusRows(uiState, pidAlive, pid, lastLogLine)
     local infoHeaderH = linuxLineHeight(24)
     local infoBodyLineH = linuxLineHeight(18)
     local infoRowGap = linuxLineHeight(3)
@@ -3020,7 +3234,7 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
     gfx.rect(progressX, progressY, progressW, progressH, 0)
     gfx.set(pr, pg, pb, 1)
     gfx.rect(progressX, progressY, math.floor(progressW * (progressPct / 100)), progressH, 1)
-    drawLinuxLogPanel(logX, logY, logW, logH, logLines, "Console wheel scrolls. Wheel outside console zooms text. Use +/- or 0 for text size.")
+    drawLinuxLogPanel(logX, logY, logW, logH, logLines, "Console wheel scrolls. Ctrl+wheel outside console zooms text. Use +/- or 0 for text size.")
 end
 
 local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
@@ -3104,7 +3318,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.set(pr, pg, pb, 1)
     gfx.rect(progressX, progressY, math.floor(progressW * (progressPct / 100)), progressH, 1)
 
-    drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "Console wheel scrolls. Wheel outside console zooms text. Use +/- or 0 for text size.")
+    drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "Console wheel scrolls. Ctrl+wheel outside console zooms text. Use +/- or 0 for text size.")
 
     local btnW = math.floor((infoW - 28 - (12 * 3)) / 4)
     local btnX = outerPad + 14
@@ -3128,7 +3342,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
 
     gfx.setfont(1, "Arial", linuxFontSize(12))
     gfx.set(0.70, 0.70, 0.72, 1)
-    local footerText = string.format("Press Esc or close this window to continue.  Text %.0f%%  Mouse wheel / +/- / 0", ((LINUX_SETUP and LINUX_SETUP.fontScale) or 1.0) * 100)
+    local footerText = string.format("Press Esc or close this window to continue.  Text %.0f%%  Ctrl+wheel / +/- / 0", ((LINUX_SETUP and LINUX_SETUP.fontScale) or 1.0) * 100)
     local footerW = gfx.measurestr(footerText)
     gfx.x = outerPad + infoW - 14 - footerW
     gfx.y = footerY + 8
@@ -3166,10 +3380,13 @@ local function linuxSetupTick()
         if LINUX_SETUP.logRect and isMouseIn(LINUX_SETUP.logRect.x, LINUX_SETUP.logRect.y, LINUX_SETUP.logRect.w, LINUX_SETUP.logRect.h) then
             adjustLinuxLogScroll(wheelStep, LINUX_SETUP.totalLogLines or 0, LINUX_SETUP.visibleLogLines or 1)
         else
-            if wheel > lastWheel then
-                adjustLinuxSetupFontScale(LINUX_SETUP_FONT_SCALE_STEP)
-            else
-                adjustLinuxSetupFontScale(-LINUX_SETUP_FONT_SCALE_STEP)
+            local ctrlHeld = ((gfx.mouse_cap or 0) & 4) == 4
+            if ctrlHeld then
+                if wheel > lastWheel then
+                    adjustLinuxSetupFontScale(LINUX_SETUP_FONT_SCALE_STEP)
+                else
+                    adjustLinuxSetupFontScale(-LINUX_SETUP_FONT_SCALE_STEP)
+                end
             end
         end
         LINUX_SETUP.lastMouseWheel = wheel
@@ -3369,6 +3586,9 @@ local function startLinuxSetup(runtime, separatorScript)
         lastMouseWheel = gfx.mouse_wheel or 0,
         fontScale = getLinuxSetupFontScale(),
         logScroll = 0,
+        stepFillByIndex = {},
+        lastStepIndex = 1,
+        lastProgressPct = 0,
         geometryRestored = false,
         windowGeometry = captureLinuxWindowGeometry(),
     }
