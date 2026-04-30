@@ -273,6 +273,11 @@ class StemSeparator:
                 separator.torch_device_dml = separator.torch_device
             except Exception as exc:
                 warnings.warn(f"Failed to force DirectML device: {exc}")
+        elif effective_device_id == "cpu":
+            try:
+                separator.torch_device = torch.device("cpu")
+            except Exception:
+                pass
 
         self._emit_progress(1.0, f"Initializing [{effective_device_name}]")
 

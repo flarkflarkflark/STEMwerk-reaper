@@ -70,14 +70,12 @@ local function findFfmpeg()
         table.insert(runtimeCandidates, runtimeBase .. "/ffmpeg/bin/ffmpeg")
     end
 
-    if OS == "Windows" then
     local candidates = {}
     for _, p in ipairs(runtimeCandidates) do
         table.insert(candidates, p)
     end
 
     if OS == "Windows" then
-        local appdata = os.getenv("LOCALAPPDATA") or ""
         local programFiles = os.getenv("ProgramFiles") or "C:\\Program Files"
         table.insert(candidates, programFiles .. "\\ffmpeg\\bin\\ffmpeg.exe")
         table.insert(candidates, "C:\\ffmpeg\\bin\\ffmpeg.exe")

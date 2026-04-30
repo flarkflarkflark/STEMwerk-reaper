@@ -630,6 +630,9 @@ function InstallAudioRuntimeDependencies([string]$PythonPath, [string]$BackendNa
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
     $deps = GetAudioRuntimeDependencyList $BackendName
     $args = @("--upgrade")
+    if ($BackendName -eq "cuda" -and -not (HasBundledWheels)) {
+        $args += @("--extra-index-url", $pytorchCudaIndex)
+    }
     $args += GetAudioConstraints $BackendName
     $args += $deps
     LogProgress "Installing curated audio runtime dependencies"
