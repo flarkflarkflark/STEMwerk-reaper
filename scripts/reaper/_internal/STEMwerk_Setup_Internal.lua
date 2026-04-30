@@ -39,6 +39,49 @@ end
 local OS = getOS()
 local PATH_SEP = OS == "Windows" and "\\" or "/"
 
+local function setupPlatformLabel()
+    if OS == "Windows" then return "Windows" end
+    if OS == "macOS" then return "macOS" end
+    return "Linux"
+end
+
+local function readSetupScriptVersion()
+    local info = debug.getinfo(1, "S")
+    local source = (info and info.source) or ""
+    local path = source:match("^@(.*)$")
+    if not path or path == "" then
+        return ""
+    end
+    local f = io.open(path, "r")
+    if not f then
+        return ""
+    end
+    for _ = 1, 40 do
+        local line = f:read("*l")
+        if not line then break end
+        local version = line:match("^%-%-%s*@version%s+([%w%._%-]+)")
+        if version and version ~= "" then
+            f:close()
+            return version
+        end
+    end
+    f:close()
+    return ""
+end
+
+local SETUP_VERSION = readSetupScriptVersion()
+
+local function setupWindowTitle(platformLabel)
+    local title = "STEMwerk Setup"
+    if platformLabel and platformLabel ~= "" then
+        title = title .. " [" .. tostring(platformLabel) .. "]"
+    end
+    if SETUP_VERSION ~= "" then
+        title = title .. " (v" .. SETUP_VERSION .. ")"
+    end
+    return title
+end
+
 local function getScriptDir()
     local info = debug.getinfo(1, "S")
     return (info and info.source and info.source:match("@?(.*[/\\])")) or ""
@@ -1190,7 +1233,7 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
     local idx = 1
     local shownMessage
 
-    gfx.init("STEMwerk Setup", w, h, 0, 150, 120)
+    gfx.init(setupWindowTitle(setupPlatformLabel()), w, h, 0, 150, 120)
     while running do
         local state = parseStateFile(stateFile)
         local lines = readTail(logFile, 16)
@@ -2374,7 +2417,7 @@ end
 local function windowsVerifyStart(runtime, separatorScript)
     ensureDir(runtime.runtimeState)
     ensureDir(runtime.runtimeLogs)
-    gfx.init("STEMwerk Setup [Windows]", 900, 620, 0, 140, 100)
+    gfx.init(setupWindowTitle("Windows"), 900, 620, 0, 140, 100)
     WINDOWS_VERIFY = {
         runtime = runtime,
         separatorScript = separatorScript,
@@ -2821,7 +2864,7 @@ local function showStyledIntroDialog(runtime)
         { label = "STEMwerk venv", color = { 100 / 255, 1.0, 100 / 255 } },
     }
     local runtimeBase = tostring(runtime and runtime.base or "")
-    gfx.init("STEMwerk Setup", winW, winH, 0, winX, winY)
+    gfx.init(setupWindowTitle(setupUiLabel()), winW, winH, 0, winX, winY)
 
     while true do
         local w, h = gfx.w, gfx.h
@@ -3101,8 +3144,7 @@ local function linuxStageColor(stepIndex)
 end
 
 local function setupUiLabel()
-    if OS == "macOS" then return "macOS" end
-    return "Linux"
+    return setupPlatformLabel()
 end
 
 local function drawLinuxStepLegend(x, y, w, state, logLines)
@@ -3563,7 +3605,7 @@ local function startLinuxSetup(runtime, separatorScript)
     if not launchPending then
         exec(cmd, 20000)
     end
-    gfx.init("STEMwerk Setup [" .. setupUiLabel() .. "]", 1240, 860, 0, 120, 80)
+    gfx.init(setupWindowTitle(setupUiLabel()), 1240, 860, 0, 120, 80)
     LINUX_SETUP = {
         runtime = runtime,
         separatorScript = separatorScript,
