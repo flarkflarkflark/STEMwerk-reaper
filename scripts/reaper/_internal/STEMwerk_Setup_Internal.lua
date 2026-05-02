@@ -260,6 +260,18 @@ fileExists = function(path)
     return false
 end
 
+local function pathExists(path)
+    if not path or path == "" then return false end
+    local ok = os.rename(path, path)
+    if ok then return true end
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
+
 local function ensureDir(path)
     if not path or path == "" then return false end
     local quoted = quoteArg(path)
@@ -335,6 +347,39 @@ local function getRuntimePaths()
         venvDir = venvDir,
         venvPython = OS == "Windows" and (venvDir .. "\\Scripts\\python.exe") or (venvDir .. "/bin/python"),
     }
+end
+
+local function getModelCacheDir()
+    local home = getHome()
+    if OS == "Windows" then
+        local localAppData = os.getenv("LOCALAPPDATA") or ""
+        if localAppData ~= "" then
+            return localAppData .. "\\STEMwerk\\models"
+        end
+        return home .. "\\AppData\\Local\\STEMwerk\\models"
+    elseif OS == "macOS" then
+        return home .. "/Library/Application Support/STEMwerk/models"
+    else
+        local xdg = os.getenv("XDG_DATA_HOME") or ""
+        if xdg ~= "" then
+            return xdg .. "/STEMwerk/models"
+        end
+        return home .. "/.local/share/STEMwerk/models"
+    end
+end
+
+local function runtimeLooksPresent(runtime)
+    if not runtime or not runtime.base or runtime.base == "" then return false end
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local modelDir = getModelCacheDir()
+    return fileExists(runtime.venvPython)
+        or pathExists(runtime.venvDir)
+        or fileExists(stateFile)
+        or fileExists(capFile)
+        or pathExists(modelDir)
+        or getExt("pythonPath") ~= ""
+        or getExt("ffmpegPath") ~= ""
 end
 
 local function parseStateFile(path)
@@ -3541,7 +3586,280 @@ local function linuxSetupTick()
     reaper.defer(linuxSetupTick)
 end
 
-local function startLinuxSetup(runtime, separatorScript)
+local function appendSetupLog(runtime, line, replace)
+    if not runtime or not runtime.runtimeLogs then return end
+    ensureDir(runtime.runtimeLogs)
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local mode = replace and "w" or "a"
+    local f = io.open(logFile, mode)
+    if not f then return end
+    f:write(tostring(line or "") .. "\n")
+    f:close()
+end
+
+local function removeDirRecursive(path)
+    if not path or path == "" or OS == "Windows" then return false end
+    local cmd = "rm -rf " .. quoteArg(path)
+    local rc = select(1, exec(cmd, 120000))
+    return rc == 0
+end
+
+local function clearTransientSetupState(runtime)
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
+    os.remove(stateFile)
+    os.remove(capFile)
+    os.remove(pidFile)
+    if guardPath and guardPath ~= "" then
+        os.remove(guardPath)
+    end
+end
+
+-- Verify-only path: fast file-existence checks only, no subprocess, no package import,
+-- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
+-- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
+local function verifyExistingSetup(runtime, separatorScript)
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    ensureDir(runtime.runtimeState)
+    ensureDir(runtime.runtimeLogs)
+    appendSetupLog(runtime, "Verify-only run (" .. setupUiLabel() .. ")", not fileExists(logFile))
+    appendSetupLog(runtime, "Mode: verify-only (file checks, no subprocess, no package import)", false)
+    appendSetupLog(runtime, "Models kept: " .. getModelCacheDir(), false)
+
+    local state = parseStateFile(stateFile)
+    local pythonPath = resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or "")
+    local ffmpegPath = resolvePath(state.FFMPEG_PATH or "")
+    local stateStatus = state.STATUS or ""
+    local stateOk = fileExists(stateFile) and state and next(state) ~= nil
+        and (stateStatus == "ok" or stateStatus == "")
+
+    local checks = {
+        { label = "bootstrap.env",       ok = stateOk,
+          detail = fileExists(stateFile) and ("Status: " .. tostring(stateStatus ~= "" and stateStatus or "ok")) or "Not found" },
+        { label = "capabilities.env",    ok = fileExists(capFile),
+          detail = fileExists(capFile) and capFile or "Not found" },
+        { label = "Python path",         ok = pythonPath ~= "" and fileExists(pythonPath),
+          detail = pythonPath ~= "" and pythonPath or "Not set in bootstrap.env" },
+        { label = "FFmpeg path",         ok = ffmpegPath ~= "" and fileExists(ffmpegPath),
+          detail = ffmpegPath ~= "" and ffmpegPath or "Not set in bootstrap.env" },
+        { label = "Virtual environment", ok = pathExists(runtime.venvDir),
+          detail = pathExists(runtime.venvDir) and runtime.venvDir or ("Not found: " .. tostring(runtime.venvDir)) },
+    }
+    local allOk = true
+    for _, c in ipairs(checks) do
+        appendSetupLog(runtime, (c.ok and "  OK: " or "FAIL: ") .. c.label .. ": " .. tostring(c.detail), false)
+        if not c.ok then allOk = false end
+    end
+    appendSetupLog(runtime, "Result: " .. (allOk and "OK (file checks passed)" or "FAIL (needs repair)"), false)
+    appendSetupLog(runtime, "Note: imports (torch, audio_separator) not checked; run Repair if separation fails.", false)
+
+    if runtime.base and runtime.base ~= "" then
+        updateBootstrapEnv(stateFile, { RUNTIME_BASE = runtime.base })
+    end
+
+    local finalMessage = {}
+    if allOk then
+        finalMessage[#finalMessage + 1] = "Verify only: file checks passed."
+        finalMessage[#finalMessage + 1] = "(Lightweight check only — imports and devices not verified)"
+    else
+        finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
+        finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
+    end
+    finalMessage[#finalMessage + 1] = ""
+    for _, c in ipairs(checks) do
+        finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
+    end
+    finalMessage[#finalMessage + 1] = ""
+    finalMessage[#finalMessage + 1] = "Log: " .. tostring(logFile)
+
+    if not gfx then
+        msgBox("STEMwerk Setup", table.concat(finalMessage, "\n"), allOk and 0 or 16)
+        return
+    end
+
+    gfx.init(setupWindowTitle(setupUiLabel()), 1240, 860, 0, 120, 80)
+    LINUX_SETUP = {
+        runtime         = runtime,
+        mode            = "verify",
+        separatorScript = separatorScript,
+        stateFile       = stateFile,
+        logFile         = logFile,
+        pidFile         = pidFile,
+        capFile         = capFile,
+        helpFile        = (OS == "Linux") and (RAW_SCRIPT_DIR .. "STEMwerk_Linux_Setup_Guide.txt")
+                          or "https://www.reaper.fm/userguide.php",
+        launchCmd       = nil,
+        launchPending   = false,
+        spinnerIndex    = 1,
+        finalized       = true,
+        finalMessage    = finalMessage,
+        finalSuccess    = allOk,
+        summaryText     = table.concat(finalMessage, "\n"),
+        pidSeen         = false,
+        startedAt       = os.time(),
+        lastMouseCap    = 0,
+        lastMouseWheel  = gfx.mouse_wheel or 0,
+        fontScale       = getLinuxSetupFontScale(),
+        logScroll       = 0,
+        stepFillByIndex = {},
+        lastStepIndex   = 4,
+        lastProgressPct = 100,
+        geometryRestored = false,
+        windowGeometry  = captureLinuxWindowGeometry(),
+    }
+    reaper.defer(linuxSetupTick)
+end
+
+-- Custom gfx modal for Linux/macOS existing-runtime setup mode selection.
+-- Returns: "verify" | "repair" | "rebuild-venv" | "cancel"
+-- Esc and window-close always return "cancel". No option removes models.
+local function showExistingRuntimeSetupMenu(runtime)
+    local winW, winH = 900, 460
+    local winX, winY = 160, 110
+    local mouseWasDown = false
+    local modelDir = getModelCacheDir()
+    local choices = {
+        { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
+        { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
+        { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
+        { id = "cancel",       label = "Cancel",        sub = "Exit without changes",              accent = { 0.38, 0.38, 0.42 } },
+    }
+    gfx.init(setupWindowTitle(setupUiLabel()), winW, winH, 0, winX, winY)
+    while true do
+        local w, h = gfx.w, gfx.h
+        local outerPad = 18
+        local panelX = outerPad
+        local panelY = 22
+        local panelW = w - outerPad * 2
+        local panelH = h - outerPad * 2 - 6
+        local bodyX = panelX + 18
+        local bodyY = panelY + 18
+        local bodyW = panelW - 36
+
+        -- Background + orange header bar
+        gfx.set(0.03, 0.03, 0.04, 1)
+        gfx.rect(0, 0, w, h, 1)
+        gfx.set(0.97, 0.55, 0.05, 1)
+        gfx.rect(0, 0, w, math.max(8, linuxLineHeight(8)), 1)
+        drawLinuxPanel(panelX, panelY, panelW, panelH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.29, 1 })
+
+        -- Buttons anchored to panel bottom
+        local btnH = math.max(56, linuxLineHeight(54))
+        local btnGap = 12
+        local btnW = math.floor((bodyW - btnGap * (#choices - 1)) / #choices)
+        local btnY = panelY + panelH - btnH - 18
+
+        for i, c in ipairs(choices) do
+            local bx = bodyX + (i - 1) * (btnW + btnGap)
+            local hot = isMouseIn(bx, btnY, btnW, btnH)
+            local acc = c.accent
+            local dim = hot and 1.0 or 0.80
+            gfx.set(acc[1] * dim, acc[2] * dim, acc[3] * dim, 1)
+            gfx.rect(bx, btnY, btnW, btnH, 1)
+            gfx.set(acc[1], acc[2], acc[3], hot and 1.0 or 0.60)
+            gfx.rect(bx, btnY, btnW, btnH, 0)
+            -- Label
+            gfx.setfont(1, "Arial Bold", linuxFontSize(14))
+            gfx.set(1, 1, 1, 1)
+            local lw = gfx.measurestr(c.label)
+            gfx.x = bx + math.floor((btnW - lw) / 2)
+            gfx.y = btnY + math.max(6, math.floor(btnH / 2) - linuxFontSize(14))
+            gfx.drawstr(c.label)
+            -- Subtitle
+            gfx.setfont(1, "Arial", linuxFontSize(10))
+            gfx.set(1, 1, 1, hot and 0.90 or 0.60)
+            local sw = gfx.measurestr(c.sub)
+            gfx.x = bx + math.floor((btnW - sw) / 2)
+            gfx.y = btnY + math.floor(btnH / 2) + 4
+            gfx.drawstr(c.sub)
+        end
+
+        -- Keyboard hint above buttons
+        gfx.setfont(1, "Arial", linuxFontSize(11))
+        gfx.set(0.40, 0.42, 0.46, 1)
+        gfx.x = bodyX
+        gfx.y = btnY - linuxLineHeight(20)
+        gfx.drawstr("Esc = cancel")
+
+        -- Content top-anchored
+        local y = bodyY
+        drawStemwerkInline(bodyX, y, linuxFontSize(22), "", "werk Setup [" .. setupUiLabel() .. "]")
+        y = y + linuxLineHeight(30)
+
+        gfx.setfont(1, "Arial Bold", linuxFontSize(14))
+        gfx.set(0.92, 0.92, 0.94, 1)
+        gfx.x = bodyX
+        gfx.y = y
+        gfx.drawstr("Existing runtime found. Choose what to do:")
+        y = y + linuxLineHeight(26)
+
+        local pathBoxH = linuxLineHeight(18) + linuxLineHeight(16) + 14
+        drawLinuxPanel(bodyX, y, bodyW, pathBoxH, { 0.06, 0.06, 0.07, 1 }, { 0.19, 0.19, 0.22, 1 })
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        gfx.set(0.55, 0.57, 0.62, 1)
+        gfx.x = bodyX + 14
+        gfx.y = y + 6
+        gfx.drawstr("Runtime:")
+        gfx.setfont(1, "Courier New", linuxFontSize(12))
+        gfx.set(0.86, 0.88, 0.92, 1)
+        gfx.x = bodyX + 14
+        gfx.y = y + 6 + linuxLineHeight(16)
+        gfx.drawstr(tostring(runtime.base))
+        y = y + pathBoxH + 10
+
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        gfx.set(0.55, 0.57, 0.62, 1)
+        gfx.x = bodyX
+        gfx.y = y
+        gfx.drawstr("Models: ")
+        local mlw = gfx.measurestr("Models: ")
+        gfx.set(0.80, 0.82, 0.86, 1)
+        gfx.x = bodyX + mlw
+        gfx.y = y
+        gfx.drawstr(tostring(modelDir))
+        y = y + linuxLineHeight(18)
+
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        gfx.set(0.38, 0.72, 0.46, 1)
+        gfx.x = bodyX
+        gfx.y = y
+        gfx.drawstr("Downloaded models will be kept in all modes.")
+
+        -- Input: keyboard
+        local ch = gfx.getchar()
+        if ch < 0 then
+            gfx.quit()
+            return "cancel"
+        end
+        if ch == 27 then
+            gfx.quit()
+            return "cancel"
+        end
+
+        -- Input: mouse (down-edge)
+        local mouseDown = (gfx.mouse_cap & 1) == 1
+        if mouseDown and not mouseWasDown then
+            for i, c in ipairs(choices) do
+                local bx = bodyX + (i - 1) * (btnW + btnGap)
+                if isMouseIn(bx, btnY, btnW, btnH) then
+                    gfx.quit()
+                    return c.id
+                end
+            end
+        end
+        mouseWasDown = mouseDown
+
+        gfx.update()
+    end
+end
+
+local function startLinuxSetup(runtime, separatorScript, mode)
+    mode = mode or "repair"
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
@@ -3550,18 +3868,30 @@ local function startLinuxSetup(runtime, separatorScript)
     ensureDir(runtime.runtimeState)
     ensureDir(runtime.runtimeLogs)
 
-    os.remove(stateFile)
-    os.remove(capFile)
-    os.remove(pidFile)
-    local lf = io.open(logFile, "w")
-    if lf then
-        lf:write("Setup run started (" .. setupUiLabel() .. ")\n")
-        lf:close()
+    clearTransientSetupState(runtime)
+    if mode == "rebuild-venv" then
+        appendSetupLog(runtime, "Setup run started (" .. setupUiLabel() .. ")", true)
+        appendSetupLog(runtime, "Mode: rebuild-venv", false)
+        appendSetupLog(runtime, "Keeping downloaded models: " .. getModelCacheDir(), false)
+        appendSetupLog(runtime, "Removing virtual environment: " .. runtime.venvDir, false)
+        if pathExists(runtime.venvDir) and not removeDirRecursive(runtime.venvDir) then
+            msgBox(
+                "STEMwerk Setup",
+                "Failed to remove existing virtual environment:\n\n" .. tostring(runtime.venvDir),
+                16
+            )
+            return
+        end
+    else
+        appendSetupLog(runtime, "Setup run started (" .. setupUiLabel() .. ")", true)
+        appendSetupLog(runtime, "Mode: repair", false)
+        appendSetupLog(runtime, "Keeping downloaded models: " .. getModelCacheDir(), false)
     end
     local sf = io.open(stateFile, "w")
     if sf then
         sf:write("STATUS=running\n")
         sf:write("STATUS_REASON=\n")
+        sf:write("MODE=" .. tostring(mode) .. "\n")
         sf:close()
     end
 
@@ -3585,6 +3915,7 @@ local function startLinuxSetup(runtime, separatorScript)
             .. " --runtime-base " .. quoteArg(runtime.base)
             .. " --state-file " .. quoteArg(stateFile)
             .. " --log-file " .. quoteArg(logFile)
+            .. " --mode " .. quoteArg(mode)
             .. " --pid-file " .. quoteArg(pidFile)
             .. " --bootstrap-script " .. quoteArg(scriptPath)
     else
@@ -3592,6 +3923,7 @@ local function startLinuxSetup(runtime, separatorScript)
             .. " --runtime-base " .. quoteArg(runtime.base)
             .. " --state-file " .. quoteArg(stateFile)
             .. " --log-file " .. quoteArg(logFile)
+            .. " --mode " .. quoteArg(mode)
             .. " </dev/null >" .. quoteArg(logFile) .. " 2>&1 & echo $! > " .. quoteArg(pidFile)
     end
 
@@ -3608,6 +3940,7 @@ local function startLinuxSetup(runtime, separatorScript)
     gfx.init(setupWindowTitle(setupUiLabel()), 1240, 860, 0, 120, 80)
     LINUX_SETUP = {
         runtime = runtime,
+        mode = mode,
         separatorScript = separatorScript,
         stateFile = stateFile,
         logFile = logFile,
@@ -3662,40 +3995,56 @@ end
 
 local function main()
     local runtime = getRuntimePaths()
+    local hasRuntime = runtimeLooksPresent(runtime)
     setExt("runtimeBase", runtime.base)
     local separatorScript = SCRIPT_DIR .. "audio_separator_process.py"
     if fileExists(separatorScript) then
         setExt("separatorScript", separatorScript)
     end
 
-    local intro =
-        "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
-        .. "STEMwerk will check and repair components if needed:\n\n"
-        .. "- Python runtime\n"
-        .. "- FFmpeg\n"
-        .. "- STEMwerk venv in:\n  " .. runtime.base .. "\n\n"
-        .. "This may download tools. Continue?"
-    local ok = (msgBox("STEMwerk Setup", intro, 4) == 6)
-    if not ok then return end
-
     if OS == "Windows" then
+        local intro =
+            "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
+            .. "On Windows, REAPER-side setup verifies the installed runtime and points you back to the installer if repair is needed.\n\n"
+            .. "Continue?"
+        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then return end
         windowsVerifyRepair(runtime, separatorScript)
         return
     end
 
-    if OS == "Linux" then
-        startLinuxSetup(runtime, separatorScript)
-        return
-    end
+    if OS == "Linux" or OS == "macOS" then
+        if hasRuntime then
+            local mode = showExistingRuntimeSetupMenu(runtime)
+            if mode == "cancel" or mode == nil then
+                return
+            elseif mode == "verify" then
+                verifyExistingSetup(runtime, separatorScript)
+                return
+            elseif mode == "repair" or mode == "rebuild-venv" then
+                startLinuxSetup(runtime, separatorScript, mode)
+                return
+            end
+        end
 
-    if OS == "macOS" then
-        local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
-        if skip then
-            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
-            showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+        local intro =
+            "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
+            .. "STEMwerk will prepare a runtime in:\n  " .. runtime.base .. "\n\n"
+            .. "Downloaded models will be kept in:\n  " .. getModelCacheDir() .. "\n\n"
+            .. "Continue with first-time setup?"
+        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then
             return
         end
-        startLinuxSetup(runtime, separatorScript)
+
+        if OS == "macOS" then
+            local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
+            if skip then
+                local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
+                showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+                return
+            end
+        end
+
+        startLinuxSetup(runtime, separatorScript, "repair")
         return
     end
 

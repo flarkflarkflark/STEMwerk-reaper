@@ -8,12 +8,14 @@ MACOS_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 RUNTIME_BASE=""
 STATE_FILE=""
 LOG_FILE=""
+MODE="repair"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --runtime-base) RUNTIME_BASE="$2"; shift 2 ;;
     --state-file) STATE_FILE="$2"; shift 2 ;;
     --log-file) LOG_FILE="$2"; shift 2 ;;
+    --mode) MODE="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -50,6 +52,10 @@ resolve_python_candidate() {
       esac
       ;;
   esac
+}
+
+model_cache_dir() {
+  printf "%s/Library/Application Support/STEMwerk/models\n" "${HOME:-/tmp}"
 }
 
 get_python_version() {
@@ -196,6 +202,14 @@ resolve_core_target() {
 if [ -z "${RUNTIME_BASE}" ]; then
   echo "Missing runtime base" >&2
   exit 1
+fi
+
+log "Bootstrap started"
+log "Requested mode: ${MODE}"
+log "Downloaded models are kept at: $(model_cache_dir)"
+if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
+  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
 fi
 
 mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
