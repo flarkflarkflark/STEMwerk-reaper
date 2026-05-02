@@ -8,6 +8,12 @@ Recommended sets:
 - strips_180x60: REAPER toolbar hiDPI/retina (same 3-state layout at 2x)
 - single/*: single-square icons (24, 30, 36, 48, 64) for manual/custom use
 
+Installation notes:
+- `STEMwerk_Setup_Toolbar.lua` installs REAPER-ready strip files into `Data/toolbar_icons/`.
+- Base icons are installed as `stemwerk_*.png`.
+- hiDPI copies are installed with the same names under `Data/toolbar_icons/150/` and `Data/toolbar_icons/200/`.
+- Legacy compatibility alias currently installed: `toolbar_6stem.png` for the All Stems action.
+
 Action-to-icon mapping:
 - STEMwerk: Main -> stemwerk_main
 - STEMwerk: Setup -> stemwerk_setup
