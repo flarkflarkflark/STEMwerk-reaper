@@ -3,7 +3,9 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
-MACOS_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
+MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
+MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
+MACOS_CONSTRAINTS_FILE=""
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -232,6 +234,14 @@ fi
 log "Bootstrap started"
 log "Requested mode: ${MODE}"
 log "Downloaded models are kept at: $(model_cache_dir)"
+MAC_ARCH="$(uname -m 2>/dev/null || echo unknown)"
+if [ "${MAC_ARCH}" = "x86_64" ]; then
+  MACOS_CONSTRAINTS_FILE="${MACOS_INTEL_CONSTRAINTS_FILE}"
+  log "Using macOS Intel constraints: ${MACOS_CONSTRAINTS_FILE}"
+else
+  MACOS_CONSTRAINTS_FILE="${MACOS_ARM_CONSTRAINTS_FILE}"
+  log "Using macOS Apple Silicon constraints: ${MACOS_CONSTRAINTS_FILE}"
+fi
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
   log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
   rm -rf "${RUNTIME_BASE}/.venv"
