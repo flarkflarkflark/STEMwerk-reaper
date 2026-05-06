@@ -12553,12 +12553,43 @@ local function drawProgressWindow()
     local py = barY + (barH - PS(14)) / 2
     drawProgressText(percentText, px, py, 1)
 
+    local footerElapsed = os.time() - (progressState.startTime or os.time())
+    local footerProcessedAudioDur = 0
+    if itemSubSelection and itemSubSelEnd and itemSubSelStart and itemSubSelEnd > itemSubSelStart then
+        footerProcessedAudioDur = itemSubSelEnd - itemSubSelStart
+    elseif itemLen and itemLen > 0 then
+        footerProcessedAudioDur = itemLen
+    end
+    local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
+    local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
+
     -- Stage text inside the main progress bar, like the multi-track job bars.
     local stageDisplay = normalizeProgressStage(progressState.stage or (T("starting") or "Starting..."))
-    local inlineStageText = tostring(stageDisplay or "")
+    local baseStageText = tostring(stageDisplay or "")
         :gsub("%s*%([^%)]*%)", "")
         :gsub("%s*%[[^%]]*%]", "")
         :gsub("%s+$", "")
+    local elapsedMins = math.floor(math.max(0, footerElapsed) / 60)
+    local elapsedSecs = math.max(0, footerElapsed) % 60
+    local elapsedText = string.format("%d:%02d", elapsedMins, elapsedSecs)
+    local stageStr = progressState.stage or ""
+    local barEta = stageStr:match("ETA%s+([%d]+:%s*%d+)")
+    if barEta then barEta = barEta:gsub("%s+", "") end
+    local richParts = { elapsedText }
+    if barEta and barEta ~= "" then
+        local etaLabel = T("eta_label") or "ETA:"
+        richParts[#richParts + 1] = tostring(etaLabel) .. " " .. tostring(barEta)
+    end
+    local inlineStageText = baseStageText
+    if inlineStageText == "" then
+        inlineStageText = T("processing_label") or "Processing"
+    end
+    if #richParts > 0 then
+        inlineStageText = inlineStageText .. " (" .. table.concat(richParts, " | ") .. ")"
+    end
+    if footerDeviceDetail and footerDeviceDetail ~= "" then
+        inlineStageText = inlineStageText .. " [" .. tostring(footerDeviceDetail) .. "]"
+    end
     if inlineStageText ~= "" then
         gfx.setfont(1, "Arial", PS(11))
         local stageTextW = math.max(PS(110), barW - PS(170))
@@ -12615,15 +12646,6 @@ local function drawProgressWindow()
             tooltipX, tooltipY = mx + PS(10), my + PS(15)
     end
 
-    local footerElapsed = os.time() - (progressState.startTime or os.time())
-    local footerProcessedAudioDur = 0
-    if itemSubSelection and itemSubSelEnd and itemSubSelStart and itemSubSelEnd > itemSubSelStart then
-        footerProcessedAudioDur = itemSubSelEnd - itemSubSelStart
-    elseif itemLen and itemLen > 0 then
-        footerProcessedAudioDur = itemLen
-    end
-    local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
-    local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
     local footerSummaryActive = (not progressState.showTerminal) and (
         footerRealtimeFactor > 0 or (footerDeviceDetail and footerDeviceDetail ~= "")
     )
