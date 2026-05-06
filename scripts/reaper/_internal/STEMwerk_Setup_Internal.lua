@@ -3529,10 +3529,19 @@ local function appendSetupLog(runtime, line, replace)
 end
 
 local function removeDirRecursive(path)
-    if not path or path == "" or OS == "Windows" then return false end
+    if not path or path == "" or OS == "Windows" then
+        return false, "unsupported_or_empty_path", -1, ""
+    end
     local cmd = "rm -rf " .. quoteArg(path)
-    local rc = select(1, exec(cmd, 120000))
-    return rc == 0
+    local rc, out = execCapture(cmd, 120000)
+    out = trim(out or "")
+    if rc == 0 and not pathExists(path) then
+        return true, nil, rc, out
+    end
+    if rc == 0 and pathExists(path) then
+        return false, "path_still_exists_after_delete", rc, out
+    end
+    return false, "rm_failed", rc, out
 end
 
 local function normalizePathForSafety(path)
@@ -4107,10 +4116,47 @@ local function startLinuxSetup(runtime, separatorScript, mode)
             )
             return
         end
-        if pathExists(runtime.venvDir) and not removeDirRecursive(runtime.venvDir) then
+        local venvExistsBefore = pathExists(runtime.venvDir)
+        appendSetupLog(runtime, "Rebuild-venv target exists before delete: " .. tostring(venvExistsBefore), false)
+        appendSetupLog(runtime, "Rebuild-venv canonical target: " .. tostring(venvCanon or "(unresolved)"), false)
+        appendSetupLog(runtime, "Rebuild-venv canonical expected: " .. tostring(expectedVenvCanon or "(unresolved)"), false)
+        if venvExistsBefore then
+            local okRemove, removeReason, removeRc, removeOut = removeDirRecursive(runtime.venvDir)
+            if not okRemove then
+                appendSetupLog(
+                    runtime,
+                    "Rebuild-venv delete failed: reason=" .. tostring(removeReason) .. " rc=" .. tostring(removeRc),
+                    false
+                )
+                if removeOut and removeOut ~= "" then
+                    appendSetupLog(runtime, "Rebuild-venv delete output: " .. tostring(removeOut), false)
+                end
+                appendDeleteAudit(
+                    "Rebuild-venv delete failed path=" .. tostring(runtime.venvDir)
+                        .. " reason=" .. tostring(removeReason)
+                        .. " rc=" .. tostring(removeRc)
+                )
+                msgBox(
+                    "STEMwerk Setup",
+                    "Could not remove the virtual environment.\n\n"
+                        .. "Target: " .. tostring(runtime.venvDir) .. "\n"
+                        .. "Reason: " .. tostring(removeReason or "delete_failed") .. "\n\n"
+                        .. "Close REAPER and try again, or remove this folder manually.\n\n"
+                        .. "Log: " .. tostring(logFile),
+                    16
+                )
+                return
+            end
+        end
+        if pathExists(runtime.venvDir) then
+            appendSetupLog(runtime, "Rebuild-venv delete failed: target still exists after delete attempt", false)
+            appendDeleteAudit("Rebuild-venv delete failed path still exists=" .. tostring(runtime.venvDir))
             msgBox(
                 "STEMwerk Setup",
-                "Failed to remove existing virtual environment:\n\n" .. tostring(runtime.venvDir),
+                "Could not remove the virtual environment.\n\n"
+                    .. "Target: " .. tostring(runtime.venvDir) .. "\n\n"
+                    .. "Close REAPER and try again, or remove this folder manually.\n\n"
+                    .. "Log: " .. tostring(logFile),
                 16
             )
             return
