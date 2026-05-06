@@ -368,6 +368,9 @@ local function getModelCacheDir()
     end
 end
 
+local setExt
+local getExt
+
 local function runtimeLooksPresent(runtime)
     if not runtime or not runtime.base or runtime.base == "" then return false end
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
@@ -396,13 +399,13 @@ local function parseStateFile(path)
     return data
 end
 
-local function setExt(key, value)
+setExt = function(key, value)
     if reaper and reaper.SetExtState then
         reaper.SetExtState(EXT_SECTION, key, tostring(value), true)
     end
 end
 
-local function getExt(key)
+getExt = function(key)
     if reaper and reaper.GetExtState then
         return tostring(reaper.GetExtState(EXT_SECTION, key) or "")
     end
