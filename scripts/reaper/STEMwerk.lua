@@ -6861,6 +6861,26 @@ local rememberDialogGeometryFromRect = WINDOW.rememberDialogGeometryFromRect
 local updateDialogPosFromGfx = WINDOW.updateDialogPosFromGfx
 captureWindowGeometry = WINDOW.captureWindowGeometry
 
+local function captureHelpWindowGeometry(currentTitle)
+    -- On macOS, prefer gfx/dock-based geometry capture. JS_Window rects can
+    -- disagree with gfx.init() expectations (client vs frame/origin mismatch),
+    -- which causes visible jumps when switching Main <-> Help.
+    if OS == "macOS" then
+        if captureWindowGeometry(currentTitle) then return true end
+        return captureWindowGeometry(WINDOW_ART_GALLERY)
+    end
+
+    if helpState.hwnd and reaper.JS_Window_GetRect then
+        local ok, left, top, right, bottom = reaper.JS_Window_GetRect(helpState.hwnd)
+        if ok then
+            return rememberDialogGeometryFromRect(left, top, right, bottom)
+        end
+    end
+
+    if captureWindowGeometry(currentTitle) then return true end
+    return captureWindowGeometry(WINDOW_ART_GALLERY)
+end
+
 -- Art Gallery window loop
 local function artGalleryLoop()
     -- Update window title based on current tab
@@ -6875,7 +6895,7 @@ local function artGalleryLoop()
     local currentTitle = tabTitles[helpState.currentTab] or "STEMwerk Help"
 
     -- Save window position/size continuously and update title
-    if reaper.JS_Window_GetRect then
+    if OS ~= "macOS" and reaper.JS_Window_GetRect then
         local hwnd = helpState.hwnd
         if (not hwnd) and reaper.JS_Window_Find then
             -- Title changes dynamically; find by current title first, then by stable prefix.
@@ -6898,20 +6918,7 @@ local function artGalleryLoop()
 
     local result = drawArtGallery()
     if result == "close" then
-        -- Remember any size/position changes made in the help window
-        local captured = false
-        if helpState.hwnd and reaper.JS_Window_GetRect then
-            local ok, left, top, right, bottom = reaper.JS_Window_GetRect(helpState.hwnd)
-            if ok then
-                rememberDialogGeometryFromRect(left, top, right, bottom)
-                captured = true
-            end
-        end
-        if (not captured) and (not lastDialogX or not lastDialogY) then
-            if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry(WINDOW_ART_GALLERY)
-            end
-        end
+        captureHelpWindowGeometry(currentTitle)
         -- Save settings before closing
         saveSettings()
         gfx.quit()
@@ -6938,20 +6945,7 @@ local function artGalleryLoop()
         return
     elseif result == "start" then
         -- Enter key pressed - close help and start STEMwerk
-        -- Remember any size/position changes made in the help window
-        local captured = false
-        if helpState.hwnd and reaper.JS_Window_GetRect then
-            local ok, left, top, right, bottom = reaper.JS_Window_GetRect(helpState.hwnd)
-            if ok then
-                rememberDialogGeometryFromRect(left, top, right, bottom)
-                captured = true
-            end
-        end
-        if (not captured) and (not lastDialogX or not lastDialogY) then
-            if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry(WINDOW_ART_GALLERY)
-            end
-        end
+        captureHelpWindowGeometry(currentTitle)
         saveSettings()
         gfx.quit()
         helpState.hwnd = nil
