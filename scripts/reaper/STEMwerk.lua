@@ -11168,7 +11168,7 @@ local function isSafeTempDir(path)
     return true
 end
 
-local function cleanupTempWorkDir(dir)
+local function cleanupTempWorkDir(dir, opts)
     if not dir or dir == "" then return end
     if SETTINGS and SETTINGS.keepTempFiles then
         debugLog("cleanupTempWorkDir: keepTempFiles enabled, skipping " .. tostring(dir))
@@ -11179,29 +11179,75 @@ local function cleanupTempWorkDir(dir)
         return
     end
 
-    if not (reaper and reaper.EnumerateFiles) then
-        local known = {"input.wav", "stdout.txt", "separation_log.txt", "done.txt", "pid.txt"}
-        for _, name in ipairs(known) do
-            os.remove(dir .. PATH_SEP .. name)
-        end
-        os.remove(dir .. PATH_SEP .. "input.wav.ffmpeg.log")
+    opts = opts or {}
+    local successOnly = opts.success == true
+    if not successOnly then
+        debugLog("cleanupTempWorkDir: skipping because run not marked successful for " .. tostring(dir))
         return
     end
 
-    local idx = 0
-    while true do
-        local f = reaper.EnumerateFiles(dir, idx)
-        if not f then break end
-        local lower = tostring(f):lower()
-        local full = dir .. PATH_SEP .. f
-        if lower == "input.wav" then
-            os.remove(full)
-        elseif lower:match("%.wav$") then
-            -- Keep outputs (stems)
-        else
-            os.remove(full)
+    local knownGeneratedStemWavs = {
+        ["vocals.wav"] = true,
+        ["vocal.wav"] = true,
+        ["drums.wav"] = true,
+        ["drum.wav"] = true,
+        ["bass.wav"] = true,
+        ["other.wav"] = true,
+        ["guitar.wav"] = true,
+        ["piano.wav"] = true,
+        ["instrumental.wav"] = true,
+        ["no_vocals.wav"] = true,
+        ["accompaniment.wav"] = true,
+    }
+
+    local keepByBasename = {}
+    local keepStemPaths = opts.keepStemPaths or {}
+    for _, p in pairs(keepStemPaths) do
+        local s = tostring(p or "")
+        if s ~= "" then
+            local base = s:match("([^/\\]+)$")
+            if base and base ~= "" then
+                keepByBasename[base:lower()] = true
+            end
         end
-        idx = idx + 1
+    end
+
+    local function isPathInsideDir(path, parentDir)
+        local nPath = normalizePath(path or "")
+        local nParent = normalizePath(parentDir or "")
+        if nPath == "" or nParent == "" then return false end
+        local nPathLower = nPath:lower()
+        local nParentLower = nParent:lower()
+        if nPathLower == nParentLower then return true end
+        local sep = PATH_SEP
+        local withSep = nParentLower
+        if withSep:sub(-1) ~= sep then
+            withSep = withSep .. sep
+        end
+        return nPathLower:sub(1, #withSep) == withSep
+    end
+
+    if reaper and reaper.EnumerateFiles then
+        local idx = 0
+        while true do
+            local f = reaper.EnumerateFiles(dir, idx)
+            if not f then break end
+            local lower = tostring(f):lower()
+            local full = dir .. PATH_SEP .. f
+            if knownGeneratedStemWavs[lower] and not keepByBasename[lower] and isPathInsideDir(full, dir) then
+                local ok = os.remove(full)
+                debugLog("cleanupTempWorkDir: removed unselected generated stem " .. tostring(full) .. " ok=" .. tostring(ok))
+            end
+            idx = idx + 1
+        end
+    end
+
+    local inputWav = dir .. PATH_SEP .. "input.wav"
+    if not (DEBUG and DEBUG.enabled) and isPathInsideDir(inputWav, dir) then
+        local ok = os.remove(inputWav)
+        if ok then
+            debugLog("cleanupTempWorkDir: removed input.wav " .. tostring(inputWav))
+        end
     end
 end
 
@@ -16552,6 +16598,8 @@ processAllStemsResult = function()
 
     for jobIdx, job in ipairs(multiTrackQueue.jobs) do
         debugLog("Job " .. jobIdx .. ": trackDir=" .. tostring(job.trackDir))
+        job.hadImportedStems = false
+        job.importedStemPaths = nil
         -- Find stem files in job directory
         local stems = {}
         local selectedCount = 0
@@ -16588,6 +16636,7 @@ processAllStemsResult = function()
             local namingTrack = job.sourceTrackName or job.trackName or "Track"
             local namingItem = job.sourceItemName or job.sourceItemDisplayName or namingTrack
             stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem)
+            job.importedStemPaths = stems
             if SETTINGS.createNewTracks then
                 -- New tracks mode: create separate tracks for each stem
                 -- Use per-job selection range: if time selection exists, use it; otherwise use the job's source item position/length
@@ -16634,6 +16683,7 @@ processAllStemsResult = function()
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
                 if count > 0 then
+                    job.hadImportedStems = true
                     if job.track and reaper.ValidatePtr(job.track, "MediaTrack*") then
                         sourceTracksWithStems[job.track] = true
                     end
@@ -16679,6 +16729,7 @@ processAllStemsResult = function()
                             end
                         end
                         totalStemsCreated = totalStemsCreated + count
+                        if count > 0 then job.hadImportedStems = true end
                     else
                         -- Bij time selection: split het item eerst bij de selectie grenzen
                         -- zodat we alleen het selectie-deel vervangen, niet het hele item
@@ -16739,6 +16790,7 @@ processAllStemsResult = function()
                         end
                     end
                     totalStemsCreated = totalStemsCreated + count
+                    if count > 0 then job.hadImportedStems = true end
                     end
                 else
                     debugLog("  ERROR: No valid source item for in-place replacement")
@@ -17039,8 +17091,8 @@ processAllStemsResult = function()
     -- Cleanup temp working files (keep stem WAVs for REAPER references).
     if multiTrackQueue.jobs then
         for _, job in ipairs(multiTrackQueue.jobs) do
-            if job.trackDir then
-                cleanupTempWorkDir(job.trackDir)
+            if job.trackDir and job.hadImportedStems then
+                cleanupTempWorkDir(job.trackDir, { success = true, keepStemPaths = job.importedStemPaths or {} })
             end
         end
     end
