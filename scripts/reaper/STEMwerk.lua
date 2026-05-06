@@ -12843,6 +12843,7 @@ local function drawProgressWindow()
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
+    local cancelBtnText = T("cancel") or "Cancel"
 
     local contextItem = timeSelectionSourceItem or selectedItem
     local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
@@ -12895,6 +12896,29 @@ local function drawProgressWindow()
     gfx.rect(0, statusBlockY, w, statusBlockH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
     gfx.rect(0, statusBlockY, w, statusBlockH, 0)
+
+    -- Explicit cancel button in processing window (same behavior as ESC / window close).
+    local cancelBtnW = math.max(PS(64), gfx.measurestr(cancelBtnText) + PS(20))
+    local cancelBtnH = PS(20)
+    local cancelBtnX = w - PS(10) - cancelBtnW
+    local cancelBtnY = statusBlockY - cancelBtnH - PS(8)
+    local cancelHover = mx >= cancelBtnX and mx <= cancelBtnX + cancelBtnW and my >= cancelBtnY and my <= cancelBtnY + cancelBtnH
+    local cancelFill = cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20}
+    drawThemeSurfaceBox(cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, cancelFill, THEME.border, 1, 0.98, getThemeRadius(PS, 8, PS(8)), getThemeBorderWeight(PS, 1), 0.35, "button")
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    local cancelTextW = gfx.measurestr(cancelBtnText)
+    gfx.x = cancelBtnX + (cancelBtnW - cancelTextW) / 2
+    gfx.y = cancelBtnY + (cancelBtnH - gfx.texth) / 2
+    gfx.drawstr(cancelBtnText)
+    if cancelHover then
+        GUI.uiClickedThisFrame = true
+        tooltipText = T("separation_cancelled") or "Cancel separation"
+        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        if mouseDown and not progressState.wasMouseDown then
+            progressState.cancelRequested = true
+        end
+    end
 
     local availableW = w - statusPadX * 2
     local splitGap = PS(16)

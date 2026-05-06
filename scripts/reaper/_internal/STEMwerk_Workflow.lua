@@ -229,6 +229,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     C.progressState.lastStdoutChangeAt = C.progressState.startTime
     C.progressState.lastLogChangeAt = C.progressState.startTime
     C.progressState.lastDoneChangeAt = C.progressState.startTime
+    C.progressState.cancelRequested = false
     C.progressState.execLogPath = SW_LOG.getLogPath()
     local execLogPath = C.progressState.execLogPath or SW_LOG.getLogPath()
     local jobTag = "single"
@@ -577,8 +578,10 @@ function WORKFLOW.progressLoop()
     if char == 26161 then  -- F1 key code
         -- Reserved (no-op for now). Keep input handling centralized here so ESC is never consumed elsewhere.
     end
-    if char == -1 or char == 27 then  -- Window closed or ESC pressed
+    local cancelRequested = (C.progressState and C.progressState.cancelRequested) and true or false
+    if char == -1 or char == 27 or cancelRequested then  -- Window closed, ESC pressed, or cancel button
         -- Window closed by user
+        C.progressState.cancelRequested = false
         C.progressState.running = false
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
