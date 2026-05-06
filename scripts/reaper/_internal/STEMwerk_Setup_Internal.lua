@@ -2648,7 +2648,13 @@ local function measureLinuxInfoRows(rows, wrapWidth)
 end
 
 local function drawLinuxInfoRows(x, y, w, rows, wrapWidth, rowGap, successMode)
-    local labelW = math.max(100, math.floor(w * 0.18))
+    gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+    local longestLabelW = 0
+    for _, row in ipairs(rows or {}) do
+        local lw = gfx.measurestr((row.label or "") .. ":")
+        if lw > longestLabelW then longestLabelW = lw end
+    end
+    local labelW = math.max(100, math.min(math.floor(w * 0.42), math.floor(longestLabelW + 16)))
     local valueX = x + labelW
     local lineH = linuxLineHeight(18)
     rowGap = rowGap or linuxLineHeight(4)
@@ -2777,8 +2783,11 @@ local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSucce
     if backend ~= "" then
         rows[#rows + 1] = { label = "Backend", value = backend, kind = finalSuccess and "status_ok" or "status_fail" }
     end
+    if trim(state.STATUS_REASON or "") ~= "" then
+        rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted", maxLines = 2 }
+    end
     if backendReason ~= "" then
-        rows[#rows + 1] = { label = "Backend Reason", value = backendReason, kind = "muted", maxLines = 2 }
+        rows[#rows + 1] = { label = "Backend reason", value = backendReason, kind = "muted", maxLines = 2 }
     end
     if backendNote ~= "" then
         rows[#rows + 1] = { label = "Note", value = backendNote, kind = "note", maxLines = 2 }
