@@ -475,6 +475,8 @@ local function prettySetupReason(reason)
             part = "audio-separator install failed"
         elseif lower == "audio_separator_torch_unavailable" then
             part = "audio-separator install failed: PyTorch is unavailable for this macOS/Python/architecture combination"
+        elseif lower == "audio_separator_torch_unavailable_macos_intel" then
+            part = "audio-separator install failed: PyTorch is unavailable for this Intel macOS/Python combination (use the official STEMwerk runtime package or a supported macOS/Python combination)"
         elseif lower == "audio_runtime_deps_install_failed" then
             part = "Audio runtime dependencies install failed"
         elseif lower == "julius_install_failed" then

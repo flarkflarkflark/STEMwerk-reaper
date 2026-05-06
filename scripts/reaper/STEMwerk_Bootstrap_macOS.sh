@@ -385,7 +385,13 @@ else
         cat "${_audio_tmp_log}" >> "${LOG_FILE}" 2>/dev/null || true
         if [ "${_audio_rc}" -ne 0 ]; then
           if grep -Eiq "No matching distribution found for torch|no matching distributions available for your environment.*torch|depends on torch" "${_audio_tmp_log}" 2>/dev/null; then
-            set_status "deps_failed" "audio_separator_torch_unavailable"
+            if [ "$(uname -m)" = "x86_64" ]; then
+              log "audio-separator install failed: PyTorch wheels unavailable for this Intel macOS/Python combination"
+              set_status "deps_failed" "audio_separator_torch_unavailable_macos_intel"
+            else
+              log "audio-separator install failed: PyTorch wheels unavailable for this macOS/Python/architecture combination"
+              set_status "deps_failed" "audio_separator_torch_unavailable"
+            fi
           else
             set_status "deps_failed" "audio_separator_install_failed"
           fi
