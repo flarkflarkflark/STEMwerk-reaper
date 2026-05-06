@@ -15464,6 +15464,7 @@ function drawMultiTrackProgressWindow()
     -- Tooltip tracking / UI click tracking (for background art click)
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
+    local cancelClicked = false
     GUI.uiClickedThisFrame = false
 
     -- === PROCEDURAL ART AS FULL BACKGROUND LAYER ===
@@ -16376,6 +16377,7 @@ function drawMultiTrackProgressWindow()
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
+    local cancelBtnText = T("progress_cancel_button") or T("cancel") or "Cancel"
     local etaText = ""
     if eta and eta > 0 then
         local etaMins = math.floor(eta / 60)
@@ -16413,6 +16415,29 @@ function drawMultiTrackProgressWindow()
     gfx.rect(0, statusBlockY, gfx.w, statusBlockH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
     gfx.rect(0, statusBlockY, gfx.w, statusBlockH, 0)
+
+    -- Explicit cancel button in multi-track processing window (same behavior as ESC / window close).
+    local cancelBtnH = PS(28)
+    local cancelBtnW = math.max(PS(96), gfx.measurestr(cancelBtnText) + PS(26))
+    local cancelBtnX = w - PS(12) - cancelBtnW
+    local cancelBtnY = statusBlockY - cancelBtnH - PS(10)
+    local cancelHover = mx >= cancelBtnX and mx <= cancelBtnX + cancelBtnW and my >= cancelBtnY and my <= cancelBtnY + cancelBtnH
+    local cancelFill = cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20}
+    drawThemeSurfaceBox(cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, cancelFill, THEME.border, 1, 0.98, getThemeRadius(PS, math.floor(cancelBtnH / 2), math.floor(cancelBtnH / 2)), getThemeBorderWeight(PS, 1), 0.35, "button")
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+    local cancelTextW = gfx.measurestr(cancelBtnText)
+    gfx.x = cancelBtnX + (cancelBtnW - cancelTextW) / 2
+    gfx.y = cancelBtnY + math.floor((cancelBtnH - gfx.texth) / 2)
+    gfx.drawstr(cancelBtnText)
+    if cancelHover then
+        GUI.uiClickedThisFrame = true
+        tooltipText = T("progress_cancel_tooltip") or T("tooltip_cancel_processing") or "Cancel processing"
+        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        if mouseDown and not multiTrackQueue.wasMouseDown then
+            cancelClicked = true
+        end
+    end
 
     local availableW = gfx.w - statusPadX * 2
     local splitGap = PS(16)
@@ -16491,7 +16516,7 @@ function drawMultiTrackProgressWindow()
     UI_Window.handleArtAdvance(multiTrackQueue, mouseDown, char)
 
     -- Check for cancel
-    if char == -1 or char == 27 then
+    if char == -1 or char == 27 or cancelClicked then
         return "cancel"
     end
 
