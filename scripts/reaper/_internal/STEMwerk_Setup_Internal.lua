@@ -26,6 +26,28 @@ local function openActionList()
     return false
 end
 
+local function launchMainStemwerkScript()
+    local mainScript = SCRIPT_DIR .. "STEMwerk.lua"
+    if not fileExists(mainScript) then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not find main script:\n\n" .. tostring(mainScript) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
+            0
+        )
+        return false
+    end
+    local ok, err = pcall(dofile, mainScript)
+    if not ok then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not open STEMwerk.lua automatically.\n\nError:\n" .. tostring(err) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
+            0
+        )
+        return false
+    end
+    return true
+end
+
 local function getOS()
     local ros = ""
     if reaper and reaper.GetOS then
@@ -3246,7 +3268,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
         gfx.set(0.20, 0.92, 0.28, 1)
         gfx.x = infoX + 14
         gfx.y = y
-        gfx.drawstr("Setup complete - run STEMwerk.lua from the REAPER Action List")
+        gfx.drawstr("Setup complete.")
     else
         gfx.set(1.0, 0.42, 0.12, 1)
         gfx.x = infoX + 14
@@ -3282,15 +3304,20 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
 
     drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "")
 
-    local actionButtons = {
-        { label = "Open Log", action = "open_log" },
-        { label = "Open Capabilities", action = "open_cap" },
-        { label = "Open Action List", action = "open_action_list" },
-        { label = "Open REAPER Help", action = "open_help" },
-        { label = "Copy Summary", action = "copy_summary" },
-        { label = "Copy Log Path", action = "copy_log" },
-        { label = "Copy Capabilities", action = "copy_cap" },
-    }
+    local actionButtons = {}
+    if finalSuccess then
+        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk" }
+    else
+        actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair" }
+        actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+    end
+    actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
+    actionButtons[#actionButtons + 1] = { label = "Open Capabilities", action = "open_cap" }
+    actionButtons[#actionButtons + 1] = { label = "Open Action List", action = "open_action_list" }
+    actionButtons[#actionButtons + 1] = { label = "Open REAPER Help", action = "open_help" }
+    actionButtons[#actionButtons + 1] = { label = "Copy Summary", action = "copy_summary" }
+    actionButtons[#actionButtons + 1] = { label = "Copy Log Path", action = "copy_log" }
+    actionButtons[#actionButtons + 1] = { label = "Copy Capabilities", action = "copy_cap" }
     local buttonAreaW = infoW - 28
     local buttonStartX = outerPad + 14
     local preferredCols = 4
@@ -3355,6 +3382,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
 end
 
 local verifyExistingSetup
+local startLinuxSetup
 
 local function linuxSetupTick()
     if not LINUX_SETUP then return end
@@ -3475,6 +3503,27 @@ local function linuxSetupTick()
                         openActionList()
                     elseif b.action == "open_help" then
                         openPath(LINUX_SETUP.helpFile)
+                    elseif b.action == "repair" then
+                        local runtime = LINUX_SETUP.runtime
+                        local separatorScript = LINUX_SETUP.separatorScript or (SCRIPT_DIR .. "audio_separator_process.py")
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        startLinuxSetup(runtime, separatorScript, "repair")
+                        return
+                    elseif b.action == "rebuild_venv" then
+                        local runtime = LINUX_SETUP.runtime
+                        local separatorScript = LINUX_SETUP.separatorScript or (SCRIPT_DIR .. "audio_separator_process.py")
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        startLinuxSetup(runtime, separatorScript, "rebuild-venv")
+                        return
+                    elseif b.action == "open_stemwerk" then
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        reaper.defer(function()
+                            launchMainStemwerkScript()
+                        end)
+                        return
                     end
                     break
                 end
@@ -3989,7 +4038,7 @@ end
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
 -- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
 -- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
-local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, finalSuccess)
+local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript)
     if not gfx then
         msgBox("STEMwerk Setup", table.concat(finalMessage or {}, "\n"), finalSuccess and 0 or 16)
         return
@@ -4001,7 +4050,7 @@ local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage
     LINUX_SETUP = {
         runtime         = runtime,
         mode            = "final",
-        separatorScript = nil,
+        separatorScript = separatorScript,
         stateFile       = stateFile,
         logFile         = logFile,
         pidFile         = pidFile,
@@ -4091,12 +4140,12 @@ verifyExistingSetup = function(runtime, separatorScript)
     finalMessage[#finalMessage + 1] = ""
     finalMessage[#finalMessage + 1] = "Log: " .. tostring(logFile)
 
-    showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk)
+    showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript)
 end
 
 -- (showExistingRuntimeSetupMenu removed: replaced by non-blocking startExistingRuntimeSetupMenu below)
 
-local function startLinuxSetup(runtime, separatorScript, mode)
+startLinuxSetup = function(runtime, separatorScript, mode)
     mode = tostring(mode or "repair")
     if mode ~= "repair" and mode ~= "rebuild-venv" then
         mode = "repair"
@@ -4956,7 +5005,7 @@ local function main()
             local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
             if skip then
                 local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
-                showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success)
+                showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
                 return
             end
         end
@@ -4970,7 +5019,7 @@ local function main()
     if OS == "Windows" then
         showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
     else
-        showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success)
+        showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
     end
 end
 
