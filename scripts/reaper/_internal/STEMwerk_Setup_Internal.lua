@@ -2309,7 +2309,8 @@ local function windowsVerifyTick()
         local state = WINDOWS_VERIFY.state or {}
         local lines = {}
         local ok = WINDOWS_VERIFY.pythonOk and WINDOWS_VERIFY.ffmpegOk and WINDOWS_VERIFY.coreOk and WINDOWS_VERIFY.sepOk
-        if WINDOWS_VERIFY.hasState and state.INSTALLER == "1" and (state.STATUS == "ok" or state.STATUS == "") and ok then
+        local metadataComplete = WINDOWS_VERIFY.hasState and state.INSTALLER == "1"
+        if ok then
             state.STATUS = "ok"
             state.STATUS_REASON = ""
             state.PYTHON_PATH = WINDOWS_VERIFY.pythonPath
@@ -2321,6 +2322,10 @@ local function windowsVerifyTick()
                 FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath,
             })
             local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript)
+            if not metadataComplete then
+                result.finalMessage[#result.finalMessage + 1] = ""
+                result.finalMessage[#result.finalMessage + 1] = "Note: Installer metadata was incomplete, but runtime checks passed."
+            end
             finalizeWindowsVerify(true, result.finalMessage)
             reaper.defer(windowsVerifyTick)
             return
