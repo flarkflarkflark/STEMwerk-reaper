@@ -598,7 +598,7 @@ function WORKFLOW.progressLoop()
 
         -- After cancel, go back to the start/selection monitoring window.
         -- This lets the user quickly pick a new item/time selection without reopening the full dialog.
-        C.showMessage("Cancelled", C.T("separation_cancelled"), "info", true)
+        C.showMessage("Cancelled", C.T("progress_cancelled_status") or C.T("separation_cancelled"), "info", true)
         return
     end
 

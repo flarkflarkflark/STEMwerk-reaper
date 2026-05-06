@@ -12840,7 +12840,7 @@ local function drawProgressWindow()
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
-    local cancelBtnText = T("cancel") or "Cancel"
+    local cancelBtnText = T("progress_cancel_button") or T("cancel") or "Cancel"
 
     local contextItem = timeSelectionSourceItem or selectedItem
     local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
@@ -12910,7 +12910,7 @@ local function drawProgressWindow()
     gfx.drawstr(cancelBtnText)
     if cancelHover then
         GUI.uiClickedThisFrame = true
-        tooltipText = T("tooltip_cancel_processing") or "Cancel processing"
+        tooltipText = T("progress_cancel_tooltip") or T("tooltip_cancel_processing") or "Cancel processing"
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not progressState.wasMouseDown then
             cancelClicked = true
@@ -16529,7 +16529,7 @@ function multiTrackProgressLoop()
             end
         end
 
-        showMessage("Cancelled", "Multi-track separation was cancelled.", "info", true)
+        showMessage("Cancelled", T("progress_cancelled_status") or "Processing cancelled.", "info", true)
         return
     end
 

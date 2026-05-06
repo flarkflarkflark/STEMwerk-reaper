@@ -293,6 +293,9 @@ local LANGUAGES = {
         -- Messages
         no_stems_selected = "No Stems Selected",
         please_select_stem = "Select one or more stems in the center column to start.",
+        progress_cancel_button = "Cancel",
+        progress_cancel_tooltip = "Cancel processing",
+        progress_cancelled_status = "Processing cancelled.",
         separation_cancelled = "Processing cancelled.",
         tooltip_cancel_processing = "Cancel processing",
         separation_timeout = "Separation timed out after 10 minutes.",
@@ -698,6 +701,9 @@ local LANGUAGES = {
         -- Messages
         no_stems_selected = "Geen stems geselecteerd",
         please_select_stem = "Selecteer minimaal een stem.",
+        progress_cancel_button = "Annuleren",
+        progress_cancel_tooltip = "Verwerking annuleren",
+        progress_cancelled_status = "Verwerking geannuleerd.",
         separation_cancelled = "Verwerking geannuleerd.",
         tooltip_cancel_processing = "Verwerking annuleren",
         separation_timeout = "Separatie time-out na 10 minuten.",
@@ -1101,6 +1107,9 @@ local LANGUAGES = {
         -- Messages
         no_stems_selected = "Keine Stems ausgewaehlt",
         please_select_stem = "Bitte mindestens einen Stem auswaehlen.",
+        progress_cancel_button = "Abbrechen",
+        progress_cancel_tooltip = "Verarbeitung abbrechen",
+        progress_cancelled_status = "Verarbeitung abgebrochen.",
         separation_cancelled = "Verarbeitung abgebrochen.",
         tooltip_cancel_processing = "Verarbeitung abbrechen",
         separation_timeout = "Trennung nach 10 Minuten abgebrochen.",
