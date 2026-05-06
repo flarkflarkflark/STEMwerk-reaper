@@ -568,8 +568,89 @@ function HELPERS.killUnixProcessFromPidFile(pidFile)
     local pid = tonumber(pidStr)
     if not pid or pid <= 0 then return false end
 
-    -- Try TERM first; if the process ignores it, the user can cancel again / wait for cleanup.
-    os.execute("kill -TERM " .. tostring(pid) .. " 2>/dev/null")
+    local function dirname(path)
+        if not path then return "" end
+        local d = tostring(path):match("^(.*)[/\\][^/\\]+$")
+        return d or ""
+    end
+    local runDir = dirname(pidFile)
+    local runDirLower = tostring(runDir):lower()
+    local function shellRead(cmd)
+        local h = io.popen(cmd .. " 2>/dev/null")
+        if not h then return "" end
+        local out = h:read("*a") or ""
+        h:close()
+        return out
+    end
+    local function pidAlive(checkPid)
+        local ok = os.execute("kill -0 " .. tostring(checkPid) .. " 2>/dev/null")
+        return ok == true or ok == 0
+    end
+    local function readCmdline(checkPid)
+        local cmd = shellRead("ps -p " .. tostring(checkPid) .. " -o command="):gsub("%s+$", "")
+        return cmd
+    end
+    local function isRelevantProcess(checkPid)
+        local cmd = readCmdline(checkPid)
+        if cmd == "" then return false end
+        local lower = cmd:lower()
+        if lower:find("audio_separator_process.py", 1, true) then return true end
+        if runDirLower ~= "" and lower:find(runDirLower, 1, true) then return true end
+        if lower:find("run_bg.sh", 1, true) and runDirLower ~= "" and lower:find(runDirLower, 1, true) then return true end
+        return false
+    end
+    local function listChildren(parentPid)
+        local out = shellRead("pgrep -P " .. tostring(parentPid))
+        local kids = {}
+        for line in out:gmatch("[^\r\n]+") do
+            local n = tonumber((line or ""):match("%d+"))
+            if n and n > 0 then kids[#kids + 1] = n end
+        end
+        return kids
+    end
+
+    local queue, seen, ordered = { pid }, {}, {}
+    while #queue > 0 do
+        local cur = table.remove(queue, 1)
+        if cur and cur > 0 and not seen[cur] then
+            seen[cur] = true
+            ordered[#ordered + 1] = cur
+            local kids = listChildren(cur)
+            for _, k in ipairs(kids) do
+                if not seen[k] then queue[#queue + 1] = k end
+            end
+        end
+    end
+
+    local targets = {}
+    for _, p in ipairs(ordered) do
+        if pidAlive(p) and isRelevantProcess(p) then
+            targets[#targets + 1] = p
+        end
+    end
+    if #targets == 0 and pidAlive(pid) then
+        -- Fallback for older launchers where only a shell PID is known; limit by immediate children.
+        local kids = listChildren(pid)
+        for _, k in ipairs(kids) do
+            if pidAlive(k) and isRelevantProcess(k) then
+                targets[#targets + 1] = k
+            end
+        end
+    end
+    if #targets == 0 then
+        debugLog("killUnixProcessFromPidFile: no relevant live targets for " .. tostring(pidFile) .. " pid=" .. tostring(pid))
+        return false
+    end
+
+    for _, p in ipairs(targets) do
+        os.execute("kill -TERM " .. tostring(p) .. " 2>/dev/null")
+    end
+    os.execute("sleep 0.3")
+    for _, p in ipairs(targets) do
+        if pidAlive(p) then
+            os.execute("kill -KILL " .. tostring(p) .. " 2>/dev/null")
+        end
+    end
     return true
 end
 
