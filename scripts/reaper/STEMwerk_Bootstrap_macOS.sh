@@ -88,6 +88,31 @@ log_python_candidate() {
   fi
 }
 
+log_macos_diagnostics() {
+  log "=== macOS runtime diagnostics ==="
+  log "uname -m: $(uname -m 2>/dev/null || echo unknown)"
+  if command -v sw_vers >/dev/null 2>&1; then
+    log "sw_vers productVersion: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+    log "sw_vers buildVersion: $(sw_vers -buildVersion 2>/dev/null || echo unknown)"
+  fi
+  if [ -n "${PYTHON}" ] && [ -x "${PYTHON}" ]; then
+    log "selected python path: ${PYTHON}"
+    log "selected python version: ${SELECTED_PYTHON_VERSION:-unknown}"
+    "${PYTHON}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
+import platform, sys
+print("python sys.version:", sys.version.replace("\n", " "))
+print("python platform.machine:", platform.machine())
+print("python platform.platform:", platform.platform())
+PY
+  fi
+  if [ "$(uname -m)" = "arm64" ]; then
+    log "expected backend path: Apple Silicon (MPS-capable when available)"
+  else
+    log "expected backend path: Intel macOS CPU-only fallback (no MPS)"
+  fi
+  log "=== end diagnostics ==="
+}
+
 remove_incompatible_venv() {
   if [ -d "${RUNTIME_BASE}/.venv" ]; then
     log "Removing incompatible virtual environment: ${RUNTIME_BASE}/.venv"
@@ -311,6 +336,7 @@ if [ -z "${PYTHON}" ]; then
   write_state
   exit 1
 else
+  log_macos_diagnostics
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     log "Creating venv with ${PYTHON}"
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
@@ -347,13 +373,25 @@ else
 
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
       {
+        _audio_tmp_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
+        : > "${_audio_tmp_log}" || true
         if [ -f "${MACOS_CONSTRAINTS_FILE}" ]; then
           log "Installing ${PACKAGE} with macOS constraints from ${MACOS_CONSTRAINTS_FILE}"
-          "${VENV_PY}" -m pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}" >> "${LOG_FILE}" 2>&1
+          "${VENV_PY}" -m pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
         else
-          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1
+          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
         fi
-      } || set_status "deps_failed" "audio_separator_install_failed"
+        _audio_rc=$?
+        cat "${_audio_tmp_log}" >> "${LOG_FILE}" 2>/dev/null || true
+        if [ "${_audio_rc}" -ne 0 ]; then
+          if grep -Eiq "No matching distribution found for torch|no matching distributions available for your environment.*torch|depends on torch" "${_audio_tmp_log}" 2>/dev/null; then
+            set_status "deps_failed" "audio_separator_torch_unavailable"
+          else
+            set_status "deps_failed" "audio_separator_install_failed"
+          fi
+        fi
+        rm -f "${_audio_tmp_log}" >/dev/null 2>&1 || true
+      }
 
     if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
       log "Installing ${ONNX_PACKAGE}"

@@ -473,6 +473,8 @@ local function prettySetupReason(reason)
             part = "stemwerk-core is missing after setup"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "audio_separator_torch_unavailable" then
+            part = "audio-separator install failed: PyTorch is unavailable for this macOS/Python/architecture combination"
         elseif lower == "audio_runtime_deps_install_failed" then
             part = "Audio runtime dependencies install failed"
         elseif lower == "julius_install_failed" then
@@ -584,6 +586,8 @@ local function prettyBackendReason(reason)
             part = "CUDA runtime confirmed by installer"
         elseif lower == "bootstrap_directml_confirmed" then
             part = "DirectML runtime confirmed by installer"
+        elseif lower == "mps_unavailable" then
+            part = "MPS unavailable; using CPU"
         end
         local key = part:lower()
         if key ~= "" and not seen[key] then
