@@ -7,12 +7,14 @@ BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 RUNTIME_BASE=""
 STATE_FILE=""
 LOG_FILE=""
+MODE="repair"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --runtime-base) RUNTIME_BASE="$2"; shift 2 ;;
     --state-file) STATE_FILE="$2"; shift 2 ;;
     --log-file) LOG_FILE="$2"; shift 2 ;;
+    --mode) MODE="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -41,6 +43,14 @@ is_core_source_bundle() {
     && [ -f "$1/pyproject.toml" ] \
     && [ -f "$1/src/stemwerk_core/__init__.py" ] \
     && [ -f "$1/src/stemwerk_core/separator.py" ]
+}
+
+model_cache_dir() {
+  if [ -n "${XDG_DATA_HOME:-}" ]; then
+    printf "%s/STEMwerk/models\n" "${XDG_DATA_HOME}"
+  else
+    printf "%s/.local/share/STEMwerk/models\n" "${HOME:-/tmp}"
+  fi
 }
 
 write_state() {
@@ -118,6 +128,12 @@ if [ -z "${RUNTIME_BASE}" ]; then
 fi
 
 log_stage "Bootstrap started"
+log_step "Requested mode: ${MODE}"
+log_step "Downloaded models are kept at: $(model_cache_dir)"
+if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
+  log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
+fi
 log_step "Preparing runtime directories"
 log_step "Clearing GPU override env vars (HIP_VISIBLE_DEVICES/HSA_OVERRIDE_GFX_VERSION/ROCR_VISIBLE_DEVICES/CUDA_VISIBLE_DEVICES)"
 log_step "GPU env before clear: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-} HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-} ROCR_VISIBLE_DEVICES=${ROCR_VISIBLE_DEVICES:-} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
