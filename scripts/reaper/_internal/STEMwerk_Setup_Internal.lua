@@ -26,28 +26,6 @@ local function openActionList()
     return false
 end
 
-local function launchMainStemwerkScript()
-    local mainScript = SCRIPT_DIR .. "STEMwerk.lua"
-    if not fileExists(mainScript) then
-        msgBox(
-            "STEMwerk Setup",
-            "Could not find main script:\n\n" .. tostring(mainScript) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
-            0
-        )
-        return false
-    end
-    local ok, err = pcall(dofile, mainScript)
-    if not ok then
-        msgBox(
-            "STEMwerk Setup",
-            "Could not open STEMwerk.lua automatically.\n\nError:\n" .. tostring(err) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
-            0
-        )
-        return false
-    end
-    return true
-end
-
 local function getOS()
     local ros = ""
     if reaper and reaper.GetOS then
@@ -154,6 +132,56 @@ end
 local INSTALL_ROOT = INSTALL.root or RAW_SCRIPT_DIR
 local SCRIPT_DIR = INSTALL.scriptsDir or RAW_SCRIPT_DIR
 warnInstallMismatch()
+
+local function resolveSetupScriptsDir()
+    if SCRIPT_DIR and SCRIPT_DIR ~= "" then
+        return SCRIPT_DIR
+    end
+    local info = debug.getinfo(1, "S")
+    local source = (info and info.source) or ""
+    local currentPath = source:match("^@(.*)$") or source:match("^(.*)$") or ""
+    local currentDir = currentPath:match("^(.*[/\\])") or ""
+    if currentDir == "" then
+        local _, actionPath = reaper.get_action_context()
+        currentDir = (actionPath and actionPath:match("^(.*[/\\])")) or ""
+    end
+    local setupDir = currentDir
+    if setupDir:match("[/\\]_internal[/\\]$") then
+        setupDir = setupDir:gsub("[/\\]_internal[/\\]$", PATH_SEP)
+    end
+    return setupDir
+end
+
+local function launchMainStemwerkScript()
+    local scriptsDir = resolveSetupScriptsDir()
+    local mainScript = tostring(scriptsDir or "") .. "STEMwerk.lua"
+    local exists = false
+    do
+        local f = io.open(mainScript, "r")
+        if f then
+            f:close()
+            exists = true
+        end
+    end
+    if not exists then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not find main script:\n\n" .. tostring(mainScript) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
+            0
+        )
+        return false
+    end
+    local ok, err = pcall(dofile, mainScript)
+    if not ok then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not open STEMwerk.lua automatically.\n\nError:\n" .. tostring(err) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
+            0
+        )
+        return false
+    end
+    return true
+end
 
 local function quoteArg(s)
     s = tostring(s)
@@ -2577,12 +2605,19 @@ local function openPath(path)
     end
 end
 
-local function drawButton(label, x, y, w, h)
-    gfx.set(0.2, 0.2, 0.2, 1)
+local function drawButton(label, x, y, w, h, style)
+    local bg = { 0.2, 0.2, 0.2, 1 }
+    local border = { 1, 1, 1, 1 }
+    if style == "primary" then
+        bg = { 0.96, 0.48, 0.10, 1 }
+        border = { 1, 0.78, 0.40, 1 }
+    end
+    gfx.set(bg[1], bg[2], bg[3], bg[4])
     gfx.rect(x, y, w, h, 1)
-    gfx.set(1, 1, 1, 1)
+    gfx.set(border[1], border[2], border[3], border[4])
     gfx.rect(x, y, w, h, 0)
     gfx.setfont(1, "Arial", linuxFontSize(13))
+    gfx.set(1, 1, 1, 1)
     gfx.x = x + 8
     gfx.y = y + math.max(2, math.floor((h - linuxLineHeight(13)) / 2))
     gfx.drawstr(label)
@@ -3306,9 +3341,9 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
 
     local actionButtons = {}
     if finalSuccess then
-        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk" }
+        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
     else
-        actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair" }
+        actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
         actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
     end
     actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
@@ -3359,11 +3394,12 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
                 w = btnW,
                 h = btnH,
                 action = b.action,
+                style = b.style,
             }
         end
         gfx.setfont(1, "Arial", linuxFontSize(13))
         for _, b in ipairs(LINUX_SETUP.buttons) do
-            drawButton(b.label, b.x, b.y, b.w, b.h)
+            drawButton(b.label, b.x, b.y, b.w, b.h, b.style)
         end
     end
 

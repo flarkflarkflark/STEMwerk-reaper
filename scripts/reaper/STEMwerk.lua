@@ -10492,16 +10492,16 @@ function renderMainColumns(ctx)
         drawColumnHeader(T("after"), col6X, afterBoxW, mainHeaderFont, contentTop)
         gfx.setfont(1, "Arial", S(13))
 
-        if drawCheckbox(col6X, afterY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
-            SETTINGS.createFolder = not SETTINGS.createFolder
-        end
-        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_create_folder"))
-
-        afterY = afterY + S(22)
         if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, afterBtnFontSize) then
             HELPERS.cycleColorMode()
         end
         setTooltip(col6X, afterY, afterBoxW, btnH, HELPERS.getColorModeTooltip())
+        afterY = afterY + S(22)
+
+        if drawCheckbox(col6X, afterY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
+            SETTINGS.createFolder = not SETTINGS.createFolder
+        end
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_create_folder"))
 
         afterY = afterY + S(22)
         if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
@@ -10586,6 +10586,12 @@ function renderMainColumns(ctx)
 
         local mode = tostring(SETTINGS.postProcessTakes or "none")
 
+        if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, afterBtnFontSize) then
+            HELPERS.cycleColorMode()
+        end
+        setTooltip(col6X, afterY, afterBoxW, btnH, HELPERS.getColorModeTooltip())
+
+        afterY = afterY + S(22)
         if drawRadio(col6X, afterY, mode == "none", T("keep_takes"), nil, afterBoxW, nil, nil, afterBtnFontSize) then
             SETTINGS.postProcessTakes = "none"
             mode = "none"
