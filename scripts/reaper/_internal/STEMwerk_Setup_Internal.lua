@@ -3331,6 +3331,8 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.drawstr(footerText)
 end
 
+local verifyExistingSetup
+
 local function linuxSetupTick()
     if not LINUX_SETUP then return end
     if not gfx then return end
@@ -3397,6 +3399,32 @@ local function linuxSetupTick()
     if LINUX_SETUP.finalized then
         restoreLinuxWindowGeometry()
         linuxDrawFinal(LINUX_SETUP.finalMessage, LINUX_SETUP.finalSuccess, state, logLines, pid)
+        if LINUX_SETUP.finalSuccess
+            and not LINUX_SETUP.postActionRefreshQueued
+            and (LINUX_SETUP.mode == "repair" or LINUX_SETUP.mode == "rebuild-venv") then
+            LINUX_SETUP.postActionRefreshQueued = true
+            local runtime = LINUX_SETUP.runtime
+            local separatorScript = LINUX_SETUP.separatorScript
+            local refreshStateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+            local refreshCapFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+            local attempts = 0
+            local function reopenWithFreshState()
+                attempts = attempts + 1
+                local freshState = parseStateFile(refreshStateFile)
+                local freshCaps = parseStateFile(refreshCapFile)
+                local stateReady = fileExists(refreshStateFile) and next(freshState) ~= nil
+                local ffmpegReady = trim(freshState.FFMPEG_PATH or freshCaps.FFMPEG_PATH or resolveLinuxFfmpegPath(freshState)) ~= ""
+                if (stateReady and ffmpegReady) or attempts >= 12 then
+                    if gfx then gfx.quit() end
+                    LINUX_SETUP = nil
+                    verifyExistingSetup(runtime, separatorScript)
+                    return
+                end
+                reaper.defer(reopenWithFreshState)
+            end
+            reaper.defer(reopenWithFreshState)
+            return
+        end
     else
         linuxDrawStatus(state, logLines, pidAlive, pid)
     end
@@ -3970,7 +3998,7 @@ local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage
     reaper.defer(linuxSetupTick)
 end
 
-local function verifyExistingSetup(runtime, separatorScript)
+verifyExistingSetup = function(runtime, separatorScript)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
@@ -3982,8 +4010,9 @@ local function verifyExistingSetup(runtime, separatorScript)
     appendSetupLog(runtime, "Models kept: " .. getModelCacheDir(), false)
 
     local state = parseStateFile(stateFile)
-    local pythonPath = resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or "")
-    local ffmpegPath = resolvePath(state.FFMPEG_PATH or "")
+    local capState = parseStateFile(capFile)
+    local pythonPath = trim(resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(state)))
+    local ffmpegPath = trim(resolvePath(state.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(state)))
     local stateStatus = state.STATUS or ""
     local stateOk = fileExists(stateFile) and state and next(state) ~= nil
         and (stateStatus == "ok" or stateStatus == "")
@@ -3996,7 +4025,7 @@ local function verifyExistingSetup(runtime, separatorScript)
         { label = "Python path",         ok = pythonPath ~= "" and fileExists(pythonPath),
           detail = pythonPath ~= "" and pythonPath or "Not set in bootstrap.env" },
         { label = "FFmpeg path",         ok = ffmpegPath ~= "" and fileExists(ffmpegPath),
-          detail = ffmpegPath ~= "" and ffmpegPath or "Not set in bootstrap.env" },
+          detail = ffmpegPath ~= "" and ffmpegPath or "Not set in bootstrap.env/capabilities.env" },
         { label = "Virtual environment", ok = pathExists(runtime.venvDir),
           detail = pathExists(runtime.venvDir) and runtime.venvDir or ("Not found: " .. tostring(runtime.venvDir)) },
     }
@@ -4036,7 +4065,10 @@ end
 -- (showExistingRuntimeSetupMenu removed: replaced by non-blocking startExistingRuntimeSetupMenu below)
 
 local function startLinuxSetup(runtime, separatorScript, mode)
-    mode = mode or "repair"
+    mode = tostring(mode or "repair")
+    if mode ~= "repair" and mode ~= "rebuild-venv" then
+        mode = "repair"
+    end
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
@@ -4664,11 +4696,19 @@ local function existingRuntimeSetupMenuTick()
                     end
                     m.confirmModal = nil
                     if ok then
-                        local runtime = m.runtime
-                        local separatorScript = m.separatorScript
-                        gfx.quit()
-                        SETUP_MENU = nil
-                        startLinuxSetup(runtime, separatorScript, "repair")
+                        if modal.kind == "models" then
+                            m.noticeText = msg or "Model cache deleted."
+                            m.noticeUntil = os.time() + 10
+                        else
+                            local runtime = m.runtime
+                            local separatorScript = m.separatorScript
+                            if msg and msg ~= "" then
+                                msgBox("STEMwerk Setup", tostring(msg), 0)
+                            end
+                            gfx.quit()
+                            SETUP_MENU = nil
+                            verifyExistingSetup(runtime, separatorScript)
+                        end
                         return
                     end
                     m.noticeText = msg or "Delete action failed."
