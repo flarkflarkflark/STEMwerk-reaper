@@ -12048,12 +12048,24 @@ local function normalizeProgressStage(stage)
     stage = stage:gsub("%s*%b[]", "")
     stage = stage:gsub("%s*%b()", "")
     stage = stage:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    local lower = stage:lower()
     if stage == "" then
         stage = T("processing_label") or "Processing"
-    elseif stage:lower():match("^processing") then
+    elseif lower:match("^processing[%s%.]*$") then
         stage = T("processing_label") or "Processing"
     end
     return stage
+end
+
+local function readableTerminalAccent(r, g, b)
+    if SETTINGS.darkMode then
+        return r, g, b
+    end
+    -- Light mode terminal: keep stem tint, but push it toward darker readable tones.
+    local dr = math.max(0.06, (r * 0.42) + 0.06)
+    local dg = math.max(0.08, (g * 0.42) + 0.08)
+    local db = math.max(0.06, (b * 0.42) + 0.06)
+    return dr, dg, db
 end
 
 local function formatProgressLine(rawLine, trackIdx)
@@ -15919,9 +15931,10 @@ function drawMultiTrackProgressWindow()
             termTextA = 0.92
         else
             -- Light mode: keep text readable, but nudge toward the active bar color.
-            termTextR = (termTextR * 0.85) + (activeBar[1] * 0.15)
-            termTextG = (termTextG * 0.85) + (activeBar[2] * 0.15)
-            termTextB = (termTextB * 0.85) + (activeBar[3] * 0.15)
+            local ar, ag, ab = readableTerminalAccent(activeBar[1], activeBar[2], activeBar[3])
+            termTextR = (termTextR * 0.85) + (ar * 0.15)
+            termTextG = (termTextG * 0.85) + (ag * 0.15)
+            termTextB = (termTextB * 0.85) + (ab * 0.15)
         end
 
         local termNow = uiNow()
@@ -16045,14 +16058,15 @@ function drawMultiTrackProgressWindow()
                 else
                     if lineTrackIdx and lineAccent and line:match("%-%-%-%-") then
                         -- Track header line
-                        gfx.set(lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB, 0.98)
+                        local ar, ag, ab = readableTerminalAccent(lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB)
+                        gfx.set(ar, ag, ab, 0.98)
                     elseif lineAccent and SETTINGS.darkMode then
                         -- Dark mode: tint normal lines toward track color
                         local ar, ag, ab = lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB
                         gfx.set((termTextR * 0.35) + (ar * 0.65), (termTextG * 0.35) + (ag * 0.65), (termTextB * 0.35) + (ab * 0.65), termTextA)
                     elseif lineAccent and not SETTINGS.darkMode then
                         -- Light mode: keep it readable; use a subtle tint
-                        local ar, ag, ab = lineAccent[1] or 0.2, lineAccent[2] or 0.2, lineAccent[3] or 0.2
+                        local ar, ag, ab = readableTerminalAccent(lineAccent[1] or 0.2, lineAccent[2] or 0.2, lineAccent[3] or 0.2)
                         gfx.set((termTextR * 0.8) + (ar * 0.2), (termTextG * 0.8) + (ag * 0.2), (termTextB * 0.8) + (ab * 0.2), termTextA)
                     else
                         gfx.set(termTextR, termTextG, termTextB, termTextA)
