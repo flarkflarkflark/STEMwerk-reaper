@@ -12254,6 +12254,7 @@ local function drawProgressWindow()
     -- Tooltip tracking
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
+    local cancelClicked = false
 
     -- Best-effort: parse actual selected device id/name from the separation log (so UI never lies).
     -- We update at most ~2x/sec to keep it cheap.
@@ -12816,10 +12817,6 @@ local function drawProgressWindow()
         gfx.drawstr(msg)
     end
 
-    -- Update mouse state AFTER all click handling
-    progressState.wasMouseDown = mouseDown
-    progressState.wasRightMouseDown = rightMouseDown
-
     -- Bottom footer (aligned with the multi-track Processing footer)
     local stageStr = progressState.stage or ""
     local bottomEta = stageStr:match("ETA%s+([%d]+:%s*%d+)")
@@ -12916,6 +12913,7 @@ local function drawProgressWindow()
         tooltipText = T("separation_cancelled") or "Cancel separation"
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not progressState.wasMouseDown then
+            cancelClicked = true
             progressState.cancelRequested = true
         end
     end
@@ -12983,7 +12981,11 @@ local function drawProgressWindow()
         drawTooltipStyled(tooltipText, tooltipX, tooltipY, w, h, padding, lineH, maxTextW)
     end
 
+    -- Update mouse state AFTER all click handling in this function.
+    progressState.wasMouseDown = mouseDown
+    progressState.wasRightMouseDown = rightMouseDown
     gfx.update()
+    return cancelClicked
 end
 
 -- Refactor flow helpers into module-like namespaces to reduce top-level locals.
@@ -14259,6 +14261,7 @@ function initCelebration()
             delay = i * 0.15,
         })
     end
+
 end
 
 -- Draw result window (clean style matching main app)

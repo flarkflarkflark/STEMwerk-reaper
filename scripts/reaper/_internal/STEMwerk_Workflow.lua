@@ -557,6 +557,7 @@ end
 function WORKFLOW.progressLoop()
     local loopNow = uiNow()
     refreshProgressActivityFromFiles()
+    local cancelClicked = false
 
     if loopNow >= (C.progressState.nextPollAt or 0) then
         C.progressState.nextPollAt = loopNow + UI_PACING.progressPollInterval
@@ -569,7 +570,7 @@ function WORKFLOW.progressLoop()
 
     if loopNow >= (C.progressState.nextFrameAt or 0) then
         C.progressState.nextFrameAt = loopNow + pacingFrameInterval("progressFrameInterval", "progressFrameIntervalFx")
-        C.drawProgressWindow()
+        cancelClicked = C.drawProgressWindow() and true or false
     end
 
     local char = gfx.getchar()
@@ -578,7 +579,7 @@ function WORKFLOW.progressLoop()
     if char == 26161 then  -- F1 key code
         -- Reserved (no-op for now). Keep input handling centralized here so ESC is never consumed elsewhere.
     end
-    local cancelRequested = (C.progressState and C.progressState.cancelRequested) and true or false
+    local cancelRequested = cancelClicked or ((C.progressState and C.progressState.cancelRequested) and true or false)
     if char == -1 or char == 27 or cancelRequested then  -- Window closed, ESC pressed, or cancel button
         -- Window closed by user
         C.progressState.cancelRequested = false
