@@ -12061,10 +12061,10 @@ local function readableTerminalAccent(r, g, b)
     if SETTINGS.darkMode then
         return r, g, b
     end
-    -- Light mode terminal: keep stem tint, but push it toward darker readable tones.
-    local dr = math.max(0.06, (r * 0.42) + 0.06)
-    local dg = math.max(0.08, (g * 0.42) + 0.08)
-    local db = math.max(0.06, (b * 0.42) + 0.06)
+    -- Light mode terminal: keep stem tint, but force higher contrast dark variants.
+    local dr = math.max(0.07, math.min(0.33, (r * 0.26) + 0.05))
+    local dg = math.max(0.08, math.min(0.36, (g * 0.28) + 0.06))
+    local db = math.max(0.07, math.min(0.34, (b * 0.26) + 0.05))
     return dr, dg, db
 end
 
@@ -12535,12 +12535,18 @@ local function drawProgressWindow()
 
     local function drawProgressText(text, x, y, alpha)
         alpha = alpha or 1
-        gfx.set(0, 0, 0, 0.6 * alpha)
-        gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
-        gfx.set(1, 1, 1, alpha)
+        if SETTINGS.darkMode then
+            gfx.set(0, 0, 0, 0.6 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
+            gfx.set(1, 1, 1, alpha)
+        else
+            gfx.set(1, 1, 1, 0.35 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.set(0.08, 0.10, 0.12, alpha)
+        end
         gfx.x, gfx.y = x, y
         gfx.drawstr(text)
     end
@@ -12731,6 +12737,7 @@ local function drawProgressWindow()
                 termHeaderG = 0.85 + accentG * 0.12
                 termHeaderB = 0.85 + accentB * 0.12
                 termHeaderA = 1
+                termTextR, termTextG, termTextB = readableTerminalAccent(accentR, accentG, accentB)
             end
 
             -- Match the LED/progress tint to the active track color when available.
@@ -15784,12 +15791,18 @@ function drawMultiTrackProgressWindow()
 
     local function drawProgressText(text, x, y, alpha)
         alpha = alpha or 1
-        gfx.set(0, 0, 0, 0.6 * alpha)
-        gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
-        gfx.set(1, 1, 1, alpha)
+        if SETTINGS.darkMode then
+            gfx.set(0, 0, 0, 0.6 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
+            gfx.set(1, 1, 1, alpha)
+        else
+            gfx.set(1, 1, 1, 0.35 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.set(0.08, 0.10, 0.12, alpha)
+        end
         gfx.x, gfx.y = x, y
         gfx.drawstr(text)
     end
