@@ -12106,6 +12106,15 @@ local function localizeProgressStagePrefix(stageText)
         then
             local suffix = trimmed:sub(#src + 1)
             suffix = suffix:gsub("^%s+", "")
+            local suffixLower = suffix:lower()
+            if suffixLower == src
+                or suffixLower:sub(1, #src + 1) == (src .. " ")
+                or suffixLower:sub(1, #src + 1) == (src .. "(")
+                or suffixLower:sub(1, #src + 1) == (src .. "[")
+            then
+                suffix = suffix:sub(#src + 1)
+                suffix = suffix:gsub("^%s+", "")
+            end
             if suffix ~= "" then
                 return dst .. " " .. suffix
             end
