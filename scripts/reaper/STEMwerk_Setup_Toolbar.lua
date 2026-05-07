@@ -10,6 +10,18 @@ local function msgBox(title, text, type)
     return reaper.ShowMessageBox(tostring(text), tostring(title), type or 0)
 end
 
+local function isDebugEnabled()
+    if not (reaper and reaper.GetExtState) then return false end
+    local a = tostring(reaper.GetExtState("STEMwerk", "debugMode") or "")
+    local b = tostring(reaper.GetExtState("STEMwerk", "debug") or "")
+    return a == "1" or b == "1"
+end
+
+local function debugConsole(text)
+    if not (isDebugEnabled() and reaper and reaper.ShowConsoleMsg) then return end
+    reaper.ShowConsoleMsg("[STEMwerk Toolbar Setup] " .. tostring(text or "") .. "\n")
+end
+
 local function hr()
     return "------------------------------------------------------------"
 end
@@ -415,33 +427,6 @@ local function buildToolbarWritePlan(actionMap)
         return false, sectionErr
     end
 
-    local reportLines = {
-        "Target file:",
-        menuPath,
-        "",
-        "Toolbar slot:",
-        tostring(slot),
-        "",
-        "Existing STEMwerk toolbar:",
-        existing and "yes" or "no",
-        "",
-        "Action IDs:",
-    }
-
-    for _, entry in ipairs(toolbarEntries) do
-        if not entry.separator then
-            local resolved = actionMap[entry.script]
-            reportLines[#reportLines + 1] =
-                string.format("%s -> %s -> %s", entry.script, tostring(resolved and resolved.namedId or "?"), entry.icon)
-        end
-    end
-
-    reportLines[#reportLines + 1] = ""
-    reportLines[#reportLines + 1] = "Section to write:"
-    for _, line in ipairs(sectionLines) do
-        reportLines[#reportLines + 1] = line
-    end
-
     return true, {
         menuPath = menuPath,
         lines = lines,
@@ -450,7 +435,6 @@ local function buildToolbarWritePlan(actionMap)
         slot = slot,
         sectionName = sectionName,
         sectionLines = sectionLines,
-        report = table.concat(reportLines, "\n"),
     }
 end
 
@@ -460,8 +444,9 @@ local function writeStemwerkToolbar(actionMap)
 
     local confirmText = joinBlocks(
         "STEMwerk Toolbar Setup\n" .. hr(),
-        section("Planned toolbar update", plan.report),
-        section("Choose action", "Yes = create/update dedicated STEMwerk toolbar\nNo = skip toolbar config write\nCancel = skip toolbar config write")
+        section("Ready to update toolbar", "A dedicated STEMwerk toolbar section will be created or updated in REAPER."),
+        section("Details", "Toolbar slot: Floating toolbar " .. tostring(plan.slot) .. "\nTarget file: reaper-menu.ini"),
+        section("Choose action", "Yes = create/update dedicated STEMwerk toolbar\nNo = close without changes\nCancel = close without changes")
     )
     local confirm = msgBox(toolbarDialogTitle("Create Toolbar"), confirmText, 3)
     if confirm ~= 6 then
@@ -479,6 +464,8 @@ local function writeStemwerkToolbar(actionMap)
             return false, "Existing STEMwerk toolbar left unchanged."
         end
     end
+
+    debugConsole("Toolbar write plan: slot=" .. tostring(plan.slot) .. " existing=" .. tostring(plan.existing) .. " menuPath=" .. tostring(plan.menuPath))
 
     local backupOk, backupInfo = backupMenuFile(plan.menuPath)
     if not backupOk then
@@ -501,7 +488,7 @@ local function writeStemwerkToolbar(actionMap)
         "\n\nToolbar slot:\nFloating toolbar " .. tostring(plan.slot) ..
         "\n\nOpen in REAPER via:\nView -> Floating toolbar " .. tostring(plan.slot) ..
         "\n\nIf it does not appear immediately, restart REAPER."
-    return true, result
+    return true, result, plan.existing
 end
 
 local function installToolbarIcons()
@@ -551,7 +538,15 @@ end
 
 local scriptsOk, scriptsErr, actionMap = registerScripts()
 if not scriptsOk then
-    msgBox(toolbarDialogTitle(), "STEMwerk Toolbar Setup\n" .. hr() .. "\n\n" .. tostring(scriptsErr), 0)
+    msgBox(
+        toolbarDialogTitle(),
+        joinBlocks(
+            "STEMwerk Toolbar Setup\n" .. hr(),
+            section("Setup failed", tostring(scriptsErr)),
+            section("What you can do", "Open Actions -> ReaScript and reload the STEMwerk scripts, then run this setup again.")
+        ),
+        0
+    )
     return
 end
 
@@ -583,6 +578,7 @@ local toolbarOrderSummary =
     "4) Assign the installed icon filenames in Customize Toolbar"
 
 if not installOk then
+    debugConsole("Icon install details: " .. tostring(installInfo))
     msgBox(
         toolbarDialogTitle(),
         joinBlocks(
@@ -600,31 +596,37 @@ local flowText =
     joinBlocks(
         "STEMwerk Toolbar Setup\n" .. hr(),
         section("Status", "Scripts are registered and toolbar icon strips are ready.\n\n" .. installSummary),
-        section("Choose setup mode", "Yes = create/update dedicated STEMwerk toolbar\nNo = show manual toolbar instructions\nCancel = icons only")
+        section("Choose setup mode", "Yes = create/update dedicated STEMwerk toolbar\nNo = show manual toolbar instructions\nCancel = close (icons are already installed; toolbar unchanged)")
     )
 
 local flowChoice = msgBox(toolbarDialogTitle(), flowText, 3)
 
 if flowChoice == 6 then
-    local toolbarOk, toolbarInfo = writeStemwerkToolbar(actionMap)
+    local toolbarOk, toolbarInfo, updatedExisting = writeStemwerkToolbar(actionMap)
     if toolbarOk then
+        local existingUpdateLine = updatedExisting and "\n\nExisting STEMwerk toolbar was updated." or ""
         msgBox(
             toolbarDialogTitle("Toolbar Created"),
             joinBlocks(
                 "STEMwerk Toolbar Setup\n" .. hr(),
-                section("Result", toolbarInfo),
+                section("Result", "Toolbar setup completed successfully.\n\nYour toolbar actions and icon-strip assignments are now ready."),
+                section("Toolbar location", "Open in REAPER: View -> Floating toolbar"),
+                section("Backup", "A backup of reaper-menu.ini was created before writing."),
                 section("Recommended order", table.concat(recommendedToolbarOrder, "\n"))
-            ),
+            ) .. existingUpdateLine .. (isDebugEnabled() and "\n\nTechnical details were written to the REAPER console." or ""),
             0
         )
+        debugConsole(toolbarInfo)
     else
+        debugConsole("Toolbar write failed/skipped: " .. tostring(toolbarInfo))
         msgBox(
             toolbarDialogTitle("Toolbar Not Written"),
             joinBlocks(
                 "STEMwerk Toolbar Setup\n" .. hr(),
                 section("Result", tostring(toolbarInfo)),
                 section("Safety", "No random toolbar sections were modified."),
-                section("Manual setup", toolbarOrderSummary)
+                section("Manual setup", toolbarOrderSummary),
+                section("What you can do", "Retry this setup, or configure toolbar actions manually from the Action List.")
             ),
             0
         )
@@ -634,7 +636,8 @@ elseif flowChoice == 7 then
         toolbarDialogTitle("Manual Toolbar Setup"),
         joinBlocks(
             "STEMwerk Toolbar Setup\n" .. hr(),
-            section("Manual setup", toolbarOrderSummary),
+            section("Manual setup", "1) Open Action List\n2) Search for STEMwerk\n3) Add the actions to your toolbar\n4) Assign icons from REAPER Data/toolbar_icons (use 150/ and 200/ for HiDPI)."),
+            section("Recommended order", table.concat(recommendedToolbarOrder, "\n")),
             section("Tip", "Run 'STEMwerk: Setup' if separation fails or components are missing.")
         ),
         0
