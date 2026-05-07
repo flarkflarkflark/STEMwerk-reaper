@@ -4645,6 +4645,14 @@ local function drawProceduralArt(x, y, w, h, time, rotation, skipBackground)
     end
 end
 
+local function getFxReadabilityOverlayAlpha()
+    if SETTINGS.darkMode then
+        return 0.50
+    end
+    -- Keep light-mode FX decorative so they do not compete with progress/log text.
+    return 0.66
+end
+
 -- Initialize procedural art on first run
 generateNewArt()
 
@@ -10165,10 +10173,11 @@ function renderDialogBackground(ctx)
 
     drawProceduralArt(0, 0, ctx.w, ctx.h, proceduralArt.time, mainDialogArt.rotation, true)
 
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, ctx.w, ctx.h, 1)
 
@@ -12249,11 +12258,12 @@ local function drawProgressWindow()
     -- Draw procedural art covering entire window (background layer)
     drawProceduralArt(0, 0, w, h, proceduralArt.time, 0, true)
 
-    -- Semi-transparent overlay for readability - pure black/white
+    -- Theme-aware readability wash over animated FX
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, w, h, 1)
 
@@ -14338,11 +14348,12 @@ function drawResultWindow()
     proceduralArt.time = proceduralArt.time + 0.016  -- ~60fps
     drawProceduralArt(0, 0, w, h, proceduralArt.time, 0, true)
 
-    -- Semi-transparent overlay for readability - pure black/white
+    -- Theme-aware readability wash over animated FX
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, w, h, 1)
 
@@ -15520,11 +15531,12 @@ function drawMultiTrackProgressWindow()
     proceduralArt.time = proceduralArt.time + 0.016  -- ~60fps
     drawProceduralArt(0, 0, w, h, proceduralArt.time, 0, true)
 
-    -- Semi-transparent overlay for readability - pure black/white
+    -- Theme-aware readability wash over animated FX
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, w, h, 1)
 
