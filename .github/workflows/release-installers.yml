@@ -89,25 +89,22 @@ jobs:
           choco install innosetup --no-progress -y
           choco install imagemagick --no-progress -y
 
-      - name: Generate installer assets from SVG
+      - name: Generate installer icon assets from approved STEMwerk icon
         shell: powershell
         run: |
           $assets = "installer\\assets"
           New-Item -ItemType Directory -Force -Path $assets | Out-Null
 
-          $svg = Join-Path $assets "stemwerk.svg"
-          if (Test-Path $svg) {
+          $sourcePng = "scripts\\reaper\\assets\\toolbar_icons\\stemwerk_main.png"
+          if (Test-Path $sourcePng) {
             $png = Join-Path $assets "stemwerk.png"
-            & magick -background none -density 220 $svg -resize 512x512 $png
+            & magick $sourcePng -resize 512x512 $png
 
             $ico = Join-Path $assets "stemwerk.ico"
             & magick $png -define icon:auto-resize=256,128,64,48,32,16 $ico
 
-            $wiz = Join-Path $assets "stemwerk-wizard.bmp"
-            & magick $png -resize 140x140 -background white -gravity center -extent 164x314 $wiz
-
-            $wizSmall = Join-Path $assets "stemwerk-wizard-small.bmp"
-            & magick $png -resize 48x48 -background white -gravity center -extent 55x58 $wizSmall
+            $wizSmall = Join-Path $assets "stemwerk-wizard-small-opt-stemwerk-colors-v2-centered-widewerk.bmp"
+            & magick $png -resize 48x48 -background white -alpha remove -alpha off -gravity center -extent 55x58 BMP3:$wizSmall
           }
 
       - name: Build .exe (Inno Setup)
