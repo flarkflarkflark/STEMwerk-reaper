@@ -2,7 +2,7 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.0" author="flarkAUDIO" time="1775481055">
+      <version name="2.2.2.1" author="flarkAUDIO" time="1775481055">
         <changelog><![CDATA[
 - macOS bootstrap now accepts only Python 3.10, 3.11, or 3.12
 - Refactored the REAPER layer into smaller internal modules for easier maintenance and safer future updates
