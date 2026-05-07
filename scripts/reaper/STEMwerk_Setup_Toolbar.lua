@@ -10,6 +10,30 @@ local function msgBox(title, text, type)
     return reaper.ShowMessageBox(tostring(text), tostring(title), type or 0)
 end
 
+local function hr()
+    return "------------------------------------------------------------"
+end
+
+local function section(title, body)
+    return "[" .. tostring(title or "") .. "]\n" .. tostring(body or "")
+end
+
+local function joinBlocks(...)
+    local blocks = {...}
+    local out = {}
+    for i = 1, #blocks do
+        local block = tostring(blocks[i] or "")
+        if block ~= "" then
+            out[#out + 1] = block
+        end
+    end
+    return table.concat(out, "\n\n")
+end
+
+local function toolbarDialogTitle(suffix)
+    return "STEMwerk Toolbar Setup" .. (suffix and (": " .. tostring(suffix)) or "")
+end
+
 local function getScriptDir()
     local info = debug.getinfo(1, "S")
     return (info and info.source and info.source:match("@?(.*[/\\])")) or ""
@@ -434,17 +458,19 @@ local function writeStemwerkToolbar(actionMap)
     local planOk, plan = buildToolbarWritePlan(actionMap)
     if not planOk then return false, plan end
 
-    local confirmText = plan.report ..
-        "\n\nCreate/update dedicated STEMwerk toolbar?\n" ..
-        "Yes = continue\nNo = skip toolbar config write\nCancel = skip toolbar config write"
-    local confirm = msgBox("Stemwerk: Create Toolbar", confirmText, 3)
+    local confirmText = joinBlocks(
+        "STEMwerk Toolbar Setup\n" .. hr(),
+        section("Planned toolbar update", plan.report),
+        section("Choose action", "Yes = create/update dedicated STEMwerk toolbar\nNo = skip toolbar config write\nCancel = skip toolbar config write")
+    )
+    local confirm = msgBox(toolbarDialogTitle("Create Toolbar"), confirmText, 3)
     if confirm ~= 6 then
         return false, "Toolbar creation skipped by user."
     end
 
     if plan.existing then
         local replace = msgBox(
-            "Stemwerk: Existing Toolbar",
+            toolbarDialogTitle("Existing Toolbar"),
             "A dedicated STEMwerk toolbar already exists in slot " .. tostring(plan.slot) ..
             ".\n\nReplace only that STEMwerk toolbar section?\n\nYes = replace\nNo = leave unchanged",
             4
@@ -525,7 +551,7 @@ end
 
 local scriptsOk, scriptsErr, actionMap = registerScripts()
 if not scriptsOk then
-    msgBox("Stemwerk: Setup Toolbar", tostring(scriptsErr), 0)
+    msgBox(toolbarDialogTitle(), "STEMwerk Toolbar Setup\n" .. hr() .. "\n\n" .. tostring(scriptsErr), 0)
     return
 end
 
@@ -558,49 +584,59 @@ local toolbarOrderSummary =
 
 if not installOk then
     msgBox(
-        "Stemwerk: Setup Toolbar",
-        installSummary ..
-        "\n\nDedicated toolbar creation was skipped because the required icon strips were not installed." ..
-        "\n\nNo toolbar config was written.\n\n" ..
-        toolbarOrderSummary,
+        toolbarDialogTitle(),
+        joinBlocks(
+            "STEMwerk Toolbar Setup\n" .. hr(),
+            section("Status", installSummary),
+            section("Result", "Dedicated toolbar creation was skipped because required icon strips were not installed.\nNo toolbar config was written."),
+            section("Manual setup", toolbarOrderSummary)
+        ),
         0
     )
     return
 end
 
 local flowText =
-    "Scripts are ready.\n\n" ..
-    installSummary ..
-    "\n\nChoose setup mode:\n" ..
-    "Yes = create/update dedicated STEMwerk toolbar\n" ..
-    "No = show manual toolbar instructions\n" ..
-    "Cancel = icons only"
+    joinBlocks(
+        "STEMwerk Toolbar Setup\n" .. hr(),
+        section("Status", "Scripts are registered and toolbar icon strips are ready.\n\n" .. installSummary),
+        section("Choose setup mode", "Yes = create/update dedicated STEMwerk toolbar\nNo = show manual toolbar instructions\nCancel = icons only")
+    )
 
-local flowChoice = msgBox("Stemwerk: Setup Toolbar", flowText, 3)
+local flowChoice = msgBox(toolbarDialogTitle(), flowText, 3)
 
 if flowChoice == 6 then
     local toolbarOk, toolbarInfo = writeStemwerkToolbar(actionMap)
     if toolbarOk then
         msgBox(
-            "Stemwerk: Toolbar Created",
-            toolbarInfo ..
-            "\n\nRecommended order:\n" .. table.concat(recommendedToolbarOrder, "\n"),
+            toolbarDialogTitle("Toolbar Created"),
+            joinBlocks(
+                "STEMwerk Toolbar Setup\n" .. hr(),
+                section("Result", toolbarInfo),
+                section("Recommended order", table.concat(recommendedToolbarOrder, "\n"))
+            ),
             0
         )
     else
         msgBox(
-            "Stemwerk: Toolbar Not Written",
-            tostring(toolbarInfo) ..
-            "\n\nNo random toolbar sections were modified.\n\n" ..
-            toolbarOrderSummary,
+            toolbarDialogTitle("Toolbar Not Written"),
+            joinBlocks(
+                "STEMwerk Toolbar Setup\n" .. hr(),
+                section("Result", tostring(toolbarInfo)),
+                section("Safety", "No random toolbar sections were modified."),
+                section("Manual setup", toolbarOrderSummary)
+            ),
             0
         )
     end
 elseif flowChoice == 7 then
     msgBox(
-        "Stemwerk: Manual Toolbar Setup",
-        toolbarOrderSummary ..
-        "\n\nTip: Run 'STEMwerk: Setup' if separation fails or components are missing.",
+        toolbarDialogTitle("Manual Toolbar Setup"),
+        joinBlocks(
+            "STEMwerk Toolbar Setup\n" .. hr(),
+            section("Manual setup", toolbarOrderSummary),
+            section("Tip", "Run 'STEMwerk: Setup' if separation fails or components are missing.")
+        ),
         0
     )
 end
