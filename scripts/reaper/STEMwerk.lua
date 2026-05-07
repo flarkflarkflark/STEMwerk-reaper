@@ -12094,7 +12094,8 @@ local function localizeProgressStagePrefix(stageText)
         {"writing stems", T("progress_stage_writing_stems") or "Writing stems"},
         {"complete", T("progress_stage_complete") or "Complete"},
     }
-    local lower = text:lower():gsub("^%s+", "")
+    local trimmed = text:gsub("^%s+", "")
+    local lower = trimmed:lower()
     for _, entry in ipairs(map) do
         local src, dst = entry[1], entry[2]
         if lower == src
@@ -12103,8 +12104,7 @@ local function localizeProgressStagePrefix(stageText)
             or lower:sub(1, #src + 1) == (src .. "[")
             or lower:sub(1, #src + 1) == (src .. ".")
         then
-            local srcPattern = src:gsub(" ", "%%s+")
-            local suffix = text:gsub("^%s*" .. srcPattern, "", 1)
+            local suffix = trimmed:sub(#src + 1)
             suffix = suffix:gsub("^%s+", "")
             if suffix ~= "" then
                 return dst .. " " .. suffix
