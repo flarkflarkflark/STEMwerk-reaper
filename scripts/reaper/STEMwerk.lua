@@ -12062,8 +12062,46 @@ local function normalizeProgressStage(stage)
         stage = T("processing_label") or "Processing"
     elseif lower:match("^processing[%s%.]*$") then
         stage = T("processing_label") or "Processing"
+    else
+        local key = nil
+        local flat = lower:gsub("[%s%.:]+$", "")
+        if flat == "loading model" then
+            key = "progress_stage_loading_model"
+        elseif flat == "loading ai model" then
+            key = "progress_stage_loading_ai_model"
+        elseif flat == "starting separation" then
+            key = "progress_stage_starting_separation"
+        elseif flat == "writing stems" then
+            key = "progress_stage_writing_stems"
+        elseif flat == "complete" then
+            key = "progress_stage_complete"
+        end
+        if key then
+            stage = T(key) or stage
+        end
     end
     return stage
+end
+
+local function localizeProgressStagePrefix(stageText)
+    local text = tostring(stageText or "")
+    if text == "" then return text end
+    local map = {
+        {"processing", T("progress_stage_processing") or "Processing"},
+        {"loading ai model", T("progress_stage_loading_ai_model") or "Loading AI model"},
+        {"loading model", T("progress_stage_loading_model") or "Loading model"},
+        {"starting separation", T("progress_stage_starting_separation") or "Starting separation"},
+        {"writing stems", T("progress_stage_writing_stems") or "Writing stems"},
+        {"complete", T("progress_stage_complete") or "Complete"},
+    }
+    local lower = text:lower():gsub("^%s+", "")
+    for _, entry in ipairs(map) do
+        local src, dst = entry[1], entry[2]
+        if lower == src or lower:sub(1, #src + 1) == (src .. " ") or lower:sub(1, #src + 1) == (src .. "(") or lower:sub(1, #src + 1) == (src .. "[") or lower:sub(1, #src + 1) == (src .. ".") then
+            return text:gsub("^%s*" .. src:gsub(" ", "%%s+") .. "%s*", dst .. " ", 1):gsub("%s+([%(%[%.])", "%1")
+        end
+    end
+    return text
 end
 
 local function readableTerminalAccent(r, g, b)
@@ -16267,7 +16305,7 @@ function drawMultiTrackProgressWindow()
             -- Stage text inside progress bar
             if not job.done and job.stage and job.stage ~= "" then
                 gfx.setfont(1, "Arial", PS(9))
-                local stageText = job.stage
+                local stageText = localizeProgressStagePrefix(job.stage)
                 if stageText == "Waiting.." or stageText == "Waiting..." then
                     stageText = T("waiting") or stageText
                 elseif stageText == "Starting.." or stageText == "Starting..." then
