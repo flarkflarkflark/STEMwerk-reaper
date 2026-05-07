@@ -73,8 +73,6 @@
         <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>
         <source file="../i18n/language_checks.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/language_checks.py</source>
 
-        <source file="../themes/DeepSea.stemtheme" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/themes/DeepSea.stemtheme</source>
-        <source file="../themes/Forest.stemtheme" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/themes/Forest.stemtheme</source>
 
         <source file="../assets/toolbar_icons/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/README.txt</source>
         <source file="../assets/toolbar_icons/stemwerk_all_stems.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/stemwerk_all_stems.png</source>
