@@ -12097,8 +12097,19 @@ local function localizeProgressStagePrefix(stageText)
     local lower = text:lower():gsub("^%s+", "")
     for _, entry in ipairs(map) do
         local src, dst = entry[1], entry[2]
-        if lower == src or lower:sub(1, #src + 1) == (src .. " ") or lower:sub(1, #src + 1) == (src .. "(") or lower:sub(1, #src + 1) == (src .. "[") or lower:sub(1, #src + 1) == (src .. ".") then
-            return text:gsub("^%s*" .. src:gsub(" ", "%%s+") .. "%s*", dst .. " ", 1):gsub("%s+([%(%[%.])", "%1")
+        if lower == src
+            or lower:sub(1, #src + 1) == (src .. " ")
+            or lower:sub(1, #src + 1) == (src .. "(")
+            or lower:sub(1, #src + 1) == (src .. "[")
+            or lower:sub(1, #src + 1) == (src .. ".")
+        then
+            local srcPattern = src:gsub(" ", "%%s+")
+            local suffix = text:gsub("^%s*" .. srcPattern, "", 1)
+            suffix = suffix:gsub("^%s+", "")
+            if suffix ~= "" then
+                return dst .. " " .. suffix
+            end
+            return dst
         end
     end
     return text
