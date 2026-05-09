@@ -6,6 +6,8 @@ OUT_DIR="$ROOT_DIR/installer/linux/dist"
 BUILD_DIR="$ROOT_DIR/installer/linux/build-arch"
 WORK_DIR="$BUILD_DIR/work"
 
+source "$ROOT_DIR/installer/linux/stage_payload.sh"
+
 VERSION="${STEMWERK_VERSION:-}"
 
 if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
@@ -23,22 +25,7 @@ mkdir -p "$OUT_DIR" "$WORK_DIR"
 SRC_DIR="$BUILD_DIR/stemwerk-$VERSION"
 mkdir -p "$SRC_DIR"
 
-rsync -a --delete \
-  --exclude='*.bak' \
-  --exclude='*.bak2' \
-  --exclude='sync_to_reaper.sh' \
-  --exclude='STEMwerk_Enable_Debug.lua' \
-  --exclude='STEMwerk_Disable_Debug.lua' \
-  --exclude='STEMwerk_Set_FFmpegPath.lua' \
-  --exclude='STEMwerk_Set_PythonPath.lua' \
-  --exclude='STEMwerk_separate.lua' \
-  "$ROOT_DIR/scripts/reaper/" \
-  "$ROOT_DIR/i18n" \
-  "$ROOT_DIR/installer/assets/stemwerk.svg" \
-  "$ROOT_DIR/README.md" \
-  "$ROOT_DIR/LICENSE" \
-  "$ROOT_DIR/TODO.md" \
-  "$SRC_DIR/"
+copy_linux_payload "$ROOT_DIR" "$SRC_DIR"
 
 tar -C "$BUILD_DIR" -czf "$WORK_DIR/stemwerk-$VERSION.tar.gz" "stemwerk-$VERSION"
 SHA256="$(sha256sum "$WORK_DIR/stemwerk-$VERSION.tar.gz" | awk '{print $1}')"

@@ -6,6 +6,8 @@ OUT_DIR="$ROOT_DIR/installer/linux/dist"
 BUILD_DIR="$ROOT_DIR/installer/linux/build-appimage"
 APPDIR="$BUILD_DIR/AppDir"
 
+source "$ROOT_DIR/installer/linux/stage_payload.sh"
+
 VERSION="${STEMWERK_VERSION:-}"
 
 if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
@@ -24,22 +26,7 @@ mkdir -p "$OUT_DIR" \
   "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
 # Copy only what we need
-rsync -a --delete \
-  --exclude='*.bak' \
-  --exclude='*.bak2' \
-  --exclude='sync_to_reaper.sh' \
-  --exclude='STEMwerk_Enable_Debug.lua' \
-  --exclude='STEMwerk_Disable_Debug.lua' \
-  --exclude='STEMwerk_Set_FFmpegPath.lua' \
-  --exclude='STEMwerk_Set_PythonPath.lua' \
-  --exclude='STEMwerk_separate.lua' \
-  "$ROOT_DIR/scripts/reaper/" \
-  "$ROOT_DIR/i18n" \
-  "$ROOT_DIR/installer/assets/stemwerk.svg" \
-  "$ROOT_DIR/README.md" \
-  "$ROOT_DIR/LICENSE" \
-  "$ROOT_DIR/TODO.md" \
-  "$APPDIR/usr/share/stemwerk/"
+copy_linux_payload "$ROOT_DIR" "$APPDIR/usr/share/stemwerk"
 
 # Icon (optional)
 if [[ -f "$ROOT_DIR/installer/assets/stemwerk.svg" ]]; then
