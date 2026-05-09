@@ -1,6 +1,6 @@
 -- @description Stemwerk: Setup Toolbar
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.1.5
+-- @version 2.2.2.1.6
 -- @changelog
 --   Adds/refreshes STEMwerk scripts in the Action List and guides toolbar setup.
 --   Registers the dedicated "Stemwerk: Explode Takes (In Place)" quick action.
