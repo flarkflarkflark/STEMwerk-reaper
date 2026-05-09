@@ -9,9 +9,19 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 STEMwerk-reaper is a REAPER script that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend (audio-separator/Demucs) and keeps processing on your machine.
 
 ### Stable release note
-This README describes the current public stable release, `v2.2.2.0`. Future development continues on separate branches, but the features documented here reflect the current stable release line.
+This README describes the current public stable release, `v2.2.2.1`. Future development continues on separate branches, but the features documented here reflect the current stable release line.
 
-Compared with older `2.2.1.x` builds, `v2.2.2.0` also includes a visual refresh with refined STEMwerk theme styling, better dark and light UI consistency, improved setup/progress/complete window presentation, and better multilingual layout fit.
+`v2.2.2.1` is a stabilization and packaging release. Compared with older `2.2.1.x` builds, the `2.2.2.x` line includes a visual refresh with refined STEMwerk theme styling, better dark and light UI consistency, improved setup/progress/complete window presentation, and better multilingual layout fit.
+
+#### What's new in v2.2.2.1
+- **Windows installer hardening**: bootstrap improvements and reduced normal installer size (source/master toolbar PNGs excluded from the installed payload; runtime strips and singles are still included)
+- **Progress/UI fixes**: fixed duplicate stage text (e.g. `Processing Processing`), improved cancel handling and status reporting, fixed i18n fallback text issues
+- **Offline patch path expanded**: the offline patch installer now supports older existing installs, including v2.2.1.4 and v2.2.2.0-style setups
+- **macOS/Linux torch pin**: bootstrap now pins `torch` and `torchaudio` to `2.5.1` to avoid a PyTorch 2.6+ Demucs model-loading failure (`weights_only` default change); existing venvs with `torch >= 2.6` are automatically rebuilt
+- **Better diagnostics**: separation logs now include Python/torch/torchaudio/onnxruntime/device information to make support easier
+- **Toolbar refresh**: updated toolbar setup assets and installer packaging
+
+Release validation: Windows VM smoke PASS, Windows NVIDIA laptop smoke PASS (including Quality separation and cancel), Linux AMD sanity PASS.
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
@@ -63,12 +73,12 @@ For most users, internet is needed on first install for:
 
 After runtime setup is complete and your model is cached, normal separation is typically offline.
 
-Windows release assets may also include bundled or offline-oriented installers for specific stable versions. The bundled installer includes Python + FFmpeg, but it can still require backend package or model downloads on first use. Large offline allmodels installers include more runtime/model assets and are hosted separately because they are too large for GitHub release assets.
+Windows release assets may also include bundled or offline-oriented installers for specific stable versions. The bundled installer includes Python + FFmpeg, but it can still require backend package or model downloads on first use. Large offline allmodels installers include more runtime/model assets and are hosted separately on Google Drive because they are too large for GitHub release assets.
 
 You should still run `STEMwerk-SETUP.lua` when asked to verify or repair the runtime inside REAPER.
 
 ## Backend Support
-Windows and Linux are the primary day-to-day validated environments. macOS is supported, but backend parity can vary by system and Python/backend package availability.
+Windows is the primary validated path for the `v2.2.2.1` release. macOS and Linux receive backend dependency hardening in this release.
 
 ### CPU
 - Windows: validated, including CPU/VM setups
@@ -76,7 +86,7 @@ Windows and Linux are the primary day-to-day validated environments. macOS is su
 - Linux: supported
 
 ### Windows GPU
-- NVIDIA: CUDA validated on current `v2.2.2.0` release
+- NVIDIA: CUDA validated on `v2.2.2.1`
 - AMD / Intel GPU: DirectML route (`torch-directml` + `onnxruntime-directml`), validated on Windows AMD
 
 ### Linux GPU
@@ -86,36 +96,42 @@ Windows and Linux are the primary day-to-day validated environments. macOS is su
 
 ### Apple Silicon
 - CPU is supported
-- Platform-specific acceleration should be treated as best-effort unless explicitly documented otherwise
+- Platform-specific acceleration should be treated as best-effort; Apple Silicon reports are welcome
 
-## Download Expectations
-Use this quick guide:
-
-- Most Windows users: use `STEMwerk-Setup-2.2.2.0.exe`
-- Windows users who want embedded Python + FFmpeg: use `STEMwerk-Setup-2.2.2.0-bundled.exe`
-- Existing Windows bundled/offline users: use `STEMwerk-2.2.2.0-offline-patch.exe` when you want the small patch/update path for the current stable line
-- Large offline allmodels Windows installers are hosted separately on Google Drive because they are too large for GitHub release assets
-- Linux/macOS users: use ReaPack or manual script install plus `STEMwerk-SETUP.lua`, or use the platform packages if preferred
-
-Windows installer asset types you may see:
-- `STEMwerk-Setup-<version>.exe`: thin/online installer
-- `STEMwerk-Setup-<version>-bundled.exe`: bundled Python + FFmpeg installer
-- `STEMwerk-<version>-offline-patch.exe`: patch installer for existing offline/bundled installs
+## Downloads
 
 ### Which installer should I use?
-- Most Windows users: start with `STEMwerk-Setup-2.2.2.0.exe`
-- If you want embedded Python + FFmpeg included: use `STEMwerk-Setup-2.2.2.0-bundled.exe`
-- If you already have an older bundled/offline Windows install and want the smaller updater path: use `STEMwerk-2.2.2.0-offline-patch.exe` when appropriate
-- If you need large offline allmodels Windows installers: use the separate Google Drive downloads below
-- On Linux and macOS, use ReaPack/manual install plus `STEMwerk-SETUP.lua`, or the platform package that best fits your system
+- **New Windows users**: use `STEMwerk-Setup-2.2.2.1.exe` — the standard online installer
+- **Windows users who want embedded Python + FFmpeg**: use `STEMwerk-Setup-2.2.2.1-bundled.exe`
+- **Existing Windows users updating from a previous install**: use `STEMwerk-Setup-2.2.2.1-offline-patch.exe` — supports v2.2.1.4 and v2.2.2.0-style installs
+- **Fully offline Windows users who need all models pre-bundled**: use the Google Drive allmodels installers below
+- **Linux users**: use the AppImage, `.deb`, or `.rpm` package
+- **ReaPack users (Windows, Linux, macOS)**: update through ReaPack as usual, then run STEMwerk setup/repair in REAPER if the backend runtime needs checking or rebuilding
 
-| Installer | Target | Size | Download |
+### GitHub release assets (v2.2.2.1)
+
+| File | Description | Size |
+|---|---|---:|
+| `STEMwerk-Setup-2.2.2.1.exe` | Windows standard installer | 3.33 MB |
+| `STEMwerk-Setup-2.2.2.1-bundled.exe` | Windows bundled installer (Python + FFmpeg included) | 133 MB |
+| `STEMwerk-Setup-2.2.2.1-offline-patch.exe` | Windows offline patch/update helper | 3.42 MB |
+| `STEMwerk-v2.2.2.1-Linux-x86_64.AppImage` | Linux portable build | 15.96 MB |
+| `STEMwerk-v2.2.2.1-Linux-amd64.deb` | Debian/Ubuntu package | 15.64 MB |
+| `STEMwerk-v2.2.2.1-Linux-x86_64.rpm` | RPM package | 15.67 MB |
+
+GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user installer download.
+
+### Large offline allmodels installers (Google Drive)
+These are fully offline Windows installers that include all runtime packages and models. They are hosted on Google Drive because they are too large for GitHub release assets.
+
+| File | Target | Size | Download |
 |---|---|---:|---|
-| CPU allmodels offline installer | Windows CPU | 870.7 MB | [Google Drive](https://drive.google.com/file/d/1dXQvPX6U6luLORd4WiHdq11B6Amtbn-_/view?usp=sharing) |
-| AMD GPU allmodels offline installer | Windows AMD GPU / DirectML | 903.2 MB | [Google Drive](https://drive.google.com/file/d/1ST37lJqJZnJ05iPgfVp7b8QIDfoOFkZW/view?usp=sharing) |
-| NVIDIA GPU allmodels offline installer | Windows NVIDIA GPU / CUDA | 3.13 GB | [Google Drive](https://drive.google.com/file/d/1FdojX51HupK6C04rSL-K8_M1xBtQWDet/view?usp=sharing) |
+| `STEMwerk-Setup-2.2.2.1-offline-bundled-cpu-allmodels.exe` | Windows CPU | 871.3 MB | [Google Drive](https://drive.google.com/file/d/1wIvR8QFKxAYANoSjhjdq45MjBXZjQRS_/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.1-offline-bundled-amd-gpu-allmodels.exe` | Windows AMD GPU / DirectML | 903.7 MB | [Google Drive](https://drive.google.com/file/d/1e_FZ276MEyRsQ-SmrV7PRBw43wLscAHC/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.1-offline-bundled-nvidia-gpu-allmodels.exe` | Windows NVIDIA GPU / CUDA | 3.13 GB | [Google Drive](https://drive.google.com/file/d/1mdppCx0qDCkv7dXII_T_sYGTUTf0yHTt/view?usp=drive_link) |
 
-Approximate first-use model downloads (when not already bundled/cached):
+### First-use model downloads
+If models are not already included in your installer, approximate download sizes on first use:
 - `Fast` (`htdemucs`): about 84 MB
 - `Quality` (`htdemucs_ft`): about 337 MB
 - `6-Stem` (`htdemucs_6s`): about 55 MB
@@ -126,14 +142,14 @@ Model size is separate from runtime/bootstrap size, and model download size is n
 - The installer is the recommended setup path on Windows.
 - ReaPack is not recommended for first-time Windows setup because it installs scripts only, not the full runtime.
 - During first-time setup, installer steps can appear paused for several minutes while Python/backend packages are resolved.
-- For the current stable release `v2.2.2.0`, offline or bundled users may also use the small offline patch installer path when appropriate.
+- For `v2.2.2.1`, offline or bundled users may also use the offline patch installer path when appropriate.
 - `STEMwerk-SETUP.lua` is a REAPER-side verify/repair tool. It does not replace the Windows installer bootstrap path.
 
-### Updating from older Windows offline installs (2.2.1.4+)
-- If you already use an older bundled or offline Windows install, `v2.2.2.0` is the current stable target.
-- Prefer `STEMwerk-2.2.2.0-offline-patch.exe` when you want the smaller update path for an existing compatible bundled or offline install.
-- If that patch path is not appropriate for your current install state, use the current full Windows installer for `v2.2.2.0` instead.
-- Current stable release: [STEMwerk v2.2.2.0](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.0).
+### Updating from older Windows installs
+- If you already use an older bundled or offline Windows install, `v2.2.2.1` is the current stable target.
+- Prefer `STEMwerk-Setup-2.2.2.1-offline-patch.exe` when you want the smaller update path for an existing compatible install (supports v2.2.1.4 and v2.2.2.0-style setups).
+- If that patch path is not appropriate for your current install state, use the full Windows installer for `v2.2.2.1` instead.
+- Current stable release: [STEMwerk v2.2.2.1](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.1).
 - After any installer update, run `STEMwerk-SETUP.lua` once to verify paths/runtime state.
 - If setup still reports missing runtime/bootstrap pieces, rerun the installer first, then rerun `STEMwerk-SETUP.lua`.
 
@@ -159,21 +175,24 @@ Notes:
 
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
 
-### ReaPack (Linux and macOS only)
+### ReaPack
 Import this repository URL into ReaPack:
 
 ```text
 https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
 ```
 
-Example workflow:
-1. Extensions -> ReaPack -> Import a repository.
-2. Paste the URL above.
-3. ReaPack -> Synchronize packages.
-4. Search for "STEMwerk" and install.
-5. In the REAPER Action List, run `STEMwerk-SETUP.lua`, then `STEMwerk.lua`.
+To install or update:
+1. In REAPER: `Extensions -> ReaPack -> Browse packages...`
+2. Search for `STEMwerk` and install or update the package.
+3. Apply/synchronize changes in REAPER.
+4. Run `STEMwerk-SETUP.lua` in the Action List to verify or rebuild the backend runtime if needed.
 
-> **WARNING (Windows)**: ReaPack is not recommended. On Windows, full setup is intentionally handled by the installer; the REAPER setup does not launch bootstrap installers. ReaPack installs only the scripts, so Python/FFmpeg/venv are often missing or resolve to unsupported Windows shim paths. Use the installer (recommended) or the manual developer install instead.
+To add the repository for the first time:
+1. `Extensions -> ReaPack -> Import a repository`
+2. Paste the URL above, then synchronize.
+
+> **WARNING (Windows)**: ReaPack is not recommended for first-time Windows setup. On Windows, full setup is intentionally handled by the installer; the REAPER setup does not launch bootstrap installers. ReaPack installs only the scripts, so Python/FFmpeg/venv are often missing or resolve to unsupported Windows shim paths. Use the installer (recommended) or the manual developer install instead.
 
 - ReaPack installs STEMwerk under `REAPER/Scripts/STEMwerk-reaper/`, the same folder layout used by the installers.
 - Older ReaPack layouts are still accepted by the runtime scripts as a fallback, so existing installs keep working.
@@ -209,9 +228,10 @@ Note: REAPER does not auto-register scripts in the Action List. Use Actions → 
 - Check the STEMwerk logs shown by setup/runtime diagnostics to identify the failing step (Python, FFmpeg, backend package, model download, permissions, etc.).
 - Backend behavior differs by system and drivers: CPU is the safest fallback, while CUDA/DirectML/ROCm availability depends on hardware and compatible packages.
 - On Windows, if bootstrap/runtime files are missing, re-run the installer first, then verify with `STEMwerk-SETUP.lua`.
+- If no stems are created and you need help, please provide: `bootstrap.log`, any available `separation_log.txt`, `stdout.txt`, and `stderr.txt`.
 - NVIDIA offline bundled troubleshooting (related to issue #11):
   - If separation works online but fails offline, verify models are present in `%LOCALAPPDATA%\\STEMwerk\\models` and that the installed variant actually includes the model set you selected.
-  - Re-run the matching offline bundled installer variant (for example `...-offline-bundled-nvidia-gpu-allmodels.exe`) and test once with internet disabled to confirm the offline path.
+  - Re-run the matching offline bundled installer variant (for example `STEMwerk-Setup-2.2.2.1-offline-bundled-nvidia-gpu-allmodels.exe`) and test once with internet disabled to confirm the offline path.
   - Bundled/offline installers intentionally disable the pre-setup "cleanup models" task to avoid deleting freshly bundled model payloads.
 
 ## REAPER workflows
