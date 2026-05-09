@@ -106,7 +106,8 @@ Windows is the primary validated path for the `v2.2.2.1` release. macOS and Linu
 - **Existing Windows users updating from a previous install**: use `STEMwerk-Setup-2.2.2.1-offline-patch.exe` — supports v2.2.1.4 and v2.2.2.0-style installs
 - **Fully offline Windows users who need all models pre-bundled**: use the Google Drive allmodels installers below
 - **Linux users**: use the AppImage, `.deb`, or `.rpm` package
-- **ReaPack users (Windows, Linux, macOS)**: update through ReaPack as usual, then run STEMwerk setup/repair in REAPER if the backend runtime needs checking or rebuilding
+- **macOS and Linux ReaPack users**: install/update through ReaPack, then run STEMwerk setup/repair in REAPER if the backend runtime needs checking or rebuilding
+- **Windows ReaPack users**: ReaPack updates the scripts, but it is not the recommended first-time setup path on Windows; use the Windows installer first if the runtime is missing or not yet prepared
 
 ### GitHub release assets (v2.2.2.1)
 
@@ -118,6 +119,8 @@ Windows is the primary validated path for the `v2.2.2.1` release. macOS and Linu
 | `STEMwerk-v2.2.2.1-Linux-x86_64.AppImage` | Linux portable build | 1.21 MB |
 | `STEMwerk-v2.2.2.1-Linux-amd64.deb` | Debian/Ubuntu package | 0.93 MB |
 | `STEMwerk-v2.2.2.1-Linux-x86_64.rpm` | RPM package | 0.95 MB |
+
+Linux packages were repacked after publish to remove non-runtime source toolbar PNGs and junk files from the package payload. Runtime files and toolbar assets are preserved; no runtime code changed.
 
 GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user installer download.
 
