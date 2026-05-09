@@ -679,14 +679,27 @@ function WORKFLOW.finishSeparationCallback()
             local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
             local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 2000) or "(no log output found)"
             local stdoutSnippet = SW_LOG.readFileSnippet(C.progressState.stdoutFile, 1200)
-            local errMsg = "No stems created"
-                .. "\n\nExit code: " .. tostring(exitCode or "unknown")
-                .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")
-                .. "\nLog file: " .. tostring(C.progressState.logFile or "unknown")
-                .. "\nDebug log: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
-                .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
-            if stdoutSnippet then
-                errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+            local errMsg = nil
+            if C.buildKnownSeparationFailureMessage then
+                errMsg = C.buildKnownSeparationFailureMessage(
+                    logSnippet,
+                    exitCode,
+                    C.progressState.lastCmd,
+                    C.progressState.logFile,
+                    C.progressState.execLogPath or SW_LOG.getLogPath(),
+                    stdoutSnippet
+                )
+            end
+            if not errMsg then
+                errMsg = "No stems created"
+                    .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+                    .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")
+                    .. "\nLog file: " .. tostring(C.progressState.logFile or "unknown")
+                    .. "\nDebug log: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
+                    .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
+                if stdoutSnippet then
+                    errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+                end
             end
             -- Keep this visible until user closes it; auto-monitor mode can immediately
             -- bounce back to the main window and hide actionable error details.

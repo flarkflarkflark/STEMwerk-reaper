@@ -28,6 +28,9 @@ select_device = None
 core_devices = None
 _core_loaded = False
 
+MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
+MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
+
 
 def _require_core() -> None:
     global StemSeparator, get_available_devices, select_device, core_devices, _core_loaded
@@ -366,12 +369,14 @@ def _emit_env_diagnostics() -> None:
 def _build_env_json() -> Dict[str, object]:
     env: Dict[str, object] = {
         "platform": platform.system(),
+        "platform_machine": platform.machine(),
         "python": platform.python_version(),
         "python_version": platform.python_version(),
         "sys_executable": sys.executable,
         "python_executable": sys.executable,
         "pythonpath_env": os.environ.get("PYTHONPATH"),
         "ld_library_path_env": os.environ.get("LD_LIBRARY_PATH"),
+        "mps_fallback_env": os.environ.get(MPS_FALLBACK_ENV),
         "torch": None,
         "torch_version": None,
         "torchaudio_version": None,
@@ -472,13 +477,67 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     env["selected_device"] = selected_device
     print(f"STEMWERK_DIAG python_executable={env.get('python_executable')}", file=sys.stderr)
     print(f"STEMWERK_DIAG python_version={env.get('python_version')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG platform={env.get('platform')} machine={env.get('platform_machine')}", file=sys.stderr)
     print(f"STEMWERK_DIAG torch_version={env.get('torch_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG torchaudio_version={env.get('torchaudio_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG onnxruntime_version={env.get('onnxruntime_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_built={env.get('mps_built')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
     print(f"STEMWERK_DIAG selected_device={selected_device}", file=sys.stderr)
     return env
+
+
+def _enable_mps_runtime_fallback(requested_device: str, resolved_device: str) -> bool:
+    if resolved_device != "mps":
+        return False
+    os.environ[MPS_FALLBACK_ENV] = "1"
+    print(
+        f"STEMWERK_DIAG mps_fallback_enabled=1 requested_device={requested_device} resolved_device={resolved_device}",
+        file=sys.stderr,
+    )
+    return True
+
+
+def _classify_runtime_failure(
+    exc: BaseException,
+    traceback_text: str,
+    requested_device: str,
+    selected_device: str,
+    model_name: str,
+    env: Optional[Dict[str, object]] = None,
+) -> Optional[Dict[str, object]]:
+    text = "\n".join(
+        part for part in (str(exc or ""), traceback_text or "") if part
+    )
+    lower = text.lower()
+    is_mps_unsupported = (
+        "output channels > 65536 not supported at the mps device" in lower
+        or (
+            "notimplementederror" in lower
+            and "pytorch_enable_mps_fallback" in lower
+            and "mps" in lower
+        )
+    )
+    if not is_mps_unsupported:
+        return None
+
+    env = env or {}
+    details = {
+        "requested_device": requested_device or "",
+        "selected_device": selected_device or "",
+        "model": model_name or "",
+        "torch_version": str(env.get("torch_version") or env.get("torch") or "unknown"),
+        "platform": str(env.get("platform") or platform.system()),
+        "platform_machine": str(env.get("platform_machine") or platform.machine()),
+        "mps_built": str(env.get("mps_built")),
+        "mps_available": str(env.get("mps_available")),
+        "mps_fallback_env": str(env.get("mps_fallback_env") or os.environ.get(MPS_FALLBACK_ENV, "")),
+    }
+    return {
+        "marker": MPS_UNSUPPORTED_MARKER,
+        "details": details,
+    }
 
 
 def _log_device_diagnostics(devices: List[Dict[str, str]], env: Dict[str, object]) -> None:
@@ -770,10 +829,12 @@ def main():
     else:
         print(f"STEMWERK_DIAG requested_device={device_preference}", file=sys.stderr)
 
+    runtime_env: Dict[str, object] = {}
     try:
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
-        _emit_runtime_diagnostics(resolved_device)
+        _enable_mps_runtime_fallback(device_preference, resolved_device)
+        runtime_env = _emit_runtime_diagnostics(resolved_device)
 
         sep = StemSeparator(model=args.model, device=resolved_device)
 
@@ -828,10 +889,23 @@ def main():
 
         return 0
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
         import traceback
 
-        traceback.print_exc(file=sys.stderr)
+        traceback_text = traceback.format_exc()
+        failure = _classify_runtime_failure(
+            exc,
+            traceback_text,
+            device_preference,
+            resolved_device,
+            args.model,
+            runtime_env,
+        )
+        if failure:
+            print(failure["marker"], file=sys.stderr)
+            for key, value in failure.get("details", {}).items():
+                print(f"STEMWERK_MPS_CONTEXT {key}={value}", file=sys.stderr)
+        print(f"ERROR: {exc}", file=sys.stderr)
+        print(traceback_text, file=sys.stderr, end="" if traceback_text.endswith("\n") else "\n")
         if write_done:
             write_done("ERROR")
         return 1

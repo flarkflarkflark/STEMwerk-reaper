@@ -16,6 +16,15 @@ def _windows_no_window_kwargs() -> Dict[str, int]:
     return {}
 
 
+def _is_macos_apple_silicon() -> bool:
+    machine = ""
+    try:
+        machine = platform.machine().lower()
+    except Exception:
+        machine = ""
+    return platform.system() == "Darwin" and machine in {"arm64", "aarch64"}
+
+
 def _rocm_arches_from_rocminfo() -> List[str]:
     """Best-effort list of GPU arch names (gfx...) in enumeration order."""
     try:
@@ -226,6 +235,13 @@ def select_device(requested_device: str = "auto") -> Tuple[str, str]:
         return None
 
     if requested_device == "auto":
+        if _is_macos_apple_silicon():
+            has_mps = any(
+                str(dev.get("id", "")) == "mps" or str(dev.get("type", "")) == "mps"
+                for dev in available
+            )
+            if has_mps:
+                return "cpu", "CPU"
         for dev in available:
             if dev["type"] in ("cuda", "directml", "mps"):
                 return dev["id"], dev["name"]
