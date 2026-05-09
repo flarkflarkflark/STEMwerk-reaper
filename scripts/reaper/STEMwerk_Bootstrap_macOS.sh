@@ -6,6 +6,8 @@ BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
+PINNED_TORCH_VERSION="2.5.1"
+PINNED_TORCHAUDIO_VERSION="2.5.1"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -120,6 +122,79 @@ remove_incompatible_venv() {
     log "Removing incompatible virtual environment: ${RUNTIME_BASE}/.venv"
     rm -rf "${RUNTIME_BASE}/.venv"
   fi
+}
+
+venv_torch_requires_rebuild() {
+  _venv_py="$1"
+  [ -x "${_venv_py}" ] || return 1
+  _probe="$("${_venv_py}" - <<'PY' 2>/dev/null || true
+try:
+    import torch
+    ver = getattr(torch, "__version__", "")
+    core = ver.split("+", 1)[0]
+    parts = core.split(".")
+    major = int(parts[0])
+    minor = int(parts[1])
+    if major > 2 or (major == 2 and minor >= 6):
+        print("rebuild|" + ver)
+    else:
+        print("ok|" + ver)
+except Exception:
+    print("missing")
+PY
+)"
+  case "${_probe}" in
+    rebuild\|*)
+      log "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator 0.23.0 compatibility"
+      return 0
+      ;;
+    ok\|*)
+      log "Existing venv torch is compatible: ${_probe#ok|}"
+      ;;
+  esac
+  return 1
+}
+
+install_pinned_torch_stack() {
+  log "Installing pinned torch stack: torch==${PINNED_TORCH_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
+  "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
+  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
+}
+
+assert_pinned_torch_stack() {
+  _venv_py="$1"
+  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+expected_torch = "${PINNED_TORCH_VERSION}"
+expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
+try:
+    import torch
+    torch_ver = getattr(torch, "__version__", "")
+except Exception as exc:
+    print("error|torch_import|" + str(exc))
+    raise SystemExit(0)
+try:
+    import torchaudio
+    torchaudio_ver = getattr(torchaudio, "__version__", "")
+except Exception as exc:
+    print("error|torchaudio_import|" + str(exc))
+    raise SystemExit(0)
+if torch_ver == expected_torch and torchaudio_ver == expected_torchaudio:
+    print("ok|" + torch_ver + "|" + torchaudio_ver)
+else:
+    print("bad|" + torch_ver + "|" + torchaudio_ver)
+PY
+)"
+  case "${_probe}" in
+    ok\|*)
+      log "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f3)"
+      return 0
+      ;;
+  esac
+  log "Pinned torch assertion failed: ${_probe}"
+  printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  return 1
 }
 
 evaluate_python_candidate() {
@@ -277,6 +352,9 @@ set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 
 # macOS must not blindly trust bare python3 because Homebrew/system aliases can
 # move to 3.13+ while STEMwerk 2.x only supports Python 3.10-3.12.
+if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+  remove_incompatible_venv
+fi
 if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
   if evaluate_python_candidate "${RUNTIME_BASE}/.venv/bin/python"; then
     log "Selected existing virtual environment Python: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
@@ -353,9 +431,9 @@ else
   fi
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
-    log "Installing ${PACKAGE} (conservative default on macOS)"
     "${VENV_PY}" -m pip install --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     "${VENV_PY}" -m pip install "numpy<2.0" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+    install_pinned_torch_stack || set_status "deps_failed" "torch_install_failed"
 
     log "Installing stemwerk-core"
     resolve_core_target || true
@@ -408,6 +486,11 @@ else
         fi
         rm -f "${_audio_tmp_log}" >/dev/null 2>&1 || true
       }
+
+    install_pinned_torch_stack || set_status "deps_failed" "torch_pin_repair_failed"
+    if ! assert_pinned_torch_stack "${VENV_PY}"; then
+      set_status "deps_failed" "torch_pin_assert_failed"
+    fi
 
     if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
       log "Installing ${ONNX_PACKAGE}"
@@ -465,6 +548,9 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
   "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
   "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 || set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
+  if ! assert_pinned_torch_stack "${VENV_PY}"; then
+    set_status "deps_failed" "torch_pin_assert_failed"
+  fi
 fi
 
 if [ -n "${STATE_FILE}" ]; then
