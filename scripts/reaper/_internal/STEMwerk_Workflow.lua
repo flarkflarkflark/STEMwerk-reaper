@@ -1,5 +1,7 @@
 local C = {}
 
+local PROGRESS_IDLE_STALE_SECONDS = 5400 -- 90 minutes without any detectable activity
+
 -- Helper: append a line to workflow_diag.log in outputDir with timestamp and job id
 local function append_diag_log(msg)
     local dir = C.progressState and C.progressState.outputDir or nil
@@ -26,6 +28,55 @@ end
 WORKFLOW = WORKFLOW or {}
 
 local C = {}
+
+local function getFileSizeSafe(path)
+    if not path or path == "" then return -1 end
+    local f = io.open(path, "rb")
+    if not f then return -1 end
+    local sz = f:seek("end")
+    f:close()
+    return tonumber(sz) or -1
+end
+
+local function touchProgressActivity(reason)
+    C.progressState.lastActivityAt = os.time()
+    if reason and reason ~= "" then
+        C.progressState.lastActivityReason = reason
+    end
+end
+
+local function refreshProgressActivityFromFiles()
+    local now = os.time()
+    local changed = false
+
+    local stdoutSize = getFileSizeSafe(C.progressState.stdoutFile)
+    if stdoutSize ~= (C.progressState.lastStdoutSize or -1) then
+        C.progressState.lastStdoutSize = stdoutSize
+        C.progressState.lastStdoutChangeAt = now
+        changed = true
+    end
+
+    local logSize = getFileSizeSafe(C.progressState.logFile)
+    if logSize ~= (C.progressState.lastLogSize or -1) then
+        C.progressState.lastLogSize = logSize
+        C.progressState.lastLogChangeAt = now
+        changed = true
+    end
+
+    local donePath = (C.progressState.outputDir and C.progressState.outputDir ~= "")
+        and (C.progressState.outputDir .. PATH_SEP .. "done.txt")
+        or nil
+    local doneSize = getFileSizeSafe(donePath)
+    if doneSize ~= (C.progressState.lastDoneSize or -1) then
+        C.progressState.lastDoneSize = doneSize
+        C.progressState.lastDoneChangeAt = now
+        changed = true
+    end
+
+    if changed then
+        touchProgressActivity("file_update")
+    end
+end
 
 function WORKFLOW.configure(ctx)
     for k, v in pairs(ctx) do C[k] = v end
@@ -108,8 +159,13 @@ function WORKFLOW.updateProgressFromFile()
     f:close()
 
     if lastProgress then
+        local prevPercent = tonumber(C.progressState.percent) or 0
+        local prevStage = tostring(C.progressState.stage or "")
         C.progressState.percent = lastProgress.percent
         C.progressState.stage = lastProgress.stage
+        if lastProgress.percent ~= prevPercent or tostring(lastProgress.stage or "") ~= prevStage then
+            touchProgressActivity("progress_update")
+        end
     end
 end
 
@@ -165,6 +221,15 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     C.progressState.percent = 0
     C.progressState.stage = "Starting.."
     C.progressState.startTime = os.time()
+    C.progressState.lastActivityAt = C.progressState.startTime
+    C.progressState.lastActivityReason = "process_start"
+    C.progressState.lastStdoutSize = getFileSizeSafe(stdoutFile)
+    C.progressState.lastLogSize = getFileSizeSafe(logFile)
+    C.progressState.lastDoneSize = getFileSizeSafe(doneFile)
+    C.progressState.lastStdoutChangeAt = C.progressState.startTime
+    C.progressState.lastLogChangeAt = C.progressState.startTime
+    C.progressState.lastDoneChangeAt = C.progressState.startTime
+    C.progressState.cancelRequested = false
     C.progressState.execLogPath = SW_LOG.getLogPath()
     local execLogPath = C.progressState.execLogPath or SW_LOG.getLogPath()
     local jobTag = "single"
@@ -449,13 +514,15 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
             script:write("(\n")
-            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR"\n')
+            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR" &\n')
+            script:write('  worker_pid=$!\n')
+            script:write('  echo "$worker_pid" > "$PIDFILE"\n')
+            script:write('  wait "$worker_pid"\n')
             script:write("  rc=$?\n")
             script:write('  echo "$rc" > "$EXITCODE"\n')
             script:write('  if [ "$rc" -ne 0 ]; then echo "EXIT:$rc" >> "$STDERR"; fi\n')
             script:write('  echo DONE > "$DONE"\n')
             script:write(") &\n")
-            script:write('echo $! > "$PIDFILE"\n')
             script:close()
 
             local cmd = "sh " .. C.quoteArg(launcherPath) .. C.suppressStderr()
@@ -489,6 +556,8 @@ end
 -- Progress loop with UI
 function WORKFLOW.progressLoop()
     local loopNow = uiNow()
+    refreshProgressActivityFromFiles()
+    local cancelClicked = false
 
     if loopNow >= (C.progressState.nextPollAt or 0) then
         C.progressState.nextPollAt = loopNow + UI_PACING.progressPollInterval
@@ -501,7 +570,7 @@ function WORKFLOW.progressLoop()
 
     if loopNow >= (C.progressState.nextFrameAt or 0) then
         C.progressState.nextFrameAt = loopNow + pacingFrameInterval("progressFrameInterval", "progressFrameIntervalFx")
-        C.drawProgressWindow()
+        cancelClicked = C.drawProgressWindow() and true or false
     end
 
     local char = gfx.getchar()
@@ -510,8 +579,10 @@ function WORKFLOW.progressLoop()
     if char == 26161 then  -- F1 key code
         -- Reserved (no-op for now). Keep input handling centralized here so ESC is never consumed elsewhere.
     end
-    if char == -1 or char == 27 then  -- Window closed or ESC pressed
+    local cancelRequested = cancelClicked or ((C.progressState and C.progressState.cancelRequested) and true or false)
+    if char == -1 or char == 27 or cancelRequested then  -- Window closed, ESC pressed, or cancel button
         -- Window closed by user
+        C.progressState.cancelRequested = false
         C.progressState.running = false
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
@@ -527,7 +598,7 @@ function WORKFLOW.progressLoop()
 
         -- After cancel, go back to the start/selection monitoring window.
         -- This lets the user quickly pick a new item/time selection without reopening the full dialog.
-        C.showMessage("Cancelled", C.T("separation_cancelled"), "info", true)
+        C.showMessage("Cancelled", C.T("progress_cancelled_status") or C.T("separation_cancelled"), "info", true)
         return
     end
 
@@ -545,8 +616,11 @@ function WORKFLOW.progressLoop()
         return
     end
 
-    -- Check timeout (10 minutes max)
-    if os.time() - C.progressState.startTime > 600 then
+    -- No fixed wall-clock timeout for active jobs.
+    -- Only declare stale when there has been no progress/log/state activity for a long period.
+    local lastActivityAt = tonumber(C.progressState.lastActivityAt or 0) or 0
+    local idleFor = lastActivityAt > 0 and (os.time() - lastActivityAt) or 0
+    if idleFor > PROGRESS_IDLE_STALE_SECONDS then
         C.progressState.running = false
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
@@ -556,7 +630,14 @@ function WORKFLOW.progressLoop()
 
         gfx.quit()
         C.progressState.windowOpen = false
-        C.showMessage("Timeout", "Separation timed out after 10 minutes.", "error", false)
+        local msg = "Separation appears stale: no progress or log updates for "
+            .. tostring(math.floor(idleFor / 60)) .. " minutes.\n\n"
+            .. "Run artifacts and logs were preserved for diagnostics.\n"
+            .. "stdout: " .. tostring(C.progressState.stdoutFile or "unknown") .. "\n"
+            .. "log: " .. tostring(C.progressState.logFile or "unknown") .. "\n"
+            .. "debug: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
+        debugLog("progressLoop stale timeout: idleForSec=" .. tostring(idleFor) .. " lastActivityReason=" .. tostring(C.progressState.lastActivityReason or "unknown"))
+        C.showMessage("Timeout", msg, "error", false)
         return
     end
 
@@ -587,7 +668,7 @@ function WORKFLOW.finishSeparationCallback()
             processStemsResult(stems)
             debugLog("[LOG] Import end (processStemsResult)")
             debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
-            C.cleanupTempWorkDir(C.progressState.outputDir)
+            C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })
             debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
         elseif checkCount < 10 then
             -- Retry

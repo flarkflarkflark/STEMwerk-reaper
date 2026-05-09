@@ -3,16 +3,21 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
+PINNED_TORCH_VERSION="2.5.1"
+PINNED_TORCHAUDIO_VERSION="2.5.1"
+PINNED_TORCHVISION_VERSION="0.20.1"
 
 RUNTIME_BASE=""
 STATE_FILE=""
 LOG_FILE=""
+MODE="repair"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --runtime-base) RUNTIME_BASE="$2"; shift 2 ;;
     --state-file) STATE_FILE="$2"; shift 2 ;;
     --log-file) LOG_FILE="$2"; shift 2 ;;
+    --mode) MODE="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -41,6 +46,14 @@ is_core_source_bundle() {
     && [ -f "$1/pyproject.toml" ] \
     && [ -f "$1/src/stemwerk_core/__init__.py" ] \
     && [ -f "$1/src/stemwerk_core/separator.py" ]
+}
+
+model_cache_dir() {
+  if [ -n "${XDG_DATA_HOME:-}" ]; then
+    printf "%s/STEMwerk/models\n" "${XDG_DATA_HOME}"
+  else
+    printf "%s/.local/share/STEMwerk/models\n" "${HOME:-/tmp}"
+  fi
 }
 
 write_state() {
@@ -112,12 +125,123 @@ resolve_core_target() {
   return 1
 }
 
+venv_torch_requires_rebuild() {
+  _venv_py="$1"
+  [ -x "${_venv_py}" ] || return 1
+  _probe="$("${_venv_py}" - <<'PY' 2>/dev/null || true
+try:
+    import torch
+    ver = getattr(torch, "__version__", "")
+    core = ver.split("+", 1)[0]
+    parts = core.split(".")
+    major = int(parts[0])
+    minor = int(parts[1])
+    if major > 2 or (major == 2 and minor >= 6):
+        print("rebuild|" + ver)
+    else:
+        print("ok|" + ver)
+except Exception:
+    print("missing")
+PY
+)"
+  case "${_probe}" in
+    rebuild\|*)
+      log_step "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator 0.23.0 compatibility"
+      return 0
+      ;;
+    ok\|*)
+      log_step "Existing venv torch is compatible: ${_probe#ok|}"
+      ;;
+  esac
+  return 1
+}
+
+linux_torch_install_args() {
+  printf '"torch==%s" "torchvision==%s" "torchaudio==%s"' \
+    "${PINNED_TORCH_VERSION}" \
+    "${PINNED_TORCHVISION_VERSION}" \
+    "${PINNED_TORCHAUDIO_VERSION}"
+}
+
+log_nvidia_packages() {
+  NVIDIA_PKGS="$("${VENV_PY}" -m pip list 2>/dev/null | awk '/^nvidia-/{print $1"=="$2}')"
+  if [ -n "${NVIDIA_PKGS}" ]; then
+    log_step "WARNING: NVIDIA packages detected after ${1}: ${NVIDIA_PKGS}"
+  else
+    log_step "No NVIDIA packages detected after ${1}"
+  fi
+}
+
+install_linux_torch_stack() {
+  _mode="$1"
+  _index="${2:-}"
+  log_step "Uninstalling existing torch/vision/audio before ${_mode} torch install"
+  "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
+  case "${_mode}" in
+    cpu)
+      log_step "Torch source index: https://download.pytorch.org/whl/cpu (torch/torchaudio pinned to ${PINNED_TORCH_VERSION})"
+      eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url https://download.pytorch.org/whl/cpu $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+      ;;
+    rocm)
+      log_step "Torch source index: ${_index} (torch/torchaudio pinned to ${PINNED_TORCH_VERSION})"
+      eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url \"${_index}\" $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+      ;;
+    cuda)
+      log_step "Torch source index: default pip index (torch/torchaudio pinned to ${PINNED_TORCH_VERSION})"
+      eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+assert_pinned_torch_stack() {
+  _venv_py="$1"
+  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+expected_torch = "${PINNED_TORCH_VERSION}"
+expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
+try:
+    import torch
+    torch_ver = getattr(torch, "__version__", "")
+except Exception as exc:
+    print("error|torch_import|" + str(exc))
+    raise SystemExit(0)
+try:
+    import torchaudio
+    torchaudio_ver = getattr(torchaudio, "__version__", "")
+except Exception as exc:
+    print("error|torchaudio_import|" + str(exc))
+    raise SystemExit(0)
+if torch_ver == expected_torch and torchaudio_ver == expected_torchaudio:
+    print("ok|" + torch_ver + "|" + torchaudio_ver)
+else:
+    print("bad|" + torch_ver + "|" + torchaudio_ver)
+PY
+)"
+  case "${_probe}" in
+    ok\|*)
+      log_step "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f3)"
+      return 0
+      ;;
+  esac
+  log_step "Pinned torch assertion failed: ${_probe}"
+  printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  return 1
+}
+
 if [ -z "${RUNTIME_BASE}" ]; then
   echo "Missing runtime base" >&2
   exit 1
 fi
 
 log_stage "Bootstrap started"
+log_step "Requested mode: ${MODE}"
+log_step "Downloaded models are kept at: $(model_cache_dir)"
+if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
+  log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
+fi
 log_step "Preparing runtime directories"
 log_step "Clearing GPU override env vars (HIP_VISIBLE_DEVICES/HSA_OVERRIDE_GFX_VERSION/ROCR_VISIBLE_DEVICES/CUDA_VISIBLE_DEVICES)"
 log_step "GPU env before clear: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-} HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-} ROCR_VISIBLE_DEVICES=${ROCR_VISIBLE_DEVICES:-} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
@@ -143,7 +267,7 @@ FFMPEG=""
 VENV_PY=""
 PYTHON_PATH=""
 # Conservative default on Linux to avoid extra GPU deps unless explicitly needed.
-PACKAGE="audio-separator"
+PACKAGE="audio-separator==0.23.0"
 ONNX_PACKAGE="onnxruntime"
 CORE_EXTRA=""
 PROFILE="linux-cpu"
@@ -151,6 +275,7 @@ BACKEND="cpu"
 BACKEND_REASON=""
 BACKEND_NOTE=""
 CONSTRAINTS_FILE=""
+SELECTED_TORCH_INDEX=""
 STEP_INDEX=""
 STEP_TOTAL="4"
 STEP_LABEL=""
@@ -186,7 +311,7 @@ if [ "${ROCM_MODE}" -eq 1 ] && [ "${GPU_MODE}" -eq 0 ]; then
   BACKEND="rocm"
 elif [ "${GPU_MODE}" -eq 1 ]; then
   log_step "CUDA-capable NVIDIA detected; enabling GPU packages"
-  PACKAGE="audio-separator[gpu]"
+  PACKAGE="audio-separator[gpu]==0.23.0"
   CORE_EXTRA="[gpu]"
   PROFILE="linux-cuda"
   BACKEND="cuda"
@@ -341,6 +466,10 @@ if [ -z "${PYTHON}" ]; then
   fi
 else
   log_stage "Creating venv"
+  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+    log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
+    rm -rf "${RUNTIME_BASE}/.venv"
+  fi
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     log_step "Creating venv at ${RUNTIME_BASE}/.venv"
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
@@ -353,18 +482,14 @@ else
 
     if [ "${BACKEND}" = "cpu" ]; then
       log_stage "Installing CPU torch"
-      log_step "Uninstalling existing torch/vision/audio before CPU install"
-      "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
-      log_step "Torch source index: https://download.pytorch.org/whl/cpu (no extra index; CUDA deps blocked)"
-      "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url "https://download.pytorch.org/whl/cpu" torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "torch_cpu_install_failed"
-      NVIDIA_PKGS="$("${VENV_PY}" -m pip list 2>/dev/null | awk '/^nvidia-/{print $1"=="$2}')"
-      if [ -n "${NVIDIA_PKGS}" ]; then
-        log_step "WARNING: NVIDIA packages detected after CPU torch install: ${NVIDIA_PKGS}"
-      else
-        log_step "No NVIDIA packages detected after CPU torch install"
-      fi
-      PACKAGE="audio-separator"
+      install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_cpu_install_failed"
+      log_nvidia_packages "CPU torch install"
+      PACKAGE="audio-separator==0.23.0"
       CORE_EXTRA=""
+    elif [ "${BACKEND}" = "cuda" ]; then
+      log_stage "Installing CUDA torch"
+      install_linux_torch_stack "cuda" || set_status "deps_failed" "torch_cuda_install_failed"
+      log_nvidia_packages "CUDA torch install"
     fi
 
 if [ "${BACKEND}" = "rocm" ]; then
@@ -427,19 +552,12 @@ if [ "${BACKEND}" = "rocm" ]; then
       for idx in ${IDX_LIST}
       do
         log_step "Trying ROCm torch index: ${idx} (no extra index; CUDA deps blocked)"
-        log_step "Uninstalling existing torch/vision/audio before ROCm install"
-        "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
-        if ! "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url "${idx}" torch torchvision torchaudio >> "${LOG_FILE}" 2>&1; then
+        if ! install_linux_torch_stack "rocm" "${idx}"; then
           log_step "ROCm torch pip install failed for ${idx}"
           rocm_fail_reason="rocm_wheel_not_found"
           continue
         fi
-        NVIDIA_PKGS="$("${VENV_PY}" -m pip list 2>/dev/null | awk '/^nvidia-/{print $1"=="$2}')"
-        if [ -n "${NVIDIA_PKGS}" ]; then
-          log_step "WARNING: NVIDIA packages detected after ROCm torch install: ${NVIDIA_PKGS}"
-        else
-          log_step "No NVIDIA packages detected after ROCm torch install"
-        fi
+        log_nvidia_packages "ROCm torch install"
 
         probe_line="$("${VENV_PY}" - <<'PY' 2>&1
 import torch
@@ -519,17 +637,17 @@ EOF
         fi
 
         rocm_ok=1
+        SELECTED_TORCH_INDEX="${idx}"
         break
       done
 
       if [ "${rocm_ok}" -ne 1 ]; then
         log_step "ROCm torch install/probe failed; falling back to CPU (reason=${rocm_fail_reason})"
-        log_step "Torch source index: https://download.pytorch.org/whl/cpu (no extra index; CUDA deps blocked)"
-        "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url "https://download.pytorch.org/whl/cpu" torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
+        install_linux_torch_stack "cpu" || true
         PROFILE="linux-cpu"
         BACKEND="cpu"
         BACKEND_REASON="${rocm_fail_reason}"
-        PACKAGE="audio-separator"
+        PACKAGE="audio-separator==0.23.0"
         CORE_EXTRA=""
       fi
     fi
@@ -609,15 +727,15 @@ PY
     audio_install_rc=0
     if ! "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; then
       if [ -n "${CONSTRAINTS_FILE}" ]; then
-        log_step "Installing audio-separator with constraints (torch pinned)"
+        log_step "Installing audio-separator 0.23.0 with constraints (torch pinned)"
         "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
       else
         "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
       fi
     fi
-    if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator" ]; then
+    if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator==0.23.0" ]; then
       log_step "GPU audio-separator install failed; falling back to CPU package"
-      PACKAGE="audio-separator"
+      PACKAGE="audio-separator==0.23.0"
       PROFILE="linux-cpu"
       BACKEND="cpu"
       BACKEND_REASON="${BACKEND_REASON:-backend_install_failed}"
@@ -625,6 +743,25 @@ PY
     fi
     if [ "${audio_install_rc}" -ne 0 ]; then
       set_status "deps_failed" "audio_separator_install_failed"
+    fi
+    log_stage "Re-applying pinned torch stack"
+    case "${BACKEND}" in
+      rocm)
+        if [ -n "${SELECTED_TORCH_INDEX}" ]; then
+          install_linux_torch_stack "rocm" "${SELECTED_TORCH_INDEX}" || set_status "deps_failed" "torch_pin_repair_failed"
+        else
+          install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
+        fi
+        ;;
+      cuda)
+        install_linux_torch_stack "cuda" || set_status "deps_failed" "torch_pin_repair_failed"
+        ;;
+      *)
+        install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
+        ;;
+    esac
+    if ! assert_pinned_torch_stack "${VENV_PY}"; then
+      set_status "deps_failed" "torch_pin_assert_failed"
     fi
 
     log_stage "Checking/installing ONNX Runtime"
@@ -683,6 +820,9 @@ if [ -n "${PYTHON}" ] && [ -n "${VENV_PY}" ]; then
   fi
   if ! "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1; then
     set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
+  fi
+  if ! assert_pinned_torch_stack "${VENV_PY}"; then
+    set_status "deps_failed" "torch_pin_assert_failed"
   fi
 fi
 

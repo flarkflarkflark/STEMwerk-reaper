@@ -4645,6 +4645,14 @@ local function drawProceduralArt(x, y, w, h, time, rotation, skipBackground)
     end
 end
 
+local function getFxReadabilityOverlayAlpha()
+    if SETTINGS.darkMode then
+        return 0.50
+    end
+    -- Keep light-mode FX decorative so they do not compete with progress/log text.
+    return 0.66
+end
+
 -- Initialize procedural art on first run
 generateNewArt()
 
@@ -6861,6 +6869,26 @@ local rememberDialogGeometryFromRect = WINDOW.rememberDialogGeometryFromRect
 local updateDialogPosFromGfx = WINDOW.updateDialogPosFromGfx
 captureWindowGeometry = WINDOW.captureWindowGeometry
 
+local function captureHelpWindowGeometry(currentTitle)
+    -- On macOS, prefer gfx/dock-based geometry capture. JS_Window rects can
+    -- disagree with gfx.init() expectations (client vs frame/origin mismatch),
+    -- which causes visible jumps when switching Main <-> Help.
+    if OS == "macOS" then
+        if captureWindowGeometry(currentTitle) then return true end
+        return captureWindowGeometry(WINDOW_ART_GALLERY)
+    end
+
+    if helpState.hwnd and reaper.JS_Window_GetRect then
+        local ok, left, top, right, bottom = reaper.JS_Window_GetRect(helpState.hwnd)
+        if ok then
+            return rememberDialogGeometryFromRect(left, top, right, bottom)
+        end
+    end
+
+    if captureWindowGeometry(currentTitle) then return true end
+    return captureWindowGeometry(WINDOW_ART_GALLERY)
+end
+
 -- Art Gallery window loop
 local function artGalleryLoop()
     -- Update window title based on current tab
@@ -6875,7 +6903,7 @@ local function artGalleryLoop()
     local currentTitle = tabTitles[helpState.currentTab] or "STEMwerk Help"
 
     -- Save window position/size continuously and update title
-    if reaper.JS_Window_GetRect then
+    if OS ~= "macOS" and reaper.JS_Window_GetRect then
         local hwnd = helpState.hwnd
         if (not hwnd) and reaper.JS_Window_Find then
             -- Title changes dynamically; find by current title first, then by stable prefix.
@@ -6898,20 +6926,7 @@ local function artGalleryLoop()
 
     local result = drawArtGallery()
     if result == "close" then
-        -- Remember any size/position changes made in the help window
-        local captured = false
-        if helpState.hwnd and reaper.JS_Window_GetRect then
-            local ok, left, top, right, bottom = reaper.JS_Window_GetRect(helpState.hwnd)
-            if ok then
-                rememberDialogGeometryFromRect(left, top, right, bottom)
-                captured = true
-            end
-        end
-        if (not captured) and (not lastDialogX or not lastDialogY) then
-            if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry(WINDOW_ART_GALLERY)
-            end
-        end
+        captureHelpWindowGeometry(currentTitle)
         -- Save settings before closing
         saveSettings()
         gfx.quit()
@@ -6938,20 +6953,7 @@ local function artGalleryLoop()
         return
     elseif result == "start" then
         -- Enter key pressed - close help and start STEMwerk
-        -- Remember any size/position changes made in the help window
-        local captured = false
-        if helpState.hwnd and reaper.JS_Window_GetRect then
-            local ok, left, top, right, bottom = reaper.JS_Window_GetRect(helpState.hwnd)
-            if ok then
-                rememberDialogGeometryFromRect(left, top, right, bottom)
-                captured = true
-            end
-        end
-        if (not captured) and (not lastDialogX or not lastDialogY) then
-            if not captureWindowGeometry(currentTitle) then
-                captureWindowGeometry(WINDOW_ART_GALLERY)
-            end
-        end
+        captureHelpWindowGeometry(currentTitle)
         saveSettings()
         gfx.quit()
         helpState.hwnd = nil
@@ -10171,10 +10173,11 @@ function renderDialogBackground(ctx)
 
     drawProceduralArt(0, 0, ctx.w, ctx.h, proceduralArt.time, mainDialogArt.rotation, true)
 
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, ctx.w, ctx.h, 1)
 
@@ -10498,16 +10501,16 @@ function renderMainColumns(ctx)
         drawColumnHeader(T("after"), col6X, afterBoxW, mainHeaderFont, contentTop)
         gfx.setfont(1, "Arial", S(13))
 
-        if drawCheckbox(col6X, afterY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
-            SETTINGS.createFolder = not SETTINGS.createFolder
-        end
-        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_create_folder"))
-
-        afterY = afterY + S(22)
         if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, afterBtnFontSize) then
             HELPERS.cycleColorMode()
         end
         setTooltip(col6X, afterY, afterBoxW, btnH, HELPERS.getColorModeTooltip())
+        afterY = afterY + S(22)
+
+        if drawCheckbox(col6X, afterY, SETTINGS.createFolder, T("create_folder"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
+            SETTINGS.createFolder = not SETTINGS.createFolder
+        end
+        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_create_folder"))
 
         afterY = afterY + S(22)
         if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
@@ -10592,6 +10595,12 @@ function renderMainColumns(ctx)
 
         local mode = tostring(SETTINGS.postProcessTakes or "none")
 
+        if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, afterBtnFontSize) then
+            HELPERS.cycleColorMode()
+        end
+        setTooltip(col6X, afterY, afterBoxW, btnH, HELPERS.getColorModeTooltip())
+
+        afterY = afterY + S(22)
         if drawRadio(col6X, afterY, mode == "none", T("keep_takes"), nil, afterBoxW, nil, nil, afterBtnFontSize) then
             SETTINGS.postProcessTakes = "none"
             mode = "none"
@@ -11168,7 +11177,7 @@ local function isSafeTempDir(path)
     return true
 end
 
-local function cleanupTempWorkDir(dir)
+local function cleanupTempWorkDir(dir, opts)
     if not dir or dir == "" then return end
     if SETTINGS and SETTINGS.keepTempFiles then
         debugLog("cleanupTempWorkDir: keepTempFiles enabled, skipping " .. tostring(dir))
@@ -11179,29 +11188,75 @@ local function cleanupTempWorkDir(dir)
         return
     end
 
-    if not (reaper and reaper.EnumerateFiles) then
-        local known = {"input.wav", "stdout.txt", "separation_log.txt", "done.txt", "pid.txt"}
-        for _, name in ipairs(known) do
-            os.remove(dir .. PATH_SEP .. name)
-        end
-        os.remove(dir .. PATH_SEP .. "input.wav.ffmpeg.log")
+    opts = opts or {}
+    local successOnly = opts.success == true
+    if not successOnly then
+        debugLog("cleanupTempWorkDir: skipping because run not marked successful for " .. tostring(dir))
         return
     end
 
-    local idx = 0
-    while true do
-        local f = reaper.EnumerateFiles(dir, idx)
-        if not f then break end
-        local lower = tostring(f):lower()
-        local full = dir .. PATH_SEP .. f
-        if lower == "input.wav" then
-            os.remove(full)
-        elseif lower:match("%.wav$") then
-            -- Keep outputs (stems)
-        else
-            os.remove(full)
+    local knownGeneratedStemWavs = {
+        ["vocals.wav"] = true,
+        ["vocal.wav"] = true,
+        ["drums.wav"] = true,
+        ["drum.wav"] = true,
+        ["bass.wav"] = true,
+        ["other.wav"] = true,
+        ["guitar.wav"] = true,
+        ["piano.wav"] = true,
+        ["instrumental.wav"] = true,
+        ["no_vocals.wav"] = true,
+        ["accompaniment.wav"] = true,
+    }
+
+    local keepByBasename = {}
+    local keepStemPaths = opts.keepStemPaths or {}
+    for _, p in pairs(keepStemPaths) do
+        local s = tostring(p or "")
+        if s ~= "" then
+            local base = s:match("([^/\\]+)$")
+            if base and base ~= "" then
+                keepByBasename[base:lower()] = true
+            end
         end
-        idx = idx + 1
+    end
+
+    local function isPathInsideDir(path, parentDir)
+        local nPath = normalizePath(path or "")
+        local nParent = normalizePath(parentDir or "")
+        if nPath == "" or nParent == "" then return false end
+        local nPathLower = nPath:lower()
+        local nParentLower = nParent:lower()
+        if nPathLower == nParentLower then return true end
+        local sep = PATH_SEP
+        local withSep = nParentLower
+        if withSep:sub(-1) ~= sep then
+            withSep = withSep .. sep
+        end
+        return nPathLower:sub(1, #withSep) == withSep
+    end
+
+    if reaper and reaper.EnumerateFiles then
+        local idx = 0
+        while true do
+            local f = reaper.EnumerateFiles(dir, idx)
+            if not f then break end
+            local lower = tostring(f):lower()
+            local full = dir .. PATH_SEP .. f
+            if knownGeneratedStemWavs[lower] and not keepByBasename[lower] and isPathInsideDir(full, dir) then
+                local ok = os.remove(full)
+                debugLog("cleanupTempWorkDir: removed unselected generated stem " .. tostring(full) .. " ok=" .. tostring(ok))
+            end
+            idx = idx + 1
+        end
+    end
+
+    local inputWav = dir .. PATH_SEP .. "input.wav"
+    if not (DEBUG and DEBUG.enabled) and isPathInsideDir(inputWav, dir) then
+        local ok = os.remove(inputWav)
+        if ok then
+            debugLog("cleanupTempWorkDir: removed input.wav " .. tostring(inputWav))
+        end
     end
 end
 
@@ -12002,12 +12057,82 @@ local function normalizeProgressStage(stage)
     stage = stage:gsub("%s*%b[]", "")
     stage = stage:gsub("%s*%b()", "")
     stage = stage:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    local lower = stage:lower()
     if stage == "" then
         stage = T("processing_label") or "Processing"
-    elseif stage:lower():match("^processing") then
+    elseif lower:match("^processing[%s%.]*$") then
         stage = T("processing_label") or "Processing"
+    else
+        local key = nil
+        local flat = lower:gsub("[%s%.:]+$", "")
+        if flat == "loading model" then
+            key = "progress_stage_loading_model"
+        elseif flat == "loading ai model" then
+            key = "progress_stage_loading_ai_model"
+        elseif flat == "starting separation" then
+            key = "progress_stage_starting_separation"
+        elseif flat == "writing stems" then
+            key = "progress_stage_writing_stems"
+        elseif flat == "complete" then
+            key = "progress_stage_complete"
+        end
+        if key then
+            stage = T(key) or stage
+        end
     end
     return stage
+end
+
+local function localizeProgressStagePrefix(stageText)
+    local text = tostring(stageText or "")
+    if text == "" then return text end
+    local map = {
+        {"processing", T("progress_stage_processing") or "Processing"},
+        {"loading ai model", T("progress_stage_loading_ai_model") or "Loading AI model"},
+        {"loading model", T("progress_stage_loading_model") or "Loading model"},
+        {"starting separation", T("progress_stage_starting_separation") or "Starting separation"},
+        {"writing stems", T("progress_stage_writing_stems") or "Writing stems"},
+        {"complete", T("progress_stage_complete") or "Complete"},
+    }
+    local trimmed = text:gsub("^%s+", "")
+    local lower = trimmed:lower()
+    for _, entry in ipairs(map) do
+        local src, dst = entry[1], entry[2]
+        if lower == src
+            or lower:sub(1, #src + 1) == (src .. " ")
+            or lower:sub(1, #src + 1) == (src .. "(")
+            or lower:sub(1, #src + 1) == (src .. "[")
+            or lower:sub(1, #src + 1) == (src .. ".")
+        then
+            local suffix = trimmed:sub(#src + 1)
+            suffix = suffix:gsub("^%s+", "")
+            local suffixLower = suffix:lower()
+            if suffixLower == src
+                or suffixLower:sub(1, #src + 1) == (src .. " ")
+                or suffixLower:sub(1, #src + 1) == (src .. "(")
+                or suffixLower:sub(1, #src + 1) == (src .. "[")
+            then
+                suffix = suffix:sub(#src + 1)
+                suffix = suffix:gsub("^%s+", "")
+            end
+            if suffix ~= "" then
+                return dst .. " " .. suffix
+            end
+            return dst
+        end
+    end
+    return text
+end
+
+local function readableTerminalAccent(r, g, b)
+    if SETTINGS.darkMode then
+        return r, g, b
+    end
+    -- Light mode terminal: keep stem tint, but force higher contrast dark variants.
+    local dr = math.max(0.07, math.min(0.33, (r * 0.26) + 0.05))
+    local dg = math.max(0.08, math.min(0.36, (g * 0.28) + 0.06))
+    local db = math.max(0.07, math.min(0.34, (b * 0.26) + 0.05))
+    return dr, dg, db
 end
 
 local function formatProgressLine(rawLine, trackIdx)
@@ -12191,11 +12316,12 @@ local function drawProgressWindow()
     -- Draw procedural art covering entire window (background layer)
     drawProceduralArt(0, 0, w, h, proceduralArt.time, 0, true)
 
-    -- Semi-transparent overlay for readability - pure black/white
+    -- Theme-aware readability wash over animated FX
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, w, h, 1)
 
@@ -12208,6 +12334,7 @@ local function drawProgressWindow()
     -- Tooltip tracking
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
+    local cancelClicked = false
 
     -- Best-effort: parse actual selected device id/name from the separation log (so UI never lies).
     -- We update at most ~2x/sec to keep it cheap.
@@ -12476,12 +12603,18 @@ local function drawProgressWindow()
 
     local function drawProgressText(text, x, y, alpha)
         alpha = alpha or 1
-        gfx.set(0, 0, 0, 0.6 * alpha)
-        gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
-        gfx.set(1, 1, 1, alpha)
+        if SETTINGS.darkMode then
+            gfx.set(0, 0, 0, 0.6 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
+            gfx.set(1, 1, 1, alpha)
+        else
+            gfx.set(1, 1, 1, 0.35 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.set(0.08, 0.10, 0.12, alpha)
+        end
         gfx.x, gfx.y = x, y
         gfx.drawstr(text)
     end
@@ -12494,12 +12627,43 @@ local function drawProgressWindow()
     local py = barY + (barH - PS(14)) / 2
     drawProgressText(percentText, px, py, 1)
 
+    local footerElapsed = os.time() - (progressState.startTime or os.time())
+    local footerProcessedAudioDur = 0
+    if itemSubSelection and itemSubSelEnd and itemSubSelStart and itemSubSelEnd > itemSubSelStart then
+        footerProcessedAudioDur = itemSubSelEnd - itemSubSelStart
+    elseif itemLen and itemLen > 0 then
+        footerProcessedAudioDur = itemLen
+    end
+    local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
+    local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
+
     -- Stage text inside the main progress bar, like the multi-track job bars.
     local stageDisplay = normalizeProgressStage(progressState.stage or (T("starting") or "Starting..."))
-    local inlineStageText = tostring(stageDisplay or "")
+    local baseStageText = tostring(stageDisplay or "")
         :gsub("%s*%([^%)]*%)", "")
         :gsub("%s*%[[^%]]*%]", "")
         :gsub("%s+$", "")
+    local elapsedMins = math.floor(math.max(0, footerElapsed) / 60)
+    local elapsedSecs = math.max(0, footerElapsed) % 60
+    local elapsedText = string.format("%d:%02d", elapsedMins, elapsedSecs)
+    local stageStr = progressState.stage or ""
+    local barEta = stageStr:match("ETA%s+([%d]+:%s*%d+)")
+    if barEta then barEta = barEta:gsub("%s+", "") end
+    local richParts = { elapsedText }
+    if barEta and barEta ~= "" then
+        local etaLabel = T("eta_label") or "ETA:"
+        richParts[#richParts + 1] = tostring(etaLabel) .. " " .. tostring(barEta)
+    end
+    local inlineStageText = baseStageText
+    if inlineStageText == "" then
+        inlineStageText = T("processing_label") or "Processing"
+    end
+    if #richParts > 0 then
+        inlineStageText = inlineStageText .. " (" .. table.concat(richParts, " | ") .. ")"
+    end
+    if footerDeviceDetail and footerDeviceDetail ~= "" then
+        inlineStageText = inlineStageText .. " [" .. tostring(footerDeviceDetail) .. "]"
+    end
     if inlineStageText ~= "" then
         gfx.setfont(1, "Arial", PS(11))
         local stageTextW = math.max(PS(110), barW - PS(170))
@@ -12556,15 +12720,6 @@ local function drawProgressWindow()
             tooltipX, tooltipY = mx + PS(10), my + PS(15)
     end
 
-    local footerElapsed = os.time() - (progressState.startTime or os.time())
-    local footerProcessedAudioDur = 0
-    if itemSubSelection and itemSubSelEnd and itemSubSelStart and itemSubSelEnd > itemSubSelStart then
-        footerProcessedAudioDur = itemSubSelEnd - itemSubSelStart
-    elseif itemLen and itemLen > 0 then
-        footerProcessedAudioDur = itemLen
-    end
-    local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
-    local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
     local footerSummaryActive = (not progressState.showTerminal) and (
         footerRealtimeFactor > 0 or (footerDeviceDetail and footerDeviceDetail ~= "")
     )
@@ -12650,6 +12805,7 @@ local function drawProgressWindow()
                 termHeaderG = 0.85 + accentG * 0.12
                 termHeaderB = 0.85 + accentB * 0.12
                 termHeaderA = 1
+                termTextR, termTextG, termTextB = readableTerminalAccent(accentR, accentG, accentB)
             end
 
             -- Match the LED/progress tint to the active track color when available.
@@ -12770,10 +12926,6 @@ local function drawProgressWindow()
         gfx.drawstr(msg)
     end
 
-    -- Update mouse state AFTER all click handling
-    progressState.wasMouseDown = mouseDown
-    progressState.wasRightMouseDown = rightMouseDown
-
     -- Bottom footer (aligned with the multi-track Processing footer)
     local stageStr = progressState.stage or ""
     local bottomEta = stageStr:match("ETA%s+([%d]+:%s*%d+)")
@@ -12797,6 +12949,7 @@ local function drawProgressWindow()
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
+    local cancelBtnText = T("progress_cancel_button") or T("cancel") or "Cancel"
 
     local contextItem = timeSelectionSourceItem or selectedItem
     local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
@@ -12849,6 +13002,30 @@ local function drawProgressWindow()
     gfx.rect(0, statusBlockY, w, statusBlockH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
     gfx.rect(0, statusBlockY, w, statusBlockH, 0)
+
+    -- Explicit cancel button in processing window (same behavior as ESC / window close).
+    local cancelBtnH = PS(28)
+    local cancelBtnW = math.max(PS(96), gfx.measurestr(cancelBtnText) + PS(26))
+    local cancelBtnX = w - PS(12) - cancelBtnW
+    local cancelBtnY = statusBlockY - cancelBtnH - PS(10)
+    local cancelHover = mx >= cancelBtnX and mx <= cancelBtnX + cancelBtnW and my >= cancelBtnY and my <= cancelBtnY + cancelBtnH
+    local cancelFill = cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20}
+    drawThemeSurfaceBox(cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, cancelFill, THEME.border, 1, 0.98, getThemeRadius(PS, math.floor(cancelBtnH / 2), math.floor(cancelBtnH / 2)), getThemeBorderWeight(PS, 1), 0.35, "button")
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+    local cancelTextW = gfx.measurestr(cancelBtnText)
+    gfx.x = cancelBtnX + (cancelBtnW - cancelTextW) / 2
+    gfx.y = cancelBtnY + math.floor((cancelBtnH - gfx.texth) / 2)
+    gfx.drawstr(cancelBtnText)
+    if cancelHover then
+        GUI.uiClickedThisFrame = true
+        tooltipText = T("progress_cancel_tooltip") or T("tooltip_cancel_processing") or "Cancel processing"
+        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        if mouseDown and not progressState.wasMouseDown then
+            cancelClicked = true
+            progressState.cancelRequested = true
+        end
+    end
 
     local availableW = w - statusPadX * 2
     local splitGap = PS(16)
@@ -12913,7 +13090,11 @@ local function drawProgressWindow()
         drawTooltipStyled(tooltipText, tooltipX, tooltipY, w, h, padding, lineH, maxTextW)
     end
 
+    -- Update mouse state AFTER all click handling in this function.
+    progressState.wasMouseDown = mouseDown
+    progressState.wasRightMouseDown = rightMouseDown
     gfx.update()
+    return cancelClicked
 end
 
 -- Refactor flow helpers into module-like namespaces to reduce top-level locals.
@@ -14189,6 +14370,7 @@ function initCelebration()
             delay = i * 0.15,
         })
     end
+
 end
 
 -- Draw result window (clean style matching main app)
@@ -14224,11 +14406,12 @@ function drawResultWindow()
     proceduralArt.time = proceduralArt.time + 0.016  -- ~60fps
     drawProceduralArt(0, 0, w, h, proceduralArt.time, 0, true)
 
-    -- Semi-transparent overlay for readability - pure black/white
+    -- Theme-aware readability wash over animated FX
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, w, h, 1)
 
@@ -15250,13 +15433,15 @@ startSeparationProcessForJob = function(job, segmentSize)
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
             script:write("(\n")
-            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR"\n')
+            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR" &\n')
+            script:write('  worker_pid=$!\n')
+            script:write('  echo "$worker_pid" > "$PIDFILE"\n')
+            script:write('  wait "$worker_pid"\n')
             script:write("  rc=$?\n")
             script:write('  echo "$rc" > "$EXITCODE"\n')
             script:write('  if [ "$rc" -ne 0 ]; then echo "EXIT:$rc" >> "$STDERR"; fi\n')
             script:write('  echo DONE > "$DONE"\n')
             script:write(") &\n")
-            script:write('echo $! > "$PIDFILE"\n')
             script:close()
 
             local cmd = "sh " .. quoteArg(launcherPath) .. suppressStderr()
@@ -15389,6 +15574,7 @@ function drawMultiTrackProgressWindow()
     -- Tooltip tracking / UI click tracking (for background art click)
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
+    local cancelClicked = false
     GUI.uiClickedThisFrame = false
 
     -- === PROCEDURAL ART AS FULL BACKGROUND LAYER ===
@@ -15403,11 +15589,12 @@ function drawMultiTrackProgressWindow()
     proceduralArt.time = proceduralArt.time + 0.016  -- ~60fps
     drawProceduralArt(0, 0, w, h, proceduralArt.time, 0, true)
 
-    -- Semi-transparent overlay for readability - pure black/white
+    -- Theme-aware readability wash over animated FX
+    local overlayAlpha = getFxReadabilityOverlayAlpha()
     if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.5)
+        gfx.set(0, 0, 0, overlayAlpha)
     else
-        gfx.set(1, 1, 1, 0.5)
+        gfx.set(1, 1, 1, overlayAlpha)
     end
     gfx.rect(0, 0, w, h, 1)
 
@@ -15674,12 +15861,18 @@ function drawMultiTrackProgressWindow()
 
     local function drawProgressText(text, x, y, alpha)
         alpha = alpha or 1
-        gfx.set(0, 0, 0, 0.6 * alpha)
-        gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
-        gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
-        gfx.set(1, 1, 1, alpha)
+        if SETTINGS.darkMode then
+            gfx.set(0, 0, 0, 0.6 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y + 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x + 1, y - 1; gfx.drawstr(text)
+            gfx.x, gfx.y = x - 1, y - 1; gfx.drawstr(text)
+            gfx.set(1, 1, 1, alpha)
+        else
+            gfx.set(1, 1, 1, 0.35 * alpha)
+            gfx.x, gfx.y = x + 1, y + 1; gfx.drawstr(text)
+            gfx.set(0.08, 0.10, 0.12, alpha)
+        end
         gfx.x, gfx.y = x, y
         gfx.drawstr(text)
     end
@@ -15843,9 +16036,10 @@ function drawMultiTrackProgressWindow()
             termTextA = 0.92
         else
             -- Light mode: keep text readable, but nudge toward the active bar color.
-            termTextR = (termTextR * 0.85) + (activeBar[1] * 0.15)
-            termTextG = (termTextG * 0.85) + (activeBar[2] * 0.15)
-            termTextB = (termTextB * 0.85) + (activeBar[3] * 0.15)
+            local ar, ag, ab = readableTerminalAccent(activeBar[1], activeBar[2], activeBar[3])
+            termTextR = (termTextR * 0.85) + (ar * 0.15)
+            termTextG = (termTextG * 0.85) + (ag * 0.15)
+            termTextB = (termTextB * 0.85) + (ab * 0.15)
         end
 
         local termNow = uiNow()
@@ -15969,14 +16163,15 @@ function drawMultiTrackProgressWindow()
                 else
                     if lineTrackIdx and lineAccent and line:match("%-%-%-%-") then
                         -- Track header line
-                        gfx.set(lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB, 0.98)
+                        local ar, ag, ab = readableTerminalAccent(lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB)
+                        gfx.set(ar, ag, ab, 0.98)
                     elseif lineAccent and SETTINGS.darkMode then
                         -- Dark mode: tint normal lines toward track color
                         local ar, ag, ab = lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB
                         gfx.set((termTextR * 0.35) + (ar * 0.65), (termTextG * 0.35) + (ag * 0.65), (termTextB * 0.35) + (ab * 0.65), termTextA)
                     elseif lineAccent and not SETTINGS.darkMode then
                         -- Light mode: keep it readable; use a subtle tint
-                        local ar, ag, ab = lineAccent[1] or 0.2, lineAccent[2] or 0.2, lineAccent[3] or 0.2
+                        local ar, ag, ab = readableTerminalAccent(lineAccent[1] or 0.2, lineAccent[2] or 0.2, lineAccent[3] or 0.2)
                         gfx.set((termTextR * 0.8) + (ar * 0.2), (termTextG * 0.8) + (ag * 0.2), (termTextB * 0.8) + (ab * 0.2), termTextA)
                     else
                         gfx.set(termTextR, termTextG, termTextB, termTextA)
@@ -16130,7 +16325,7 @@ function drawMultiTrackProgressWindow()
             -- Stage text inside progress bar
             if not job.done and job.stage and job.stage ~= "" then
                 gfx.setfont(1, "Arial", PS(9))
-                local stageText = job.stage
+                local stageText = localizeProgressStagePrefix(job.stage)
                 if stageText == "Waiting.." or stageText == "Waiting..." then
                     stageText = T("waiting") or stageText
                 elseif stageText == "Starting.." or stageText == "Starting..." then
@@ -16301,6 +16496,7 @@ function drawMultiTrackProgressWindow()
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
+    local cancelBtnText = T("progress_cancel_button") or T("cancel") or "Cancel"
     local etaText = ""
     if eta and eta > 0 then
         local etaMins = math.floor(eta / 60)
@@ -16338,6 +16534,29 @@ function drawMultiTrackProgressWindow()
     gfx.rect(0, statusBlockY, gfx.w, statusBlockH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
     gfx.rect(0, statusBlockY, gfx.w, statusBlockH, 0)
+
+    -- Explicit cancel button in multi-track processing window (same behavior as ESC / window close).
+    local cancelBtnH = PS(28)
+    local cancelBtnW = math.max(PS(96), gfx.measurestr(cancelBtnText) + PS(26))
+    local cancelBtnX = w - PS(12) - cancelBtnW
+    local cancelBtnY = statusBlockY - cancelBtnH - PS(10)
+    local cancelHover = mx >= cancelBtnX and mx <= cancelBtnX + cancelBtnW and my >= cancelBtnY and my <= cancelBtnY + cancelBtnH
+    local cancelFill = cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20}
+    drawThemeSurfaceBox(cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, cancelFill, THEME.border, 1, 0.98, getThemeRadius(PS, math.floor(cancelBtnH / 2), math.floor(cancelBtnH / 2)), getThemeBorderWeight(PS, 1), 0.35, "button")
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+    local cancelTextW = gfx.measurestr(cancelBtnText)
+    gfx.x = cancelBtnX + (cancelBtnW - cancelTextW) / 2
+    gfx.y = cancelBtnY + math.floor((cancelBtnH - gfx.texth) / 2)
+    gfx.drawstr(cancelBtnText)
+    if cancelHover then
+        GUI.uiClickedThisFrame = true
+        tooltipText = T("progress_cancel_tooltip") or T("tooltip_cancel_processing") or "Cancel processing"
+        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        if mouseDown and not multiTrackQueue.wasMouseDown then
+            cancelClicked = true
+        end
+    end
 
     local availableW = gfx.w - statusPadX * 2
     local splitGap = PS(16)
@@ -16416,7 +16635,7 @@ function drawMultiTrackProgressWindow()
     UI_Window.handleArtAdvance(multiTrackQueue, mouseDown, char)
 
     -- Check for cancel
-    if char == -1 or char == 27 then
+    if char == -1 or char == 27 or cancelClicked then
         return "cancel"
     end
 
@@ -16454,7 +16673,7 @@ function multiTrackProgressLoop()
             end
         end
 
-        showMessage("Cancelled", "Multi-track separation was cancelled.", "info", true)
+        showMessage("Cancelled", T("progress_cancelled_status") or "Processing cancelled.", "info", true)
         return
     end
 
@@ -16552,6 +16771,8 @@ processAllStemsResult = function()
 
     for jobIdx, job in ipairs(multiTrackQueue.jobs) do
         debugLog("Job " .. jobIdx .. ": trackDir=" .. tostring(job.trackDir))
+        job.hadImportedStems = false
+        job.importedStemPaths = nil
         -- Find stem files in job directory
         local stems = {}
         local selectedCount = 0
@@ -16588,6 +16809,7 @@ processAllStemsResult = function()
             local namingTrack = job.sourceTrackName or job.trackName or "Track"
             local namingItem = job.sourceItemName or job.sourceItemDisplayName or namingTrack
             stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem)
+            job.importedStemPaths = stems
             if SETTINGS.createNewTracks then
                 -- New tracks mode: create separate tracks for each stem
                 -- Use per-job selection range: if time selection exists, use it; otherwise use the job's source item position/length
@@ -16634,6 +16856,7 @@ processAllStemsResult = function()
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
                 if count > 0 then
+                    job.hadImportedStems = true
                     if job.track and reaper.ValidatePtr(job.track, "MediaTrack*") then
                         sourceTracksWithStems[job.track] = true
                     end
@@ -16679,6 +16902,7 @@ processAllStemsResult = function()
                             end
                         end
                         totalStemsCreated = totalStemsCreated + count
+                        if count > 0 then job.hadImportedStems = true end
                     else
                         -- Bij time selection: split het item eerst bij de selectie grenzen
                         -- zodat we alleen het selectie-deel vervangen, niet het hele item
@@ -16739,6 +16963,7 @@ processAllStemsResult = function()
                         end
                     end
                     totalStemsCreated = totalStemsCreated + count
+                    if count > 0 then job.hadImportedStems = true end
                     end
                 else
                     debugLog("  ERROR: No valid source item for in-place replacement")
@@ -17039,8 +17264,8 @@ processAllStemsResult = function()
     -- Cleanup temp working files (keep stem WAVs for REAPER references).
     if multiTrackQueue.jobs then
         for _, job in ipairs(multiTrackQueue.jobs) do
-            if job.trackDir then
-                cleanupTempWorkDir(job.trackDir)
+            if job.trackDir and job.hadImportedStems then
+                cleanupTempWorkDir(job.trackDir, { success = true, keepStemPaths = job.importedStemPaths or {} })
             end
         end
     end

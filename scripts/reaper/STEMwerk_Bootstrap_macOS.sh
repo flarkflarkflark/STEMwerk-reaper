@@ -3,17 +3,23 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
-MACOS_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
+MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
+MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
+MACOS_CONSTRAINTS_FILE=""
+PINNED_TORCH_VERSION="2.5.1"
+PINNED_TORCHAUDIO_VERSION="2.5.1"
 
 RUNTIME_BASE=""
 STATE_FILE=""
 LOG_FILE=""
+MODE="repair"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --runtime-base) RUNTIME_BASE="$2"; shift 2 ;;
     --state-file) STATE_FILE="$2"; shift 2 ;;
     --log-file) LOG_FILE="$2"; shift 2 ;;
+    --mode) MODE="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -52,6 +58,10 @@ resolve_python_candidate() {
   esac
 }
 
+model_cache_dir() {
+  printf "%s/Library/Application Support/STEMwerk/models\n" "${HOME:-/tmp}"
+}
+
 get_python_version() {
   if [ -z "${1:-}" ] || [ ! -x "$1" ]; then
     return 1
@@ -82,11 +92,109 @@ log_python_candidate() {
   fi
 }
 
+log_macos_diagnostics() {
+  log "=== macOS runtime diagnostics ==="
+  log "uname -m: $(uname -m 2>/dev/null || echo unknown)"
+  if command -v sw_vers >/dev/null 2>&1; then
+    log "sw_vers productVersion: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+    log "sw_vers buildVersion: $(sw_vers -buildVersion 2>/dev/null || echo unknown)"
+  fi
+  if [ -n "${PYTHON}" ] && [ -x "${PYTHON}" ]; then
+    log "selected python path: ${PYTHON}"
+    log "selected python version: ${SELECTED_PYTHON_VERSION:-unknown}"
+    "${PYTHON}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
+import platform, sys
+print("python sys.version:", sys.version.replace("\n", " "))
+print("python platform.machine:", platform.machine())
+print("python platform.platform:", platform.platform())
+PY
+  fi
+  if [ "$(uname -m)" = "arm64" ]; then
+    log "expected backend path: Apple Silicon (MPS-capable when available)"
+  else
+    log "expected backend path: Intel macOS CPU-only fallback (no MPS)"
+  fi
+  log "=== end diagnostics ==="
+}
+
 remove_incompatible_venv() {
   if [ -d "${RUNTIME_BASE}/.venv" ]; then
     log "Removing incompatible virtual environment: ${RUNTIME_BASE}/.venv"
     rm -rf "${RUNTIME_BASE}/.venv"
   fi
+}
+
+venv_torch_requires_rebuild() {
+  _venv_py="$1"
+  [ -x "${_venv_py}" ] || return 1
+  _probe="$("${_venv_py}" - <<'PY' 2>/dev/null || true
+try:
+    import torch
+    ver = getattr(torch, "__version__", "")
+    core = ver.split("+", 1)[0]
+    parts = core.split(".")
+    major = int(parts[0])
+    minor = int(parts[1])
+    if major > 2 or (major == 2 and minor >= 6):
+        print("rebuild|" + ver)
+    else:
+        print("ok|" + ver)
+except Exception:
+    print("missing")
+PY
+)"
+  case "${_probe}" in
+    rebuild\|*)
+      log "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator 0.23.0 compatibility"
+      return 0
+      ;;
+    ok\|*)
+      log "Existing venv torch is compatible: ${_probe#ok|}"
+      ;;
+  esac
+  return 1
+}
+
+install_pinned_torch_stack() {
+  log "Installing pinned torch stack: torch==${PINNED_TORCH_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
+  "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
+  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
+}
+
+assert_pinned_torch_stack() {
+  _venv_py="$1"
+  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+expected_torch = "${PINNED_TORCH_VERSION}"
+expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
+try:
+    import torch
+    torch_ver = getattr(torch, "__version__", "")
+except Exception as exc:
+    print("error|torch_import|" + str(exc))
+    raise SystemExit(0)
+try:
+    import torchaudio
+    torchaudio_ver = getattr(torchaudio, "__version__", "")
+except Exception as exc:
+    print("error|torchaudio_import|" + str(exc))
+    raise SystemExit(0)
+if torch_ver == expected_torch and torchaudio_ver == expected_torchaudio:
+    print("ok|" + torch_ver + "|" + torchaudio_ver)
+else:
+    print("bad|" + torch_ver + "|" + torchaudio_ver)
+PY
+)"
+  case "${_probe}" in
+    ok\|*)
+      log "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f3)"
+      return 0
+      ;;
+  esac
+  log "Pinned torch assertion failed: ${_probe}"
+  printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  return 1
 }
 
 evaluate_python_candidate() {
@@ -198,6 +306,22 @@ if [ -z "${RUNTIME_BASE}" ]; then
   exit 1
 fi
 
+log "Bootstrap started"
+log "Requested mode: ${MODE}"
+log "Downloaded models are kept at: $(model_cache_dir)"
+MAC_ARCH="$(uname -m 2>/dev/null || echo unknown)"
+if [ "${MAC_ARCH}" = "x86_64" ]; then
+  MACOS_CONSTRAINTS_FILE="${MACOS_INTEL_CONSTRAINTS_FILE}"
+  log "Using macOS Intel constraints: ${MACOS_CONSTRAINTS_FILE}"
+else
+  MACOS_CONSTRAINTS_FILE="${MACOS_ARM_CONSTRAINTS_FILE}"
+  log "Using macOS Apple Silicon constraints: ${MACOS_CONSTRAINTS_FILE}"
+fi
+if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
+  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
+fi
+
 mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 STATUS="ok"
@@ -228,6 +352,9 @@ set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 
 # macOS must not blindly trust bare python3 because Homebrew/system aliases can
 # move to 3.13+ while STEMwerk 2.x only supports Python 3.10-3.12.
+if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+  remove_incompatible_venv
+fi
 if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
   if evaluate_python_candidate "${RUNTIME_BASE}/.venv/bin/python"; then
     log "Selected existing virtual environment Python: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
@@ -297,15 +424,16 @@ if [ -z "${PYTHON}" ]; then
   write_state
   exit 1
 else
+  log_macos_diagnostics
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     log "Creating venv with ${PYTHON}"
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
   fi
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
-    log "Installing ${PACKAGE} (conservative default on macOS)"
     "${VENV_PY}" -m pip install --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     "${VENV_PY}" -m pip install "numpy<2.0" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+    install_pinned_torch_stack || set_status "deps_failed" "torch_install_failed"
 
     log "Installing stemwerk-core"
     resolve_core_target || true
@@ -333,13 +461,36 @@ else
 
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
       {
+        _audio_tmp_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
+        : > "${_audio_tmp_log}" || true
         if [ -f "${MACOS_CONSTRAINTS_FILE}" ]; then
           log "Installing ${PACKAGE} with macOS constraints from ${MACOS_CONSTRAINTS_FILE}"
-          "${VENV_PY}" -m pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}" >> "${LOG_FILE}" 2>&1
+          "${VENV_PY}" -m pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
         else
-          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1
+          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
         fi
-      } || set_status "deps_failed" "audio_separator_install_failed"
+        _audio_rc=$?
+        cat "${_audio_tmp_log}" >> "${LOG_FILE}" 2>/dev/null || true
+        if [ "${_audio_rc}" -ne 0 ]; then
+          if grep -Eiq "No matching distribution found for torch|no matching distributions available for your environment.*torch|depends on torch" "${_audio_tmp_log}" 2>/dev/null; then
+            if [ "$(uname -m)" = "x86_64" ]; then
+              log "audio-separator install failed: PyTorch wheels unavailable for this Intel macOS/Python combination"
+              set_status "deps_failed" "audio_separator_torch_unavailable_macos_intel"
+            else
+              log "audio-separator install failed: PyTorch wheels unavailable for this macOS/Python/architecture combination"
+              set_status "deps_failed" "audio_separator_torch_unavailable"
+            fi
+          else
+            set_status "deps_failed" "audio_separator_install_failed"
+          fi
+        fi
+        rm -f "${_audio_tmp_log}" >/dev/null 2>&1 || true
+      }
+
+    install_pinned_torch_stack || set_status "deps_failed" "torch_pin_repair_failed"
+    if ! assert_pinned_torch_stack "${VENV_PY}"; then
+      set_status "deps_failed" "torch_pin_assert_failed"
+    fi
 
     if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
       log "Installing ${ONNX_PACKAGE}"
@@ -397,6 +548,9 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
   "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
   "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 || set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
+  if ! assert_pinned_torch_stack "${VENV_PY}"; then
+    set_status "deps_failed" "torch_pin_assert_failed"
+  fi
 fi
 
 if [ -n "${STATE_FILE}" ]; then

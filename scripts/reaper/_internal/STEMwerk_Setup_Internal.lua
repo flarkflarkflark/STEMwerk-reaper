@@ -133,6 +133,56 @@ local INSTALL_ROOT = INSTALL.root or RAW_SCRIPT_DIR
 local SCRIPT_DIR = INSTALL.scriptsDir or RAW_SCRIPT_DIR
 warnInstallMismatch()
 
+local function resolveSetupScriptsDir()
+    if SCRIPT_DIR and SCRIPT_DIR ~= "" then
+        return SCRIPT_DIR
+    end
+    local info = debug.getinfo(1, "S")
+    local source = (info and info.source) or ""
+    local currentPath = source:match("^@(.*)$") or source:match("^(.*)$") or ""
+    local currentDir = currentPath:match("^(.*[/\\])") or ""
+    if currentDir == "" then
+        local _, actionPath = reaper.get_action_context()
+        currentDir = (actionPath and actionPath:match("^(.*[/\\])")) or ""
+    end
+    local setupDir = currentDir
+    if setupDir:match("[/\\]_internal[/\\]$") then
+        setupDir = setupDir:gsub("[/\\]_internal[/\\]$", PATH_SEP)
+    end
+    return setupDir
+end
+
+local function launchMainStemwerkScript()
+    local scriptsDir = resolveSetupScriptsDir()
+    local mainScript = tostring(scriptsDir or "") .. "STEMwerk.lua"
+    local exists = false
+    do
+        local f = io.open(mainScript, "r")
+        if f then
+            f:close()
+            exists = true
+        end
+    end
+    if not exists then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not find main script:\n\n" .. tostring(mainScript) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
+            0
+        )
+        return false
+    end
+    local ok, err = pcall(dofile, mainScript)
+    if not ok then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not open STEMwerk.lua automatically.\n\nError:\n" .. tostring(err) .. "\n\nRun STEMwerk.lua manually from the REAPER Action List.",
+            0
+        )
+        return false
+    end
+    return true
+end
+
 local function quoteArg(s)
     s = tostring(s)
     if s:find('"') then
@@ -260,6 +310,18 @@ fileExists = function(path)
     return false
 end
 
+local function pathExists(path)
+    if not path or path == "" then return false end
+    local ok = os.rename(path, path)
+    if ok then return true end
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
+
 local function ensureDir(path)
     if not path or path == "" then return false end
     local quoted = quoteArg(path)
@@ -337,6 +399,42 @@ local function getRuntimePaths()
     }
 end
 
+local function getModelCacheDir()
+    local home = getHome()
+    if OS == "Windows" then
+        local localAppData = os.getenv("LOCALAPPDATA") or ""
+        if localAppData ~= "" then
+            return localAppData .. "\\STEMwerk\\models"
+        end
+        return home .. "\\AppData\\Local\\STEMwerk\\models"
+    elseif OS == "macOS" then
+        return home .. "/Library/Application Support/STEMwerk/models"
+    else
+        local xdg = os.getenv("XDG_DATA_HOME") or ""
+        if xdg ~= "" then
+            return xdg .. "/STEMwerk/models"
+        end
+        return home .. "/.local/share/STEMwerk/models"
+    end
+end
+
+local setExt
+local getExt
+
+local function runtimeLooksPresent(runtime)
+    if not runtime or not runtime.base or runtime.base == "" then return false end
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local modelDir = getModelCacheDir()
+    return fileExists(runtime.venvPython)
+        or pathExists(runtime.venvDir)
+        or fileExists(stateFile)
+        or fileExists(capFile)
+        or pathExists(modelDir)
+        or getExt("pythonPath") ~= ""
+        or getExt("ffmpegPath") ~= ""
+end
+
 local function parseStateFile(path)
     local data = {}
     local f = io.open(path, "r")
@@ -351,13 +449,13 @@ local function parseStateFile(path)
     return data
 end
 
-local function setExt(key, value)
+setExt = function(key, value)
     if reaper and reaper.SetExtState then
         reaper.SetExtState(EXT_SECTION, key, tostring(value), true)
     end
 end
 
-local function getExt(key)
+getExt = function(key)
     if reaper and reaper.GetExtState then
         return tostring(reaper.GetExtState(EXT_SECTION, key) or "")
     end
@@ -425,6 +523,10 @@ local function prettySetupReason(reason)
             part = "stemwerk-core is missing after setup"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "audio_separator_torch_unavailable" then
+            part = "audio-separator install failed: PyTorch is unavailable for this macOS/Python/architecture combination"
+        elseif lower == "audio_separator_torch_unavailable_macos_intel" then
+            part = "audio-separator install failed: PyTorch is unavailable for this Intel macOS/Python combination (use the official STEMwerk runtime package or a supported macOS/Python combination)"
         elseif lower == "audio_runtime_deps_install_failed" then
             part = "Audio runtime dependencies install failed"
         elseif lower == "julius_install_failed" then
@@ -536,6 +638,8 @@ local function prettyBackendReason(reason)
             part = "CUDA runtime confirmed by installer"
         elseif lower == "bootstrap_directml_confirmed" then
             part = "DirectML runtime confirmed by installer"
+        elseif lower == "mps_unavailable" then
+            part = "MPS unavailable; using CPU"
         end
         local key = part:lower()
         if key ~= "" and not seen[key] then
@@ -1198,129 +1302,30 @@ local function showStatusWindow(stateFile, logFile, finalMessage)
         return
     end
 
-    if OS == "Windows" then
-        local state = parseStateFile(stateFile)
-        local msg = finalMessage
-        if not msg or msg == "" then
-            local tail = readTail(logFile, 24)
-            local lastLogLine = extractLastLogLine(tail)
-            local lines = {
-                "Setup status: " .. prettySetupStatus(state.STATUS or "unknown"),
-            }
-            if state.STATUS_REASON and state.STATUS_REASON ~= "" then
-                lines[#lines + 1] = "Reason: " .. tostring(prettySetupReason(state.STATUS_REASON))
-            end
-            if lastLogLine ~= "" then
-                lines[#lines + 1] = "Last log line: " .. tostring(lastLogLine)
-            end
-            if state.PYTHON_PATH or state.VENV_PYTHON then
-                lines[#lines + 1] = "Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or "")
-            end
-            if state.FFMPEG_PATH then
-                lines[#lines + 1] = "FFmpeg: " .. tostring(state.FFMPEG_PATH or "")
-            end
-            lines[#lines + 1] = "Log: " .. tostring(logFile or "")
-            msg = table.concat(lines, "\n")
+    local state = parseStateFile(stateFile)
+    local msg = finalMessage
+    if not msg or msg == "" then
+        local tail = readTail(logFile, 24)
+        local lastLogLine = extractLastLogLine(tail)
+        local lines = {
+            "Setup status: " .. prettySetupStatus(state.STATUS or "unknown"),
+        }
+        if state.STATUS_REASON and state.STATUS_REASON ~= "" then
+            lines[#lines + 1] = "Reason: " .. tostring(prettySetupReason(state.STATUS_REASON))
         end
-        msgBox("STEMwerk Setup", msg, (msg:find("failed") and 16) or 0)
-        return
+        if lastLogLine ~= "" then
+            lines[#lines + 1] = "Last log line: " .. tostring(lastLogLine)
+        end
+        if state.PYTHON_PATH or state.VENV_PYTHON then
+            lines[#lines + 1] = "Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or "")
+        end
+        if state.FFMPEG_PATH then
+            lines[#lines + 1] = "FFmpeg: " .. tostring(state.FFMPEG_PATH or "")
+        end
+        lines[#lines + 1] = "Log: " .. tostring(logFile or "")
+        msg = table.concat(lines, "\n")
     end
-
-    local running = true
-    local finishedAt = os.time()
-    local w, h = 860, 480
-    local spinner = { "|", "/", "-", "\\" }
-    local idx = 1
-    local shownMessage
-
-    gfx.init(setupWindowTitle(setupPlatformLabel()), w, h, 0, 150, 120)
-    while running do
-        local state = parseStateFile(stateFile)
-        local lines = readTail(logFile, 16)
-        local lastLogLine = extractLastLogLine(lines)
-        local stateLine = "Status: " .. prettySetupStatus(state.STATUS and tostring(state.STATUS) or "running")
-        local reasonLine = state.STATUS_REASON and ("Reason: " .. tostring(prettySetupReason(state.STATUS_REASON))) or ""
-        local lastLogLabel = lastLogLine ~= "" and ("Last log line: " .. tostring(lastLogLine)) or ""
-        local stepLine = formatStepStatus(state)
-        local pythonLine = "Python: " .. tostring(state.PYTHON_PATH or state.VENV_PYTHON or "")
-        local ffmpegLine = "FFmpeg: " .. tostring(state.FFMPEG_PATH or "")
-        local spin = spinner[idx]
-        idx = (idx % #spinner) + 1
-
-        gfx.set(0, 0, 0, 0)
-        gfx.setfont(1, "Arial", 16)
-        gfx.x = 20
-        gfx.y = 20
-        if finalMessage then
-            shownMessage = finalMessage
-        else
-            shownMessage = (state.STATUS == "ok") and "Bootstrap completed." or "Bootstrapping..."
-        end
-        gfx.drawstr(shownMessage .. " [" .. spin .. "]")
-        gfx.y = gfx.y + 30
-        gfx.drawstr(stateLine)
-        if reasonLine ~= "" then
-            gfx.y = gfx.y + 22
-            gfx.drawstr(reasonLine)
-        end
-        if stepLine ~= "" then
-            gfx.y = gfx.y + 22
-            gfx.drawstr(stepLine)
-        end
-        if lastLogLabel ~= "" then
-            gfx.y = gfx.y + 22
-            gfx.drawstr(lastLogLabel)
-        end
-        gfx.y = gfx.y + 26
-        gfx.drawstr(pythonLine)
-        gfx.y = gfx.y + 22
-        gfx.drawstr(ffmpegLine)
-        gfx.y = gfx.y + 26
-        gfx.drawstr("Log: " .. tostring(logFile))
-        gfx.y = gfx.y + 22
-        gfx.drawstr("Recent log lines:")
-        gfx.y = gfx.y + 20
-
-        for _, line in ipairs(lines) do
-            local wrapped = wrapLine(line, 106)
-            for _, wl in ipairs(wrapped) do
-                gfx.drawstr(wl)
-                gfx.y = gfx.y + 18
-        end
-        end
-
-        if finalMessage and os.time() - finishedAt > 0 then
-            gfx.y = h - 30
-            gfx.drawstr("Press Esc or close this window to continue.")
-        end
-
-        gfx.update()
-        local key = gfx.getchar()
-        if finalMessage then
-            if key == 27 or key == -1 then
-                break
-            end
-        else
-            if state.STATUS and state.STATUS ~= "" and state.STATUS ~= "running" then
-                running = false
-                if finalMessage == nil then
-                    os.execute("sleep 0.25")
-                end
-            end
-        end
-        os.execute("sleep 0.15")
-    end
-
-    if finalMessage then
-        while true do
-            local key = gfx.getchar()
-            if key == 27 or key == -1 then
-                break
-            end
-            os.execute("sleep 0.05")
-        end
-    end
-    gfx.quit()
+    msgBox("STEMwerk Setup", msg, (tostring(msg):find("failed") and 16) or 0)
 end
 
 local function waitForBootstrapState(stateFile, logFile, runtimeState)
@@ -1938,6 +1943,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         BACKEND = backend or "",
         BACKEND_REASON = backendReason or "",
         BACKEND_NOTE = backendNote or "",
+        STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
     }
     if verificationStatus == "ok" then
         syncKv.STATUS = "ok"
@@ -2362,7 +2368,8 @@ local function windowsVerifyTick()
         local state = WINDOWS_VERIFY.state or {}
         local lines = {}
         local ok = WINDOWS_VERIFY.pythonOk and WINDOWS_VERIFY.ffmpegOk and WINDOWS_VERIFY.coreOk and WINDOWS_VERIFY.sepOk
-        if WINDOWS_VERIFY.hasState and state.INSTALLER == "1" and (state.STATUS == "ok" or state.STATUS == "") and ok then
+        local metadataComplete = WINDOWS_VERIFY.hasState and state.INSTALLER == "1"
+        if ok then
             state.STATUS = "ok"
             state.STATUS_REASON = ""
             state.PYTHON_PATH = WINDOWS_VERIFY.pythonPath
@@ -2374,6 +2381,10 @@ local function windowsVerifyTick()
                 FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath,
             })
             local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript)
+            if not metadataComplete then
+                result.finalMessage[#result.finalMessage + 1] = ""
+                result.finalMessage[#result.finalMessage + 1] = "Note: Installer metadata was incomplete, but runtime checks passed."
+            end
             finalizeWindowsVerify(true, result.finalMessage)
             reaper.defer(windowsVerifyTick)
             return
@@ -2435,9 +2446,13 @@ local function windowsVerifyRepair(runtime, separatorScript)
 end
 
 local LINUX_SETUP = nil
+local SETUP_MENU = nil
+local SETUP_MENU_DEFAULT_W = 1260
+local SETUP_MENU_DEFAULT_H = 904
 local LINUX_SETUP_FONT_SCALE_KEY = "linuxSetupFontScale"
+local LINUX_SETUP_FONT_SCALE_DEFAULT = 1.0
 local LINUX_SETUP_FONT_SCALE_MIN = 0.7
-local LINUX_SETUP_FONT_SCALE_MAX = 1.8
+local LINUX_SETUP_FONT_SCALE_MAX = 3.0
 local LINUX_SETUP_FONT_SCALE_STEP = 0.1
 
 local function clamp(value, minValue, maxValue)
@@ -2448,7 +2463,7 @@ end
 
 local function getLinuxSetupFontScale()
     local raw = tonumber(getExt(LINUX_SETUP_FONT_SCALE_KEY) or "")
-    if not raw then return 1.25 end
+    if not raw then return LINUX_SETUP_FONT_SCALE_DEFAULT end
     return clamp(raw, LINUX_SETUP_FONT_SCALE_MIN, LINUX_SETUP_FONT_SCALE_MAX)
 end
 
@@ -2457,32 +2472,47 @@ local function saveLinuxSetupFontScale(scale)
 end
 
 local function linuxFontSize(baseSize)
-    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale) or getLinuxSetupFontScale()
+    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale)
+        or (SETUP_MENU and SETUP_MENU.fontScale)
+        or getLinuxSetupFontScale()
     return math.max(10, math.floor((baseSize * scale) + 0.5))
 end
 
 local function linuxWrapWidth(baseWidth)
-    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale) or getLinuxSetupFontScale()
+    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale)
+        or (SETUP_MENU and SETUP_MENU.fontScale)
+        or getLinuxSetupFontScale()
     return math.max(48, math.floor((baseWidth / scale) + 0.5))
 end
 
+local function linuxInfoWrapCharsForColumn(colW)
+    local labelW = math.max(90, math.floor(colW * 0.22))
+    local valueW = math.max(72, colW - labelW - 8)
+    local charW = math.max(6, linuxFontSize(13) * 0.56)
+    return math.max(18, math.floor(valueW / charW))
+end
+
 local function linuxLineHeight(baseHeight)
-    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale) or getLinuxSetupFontScale()
+    local scale = (LINUX_SETUP and LINUX_SETUP.fontScale)
+        or (SETUP_MENU and SETUP_MENU.fontScale)
+        or getLinuxSetupFontScale()
     return math.max(12, math.floor((baseHeight * scale) + 0.5))
 end
 
 local function adjustLinuxSetupFontScale(delta)
-    if not LINUX_SETUP then return end
-    local nextScale = clamp((LINUX_SETUP.fontScale or 1.0) + delta, LINUX_SETUP_FONT_SCALE_MIN, LINUX_SETUP_FONT_SCALE_MAX)
-    if math.abs(nextScale - (LINUX_SETUP.fontScale or 1.0)) < 0.001 then return end
-    LINUX_SETUP.fontScale = nextScale
+    local target = LINUX_SETUP or SETUP_MENU
+    if not target then return end
+    local nextScale = clamp((target.fontScale or 1.0) + delta, LINUX_SETUP_FONT_SCALE_MIN, LINUX_SETUP_FONT_SCALE_MAX)
+    if math.abs(nextScale - (target.fontScale or 1.0)) < 0.001 then return end
+    target.fontScale = nextScale
     saveLinuxSetupFontScale(nextScale)
 end
 
 local function resetLinuxSetupFontScale()
-    if not LINUX_SETUP then return end
-    LINUX_SETUP.fontScale = 1.25
-    saveLinuxSetupFontScale(1.25)
+    local target = LINUX_SETUP or SETUP_MENU
+    if not target then return end
+    target.fontScale = LINUX_SETUP_FONT_SCALE_DEFAULT
+    saveLinuxSetupFontScale(LINUX_SETUP_FONT_SCALE_DEFAULT)
 end
 
 local function linuxPidAlive(pidFile)
@@ -2575,12 +2605,19 @@ local function openPath(path)
     end
 end
 
-local function drawButton(label, x, y, w, h)
-    gfx.set(0.2, 0.2, 0.2, 1)
+local function drawButton(label, x, y, w, h, style)
+    local bg = { 0.2, 0.2, 0.2, 1 }
+    local border = { 1, 1, 1, 1 }
+    if style == "primary" then
+        bg = { 0.96, 0.48, 0.10, 1 }
+        border = { 1, 0.78, 0.40, 1 }
+    end
+    gfx.set(bg[1], bg[2], bg[3], bg[4])
     gfx.rect(x, y, w, h, 1)
-    gfx.set(1, 1, 1, 1)
+    gfx.set(border[1], border[2], border[3], border[4])
     gfx.rect(x, y, w, h, 0)
     gfx.setfont(1, "Arial", linuxFontSize(13))
+    gfx.set(1, 1, 1, 1)
     gfx.x = x + 8
     gfx.y = y + math.max(2, math.floor((h - linuxLineHeight(13)) / 2))
     gfx.drawstr(label)
@@ -2658,13 +2695,23 @@ local function measureLinuxInfoRows(rows, wrapWidth)
     local total = 0
     for _, row in ipairs(rows or {}) do
         local wrapped = wrapLine(tostring(row.value or ""), wrapWidth)
-        total = total + math.max(1, #wrapped)
+        local rowLines = math.max(1, #wrapped)
+        if row.maxLines and row.maxLines > 0 then
+            rowLines = math.min(rowLines, row.maxLines)
+        end
+        total = total + rowLines
     end
     return total
 end
 
 local function drawLinuxInfoRows(x, y, w, rows, wrapWidth, rowGap, successMode)
-    local labelW = math.max(100, math.floor(w * 0.18))
+    gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+    local longestLabelW = 0
+    for _, row in ipairs(rows or {}) do
+        local lw = gfx.measurestr((row.label or "") .. ":")
+        if lw > longestLabelW then longestLabelW = lw end
+    end
+    local labelW = math.max(100, math.min(math.floor(w * 0.42), math.floor(longestLabelW + 16)))
     local valueX = x + labelW
     local lineH = linuxLineHeight(18)
     rowGap = rowGap or linuxLineHeight(4)
@@ -2672,6 +2719,14 @@ local function drawLinuxInfoRows(x, y, w, rows, wrapWidth, rowGap, successMode)
 
     for _, row in ipairs(rows or {}) do
         local wrapped = wrapLine(tostring(row.value or ""), wrapWidth)
+        if row.maxLines and row.maxLines > 0 and #wrapped > row.maxLines then
+            local clipped = {}
+            for i = 1, row.maxLines do
+                clipped[i] = wrapped[i]
+            end
+            clipped[row.maxLines] = tostring(clipped[row.maxLines] or "") .. " ..."
+            wrapped = clipped
+        end
         gfx.setfont(1, "Arial Bold", linuxFontSize(13))
         gfx.set(0.72, 0.74, 0.78, 1)
         gfx.x = x
@@ -2692,6 +2747,28 @@ local function drawLinuxInfoRows(x, y, w, rows, wrapWidth, rowGap, successMode)
         y = y + lineH + rowGap
     end
     return y
+end
+
+local function splitLinuxInfoRows(rows, leftLabels)
+    local left = {}
+    local right = {}
+    local labelSet = {}
+    for _, label in ipairs(leftLabels or {}) do
+        labelSet[tostring(label)] = true
+    end
+    for _, row in ipairs(rows or {}) do
+        local key = tostring(row.label or "")
+        if labelSet[key] then
+            left[#left + 1] = row
+        else
+            right[#right + 1] = row
+        end
+    end
+    if #left == 0 and #right > 0 then
+        left[#left + 1] = right[1]
+        table.remove(right, 1)
+    end
+    return left, right
 end
 
 local function normalizeLinuxUiState(state, pidAlive)
@@ -2721,7 +2798,7 @@ local function buildLinuxStatusRows(state, pidAlive, pid, lastLogLine)
         kind = (trim(state.STATUS or "") == "ok") and "status_ok" or "muted",
     }
     if trim(state.STATUS_REASON or "") ~= "" then
-        rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted" }
+        rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted", maxLines = 2 }
     end
     if stepLine ~= "" then
         rows[#rows + 1] = { label = "Step", value = stepLine:gsub("^Step%s*", ""), kind = "muted" }
@@ -2735,12 +2812,12 @@ local function buildLinuxStatusRows(state, pidAlive, pid, lastLogLine)
     rows[#rows + 1] = { label = "Python", value = resolveLinuxPythonPath(state), kind = "python_path" }
     rows[#rows + 1] = { label = "FFmpeg", value = resolveLinuxFfmpegPath(state), kind = "ffmpeg_path" }
     if trim(lastLogLine or "") ~= "" then
-        rows[#rows + 1] = { label = "Last Log", value = tostring(lastLogLine), kind = "muted" }
+        rows[#rows + 1] = { label = "Last Log", value = tostring(lastLogLine), kind = "muted", maxLines = 1 }
     end
     rows[#rows + 1] = { label = "PID", value = tostring(pid or "") .. " (alive: " .. tostring(pidAlive) .. ")", kind = "muted" }
     rows[#rows + 1] = { label = "Log", value = tostring(LINUX_SETUP and LINUX_SETUP.logFile or ""), kind = "log_path" }
     if note ~= "" then
-        rows[#rows + 1] = { label = "Note", value = note, kind = "note" }
+        rows[#rows + 1] = { label = "Note", value = note, kind = "note", maxLines = 2 }
     end
     return rows
 end
@@ -2763,17 +2840,20 @@ local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSucce
     if backend ~= "" then
         rows[#rows + 1] = { label = "Backend", value = backend, kind = finalSuccess and "status_ok" or "status_fail" }
     end
+    if trim(state.STATUS_REASON or "") ~= "" then
+        rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted", maxLines = 2 }
+    end
     if backendReason ~= "" then
-        rows[#rows + 1] = { label = "Backend Reason", value = backendReason, kind = "muted" }
+        rows[#rows + 1] = { label = "Backend reason", value = backendReason, kind = "muted", maxLines = 2 }
     end
     if backendNote ~= "" then
-        rows[#rows + 1] = { label = "Note", value = backendNote, kind = "note" }
+        rows[#rows + 1] = { label = "Note", value = backendNote, kind = "note", maxLines = 2 }
     end
     if deviceNames ~= "" then
-        rows[#rows + 1] = { label = "Devices", value = deviceNames, kind = "muted" }
+        rows[#rows + 1] = { label = "Devices", value = deviceNames, kind = "muted", maxLines = 1 }
     end
-    rows[#rows + 1] = { label = "Capabilities", value = tostring((runtime and runtime.runtimeState or "") .. PATH_SEP .. "capabilities.env"), kind = "cap_path" }
-    rows[#rows + 1] = { label = "Log", value = tostring(logFile or ""), kind = "log_path" }
+    rows[#rows + 1] = { label = "Capabilities", value = tostring((runtime and runtime.runtimeState or "") .. PATH_SEP .. "capabilities.env"), kind = "cap_path", maxLines = 1 }
+    rows[#rows + 1] = { label = "Log", value = tostring(logFile or ""), kind = "log_path", maxLines = 1 }
     return rows
 end
 
@@ -2853,146 +2933,15 @@ local function drawIntroActionButton(label, x, y, w, h, accent, hovered, primary
 end
 
 local function showStyledIntroDialog(runtime)
-    local winW, winH = 760, 430
-    local winX, winY = 180, 120
-    local mouseWasDown = false
-    local accentYes = { 0.92, 0.45, 0.10 }
-    local accentNo = { 0.42, 0.42, 0.46 }
-    local bullets = {
-        { label = "Python runtime", color = { 1.0, 100 / 255, 100 / 255 } },
-        { label = "FFmpeg", color = { 100 / 255, 200 / 255, 1.0 } },
-        { label = "STEMwerk venv", color = { 100 / 255, 1.0, 100 / 255 } },
-    }
     local runtimeBase = tostring(runtime and runtime.base or "")
-    gfx.init(setupWindowTitle(setupUiLabel()), winW, winH, 0, winX, winY)
-
-    while true do
-        local w, h = gfx.w, gfx.h
-        local outerPad = 18
-        local panelX = outerPad
-        local panelY = 22
-        local panelW = w - (outerPad * 2)
-        local panelH = h - (outerPad * 2) - 6
-        local bodyX = panelX + 18
-        local bodyY = panelY + 20
-        local bodyW = panelW - 36
-
-        gfx.set(0.03, 0.03, 0.04, 1)
-        gfx.rect(0, 0, w, h, 1)
-        gfx.set(0.97, 0.55, 0.05, 1)
-        gfx.rect(0, 0, w, math.max(8, linuxLineHeight(8)), 1)
-        drawLinuxPanel(panelX, panelY, panelW, panelH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.29, 1 })
-
-        local y = bodyY
-        drawStemwerkInline(bodyX, y, linuxFontSize(22), "", "werk Setup")
-        y = y + linuxLineHeight(30)
-
-        gfx.setfont(1, "Arial Bold", linuxFontSize(16))
-        gfx.set(1, 1, 1, 1)
-        gfx.x = bodyX
-        gfx.y = y
-        gfx.drawstr("Run this setup once in REAPER before using STEMwerk.lua.")
-        y = y + linuxLineHeight(30)
-
-        gfx.setfont(1, "Arial", linuxFontSize(13))
-        gfx.set(0.82, 0.85, 0.90, 1)
-        local introLines = wrapLine("STEMwerk will check and repair components if needed, then prepare a fixed runtime for this machine.", linuxWrapWidth(82))
-        for _, line in ipairs(introLines) do
-            gfx.x = bodyX
-            gfx.y = y
-            gfx.drawstr(line)
-            y = y + linuxLineHeight(18)
-        end
-
-        y = y + linuxLineHeight(10)
-        local bulletH = linuxLineHeight(26)
-        for _, item in ipairs(bullets) do
-            local boxY = y
-            drawLinuxPanel(bodyX, boxY, bodyW, bulletH, { 0.11, 0.11, 0.12, 1 }, { 0.20, 0.20, 0.22, 1 })
-            gfx.set(item.color[1], item.color[2], item.color[3], 1)
-            gfx.rect(bodyX, boxY, 8, bulletH, 1)
-            gfx.setfont(1, "Arial Bold", linuxFontSize(13))
-            gfx.x = bodyX + 18
-            gfx.y = boxY + math.max(4, math.floor((bulletH - linuxFontSize(13)) / 2) - 1)
-            gfx.drawstr(item.label)
-            y = y + bulletH + 8
-        end
-
-        local pathBoxH = linuxLineHeight(58)
-        drawLinuxPanel(bodyX, y, bodyW, pathBoxH, { 0.06, 0.06, 0.07, 1 }, { 0.19, 0.19, 0.22, 1 })
-        gfx.setfont(1, "Arial", linuxFontSize(12))
-        gfx.set(0.72, 0.74, 0.78, 1)
-        gfx.x = bodyX + 14
-        gfx.y = y + 10
-        gfx.drawstr("Runtime location")
-        gfx.setfont(1, "Courier New", linuxFontSize(12))
-        gfx.set(0.92, 0.92, 0.94, 1)
-        local pathLines = wrapLine(runtimeBase, linuxWrapWidth(78))
-        local pathY = y + linuxLineHeight(28)
-        for _, line in ipairs(pathLines) do
-            gfx.x = bodyX + 14
-            gfx.y = pathY
-            gfx.drawstr(line)
-            pathY = pathY + linuxLineHeight(14)
-        end
-        y = y + pathBoxH + linuxLineHeight(14)
-
-        gfx.setfont(1, "Arial", linuxFontSize(13))
-        gfx.set(0.90, 0.72, 0.40, 1)
-        local noteLines = wrapLine("This may download tools and can take several minutes on first run.", linuxWrapWidth(82))
-        for _, line in ipairs(noteLines) do
-            gfx.x = bodyX
-            gfx.y = y
-            gfx.drawstr(line)
-            y = y + linuxLineHeight(18)
-        end
-
-        gfx.setfont(1, "Arial", linuxFontSize(11))
-        gfx.set(0.58, 0.60, 0.64, 1)
-        gfx.x = bodyX
-        gfx.y = panelY + panelH - linuxLineHeight(72)
-        gfx.drawstr("Enter = start, Esc = cancel")
-
-        local btnW = 138
-        local btnH = 36
-        local btnGap = 14
-        local btnY = panelY + panelH - btnH - 18
-        local yesX = panelX + panelW - (btnW * 2) - btnGap - 18
-        local noX = yesX + btnW + btnGap
-        local yesHot = isMouseIn(yesX, btnY, btnW, btnH)
-        local noHot = isMouseIn(noX, btnY, btnW, btnH)
-        drawIntroActionButton("Start Setup", yesX, btnY, btnW, btnH, accentYes, yesHot, true)
-        drawIntroActionButton("Not Now", noX, btnY, btnW, btnH, accentNo, noHot, false)
-
-        local ch = gfx.getchar()
-        if ch < 0 then
-            gfx.quit()
-            return false
-        end
-        if ch == 13 or ch == 32 or ch == string.byte("y") or ch == string.byte("Y") then
-            gfx.quit()
-            return true
-        end
-        if ch == 27 or ch == string.byte("n") or ch == string.byte("N") then
-            gfx.quit()
-            return false
-        end
-
-        local mouseDown = (gfx.mouse_cap & 1) == 1
-        if mouseDown and not mouseWasDown then
-            if yesHot then
-                gfx.quit()
-                return true
-            end
-            if noHot then
-                gfx.quit()
-                return false
-            end
-        end
-        mouseWasDown = mouseDown
-
-        gfx.update()
-    end
+    local intro =
+        "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
+        .. "STEMwerk will check and repair components if needed:\n\n"
+        .. "- Python runtime\n"
+        .. "- FFmpeg\n"
+        .. "- STEMwerk venv in:\n  " .. runtimeBase .. "\n\n"
+        .. "Continue?"
+    return msgBox("STEMwerk Setup", intro, 4) == 6
 end
 
 buildLinuxLogDisplayLines = function(logLines, wrapWidth)
@@ -3217,17 +3166,24 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
     local infoY = 22
     local infoW = w - (outerPad * 2)
     local infoIntroLines = {
-        "Please wait while Setup installs STEMwerk on your computer.",
-        "",
-        "First-time setup can take several minutes.",
-        "STEMwerk is preparing the runtime, creating the Python environment, checking FFmpeg, and finalizing the runtime.",
-        "",
+        "Setup is running. Keep this window open.",
+        "Progress and logs update in real time.",
     }
     local infoRows = buildLinuxStatusRows(uiState, pidAlive, pid, lastLogLine)
+    local leftRows, rightRows = splitLinuxInfoRows(infoRows, {
+        "Phase", "Status", "Step", "Profile", "Backend", "Python", "FFmpeg"
+    })
+    local infoColGap = math.max(10, linuxLineHeight(10))
+    local infoContentW = infoW - 28
+    local infoColW = math.floor((infoContentW - infoColGap) / 2)
+    local leftWrap = linuxInfoWrapCharsForColumn(infoColW)
+    local rightWrap = linuxInfoWrapCharsForColumn(infoColW)
     local infoHeaderH = linuxLineHeight(24)
     local infoBodyLineH = linuxLineHeight(18)
     local infoRowGap = linuxLineHeight(3)
-    local infoRowsH = (measureLinuxInfoRows(infoRows, linuxWrapWidth(86)) * infoBodyLineH) + (#infoRows * infoRowGap)
+    local infoRowsLeftH = (measureLinuxInfoRows(leftRows, leftWrap) * infoBodyLineH) + (#leftRows * infoRowGap)
+    local infoRowsRightH = (measureLinuxInfoRows(rightRows, rightWrap) * infoBodyLineH) + (#rightRows * infoRowGap)
+    local infoRowsH = math.max(infoRowsLeftH, infoRowsRightH)
     local progressH = math.max(18, linuxLineHeight(18))
     local legendGap = linuxLineHeight(14)
     local contentBottomY = (infoY + 14) + linuxLineHeight(28) + linuxLineHeight(22) + (#infoIntroLines * infoBodyLineH) + linuxLineHeight(6) + infoRowsH
@@ -3262,7 +3218,9 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
     end
 
     y = y + linuxLineHeight(6)
-    y = drawLinuxInfoRows(infoX + 14, y, infoW - 28, infoRows, linuxWrapWidth(86), infoRowGap, false)
+    local rowTopY = y
+    drawLinuxInfoRows(infoX + 14, rowTopY, infoColW, leftRows, leftWrap, infoRowGap, false)
+    drawLinuxInfoRows(infoX + 14 + infoColW + infoColGap, rowTopY, infoColW, rightRows, rightWrap, infoRowGap, false)
 
     drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, uiState, logLines)
 
@@ -3292,24 +3250,41 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local infoY = 22
     local infoW = w - (outerPad * 2)
     local btnGap = 12
-    local btnH = math.max(26, linuxLineHeight(24))
     local actionH = linuxLineHeight(104)
+    local minActionH = linuxLineHeight(84)
+    local minLogH = math.max(96, linuxLineHeight(92))
     local capState = parseStateFile((LINUX_SETUP and LINUX_SETUP.capFile) or "")
     local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess)
+    local leftRows, rightRows = splitLinuxInfoRows(infoRows, {
+        "Python", "FFmpeg", "Profile", "Backend"
+    })
+    local infoColGap = math.max(10, linuxLineHeight(10))
+    local infoContentW = infoW - 28
+    local infoColW = math.floor((infoContentW - infoColGap) / 2)
+    local leftWrap = linuxInfoWrapCharsForColumn(infoColW)
+    local rightWrap = linuxInfoWrapCharsForColumn(infoColW)
     local infoLineH = linuxLineHeight(18)
     local infoRowGap = linuxLineHeight(2)
-    local infoRowsH = (measureLinuxInfoRows(infoRows, linuxWrapWidth(84)) * infoLineH) + (#infoRows * infoRowGap)
+    local infoRowsLeftH = (measureLinuxInfoRows(leftRows, leftWrap) * infoLineH) + (#leftRows * infoRowGap)
+    local infoRowsRightH = (measureLinuxInfoRows(rightRows, rightWrap) * infoLineH) + (#rightRows * infoRowGap)
+    local infoRowsH = math.max(infoRowsLeftH, infoRowsRightH)
     local progressH = math.max(18, linuxLineHeight(18))
     local legendGap = linuxLineHeight(14)
     local contentBottomY = (infoY + 14) + linuxLineHeight(28) + linuxLineHeight(26) + linuxLineHeight(30) + infoRowsH
     local legendY = contentBottomY + legendGap
     local progressY = legendY + linuxLineHeight(36)
-    local infoH = (progressY + progressH + 14) - infoY
+    local infoHCalculated = (progressY + progressH + 14) - infoY
+    local maxInfoH = h - outerPad - actionH - gap - infoY - gap - minLogH
+    if maxInfoH < 140 then
+        actionH = minActionH
+        maxInfoH = h - outerPad - actionH - gap - infoY - gap - minLogH
+    end
+    local infoH = math.min(infoHCalculated, math.max(140, maxInfoH))
     local footerY = h - outerPad - actionH
     local logX = outerPad
     local logY = infoY + infoH + gap
     local logW = infoW
-    local logH = math.max(160, footerY - gap - logY)
+    local logH = math.max(40, footerY - gap - logY)
 
     drawLinuxPanel(infoX, infoY, infoW, infoH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.28, 1 })
     drawLinuxPanel(outerPad, footerY, infoW, actionH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.28, 1 })
@@ -3328,7 +3303,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
         gfx.set(0.20, 0.92, 0.28, 1)
         gfx.x = infoX + 14
         gfx.y = y
-        gfx.drawstr("Setup complete - run STEMwerk.lua from the REAPER Action List")
+        gfx.drawstr("Setup complete.")
     else
         gfx.set(1.0, 0.42, 0.12, 1)
         gfx.x = infoX + 14
@@ -3336,7 +3311,9 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
         gfx.drawstr("Setup was not completely successful.")
     end
     y = y + linuxLineHeight(30)
-    drawLinuxInfoRows(infoX + 14, y, infoW - 28, infoRows, linuxWrapWidth(84), infoRowGap, finalSuccess)
+    local rowTopY = y
+    drawLinuxInfoRows(infoX + 14, rowTopY, infoColW, leftRows, leftWrap, infoRowGap, finalSuccess)
+    drawLinuxInfoRows(infoX + 14 + infoColW + infoColGap, rowTopY, infoColW, rightRows, rightWrap, infoRowGap, finalSuccess)
 
     local finalState = {}
     for k, v in pairs(state or {}) do
@@ -3360,36 +3337,88 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.set(pr, pg, pb, 1)
     gfx.rect(progressX, progressY, math.floor(progressW * (progressPct / 100)), progressH, 1)
 
-    drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "Console wheel scrolls. Ctrl+wheel outside console zooms text. Use +/- or 0 for text size.")
+    drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "")
 
-    local btnW = math.floor((infoW - 28 - (12 * 3)) / 4)
-    local btnX = outerPad + 14
-    local btnY1 = footerY + linuxLineHeight(28)
-    local btnY2 = btnY1 + btnH + 8
+    local actionButtons = {}
+    if finalSuccess then
+        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
+    else
+        actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
+        actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+    end
+    actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
+    actionButtons[#actionButtons + 1] = { label = "Open Capabilities", action = "open_cap" }
+    actionButtons[#actionButtons + 1] = { label = "Open Action List", action = "open_action_list" }
+    actionButtons[#actionButtons + 1] = { label = "Open REAPER Help", action = "open_help" }
+    actionButtons[#actionButtons + 1] = { label = "Copy Summary", action = "copy_summary" }
+    actionButtons[#actionButtons + 1] = { label = "Copy Log Path", action = "copy_log" }
+    actionButtons[#actionButtons + 1] = { label = "Copy Capabilities", action = "copy_cap" }
+    local buttonAreaW = infoW - 28
+    local buttonStartX = outerPad + 14
+    local preferredCols = 4
+    if buttonAreaW < 980 then preferredCols = 3 end
+    if buttonAreaW < 760 then preferredCols = 2 end
+    local footerTextH = linuxLineHeight(18)
+    local footerTextY = footerY + actionH - footerTextH - 8
+    local buttonsTop = footerY + 10
+    local buttonsBottom = footerTextY - 6
+    local rowGap = 8
+    local minBtnH = math.max(18, linuxLineHeight(18))
+
+    local function computeFooterGrid(cols)
+        local rows = math.ceil(#actionButtons / cols)
+        local btnW = math.floor((buttonAreaW - (btnGap * (cols - 1))) / cols)
+        local availH = math.max(0, buttonsBottom - buttonsTop)
+        local btnH = math.floor((availH - (rowGap * (rows - 1))) / rows)
+        return cols, rows, btnW, btnH
+    end
+
+    local cols, rows, btnW, btnH = computeFooterGrid(preferredCols)
+    while btnH < minBtnH and cols < 4 do
+        cols = cols + 1
+        cols, rows, btnW, btnH = computeFooterGrid(cols)
+    end
+    btnH = math.max(16, btnH)
+
     if LINUX_SETUP then
-        LINUX_SETUP.buttons = {
-            { label = "Open Log", x = btnX, y = btnY1, w = btnW, h = btnH, action = "open_log" },
-            { label = "Open Capabilities", x = btnX + (btnW + btnGap), y = btnY1, w = btnW, h = btnH, action = "open_cap" },
-            { label = "Open Action List", x = btnX + 2 * (btnW + btnGap), y = btnY1, w = btnW, h = btnH, action = "open_action_list" },
-            { label = "Open REAPER Help", x = btnX + 3 * (btnW + btnGap), y = btnY1, w = btnW, h = btnH, action = "open_help" },
-            { label = "Copy Summary", x = btnX, y = btnY2, w = btnW, h = btnH, action = "copy_summary" },
-            { label = "Copy Log Path", x = btnX + (btnW + btnGap), y = btnY2, w = btnW, h = btnH, action = "copy_log" },
-            { label = "Copy Capabilities", x = btnX + 2 * (btnW + btnGap), y = btnY2, w = btnW, h = btnH, action = "copy_cap" },
-        }
+        LINUX_SETUP.buttons = {}
+        for i, b in ipairs(actionButtons) do
+            local row = math.floor((i - 1) / cols)
+            local col = (i - 1) % cols
+            local bx = buttonStartX + (col * (btnW + btnGap))
+            local by = buttonsTop + (row * (btnH + rowGap))
+            LINUX_SETUP.buttons[#LINUX_SETUP.buttons + 1] = {
+                label = b.label,
+                x = bx,
+                y = by,
+                w = btnW,
+                h = btnH,
+                action = b.action,
+                style = b.style,
+            }
+        end
         gfx.setfont(1, "Arial", linuxFontSize(13))
         for _, b in ipairs(LINUX_SETUP.buttons) do
-            drawButton(b.label, b.x, b.y, b.w, b.h)
+            drawButton(b.label, b.x, b.y, b.w, b.h, b.style)
         end
     end
 
     gfx.setfont(1, "Arial", linuxFontSize(12))
     gfx.set(0.70, 0.70, 0.72, 1)
-    local footerText = string.format("Press Esc or close this window to continue.  Text %.0f%%  Ctrl+wheel / +/- / 0", ((LINUX_SETUP and LINUX_SETUP.fontScale) or 1.0) * 100)
+    local helpText = "Console wheel: scroll. Ctrl+wheel or +/-/0: text zoom."
+    gfx.x = outerPad + 14
+    gfx.y = footerTextY
+    gfx.drawstr(helpText)
+
+    local footerText = string.format("Esc/close to continue.  Text %.0f%%", ((LINUX_SETUP and LINUX_SETUP.fontScale) or 1.0) * 100)
     local footerW = gfx.measurestr(footerText)
     gfx.x = outerPad + infoW - 14 - footerW
-    gfx.y = footerY + 8
+    gfx.y = footerTextY
     gfx.drawstr(footerText)
 end
+
+local verifyExistingSetup
+local startLinuxSetup
 
 local function linuxSetupTick()
     if not LINUX_SETUP then return end
@@ -3457,6 +3486,32 @@ local function linuxSetupTick()
     if LINUX_SETUP.finalized then
         restoreLinuxWindowGeometry()
         linuxDrawFinal(LINUX_SETUP.finalMessage, LINUX_SETUP.finalSuccess, state, logLines, pid)
+        if LINUX_SETUP.finalSuccess
+            and not LINUX_SETUP.postActionRefreshQueued
+            and (LINUX_SETUP.mode == "repair" or LINUX_SETUP.mode == "rebuild-venv") then
+            LINUX_SETUP.postActionRefreshQueued = true
+            local runtime = LINUX_SETUP.runtime
+            local separatorScript = LINUX_SETUP.separatorScript
+            local refreshStateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+            local refreshCapFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+            local attempts = 0
+            local function reopenWithFreshState()
+                attempts = attempts + 1
+                local freshState = parseStateFile(refreshStateFile)
+                local freshCaps = parseStateFile(refreshCapFile)
+                local stateReady = fileExists(refreshStateFile) and next(freshState) ~= nil
+                local ffmpegReady = trim(freshState.FFMPEG_PATH or freshCaps.FFMPEG_PATH or resolveLinuxFfmpegPath(freshState)) ~= ""
+                if (stateReady and ffmpegReady) or attempts >= 12 then
+                    if gfx then gfx.quit() end
+                    LINUX_SETUP = nil
+                    verifyExistingSetup(runtime, separatorScript)
+                    return
+                end
+                reaper.defer(reopenWithFreshState)
+            end
+            reaper.defer(reopenWithFreshState)
+            return
+        end
     else
         linuxDrawStatus(state, logLines, pidAlive, pid)
     end
@@ -3484,6 +3539,27 @@ local function linuxSetupTick()
                         openActionList()
                     elseif b.action == "open_help" then
                         openPath(LINUX_SETUP.helpFile)
+                    elseif b.action == "repair" then
+                        local runtime = LINUX_SETUP.runtime
+                        local separatorScript = LINUX_SETUP.separatorScript or (SCRIPT_DIR .. "audio_separator_process.py")
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        startLinuxSetup(runtime, separatorScript, "repair")
+                        return
+                    elseif b.action == "rebuild_venv" then
+                        local runtime = LINUX_SETUP.runtime
+                        local separatorScript = LINUX_SETUP.separatorScript or (SCRIPT_DIR .. "audio_separator_process.py")
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        startLinuxSetup(runtime, separatorScript, "rebuild-venv")
+                        return
+                    elseif b.action == "open_stemwerk" then
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        reaper.defer(function()
+                            launchMainStemwerkScript()
+                        end)
+                        return
                     end
                     break
                 end
@@ -3541,7 +3617,575 @@ local function linuxSetupTick()
     reaper.defer(linuxSetupTick)
 end
 
-local function startLinuxSetup(runtime, separatorScript)
+local function appendSetupLog(runtime, line, replace)
+    if not runtime or not runtime.runtimeLogs then return end
+    ensureDir(runtime.runtimeLogs)
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local mode = replace and "w" or "a"
+    local f = io.open(logFile, mode)
+    if not f then return end
+    f:write(tostring(line or "") .. "\n")
+    f:close()
+end
+
+local function removeDirRecursive(path)
+    if not path or path == "" or OS == "Windows" then
+        return false, "unsupported_or_empty_path", -1, ""
+    end
+    local cmd = "rm -rf " .. quoteArg(path)
+    local rc, out = execCapture(cmd, 120000)
+    out = trim(out or "")
+    if rc == 0 and not pathExists(path) then
+        return true, nil, rc, out
+    end
+    if rc == 0 and pathExists(path) then
+        return false, "path_still_exists_after_delete", rc, out
+    end
+    return false, "rm_failed", rc, out
+end
+
+local function normalizePathForSafety(path)
+    local p = resolvePath(path or "")
+    if p == "" then return "" end
+    p = p:gsub("\\", "/")
+    p = p:gsub("/+$", "")
+    return p
+end
+
+local function canonicalizeDir(path)
+    local raw = resolvePath(path or "")
+    if raw == "" then return nil, "empty_path" end
+    if not pathExists(raw) then return nil, "path_missing" end
+    local cmd = 'cd ' .. quoteArg(raw) .. ' >/dev/null 2>&1 && pwd -P'
+    local rc, out = execCapture(cmd, 4000)
+    if rc ~= 0 then
+        return nil, "canonical_resolution_failed"
+    end
+    local canon = normalizePathForSafety(trim((out or ""):match("([^\r\n]+)") or ""))
+    if canon == "" then
+        return nil, "canonical_empty"
+    end
+    return canon, nil
+end
+
+local function canonicalizeParentAndJoin(path)
+    local raw = resolvePath(path or "")
+    if raw == "" then return nil, "empty_path" end
+    local norm = normalizePathForSafety(raw)
+    local parent = norm:match("^(.*)/[^/]+$") or ""
+    local leaf = norm:match("([^/]+)$") or ""
+    if parent == "" or leaf == "" then
+        return nil, "invalid_path"
+    end
+    local canonParent, err = canonicalizeDir(parent)
+    if not canonParent then
+        return nil, err or "canonical_parent_failed"
+    end
+    return canonParent .. "/" .. leaf, nil
+end
+
+local function startsWithPath(path, prefix)
+    path = normalizePathForSafety(path)
+    prefix = normalizePathForSafety(prefix)
+    if path == "" or prefix == "" then return false end
+    return path == prefix or path:sub(1, #prefix + 1) == (prefix .. "/")
+end
+
+local function getCanonicalReaperResourcePath()
+    local rp = PATH_HELPER and PATH_HELPER.getReaperResourcePath and PATH_HELPER.getReaperResourcePath(OS, PATH_SEP) or ""
+    if rp == "" then return nil end
+    return canonicalizeDir(rp)
+end
+
+local function getCanonicalScriptsInstallPath()
+    local canonical = PATH_HELPER and PATH_HELPER.getCanonicalInstallRoot and PATH_HELPER.getCanonicalInstallRoot(OS, PATH_SEP) or ""
+    if canonical == "" then return nil end
+    return canonicalizeParentAndJoin(canonical)
+end
+
+local function validateCanonicalDeleteTarget(targetPath, expectedPath, label)
+    local targetCanon, targetErr = canonicalizeDir(targetPath)
+    if not targetCanon then
+        return false, targetErr or "target_canonical_failed", nil, nil
+    end
+    local expectedCanon, expectedErr = canonicalizeParentAndJoin(expectedPath)
+    if not expectedCanon then
+        return false, expectedErr or "expected_canonical_failed", targetCanon, nil
+    end
+    if targetCanon ~= expectedCanon then
+        return false, "target_mismatch", targetCanon, expectedCanon
+    end
+    local homeCanon = canonicalizeDir(getHome())
+    if homeCanon and targetCanon == homeCanon then
+        return false, "forbidden_home_path", targetCanon, expectedCanon
+    end
+    local resourceCanon = getCanonicalReaperResourcePath()
+    if resourceCanon and (targetCanon == resourceCanon or startsWithPath(targetCanon, resourceCanon)) then
+        return false, "forbidden_resource_path", targetCanon, expectedCanon
+    end
+    local scriptsCanon = getCanonicalScriptsInstallPath()
+    if scriptsCanon and (targetCanon == scriptsCanon or startsWithPath(targetCanon, scriptsCanon)) then
+        return false, "forbidden_scripts_path", targetCanon, expectedCanon
+    end
+    if targetCanon == "/" then
+        return false, "root_path", targetCanon, expectedCanon
+    end
+    return true, nil, targetCanon, expectedCanon
+end
+
+local function uniqueTrashPath(trashRoot, prefix)
+    if not trashRoot or trashRoot == "" then return nil, "missing_trash_root" end
+    local stamp = os.date("%Y%m%d-%H%M%S")
+    for index = 0, 99 do
+        local suffix = (index == 0) and stamp or (stamp .. "-" .. tostring(index))
+        local candidate = trashRoot .. PATH_SEP .. prefix .. "-" .. suffix
+        if not pathExists(candidate) then
+            return candidate, nil
+        end
+    end
+    return nil, "trash_target_collision"
+end
+
+local function dirIsEmpty(path)
+    if not path or path == "" then return true end
+    local rc, out = execCapture("find " .. quoteArg(path) .. " -mindepth 1 -print -quit", 4000)
+    if rc ~= 0 then
+        return true
+    end
+    return trim(out or "") == ""
+end
+
+local function estimateDirSize(path)
+    if not path or path == "" then return "unknown" end
+    local rc, out = execCapture("du -sh " .. quoteArg(path), 6000)
+    if rc ~= 0 then
+        return "unknown"
+    end
+    local first = trim((out or ""):match("^(%S+)") or "")
+    return first ~= "" and first or "unknown"
+end
+
+local function appendDeleteAudit(line)
+    local auditPath = getHome() .. "/.stemwerk_setup_delete.log"
+    local f = io.open(auditPath, "a")
+    if not f then return end
+    f:write(os.date("%Y-%m-%d %H:%M:%S") .. " " .. tostring(line or "") .. "\n")
+    f:close()
+end
+
+local function getModelsDeleteContext(runtime)
+    local modelDir = resolvePath(getModelCacheDir())
+    local baseDir = resolvePath((runtime and runtime.base) or getRuntimeBase())
+    local modelNorm = normalizePathForSafety(modelDir)
+    local baseNorm = normalizePathForSafety(baseDir)
+    local homeNorm = normalizePathForSafety(getHome())
+    local expectedSuffix = "/STEMwerk/models"
+    local insideBase = (baseNorm ~= "") and (modelNorm == (baseNorm .. "/models") or modelNorm:sub(1, #baseNorm + 1) == (baseNorm .. "/"))
+    local safeSuffix = modelNorm:sub(-#expectedSuffix) == expectedSuffix
+    local unsafe = modelNorm == "" or modelNorm == "/" or modelNorm == baseNorm or modelNorm == homeNorm
+    local canonOk, canonReason, targetCanon, expectedCanon = validateCanonicalDeleteTarget(modelDir, getModelCacheDir(), "models")
+    return {
+        modelDir = modelDir,
+        baseDir = baseDir,
+        unsafe = unsafe,
+        safeSuffix = safeSuffix,
+        insideBase = insideBase,
+        canonOk = canonOk,
+        canonReason = canonReason,
+        targetCanon = targetCanon,
+        expectedCanon = expectedCanon,
+    }
+end
+
+local function deleteDownloadedModels(runtime, opts)
+    opts = opts or {}
+
+    local function fail(text, code)
+        if not opts.noDialogs then
+            msgBox("STEMwerk Setup", text, code or 16)
+        end
+        return false, text
+    end
+
+    local function info(text)
+        if not opts.noDialogs then
+            msgBox("STEMwerk Setup", text, 0)
+        end
+        return true, text
+    end
+
+    if OS == "Windows" then
+        return fail("Delete models is currently available only on Linux/macOS in this setup flow.", 0)
+    end
+
+    local ctx = getModelsDeleteContext(runtime)
+    local modelDir = ctx.modelDir
+    local baseDir = ctx.baseDir
+    local unsafe = ctx.unsafe
+    local safeSuffix = ctx.safeSuffix
+    local insideBase = ctx.insideBase
+    local canonOk = ctx.canonOk
+
+    appendSetupLog(runtime, "Delete-models selected", false)
+    appendSetupLog(runtime, "Delete-models path: " .. tostring(modelDir), false)
+    appendDeleteAudit("Delete-models selected path=" .. tostring(modelDir))
+
+    if not pathExists(modelDir) then
+        appendSetupLog(runtime, "Delete-models: directory does not exist", false)
+        return info(
+            "Model cache directory does not exist.\n\nPath: " .. tostring(modelDir) .. "\n\nNothing was deleted."
+        )
+    end
+
+    if unsafe or not safeSuffix or not insideBase or not canonOk then
+        appendSetupLog(runtime, "Delete-models blocked by safety checks", false)
+        appendDeleteAudit("Delete-models blocked reason=" .. tostring(ctx.canonReason or "path_safety"))
+        return fail(
+            "Safety check blocked model deletion.\n\n"
+                .. "Resolved path: " .. tostring(modelDir) .. "\n"
+                .. "Expected under: " .. tostring(baseDir) .. "/models\n"
+                .. "Canonical target: " .. tostring(ctx.targetCanon or "(unresolved)") .. "\n"
+                .. "Canonical expected: " .. tostring(ctx.expectedCanon or "(unresolved)") .. "\n\n"
+                .. "Nothing was deleted.",
+            16
+        )
+    end
+
+    local sizeText = estimateDirSize(modelDir)
+    local empty = dirIsEmpty(modelDir)
+    appendSetupLog(runtime, "Delete-models exists: yes", false)
+    appendSetupLog(runtime, "Delete-models empty: " .. tostring(empty), false)
+    appendSetupLog(runtime, "Delete-models estimated size: " .. tostring(sizeText), false)
+    if empty then
+        return info("Model cache is already empty.\n\nPath: " .. tostring(modelDir) .. "\n\nNothing was deleted.")
+    end
+
+    if not opts.skipConfirm then
+        local confirm1 =
+            "Delete downloaded STEMwerk models?\n\n"
+            .. "Path: " .. tostring(modelDir) .. "\n"
+            .. "Estimated size: " .. tostring(sizeText) .. "\n\n"
+            .. "This cannot be undone.\n"
+            .. "The models will need to be downloaded again later."
+        if msgBox("STEMwerk Setup", confirm1, 4) ~= 6 then
+            appendSetupLog(runtime, "Delete-models cancelled at first confirmation", false)
+            return false, "Delete models cancelled."
+        end
+
+        local confirm2 =
+            "Final confirmation:\n\n"
+            .. "Delete downloaded STEMwerk models now?\n"
+            .. "Path: " .. tostring(modelDir) .. "\n\n"
+            .. "STEMwerk setup will reopen with live progress after deletion."
+        if msgBox("STEMwerk Setup", confirm2, 4) ~= 6 then
+            appendSetupLog(runtime, "Delete-models cancelled at second confirmation", false)
+            return false, "Delete models cancelled."
+        end
+    end
+
+    local trashRoot = (runtime and runtime.runtimeState or (baseDir .. PATH_SEP .. "state")) .. PATH_SEP .. "model-trash"
+    ensureDir(trashRoot)
+    local trashPath, trashErr = uniqueTrashPath(trashRoot, "models")
+    if not trashPath then
+        appendSetupLog(runtime, "Delete-models aborted: unable to allocate trash path (" .. tostring(trashErr) .. ")", false)
+        appendDeleteAudit("Delete-models aborted trash reason=" .. tostring(trashErr))
+        return fail("Unable to allocate a safe trash destination for models.\n\nNothing was deleted.", 16)
+    end
+
+    local moved = os.rename(modelDir, trashPath)
+    if moved then
+        appendSetupLog(runtime, "Delete-models moved to trash path: " .. tostring(trashPath), false)
+        appendDeleteAudit("Delete-models moved to trash path=" .. tostring(trashPath))
+        ensureDir(modelDir)
+        exec("rm -rf " .. quoteArg(trashPath) .. " >/dev/null 2>&1 &", 1000)
+        appendSetupLog(runtime, "Delete-models background cleanup started", false)
+        appendDeleteAudit("Delete-models background cleanup started")
+        return info(
+            "Downloaded models were removed.\n\n"
+                .. "Removed path: " .. tostring(modelDir) .. "\n\n"
+                .. "STEMwerk setup will now reopen with live progress."
+        )
+    end
+
+    appendSetupLog(runtime, "Delete-models move to trash failed; aborting safely", false)
+    appendDeleteAudit("Delete-models move to trash failed; no direct delete fallback")
+    return fail(
+        "Failed to move downloaded model cache to a safe trash location.\n\nPath: " .. tostring(modelDir) .. "\n\nNothing was deleted.",
+        16
+    )
+end
+
+local function getRuntimeDeleteContext(runtime)
+    local runtimeDir = resolvePath((runtime and runtime.base) or getRuntimeBase())
+    local runtimeNorm = normalizePathForSafety(runtimeDir)
+    local expectedNorm = normalizePathForSafety(getRuntimeBase())
+    local homeNorm = normalizePathForSafety(getHome())
+    local safeSuffix = runtimeNorm:sub(-9) == "/STEMwerk"
+    local unsafe = runtimeNorm == "" or runtimeNorm == "/" or runtimeNorm == homeNorm
+    local matchesExpected = (runtimeNorm ~= "" and expectedNorm ~= "") and PATH_HELPER.pathEquals(runtimeNorm, expectedNorm, OS)
+    local canonOk, canonReason, targetCanon, expectedCanon = validateCanonicalDeleteTarget(runtimeDir, getRuntimeBase(), "runtime")
+    return {
+        runtimeDir = runtimeDir,
+        runtimeNorm = runtimeNorm,
+        expectedNorm = expectedNorm,
+        unsafe = unsafe,
+        safeSuffix = safeSuffix,
+        matchesExpected = matchesExpected,
+        canonOk = canonOk,
+        canonReason = canonReason,
+        targetCanon = targetCanon,
+        expectedCanon = expectedCanon,
+    }
+end
+
+local function deleteRuntimeBase(runtime, opts)
+    opts = opts or {}
+
+    local function fail(text, code)
+        if not opts.noDialogs then
+            msgBox("STEMwerk Setup", text, code or 16)
+        end
+        return false, text
+    end
+
+    local function info(text)
+        if not opts.noDialogs then
+            msgBox("STEMwerk Setup", text, 0)
+        end
+        return true, text
+    end
+
+    if OS == "Windows" then
+        return fail("Delete runtime is currently available only on Linux/macOS in this setup flow.", 0)
+    end
+
+    local ctx = getRuntimeDeleteContext(runtime)
+    local runtimeDir = ctx.runtimeDir
+    local runtimeNorm = ctx.runtimeNorm
+    local expectedNorm = ctx.expectedNorm
+    local safeSuffix = ctx.safeSuffix
+    local unsafe = ctx.unsafe
+    local matchesExpected = ctx.matchesExpected
+    local canonOk = ctx.canonOk
+
+    appendSetupLog(runtime, "Delete-runtime selected", false)
+    appendSetupLog(runtime, "Delete-runtime path: " .. tostring(runtimeDir), false)
+    appendDeleteAudit("Delete-runtime selected path=" .. tostring(runtimeDir))
+
+    if not pathExists(runtimeDir) then
+        appendSetupLog(runtime, "Delete-runtime: directory does not exist", false)
+        appendDeleteAudit("Delete-runtime directory missing")
+        return info("Runtime directory does not exist.\n\nPath: " .. tostring(runtimeDir) .. "\n\nNothing was deleted.")
+    end
+
+    if unsafe or not safeSuffix or not matchesExpected or not canonOk then
+        appendSetupLog(runtime, "Delete-runtime blocked by safety checks", false)
+        appendDeleteAudit("Delete-runtime blocked reason=" .. tostring(ctx.canonReason or "path_safety"))
+        return fail(
+            "Safety check blocked runtime deletion.\n\n"
+                .. "Resolved path: " .. tostring(runtimeDir) .. "\n"
+                .. "Expected runtime: " .. tostring(expectedNorm) .. "\n"
+                .. "Canonical target: " .. tostring(ctx.targetCanon or "(unresolved)") .. "\n"
+                .. "Canonical expected: " .. tostring(ctx.expectedCanon or "(unresolved)") .. "\n\n"
+                .. "Nothing was deleted.",
+            16
+        )
+    end
+
+    local sizeText = estimateDirSize(runtimeDir)
+    local empty = dirIsEmpty(runtimeDir)
+    appendSetupLog(runtime, "Delete-runtime exists: yes", false)
+    appendSetupLog(runtime, "Delete-runtime empty: " .. tostring(empty), false)
+    appendSetupLog(runtime, "Delete-runtime estimated size: " .. tostring(sizeText), false)
+    appendDeleteAudit("Delete-runtime exists=yes empty=" .. tostring(empty) .. " size=" .. tostring(sizeText))
+    if empty then
+        return info("Runtime directory is already empty.\n\nPath: " .. tostring(runtimeDir) .. "\n\nNothing was deleted.")
+    end
+
+    if not opts.skipConfirm then
+        local confirm1 =
+            "Delete runtime - Full reset (venv, state, logs, models)?\n\n"
+            .. "Path: " .. tostring(runtimeDir) .. "\n"
+            .. "Estimated size: " .. tostring(sizeText) .. "\n\n"
+            .. "This deletes runtime, .venv, state, logs, and downloaded models.\n"
+            .. "This cannot be undone."
+        if msgBox("STEMwerk Setup", confirm1, 4) ~= 6 then
+            appendSetupLog(runtime, "Delete-runtime cancelled at first confirmation", false)
+            appendDeleteAudit("Delete-runtime cancelled at first confirmation")
+            return false, "Delete runtime cancelled."
+        end
+
+        local confirm2 =
+            "Final confirmation:\n\n"
+            .. "Delete runtime - Full reset now?\n"
+            .. "Path: " .. tostring(runtimeDir) .. "\n\n"
+            .. "STEMwerk setup will reopen with live progress after deletion."
+        if msgBox("STEMwerk Setup", confirm2, 4) ~= 6 then
+            appendSetupLog(runtime, "Delete-runtime cancelled at second confirmation", false)
+            appendDeleteAudit("Delete-runtime cancelled at second confirmation")
+            return false, "Delete runtime cancelled."
+        end
+    end
+
+    local parent = runtimeNorm:match("^(.*)/[^/]+$") or ""
+    if parent == "" or parent == "/" then
+        appendSetupLog(runtime, "Delete-runtime aborted: unsafe parent", false)
+        appendDeleteAudit("Delete-runtime aborted: unsafe parent")
+        return fail("Runtime deletion aborted due to unsafe parent path.\n\nNothing was deleted.", 16)
+    end
+
+    local trashRoot = parent .. "/.stemwerk-runtime-trash"
+    ensureDir(trashRoot)
+    local trashPath, trashErr = uniqueTrashPath(trashRoot, "runtime")
+    if not trashPath then
+        appendDeleteAudit("Delete-runtime aborted trash reason=" .. tostring(trashErr))
+        return fail("Unable to allocate a safe trash destination for runtime.\n\nNothing was deleted.", 16)
+    end
+
+    local moved = os.rename(runtimeDir, trashPath)
+    if moved then
+        appendDeleteAudit("Delete-runtime moved to trash path=" .. tostring(trashPath))
+        exec("rm -rf " .. quoteArg(trashPath) .. " >/dev/null 2>&1 &", 1000)
+        appendDeleteAudit("Delete-runtime background cleanup started")
+        return info(
+            "Runtime was removed.\n\n"
+                .. "Removed path: " .. tostring(runtimeDir) .. "\n\n"
+                .. "STEMwerk setup will now reopen with live progress."
+        )
+    end
+
+    appendDeleteAudit("Delete-runtime move to trash failed; no direct delete fallback")
+    return fail("Failed to move runtime directory to a safe trash location.\n\nPath: " .. tostring(runtimeDir) .. "\n\nNothing was deleted.", 16)
+end
+
+local function clearTransientSetupState(runtime)
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
+    os.remove(stateFile)
+    os.remove(capFile)
+    os.remove(pidFile)
+    if guardPath and guardPath ~= "" then
+        os.remove(guardPath)
+    end
+end
+
+-- Verify-only path: fast file-existence checks only, no subprocess, no package import,
+-- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
+-- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
+local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript)
+    if not gfx then
+        msgBox("STEMwerk Setup", table.concat(finalMessage or {}, "\n"), finalSuccess and 0 or 16)
+        return
+    end
+
+    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
+    LINUX_SETUP = {
+        runtime         = runtime,
+        mode            = "final",
+        separatorScript = separatorScript,
+        stateFile       = stateFile,
+        logFile         = logFile,
+        pidFile         = pidFile,
+        capFile         = capFile,
+        helpFile        = (OS == "Linux") and (RAW_SCRIPT_DIR .. "STEMwerk_Linux_Setup_Guide.txt")
+                          or "https://www.reaper.fm/userguide.php",
+        launchCmd       = nil,
+        launchPending   = false,
+        spinnerIndex    = 1,
+        finalized       = true,
+        finalMessage    = finalMessage,
+        finalSuccess    = finalSuccess == true,
+        summaryText     = table.concat(finalMessage or {}, "\n"),
+        pidSeen         = false,
+        startedAt       = os.time(),
+        lastMouseCap    = 0,
+        lastMouseWheel  = gfx.mouse_wheel or 0,
+        fontScale       = getLinuxSetupFontScale(),
+        logScroll       = 0,
+        stepFillByIndex = {},
+        lastStepIndex   = 4,
+        lastProgressPct = 100,
+        geometryRestored = false,
+        windowGeometry  = captureLinuxWindowGeometry(),
+    }
+    reaper.defer(linuxSetupTick)
+end
+
+verifyExistingSetup = function(runtime, separatorScript)
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    ensureDir(runtime.runtimeState)
+    ensureDir(runtime.runtimeLogs)
+    appendSetupLog(runtime, "Verify-only run (" .. setupUiLabel() .. ")", not fileExists(logFile))
+    appendSetupLog(runtime, "Mode: verify-only (file checks, no subprocess, no package import)", false)
+    appendSetupLog(runtime, "Models kept: " .. getModelCacheDir(), false)
+
+    local state = parseStateFile(stateFile)
+    local capState = parseStateFile(capFile)
+    local pythonPath = trim(resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(state)))
+    local ffmpegPath = trim(resolvePath(state.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(state)))
+    local stateStatus = state.STATUS or ""
+    local stateOk = fileExists(stateFile) and state and next(state) ~= nil
+        and (stateStatus == "ok" or stateStatus == "")
+
+    local checks = {
+        { label = "bootstrap.env",       ok = stateOk,
+          detail = fileExists(stateFile) and ("Status: " .. tostring(stateStatus ~= "" and stateStatus or "ok")) or "Not found" },
+        { label = "capabilities.env",    ok = fileExists(capFile),
+          detail = fileExists(capFile) and capFile or "Not found" },
+        { label = "Python path",         ok = pythonPath ~= "" and fileExists(pythonPath),
+          detail = pythonPath ~= "" and pythonPath or "Not set in bootstrap.env" },
+        { label = "FFmpeg path",         ok = ffmpegPath ~= "" and fileExists(ffmpegPath),
+          detail = ffmpegPath ~= "" and ffmpegPath or "Not set in bootstrap.env/capabilities.env" },
+        { label = "Virtual environment", ok = pathExists(runtime.venvDir),
+          detail = pathExists(runtime.venvDir) and runtime.venvDir or ("Not found: " .. tostring(runtime.venvDir)) },
+    }
+    local allOk = true
+    for _, c in ipairs(checks) do
+        appendSetupLog(runtime, (c.ok and "  OK: " or "FAIL: ") .. c.label .. ": " .. tostring(c.detail), false)
+        if not c.ok then allOk = false end
+    end
+    appendSetupLog(runtime, "Result: " .. (allOk and "OK (file checks passed)" or "FAIL (needs repair)"), false)
+    appendSetupLog(runtime, "Note: imports (torch, audio_separator) not checked; run Repair if separation fails.", false)
+
+    if runtime.base and runtime.base ~= "" then
+        updateBootstrapEnv(stateFile, {
+            RUNTIME_BASE = runtime.base,
+            STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
+        })
+    end
+
+    local finalMessage = {}
+    if allOk then
+        finalMessage[#finalMessage + 1] = "Verify only: file checks passed."
+        finalMessage[#finalMessage + 1] = "(Lightweight check only — imports and devices not verified)"
+    else
+        finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
+        finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
+    end
+    finalMessage[#finalMessage + 1] = ""
+    for _, c in ipairs(checks) do
+        finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
+    end
+    finalMessage[#finalMessage + 1] = ""
+    finalMessage[#finalMessage + 1] = "Log: " .. tostring(logFile)
+
+    showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript)
+end
+
+-- (showExistingRuntimeSetupMenu removed: replaced by non-blocking startExistingRuntimeSetupMenu below)
+
+startLinuxSetup = function(runtime, separatorScript, mode)
+    mode = tostring(mode or "repair")
+    if mode ~= "repair" and mode ~= "rebuild-venv" then
+        mode = "repair"
+    end
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
@@ -3550,18 +4194,83 @@ local function startLinuxSetup(runtime, separatorScript)
     ensureDir(runtime.runtimeState)
     ensureDir(runtime.runtimeLogs)
 
-    os.remove(stateFile)
-    os.remove(capFile)
-    os.remove(pidFile)
-    local lf = io.open(logFile, "w")
-    if lf then
-        lf:write("Setup run started (" .. setupUiLabel() .. ")\n")
-        lf:close()
+    clearTransientSetupState(runtime)
+    if mode == "rebuild-venv" then
+        appendSetupLog(runtime, "Setup run started (" .. setupUiLabel() .. ")", true)
+        appendSetupLog(runtime, "Mode: rebuild-venv", false)
+        appendSetupLog(runtime, "Keeping downloaded models: " .. getModelCacheDir(), false)
+        appendSetupLog(runtime, "Removing virtual environment: " .. runtime.venvDir, false)
+        local expectedVenv = resolvePath((runtime and runtime.base or getRuntimeBase()) .. PATH_SEP .. ".venv")
+        local venvOk, venvReason, venvCanon, expectedVenvCanon = validateCanonicalDeleteTarget(runtime.venvDir, expectedVenv, "venv")
+        if not venvOk then
+            appendSetupLog(runtime, "Rebuild-venv blocked: " .. tostring(venvReason), false)
+            appendDeleteAudit("Rebuild-venv blocked reason=" .. tostring(venvReason) .. " target=" .. tostring(venvCanon) .. " expected=" .. tostring(expectedVenvCanon))
+            msgBox(
+                "STEMwerk Setup",
+                "Safety check blocked virtual environment rebuild.\n\n"
+                    .. "Target: " .. tostring(runtime.venvDir) .. "\n"
+                    .. "Canonical target: " .. tostring(venvCanon or "(unresolved)") .. "\n"
+                    .. "Canonical expected: " .. tostring(expectedVenvCanon or "(unresolved)") .. "\n\n"
+                    .. "Nothing was deleted.",
+                16
+            )
+            return
+        end
+        local venvExistsBefore = pathExists(runtime.venvDir)
+        appendSetupLog(runtime, "Rebuild-venv target exists before delete: " .. tostring(venvExistsBefore), false)
+        appendSetupLog(runtime, "Rebuild-venv canonical target: " .. tostring(venvCanon or "(unresolved)"), false)
+        appendSetupLog(runtime, "Rebuild-venv canonical expected: " .. tostring(expectedVenvCanon or "(unresolved)"), false)
+        if venvExistsBefore then
+            local okRemove, removeReason, removeRc, removeOut = removeDirRecursive(runtime.venvDir)
+            if not okRemove then
+                appendSetupLog(
+                    runtime,
+                    "Rebuild-venv delete failed: reason=" .. tostring(removeReason) .. " rc=" .. tostring(removeRc),
+                    false
+                )
+                if removeOut and removeOut ~= "" then
+                    appendSetupLog(runtime, "Rebuild-venv delete output: " .. tostring(removeOut), false)
+                end
+                appendDeleteAudit(
+                    "Rebuild-venv delete failed path=" .. tostring(runtime.venvDir)
+                        .. " reason=" .. tostring(removeReason)
+                        .. " rc=" .. tostring(removeRc)
+                )
+                msgBox(
+                    "STEMwerk Setup",
+                    "Could not remove the virtual environment.\n\n"
+                        .. "Target: " .. tostring(runtime.venvDir) .. "\n"
+                        .. "Reason: " .. tostring(removeReason or "delete_failed") .. "\n\n"
+                        .. "Close REAPER and try again, or remove this folder manually.\n\n"
+                        .. "Log: " .. tostring(logFile),
+                    16
+                )
+                return
+            end
+        end
+        if pathExists(runtime.venvDir) then
+            appendSetupLog(runtime, "Rebuild-venv delete failed: target still exists after delete attempt", false)
+            appendDeleteAudit("Rebuild-venv delete failed path still exists=" .. tostring(runtime.venvDir))
+            msgBox(
+                "STEMwerk Setup",
+                "Could not remove the virtual environment.\n\n"
+                    .. "Target: " .. tostring(runtime.venvDir) .. "\n\n"
+                    .. "Close REAPER and try again, or remove this folder manually.\n\n"
+                    .. "Log: " .. tostring(logFile),
+                16
+            )
+            return
+        end
+    else
+        appendSetupLog(runtime, "Setup run started (" .. setupUiLabel() .. ")", true)
+        appendSetupLog(runtime, "Mode: repair", false)
+        appendSetupLog(runtime, "Keeping downloaded models: " .. getModelCacheDir(), false)
     end
     local sf = io.open(stateFile, "w")
     if sf then
         sf:write("STATUS=running\n")
         sf:write("STATUS_REASON=\n")
+        sf:write("MODE=" .. tostring(mode) .. "\n")
         sf:close()
     end
 
@@ -3585,6 +4294,7 @@ local function startLinuxSetup(runtime, separatorScript)
             .. " --runtime-base " .. quoteArg(runtime.base)
             .. " --state-file " .. quoteArg(stateFile)
             .. " --log-file " .. quoteArg(logFile)
+            .. " --mode " .. quoteArg(mode)
             .. " --pid-file " .. quoteArg(pidFile)
             .. " --bootstrap-script " .. quoteArg(scriptPath)
     else
@@ -3592,6 +4302,7 @@ local function startLinuxSetup(runtime, separatorScript)
             .. " --runtime-base " .. quoteArg(runtime.base)
             .. " --state-file " .. quoteArg(stateFile)
             .. " --log-file " .. quoteArg(logFile)
+            .. " --mode " .. quoteArg(mode)
             .. " </dev/null >" .. quoteArg(logFile) .. " 2>&1 & echo $! > " .. quoteArg(pidFile)
     end
 
@@ -3605,9 +4316,10 @@ local function startLinuxSetup(runtime, separatorScript)
     if not launchPending then
         exec(cmd, 20000)
     end
-    gfx.init(setupWindowTitle(setupUiLabel()), 1240, 860, 0, 120, 80)
+    gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
     LINUX_SETUP = {
         runtime = runtime,
+        mode = mode,
         separatorScript = separatorScript,
         stateFile = stateFile,
         logFile = logFile,
@@ -3637,6 +4349,637 @@ local function startLinuxSetup(runtime, separatorScript)
     reaper.defer(linuxSetupTick)
 end
 
+-- Deferred tick for the existing-runtime setup mode selection menu.
+-- Draws the window, handles input, and dispatches to verifyExistingSetup /
+-- startLinuxSetup / cancel. Never blocks the REAPER UI thread.
+local function existingRuntimeSetupMenuTick()
+    if not SETUP_MENU then return end
+    local m = SETUP_MENU
+    local w, h = gfx.w, gfx.h
+
+    local outerPad = math.max(10, math.floor(w * 0.02))
+    local panelX = outerPad
+    local panelY = math.max(12, math.floor(h * 0.03))
+    local panelW = w - outerPad * 2
+    local panelH = h - panelY - outerPad
+    local bodyPad = math.max(10, linuxLineHeight(10))
+    local bodyX = panelX + bodyPad
+    local bodyY = panelY + bodyPad
+    local bodyW = panelW - (bodyPad * 2)
+    local choices = m.choices
+    local modal = m.confirmModal
+
+    local function cappedWrap(text, charWidth, maxLines)
+        local lines = wrapLine(tostring(text or ""), math.max(8, charWidth or 8))
+        if maxLines and #lines > maxLines then
+            local out = {}
+            for i = 1, maxLines do out[i] = lines[i] end
+            out[maxLines] = out[maxLines] .. " ..."
+            return out
+        end
+        return lines
+    end
+
+    -- Zoom controls: Ctrl+wheel, +/- and 0 use shared persisted scale helpers.
+    local wheel = gfx.mouse_wheel or 0
+    local lastWheel = m.lastMouseWheel or 0
+    if wheel ~= lastWheel then
+        local ctrlHeld = ((gfx.mouse_cap or 0) & 4) == 4
+        if ctrlHeld then
+            if wheel > lastWheel then
+                adjustLinuxSetupFontScale(LINUX_SETUP_FONT_SCALE_STEP)
+            else
+                adjustLinuxSetupFontScale(-LINUX_SETUP_FONT_SCALE_STEP)
+            end
+        end
+        m.lastMouseWheel = wheel
+    end
+
+    -- Background
+    gfx.set(0.03, 0.03, 0.04, 1)
+    gfx.rect(0, 0, w, h, 1)
+    gfx.set(0.97, 0.55, 0.05, 1)
+    gfx.rect(0, 0, w, math.max(8, linuxLineHeight(8)), 1)
+    drawLinuxPanel(panelX, panelY, panelW, panelH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.29, 1 })
+
+    local scale = m.fontScale or 1.0
+    local compact = (w < 760 or h < 460 or scale >= 2.6)
+    local tiny = (w < 560 or h < 360)
+    local showSubs = not compact
+
+    local cols = 3
+    if bodyW < 980 or scale >= 2.2 then cols = 3 end
+    if bodyW < 700 or scale >= 2.8 then cols = 2 end
+    if bodyW < 420 then cols = 1 end
+
+    local btnGapX = math.max(8, math.floor(linuxLineHeight(8)))
+    local btnGapY = math.max(8, math.floor(linuxLineHeight(8)))
+
+    local function buildButtonLayout(colCount, withSubs)
+        local btnW = math.floor((bodyW - btnGapX * (colCount - 1)) / colCount)
+        local subByChoice = {}
+        local labelH = linuxLineHeight(16)
+        local subH = linuxLineHeight(12)
+        local subMaxLines = 1
+        if withSubs then
+            local subChars = math.max(8, math.floor((btnW - 20) / math.max(6, linuxFontSize(10) * 0.56)))
+            local subCap = (scale >= 2.4) and 1 or 2
+            for i, c in ipairs(choices) do
+                local lines = cappedWrap(c.sub, subChars, subCap)
+                subByChoice[i] = lines
+                subMaxLines = math.max(subMaxLines, #lines)
+            end
+        else
+            for i = 1, #choices do subByChoice[i] = {} end
+        end
+
+        local topPad = math.max(8, linuxLineHeight(8))
+        local bottomPad = math.max(8, linuxLineHeight(8))
+        local innerGap = withSubs and math.max(4, linuxLineHeight(4)) or 0
+        local subtitleBlock = withSubs and (subMaxLines * subH) or 0
+        local btnH = math.max(56, topPad + labelH + innerGap + subtitleBlock + bottomPad)
+        local rows = math.ceil(#choices / colCount)
+        local btnBlockH = rows * btnH + (rows - 1) * btnGapY
+        local btnY = panelY + panelH - btnBlockH - math.max(10, linuxLineHeight(10))
+        return {
+            cols = colCount,
+            btnW = btnW,
+            btnH = btnH,
+            btnY = btnY,
+            labelH = labelH,
+            subH = subH,
+            innerGap = innerGap,
+            subByChoice = subByChoice,
+        }
+    end
+
+    local layout = buildButtonLayout(cols, showSubs)
+
+    local footerText = string.format("Ctrl+wheel zooms text. Use +/- or 0 for text size. Esc = cancel.  Text %.0f%%", scale * 100)
+    if compact then
+        footerText = string.format("Ctrl+wheel / +/- / 0. Esc = cancel.  Text %.0f%%", scale * 100)
+    end
+    gfx.setfont(1, "Arial", linuxFontSize(11))
+    local footerChars = math.max(16, math.floor(bodyW / math.max(6, linuxFontSize(11) * 0.56)))
+    local footerLines = cappedWrap(footerText, footerChars, compact and 1 or 2)
+    local footerLineH = linuxLineHeight(14)
+    local footerH = #footerLines * footerLineH
+    local footerBottomPad = math.max(8, linuxLineHeight(8))
+    local footerY = panelY + panelH - footerBottomPad - footerH
+    local tooltipTextH = linuxLineHeight(14)
+    local tooltipBoxH = tooltipTextH + 4
+    local tooltipY = footerY - math.max(6, linuxLineHeight(6)) - tooltipBoxH
+    local rows = math.ceil(#choices / layout.cols)
+    local btnBlockH = (rows * layout.btnH) + ((rows - 1) * btnGapY)
+    layout.btnY = tooltipY - math.max(8, linuxLineHeight(8)) - btnBlockH
+    local infoBottom = layout.btnY - math.max(8, linuxLineHeight(8))
+
+    -- Info content is drawn only when it fits; this prevents overlap in tiny windows.
+    local y = bodyY
+    drawStemwerkInline(bodyX, y, linuxFontSize(22), "", "werk Setup [" .. setupUiLabel() .. "]")
+    y = y + linuxLineHeight(30)
+
+    gfx.setfont(1, "Arial Bold", linuxFontSize(14))
+    gfx.set(0.92, 0.92, 0.94, 1)
+    gfx.x = bodyX
+    gfx.y = y
+    gfx.drawstr("Existing runtime found. Choose what to do:")
+    y = y + linuxLineHeight(26)
+
+    if not tiny then
+        local runtimeChars = math.max(18, math.floor((bodyW - 28) / math.max(6, linuxFontSize(12) * 0.58)))
+        local runtimeLines = cappedWrap(tostring(m.runtime.base), runtimeChars, compact and 1 or 3)
+        local pathBoxH = linuxLineHeight(18) + (#runtimeLines * linuxLineHeight(15)) + 14
+        if y + pathBoxH <= infoBottom then
+            drawLinuxPanel(bodyX, y, bodyW, pathBoxH, { 0.06, 0.06, 0.07, 1 }, { 0.19, 0.19, 0.22, 1 })
+            gfx.setfont(1, "Arial", linuxFontSize(12))
+            gfx.set(0.55, 0.57, 0.62, 1)
+            gfx.x = bodyX + 14
+            gfx.y = y + 6
+            gfx.drawstr("Runtime:")
+            gfx.setfont(1, "Courier New", linuxFontSize(12))
+            gfx.set(0.86, 0.88, 0.92, 1)
+            local pathY = y + 6 + linuxLineHeight(16)
+            for _, line in ipairs(runtimeLines) do
+                gfx.x = bodyX + 14
+                gfx.y = pathY
+                gfx.drawstr(line)
+                pathY = pathY + linuxLineHeight(15)
+            end
+            y = y + pathBoxH + 10
+        end
+    end
+
+    if not tiny then
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        local modelLabel = "Models: "
+        local modelLabelW = gfx.measurestr(modelLabel)
+        local modelChars = math.max(16, math.floor((bodyW - modelLabelW) / math.max(6, linuxFontSize(12) * 0.58)))
+        local modelLines = cappedWrap(tostring(m.modelDir), modelChars, compact and 1 or 2)
+        local modelH = math.max(1, #modelLines) * linuxLineHeight(16)
+        if y + modelH <= infoBottom then
+            gfx.set(0.55, 0.57, 0.62, 1)
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr(modelLabel)
+            gfx.set(0.80, 0.82, 0.86, 1)
+            for i, line in ipairs(modelLines) do
+                gfx.x = bodyX + modelLabelW
+                gfx.y = y + ((i - 1) * linuxLineHeight(16))
+                gfx.drawstr(line)
+            end
+            y = y + modelH + linuxLineHeight(4)
+        end
+    end
+
+    -- Version info block
+    if not tiny and y + linuxLineHeight(16) <= infoBottom then
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        local cv = m.currentVersion or ""
+        local lv = m.lastSetupVersion or ""
+        if cv ~= "" or lv ~= "" then
+            local verLabel = "Setup script: v" .. (cv ~= "" and cv or "?")
+            if lv ~= "" then
+                verLabel = verLabel .. "   Last run: v" .. lv
+            else
+                verLabel = verLabel .. "   Last run: (unknown)"
+            end
+            gfx.set(0.55, 0.57, 0.62, 1)
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr(verLabel)
+            y = y + linuxLineHeight(16)
+        end
+    end
+
+    if m.updateDetected and y + linuxLineHeight(18) <= infoBottom then
+        gfx.setfont(1, "Arial Bold", linuxFontSize(12))
+        gfx.set(0.97, 0.80, 0.15, 1)
+        gfx.x = bodyX
+        gfx.y = y
+        gfx.drawstr("Update detected — Repair recommended to apply new dependencies.")
+        y = y + linuxLineHeight(18)
+    end
+
+    if not compact and y + linuxLineHeight(18) <= infoBottom then
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        gfx.set(0.38, 0.72, 0.46, 1)
+        gfx.x = bodyX
+        gfx.y = y
+        gfx.drawstr("Models are kept in Check only, Repair, and Rebuild venv.")
+        y = y + linuxLineHeight(18)
+    end
+
+    if not compact and y + linuxLineHeight(18) <= infoBottom then
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        gfx.set(0.90, 0.52, 0.24, 1)
+        gfx.x = bodyX
+        gfx.y = y
+        gfx.drawstr("Delete models... and Delete runtime... are destructive advanced actions.")
+        y = y + linuxLineHeight(18)
+    end
+
+    if y + linuxLineHeight(18) <= infoBottom then
+        gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+        if m.updateDetected then
+            gfx.set(0.97, 0.80, 0.15, 1)
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr("Update detected — run Repair to apply changes")
+        else
+            gfx.set(0.20, 0.92, 0.28, 1)
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr("Existing runtime detected - choose an action below")
+        end
+        y = y + linuxLineHeight(22)
+    end
+
+    -- Mid panel: content-sized summary box (no empty space).
+    local midPanelY = y + linuxLineHeight(6)
+    local midPanelAvailH = (footerY - math.max(10, linuxLineHeight(10))) - midPanelY
+    local perItem = linuxLineHeight(16)
+    local cv = m.currentVersion or ""
+    local lv = m.lastSetupVersion or ""
+    local verRow = ""
+    if cv ~= "" then
+        verRow = "Script v" .. cv
+        if lv ~= "" then
+            verRow = verRow .. "  |  Last setup v" .. lv
+            if m.updateDetected then verRow = verRow .. "  ← update" end
+        end
+    end
+    local hasVerRow = verRow ~= ""
+    local contentH = 12 + linuxLineHeight(18)
+        + (hasVerRow and linuxLineHeight(16) or 0)
+        + #choices * perItem
+        + 10
+    local midPanelH = math.min(contentH, midPanelAvailH)
+    if midPanelH >= linuxLineHeight(40) then
+        drawLinuxPanel(bodyX, midPanelY, bodyW, midPanelH, { 0.06, 0.06, 0.07, 1 }, { 0.22, 0.22, 0.24, 1 })
+
+        local iy = midPanelY + 12
+        gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+        gfx.set(0.92, 0.92, 0.94, 1)
+        gfx.x = bodyX + 12
+        gfx.y = iy
+        gfx.drawstr("Mode summary")
+        iy = iy + linuxLineHeight(18)
+
+        if hasVerRow and iy + linuxLineHeight(16) <= midPanelY + midPanelH - 10 then
+            gfx.setfont(1, "Arial", linuxFontSize(11))
+            gfx.set(m.updateDetected and 0.97 or 0.45, m.updateDetected and 0.80 or 0.47, m.updateDetected and 0.15 or 0.54, 1)
+            gfx.x = bodyX + 12
+            gfx.y = iy
+            gfx.drawstr(verRow)
+            iy = iy + linuxLineHeight(16)
+        end
+
+        local maxItems = math.max(1, math.floor(((midPanelY + midPanelH - 10) - iy) / perItem))
+        local shown = math.min(#choices, maxItems)
+        for i = 1, shown do
+            local c = choices[i]
+            local summaryLabel = tostring(c.label or ""):gsub("%.%.%.$", "")
+            gfx.set(c.accent[1], c.accent[2], c.accent[3], 1)
+            gfx.rect(bodyX + 12, iy + 4, 6, math.max(6, linuxLineHeight(6)), 1)
+            gfx.setfont(1, "Arial", linuxFontSize(12))
+            gfx.set(0.82, 0.84, 0.88, 1)
+            gfx.x = bodyX + 24
+            gfx.y = iy
+            gfx.drawstr(summaryLabel .. " - " .. c.sub)
+            iy = iy + perItem
+        end
+    end
+
+    local hoveredChoice = nil
+    local chosen = nil
+    for i, c in ipairs(choices) do
+        local row = math.floor((i - 1) / layout.cols)
+        local col = (i - 1) % layout.cols
+        local bx = bodyX + col * (layout.btnW + btnGapX)
+        local by = layout.btnY + row * (layout.btnH + btnGapY)
+        local hot = isMouseIn(bx, by, layout.btnW, layout.btnH)
+        if hot then hoveredChoice = c end
+
+        local acc = c.accent
+        local topH = math.max(5, linuxLineHeight(5))
+        gfx.set(0.16, 0.16, 0.17, 1)
+        gfx.rect(bx, by, layout.btnW, layout.btnH, 1)
+        gfx.set(0.28, 0.28, 0.30, 1)
+        gfx.rect(bx, by, layout.btnW, layout.btnH, 0)
+        gfx.set(acc[1], acc[2], acc[3], hot and 1.0 or 0.72)
+        gfx.rect(bx, by, layout.btnW, topH, 1)
+        if hot then
+            gfx.set(acc[1], acc[2], acc[3], 0.25)
+            gfx.rect(bx + 1, by + topH + 1, layout.btnW - 2, layout.btnH - topH - 2, 1)
+        end
+
+        local subLines = layout.subByChoice[i] or {}
+        local contentH = layout.labelH + ((#subLines > 0) and (layout.innerGap + (#subLines * layout.subH)) or 0)
+        local contentY = by + math.max(6, math.floor((layout.btnH - contentH) / 2))
+
+        gfx.setfont(1, "Arial Bold", linuxFontSize(14))
+        gfx.set(1, 1, 1, 1)
+        local lw = gfx.measurestr(c.label)
+        gfx.x = bx + math.floor((layout.btnW - lw) / 2)
+        gfx.y = contentY
+        gfx.drawstr(c.label)
+
+        if #subLines > 0 then
+            gfx.setfont(1, "Arial", linuxFontSize(10))
+            gfx.set(0.84, 0.84, 0.86, hot and 0.98 or 0.70)
+            local subY = contentY + layout.labelH + layout.innerGap
+            for _, line in ipairs(subLines) do
+                local sw = gfx.measurestr(line)
+                gfx.x = bx + math.floor((layout.btnW - sw) / 2)
+                gfx.y = subY
+                gfx.drawstr(line)
+                subY = subY + layout.subH
+            end
+        end
+    end
+
+    -- Optional tooltip line for hovered action (extra user info)
+    if hoveredChoice then
+        local tip = hoveredChoice.label .. ": " .. hoveredChoice.sub
+        gfx.setfont(1, "Arial", linuxFontSize(11))
+        local tipChars = math.max(14, math.floor(bodyW / math.max(6, linuxFontSize(11) * 0.56)))
+        local tipLines = cappedWrap(tip, tipChars, 1)
+        local tipY = tooltipY + math.max(1, math.floor((tooltipBoxH - tooltipTextH) / 2))
+        if tooltipY >= bodyY then
+            gfx.set(0.14, 0.14, 0.15, 0.98)
+            gfx.rect(bodyX, tooltipY, bodyW, tooltipBoxH, 1)
+            gfx.set(0.26, 0.26, 0.30, 1)
+            gfx.rect(bodyX, tooltipY, bodyW, tooltipBoxH, 0)
+            gfx.set(0.85, 0.87, 0.90, 1)
+            gfx.x = bodyX + 6
+            gfx.y = tipY
+            gfx.drawstr(tipLines[1] or "")
+        end
+    end
+
+    gfx.setfont(1, "Arial", linuxFontSize(11))
+    gfx.set(0.40, 0.42, 0.46, 1)
+    local footerLineY = footerY
+    for _, line in ipairs(footerLines) do
+        gfx.x = bodyX
+        gfx.y = footerLineY
+        gfx.drawstr(line)
+        footerLineY = footerLineY + footerLineH
+    end
+
+    if m.noticeText and m.noticeText ~= "" then
+        local showNotice = (not m.noticeUntil) or (os.time() <= m.noticeUntil)
+        if showNotice then
+            local noticeChars = math.max(16, math.floor(bodyW / math.max(6, linuxFontSize(11) * 0.56)))
+            local noticeLines = cappedWrap(m.noticeText, noticeChars, 2)
+            local noticeH = (#noticeLines * linuxLineHeight(14)) + 6
+            local noticeY = layout.btnY - noticeH - math.max(6, linuxLineHeight(6))
+            if noticeY >= bodyY then
+                gfx.set(0.13, 0.18, 0.14, 0.96)
+                gfx.rect(bodyX, noticeY, bodyW, noticeH, 1)
+                gfx.set(0.22, 0.34, 0.24, 1)
+                gfx.rect(bodyX, noticeY, bodyW, noticeH, 0)
+                gfx.set(0.82, 0.95, 0.84, 1)
+                gfx.setfont(1, "Arial", linuxFontSize(11))
+                local ny = noticeY + 3
+                for _, line in ipairs(noticeLines) do
+                    gfx.x = bodyX + 6
+                    gfx.y = ny
+                    gfx.drawstr(line)
+                    ny = ny + linuxLineHeight(14)
+                end
+            end
+        else
+            m.noticeText = nil
+            m.noticeUntil = nil
+        end
+    end
+
+    local modalYes = nil
+    local modalNo = nil
+    if modal then
+        gfx.set(0, 0, 0, 0.60)
+        gfx.rect(panelX, panelY, panelW, panelH, 1)
+
+        local mw = math.max(520, math.floor(bodyW * 0.74))
+        local mh = math.max(220, linuxLineHeight(210))
+        local mx = bodyX + math.floor((bodyW - mw) / 2)
+        local my = bodyY + math.max(20, math.floor((panelH - mh) / 2))
+        drawLinuxPanel(mx, my, mw, mh, { 0.12, 0.12, 0.13, 1 }, { 0.30, 0.30, 0.32, 1 })
+
+        local tx = mx + 14
+        local ty = my + 12
+        local isRuntime = modal.kind == "runtime"
+        local title
+        if modal.step == 1 then
+            title = isRuntime and "Delete runtime - Full reset?" or "Delete downloaded models?"
+        else
+            title = "Final confirmation"
+        end
+        gfx.setfont(1, "Arial Bold", linuxFontSize(15))
+        gfx.set(0.95, 0.95, 0.96, 1)
+        gfx.x = tx
+        gfx.y = ty
+        gfx.drawstr(title)
+        ty = ty + linuxLineHeight(24)
+
+        gfx.setfont(1, "Arial", linuxFontSize(12))
+        gfx.set(0.84, 0.86, 0.90, 1)
+        local bodyLines = {
+            "Path: " .. tostring(modal.runtimeDir or ""),
+            "Estimated size: " .. tostring(modal.sizeText or "unknown"),
+            "",
+        }
+        if modal.step == 1 then
+            if isRuntime then
+                bodyLines[#bodyLines + 1] = "This deletes runtime, .venv, state, logs, and downloaded models."
+                bodyLines[#bodyLines + 1] = "This cannot be undone."
+            else
+                bodyLines[#bodyLines + 1] = "This deletes only the downloaded model cache."
+                bodyLines[#bodyLines + 1] = "Models will be downloaded again when needed."
+            end
+        else
+            if isRuntime then
+                bodyLines[#bodyLines + 1] = "Delete runtime - Full reset now?"
+            else
+                bodyLines[#bodyLines + 1] = "Delete downloaded models now?"
+            end
+            bodyLines[#bodyLines + 1] = "Setup will reopen with live progress after deletion."
+        end
+        for _, line in ipairs(bodyLines) do
+            gfx.x = tx
+            gfx.y = ty
+            gfx.drawstr(line)
+            ty = ty + linuxLineHeight(16)
+        end
+
+        local bW = math.max(96, linuxLineHeight(88))
+        local bH = math.max(28, linuxLineHeight(26))
+        local bGap = 10
+        local by = my + mh - bH - 12
+        local bx2 = mx + mw - bW - 14
+        local bx1 = bx2 - bGap - bW
+        modalYes = { x = bx1, y = by, w = bW, h = bH }
+        modalNo = { x = bx2, y = by, w = bW, h = bH }
+        drawButton((modal.step == 1) and "Yes" or "Delete", modalYes.x, modalYes.y, modalYes.w, modalYes.h)
+        drawButton("Cancel", modalNo.x, modalNo.y, modalNo.w, modalNo.h)
+    end
+
+    local ch = gfx.getchar()
+    if modal then
+        if ch < 0 or ch == 27 then
+            m.confirmModal = nil
+            gfx.update()
+            reaper.defer(existingRuntimeSetupMenuTick)
+            return
+        end
+
+        local mouseDown = (gfx.mouse_cap & 1) == 1
+        local lastModalMouse = m.modalMouseWasDown or false
+        if mouseDown and not lastModalMouse then
+            if modalYes and isMouseIn(modalYes.x, modalYes.y, modalYes.w, modalYes.h) then
+                if modal.step == 1 then
+                    modal.step = 2
+                else
+                    local ok, msg
+                    if modal.kind == "models" then
+                        ok, msg = deleteDownloadedModels(m.runtime, { skipConfirm = true, noDialogs = true })
+                    else
+                        ok, msg = deleteRuntimeBase(m.runtime, { skipConfirm = true, noDialogs = true })
+                    end
+                    m.confirmModal = nil
+                    if ok then
+                        if modal.kind == "models" then
+                            m.noticeText = msg or "Model cache deleted."
+                            m.noticeUntil = os.time() + 10
+                        else
+                            local runtime = m.runtime
+                            local separatorScript = m.separatorScript
+                            if msg and msg ~= "" then
+                                msgBox("STEMwerk Setup", tostring(msg), 0)
+                            end
+                            gfx.quit()
+                            SETUP_MENU = nil
+                            verifyExistingSetup(runtime, separatorScript)
+                        end
+                        return
+                    end
+                    m.noticeText = msg or "Delete action failed."
+                    m.noticeUntil = os.time() + 8
+                end
+            elseif modalNo and isMouseIn(modalNo.x, modalNo.y, modalNo.w, modalNo.h) then
+                m.confirmModal = nil
+            end
+        end
+        m.modalMouseWasDown = mouseDown
+        gfx.update()
+        reaper.defer(existingRuntimeSetupMenuTick)
+        return
+    end
+
+    if ch == 43 or ch == 61 then
+        adjustLinuxSetupFontScale(LINUX_SETUP_FONT_SCALE_STEP)
+    elseif ch == 45 or ch == 95 then
+        adjustLinuxSetupFontScale(-LINUX_SETUP_FONT_SCALE_STEP)
+    elseif ch == 48 then
+        resetLinuxSetupFontScale()
+    elseif ch < 0 or ch == 27 then
+        chosen = "cancel"
+    end
+
+    if not chosen then
+        local mouseDown = (gfx.mouse_cap & 1) == 1
+        if mouseDown and not m.mouseWasDown then
+            for i, c in ipairs(choices) do
+                local row = math.floor((i - 1) / layout.cols)
+                local col = (i - 1) % layout.cols
+                local bx = bodyX + col * (layout.btnW + btnGapX)
+                local by = layout.btnY + row * (layout.btnH + btnGapY)
+                if isMouseIn(bx, by, layout.btnW, layout.btnH) then
+                    chosen = c.id
+                    break
+                end
+            end
+        end
+        m.mouseWasDown = mouseDown
+    end
+
+    gfx.update()
+
+    if chosen == "delete-runtime" then
+        local ctx = getRuntimeDeleteContext(m.runtime)
+        m.confirmModal = {
+            step = 1,
+            kind = "runtime",
+            runtimeDir = ctx.runtimeDir,
+            sizeText = estimateDirSize(ctx.runtimeDir),
+        }
+        reaper.defer(existingRuntimeSetupMenuTick)
+        return
+    end
+
+    if chosen == "delete-models" then
+        local ctx = getModelsDeleteContext(m.runtime)
+        m.confirmModal = {
+            step = 1,
+            kind = "models",
+            runtimeDir = ctx.modelDir,
+            sizeText = estimateDirSize(ctx.modelDir),
+        }
+        reaper.defer(existingRuntimeSetupMenuTick)
+        return
+    end
+
+    if chosen then
+        gfx.quit()
+        local runtime = m.runtime
+        local separatorScript = m.separatorScript
+        SETUP_MENU = nil
+        if chosen == "verify" then
+            verifyExistingSetup(runtime, separatorScript)
+        elseif chosen == "repair" or chosen == "rebuild-venv" then
+            startLinuxSetup(runtime, separatorScript, chosen)
+        end
+        return
+    end
+
+    reaper.defer(existingRuntimeSetupMenuTick)
+end
+
+-- Initializes the gfx window and kicks off the deferred menu tick.
+-- Returns immediately; REAPER remains responsive while the menu is open.
+local function startExistingRuntimeSetupMenu(runtime, separatorScript)
+    local stateFileForVer = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local storedState = fileExists(stateFileForVer) and parseStateFile(stateFileForVer) or {}
+    local lastSetupVersion = trim(storedState.STEMWERK_SETUP_VERSION or "")
+    local currentVersion = SETUP_VERSION or ""
+    local versionMatch = (lastSetupVersion == "" or lastSetupVersion == currentVersion)
+    local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
+
+    SETUP_MENU = {
+        runtime         = runtime,
+        separatorScript = separatorScript,
+        modelDir        = getModelCacheDir(),
+        mouseWasDown    = false,
+        lastMouseWheel  = gfx.mouse_wheel or 0,
+        fontScale       = math.max(getLinuxSetupFontScale(), LINUX_SETUP_FONT_SCALE_DEFAULT),
+        currentVersion  = currentVersion,
+        lastSetupVersion = lastSetupVersion,
+        updateDetected  = updateDetected,
+        choices = {
+            { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
+            { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
+            { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
+            { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } },
+            { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } },
+            { id = "cancel",       label = "Cancel",        sub = "Exit without changes",              accent = { 0.38, 0.38, 0.42 } },
+        },
+    }
+    gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
+    reaper.defer(existingRuntimeSetupMenuTick)
+end
+
 local function shouldSkipMacBootstrap(runtime)
     if OS ~= "macOS" then return false end
     if not PATH_HELPER then return false end
@@ -3662,46 +5005,58 @@ end
 
 local function main()
     local runtime = getRuntimePaths()
+    local hasRuntime = runtimeLooksPresent(runtime)
     setExt("runtimeBase", runtime.base)
     local separatorScript = SCRIPT_DIR .. "audio_separator_process.py"
     if fileExists(separatorScript) then
         setExt("separatorScript", separatorScript)
     end
 
-    local intro =
-        "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
-        .. "STEMwerk will check and repair components if needed:\n\n"
-        .. "- Python runtime\n"
-        .. "- FFmpeg\n"
-        .. "- STEMwerk venv in:\n  " .. runtime.base .. "\n\n"
-        .. "This may download tools. Continue?"
-    local ok = (msgBox("STEMwerk Setup", intro, 4) == 6)
-    if not ok then return end
-
     if OS == "Windows" then
+        local intro =
+            "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
+            .. "On Windows, REAPER-side setup verifies the installed runtime and points you back to the installer if repair is needed.\n\n"
+            .. "Continue?"
+        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then return end
         windowsVerifyRepair(runtime, separatorScript)
         return
     end
 
-    if OS == "Linux" then
-        startLinuxSetup(runtime, separatorScript)
-        return
-    end
-
-    if OS == "macOS" then
-        local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
-        if skip then
-            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
-            showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+    if OS == "Linux" or OS == "macOS" then
+        if hasRuntime then
+            startExistingRuntimeSetupMenu(runtime, separatorScript)
             return
         end
-        startLinuxSetup(runtime, separatorScript)
+
+        local intro =
+            "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
+            .. "STEMwerk will prepare a runtime in:\n  " .. runtime.base .. "\n\n"
+            .. "Downloaded models will be kept in:\n  " .. getModelCacheDir() .. "\n\n"
+            .. "Continue with first-time setup?"
+        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then
+            return
+        end
+
+        if OS == "macOS" then
+            local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
+            if skip then
+                local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
+                showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
+                return
+            end
+        end
+
+        startLinuxSetup(runtime, separatorScript, "repair")
         return
     end
 
     local bootstrapSuccess, stateFile, logFile, bootstrapState = runBootstrap(runtime)
     local result = safePerformPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
-    showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+    if OS == "Windows" then
+        showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+    else
+        showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
+    end
 end
 
 main()

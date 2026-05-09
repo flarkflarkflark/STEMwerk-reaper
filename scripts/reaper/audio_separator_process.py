@@ -367,17 +367,24 @@ def _build_env_json() -> Dict[str, object]:
     env: Dict[str, object] = {
         "platform": platform.system(),
         "python": platform.python_version(),
+        "python_version": platform.python_version(),
         "sys_executable": sys.executable,
+        "python_executable": sys.executable,
         "pythonpath_env": os.environ.get("PYTHONPATH"),
         "ld_library_path_env": os.environ.get("LD_LIBRARY_PATH"),
         "torch": None,
+        "torch_version": None,
+        "torchaudio_version": None,
         "torch_file": None,
         "cuda_available": False,
         "cuda_count": 0,
+        "mps_built": False,
         "mps_available": False,
+        "selected_device": None,
         "directml_possible": importlib.util.find_spec("torch_directml") is not None,
         "rocm_path_exists": False,
         "torch_hip": None,
+        "onnxruntime_version": None,
         "onnxruntime": None,
         "onnxruntime-gpu": None,
         "onnxruntime-directml": None,
@@ -393,6 +400,7 @@ def _build_env_json() -> Dict[str, object]:
         import torch
 
         env["torch"] = getattr(torch, "__version__", str(torch))
+        env["torch_version"] = env["torch"]
         try:
             env["torch_file"] = getattr(torch, "__file__", None)
         except Exception:
@@ -410,11 +418,24 @@ def _build_env_json() -> Dict[str, object]:
         except Exception:
             env["cuda_count"] = 0
         try:
+            env["mps_built"] = bool(
+                getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_built()
+            )
+        except Exception:
+            env["mps_built"] = False
+        try:
             env["mps_available"] = bool(
                 getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
             )
         except Exception:
             env["mps_available"] = False
+    except Exception:
+        pass
+
+    try:
+        import torchaudio
+
+        env["torchaudio_version"] = getattr(torchaudio, "__version__", str(torchaudio))
     except Exception:
         pass
 
@@ -434,9 +455,29 @@ def _build_env_json() -> Dict[str, object]:
         env["onnxruntime-gpu"] = _dist("onnxruntime-gpu")
         env["onnxruntime-directml"] = _dist("onnxruntime-directml")
         env["onnxruntime-silicon"] = _dist("onnxruntime-silicon")
+        env["onnxruntime_version"] = (
+            env["onnxruntime-silicon"]
+            or env["onnxruntime-directml"]
+            or env["onnxruntime-gpu"]
+            or env["onnxruntime"]
+        )
     except Exception:
         pass
 
+    return env
+
+
+def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, object]:
+    env = _build_env_json()
+    env["selected_device"] = selected_device
+    print(f"STEMWERK_DIAG python_executable={env.get('python_executable')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG python_version={env.get('python_version')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG torch_version={env.get('torch_version')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG torchaudio_version={env.get('torchaudio_version')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG onnxruntime_version={env.get('onnxruntime_version')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG mps_built={env.get('mps_built')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG selected_device={selected_device}", file=sys.stderr)
     return env
 
 
@@ -517,13 +558,16 @@ def list_devices_machine(skip_devices: Optional[Set[str]] = None):
             skip_ids.add(sid)
 
     preferred = None
+    selected_device = None
     if sys.platform.startswith("linux"):
         preferred = _prefer_linux_amd_device(devices, skip_ids)
     if preferred:
-        print(f"STEMWERK_SELECTED_DEVICE\t{preferred.get('id','')}\t{preferred.get('name','')}")
+        selected_device = preferred.get("id", "")
+        print(f"STEMWERK_SELECTED_DEVICE\t{selected_device}\t{preferred.get('name','')}")
     else:
         try:
             dev_id, dev_name = select_device("auto")
+            selected_device = dev_id
             print(f"STEMWERK_SELECTED_DEVICE\t{dev_id}\t{dev_name}")
         except Exception:
             pass
@@ -540,6 +584,7 @@ def list_devices_machine(skip_devices: Optional[Set[str]] = None):
     print("STEMWERK_HOST_VISIBLE_END")
 
     env = _build_env_json()
+    env["selected_device"] = selected_device
     print("STEMWERK_TORCH_VISIBLE_BEGIN")
     try:
         print(
@@ -728,6 +773,7 @@ def main():
     try:
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
+        _emit_runtime_diagnostics(resolved_device)
 
         sep = StemSeparator(model=args.model, device=resolved_device)
 
