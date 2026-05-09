@@ -2,16 +2,14 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.1" author="flarkAUDIO" time="1778304765">
+      <version name="2.2.2.1.1" author="flarkAUDIO" time="1778307487">
         <changelog><![CDATA[
-- Windows installer/bootstrap hardening
-- Fixed progress/i18n fallback text issues
-- Fixed duplicate `Processing Processing` stage text
-- Improved cancel handling and status reporting
-- Refreshed toolbar setup/assets
-- macOS/Linux bootstrap now pins `torch`/`torchaudio` to `2.5.1` to avoid PyTorch 2.6+ Demucs model-loading failures
-- Existing macOS/Linux venvs with `torch >= 2.6` are rebuilt automatically
-- Separation diagnostics now include Python/torch/torchaudio/onnxruntime/MPS/device info
+- ReaPack-only runtime parity hotfix above v2.2.2.1
+- Restores Linux/macOS setup maintenance chooser for existing runtimes
+- Restores macOS/Linux bootstrap dependency hardening from the v2.2.2.1 release source
+- Restores richer separation diagnostics from the v2.2.2.1 release source
+- Keeps first-time automatic setup flow
+- No installer or release asset changes
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
@@ -58,6 +56,7 @@
         <source file="../constraints/cuda.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/cuda.txt</source>
         <source file="../constraints/directml.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/directml.txt</source>
         <source file="../constraints/macos.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/macos.txt</source>
+        <source file="../constraints/macos-intel.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/macos-intel.txt</source>
 
         <source file="../vendor/julius/pyproject.toml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/julius/pyproject.toml</source>
         <source file="../vendor/julius/src/julius.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/julius/src/julius.py</source>
@@ -73,9 +72,6 @@
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/stemwerk_language_wrapper.lua</source>
         <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>
         <source file="../i18n/language_checks.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/language_checks.py</source>
-
-        <source file="../themes/DeepSea.stemtheme" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/themes/DeepSea.stemtheme</source>
-        <source file="../themes/Forest.stemtheme" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/themes/Forest.stemtheme</source>
 
         <source file="../assets/toolbar_icons/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/README.txt</source>
         <source file="../assets/toolbar_icons/single/stemwerk_all_stems_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_24.png</source>

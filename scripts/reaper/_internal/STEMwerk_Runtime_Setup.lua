@@ -798,10 +798,9 @@ function M.ensureDependenciesInteractive()
 
     local runtime = M.getRuntimePaths()
     local msg =
-        "STEMwerk is missing components:\n\n- " .. table.concat(missing, "\n- ") ..
-        "\n\nRun STEMwerk-SETUP.lua in REAPER before using STEMwerk.lua.\n\n" ..
-        "STEMwerk can repair this automatically and create a fixed runtime at:\n" .. tostring(runtime.base) ..
-        "\n\nStart automatic setup?"
+        "STEMwerk is missing required runtime components:\n\n- " .. table.concat(missing, "\n- ") ..
+        "\n\nSTEMwerk can open setup/repair now and create or repair the runtime at:\n" .. tostring(runtime.base) ..
+        "\n\nStart setup now?\n\nYou can also run STEMwerk-SETUP.lua manually from REAPER later."
 
     if state.prompted then
         return false

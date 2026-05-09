@@ -6,12 +6,14 @@ STATE_FILE=""
 LOG_FILE=""
 PID_FILE=""
 BOOTSTRAP_SCRIPT=""
+MODE="repair"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --runtime-base) RUNTIME_BASE="$2"; shift 2 ;;
     --state-file) STATE_FILE="$2"; shift 2 ;;
     --log-file) LOG_FILE="$2"; shift 2 ;;
+    --mode) MODE="$2"; shift 2 ;;
     --pid-file) PID_FILE="$2"; shift 2 ;;
     --bootstrap-script) BOOTSTRAP_SCRIPT="$2"; shift 2 ;;
     --bootstrap) BOOTSTRAP_SCRIPT="$2"; shift 2 ;;
@@ -42,6 +44,7 @@ set_status() {
 log "Launcher started"
 log "Launcher PID: $$"
 log "Bootstrap script: ${BOOTSTRAP_SCRIPT}"
+log "Requested mode: ${MODE}"
 log "State file: ${STATE_FILE}"
 log "PID file: ${PID_FILE}"
 
@@ -62,7 +65,8 @@ fi
 /bin/sh "${BOOTSTRAP_SCRIPT}" \
   --runtime-base "${RUNTIME_BASE}" \
   --state-file "${STATE_FILE}" \
-  --log-file "${LOG_FILE}" >> "${LOG_FILE}" 2>&1 &
+  --log-file "${LOG_FILE}" \
+  --mode "${MODE}" >> "${LOG_FILE}" 2>&1 &
 
 CHILD_PID=$!
 if [ -z "${CHILD_PID}" ]; then
