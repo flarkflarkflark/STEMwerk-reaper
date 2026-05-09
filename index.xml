@@ -2,12 +2,13 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.1.7" author="flarkAUDIO" time="1778347465">
+      <version name="2.2.2.1.8" author="flarkAUDIO" time="1778368183">
         <changelog><![CDATA[
-- ReaPack-only progress/i18n UI hotfix
-- Fixes raw cancel button label `progress cancel button`
-- Fixes raw multi-track progress label `progress stage processing`
-- No backend/runtime dependency changes
+- ReaPack-only macOS Apple Silicon Auto/MPS hotfix
+- Auto on Apple Silicon now prefers CPU to avoid a known PyTorch MPS limitation in HTDemucs/audio-separator
+- Explicit Apple MPS remains available with PyTorch MPS fallback enabled
+- Known MPS unsupported-op failures now get a clearer message
+- No dependency stack changes
 - No installer or release asset changes
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
