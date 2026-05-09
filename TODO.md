@@ -32,6 +32,29 @@ This file is intentionally tracked in git so "what's next" survives VS Code / Co
 	- [x] Complete: remove Space as a close/OK key
 	- [x] i18n: Nerd Mode tooltip strings
 	- [ ] Complete: verify all header tooltips consistent with main/progress windows
+	- [ ] v2.2.2.2: fix ReaPack i18n payload drift for progress labels
+		- Fix ReaPack/root i18n payload drift.
+		- Translate progress labels cleanly for shipped ReaPack payloads.
+		- Make one canonical shipped i18n source for ReaPack.
+		- Either sync root `i18n/languages.lua` with `scripts/reaper/i18n/languages.lua`, or repoint `index.xml` to ship the canonical `scripts/reaper/i18n/languages.lua`.
+		- Ensure shipped ReaPack i18n includes progress-stage + cancel keys for English, Dutch, and German.
+		- Avoid raw fallback labels like `progress stage processing` and `progress cancel button`.
+		- Optional hardening: add a safe progress-label translation helper so raw i18n keys never leak into UI again if future payload drift happens.
+		- Decide whether to add 150% toolbar icons.
+		- Further polish setup/maintenance UX.
+		- Build full new assets only as part of a real `v2.2.2.2` release.
+
+- [ ] macOS CI/testing hardening
+	- [x] Add Apple Silicon dependency smoke on `macos-14`
+	- [x] Add richer runner/platform/MPS diagnostics without changing smoke scope
+	- [ ] Add a non-required manual/scheduled macOS backend sanity workflow
+		- Keep it no-GUI, no model downloads, no real separation by default.
+		- Validate `audio_separator_process.py --check`, `--list-devices`, i18n payload consistency, and ReaPack index sanity.
+		- Keep `torch.backends.mps.is_available()` diagnostic-only, not a hard CI assertion.
+	- [ ] Investigate a future CI-safe macOS bootstrap check mode
+		- Design a CI-safe bootstrap dry-run if it proves useful.
+		- Prefer a dedicated `--check` / `--ci-smoke` mode over reusing full bootstrap side effects.
+		- Use temp runtime paths only; do not touch user locations.
 
 - [ ] REAPER time-selection workflow correctness
 	- [x] Fix multi-track render producing empty `input.wav` (ffmpeg log + AudioAccessor fallback)
