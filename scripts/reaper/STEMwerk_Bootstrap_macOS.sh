@@ -6,10 +6,16 @@ BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
-PINNED_TORCH_VERSION="2.5.1"
+PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
-PINNED_TORCHAUDIO_VERSION="2.5.1"
+PINNED_TORCHAUDIO_VERSION=""
+PINNED_TORCH_VERSION_ARM64="2.5.1"
 PINNED_TORCHVISION_VERSION_ARM64="0.20.1"
+PINNED_TORCHAUDIO_VERSION_ARM64="2.5.1"
+PINNED_TORCH_VERSION_INTEL="2.2.2"
+PINNED_TORCHVISION_VERSION_INTEL="0.17.2"
+PINNED_TORCHAUDIO_VERSION_INTEL="2.2.2"
+PINNED_TORCH_STACK_LABEL=""
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -158,22 +164,12 @@ PY
 }
 
 install_pinned_torch_stack() {
-  if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
-    log "Installing pinned torch stack: torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
-  else
-    log "Installing pinned torch stack: torch==${PINNED_TORCH_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
-  fi
+  log "Installing pinned torch stack (${PINNED_TORCH_STACK_LABEL}): torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
-  if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
-    "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
-      "torch==${PINNED_TORCH_VERSION}" \
-      "torchvision==${PINNED_TORCHVISION_VERSION}" \
-      "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
-  else
-    "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
-      "torch==${PINNED_TORCH_VERSION}" \
-      "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
-  fi
+  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
 }
 
 assert_pinned_torch_stack() {
@@ -190,15 +186,12 @@ try:
 except Exception as exc:
     print("error|torch_import|" + str(exc))
     raise SystemExit(0)
-if expected_torchvision:
-    try:
-        import torchvision
-        torchvision_ver = getattr(torchvision, "__version__", "")
-    except Exception as exc:
-        print("error|torchvision_import|" + str(exc))
-        raise SystemExit(0)
-else:
-    torchvision_ver = ""
+try:
+    import torchvision
+    torchvision_ver = getattr(torchvision, "__version__", "")
+except Exception as exc:
+    print("error|torchvision_import|" + str(exc))
+    raise SystemExit(0)
 try:
     import torchaudio
     torchaudio_ver = getattr(torchaudio, "__version__", "")
@@ -208,7 +201,7 @@ except Exception as exc:
 if (
     core(torch_ver) == expected_torch
     and core(torchaudio_ver) == expected_torchaudio
-    and (not expected_torchvision or core(torchvision_ver) == expected_torchvision)
+    and core(torchvision_ver) == expected_torchvision
 ):
     print("ok|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
 else:
@@ -217,20 +210,12 @@ PY
 )"
   case "${_probe}" in
     ok\|*)
-      if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
-        log "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchvision=$(printf "%s" "${_probe}" | cut -d'|' -f3) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f4)"
-      else
-        log "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f4)"
-      fi
+      log "Pinned torch assertion passed (${PINNED_TORCH_STACK_LABEL}): torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchvision=$(printf "%s" "${_probe}" | cut -d'|' -f3) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f4)"
       return 0
       ;;
   esac
   log "Pinned torch assertion failed: ${_probe}"
-  if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
-    printf "STEMwerk bootstrap failed: expected torch=%s, torchvision=%s, and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHVISION_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
-  else
-    printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
-  fi
+  printf "STEMwerk bootstrap failed: expected %s torch=%s, torchvision=%s, and torchaudio=%s after setup.\n" "${PINNED_TORCH_STACK_LABEL}" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHVISION_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
   return 1
 }
 
@@ -238,6 +223,7 @@ log_final_dependency_versions() {
   _venv_py="$1"
   [ -x "${_venv_py}" ] || return 0
   log "=== final dependency versions ==="
+  log "torch_stack_profile=${PINNED_TORCH_STACK_LABEL}"
   "${_venv_py}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
 from importlib.metadata import PackageNotFoundError, version
 
@@ -365,12 +351,21 @@ log "Downloaded models are kept at: $(model_cache_dir)"
 MAC_ARCH="$(uname -m 2>/dev/null || echo unknown)"
 if [ "${MAC_ARCH}" = "x86_64" ]; then
   MACOS_CONSTRAINTS_FILE="${MACOS_INTEL_CONSTRAINTS_FILE}"
+  PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_INTEL}"
+  PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_INTEL}"
+  PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_INTEL}"
+  PINNED_TORCH_STACK_LABEL="Intel macOS CPU fallback"
   log "Using macOS Intel constraints: ${MACOS_CONSTRAINTS_FILE}"
 else
   MACOS_CONSTRAINTS_FILE="${MACOS_ARM_CONSTRAINTS_FILE}"
+  PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_ARM64}"
   PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_ARM64}"
+  PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_ARM64}"
+  PINNED_TORCH_STACK_LABEL="Apple Silicon macOS"
   log "Using macOS Apple Silicon constraints: ${MACOS_CONSTRAINTS_FILE}"
 fi
+log "Selected torch stack profile: ${PINNED_TORCH_STACK_LABEL}"
+log "Selected torch stack versions: torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
   log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
   rm -rf "${RUNTIME_BASE}/.venv"
@@ -487,7 +482,12 @@ else
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     "${VENV_PY}" -m pip install --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     "${VENV_PY}" -m pip install "numpy<2.0" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
-    install_pinned_torch_stack || set_status "deps_failed" "torch_install_failed"
+    if ! install_pinned_torch_stack; then
+      if [ "${MAC_ARCH}" = "x86_64" ]; then
+        log "Intel macOS CPU fallback dependency install failed during initial torch stack setup"
+      fi
+      set_status "deps_failed" "torch_install_failed"
+    fi
 
     log "Installing stemwerk-core"
     resolve_core_target || true
@@ -541,7 +541,12 @@ else
         rm -f "${_audio_tmp_log}" >/dev/null 2>&1 || true
       }
 
-    install_pinned_torch_stack || set_status "deps_failed" "torch_pin_repair_failed"
+    if ! install_pinned_torch_stack; then
+      if [ "${MAC_ARCH}" = "x86_64" ]; then
+        log "Intel macOS CPU fallback dependency install failed during post-audio-separator torch stack repair"
+      fi
+      set_status "deps_failed" "torch_pin_repair_failed"
+    fi
     if ! assert_pinned_torch_stack "${VENV_PY}"; then
       set_status "deps_failed" "torch_pin_assert_failed"
     fi
