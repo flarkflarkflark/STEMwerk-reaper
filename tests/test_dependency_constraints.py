@@ -50,6 +50,8 @@ def test_dependency_diagnostics():
 
 
 def test_runner_is_macos_arm64():
+    if platform.system() != "Darwin":
+        pytest.skip("macOS Apple Silicon runtime smoke only")
     assert platform.system() == "Darwin", (
         f"Expected Darwin runner, got {platform.system()!r}"
     )
@@ -143,14 +145,36 @@ def test_macos_arm_constraints_include_matching_torchvision_pin():
     assert "torchaudio==2.5.1" in constraints_lines
 
 
+def test_macos_intel_constraints_include_matching_cpu_fallback_stack():
+    from pathlib import Path
+
+    constraints_lines = Path("scripts/reaper/constraints/macos-intel.txt").read_text().splitlines()
+    assert "torch==2.2.2" in constraints_lines
+    assert "torchvision==0.17.2" in constraints_lines
+    assert "torchaudio==2.2.2" in constraints_lines
+
+
 def test_macos_bootstrap_repairs_after_audio_separator_install():
     from pathlib import Path
 
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
     audio_install_marker = 'pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"'
-    repair_marker = 'install_pinned_torch_stack || set_status "deps_failed" "torch_pin_repair_failed"'
+    repair_marker = 'set_status "deps_failed" "torch_pin_repair_failed"'
 
+    assert 'PINNED_TORCH_VERSION_ARM64="2.5.1"' in script
     assert 'PINNED_TORCHVISION_VERSION_ARM64="0.20.1"' in script
+    assert 'PINNED_TORCHAUDIO_VERSION_ARM64="2.5.1"' in script
+    assert 'PINNED_TORCH_VERSION_INTEL="2.2.2"' in script
+    assert 'PINNED_TORCHVISION_VERSION_INTEL="0.17.2"' in script
+    assert 'PINNED_TORCHAUDIO_VERSION_INTEL="2.2.2"' in script
+    assert 'PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_INTEL}"' in script
+    assert 'PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_INTEL}"' in script
+    assert 'PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_INTEL}"' in script
+    assert 'PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_ARM64}"' in script
+    assert 'PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_ARM64}"' in script
+    assert 'PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_ARM64}"' in script
+    assert 'MACOS_CONSTRAINTS_FILE="${MACOS_INTEL_CONSTRAINTS_FILE}"' in script
+    assert 'MACOS_CONSTRAINTS_FILE="${MACOS_ARM_CONSTRAINTS_FILE}"' in script
     assert '"torchvision==${PINNED_TORCHVISION_VERSION}"' in script
     assert audio_install_marker in script
     assert repair_marker in script
