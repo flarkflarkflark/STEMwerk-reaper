@@ -1388,6 +1388,37 @@ local function effectiveRunRequestedParallel()
     return (SETTINGS and SETTINGS.parallelProcessing) and true or false
 end
 
+local KNOWN_MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
+
+local function isKnownMpsUnsupportedFailure(logSnippet)
+    local text = string.lower(tostring(logSnippet or ""))
+    if text == "" then return false end
+    if text:find(string.lower(KNOWN_MPS_UNSUPPORTED_MARKER), 1, true) then
+        return true
+    end
+    return text:find("output channels > 65536 not supported at the mps device", 1, true) ~= nil
+end
+
+local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine, logPath, debugLogPath, stdoutSnippet)
+    if not isKnownMpsUnsupportedFailure(logSnippet) then
+        return nil
+    end
+
+    local msg = "Apple MPS failed because this model hits a PyTorch MPS limitation.\n"
+        .. "Please use CPU for now.\n\n"
+        .. "Exit code: " .. tostring(exitCode or "unknown") .. "\n"
+        .. "Command: " .. tostring(cmdLine or "unknown") .. "\n"
+        .. "Python log (" .. tostring(logPath or "unknown") .. "):\n"
+        .. tostring(logSnippet or "(no log output found)")
+        .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+
+    if stdoutSnippet and stdoutSnippet ~= "" then
+        msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+    end
+
+    return msg
+end
+
 local function isEffectiveRun6Stem()
     return effectiveRunModel() == "htdemucs_6s"
 end
@@ -13125,6 +13156,7 @@ WORKFLOW.configure({
     GUI                           = GUI,
     T                             = T,
     showMessage                   = showMessage,
+    buildKnownSeparationFailureMessage = buildKnownSeparationFailureMessage,
     captureWindowGeometry         = captureWindowGeometry,
     saveSettings                  = saveSettings,
     ensureDependenciesInteractive = ensureDependenciesInteractive,
@@ -17005,13 +17037,22 @@ processAllStemsResult = function()
         local cmdLine = firstJob and firstJob.lastCmd or nil
         local debugLogPath = firstJob and (firstJob.execLogPath or SW_LOG.getLogPath()) or SW_LOG.getLogPath()
 
-        local msg = "No stems were created.\n\n"
-            .. "This usually means the Python separator failed to start or crashed.\n\n"
-            .. "Exit code: " .. tostring(exitCode or "unknown") .. "\n"
-            .. "Command: " .. tostring(cmdLine or "unknown") .. "\n"
-            .. "Python log (" .. tostring(logPath or "unknown") .. "):\n"
-            .. logSnippet
-            .. "\n\nDebug log: " .. tostring(debugLogPath)
+        local msg = buildKnownSeparationFailureMessage(
+            logSnippet,
+            exitCode,
+            cmdLine,
+            logPath,
+            debugLogPath
+        )
+        if not msg then
+            msg = "No stems were created.\n\n"
+                .. "This usually means the Python separator failed to start or crashed.\n\n"
+                .. "Exit code: " .. tostring(exitCode or "unknown") .. "\n"
+                .. "Command: " .. tostring(cmdLine or "unknown") .. "\n"
+                .. "Python log (" .. tostring(logPath or "unknown") .. "):\n"
+                .. logSnippet
+                .. "\n\nDebug log: " .. tostring(debugLogPath)
+        end
 
         -- Friendly hint for the most common missing dependency.
         if logSnippet:find("No module named 'onnxruntime'", 1, true) then
