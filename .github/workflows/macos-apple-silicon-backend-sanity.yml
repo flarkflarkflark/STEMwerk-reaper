@@ -1,0 +1,137 @@
+name: macOS Apple Silicon backend sanity
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apple-silicon-backend-sanity:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show runner diagnostics
+        env:
+          RUNNER_OS_CONTEXT: ${{ runner.os }}
+          RUNNER_ARCH_CONTEXT: ${{ runner.arch }}
+          RUNNER_NAME_CONTEXT: ${{ runner.name }}
+        run: |
+          echo "runner.os=${RUNNER_OS_CONTEXT}"
+          echo "runner.arch=${RUNNER_ARCH_CONTEXT}"
+          echo "runner.name=${RUNNER_NAME_CONTEXT}"
+          uname -a
+          uname -m
+          sw_vers
+          python3 --version
+          python3 - <<'PY'
+          import platform
+          import sys
+
+          print(f"python_executable={sys.executable}")
+          print(f"sys_platform={sys.platform}")
+          print(f"python_version={platform.python_version()}")
+          print(f"platform_system={platform.system()}")
+          print(f"platform_platform={platform.platform()}")
+          print(f"platform_machine={platform.machine()}")
+          PY
+
+      - name: Verify vendored stemwerk-core bundle
+        run: |
+          test -f scripts/reaper/vendor/stemwerk-core/pyproject.toml
+          test -f scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py
+
+      - name: Create venv and install Apple Silicon sanity dependencies
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -c scripts/reaper/constraints/macos.txt \
+            "numpy==1.26.4" \
+            "torch==2.5.1" \
+            "torchvision==0.20.1" \
+            "torchaudio==2.5.1"
+          pip install "llvmlite==0.42.0" "numba==0.59.1"
+          pip install ./scripts/reaper/vendor/stemwerk-core
+          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"
+          pip install --force-reinstall --no-deps \
+            "numpy==1.26.4" \
+            "torch==2.5.1" \
+            "torchvision==0.20.1" \
+            "torchaudio==2.5.1"
+          pip install onnxruntime-silicon || pip install onnxruntime
+
+      - name: Run Apple Silicon dependency and backend assertions
+        run: |
+          . .venv/bin/activate
+          python - <<'PY'
+          import json
+          import platform
+          import sys
+          from importlib.metadata import version
+
+          import audio_separator
+          import llvmlite
+          import numba
+          import onnxruntime
+          import stemwerk_core
+          import torch
+          import torchvision
+          import torchaudio
+
+          def core(ver):
+              return str(ver).split("+", 1)[0]
+
+          payload = {
+              "runner_os": "${{ runner.os }}",
+              "runner_arch": "${{ runner.arch }}",
+              "sys_platform": sys.platform,
+              "platform_system": platform.system(),
+              "platform_machine": platform.machine(),
+              "platform_platform": platform.platform(),
+              "python_executable": sys.executable,
+              "python_version": platform.python_version(),
+              "torch_version": torch.__version__,
+              "torchvision_version": torchvision.__version__,
+              "torchaudio_version": torchaudio.__version__,
+              "audio_separator_version": version("audio-separator"),
+              "onnxruntime_version": onnxruntime.__version__,
+              "numpy_version": version("numpy"),
+              "numba_version": numba.__version__,
+              "llvmlite_version": llvmlite.__version__,
+              "mps_built": torch.backends.mps.is_built(),
+              "mps_available": torch.backends.mps.is_available(),
+              "audio_separator_import": audio_separator.__name__,
+              "stemwerk_core_import": stemwerk_core.__name__,
+          }
+          print("SANITY_DIAGNOSTICS_JSON=" + json.dumps(payload, sort_keys=True))
+
+          assert platform.system() == "Darwin", f"Expected Darwin, got {platform.system()!r}"
+          assert platform.machine() == "arm64", f"Expected arm64, got {platform.machine()!r}"
+          assert core(payload["numpy_version"]) == "1.26.4", payload["numpy_version"]
+          assert core(payload["torch_version"]) == "2.5.1", payload["torch_version"]
+          assert core(payload["torchvision_version"]) == "0.20.1", payload["torchvision_version"]
+          assert core(payload["torchaudio_version"]) == "2.5.1", payload["torchaudio_version"]
+          assert core(payload["audio_separator_version"]) == "0.23.0", payload["audio_separator_version"]
+          assert onnxruntime is not None
+          assert torch.backends.mps.is_built() is True, "Expected torch wheel with MPS support built in"
+          PY
+
+      - name: Run audio_separator_process installation check
+        run: |
+          . .venv/bin/activate
+          python scripts/reaper/audio_separator_process.py --check
+
+      - name: List available devices
+        run: |
+          . .venv/bin/activate
+          python scripts/reaper/audio_separator_process.py --list-devices
+
+      - name: Emit machine-readable backend diagnostics
+        run: |
+          . .venv/bin/activate
+          python scripts/reaper/audio_separator_process.py --env-json
