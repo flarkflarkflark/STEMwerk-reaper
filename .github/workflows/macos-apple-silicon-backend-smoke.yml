@@ -20,7 +20,14 @@ jobs:
           python-version: "3.12"
 
       - name: Show runner diagnostics
+        env:
+          RUNNER_OS_CONTEXT: ${{ runner.os }}
+          RUNNER_ARCH_CONTEXT: ${{ runner.arch }}
+          RUNNER_NAME_CONTEXT: ${{ runner.name }}
         run: |
+          echo "runner.os=${RUNNER_OS_CONTEXT}"
+          echo "runner.arch=${RUNNER_ARCH_CONTEXT}"
+          echo "runner.name=${RUNNER_NAME_CONTEXT}"
           uname -a
           uname -m
           sw_vers
@@ -30,8 +37,10 @@ jobs:
           import sys
 
           print(f"python_executable={sys.executable}")
+          print(f"sys_platform={sys.platform}")
           print(f"python_version={platform.python_version()}")
           print(f"platform_system={platform.system()}")
+          print(f"platform_platform={platform.platform()}")
           print(f"platform_machine={platform.machine()}")
           PY
 
@@ -51,6 +60,40 @@ jobs:
           pip install --force-reinstall --no-deps "torch==2.5.1" "torchaudio==2.5.1"
           pip install onnxruntime-silicon || pip install "onnxruntime>=1.21,<1.22"
           pip install pytest
+
+      - name: Show backend smoke dependency diagnostics
+        run: |
+          . .venv/bin/activate
+          python - <<'PY'
+          import json
+          import platform
+          import sys
+          from importlib.metadata import version
+
+          import audio_separator
+          import onnxruntime
+          import stemwerk_core
+          import torch
+          import torchaudio
+
+          payload = {
+              "sys_platform": sys.platform,
+              "platform_system": platform.system(),
+              "platform_machine": platform.machine(),
+              "platform_platform": platform.platform(),
+              "python_executable": sys.executable,
+              "python_version": platform.python_version(),
+              "torch_version": torch.__version__,
+              "torchaudio_version": torchaudio.__version__,
+              "audio_separator_version": version("audio-separator"),
+              "onnxruntime_version": onnxruntime.__version__,
+              "mps_built": torch.backends.mps.is_built(),
+              "mps_available": torch.backends.mps.is_available(),
+              "audio_separator_import": audio_separator.__name__,
+              "stemwerk_core_import": stemwerk_core.__name__,
+          }
+          print("SMOKE_DIAGNOSTICS_JSON=" + json.dumps(payload, sort_keys=True))
+          PY
 
       - name: Run dependency smoke pytest
         run: |
