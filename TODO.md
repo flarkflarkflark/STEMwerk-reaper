@@ -123,6 +123,33 @@ Toolbar + Icons + Toolbarscripts:
 | **Stemwerk: All Stems** | Extract all stems to separate tracks |
 | **Stemwerk: Setup Toolbar** | Add quick-access toolbar buttons |
 
+## GitHub issue follow-ups
+
+### #23 — Installed version / diagnostics visibility
+- Priority: support UX / medium priority
+- Add a visible About / Diagnostics / Copy report UI.
+- Show STEMwerk package/script version, runtime path, Python path/version, FFmpeg path, backend profile, torch/torchvision/torchaudio, audio-separator, onnxruntime, NumPy/numba/llvmlite.
+- This should make it easy for users to know what version is installed and copy support diagnostics.
+
+### #22 — Running-state cleanup after completion
+- Priority: bug / cleanup-lifecycle / higher priority
+- Investigate case where stems are created and completion dialog appears, but main STEMwerk window does not return after OK.
+- STEMwerk then still thinks an instance is running.
+- Investigate stuck backend/Python process, singleton/running-state cleanup, temp folder handles, and `collab_low` folder remaining locked.
+- Ensure completion/finalize path always clears running state and releases temp resources.
+
+### #21 — Batch output grouping for multiple selected items
+- Priority: enhancement / workflow polish / medium priority
+- Current behavior creates a separate folder + child stem track per selected item.
+- Desired behavior: when multiple selected items are on the same source track and use the same stem mode/output mode, optionally group outputs into one shared folder and one child track per stem type.
+- Treat as enhancement/workflow polish; track/routing behavior needs careful design.
+
+### #16 — Temp cleanup when only some stems are requested
+- Priority: bug / cleanup-lifecycle / higher priority
+- Investigate temp files/folders not deleted when not all stems are requested.
+- Likely related to cleanup/finalize lifecycle and should be reviewed together with #22.
+- Ensure partial-stem workflows clean up temporary files safely without deleting user outputs or model cache.
+
 ## Future
 
 - **Timeline Alignment / Trim Silence:** Trim the input to the AI-engine to the actual `AudioAccessor` boundaries within a time selection. Currently, if a time selection is larger than the media item, the engine processes the extra silence, which wastes GPU time.
