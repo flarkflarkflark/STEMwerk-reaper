@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.1.6
+-- @version 2.2.2.1.7
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.2.1.6"
+local APP_VERSION = "2.2.2.1.7"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -12051,6 +12051,20 @@ local processAllStemsResult
 local PROGRESS_BASE_W = 480
 local PROGRESS_BASE_H = 420
 
+local function progressUiLabel(key, fallback)
+    local translated = T(key)
+    local rawKey = tostring(key or "")
+    local humanized = rawKey:gsub("_", " ")
+    if translated == nil then
+        return fallback
+    end
+    translated = tostring(translated)
+    if translated == "" or translated == rawKey or translated == humanized then
+        return fallback
+    end
+    return translated
+end
+
 local function normalizeProgressStage(stage)
     stage = tostring(stage or "")
     -- Strip timing + device suffixes to keep the terminal line clean.
@@ -12059,9 +12073,9 @@ local function normalizeProgressStage(stage)
     stage = stage:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
     local lower = stage:lower()
     if stage == "" then
-        stage = T("processing_label") or "Processing"
+        stage = progressUiLabel("progress_stage_processing", "Processing")
     elseif lower:match("^processing[%s%.]*$") then
-        stage = T("processing_label") or "Processing"
+        stage = progressUiLabel("progress_stage_processing", "Processing")
     else
         local key = nil
         local flat = lower:gsub("[%s%.:]+$", "")
@@ -12077,7 +12091,7 @@ local function normalizeProgressStage(stage)
             key = "progress_stage_complete"
         end
         if key then
-            stage = T(key) or stage
+            stage = progressUiLabel(key, stage)
         end
     end
     return stage
@@ -12087,12 +12101,12 @@ local function localizeProgressStagePrefix(stageText)
     local text = tostring(stageText or "")
     if text == "" then return text end
     local map = {
-        {"processing", T("progress_stage_processing") or "Processing"},
-        {"loading ai model", T("progress_stage_loading_ai_model") or "Loading AI model"},
-        {"loading model", T("progress_stage_loading_model") or "Loading model"},
-        {"starting separation", T("progress_stage_starting_separation") or "Starting separation"},
-        {"writing stems", T("progress_stage_writing_stems") or "Writing stems"},
-        {"complete", T("progress_stage_complete") or "Complete"},
+        {"processing", progressUiLabel("progress_stage_processing", "Processing")},
+        {"loading ai model", progressUiLabel("progress_stage_loading_ai_model", "Loading AI model")},
+        {"loading model", progressUiLabel("progress_stage_loading_model", "Loading model")},
+        {"starting separation", progressUiLabel("progress_stage_starting_separation", "Starting separation")},
+        {"writing stems", progressUiLabel("progress_stage_writing_stems", "Writing stems")},
+        {"complete", progressUiLabel("progress_stage_complete", "Complete")},
     }
     local trimmed = text:gsub("^%s+", "")
     local lower = trimmed:lower()
@@ -12949,7 +12963,7 @@ local function drawProgressWindow()
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
-    local cancelBtnText = T("progress_cancel_button") or T("cancel") or "Cancel"
+    local cancelBtnText = progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
 
     local contextItem = timeSelectionSourceItem or selectedItem
     local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
@@ -13019,7 +13033,7 @@ local function drawProgressWindow()
     gfx.drawstr(cancelBtnText)
     if cancelHover then
         GUI.uiClickedThisFrame = true
-        tooltipText = T("progress_cancel_tooltip") or T("tooltip_cancel_processing") or "Cancel processing"
+        tooltipText = progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not progressState.wasMouseDown then
             cancelClicked = true
@@ -16496,7 +16510,7 @@ function drawMultiTrackProgressWindow()
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
-    local cancelBtnText = T("progress_cancel_button") or T("cancel") or "Cancel"
+    local cancelBtnText = progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
     local etaText = ""
     if eta and eta > 0 then
         local etaMins = math.floor(eta / 60)
@@ -16551,7 +16565,7 @@ function drawMultiTrackProgressWindow()
     gfx.drawstr(cancelBtnText)
     if cancelHover then
         GUI.uiClickedThisFrame = true
-        tooltipText = T("progress_cancel_tooltip") or T("tooltip_cancel_processing") or "Cancel processing"
+        tooltipText = progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not multiTrackQueue.wasMouseDown then
             cancelClicked = true
@@ -16673,7 +16687,7 @@ function multiTrackProgressLoop()
             end
         end
 
-        showMessage("Cancelled", T("progress_cancelled_status") or "Processing cancelled.", "info", true)
+        showMessage("Cancelled", progressUiLabel("progress_cancelled_status", "Cancelled"), "info", true)
         return
     end
 

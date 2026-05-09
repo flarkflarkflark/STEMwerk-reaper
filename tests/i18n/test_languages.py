@@ -37,6 +37,17 @@ def parse_lua_language_file(file_path):
     return languages
 
 
+def extract_language_block(file_path, lang_code):
+    content = Path(file_path).read_text(encoding="utf-8")
+    match = re.search(rf"\b{re.escape(lang_code)}\s*=\s*\{{(.*?)\n\s*\}}", content, re.DOTALL)
+    return match.group(1) if match else ""
+
+
+def extract_string_value(block, key):
+    match = re.search(rf"^\s*{re.escape(key)}\s*=\s*\"([^\"]*)\"", block, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def test_all_languages_present():
     """Test that all expected languages are present in the file."""
     file_path = Path(__file__).parent.parent.parent / 'i18n' / 'languages.lua'
@@ -140,6 +151,60 @@ def test_language_coverage():
         print(f"{lang.upper():<10} {key_count:<10} {coverage:>6.1f}%    {status}")
     
     return True
+
+
+def test_progress_ui_labels_are_present_in_shipped_and_canonical_i18n():
+    expected = {
+        "en": {
+            "progress_stage_processing": "Processing",
+            "progress_stage_loading_model": "Loading model",
+            "progress_stage_loading_ai_model": "Loading AI model",
+            "progress_stage_starting_separation": "Starting separation",
+            "progress_stage_writing_stems": "Writing stems",
+            "progress_stage_complete": "Complete",
+            "progress_cancel_button": "Cancel",
+            "progress_cancel_tooltip": "Cancel separation",
+            "progress_cancelled_status": "Cancelled",
+            "tooltip_cancel_processing": "Cancel separation",
+        },
+        "nl": {
+            "progress_stage_processing": "Verwerken",
+            "progress_stage_loading_model": "Model laden",
+            "progress_stage_loading_ai_model": "AI-model laden",
+            "progress_stage_starting_separation": "Separatie starten",
+            "progress_stage_writing_stems": "Stems schrijven",
+            "progress_stage_complete": "Voltooid",
+            "progress_cancel_button": "Annuleren",
+            "progress_cancel_tooltip": "Scheiding annuleren",
+            "progress_cancelled_status": "Geannuleerd",
+            "tooltip_cancel_processing": "Scheiding annuleren",
+        },
+        "de": {
+            "progress_stage_processing": "Verarbeiten",
+            "progress_stage_loading_model": "Modell laden",
+            "progress_stage_loading_ai_model": "KI-Modell laden",
+            "progress_stage_starting_separation": "Trennung starten",
+            "progress_stage_writing_stems": "Stems schreiben",
+            "progress_stage_complete": "Abgeschlossen",
+            "progress_cancel_button": "Abbrechen",
+            "progress_cancel_tooltip": "Trennung abbrechen",
+            "progress_cancelled_status": "Abgebrochen",
+            "tooltip_cancel_processing": "Trennung abbrechen",
+        },
+    }
+    files = [
+        Path(__file__).parent.parent.parent / "i18n" / "languages.lua",
+        Path(__file__).parent.parent.parent / "scripts" / "reaper" / "i18n" / "languages.lua",
+    ]
+
+    for file_path in files:
+        for lang_code, expected_values in expected.items():
+            block = extract_language_block(file_path, lang_code)
+            assert block, f"Missing language block {lang_code!r} in {file_path}"
+            for key, value in expected_values.items():
+                assert extract_string_value(block, key) == value, (
+                    f"{file_path} {lang_code}.{key} drifted from expected progress UI label"
+                )
 
 
 def main():
