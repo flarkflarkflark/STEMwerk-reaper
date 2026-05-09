@@ -7,7 +7,9 @@ MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
 PINNED_TORCH_VERSION="2.5.1"
+PINNED_TORCHVISION_VERSION=""
 PINNED_TORCHAUDIO_VERSION="2.5.1"
+PINNED_TORCHVISION_VERSION_ARM64="0.20.1"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -156,45 +158,96 @@ PY
 }
 
 install_pinned_torch_stack() {
-  log "Installing pinned torch stack: torch==${PINNED_TORCH_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
+  if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
+    log "Installing pinned torch stack: torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
+  else
+    log "Installing pinned torch stack: torch==${PINNED_TORCH_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
+  fi
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
-  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
-    "torch==${PINNED_TORCH_VERSION}" \
-    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
+  if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
+    "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+      "torch==${PINNED_TORCH_VERSION}" \
+      "torchvision==${PINNED_TORCHVISION_VERSION}" \
+      "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
+  else
+    "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+      "torch==${PINNED_TORCH_VERSION}" \
+      "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
+  fi
 }
 
 assert_pinned_torch_stack() {
   _venv_py="$1"
   _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
 expected_torch = "${PINNED_TORCH_VERSION}"
+expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
+def core(ver):
+    return ver.split("+", 1)[0]
 try:
     import torch
     torch_ver = getattr(torch, "__version__", "")
 except Exception as exc:
     print("error|torch_import|" + str(exc))
     raise SystemExit(0)
+if expected_torchvision:
+    try:
+        import torchvision
+        torchvision_ver = getattr(torchvision, "__version__", "")
+    except Exception as exc:
+        print("error|torchvision_import|" + str(exc))
+        raise SystemExit(0)
+else:
+    torchvision_ver = ""
 try:
     import torchaudio
     torchaudio_ver = getattr(torchaudio, "__version__", "")
 except Exception as exc:
     print("error|torchaudio_import|" + str(exc))
     raise SystemExit(0)
-if torch_ver == expected_torch and torchaudio_ver == expected_torchaudio:
-    print("ok|" + torch_ver + "|" + torchaudio_ver)
+if (
+    core(torch_ver) == expected_torch
+    and core(torchaudio_ver) == expected_torchaudio
+    and (not expected_torchvision or core(torchvision_ver) == expected_torchvision)
+):
+    print("ok|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
 else:
-    print("bad|" + torch_ver + "|" + torchaudio_ver)
+    print("bad|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
 PY
 )"
   case "${_probe}" in
     ok\|*)
-      log "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f3)"
+      if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
+        log "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchvision=$(printf "%s" "${_probe}" | cut -d'|' -f3) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f4)"
+      else
+        log "Pinned torch assertion passed: torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f4)"
+      fi
       return 0
       ;;
   esac
   log "Pinned torch assertion failed: ${_probe}"
-  printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  if [ -n "${PINNED_TORCHVISION_VERSION}" ]; then
+    printf "STEMwerk bootstrap failed: expected torch=%s, torchvision=%s, and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHVISION_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  else
+    printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  fi
   return 1
+}
+
+log_final_dependency_versions() {
+  _venv_py="$1"
+  [ -x "${_venv_py}" ] || return 0
+  log "=== final dependency versions ==="
+  "${_venv_py}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
+from importlib.metadata import PackageNotFoundError, version
+
+for name in ("torch", "torchvision", "torchaudio", "audio-separator", "onnxruntime"):
+    try:
+        print(f"{name}={version(name)}")
+    except PackageNotFoundError:
+        print(f"{name}=missing")
+PY
+  log "=== end final dependency versions ==="
 }
 
 evaluate_python_candidate() {
@@ -315,6 +368,7 @@ if [ "${MAC_ARCH}" = "x86_64" ]; then
   log "Using macOS Intel constraints: ${MACOS_CONSTRAINTS_FILE}"
 else
   MACOS_CONSTRAINTS_FILE="${MACOS_ARM_CONSTRAINTS_FILE}"
+  PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_ARM64}"
   log "Using macOS Apple Silicon constraints: ${MACOS_CONSTRAINTS_FILE}"
 fi
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
@@ -545,6 +599,7 @@ fi
 set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
 
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  log_final_dependency_versions "${VENV_PY}"
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
   "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
   "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 || set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
