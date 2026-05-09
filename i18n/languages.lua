@@ -228,6 +228,12 @@ local LANGUAGES = {
         resize_window_for_terminal = "Tip: resize this window taller to view Terminal / Art",
         progress_checking_runtime = "Checking runtime...",
         progress_preparing_audio = "Preparing audio...",
+        progress_stage_processing = "Processing",
+        progress_stage_loading_model = "Loading model",
+        progress_stage_loading_ai_model = "Loading AI model",
+        progress_stage_starting_separation = "Starting separation",
+        progress_stage_writing_stems = "Writing stems",
+        progress_stage_complete = "Complete",
         scroll_wheel_hint = "wheel",
         complete_hint_keys = "Enter / ESC",
         complete_target_prefix = "Target:",
@@ -293,7 +299,11 @@ local LANGUAGES = {
         -- Messages
         no_stems_selected = "No Stems Selected",
         please_select_stem = "Select one or more stems in the center column to start.",
+        progress_cancel_button = "Cancel",
+        progress_cancel_tooltip = "Cancel separation",
+        progress_cancelled_status = "Cancelled",
         separation_cancelled = "Separation cancelled.",
+        tooltip_cancel_processing = "Cancel separation",
         separation_timeout = "Separation timed out after 10 minutes.",
 
         -- Help hints
@@ -632,6 +642,12 @@ local LANGUAGES = {
         resize_window_for_terminal = "Tip: maak dit venster hoger om Terminal / Art te zien",
         progress_checking_runtime = "Runtime controleren...",
         progress_preparing_audio = "Audio voorbereiden...",
+        progress_stage_processing = "Verwerken",
+        progress_stage_loading_model = "Model laden",
+        progress_stage_loading_ai_model = "AI-model laden",
+        progress_stage_starting_separation = "Separatie starten",
+        progress_stage_writing_stems = "Stems schrijven",
+        progress_stage_complete = "Voltooid",
         scroll_wheel_hint = "wiel",
         complete_hint_keys = "Enter / ESC",
         complete_target_prefix = "Doel:",
@@ -697,7 +713,11 @@ local LANGUAGES = {
         -- Messages
         no_stems_selected = "Geen stems geselecteerd",
         please_select_stem = "Selecteer minimaal een stem.",
+        progress_cancel_button = "Annuleren",
+        progress_cancel_tooltip = "Scheiding annuleren",
+        progress_cancelled_status = "Geannuleerd",
         separation_cancelled = "Separatie geannuleerd.",
+        tooltip_cancel_processing = "Scheiding annuleren",
         separation_timeout = "Separatie time-out na 10 minuten.",
 
         -- Help hints
@@ -1034,6 +1054,12 @@ local LANGUAGES = {
         resize_window_for_terminal = "Tipp: Fenster hoeher ziehen, um Terminal / Art zu sehen",
         progress_checking_runtime = "Runtime wird geprueft...",
         progress_preparing_audio = "Audio wird vorbereitet...",
+        progress_stage_processing = "Verarbeiten",
+        progress_stage_loading_model = "Modell laden",
+        progress_stage_loading_ai_model = "KI-Modell laden",
+        progress_stage_starting_separation = "Trennung starten",
+        progress_stage_writing_stems = "Stems schreiben",
+        progress_stage_complete = "Abgeschlossen",
         scroll_wheel_hint = "Mausrad",
         complete_hint_keys = "Enter / ESC",
         complete_target_prefix = "Ziel:",
@@ -1099,7 +1125,11 @@ local LANGUAGES = {
         -- Messages
         no_stems_selected = "Keine Stems ausgewaehlt",
         please_select_stem = "Bitte mindestens einen Stem auswaehlen.",
+        progress_cancel_button = "Abbrechen",
+        progress_cancel_tooltip = "Trennung abbrechen",
+        progress_cancelled_status = "Abgebrochen",
         separation_cancelled = "Trennung abgebrochen.",
+        tooltip_cancel_processing = "Trennung abbrechen",
         separation_timeout = "Trennung nach 10 Minuten abgebrochen.",
 
         -- Help hints

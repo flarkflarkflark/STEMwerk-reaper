@@ -300,10 +300,10 @@ local LANGUAGES = {
         no_stems_selected = "No Stems Selected",
         please_select_stem = "Select one or more stems in the center column to start.",
         progress_cancel_button = "Cancel",
-        progress_cancel_tooltip = "Cancel processing",
-        progress_cancelled_status = "Processing cancelled.",
+        progress_cancel_tooltip = "Cancel separation",
+        progress_cancelled_status = "Cancelled",
         separation_cancelled = "Processing cancelled.",
-        tooltip_cancel_processing = "Cancel processing",
+        tooltip_cancel_processing = "Cancel separation",
         separation_timeout = "Separation timed out after 10 minutes.",
 
         -- Help hints
@@ -714,10 +714,10 @@ local LANGUAGES = {
         no_stems_selected = "Geen stems geselecteerd",
         please_select_stem = "Selecteer minimaal een stem.",
         progress_cancel_button = "Annuleren",
-        progress_cancel_tooltip = "Verwerking annuleren",
-        progress_cancelled_status = "Verwerking geannuleerd.",
+        progress_cancel_tooltip = "Scheiding annuleren",
+        progress_cancelled_status = "Geannuleerd",
         separation_cancelled = "Verwerking geannuleerd.",
-        tooltip_cancel_processing = "Verwerking annuleren",
+        tooltip_cancel_processing = "Scheiding annuleren",
         separation_timeout = "Separatie time-out na 10 minuten.",
 
         -- Help hints
@@ -1054,7 +1054,7 @@ local LANGUAGES = {
         resize_window_for_terminal = "Tipp: Fenster hoeher ziehen, um Terminal / Art zu sehen",
         progress_checking_runtime = "Runtime wird geprueft...",
         progress_preparing_audio = "Audio wird vorbereitet...",
-        progress_stage_processing = "Verarbeitung",
+        progress_stage_processing = "Verarbeiten",
         progress_stage_loading_model = "Modell laden",
         progress_stage_loading_ai_model = "KI-Modell laden",
         progress_stage_starting_separation = "Trennung starten",
@@ -1126,10 +1126,10 @@ local LANGUAGES = {
         no_stems_selected = "Keine Stems ausgewaehlt",
         please_select_stem = "Bitte mindestens einen Stem auswaehlen.",
         progress_cancel_button = "Abbrechen",
-        progress_cancel_tooltip = "Verarbeitung abbrechen",
-        progress_cancelled_status = "Verarbeitung abgebrochen.",
+        progress_cancel_tooltip = "Trennung abbrechen",
+        progress_cancelled_status = "Abgebrochen",
         separation_cancelled = "Verarbeitung abgebrochen.",
-        tooltip_cancel_processing = "Verarbeitung abbrechen",
+        tooltip_cancel_processing = "Trennung abbrechen",
         separation_timeout = "Trennung nach 10 Minuten abgebrochen.",
 
         -- Help hints

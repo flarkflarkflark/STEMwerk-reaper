@@ -2,12 +2,12 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.1.6" author="flarkAUDIO" time="1778346401">
+      <version name="2.2.2.1.7" author="flarkAUDIO" time="1778347465">
         <changelog><![CDATA[
-- ReaPack-only macOS setup assertion hotfix
-- Fixes false failure after a correct Intel macOS dependency repair
-- Fixes setup error fallback logging crash
-- No dependency stack changes
+- ReaPack-only progress/i18n UI hotfix
+- Fixes raw cancel button label `progress cancel button`
+- Fixes raw multi-track progress label `progress stage processing`
+- No backend/runtime dependency changes
 - No installer or release asset changes
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
