@@ -157,3 +157,23 @@ def test_macos_bootstrap_repairs_after_audio_separator_install():
     assert script.index(repair_marker) > script.index(audio_install_marker), (
         "macOS bootstrap must re-apply the pinned torch stack after audio-separator install"
     )
+
+
+def test_macos_apple_silicon_workflow_repairs_torchvision_stack():
+    from pathlib import Path
+
+    workflow = Path(".github/workflows/macos-apple-silicon-backend-smoke.yml").read_text()
+
+    initial_install = 'pip install "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"'
+    constrained_audio = 'pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"'
+    repair_install = (
+        'pip install --force-reinstall --no-deps "torch==2.5.1" '
+        '"torchvision==0.20.1" "torchaudio==2.5.1"'
+    )
+
+    assert initial_install in workflow
+    assert constrained_audio in workflow
+    assert repair_install in workflow
+    assert workflow.index(repair_install) > workflow.index(constrained_audio), (
+        "workflow must re-apply the pinned torch/vision/audio stack after audio-separator install"
+    )
