@@ -14,6 +14,10 @@ EXPECTED_TORCHAUDIO = "2.5.1"
 EXPECTED_AUDIO_SEPARATOR = "0.23.0"
 
 
+def _core_version(ver):
+    return ver.split("+", 1)[0]
+
+
 def _version_or_fail(dist_name):
     try:
         return version(dist_name)
@@ -57,7 +61,7 @@ def test_runner_is_macos_arm64():
 def test_torch_pin():
     import torch
 
-    assert torch.__version__.split("+", 1)[0] == EXPECTED_TORCH, (
+    assert _core_version(torch.__version__) == EXPECTED_TORCH, (
         f"torch drifted from {EXPECTED_TORCH}: {torch.__version__}"
     )
 
@@ -66,15 +70,22 @@ def test_torchvision_pin_and_abi_match():
     import torch
     import torchvision
 
-    torch_version = torch.__version__.split("+", 1)[0]
-    torchvision_version = torchvision.__version__.split("+", 1)[0]
+    torch_version = _core_version(torch.__version__)
+    torchvision_version = _core_version(torchvision.__version__)
+    torchvision_requires = distribution("torchvision").requires or []
 
     assert torchvision_version == EXPECTED_TORCHVISION, (
         f"torchvision drifted from {EXPECTED_TORCHVISION}: {torchvision.__version__}"
     )
-    assert torchvision_version.rsplit(".", 1)[0] == torch_version.rsplit(".", 1)[0], (
-        f"torch {torch.__version__} and torchvision {torchvision.__version__} "
-        "major.minor mismatch"
+    assert torch_version == EXPECTED_TORCH, (
+        f"torch drifted from {EXPECTED_TORCH}: {torch.__version__}"
+    )
+    assert any(
+        req.replace(" ", "") == f"torch(=={EXPECTED_TORCH})"
+        for req in torchvision_requires
+    ), (
+        f"torchvision {torchvision.__version__} does not declare torch=={EXPECTED_TORCH}; "
+        f"requires={torchvision_requires!r}"
     )
 
 
@@ -82,8 +93,8 @@ def test_torchaudio_pin_and_abi_match():
     import torch
     import torchaudio
 
-    torch_version = torch.__version__.split("+", 1)[0]
-    torchaudio_version = torchaudio.__version__.split("+", 1)[0]
+    torch_version = _core_version(torch.__version__)
+    torchaudio_version = _core_version(torchaudio.__version__)
 
     assert torchaudio_version == EXPECTED_TORCHAUDIO, (
         f"torchaudio drifted from {EXPECTED_TORCHAUDIO}: {torchaudio.__version__}"
