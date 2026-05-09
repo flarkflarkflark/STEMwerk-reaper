@@ -115,9 +115,9 @@ Windows is the primary validated path for the `v2.2.2.1` release. macOS and Linu
 | `STEMwerk-Setup-2.2.2.1.exe` | Windows standard installer | 3.33 MB |
 | `STEMwerk-Setup-2.2.2.1-bundled.exe` | Windows bundled installer (Python + FFmpeg included) | 133 MB |
 | `STEMwerk-Setup-2.2.2.1-offline-patch.exe` | Windows offline patch/update helper | 3.42 MB |
-| `STEMwerk-v2.2.2.1-Linux-x86_64.AppImage` | Linux portable build | 15.96 MB |
-| `STEMwerk-v2.2.2.1-Linux-amd64.deb` | Debian/Ubuntu package | 15.64 MB |
-| `STEMwerk-v2.2.2.1-Linux-x86_64.rpm` | RPM package | 15.67 MB |
+| `STEMwerk-v2.2.2.1-Linux-x86_64.AppImage` | Linux portable build | 1.21 MB |
+| `STEMwerk-v2.2.2.1-Linux-amd64.deb` | Debian/Ubuntu package | 0.93 MB |
+| `STEMwerk-v2.2.2.1-Linux-x86_64.rpm` | RPM package | 0.96 MB |
 
 GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user installer download.
 
