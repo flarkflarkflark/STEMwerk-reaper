@@ -140,6 +140,7 @@ def test_macos_arm_constraints_include_matching_torchvision_pin():
     from pathlib import Path
 
     constraints_lines = Path("scripts/reaper/constraints/macos.txt").read_text().splitlines()
+    assert "numpy==1.26.4" in constraints_lines
     assert "torch==2.5.1" in constraints_lines
     assert "torchvision==0.20.1" in constraints_lines
     assert "torchaudio==2.5.1" in constraints_lines
@@ -149,6 +150,7 @@ def test_macos_intel_constraints_include_matching_cpu_fallback_stack():
     from pathlib import Path
 
     constraints_lines = Path("scripts/reaper/constraints/macos-intel.txt").read_text().splitlines()
+    assert "numpy==1.26.4" in constraints_lines
     assert "torch==2.2.2" in constraints_lines
     assert "torchvision==0.17.2" in constraints_lines
     assert "torchaudio==2.2.2" in constraints_lines
@@ -161,6 +163,13 @@ def test_macos_bootstrap_repairs_after_audio_separator_install():
     audio_install_marker = 'pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"'
     repair_marker = 'set_status "deps_failed" "torch_pin_repair_failed"'
 
+    assert 'PINNED_NUMPY_VERSION="1.26.4"' in script
+    assert '"numpy==${PINNED_NUMPY_VERSION}"' in script
+    assert 'core(numpy_ver) == expected_numpy' in script
+    assert 'import numba' in script
+    assert 'import llvmlite' in script
+    assert 'for name in ("numpy", "numba", "llvmlite")' in script
+    assert 'set_status "deps_failed" "numba_missing_after_setup"' in script
     assert 'PINNED_TORCH_VERSION_ARM64="2.5.1"' in script
     assert 'PINNED_TORCHVISION_VERSION_ARM64="0.20.1"' in script
     assert 'PINNED_TORCHAUDIO_VERSION_ARM64="2.5.1"' in script

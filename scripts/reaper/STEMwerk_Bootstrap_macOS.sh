@@ -6,6 +6,7 @@ BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
+PINNED_NUMPY_VERSION="1.26.4"
 PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
 PINNED_TORCHAUDIO_VERSION=""
@@ -167,19 +168,41 @@ install_pinned_torch_stack() {
   log "Installing pinned torch stack (${PINNED_TORCH_STACK_LABEL}): torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
   "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+    "numpy==${PINNED_NUMPY_VERSION}" \
     "torch==${PINNED_TORCH_VERSION}" \
     "torchvision==${PINNED_TORCHVISION_VERSION}" \
     "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
+  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+    "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1
 }
 
 assert_pinned_torch_stack() {
   _venv_py="$1"
   _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+expected_numpy = "${PINNED_NUMPY_VERSION}"
 expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
 def core(ver):
     return ver.split("+", 1)[0]
+try:
+    import numpy
+    numpy_ver = getattr(numpy, "__version__", "")
+except Exception as exc:
+    print("error|numpy_import|" + str(exc))
+    raise SystemExit(0)
+try:
+    import numba
+    numba_ver = getattr(numba, "__version__", "")
+except Exception as exc:
+    print("error|numba_import|" + str(exc))
+    raise SystemExit(0)
+try:
+    import llvmlite
+    llvmlite_ver = getattr(llvmlite, "__version__", "")
+except Exception as exc:
+    print("error|llvmlite_import|" + str(exc))
+    raise SystemExit(0)
 try:
     import torch
     torch_ver = getattr(torch, "__version__", "")
@@ -199,23 +222,24 @@ except Exception as exc:
     print("error|torchaudio_import|" + str(exc))
     raise SystemExit(0)
 if (
+    core(numpy_ver) == expected_numpy
     core(torch_ver) == expected_torch
     and core(torchaudio_ver) == expected_torchaudio
     and core(torchvision_ver) == expected_torchvision
 ):
-    print("ok|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
+    print("ok|" + numpy_ver + "|" + numba_ver + "|" + llvmlite_ver + "|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
 else:
-    print("bad|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
+    print("bad|" + numpy_ver + "|" + numba_ver + "|" + llvmlite_ver + "|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
 PY
 )"
   case "${_probe}" in
     ok\|*)
-      log "Pinned torch assertion passed (${PINNED_TORCH_STACK_LABEL}): torch=$(printf "%s" "${_probe}" | cut -d'|' -f2) torchvision=$(printf "%s" "${_probe}" | cut -d'|' -f3) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f4)"
+      log "Pinned runtime assertion passed (${PINNED_TORCH_STACK_LABEL}): numpy=$(printf "%s" "${_probe}" | cut -d'|' -f2) numba=$(printf "%s" "${_probe}" | cut -d'|' -f3) llvmlite=$(printf "%s" "${_probe}" | cut -d'|' -f4) torch=$(printf "%s" "${_probe}" | cut -d'|' -f5) torchvision=$(printf "%s" "${_probe}" | cut -d'|' -f6) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f7)"
       return 0
       ;;
   esac
-  log "Pinned torch assertion failed: ${_probe}"
-  printf "STEMwerk bootstrap failed: expected %s torch=%s, torchvision=%s, and torchaudio=%s after setup.\n" "${PINNED_TORCH_STACK_LABEL}" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHVISION_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  log "Pinned runtime assertion failed: ${_probe}"
+  printf "STEMwerk bootstrap failed: expected %s numpy=%s, torch=%s, torchvision=%s, and torchaudio=%s after setup.\n" "${PINNED_TORCH_STACK_LABEL}" "${PINNED_NUMPY_VERSION}" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHVISION_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
   return 1
 }
 
@@ -228,6 +252,11 @@ log_final_dependency_versions() {
 from importlib.metadata import PackageNotFoundError, version
 
 for name in ("torch", "torchvision", "torchaudio", "audio-separator", "onnxruntime"):
+    try:
+        print(f"{name}={version(name)}")
+    except PackageNotFoundError:
+        print(f"{name}=missing")
+for name in ("numpy", "numba", "llvmlite"):
     try:
         print(f"{name}={version(name)}")
     except PackageNotFoundError:
@@ -481,7 +510,7 @@ else
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     "${VENV_PY}" -m pip install --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
-    "${VENV_PY}" -m pip install "numpy<2.0" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+    "${VENV_PY}" -m pip install "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
     if ! install_pinned_torch_stack; then
       if [ "${MAC_ARCH}" = "x86_64" ]; then
         log "Intel macOS CPU fallback dependency install failed during initial torch stack setup"
@@ -604,6 +633,7 @@ fi
 set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
 
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  "${VENV_PY}" -c "import numba" >/dev/null 2>&1 || set_status "deps_failed" "numba_missing_after_setup"
   log_final_dependency_versions "${VENV_PY}"
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
   "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
