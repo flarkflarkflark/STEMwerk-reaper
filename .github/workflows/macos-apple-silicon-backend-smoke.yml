@@ -1,0 +1,58 @@
+name: macOS Apple Silicon backend smoke
+
+on:
+  push:
+    branches:
+      - ci/macos-apple-silicon-backend-smoke
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apple-silicon-backend:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show runner diagnostics
+        run: |
+          uname -a
+          uname -m
+          sw_vers
+          python3 --version
+          python3 - <<'PY'
+          import platform
+          import sys
+
+          print(f"python_executable={sys.executable}")
+          print(f"python_version={platform.python_version()}")
+          print(f"platform_system={platform.system()}")
+          print(f"platform_machine={platform.machine()}")
+          PY
+
+      - name: Verify vendored stemwerk-core bundle
+        run: |
+          test -f scripts/reaper/vendor/stemwerk-core/pyproject.toml
+
+      - name: Create venv and install backend smoke dependencies
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install "numpy<2.0" "soundfile>=0.12.1"
+          pip install "torch==2.5.1" "torchaudio==2.5.1"
+          pip install ./scripts/reaper/vendor/stemwerk-core
+          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"
+          pip install --force-reinstall --no-deps "torch==2.5.1" "torchaudio==2.5.1"
+          pip install onnxruntime-silicon || pip install "onnxruntime>=1.21,<1.22"
+          pip install pytest
+
+      - name: Run dependency smoke pytest
+        run: |
+          . .venv/bin/activate
+          pytest tests/test_dependency_constraints.py -v --tb=short -s
