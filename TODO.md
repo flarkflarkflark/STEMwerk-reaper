@@ -123,6 +123,40 @@ Toolbar + Icons + Toolbarscripts:
 | **Stemwerk: All Stems** | Extract all stems to separate tracks |
 | **Stemwerk: Setup Toolbar** | Add quick-access toolbar buttons |
 
+## v2.2.2.2 follow-up cleanup
+
+- [ ] ReaPack/root vs `scripts/reaper` i18n structure cleanup
+	- Decide one clear canonical shipped i18n source
+	- Remove duplicated/confusing packaging paths
+	- Validate the cleaned-up tree before the next full release build
+- [ ] Reduce macOS setup bootstrap re-download/reinstall of the torch stack when the runtime is already correct
+	- Re-check current setup/repair behavior on Apple Silicon and Intel macOS
+	- Avoid unnecessary torch reinstall when runtime verification already passes
+- [ ] Build the next full release assets from a cleaned-up `main`
+	- ReaPack/package metadata, repo tree, and release payload should agree
+
+## Support / diagnostics
+
+- [ ] Add a visible About / Diagnostics / Copy report UI
+	- Show installed package/script/ReaPack version clearly
+	- Show runtime base path, Python path/version, FFmpeg path/version
+	- Show torch / torchvision / torchaudio / audio-separator / onnxruntime
+	- Show numpy / numba / llvmlite
+	- Show backend/device profile and selected mode
+	- Provide a copy-to-clipboard diagnostics block that is easy to paste into GitHub issues/forum posts
+- [ ] Land/publish `STEMwerk_Save_Support_Bundle.lua`
+	- Keep it as a standalone Action List action
+	- Also expose “Save Support Bundle” from the `STEMwerk-SETUP.lua` maintenance UI
+	- Reuse one collector implementation; do not duplicate logic
+	- Must stay safe for no runtime / failed runtime / failed setup / failed separation
+	- Keep version + OS/architecture block prominent at the top of diagnostics
+	- Never include audio/model/project payloads
+- [ ] Finish hardening the support bundle collector from Linux manual-test findings
+	- Ensure architecture, `uname`, Python version, and FFmpeg version are always reported when detectable
+	- Ensure `python_diagnostics.txt` is never silently empty
+	- Sanitize copied text logs and temp inventory so raw temp/media paths do not leak
+	- Improve temp inventory metadata: name, type, size, modified time, and useful reason if unavailable
+
 ## GitHub issue follow-ups
 
 ### #23 — Installed version / diagnostics visibility
@@ -149,6 +183,42 @@ Toolbar + Icons + Toolbarscripts:
 - Investigate temp files/folders not deleted when not all stems are requested.
 - Likely related to cleanup/finalize lifecycle and should be reviewed together with #22.
 - Ensure partial-stem workflows clean up temporary files safely without deleting user outputs or model cache.
+
+## macOS Apple Silicon / MPS follow-up
+
+- [ ] Keep CPU as the reliable Auto path on Apple Silicon until MPS is proven stable
+	- Current hotfix behavior: Auto prefers CPU, explicit Apple MPS remains available
+	- Current explicit MPS behavior sets `PYTORCH_ENABLE_MPS_FALLBACK=1`
+	- Known unsupported-op failures now surface a clearer user-facing message
+- [ ] Investigate whether stable Apple MPS support is possible for HTDemucs / audio-separator
+	- Track the real PyTorch MPS limitation: `Output channels > 65536 not supported at the MPS device`
+	- Monitor PyTorch / Demucs / audio-separator MPS behavior over time
+	- Revisit retry/fallback policy only after the failure modes are better understood
+
+## CI / testing
+
+- [ ] Keep Apple Silicon CI probes/manual workflows available but non-required until they are stable and low-noise
+	- Manual Apple Silicon backend sanity workflow
+	- Manual macOS MPS limitation probe
+	- Avoid model downloads and real separation in required CI
+- [ ] Maintain headless CI coverage for the support bundle collector
+	- Exercise sanitization, missing-runtime behavior, and forbidden-payload checks without requiring REAPER
+
+## UI / theme polish
+
+- [ ] Add optional UI/theme accessibility polish
+	- Optional “REAPER Native” theme
+	- Reduced visual FX mode
+	- Tooltip detail/off setting
+	- Keep flarkAUDIO theme selectable
+- [ ] Investigate whether laggy macOS tooltips/UI responsiveness is separate from backend/runtime issues
+
+## ReaPack/package metadata cleanup
+
+- [ ] Clarify ReaPack/package naming and installed-version visibility
+	- Current feed/package display is confusing (`STEMwerk-reaper/STEMwerk-reaper/...`)
+	- Make package naming, action naming, and installed version easier to identify
+	- Review whether the package description and display path can be simplified without breaking updates
 
 ## Future
 
