@@ -30,6 +30,5 @@ copy_linux_payload() {
     "$root_dir/installer/assets/stemwerk.svg" \
     "$root_dir/README.md" \
     "$root_dir/LICENSE" \
-    "$root_dir/TODO.md" \
     "$dest_dir/"
 }
