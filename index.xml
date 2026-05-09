@@ -2,13 +2,11 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.1.1" author="flarkAUDIO" time="1778307487">
+      <version name="2.2.2.1.2" author="flarkAUDIO" time="1778309208">
         <changelog><![CDATA[
-- ReaPack-only runtime parity hotfix above v2.2.2.1
-- Restores Linux/macOS setup maintenance chooser for existing runtimes
-- Restores macOS/Linux bootstrap dependency hardening from the v2.2.2.1 release source
-- Restores richer separation diagnostics from the v2.2.2.1 release source
-- Keeps first-time automatic setup flow
+- ReaPack-only toolbar icon polish hotfix above v2.2.2.1.1
+- Replaces ReaPack/runtime toolbar strips with the current canonical STEMwerk icon family
+- No runtime or backend logic changes
 - No installer or release asset changes
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
