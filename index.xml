@@ -2,12 +2,12 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.1.5" author="flarkAUDIO" time="1778344143">
+      <version name="2.2.2.1.6" author="flarkAUDIO" time="1778346401">
         <changelog><![CDATA[
-- ReaPack-only macOS NumPy dependency hotfix
-- Restores numpy==1.26.4 after macOS torch stack repair
-- Prevents torch/torchvision repair from leaving NumPy 2.x installed
-- Keeps Apple Silicon and Intel macOS torch stacks unchanged
+- ReaPack-only macOS setup assertion hotfix
+- Fixes false failure after a correct Intel macOS dependency repair
+- Fixes setup error fallback logging crash
+- No dependency stack changes
 - No installer or release asset changes
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>

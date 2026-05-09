@@ -165,9 +165,9 @@ def test_macos_bootstrap_repairs_after_audio_separator_install():
 
     assert 'PINNED_NUMPY_VERSION="1.26.4"' in script
     assert '"numpy==${PINNED_NUMPY_VERSION}"' in script
-    assert 'core(numpy_ver) == expected_numpy' in script
+    assert 'if core(numpy_ver) != expected_numpy:' in script
     assert 'import numba' in script
-    assert 'import llvmlite' in script
+    assert 'import_module_version("llvmlite")' in script
     assert 'for name in ("numpy", "numba", "llvmlite")' in script
     assert 'set_status "deps_failed" "numba_missing_after_setup"' in script
     assert 'PINNED_TORCH_VERSION_ARM64="2.5.1"' in script
@@ -190,3 +190,44 @@ def test_macos_bootstrap_repairs_after_audio_separator_install():
     assert script.index(repair_marker) > script.index(audio_install_marker), (
         "macOS bootstrap must re-apply the pinned torch stack after audio-separator install"
     )
+
+
+def test_macos_bootstrap_assertion_uses_audio_separator_metadata():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'version("audio-separator")' in script
+    assert 'audio_separator.__version__' not in script
+
+
+def test_macos_bootstrap_assertion_does_not_require_mps_availability_on_intel():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'record("mps_available"' in script
+    assert 'add_failure("mps_available"' not in script
+    assert 'failures.append("mps_available' not in script
+
+
+def test_macos_bootstrap_assertion_reports_clear_failure_output():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert '_probe_output="$("${_venv_py}" - <<PY 2>&1' in script
+    assert '_probe=$(printf "%s\\n" "${_probe_output}" | tail -n 1)' in script
+    assert 'failures=' in script
+    assert 'Pinned runtime assertion failed: ${_probe}' in script
+    assert 'STEMwerk bootstrap failed: pinned runtime assertion failed (%s): %s\\n' in script
+
+
+def test_macos_setup_internal_append_log_helper_is_guarded():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local appendLogLine" in script
+    assert "if appendLogLine then" in script
+    assert "appendLogLine = function(logFile, line)" in script

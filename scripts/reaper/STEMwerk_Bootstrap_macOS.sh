@@ -178,68 +178,137 @@ install_pinned_torch_stack() {
 
 assert_pinned_torch_stack() {
   _venv_py="$1"
-  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+  _probe_output="$("${_venv_py}" - <<PY 2>&1
+from importlib.metadata import PackageNotFoundError, version
+
 expected_numpy = "${PINNED_NUMPY_VERSION}"
 expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
+expected_audio_separator = "0.23.0"
+expected_profile = "${PINNED_TORCH_STACK_LABEL}"
+mac_arch = "${MAC_ARCH}"
+
 def core(ver):
-    return ver.split("+", 1)[0]
+    return str(ver).split("+", 1)[0]
+
+details = {}
+failures = []
+
+def record(name, value):
+    details[name] = str(value)
+
+def add_failure(name, expected=None, actual=None):
+    if expected is None:
+        failures.append(str(name))
+    else:
+        failures.append(f"{name}: expected {expected}, got {actual}")
+
+def import_module_version(import_name, detail_name=None):
+    try:
+        module = __import__(import_name)
+    except Exception as exc:
+        record(detail_name or import_name, f"import_error:{exc}")
+        failures.append(f"{import_name} import failed: {exc}")
+        return None, ""
+    module_ver = getattr(module, "__version__", "")
+    record(detail_name or import_name, module_ver or "imported")
+    return module, module_ver
+
+def distribution_version(dist_name, detail_name=None):
+    try:
+        dist_ver = version(dist_name)
+    except PackageNotFoundError:
+        record(detail_name or dist_name, "missing")
+        failures.append(f"{dist_name} distribution missing")
+        return ""
+    except Exception as exc:
+        record(detail_name or dist_name, f"metadata_error:{exc}")
+        failures.append(f"{dist_name} metadata lookup failed: {exc}")
+        return ""
+    record(detail_name or dist_name, dist_ver)
+    return dist_ver
+
 try:
-    import numpy
-    numpy_ver = getattr(numpy, "__version__", "")
+    _, numpy_ver = import_module_version("numpy")
+    _, numba_ver = import_module_version("numba")
+    _, llvmlite_ver = import_module_version("llvmlite")
+    torch_mod, torch_ver = import_module_version("torch")
+    _, torchvision_ver = import_module_version("torchvision")
+    _, torchaudio_ver = import_module_version("torchaudio")
+    audio_separator_ver = distribution_version("audio-separator")
+    _, onnxruntime_ver = import_module_version("onnxruntime")
+
+    mps_backend = getattr(getattr(torch_mod, "backends", None), "mps", None) if torch_mod is not None else None
+    if mps_backend is not None:
+        try:
+            record("mps_built", mps_backend.is_built())
+        except Exception as exc:
+            record("mps_built", f"error:{exc}")
+        try:
+            record("mps_available", mps_backend.is_available())
+        except Exception as exc:
+            record("mps_available", f"error:{exc}")
+    else:
+        record("mps_built", "unsupported")
+        record("mps_available", "unsupported")
+    record("mac_arch", mac_arch)
+
+    if core(numpy_ver) != expected_numpy:
+        add_failure("numpy", expected_numpy, numpy_ver or "missing")
+    if core(torch_ver) != expected_torch:
+        add_failure("torch", expected_torch, torch_ver or "missing")
+    if core(torchvision_ver) != expected_torchvision:
+        add_failure("torchvision", expected_torchvision, torchvision_ver or "missing")
+    if core(torchaudio_ver) != expected_torchaudio:
+        add_failure("torchaudio", expected_torchaudio, torchaudio_ver or "missing")
+    if core(audio_separator_ver) != expected_audio_separator:
+        add_failure("audio-separator", expected_audio_separator, audio_separator_ver or "missing")
+
+    ordered_names = (
+        "mac_arch",
+        "numpy",
+        "numba",
+        "llvmlite",
+        "torch",
+        "torchvision",
+        "torchaudio",
+        "audio-separator",
+        "onnxruntime",
+        "mps_built",
+        "mps_available",
+    )
+    summary = "; ".join(f"{name}={details.get(name, 'missing')}" for name in ordered_names)
+    if failures:
+        print("bad|profile=" + expected_profile + "; failures=" + "; ".join(failures) + "; " + summary)
+    else:
+        print("ok|profile=" + expected_profile + "; " + summary)
 except Exception as exc:
-    print("error|numpy_import|" + str(exc))
-    raise SystemExit(0)
-try:
-    import numba
-    numba_ver = getattr(numba, "__version__", "")
-except Exception as exc:
-    print("error|numba_import|" + str(exc))
-    raise SystemExit(0)
-try:
-    import llvmlite
-    llvmlite_ver = getattr(llvmlite, "__version__", "")
-except Exception as exc:
-    print("error|llvmlite_import|" + str(exc))
-    raise SystemExit(0)
-try:
-    import torch
-    torch_ver = getattr(torch, "__version__", "")
-except Exception as exc:
-    print("error|torch_import|" + str(exc))
-    raise SystemExit(0)
-try:
-    import torchvision
-    torchvision_ver = getattr(torchvision, "__version__", "")
-except Exception as exc:
-    print("error|torchvision_import|" + str(exc))
-    raise SystemExit(0)
-try:
-    import torchaudio
-    torchaudio_ver = getattr(torchaudio, "__version__", "")
-except Exception as exc:
-    print("error|torchaudio_import|" + str(exc))
-    raise SystemExit(0)
-if (
-    core(numpy_ver) == expected_numpy
-    core(torch_ver) == expected_torch
-    and core(torchaudio_ver) == expected_torchaudio
-    and core(torchvision_ver) == expected_torchvision
-):
-    print("ok|" + numpy_ver + "|" + numba_ver + "|" + llvmlite_ver + "|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
-else:
-    print("bad|" + numpy_ver + "|" + numba_ver + "|" + llvmlite_ver + "|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver)
+    print("error|runtime_probe|" + str(exc))
 PY
 )"
+  _probe_rc=$?
+  _probe=$(printf "%s\n" "${_probe_output}" | tail -n 1)
+  if [ -z "${_probe}" ] && [ -n "${_probe_output}" ]; then
+    _probe="${_probe_output}"
+  fi
+  if [ -n "${_probe_output}" ] && [ "${_probe_output}" != "${_probe}" ]; then
+    log "Pinned runtime assertion probe emitted auxiliary output:"
+    printf "%s\n" "${_probe_output}" | while IFS= read -r _line; do
+      log "  ${_line}"
+    done
+  fi
   case "${_probe}" in
     ok\|*)
-      log "Pinned runtime assertion passed (${PINNED_TORCH_STACK_LABEL}): numpy=$(printf "%s" "${_probe}" | cut -d'|' -f2) numba=$(printf "%s" "${_probe}" | cut -d'|' -f3) llvmlite=$(printf "%s" "${_probe}" | cut -d'|' -f4) torch=$(printf "%s" "${_probe}" | cut -d'|' -f5) torchvision=$(printf "%s" "${_probe}" | cut -d'|' -f6) torchaudio=$(printf "%s" "${_probe}" | cut -d'|' -f7)"
+      log "Pinned runtime assertion passed: ${_probe#ok|}"
       return 0
       ;;
   esac
+  if [ -z "${_probe}" ]; then
+    _probe="error|runtime_probe|no probe output (python exit ${_probe_rc})"
+  fi
   log "Pinned runtime assertion failed: ${_probe}"
-  printf "STEMwerk bootstrap failed: expected %s numpy=%s, torch=%s, torchvision=%s, and torchaudio=%s after setup.\n" "${PINNED_TORCH_STACK_LABEL}" "${PINNED_NUMPY_VERSION}" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHVISION_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  printf "STEMwerk bootstrap failed: pinned runtime assertion failed (%s): %s\n" "${PINNED_TORCH_STACK_LABEL}" "${_probe}" >&2
   return 1
 }
 

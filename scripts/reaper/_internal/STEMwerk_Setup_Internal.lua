@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.1.5
+-- @version 2.2.2.1.6
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -90,6 +90,7 @@ end
 local RAW_SCRIPT_DIR = getScriptDir()
 local PATH_HELPER = nil
 local linuxEnvPrefix
+local appendLogLine
 local helperOk, helperMod = pcall(dofile, RAW_SCRIPT_DIR .. "STEMwerk_Path_Helper.lua")
 if helperOk and type(helperMod) == "table" then
     PATH_HELPER = helperMod
@@ -1823,7 +1824,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk
 
     if verifiedRuntimeOk and state.STATUS ~= "ok" then
-        appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
+        if appendLogLine then
+            appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
+        else
+            local lf = io.open(logFile, "a")
+            if lf then
+                lf:write("INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok\n")
+                lf:close()
+            end
+        end
         state.STATUS = "ok"
         state.STATUS_REASON = ""
     end
@@ -2046,7 +2055,7 @@ safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSucces
     }
 end
 
-local function appendLogLine(logFile, line)
+appendLogLine = function(logFile, line)
     if not logFile or logFile == "" then return end
     local lf = io.open(logFile, "a")
     if not lf then return end
