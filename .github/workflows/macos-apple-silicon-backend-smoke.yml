@@ -54,10 +54,10 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install "numpy<2.0" "soundfile>=0.12.1"
-          pip install "torch==2.5.1" "torchaudio==2.5.1"
+          pip install "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
           pip install ./scripts/reaper/vendor/stemwerk-core
           pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"
-          pip install --force-reinstall --no-deps "torch==2.5.1" "torchaudio==2.5.1"
+          pip install --force-reinstall --no-deps "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
           pip install onnxruntime-silicon || pip install "onnxruntime>=1.21,<1.22"
           pip install pytest
 
@@ -74,6 +74,7 @@ jobs:
           import onnxruntime
           import stemwerk_core
           import torch
+          import torchvision
           import torchaudio
 
           payload = {
@@ -84,6 +85,7 @@ jobs:
               "python_executable": sys.executable,
               "python_version": platform.python_version(),
               "torch_version": torch.__version__,
+              "torchvision_version": torchvision.__version__,
               "torchaudio_version": torchaudio.__version__,
               "audio_separator_version": version("audio-separator"),
               "onnxruntime_version": onnxruntime.__version__,

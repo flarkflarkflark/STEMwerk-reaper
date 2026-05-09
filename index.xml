@@ -2,11 +2,12 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.1.2" author="flarkAUDIO" time="1778309208">
+      <version name="2.2.2.1.3" author="flarkAUDIO" time="1778340665">
         <changelog><![CDATA[
-- ReaPack-only toolbar icon polish hotfix above v2.2.2.1.1
-- Replaces ReaPack/runtime toolbar strips with the current canonical STEMwerk icon family
-- No runtime or backend logic changes
+- ReaPack-only macOS Apple Silicon dependency hotfix
+- Pins torchvision==0.20.1 with torch==2.5.1 and torchaudio==2.5.1
+- Prevents audio-separator/onnx2torch dependency resolution from pulling an incompatible newer torch stack
+- Improves final dependency diagnostics
 - No installer or release asset changes
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
