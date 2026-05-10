@@ -503,14 +503,14 @@ THEME_PRESETS = {
             text = {0.90, 0.90, 0.90},
             textDim = {0.70, 0.70, 0.70},
             textHint = {0.50, 0.50, 0.50},
-            accent = {0.30, 0.40, 0.50},
-            accentHover = {0.40, 0.50, 0.60},
+            accent = {0.30, 0.46, 0.32},
+            accentHover = {0.36, 0.54, 0.38},
             checkbox = {0.15, 0.15, 0.15},
-            checkboxChecked = {0.30, 0.40, 0.50},
+            checkboxChecked = {0.28, 0.48, 0.30},
             button = {0.25, 0.25, 0.25},
             buttonHover = {0.35, 0.35, 0.35},
-            buttonPrimary = {0.30, 0.40, 0.50},
-            buttonPrimaryHover = {0.40, 0.50, 0.60},
+            buttonPrimary = {0.30, 0.46, 0.32},
+            buttonPrimaryHover = {0.36, 0.54, 0.38},
             border = {0.40, 0.40, 0.40},
             semantic = {
                 panelBg = {0.22, 0.22, 0.22},
@@ -544,14 +544,14 @@ THEME_PRESETS = {
             text = {0.10, 0.10, 0.10},
             textDim = {0.30, 0.30, 0.30},
             textHint = {0.50, 0.50, 0.50},
-            accent = {0.50, 0.60, 0.70},
-            accentHover = {0.40, 0.50, 0.60},
+            accent = {0.56, 0.68, 0.58},
+            accentHover = {0.62, 0.74, 0.64},
             checkbox = {0.95, 0.95, 0.95},
-            checkboxChecked = {0.50, 0.60, 0.70},
-            button = {0.75, 0.75, 0.75},
-            buttonHover = {0.85, 0.85, 0.85},
-            buttonPrimary = {0.50, 0.60, 0.70},
-            buttonPrimaryHover = {0.40, 0.50, 0.60},
+            checkboxChecked = {0.58, 0.72, 0.58},
+            button = {0.78, 0.78, 0.78},
+            buttonHover = {0.86, 0.86, 0.86},
+            buttonPrimary = {0.56, 0.68, 0.58},
+            buttonPrimaryHover = {0.62, 0.74, 0.64},
             border = {0.60, 0.60, 0.60},
             semantic = {
                 panelBg = {0.80, 0.80, 0.80},
@@ -565,7 +565,7 @@ THEME_PRESETS = {
                 tooltipText = {0.10, 0.10, 0.10},
                 iconPrimary = {0.20, 0.20, 0.20},
                 iconMuted = {0.50, 0.50, 0.50},
-                buttonText = {0.10, 0.10, 0.10},
+                buttonText = {0.08, 0.08, 0.08},
                 success = {0.40, 0.60, 0.40},
                 warning = {0.80, 0.60, 0.30},
             },
@@ -900,7 +900,8 @@ end
 -- ── Theme UI helpers ───────────────────────────────────────────────────────────
 
 function getThemePresetLabel()
-    local presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
+    local presetId = _G.FORCE_THEME_PRESET or (SETTINGS and SETTINGS.themePreset)
+    presetId = normalizeThemePreset(presetId)
     local preset = THEME_PRESETS[presetId] or THEME_PRESETS.classic
     local key = preset and preset.nameKey
     if LANG and key and LANG[key] then
@@ -917,6 +918,10 @@ function getLangText(key, fallback)
 end
 
 function getThemeToggleTooltip()
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+        local switchTip = SETTINGS.darkMode and getLangText("switch_light", "Click to switch to light mode") or getLangText("switch_dark", "Click to switch to dark mode")
+        return switchTip .. " — REAPER Native mode: fixed utility theme. Run normal STEMwerk to use other themes."
+    end
     local switchTip = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
     local presetLabel = getLangText("theme_preset", "Theme")
     local presetName = getThemePresetLabel()

@@ -29,6 +29,31 @@ local function getFunctionalIconPalette()
     }
 end
 
+local function isUtilityMode()
+    return type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+end
+
+local function drawUtilityThemeToggle(themeX, themeY, themeSize, hover, alpha)
+    local label = SETTINGS and SETTINGS.darkMode and "D" or "L"
+    gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte("b"))
+    local tw = gfx.measurestr(label)
+    local bg = getColorOrFallback("buttonBg", {0.25, 0.25, 0.25})
+    local border = getColorOrFallback("border", {0.45, 0.45, 0.45})
+    local text = getColorOrFallback("textPrimary", {0.90, 0.90, 0.90})
+    gfx.set(border[1], border[2], border[3], alpha or 1)
+    gfx.rect(themeX, themeY, themeSize, themeSize, 0)
+    if hover then
+        gfx.set(bg[1] + 0.08, bg[2] + 0.08, bg[3] + 0.08, 0.95 * (alpha or 1))
+    else
+        gfx.set(bg[1], bg[2], bg[3], 0.75 * (alpha or 1))
+    end
+    gfx.rect(themeX + 1, themeY + 1, math.max(1, themeSize - 2), math.max(1, themeSize - 2), 1)
+    gfx.set(text[1], text[2], text[3], alpha or 1)
+    gfx.x = themeX + (themeSize - tw) / 2
+    gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
+    gfx.drawstr(label)
+end
+
 local function cycleLanguageSetting(setLanguageFn)
     local langs = {"en", "nl", "de"}
     local currentIdx = 1
@@ -56,7 +81,8 @@ local function drawHelpControls(ctx)
     local mouseDown = ctx.mouseDown
     local rightMouseDown = ctx.rightMouseDown
     local state = ctx.state
-    local controlsOpacity = ctx.controlsOpacity or 1
+    local utilityMode = isUtilityMode()
+    local controlsOpacity = utilityMode and 1.0 or (ctx.controlsOpacity or 1)
     local iconScale = ctx.iconScale or 0.66
     local themeX = ctx.themeX
     local themeY = ctx.themeY
@@ -69,7 +95,9 @@ local function drawHelpControls(ctx)
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
     local iconPalette = getFunctionalIconPalette()
     local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
-    if SETTINGS.darkMode then
+    if utilityMode then
+        drawUtilityThemeToggle(themeX, themeY, themeSize, themeHover, controlsOpacity)
+    elseif SETTINGS.darkMode then
         gfx.set(iconPalette.moon[1], iconPalette.moon[2], iconPalette.moon[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
         gfx.set(iconPalette.moonCutout[1], iconPalette.moonCutout[2], iconPalette.moonCutout[3], 1 * controlsOpacity)
@@ -132,40 +160,42 @@ local function drawHelpControls(ctx)
         cycleLanguageSetting(ctx.setLanguageFn)
     end
 
-    local fxSize = math.max(S(10), math.floor(S(16) * iconScale + 0.5))
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + S(3)
-    local fxHover = mx >= fxX - S(2) and mx <= fxX + fxSize + S(2) and my >= fxY - S(2) and my <= fxY + fxSize + S(2)
+    if not utilityMode then
+        local fxSize = math.max(S(10), math.floor(S(16) * iconScale + 0.5))
+        local fxX = themeX + (themeSize - fxSize) / 2
+        local fxY = themeY + themeSize + S(3)
+        local fxHover = mx >= fxX - S(2) and mx <= fxX + fxSize + S(2) and my >= fxY - S(2) and my <= fxY + fxSize + S(2)
 
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
-    if SETTINGS.visualFX then
-        gfx.set(iconPalette.fxOn[1], iconPalette.fxOn[2], iconPalette.fxOn[3], fxAlpha)
-    else
-        gfx.set(iconPalette.fxOff[1], iconPalette.fxOff[2], iconPalette.fxOff[3], fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", S(9), string.byte("b"))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + S(1)
-    gfx.drawstr(fxText)
+        local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+        if SETTINGS.visualFX then
+            gfx.set(iconPalette.fxOn[1], iconPalette.fxOn[2], iconPalette.fxOn[3], fxAlpha)
+        else
+            gfx.set(iconPalette.fxOff[1], iconPalette.fxOff[2], iconPalette.fxOff[3], fxAlpha * 0.6)
+        end
+        gfx.setfont(1, "Arial", S(9), string.byte("b"))
+        local fxText = "FX"
+        local fxTextW = gfx.measurestr(fxText)
+        gfx.x = fxX + (fxSize - fxTextW) / 2
+        gfx.y = fxY + S(1)
+        gfx.drawstr(fxText)
 
-    if SETTINGS.visualFX then
-        gfx.set(iconPalette.fxSpark[1], iconPalette.fxSpark[2], iconPalette.fxSpark[3], fxAlpha * 0.8)
-        gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
-    else
-        gfx.set(iconPalette.fxOffSlash[1], iconPalette.fxOffSlash[2], iconPalette.fxOffSlash[3], fxAlpha)
-        gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
-    end
+        if SETTINGS.visualFX then
+            gfx.set(iconPalette.fxSpark[1], iconPalette.fxSpark[2], iconPalette.fxSpark[3], fxAlpha * 0.8)
+            gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
+            gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
+        else
+            gfx.set(iconPalette.fxOffSlash[1], iconPalette.fxOffSlash[2], iconPalette.fxOffSlash[3], fxAlpha)
+            gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
+        end
 
-    if fxHover and controlsOpacity > 0.3 then
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX, tooltipY = mx + S(10), my + S(15)
-    end
-    if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
+        if fxHover and controlsOpacity > 0.3 then
+            tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
+            tooltipX, tooltipY = mx + S(10), my + S(15)
+        end
+        if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
+            SETTINGS.visualFX = not SETTINGS.visualFX
+            saveSettings()
+        end
     end
 
     ctx.tooltipText = tooltipText
@@ -203,7 +233,7 @@ local function drawResultControls(ctx)
         applyControlsOpacity = _G.updateControlsOpacity
     end
     local controlsOpacity
-    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+    if utilityMode then
         controlsOpacity = 1.0
     elseif type(applyControlsOpacity) == "function" then
         controlsOpacity = applyControlsOpacity(state, mouseInControls)
@@ -215,10 +245,13 @@ local function drawResultControls(ctx)
         GUI.uiClickedThisFrame = true
     end
 
+    local utilityMode = isUtilityMode()
     local iconPalette = getFunctionalIconPalette()
     local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
 
-    if SETTINGS.darkMode then
+    if utilityMode then
+        drawUtilityThemeToggle(themeX, themeY, themeSize, themeHover, controlsOpacity)
+    elseif SETTINGS.darkMode then
         gfx.set(iconPalette.moon[1], iconPalette.moon[2], iconPalette.moon[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
         gfx.set(iconPalette.moonCutout[1], iconPalette.moonCutout[2], iconPalette.moonCutout[3], 1 * controlsOpacity)
@@ -251,38 +284,40 @@ local function drawResultControls(ctx)
         tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
     end
 
-    local fxSize = math.max(S(controls.fxSizeMin or 10), math.floor(S(controls.fxSizeBase or 16) * iconScale + 0.5))
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + S(gaps.fxOffsetY or 3)
-    local fxHover = mx >= fxX - S(controls.fxHitPad or 2) and mx <= fxX + fxSize + S(controls.fxHitPad or 2) and my >= fxY - S(controls.fxHitPad or 2) and my <= fxY + fxSize + S(controls.fxHitPad or 2)
+    if not utilityMode then
+        local fxSize = math.max(S(controls.fxSizeMin or 10), math.floor(S(controls.fxSizeBase or 16) * iconScale + 0.5))
+        local fxX = themeX + (themeSize - fxSize) / 2
+        local fxY = themeY + themeSize + S(gaps.fxOffsetY or 3)
+        local fxHover = mx >= fxX - S(controls.fxHitPad or 2) and mx <= fxX + fxSize + S(controls.fxHitPad or 2) and my >= fxY - S(controls.fxHitPad or 2) and my <= fxY + fxSize + S(controls.fxHitPad or 2)
 
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
-    if SETTINGS.visualFX then
-        gfx.set(iconPalette.fxOn[1], iconPalette.fxOn[2], iconPalette.fxOn[3], fxAlpha)
-    else
-        gfx.set(iconPalette.fxOff[1], iconPalette.fxOff[2], iconPalette.fxOff[3], fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", S(fonts.controls or 9), string.byte("b"))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + S(1)
-    gfx.drawstr(fxText)
-    if SETTINGS.visualFX then
-        gfx.set(iconPalette.fxSpark[1], iconPalette.fxSpark[2], iconPalette.fxSpark[3], fxAlpha * 0.8)
-        gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
-    else
-        gfx.set(iconPalette.fxOffSlash[1], iconPalette.fxOffSlash[2], iconPalette.fxOffSlash[3], fxAlpha)
-        gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
-    end
-    if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
-    end
-    if fxHover and controlsOpacity > 0.3 then
-        tooltipText = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
-        tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
+        local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+        if SETTINGS.visualFX then
+            gfx.set(iconPalette.fxOn[1], iconPalette.fxOn[2], iconPalette.fxOn[3], fxAlpha)
+        else
+            gfx.set(iconPalette.fxOff[1], iconPalette.fxOff[2], iconPalette.fxOff[3], fxAlpha * 0.6)
+        end
+        gfx.setfont(1, "Arial", S(fonts.controls or 9), string.byte("b"))
+        local fxText = "FX"
+        local fxTextW = gfx.measurestr(fxText)
+        gfx.x = fxX + (fxSize - fxTextW) / 2
+        gfx.y = fxY + S(1)
+        gfx.drawstr(fxText)
+        if SETTINGS.visualFX then
+            gfx.set(iconPalette.fxSpark[1], iconPalette.fxSpark[2], iconPalette.fxSpark[3], fxAlpha * 0.8)
+            gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
+            gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
+        else
+            gfx.set(iconPalette.fxOffSlash[1], iconPalette.fxOffSlash[2], iconPalette.fxOffSlash[3], fxAlpha)
+            gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
+        end
+        if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
+            SETTINGS.visualFX = not SETTINGS.visualFX
+            saveSettings()
+        end
+        if fxHover and controlsOpacity > 0.3 then
+            tooltipText = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
+            tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
+        end
     end
 
     local langW = S(controls.langWidth or 22)

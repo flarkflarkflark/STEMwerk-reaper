@@ -4631,6 +4631,14 @@ end
 
 -- Wrapper function that handles crossfade transitions between patterns
 local function drawProceduralArt(x, y, w, h, time, rotation, skipBackground)
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+        if not skipBackground then
+            local bg = (THEME and THEME.bg) or (SETTINGS.darkMode and {0.18, 0.18, 0.18} or {0.86, 0.86, 0.86})
+            gfx.set(bg[1], bg[2], bg[3], 1)
+            gfx.rect(x, y, w, h, 1)
+        end
+        return
+    end
     -- Check if visual FX are disabled
     if not SETTINGS.visualFX then
         -- Just draw a simple background when FX are off
@@ -4825,8 +4833,260 @@ local showMessage
 -- Forward declaration for shared font-size cache helper used by earlier UI paths (e.g. About/Gallery).
 local getUniformFontSizeCached
 
+
+local function drawUtilityNativeHelpWindow()
+    local w, h = gfx.w, gfx.h
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = (gfx.mouse_cap & 1) == 1
+    local rightMouseDown = (gfx.mouse_cap & 2) == 2
+    local dark = SETTINGS and SETTINGS.darkMode
+
+    local function col(c, a) gfx.set(c[1], c[2], c[3], a or 1) end
+    local bg = dark and {0.10, 0.10, 0.10} or {0.93, 0.93, 0.93}
+    local panel = dark and {0.15, 0.15, 0.15} or {0.84, 0.84, 0.84}
+    local panel2 = dark and {0.12, 0.12, 0.12} or {0.90, 0.90, 0.90}
+    local border = dark and {0.36, 0.36, 0.36} or {0.55, 0.55, 0.55}
+    local text = dark and {0.88, 0.88, 0.88} or {0.08, 0.08, 0.08}
+    local muted = dark and {0.62, 0.62, 0.62} or {0.32, 0.32, 0.32}
+    local hoverBg = dark and {0.23, 0.23, 0.23} or {0.78, 0.78, 0.78}
+    local activeBg = dark and {0.18, 0.34, 0.36} or {0.54, 0.68, 0.70}
+
+    local function tr(key, fallback)
+        if type(T) == "function" then
+            local v = T(key)
+            if v and v ~= key and v ~= "" then return v end
+        end
+        return fallback or key
+    end
+
+    local function addLine(lines, textLine)
+        if textLine and textLine ~= "" then lines[#lines + 1] = tostring(textLine) end
+    end
+
+    local function addPair(lines, title, body)
+        if title and title ~= "" then addLine(lines, tostring(title)) end
+        if body and body ~= "" then addLine(lines, "  " .. tostring(body)) end
+    end
+
+    local tabs = {
+        { tr("help_welcome", "Welcome"), function()
+            local lines = {}
+            addLine(lines, tr("help_welcome_title", "Welcome to STEMwerk"))
+            addLine(lines, tr("help_welcome_sub", "Stem Separation for REAPER"))
+            addLine(lines, "")
+            addPair(lines, tr("help_feature_vocals", "Extract vocals for remixes or karaoke"), tr("help_feature_vocals_desc", "Lead vocals, backing vocals, speech"))
+            addPair(lines, tr("help_feature_drums", "Isolate drums for sampling or practice"), tr("help_feature_drums_desc", "Kick, snare, hi-hats, percussion"))
+            addPair(lines, tr("help_feature_bass", "Separate bass for mixing or transcription"), tr("help_feature_bass_desc", "Bass guitar, synth bass, low frequencies"))
+            addPair(lines, tr("help_feature_other", "Get other instruments cleanly"), tr("help_feature_other_desc", "Guitar, keys, strings, synths, effects"))
+            return lines
+        end },
+        { tr("help_quickstart", "Quick Start"), function()
+            local lines = {}
+            addLine(lines, tr("help_quickstart_title", "Getting Started"))
+            addLine(lines, tr("help_quickstart_sub", "Follow these simple steps to separate your audio"))
+            addLine(lines, "")
+            addPair(lines, "1. " .. tr("help_step1_title", "Select Audio"), tr("help_step1_detail", tr("help_step1_desc", "Select tracks, items, or make a time selection")))
+            addPair(lines, "2. " .. tr("help_step2_title", "Choose Model & Stems"), tr("help_step2_detail", tr("help_step2_desc", "Pick a preset or select individual stems")))
+            addPair(lines, "3. " .. tr("help_step3_title", "Click STEMwerk"), tr("help_step3_detail", tr("help_step3_desc", "Wait for AI to separate your audio")))
+            addLine(lines, "")
+            addLine(lines, tr("help_pro_tip", "Pro Tip: Use the 6-stem model (htdemucs_6s) for guitar and piano separation!"))
+            addLine(lines, tr("keyboard_shortcuts", "Keyboard shortcuts:"))
+            addLine(lines, "  H = " .. tr("open_help", "Open Help") .. "   ESC = " .. tr("close_cancel", "Close / Cancel") .. "   Enter = " .. tr("start_stemwerk", "Start STEMwerk"))
+            return lines
+        end },
+        { tr("help_stems", "Stems"), function()
+            local lines = {}
+            addLine(lines, tr("help_stems_title", "About Stems"))
+            addLine(lines, tr("help_stems_sub", "Understanding what each stem contains"))
+            addLine(lines, "")
+            addPair(lines, tr("stem_vocals", "Vocals") .. ": " .. tr("help_stem_vocals_desc", "Lead vocals, backing vocals, speech"), tr("help_stem_vocals_uses", "Perfect for karaoke, vocal isolation, remix, or studying vocal techniques"))
+            addPair(lines, tr("stem_drums", "Drums") .. ": " .. tr("help_stem_drums_desc", "Kick, snare, hi-hats, cymbals, percussion"), tr("help_stem_drums_uses", "Great for drummers, sampling, practice tracks, or groove analysis"))
+            addPair(lines, tr("stem_bass", "Bass") .. ": " .. tr("help_stem_bass_desc", "Bass guitar, synth bass, low frequencies"), tr("help_stem_bass_uses", "Ideal for bass transcription, low-end mixing, or learning bass lines"))
+            addPair(lines, tr("stem_other", "Other") .. ": " .. tr("help_stem_other_desc", "Guitar, keys, strings, synths, effects"), tr("help_stem_other_uses", "Captures everything else: guitars, keys, strings, synths, pads, effects"))
+            addLine(lines, "")
+            addPair(lines, tr("help_6stem_title", "6-Stem Model (htdemucs_6s)"), tr("help_6stem_desc", "Adds Guitar and Piano as separate stems for even more control!"))
+            return lines
+        end },
+        { tr("help_reaper", "Reaper"), function()
+            local lines = {}
+            addLine(lines, tr("help_reaper_title", "REAPER Files & Cleanup"))
+            addLine(lines, tr("help_reaper_sub", "How STEMwerk handles temp folders and logs"))
+            addLine(lines, "")
+            addPair(lines, tr("help_reaper_selection_title", "Selection Rules"), tr("help_reaper_selection_body", "Time selection is used only when no items or tracks are selected."))
+            addPair(lines, tr("help_reaper_temp_title", "Temporary Work Folder"), tr("help_reaper_temp_body", "During separation, STEMwerk renders a temporary input file and writes outputs to a STEMwerk_* folder."))
+            addPair(lines, tr("help_reaper_logs_title", "Logs and Diagnostics"), tr("help_reaper_logs_body", "If something fails, STEMwerk saves small logs for debugging."))
+            addPair(lines, tr("help_reaper_cleanup_title", "Cleanup Settings"), tr("help_reaper_cleanup_body", "Use the Keep temp files option under Model to preserve the temp folder for troubleshooting."))
+            return lines
+        end },
+        { tr("help_gallery", "Gallery"), function()
+            local lines = {}
+            addLine(lines, tr("help_gallery", "Gallery"))
+            addLine(lines, "REAPER Native mode intentionally disables the animated gallery and dynamic art controls.")
+            addLine(lines, "")
+            addLine(lines, "Normal STEMwerk still contains the visual art/gallery mode. This local utility view keeps help static and text-only.")
+            addLine(lines, "")
+            addLine(lines, tr("help_gallery_hint", "Use the normal STEMwerk theme if you want the animated gallery controls."))
+            return lines
+        end },
+        { tr("help_about", "About"), function()
+            local lines = {}
+            addLine(lines, tr("about_title", "About STEMwerk"))
+            addLine(lines, tr("about_subtitle", "Stem Separation for REAPER"))
+            addLine(lines, tr("about_version", "Version") .. ": " .. tostring(APP_VERSION or ""))
+            addLine(lines, "")
+            addLine(lines, tr("about_features_title", "Features"))
+            addLine(lines, "- " .. tr("about_feature_1", "4 or 6 stem separation (Vocals, Drums, Bass, Other, Guitar, Piano)"))
+            addLine(lines, "- " .. tr("about_feature_2", "Multiple quality modes (Fast, Quality, 6-Stem)"))
+            addLine(lines, "- " .. tr("about_feature_3", "In-place or new tracks output"))
+            addLine(lines, "- " .. tr("about_feature_4", "Multi-track parallel processing"))
+            addLine(lines, "- " .. tr("about_feature_5", "Procedural art animations in the normal theme"))
+            addLine(lines, "")
+            addLine(lines, tr("about_powered_by", "Powered by") .. ": " .. tr("about_demucs", "Meta's Demucs"))
+            return lines
+        end },
+    }
+    if helpState.currentTab < 1 or helpState.currentTab > #tabs then helpState.currentTab = 1 end
+
+    col(bg, 1)
+    gfx.rect(0, 0, w, h, 1)
+
+    local pad = math.max(12, math.floor(math.min(w, h) * 0.025))
+    local helpScale = math.max(1.0, math.min(1.65, math.min(w / 760, h / 520)))
+    local function HS(val) return math.floor(val * helpScale + 0.5) end
+    local topH = HS(54)
+    col(panel, 1)
+    gfx.rect(0, 0, w, topH, 1)
+    col(border, 1)
+    gfx.line(0, topH, w, topH)
+
+    gfx.setfont(1, "Arial", HS(20), string.byte('b'))
+    col(text, 1)
+    gfx.x, gfx.y = pad, 12
+    gfx.drawstr("STEMwerk Help")
+    gfx.setfont(1, "Arial", HS(11))
+    col(muted, 1)
+    gfx.x, gfx.y = pad + HS(170), HS(18)
+    gfx.drawstr("REAPER Native - text only")
+
+    local function smallBox(label, x, y, ww, hh)
+        local hover = mx >= x and mx <= x + ww and my >= y and my <= y + hh
+        col(hover and hoverBg or bg, 1)
+        gfx.rect(x, y, ww, hh, 1)
+        col(border, 1)
+        gfx.rect(x, y, ww, hh, 0)
+        gfx.setfont(1, "Arial", HS(10), string.byte('b'))
+        col(text, 1)
+        local tw = gfx.measurestr(label)
+        gfx.x, gfx.y = x + (ww - tw) / 2, y + (hh - gfx.texth) / 2
+        gfx.drawstr(label)
+        return hover
+    end
+
+    local lightHover = smallBox(dark and "D" or "L", w - pad - 34, 12, 26, 24)
+    local langHover = smallBox(string.upper(SETTINGS.language or "EN"), w - pad - 70, 12, 30, 24)
+    if lightHover and mouseDown and not helpState.wasMouseDown then
+        SETTINGS.darkMode = not SETTINGS.darkMode
+        updateTheme()
+        saveSettings()
+    end
+    if langHover and mouseDown and not helpState.wasMouseDown then
+        local langs = {"en", "nl", "de"}
+        local idx = 1
+        for i, l in ipairs(langs) do if l == SETTINGS.language then idx = i break end end
+        setLanguage(langs[(idx % #langs) + 1])
+        saveSettings()
+    elseif langHover and rightMouseDown and not helpState.wasRightMouseDown then
+        SETTINGS.tooltips = not SETTINGS.tooltips
+        saveSettings()
+    end
+
+    local tabY = topH + pad
+    local tabX = pad
+    local tabH = HS(30)
+    local clickedTab = nil
+    for i, tab in ipairs(tabs) do
+        gfx.setfont(1, "Arial", HS(12))
+        local tabW = math.max(HS(80), gfx.measurestr(tab[1]) + HS(22))
+        local hover = mx >= tabX and mx <= tabX + tabW and my >= tabY and my <= tabY + tabH
+        col((helpState.currentTab == i) and activeBg or (hover and hoverBg or panel), 1)
+        gfx.rect(tabX, tabY, tabW, tabH, 1)
+        col(border, 1)
+        gfx.rect(tabX, tabY, tabW, tabH, 0)
+        col((helpState.currentTab == i and not dark) and {0.02, 0.02, 0.02} or text, 1)
+        local tw = gfx.measurestr(tab[1])
+        gfx.x, gfx.y = tabX + (tabW - tw) / 2, tabY + (tabH - gfx.texth) / 2
+        gfx.drawstr(tab[1])
+        if hover and mouseDown and not helpState.wasMouseDown then clickedTab = i end
+        tabX = tabX + tabW + 6
+    end
+    if clickedTab then helpState.currentTab = clickedTab end
+
+    local contentX = pad
+    local contentY = tabY + tabH + pad
+    local contentW = w - pad * 2
+    local contentH = h - contentY - 54
+    col(panel2, 1)
+    gfx.rect(contentX, contentY, contentW, contentH, 1)
+    col(border, 1)
+    gfx.rect(contentX, contentY, contentW, contentH, 0)
+
+    local tab = tabs[helpState.currentTab]
+    -- Tab label already shown in tab bar above; do not repeat as content heading.
+    local y = contentY + HS(14)
+    local lineH = HS(20)
+    local maxW = contentW - 42
+    local contentLines = tab[2]()
+    gfx.setfont(1, "Arial", HS(14))
+    for _, rawLine in ipairs(contentLines) do
+        if y > contentY + contentH - 20 then break end
+        if rawLine == "" then
+            y = y + math.floor(lineH * 0.7)
+        else
+            local isIndented = rawLine:match("^%s") ~= nil
+            local drawX = contentX + (isIndented and 38 or 22)
+            local wrapW = maxW - (isIndented and 16 or 0)
+            local wrapped = _wrapTextToWidth(tostring(rawLine):gsub("^%s+", ""), wrapW)
+            for _, ln in ipairs(wrapped) do
+                if y > contentY + contentH - 20 then break end
+                col(isIndented and muted or text, 1)
+                gfx.x, gfx.y = drawX, y
+                gfx.drawstr(ln)
+                y = y + lineH
+            end
+            y = y + 2
+        end
+    end
+
+    local btnW, btnH = HS(96), HS(32)
+    local btnX, btnY = (w - btnW) / 2, h - 40
+    local backHover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
+    col(backHover and hoverBg or panel, 1)
+    gfx.rect(btnX, btnY, btnW, btnH, 1)
+    col(border, 1)
+    gfx.rect(btnX, btnY, btnW, btnH, 0)
+    gfx.setfont(1, "Arial", HS(13), string.byte('b'))
+    col(text, 1)
+    local backText = tr("back", "Back")
+    local bw = gfx.measurestr(backText)
+    gfx.x, gfx.y = btnX + (btnW - bw) / 2, btnY + (btnH - gfx.texth) / 2
+    gfx.drawstr(backText)
+
+    if backHover and mouseDown and not helpState.wasMouseDown then return "close" end
+    local char = gfx.getchar()
+    if char == -1 or char == 27 then return "close" end
+
+    helpState.wasMouseDown = mouseDown
+    helpState.wasRightMouseDown = rightMouseDown
+    gfx.update()
+    return nil
+end
+
 -- Draw Art Gallery window - SPECTACULAR GRAPHICAL ANIMATIONS
 local function drawArtGallery()
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+        return drawUtilityNativeHelpWindow()
+    end
+
     local w, h = gfx.w, gfx.h
 
     -- Calculate scale for large window (with text zoom for non-gallery tabs)
@@ -5083,13 +5343,18 @@ local function drawArtGallery()
         local bottomControlArea = UI(60) -- Back button + bottom credits/hints
         local bottomY = h - bottomControlArea
 
-        local mouseInControls = (my < topControlArea) or (my > bottomY)
-        helpState.targetControlsOpacity = mouseInControls and 1.0 or 0.0
+        if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+            helpState.controlsOpacity = 1.0
+            controlsOpacity = 1.0
+        else
+            local mouseInControls = (my < topControlArea) or (my > bottomY)
+            helpState.targetControlsOpacity = mouseInControls and 1.0 or 0.0
 
-        local fadeSpeed = mouseInControls and 0.25 or 0.08  -- Faster fade-in, slower fade-out
-        helpState.controlsOpacity = helpState.controlsOpacity + (helpState.targetControlsOpacity - helpState.controlsOpacity) * fadeSpeed
-        helpState.controlsOpacity = math.max(0, math.min(1, helpState.controlsOpacity))
-        controlsOpacity = helpState.controlsOpacity
+            local fadeSpeed = mouseInControls and 0.25 or 0.08  -- Faster fade-in, slower fade-out
+            helpState.controlsOpacity = helpState.controlsOpacity + (helpState.targetControlsOpacity - helpState.controlsOpacity) * fadeSpeed
+            helpState.controlsOpacity = math.max(0, math.min(1, helpState.controlsOpacity))
+            controlsOpacity = helpState.controlsOpacity
+        end
     end
     local tabs = {T("help_welcome"), T("help_quickstart"), T("help_stems"), T("help_reaper"), T("help_gallery"), T("help_about")}
 
@@ -6189,46 +6454,44 @@ local function drawArtGallery()
 
         -- === TEXT CONTENT (drawn AFTER background) ===
 
-        if not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) then
-            -- Large animated STEMwerk title
-            do
-                local fontSize = PS(welcomeFonts.title or 44)
-                local titleW = measureStemwerkLogo(fontSize, "Arial", true)
-                local titleX = (w - titleW) / 2 + textOffsetX
-                local titleY = contentY + PS(welcomeSpacing.titleTop or 12)
-                drawWavingStemwerkLogo({
-                    x = titleX,
-                    y = titleY,
-                    fontSize = fontSize,
-                    time = os.clock(),
-                    amp = PS(2),
-                    speed = 3,
-                    phase = 0.2,
-                    alphaStem = 1.0,
-                    alphaRest = 1.0,
-                    fontName = "Arial",
-                    bold = true,
-                })
-            end
-
-            -- Subtitle
-            gfx.setfont(1, "Arial", PS(welcomeFonts.subtitle or 16))
-            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-            local welcomeSub = T("help_welcome_sub")
-            local wsW = gfx.measurestr(welcomeSub)
-            gfx.x = (w - wsW) / 2 + textOffsetX
-            gfx.y = contentY + PS(welcomeSpacing.subtitleTop or 60)
-            gfx.drawstr(welcomeSub)
-
-            -- Divider line
-            gfx.set(0.4, 0.4, 0.5, 0.5)
-            gfx.line(
-                w * (welcomeSpacing.dividerXStartFactor or 0.2) + textOffsetX,
-                contentY + PS(welcomeSpacing.dividerTop or 85),
-                w * (welcomeSpacing.dividerXEndFactor or 0.8) + textOffsetX,
-                contentY + PS(welcomeSpacing.dividerTop or 85)
-            )
+        -- Large animated STEMwerk title (replaces old "STEMperator" typography)
+        do
+            local fontSize = PS(welcomeFonts.title or 44)
+            local titleW = measureStemwerkLogo(fontSize, "Arial", true)
+            local titleX = (w - titleW) / 2 + textOffsetX
+            local titleY = contentY + PS(welcomeSpacing.titleTop or 12)
+            drawWavingStemwerkLogo({
+                x = titleX,
+                y = titleY,
+                fontSize = fontSize,
+                time = os.clock(),
+                amp = PS(2),
+                speed = 3,
+                phase = 0.2,
+                alphaStem = 1.0,
+                alphaRest = 1.0,
+                fontName = "Arial",
+                bold = true,
+            })
         end
+
+        -- Subtitle
+        gfx.setfont(1, "Arial", PS(welcomeFonts.subtitle or 16))
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        local welcomeSub = T("help_welcome_sub")
+        local wsW = gfx.measurestr(welcomeSub)
+        gfx.x = (w - wsW) / 2 + textOffsetX
+        gfx.y = contentY + PS(welcomeSpacing.subtitleTop or 60)
+        gfx.drawstr(welcomeSub)
+
+        -- Divider line
+        gfx.set(0.4, 0.4, 0.5, 0.5)
+        gfx.line(
+            w * (welcomeSpacing.dividerXStartFactor or 0.2) + textOffsetX,
+            contentY + PS(welcomeSpacing.dividerTop or 85),
+            w * (welcomeSpacing.dividerXEndFactor or 0.8) + textOffsetX,
+            contentY + PS(welcomeSpacing.dividerTop or 85)
+        )
 
         -- Features list - LARGER and more descriptive
         local features = {
@@ -6237,8 +6500,7 @@ local function drawArtGallery()
             {icon = "≡", color = stemColors[3], title = T("help_feature_bass"), desc = T("help_feature_bass_desc")},
             {icon = "✦", color = stemColors[4], title = T("help_feature_other"), desc = T("help_feature_other_desc")},
         }
-        local _utilWelcome = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
-        local featureY = contentY + PS(_utilWelcome and 20 or (welcomeSpacing.featuresTop or 100))
+        local featureY = contentY + PS(welcomeSpacing.featuresTop or 100)
         local featureSpacing = PS(welcomeSpacing.featureSpacing or 50)
         local leftCol = PS(welcomeSpacing.leftCol or 40) + textOffsetX
 
@@ -7239,9 +7501,9 @@ local function drawMessageWindow()
     local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
     local fxX = themeX + (themeSize - fxSize) / 2
     local fxY = themeY + themeSize + PS(3)
-    local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
+    local fxHover = not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
 
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+    local fxAlpha = ((type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and 0 or ((fxHover and 1 or 0.7) * controlsOpacity))
     if SETTINGS.visualFX then
         gfx.set(0.4, 0.9, 0.5, fxAlpha)
     else
@@ -7484,25 +7746,26 @@ local function drawMessageWindow()
     gfx.y = h - PS(12)
     gfx.drawstr(hint)
 
-    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
-    gfx.setfont(1, "Arial", PS(10))
-    local flarkPart = "flark"
-    local flarkPartW = gfx.measurestr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
-    local audioPart = "AUDIO"
-    local audioPartW = gfx.measurestr(audioPart)
-    local totalLogoW = flarkPartW + audioPartW
-    local logoStartX = (w - totalLogoW) / 2
-    -- Orange text, 50% translucent
-    gfx.set(1.0, 0.5, 0.1, 0.5)
-    gfx.setfont(1, "Arial", PS(10))
-    gfx.x = logoStartX
-    gfx.y = PS(3)
-    gfx.drawstr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
-    gfx.x = logoStartX + flarkPartW
-    gfx.y = PS(3)
-    gfx.drawstr(audioPart)
+    -- flarkAUDIO logo at top (translucent) - skipped in utility mode
+    if not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) then
+        gfx.setfont(1, "Arial", PS(10))
+        local flarkPart = "flark"
+        local flarkPartW = gfx.measurestr(flarkPart)
+        gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+        local audioPart = "AUDIO"
+        local audioPartW = gfx.measurestr(audioPart)
+        local totalLogoW = flarkPartW + audioPartW
+        local logoStartX = (w - totalLogoW) / 2
+        gfx.set(1.0, 0.5, 0.1, 0.5)
+        gfx.setfont(1, "Arial", PS(10))
+        gfx.x = logoStartX
+        gfx.y = PS(3)
+        gfx.drawstr(flarkPart)
+        gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+        gfx.x = logoStartX + flarkPartW
+        gfx.y = PS(3)
+        gfx.drawstr(audioPart)
+    end
 
     -- Draw tooltip if active (with STEM colors)
     if tooltipText then
@@ -7880,6 +8143,7 @@ local getStemDisplayName
 
 function renderResultTitleArea(ctx)
     local w, PS = ctx.w, ctx.PS
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     local selectedStems = resultWindowState.selectedStems or {}
     local resultTokens = (UI_TOKENS and UI_TOKENS.result) or {}
     local spacing = resultTokens.spacing or {}
@@ -7889,7 +8153,12 @@ function renderResultTitleArea(ctx)
     local iconY = PS(spacing.iconY or 60)
     local iconR = PS(spacing.iconRadius or 28)
 
-    gfx.set(0.2, 0.65, 0.35, 1)
+    if utilityMode then
+        local ur, ug, ub = utilityProgressColor()
+        gfx.set(ur, ug, ub, 1)
+    else
+        gfx.set(0.2, 0.65, 0.35, 1)
+    end
     gfx.circle(iconX, iconY, iconR, 1, 1)
 
     gfx.set(1, 1, 1, 1)
@@ -7903,29 +8172,26 @@ function renderResultTitleArea(ctx)
     gfx.line(x2, y2+1, x3, y3+1)
 
     gfx.setfont(1, "Arial", PS(fonts.title or 18), string.byte('b'))
+    local stemLetterColors = {
+        {255, 100, 100},
+        {100, 200, 255},
+        {150, 100, 255},
+        {100, 255, 150},
+    }
+    local stemPart = "STEM"
+    local restPart = T("complete_title_suffix") or "werk Complete!"
+    local stemW = gfx.measurestr(stemPart)
+    local restW = gfx.measurestr(restPart)
+    local totalW = stemW + restW
+    local titleX = (w - totalW) / 2
     local titleY = PS(spacing.titleY or 100)
-    local _resultUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
-    if _resultUtility then
-        local plainTitle = "STEMwerk " .. (T("complete_title_suffix") or "Complete!")
-        local plainW = gfx.measurestr(plainTitle)
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        gfx.x = (w - plainW) / 2
-        gfx.y = titleY
-        gfx.drawstr(plainTitle)
-    else
-        local stemLetterColors = {
-            {255, 100, 100},
-            {100, 200, 255},
-            {150, 100, 255},
-            {100, 255, 150},
-        }
-        local stemPart = "STEM"
-        local restPart = T("complete_title_suffix") or "werk Complete!"
-        local stemW = gfx.measurestr(stemPart)
-        local restW = gfx.measurestr(restPart)
-        local totalW = stemW + restW
-        local titleX = (w - totalW) / 2
 
+    if utilityMode then
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = titleX
+        gfx.y = titleY
+        gfx.drawstr(stemPart .. restPart)
+    else
         local charX = titleX
         for i = 1, 4 do
             local char = stemPart:sub(i, i)
@@ -7954,7 +8220,12 @@ function renderResultTitleArea(ctx)
     local stemX = (w - totalStemWidth) / 2
     for _, stem in ipairs(selectedStems) do
         local stemLabel = getStemDisplayName(stem)
-        gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+        if utilityMode then
+            local ur, ug, ub = utilityProgressMutedColor()
+            gfx.set(ur, ug, ub, 1)
+        else
+            gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+        end
         gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         gfx.x = stemX + stemBoxSize + PS(spacing.stemLabelGap or 5)
@@ -9233,7 +9504,6 @@ function GUI._handleNoSelection()
 end
 
 drawHelpQuickStartHeader = function(w, contentY, textOffsetX, PS)
-    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then return end
     local function PX(val) return (PS and PS(val)) or val end
     local qsTitle = getLangText("help_quickstart_title", "Quick Start")
     local subText = getLangText("help_quickstart_sub", "A fast guide to getting stems in REAPER.")
@@ -9262,7 +9532,6 @@ drawHelpQuickStartHeader = function(w, contentY, textOffsetX, PS)
 end
 
 drawHelpReaperHeader = function(w, contentY, textOffsetX, PS)
-    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then return end
     local function PX(val) return (PS and PS(val)) or val end
     local repTitle = getLangText("help_reaper_title", "REAPER")
     local repSub = getLangText("help_reaper_sub", "Selection, temp files, and cleanup")
@@ -10038,12 +10307,13 @@ function prepareDialogTopRightControls(ctx)
     local fxSize = math.max(S(10), math.floor(S(16) * iconScale + 0.5))
     local fxX = themeX + (themeSize - fxSize) / 2
     local fxY = themeY + themeSize + S(3)
-    local fxHover = mx >= fxX - S(2) and mx <= fxX + fxSize + S(2) and my >= fxY - S(2) and my <= fxY + fxSize + S(2)
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local fxHover = (not utilityMode) and mx >= fxX - S(2) and mx <= fxX + fxSize + S(2) and my >= fxY - S(2) and my <= fxY + fxSize + S(2)
 
     local controlsLeft = langX - S(10)
-    local controlsBottom = fxY + fxSize + S(6)
+    local controlsBottom = utilityMode and (themeY + themeSize + S(6)) or (fxY + fxSize + S(6))
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
-    local controlsOpacity = updateControlsOpacity(GUI, mouseInControls)
+    local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(GUI, mouseInControls)
 
     ctx.ui = {
         iconScale = iconScale,
@@ -10077,7 +10347,20 @@ function renderTopRightControls(ctx)
     local langW, langH, langX, langY, langHover = ui.langW, ui.langH, ui.langX, ui.langY, ui.langHover
     local fxSize, fxX, fxY, fxHover = ui.fxSize, ui.fxX, ui.fxY, ui.fxHover
 
-    if SETTINGS.darkMode then
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    if utilityMode then
+        local label = SETTINGS.darkMode and "D" or "L"
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], controlsOpacity)
+        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
+        gfx.set(THEME.button[1], THEME.button[2], THEME.button[3], (themeHover and 0.95 or 0.72) * controlsOpacity)
+        gfx.rect(themeX + 1, themeY + 1, math.max(1, themeSize - 2), math.max(1, themeSize - 2), 1)
+        gfx.setfont(1, "Arial", S(9), string.byte('b'))
+        local labelW = gfx.measurestr(label)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], controlsOpacity)
+        gfx.x = themeX + (themeSize - labelW) / 2
+        gfx.y = themeY + (themeSize - gfx.texth) / 2
+        gfx.drawstr(label)
+    elseif SETTINGS.darkMode then
         gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
         gfx.set(0, 0, 0, 1 * controlsOpacity)
@@ -10140,33 +10423,35 @@ function renderTopRightControls(ctx)
         end
     end
 
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", S(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + S(1)
-    gfx.drawstr(fxText)
+    if not utilityMode then
+        local fxAlpha = ((type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and 0 or ((fxHover and 1 or 0.7) * controlsOpacity))
+        if SETTINGS.visualFX then
+            gfx.set(0.4, 0.9, 0.5, fxAlpha)
+        else
+            gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
+        end
+        gfx.setfont(1, "Arial", S(9), string.byte('b'))
+        local fxText = "FX"
+        local fxTextW = gfx.measurestr(fxText)
+        gfx.x = fxX + (fxSize - fxTextW) / 2
+        gfx.y = fxY + S(1)
+        gfx.drawstr(fxText)
 
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
-    end
+        if SETTINGS.visualFX then
+            gfx.set(1, 1, 0.5, fxAlpha * 0.8)
+            gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
+            gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
+        else
+            gfx.set(0.8, 0.3, 0.3, fxAlpha)
+            gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
+        end
 
-    if fxHover and controlsOpacity > 0.3 then
-        setTooltip(fxX - S(2), fxY - S(2), fxSize + S(4), fxSize + S(4), SETTINGS.visualFX and T("fx_disable") or T("fx_enable"))
-        if mouseDown and not GUI.wasMouseDown then
-            SETTINGS.visualFX = not SETTINGS.visualFX
-            saveSettings()
+        if fxHover and controlsOpacity > 0.3 then
+            setTooltip(fxX - S(2), fxY - S(2), fxSize + S(4), fxSize + S(4), SETTINGS.visualFX and T("fx_disable") or T("fx_enable"))
+            if mouseDown and not GUI.wasMouseDown then
+                SETTINGS.visualFX = not SETTINGS.visualFX
+                saveSettings()
+            end
         end
     end
 end
@@ -10792,48 +11077,58 @@ function renderFooter(ctx)
     gfx.setfont(1, "Arial", S(13), string.byte('b'))
     local textY = footerRow4Y + (btnH - gfx.texth) / 2
 
-    local letters = {"S", "T", "E", "M", "w", "e", "r", "k"}
-    local letterWidths = {}
-    local totalWidth = 0
-    for i, letter in ipairs(letters) do
-        local lw = gfx.measurestr(letter)
-        letterWidths[i] = lw
-        totalWidth = totalWidth + lw
-    end
-    local textX = stemBtnX + (stemBtnW - totalWidth) / 2
-
-    local stemColors = {
-        {255/255, 100/255, 100/255},
-        {100/255, 200/255, 255/255},
-        {150/255, 100/255, 255/255},
-        {100/255, 255/255, 150/255},
-    }
-
-    local offsets = {
-        {1, 1}, {-1, 1}, {1, -1}, {-1, -1},
-    }
-    for _, off in ipairs(offsets) do
-        local ox = textX + off[1]
-        local oy = textY + off[2]
-        gfx.set(0, 0, 0, 0.6)
-        for i, letter in ipairs(letters) do
-            gfx.x = ox
-            gfx.y = oy
-            gfx.drawstr(letter)
-            ox = ox + letterWidths[i]
-        end
-    end
-
-    for i, letter in ipairs(letters) do
-        if i <= 4 then
-            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
-        else
-            gfx.set(1, 1, 1, 1)
-        end
-        gfx.x = textX
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    if utilityMode then
+        local startText = "Run"
+        local startW = gfx.measurestr(startText)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = stemBtnX + (stemBtnW - startW) / 2
         gfx.y = textY
-        gfx.drawstr(letter)
-        textX = textX + letterWidths[i]
+        gfx.drawstr(startText)
+    else
+        local letters = {"S", "T", "E", "M", "w", "e", "r", "k"}
+        local letterWidths = {}
+        local totalWidth = 0
+        for i, letter in ipairs(letters) do
+            local lw = gfx.measurestr(letter)
+            letterWidths[i] = lw
+            totalWidth = totalWidth + lw
+        end
+        local textX = stemBtnX + (stemBtnW - totalWidth) / 2
+
+        local stemColors = {
+            {255/255, 100/255, 100/255},
+            {100/255, 200/255, 255/255},
+            {150/255, 100/255, 255/255},
+            {100/255, 255/255, 150/255},
+        }
+
+        local offsets = {
+            {1, 1}, {-1, 1}, {1, -1}, {-1, -1},
+        }
+        for _, off in ipairs(offsets) do
+            local ox = textX + off[1]
+            local oy = textY + off[2]
+            gfx.set(0, 0, 0, 0.6)
+            for i, letter in ipairs(letters) do
+                gfx.x = ox
+                gfx.y = oy
+                gfx.drawstr(letter)
+                ox = ox + letterWidths[i]
+            end
+        end
+
+        for i, letter in ipairs(letters) do
+            if i <= 4 then
+                gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            else
+                gfx.set(1, 1, 1, 1)
+            end
+            gfx.x = textX
+            gfx.y = textY
+            gfx.drawstr(letter)
+            textX = textX + letterWidths[i]
+        end
     end
 
     setRichTooltip(stemBtnX, footerRow4Y, stemBtnW, btnH)
@@ -12226,6 +12521,21 @@ local function readableTerminalAccent(r, g, b)
     return dr, dg, db
 end
 
+function utilityProgressColor()
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+        local c = THEME and (THEME.buttonPrimary or THEME.accent) or nil
+        if type(c) == "table" then return c[1] or 0.4, c[2] or 0.55, c[3] or 0.42 end
+    end
+    return 0.30, 0.46, 0.32
+end
+
+function utilityProgressMutedColor()
+    if SETTINGS and SETTINGS.darkMode then
+        return 0.34, 0.42, 0.36
+    end
+    return 0.56, 0.68, 0.58
+end
+
 local function formatProgressLine(rawLine, trackIdx)
     if not rawLine or rawLine == "" then return nil end
     local percent, stage = rawLine:match("PROGRESS:(%d+):(.+)")
@@ -12388,6 +12698,7 @@ local function drawProgressWindow()
 
     -- Scaling helper
     local function PS(val) return math.floor(val * scale + 0.5) end
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
 
     -- Try to make window resizable
     makeProgressWindowResizable()
@@ -12405,7 +12716,7 @@ local function drawProgressWindow()
     proceduralArt.time = proceduralArt.time + 0.016  -- ~60fps
 
     -- Draw procedural art covering entire window (background layer)
-    if not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) then
+    if not utilityMode then
         drawProceduralArt(0, 0, w, h, proceduralArt.time, 0, true)
 
         -- Theme-aware readability wash over animated FX
@@ -12469,9 +12780,24 @@ local function drawProgressWindow()
     local controlsLeft = themeX - PS(60)
     local controlsBottom = themeY + themeSize + PS(30)
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
-    local controlsOpacity = updateControlsOpacity(progressState, mouseInControls)
+    local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(progressState, mouseInControls)
 
-    if SETTINGS.darkMode then
+    if utilityMode then
+        local bg = THEME.button or THEME.inputBg or {0.25, 0.25, 0.25}
+        local border = THEME.border or {0.45, 0.45, 0.45}
+        local txt = THEME.text or {0.85, 0.85, 0.85}
+        gfx.set(bg[1], bg[2], bg[3], 0.95 * controlsOpacity)
+        gfx.rect(themeX, themeY, themeSize, themeSize, 1)
+        gfx.set(border[1], border[2], border[3], controlsOpacity)
+        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
+        gfx.set(txt[1], txt[2], txt[3], controlsOpacity)
+        gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte('b'))
+        local label = SETTINGS.darkMode and "D" or "L"
+        local lw = gfx.measurestr(label)
+        gfx.x = themeX + (themeSize - lw) / 2
+        gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
+        gfx.drawstr(label)
+    elseif SETTINGS.darkMode then
         gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)
         gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
         gfx.set(0, 0, 0, 1 * controlsOpacity)  -- Pure black for moon overlay
@@ -12544,9 +12870,9 @@ local function drawProgressWindow()
     local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
     local fxX = themeX + (themeSize - fxSize) / 2
     local fxY = themeY + themeSize + PS(3)
-    local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
+    local fxHover = not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
 
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+    local fxAlpha = ((type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and 0 or ((fxHover and 1 or 0.7) * controlsOpacity))
     if SETTINGS.visualFX then
         gfx.set(0.4, 0.9, 0.5, fxAlpha)
     else
@@ -12630,18 +12956,21 @@ local function drawProgressWindow()
         local singleTrackLabel = T("single_track") or "Single-Track"
         gfx.drawstr(singleTrackLabel .. " ")
         local aiW = gfx.measurestr(singleTrackLabel .. " ")
-
-        drawWavingStemwerkLogo({
-            x = titleX + aiW,
-            y = titleY,
-            fontSize = PS(18),
-            time = os.clock(),
-            amp = PS(2),
-            speed = 3,
-            phase = 0.5,
-            alphaStem = 1,
-            alphaRest = 1,
-        })
+        if utilityMode then
+            gfx.drawstr("STEMwerk")
+        else
+            drawWavingStemwerkLogo({
+                x = titleX + aiW,
+                y = titleY,
+                fontSize = PS(18),
+                time = os.clock(),
+                amp = PS(2),
+                speed = 3,
+                phase = 0.5,
+                alphaStem = 1,
+                alphaRest = 1,
+            })
+        end
     end
 
     -- Stem indicators (simple colored boxes)
@@ -12651,8 +12980,13 @@ local function drawProgressWindow()
     gfx.setfont(1, "Arial", PS(11))
     for _, stem in ipairs(STEMS) do
         if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
-            -- Stem color box
-            gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+            -- Stem marker box. REAPER Native keeps processing windows neutral.
+            if utilityMode then
+                local ur, ug, ub = utilityProgressMutedColor()
+                gfx.set(ur, ug, ub, 1)
+            else
+                gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+            end
             gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
             -- Stem name
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
@@ -12673,12 +13007,14 @@ local function drawProgressWindow()
     gfx.rect(barX, barY, barW, barH, 0)
     drawLightSurfaceFinish(barX + 1, barY + 1, math.max(1, barW - 2), math.max(1, barH - 2), math.max(0, mainBarRadius - 1), "process", 1)
 
-    -- Progress bar fill (stem color gradient in normal mode; uniform accent in utility mode)
+    -- Progress bar fill. Native utility mode uses a single muted REAPER-ish
+    -- blue/green fill instead of the decorative stem gradient.
     local fillWidth = math.floor(barW * progressState.percent / 100)
     if fillWidth > 0 and #selectedStems > 0 then
-        if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
-            gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
-            gfx.rect(barX, barY + 1, fillWidth, barH - 2, 1)
+        if utilityMode then
+            local ur, ug, ub = utilityProgressColor()
+            gfx.set(ur, ug, ub, 1)
+            gfx.rect(barX + 1, barY + 1, math.max(1, fillWidth - 2), barH - 2, 1)
         else
             for x = 0, fillWidth - 1 do
                 local pos = x / math.max(1, fillWidth - 1)
@@ -12792,11 +13128,12 @@ local function drawProgressWindow()
     -- Handle nerd button click and tooltip
     if nerdHover then
         GUI.uiClickedThisFrame = true
-        local _nerdUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
-        if progressState.showTerminal then
-            tooltipText = _nerdUtility and "Hide terminal output" or (T("tooltip_nerd_mode_hide") or "Switch to Art View")
+        if utilityMode then
+            tooltipText = progressState.showTerminal and "Hide terminal output" or "Show terminal output"
+        elseif progressState.showTerminal then
+            tooltipText = T("tooltip_nerd_mode_hide") or "Switch to Art View"
         else
-            tooltipText = _nerdUtility and "Show terminal output" or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output"
         end
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not progressState.wasMouseDown then
@@ -12851,7 +13188,31 @@ local function drawProgressWindow()
             local termErrR, termErrG, termErrB, termErrA
             local termProgR, termProgG, termProgB, termProgA
 
-            if SETTINGS.darkMode then
+            if utilityMode then
+                if SETTINGS.darkMode then
+                    termBgR, termBgG, termBgB, termBgA = 0.04, 0.04, 0.04, 1
+                    termBorderR, termBorderG, termBorderB, termBorderA = 0.35, 0.35, 0.35, 1
+                    termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.16, 0.16, 0.16, 1
+                    termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.86, 0.86, 0.86, 1
+                    termTextR, termTextG, termTextB, termTextA = 0.78, 0.78, 0.78, 1
+                    termDimR, termDimG, termDimB, termDimA = 0.55, 0.55, 0.55, 1
+                    termOkR, termOkG, termOkB, termOkA = 0.68, 0.78, 0.68, 1
+                    termWarnR, termWarnG, termWarnB, termWarnA = 0.82, 0.68, 0.40, 1
+                    termErrR, termErrG, termErrB, termErrA = 0.86, 0.38, 0.38, 1
+                    termProgR, termProgG, termProgB, termProgA = 0.64, 0.74, 0.64, 1
+                else
+                    termBgR, termBgG, termBgB, termBgA = 0.96, 0.96, 0.94, 1
+                    termBorderR, termBorderG, termBorderB, termBorderA = 0.58, 0.58, 0.54, 1
+                    termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.86, 0.86, 0.82, 1
+                    termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.10, 0.10, 0.10, 1
+                    termTextR, termTextG, termTextB, termTextA = 0.20, 0.20, 0.18, 1
+                    termDimR, termDimG, termDimB, termDimA = 0.46, 0.46, 0.42, 1
+                    termOkR, termOkG, termOkB, termOkA = 0.24, 0.40, 0.24, 1
+                    termWarnR, termWarnG, termWarnB, termWarnA = 0.55, 0.38, 0.10, 1
+                    termErrR, termErrG, termErrB, termErrA = 0.70, 0.12, 0.12, 1
+                    termProgR, termProgG, termProgB, termProgA = 0.24, 0.40, 0.24, 1
+                end
+            elseif SETTINGS.darkMode then
                 termBgR, termBgG, termBgB, termBgA = 0.02, 0.02, 0.03, 0.98
                 termBorderR, termBorderG, termBorderB, termBorderA = 0.2, 0.8, 0.2, 0.5
                 termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.2, 0.6, 0.2, 1
@@ -12876,51 +13237,29 @@ local function drawProgressWindow()
                 termProgR, termProgG, termProgB, termProgA = 0.08, 0.35, 0.75, 1
             end
 
-            -- In utility mode: override with plain sober colors, no stem tinting.
-            local _termUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
-            if _termUtility then
-                if SETTINGS.darkMode then
-                    termBgR, termBgG, termBgB, termBgA = 0.08, 0.08, 0.08, 1
-                    termBorderR, termBorderG, termBorderB, termBorderA = 0.35, 0.35, 0.35, 1
-                    termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.18, 0.18, 0.18, 1
-                    termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.75, 0.75, 0.75, 1
-                    termTextR, termTextG, termTextB, termTextA = 0.80, 0.80, 0.80, 1
-                    termDimR, termDimG, termDimB, termDimA = 0.55, 0.55, 0.55, 1
-                    termOkR, termOkG, termOkB, termOkA = 0.45, 0.75, 0.45, 1
-                    termWarnR, termWarnG, termWarnB, termWarnA = 0.80, 0.65, 0.25, 1
-                    termErrR, termErrG, termErrB, termErrA = 0.80, 0.30, 0.30, 1
-                    termProgR, termProgG, termProgB, termProgA = THEME.accent[1], THEME.accent[2], THEME.accent[3], 1
-                else
-                    termBgR, termBgG, termBgB, termBgA = 0.93, 0.93, 0.93, 1
-                    termBorderR, termBorderG, termBorderB, termBorderA = 0.55, 0.55, 0.55, 1
-                    termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.80, 0.80, 0.80, 1
-                    termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.15, 0.15, 0.15, 1
-                    termTextR, termTextG, termTextB, termTextA = 0.10, 0.10, 0.10, 1
-                    termDimR, termDimG, termDimB, termDimA = 0.40, 0.40, 0.40, 1
-                    termOkR, termOkG, termOkB, termOkA = 0.20, 0.45, 0.20, 1
-                    termWarnR, termWarnG, termWarnB, termWarnA = 0.60, 0.40, 0.10, 1
-                    termErrR, termErrG, termErrB, termErrA = 0.65, 0.15, 0.15, 1
-                    termProgR, termProgG, termProgB, termProgA = THEME.accent[1], THEME.accent[2], THEME.accent[3], 1
-                end
-            else
-                -- Accent tint: cycle through selected stems as progress advances.
-                local accentR, accentG, accentB = THEME.accent[1], THEME.accent[2], THEME.accent[3]
-                if selectedStems and #selectedStems > 0 then
-                    local n = #selectedStems
-                    local p = tonumber(progressState.percent) or 0
-                    local idx = math.floor((p / 100) * n) + 1
-                    if idx < 1 then idx = 1 end
-                    if idx > n then idx = n end
-                    local sc = selectedStems[idx].color or {255, 255, 255}
-                    accentR, accentG, accentB = (sc[1] or 255) / 255, (sc[2] or 255) / 255, (sc[3] or 255) / 255
-                end
+            -- Accent tint: cycle through selected stems as progress advances (nice variation).
+            local accentR, accentG, accentB = THEME.accent[1], THEME.accent[2], THEME.accent[3]
+            if (not utilityMode) and selectedStems and #selectedStems > 0 then
+                local n = #selectedStems
+                local p = tonumber(progressState.percent) or 0
+                local idx = math.floor((p / 100) * n) + 1
+                if idx < 1 then idx = 1 end
+                if idx > n then idx = n end
+                local sc = selectedStems[idx].color or {255, 255, 255}
+                accentR, accentG, accentB = (sc[1] or 255) / 255, (sc[2] or 255) / 255, (sc[3] or 255) / 255
+            end
 
+            -- Apply tint to header/border (keep error/warn colors intact).
+            if not utilityMode then
                 if SETTINGS.darkMode then
                     termBorderR, termBorderG, termBorderB = accentR, accentG, accentB
                     termBorderA = 0.55
+                    -- Slightly dimmed accent for header fill so black header text stays readable.
                     termHeaderR, termHeaderG, termHeaderB, termHeaderA = accentR * 0.75, accentG * 0.75, accentB * 0.75, 1
+                    -- Normal text follows accent a bit (variety), but keep it bright enough.
                     termTextR, termTextG, termTextB = math.max(0.15, accentR * 0.9), math.max(0.2, accentG * 0.9), math.max(0.15, accentB * 0.9)
                 else
+                    -- Light mode: tint header/border only; keep normal text dark for readability.
                     termBorderR, termBorderG, termBorderB = accentR * 0.5, accentG * 0.6, accentB * 0.5
                     termBorderA = 0.45
                     termHeaderR = 0.85 + accentR * 0.12
@@ -12930,19 +13269,20 @@ local function drawProgressWindow()
                     termTextR, termTextG, termTextB = readableTerminalAccent(accentR, accentG, accentB)
                 end
 
+                -- Match the LED/progress tint to the active track color when available.
                 if progressState.uiColor and type(progressState.uiColor) == "table" then
                     termProgR, termProgG, termProgB = progressState.uiColor[1] or termProgR, progressState.uiColor[2] or termProgG, progressState.uiColor[3] or termProgB
                 end
             end
 
-            -- Terminal background
+            -- Dark terminal background
             gfx.set(termBgR, termBgG, termBgB, termBgA)
             gfx.rect(displayX, displayY, displayW, displayH, 1)
 
-            -- Terminal border
+            -- Terminal border (green)
             gfx.set(termBorderR, termBorderG, termBorderB, termBorderA)
             gfx.rect(displayX, displayY, displayW, displayH, 0)
-            if SETTINGS.visualFX and not _termUtility then
+            if SETTINGS.visualFX and not utilityMode then
                 drawTerminalFx(displayX, displayY, displayW, displayH, uiNow(), termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
             end
 
@@ -13008,8 +13348,8 @@ local function drawProgressWindow()
                 end
             end
 
-            -- Blinking cursor at bottom (skipped in utility mode)
-            if not _termUtility and math.floor(now * 2) % 2 == 0 then
+            -- Blinking cursor at bottom
+            if (not utilityMode) and math.floor(now * 2) % 2 == 0 then
                 gfx.set(termOkR, termOkG, termOkB, 1)
                 gfx.x = displayX + PS(5)
                 gfx.y = math.min(lineY, displayY + displayH - lineHeight - PS(5))
@@ -13019,7 +13359,7 @@ local function drawProgressWindow()
             -- Terminal hint
             gfx.set(termDimR, termDimG, termDimB, termDimA)
             gfx.setfont(1, "Courier", PS(8))
-            local termHint = T("terminal_hint_return_to_art") or "Click >_ to return to art"
+            local termHint = utilityMode and "Click >_ to return to progress" or (T("terminal_hint_return_to_art") or "Click >_ to return to art")
             local termHintW = gfx.measurestr(termHint)
             gfx.x = displayX + (displayW - termHintW) / 2
             gfx.y = displayY + displayH - PS(16)
@@ -13183,25 +13523,26 @@ local function drawProgressWindow()
         end
     end
 
-    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
-    gfx.setfont(1, "Arial", PS(10))
-    local flarkPart = "flark"
-    local flarkPartW = gfx.measurestr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
-    local audioPart = "AUDIO"
-    local audioPartW = gfx.measurestr(audioPart)
-    local totalLogoW = flarkPartW + audioPartW
-    local logoStartX = (w - totalLogoW) / 2
-    -- Orange text, 50% translucent
-    gfx.set(1.0, 0.5, 0.1, 0.5)
-    gfx.setfont(1, "Arial", PS(10))
-    gfx.x = logoStartX
-    gfx.y = PS(3)
-    gfx.drawstr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
-    gfx.x = logoStartX + flarkPartW
-    gfx.y = PS(3)
-    gfx.drawstr(audioPart)
+    -- flarkAUDIO logo at top (translucent) - skipped in utility mode
+    if not utilityMode then
+        gfx.setfont(1, "Arial", PS(10))
+        local flarkPart = "flark"
+        local flarkPartW = gfx.measurestr(flarkPart)
+        gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+        local audioPart = "AUDIO"
+        local audioPartW = gfx.measurestr(audioPart)
+        local totalLogoW = flarkPartW + audioPartW
+        local logoStartX = (w - totalLogoW) / 2
+        gfx.set(1.0, 0.5, 0.1, 0.5)
+        gfx.setfont(1, "Arial", PS(10))
+        gfx.x = logoStartX
+        gfx.y = PS(3)
+        gfx.drawstr(flarkPart)
+        gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+        gfx.x = logoStartX + flarkPartW
+        gfx.y = PS(3)
+        gfx.drawstr(audioPart)
+    end
 
     -- === DRAW TOOLTIP (always on top, with STEM colors) ===
     if tooltipText then
@@ -14580,14 +14921,18 @@ function drawResultWindow()
     local okW = gfx.measurestr(okText)
     local okX = btnX + (btnW - okW) / 2
     local okY = btnY + (btnH - gfx.texth) / 2
-    gfx.set(0, 0, 0, 0.4)
-    gfx.x, gfx.y = okX + 2, okY + 2; gfx.drawstr(okText)
-    gfx.set(0, 0, 0, 0.6)
-    gfx.x, gfx.y = okX + 1, okY + 1; gfx.drawstr(okText)
-    gfx.x, gfx.y = okX - 1, okY + 1; gfx.drawstr(okText)
-    gfx.x, gfx.y = okX + 1, okY - 1; gfx.drawstr(okText)
-    gfx.x, gfx.y = okX - 1, okY - 1; gfx.drawstr(okText)
-    gfx.set(1, 1, 1, 1)
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    else
+        gfx.set(0, 0, 0, 0.4)
+        gfx.x, gfx.y = okX + 2, okY + 2; gfx.drawstr(okText)
+        gfx.set(0, 0, 0, 0.6)
+        gfx.x, gfx.y = okX + 1, okY + 1; gfx.drawstr(okText)
+        gfx.x, gfx.y = okX - 1, okY + 1; gfx.drawstr(okText)
+        gfx.x, gfx.y = okX + 1, okY - 1; gfx.drawstr(okText)
+        gfx.x, gfx.y = okX - 1, okY - 1; gfx.drawstr(okText)
+        gfx.set(1, 1, 1, 1)
+    end
     gfx.x, gfx.y = okX, okY
     gfx.drawstr(okText)
 
@@ -14602,24 +14947,24 @@ function drawResultWindow()
 
     -- flarkAUDIO logo at top (translucent) - skipped in utility mode
     if not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) then
-        gfx.setfont(1, "Arial", PS(fonts.logo or 10))
-        local flarkPart = "flark"
-        local flarkPartW = gfx.measurestr(flarkPart)
-        gfx.setfont(1, "Arial", PS(fonts.logo or 10), string.byte('b'))
-        local audioPart = "AUDIO"
-        local audioPartW = gfx.measurestr(audioPart)
-        local totalLogoW = flarkPartW + audioPartW
-        local logoStartX = (w - totalLogoW) / 2
-        gfx.set(1.0, 0.5, 0.1, 0.5)
-        gfx.setfont(1, "Arial", PS(fonts.logo or 10))
-        gfx.x = logoStartX
-        gfx.y = PS(spacing.logoTop or 3)
-        gfx.drawstr(flarkPart)
-        gfx.setfont(1, "Arial", PS(fonts.logo or 10), string.byte('b'))
-        gfx.x = logoStartX + flarkPartW
-        gfx.y = PS(spacing.logoTop or 3)
-        gfx.drawstr(audioPart)
-    end
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10))
+    local flarkPart = "flark"
+    local flarkPartW = gfx.measurestr(flarkPart)
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10), string.byte('b'))
+    local audioPart = "AUDIO"
+    local audioPartW = gfx.measurestr(audioPart)
+    local totalLogoW = flarkPartW + audioPartW
+    local logoStartX = (w - totalLogoW) / 2
+    gfx.set(1.0, 0.5, 0.1, 0.5)
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10))
+    gfx.x = logoStartX
+    gfx.y = PS(spacing.logoTop or 3)
+    gfx.drawstr(flarkPart)
+    gfx.setfont(1, "Arial", PS(fonts.logo or 10), string.byte('b'))
+    gfx.x = logoStartX + flarkPartW
+    gfx.y = PS(spacing.logoTop or 3)
+    gfx.drawstr(audioPart)
+    end -- end utility mode logo guard
 
     gfx.update()
 
@@ -14636,7 +14981,9 @@ function drawResultWindow()
     resultWindowState.wasRightMouseDown = (gfx.mouse_cap & 2 == 2)
 
     local char = gfx.getchar()
-    UI_Window.handleArtAdvance(resultWindowState, mouseDown, char)
+    if not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) then
+        UI_Window.handleArtAdvance(resultWindowState, mouseDown, char)
+    end
     if char == -1 or char == 27 or char == 13 then  -- Window closed, ESC, Enter
         return true  -- Close
     end
@@ -15736,9 +16083,24 @@ function drawMultiTrackProgressWindow()
     local controlsLeft = themeX - PS(60)
     local controlsBottom = themeY + themeSize + PS(30)
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
-    local controlsOpacity = updateControlsOpacity(multiTrackQueue, mouseInControls)
+    local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(multiTrackQueue, mouseInControls)
 
-    if SETTINGS.darkMode then
+    if utilityMode then
+        local bg = THEME.button or THEME.inputBg or {0.25, 0.25, 0.25}
+        local border = THEME.border or {0.45, 0.45, 0.45}
+        local txt = THEME.text or {0.85, 0.85, 0.85}
+        gfx.set(bg[1], bg[2], bg[3], 0.95 * controlsOpacity)
+        gfx.rect(themeX, themeY, themeSize, themeSize, 1)
+        gfx.set(border[1], border[2], border[3], controlsOpacity)
+        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
+        gfx.set(txt[1], txt[2], txt[3], controlsOpacity)
+        gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte('b'))
+        local label = SETTINGS.darkMode and "D" or "L"
+        local lw = gfx.measurestr(label)
+        gfx.x = themeX + (themeSize - lw) / 2
+        gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
+        gfx.drawstr(label)
+    elseif SETTINGS.darkMode then
         gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)
         gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
         gfx.set(0, 0, 0, 1 * controlsOpacity)  -- Pure black for moon overlay
@@ -15776,9 +16138,9 @@ function drawMultiTrackProgressWindow()
     local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
     local fxX = themeX + (themeSize - fxSize) / 2
     local fxY = themeY + themeSize + PS(3)
-    local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
+    local fxHover = not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
 
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+    local fxAlpha = ((type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and 0 or ((fxHover and 1 or 0.7) * controlsOpacity))
     if SETTINGS.visualFX then
         gfx.set(0.4, 0.9, 0.5, fxAlpha)
     else
@@ -15819,25 +16181,30 @@ function drawMultiTrackProgressWindow()
     gfx.x = titleX
     gfx.y = titleY
     local multiTrackLabel = T("multi_track") or "Multi-Track"
-    gfx.drawstr(multiTrackLabel .. " ")
-    local prefixW = gfx.measurestr(multiTrackLabel .. " ")
-
-    local logoW = measureStemwerkLogo(PS(16), "Arial", true)
-    drawWavingStemwerkLogo({
-        x = titleX + prefixW,
-        y = titleY,
-        fontSize = PS(16),
-        time = os.clock(),
-        amp = PS(2),
-        speed = 3,
-        phase = 0.5,
-        alphaStem = 1,
-        alphaRest = 1,
-    })
-
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-    gfx.x = titleX + prefixW + logoW
-    gfx.y = titleY
+    if utilityMode then
+        gfx.drawstr(multiTrackLabel .. " STEMwerk")
+        local prefixW = gfx.measurestr(multiTrackLabel .. " STEMwerk")
+        gfx.x = titleX + prefixW
+        gfx.y = titleY
+    else
+        gfx.drawstr(multiTrackLabel .. " ")
+        local prefixW = gfx.measurestr(multiTrackLabel .. " ")
+        local logoW = measureStemwerkLogo(PS(16), "Arial", true)
+        drawWavingStemwerkLogo({
+            x = titleX + prefixW,
+            y = titleY,
+            fontSize = PS(16),
+            time = os.clock(),
+            amp = PS(2),
+            speed = 3,
+            phase = 0.5,
+            alphaStem = 1,
+            alphaRest = 1,
+        })
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = titleX + prefixW + logoW
+        gfx.y = titleY
+    end
     local runtimeMode, _, runtimeReason = getRuntimeModeLabel(multiTrackQueue)
     local anyPerItem = false
     for _, job in ipairs(multiTrackQueue.jobs) do
@@ -15910,7 +16277,12 @@ function drawMultiTrackProgressWindow()
     if #selectedStems > 0 then
         gfx.setfont(1, "Arial", PS(10))
         for _, stem in ipairs(selectedStems) do
-            gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+            if utilityMode then
+                local ur, ug, ub = utilityProgressMutedColor()
+                gfx.set(ur, ug, ub, 1)
+            else
+                gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+            end
             gfx.rect(stemX, stemRowY, stemBoxSize, stemBoxSize, 1)
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.x = stemX + stemBoxSize + PS(5)
@@ -15957,12 +16329,14 @@ function drawMultiTrackProgressWindow()
     gfx.rect(barX, barY, barW, barH, 0)
     drawLightSurfaceFinish(barX + 1, barY + 1, math.max(1, barW - 2), math.max(1, barH - 2), math.max(0, overallBarRadius - 1), "process", 1)
 
-    -- Progress fill (stem color gradient in normal mode; uniform accent in utility mode)
+    -- Progress fill. Native utility mode uses a single muted REAPER-ish
+    -- blue/green fill and skips animated glow.
     local fillW = math.floor(barW * overallProgress / 100)
     if fillW > 0 and #selectedStems > 0 then
-        if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
-            gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
-            gfx.rect(barX + 1, barY + 1, fillW - 1, barH - 2, 1)
+        if utilityMode then
+            local ur, ug, ub = utilityProgressColor()
+            gfx.set(ur, ug, ub, 1)
+            gfx.rect(barX + 1, barY + 1, math.max(1, fillW - 2), barH - 2, 1)
         else
             for i = 0, fillW - 1 do
                 local pos = i / math.max(1, fillW - 1)
@@ -16040,11 +16414,10 @@ function drawMultiTrackProgressWindow()
     gfx.drawstr(">_")
 
     if nerdHover then
-        local _mtNerdUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
-        if multiTrackQueue.showTerminal then
-            tooltipText = _mtNerdUtility and "Hide terminal output" or (T("tooltip_nerd_mode_hide") or "Switch to Art View")
+        if utilityMode then
+            tooltipText = multiTrackQueue.showTerminal and "Hide terminal output" or "Show terminal output"
         else
-            tooltipText = _mtNerdUtility and "Show terminal output" or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = multiTrackQueue.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         end
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not multiTrackQueue.wasMouseDown then
@@ -16101,13 +16474,6 @@ function drawMultiTrackProgressWindow()
         if termHover then GUI.uiClickedThisFrame = true end
 
         -- === TERMINAL VIEW (combined output from all active jobs) ===
-        -- jobBarColor: maps a job index to the STEM color of that bar (used for per-track line tinting)
-        local function jobBarColor(jobIdx)
-            local s = STEMS[((jobIdx or 1) - 1) % #STEMS + 1]
-            local c = s and s.color or {255, 255, 255}
-            return { (c[1] or 255) / 255, (c[2] or 255) / 255, (c[3] or 255) / 255 }
-        end
-
         -- Theme-aware terminal palette (dark/light)
         local termBgR, termBgG, termBgB, termBgA
         local termBorderR, termBorderG, termBorderB, termBorderA
@@ -16120,18 +16486,31 @@ function drawMultiTrackProgressWindow()
         local termErrR, termErrG, termErrB, termErrA
         local termProgR, termProgG, termProgB, termProgA
 
-        if SETTINGS.darkMode then
-            termBgR, termBgG, termBgB, termBgA = 0.02, 0.02, 0.03, 0.98
-            termBorderR, termBorderG, termBorderB, termBorderA = 0.2, 0.8, 0.2, 0.5
-            termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.2, 0.6, 0.2, 1
-            termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0, 0, 0, 1
-            termTextR, termTextG, termTextB, termTextA = 0.3, 0.9, 0.3, 0.9
-            termDimR, termDimG, termDimB, termDimA = 0.3, 0.5, 0.3, 0.7
-            termOkR, termOkG, termOkB, termOkA = 0.5, 1, 0.5, 1
-            termWarnR, termWarnG, termWarnB, termWarnA = 1, 0.8, 0.3, 1
-            termErrR, termErrG, termErrB, termErrA = 1, 0.3, 0.3, 1
-            termProgR, termProgG, termProgB, termProgA = 0.3, 0.8, 1, 1
-        else
+        if utilityMode then
+            if SETTINGS.darkMode then
+                termBgR, termBgG, termBgB, termBgA = 0.04, 0.04, 0.04, 1
+                termBorderR, termBorderG, termBorderB, termBorderA = 0.35, 0.35, 0.35, 1
+                termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.16, 0.16, 0.16, 1
+                termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.86, 0.86, 0.86, 1
+                termTextR, termTextG, termTextB, termTextA = 0.78, 0.78, 0.78, 1
+                termDimR, termDimG, termDimB, termDimA = 0.55, 0.55, 0.55, 1
+                termOkR, termOkG, termOkB, termOkA = 0.68, 0.78, 0.68, 1
+                termWarnR, termWarnG, termWarnB, termWarnA = 0.82, 0.68, 0.40, 1
+                termErrR, termErrG, termErrB, termErrA = 0.86, 0.38, 0.38, 1
+                termProgR, termProgG, termProgB, termProgA = 0.64, 0.74, 0.64, 1
+            else
+                termBgR, termBgG, termBgB, termBgA = 0.96, 0.96, 0.94, 1
+                termBorderR, termBorderG, termBorderB, termBorderA = 0.58, 0.58, 0.54, 1
+                termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.86, 0.86, 0.82, 1
+                termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.10, 0.10, 0.10, 1
+                termTextR, termTextG, termTextB, termTextA = 0.20, 0.20, 0.18, 1
+                termDimR, termDimG, termDimB, termDimA = 0.46, 0.46, 0.42, 1
+                termOkR, termOkG, termOkB, termOkA = 0.24, 0.40, 0.24, 1
+                termWarnR, termWarnG, termWarnB, termWarnA = 0.55, 0.38, 0.10, 1
+                termErrR, termErrG, termErrB, termErrA = 0.70, 0.12, 0.12, 1
+                termProgR, termProgG, termProgB, termProgA = 0.24, 0.40, 0.24, 1
+            end
+        elseif SETTINGS.darkMode then
             termBgR, termBgG, termBgB, termBgA = 0.98, 0.98, 0.99, 0.98
             termBorderR, termBorderG, termBorderB, termBorderA = 0.15, 0.55, 0.2, 0.45
             termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.75, 0.92, 0.78, 1
@@ -16144,69 +16523,51 @@ function drawMultiTrackProgressWindow()
             termProgR, termProgG, termProgB, termProgA = 0.08, 0.35, 0.75, 1
         end
 
-        -- In utility mode: override with plain sober colors, no track tinting.
-        local _mtTermUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
-        if _mtTermUtility then
+        -- Accent tint: use the currently active track color for header/border (nice "alive" feedback).
+        local activeAccent = nil
+        if activeJob and type(activeJob.uiColor) == "table" then
+            activeAccent = activeJob.uiColor
+        end
+        if (not utilityMode) and activeAccent then
+            local ar, ag, ab = activeAccent[1] or THEME.accent[1], activeAccent[2] or THEME.accent[2], activeAccent[3] or THEME.accent[3]
             if SETTINGS.darkMode then
-                termBgR, termBgG, termBgB, termBgA = 0.08, 0.08, 0.08, 1
-                termBorderR, termBorderG, termBorderB, termBorderA = 0.35, 0.35, 0.35, 1
-                termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.18, 0.18, 0.18, 1
-                termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.75, 0.75, 0.75, 1
-                termTextR, termTextG, termTextB, termTextA = 0.80, 0.80, 0.80, 1
-                termDimR, termDimG, termDimB, termDimA = 0.55, 0.55, 0.55, 1
-                termOkR, termOkG, termOkB, termOkA = 0.45, 0.75, 0.45, 1
-                termWarnR, termWarnG, termWarnB, termWarnA = 0.80, 0.65, 0.25, 1
-                termErrR, termErrG, termErrB, termErrA = 0.80, 0.30, 0.30, 1
-                termProgR, termProgG, termProgB, termProgA = THEME.accent[1], THEME.accent[2], THEME.accent[3], 1
+                termBorderR, termBorderG, termBorderB = ar, ag, ab
+                termBorderA = 0.55
+                termHeaderR, termHeaderG, termHeaderB, termHeaderA = ar * 0.75, ag * 0.75, ab * 0.75, 1
             else
-                termBgR, termBgG, termBgB, termBgA = 0.93, 0.93, 0.93, 1
-                termBorderR, termBorderG, termBorderB, termBorderA = 0.55, 0.55, 0.55, 1
-                termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.80, 0.80, 0.80, 1
-                termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.15, 0.15, 0.15, 1
-                termTextR, termTextG, termTextB, termTextA = 0.10, 0.10, 0.10, 1
-                termDimR, termDimG, termDimB, termDimA = 0.40, 0.40, 0.40, 1
-                termOkR, termOkG, termOkB, termOkA = 0.20, 0.45, 0.20, 1
-                termWarnR, termWarnG, termWarnB, termWarnA = 0.60, 0.40, 0.10, 1
-                termErrR, termErrG, termErrB, termErrA = 0.65, 0.15, 0.15, 1
-                termProgR, termProgG, termProgB, termProgA = THEME.accent[1], THEME.accent[2], THEME.accent[3], 1
+                termBorderR, termBorderG, termBorderB = ar * 0.5, ag * 0.6, ab * 0.5
+                termBorderA = 0.45
+                termHeaderR = 0.85 + ar * 0.12
+                termHeaderG = 0.85 + ag * 0.12
+                termHeaderB = 0.85 + ab * 0.12
+                termHeaderA = 1
             end
-        else
-            -- Accent tint: use the currently active track color for header/border.
-            local activeAccent = nil
-            if activeJob and type(activeJob.uiColor) == "table" then
-                activeAccent = activeJob.uiColor
-            end
-            if activeAccent then
-                local ar, ag, ab = activeAccent[1] or THEME.accent[1], activeAccent[2] or THEME.accent[2], activeAccent[3] or THEME.accent[3]
-                if SETTINGS.darkMode then
-                    termBorderR, termBorderG, termBorderB = ar, ag, ab
-                    termBorderA = 0.55
-                    termHeaderR, termHeaderG, termHeaderB, termHeaderA = ar * 0.75, ag * 0.75, ab * 0.75, 1
-                else
-                    termBorderR, termBorderG, termBorderB = ar * 0.5, ag * 0.6, ab * 0.5
-                    termBorderA = 0.45
-                    termHeaderR = 0.85 + ar * 0.12
-                    termHeaderG = 0.85 + ag * 0.12
-                    termHeaderB = 0.85 + ab * 0.12
-                    termHeaderA = 1
-                end
-            end
+        end
 
-            if activeJob and type(activeJob.uiColor) == "table" then
-                termProgR, termProgG, termProgB = activeJob.uiColor[1] or termProgR, activeJob.uiColor[2] or termProgG, activeJob.uiColor[3] or termProgB
-            end
+        if (not utilityMode) and activeJob and type(activeJob.uiColor) == "table" then
+            termProgR, termProgG, termProgB = activeJob.uiColor[1] or termProgR, activeJob.uiColor[2] or termProgG, activeJob.uiColor[3] or termProgB
+        end
 
-            local activeBar = activeJob and jobBarColor(activeJob.index or 1) or jobBarColor(1)
+        -- Terminal text color should follow the same color as the processed track progress bar.
+        local function jobBarColor(jobIdx)
+            local s = STEMS[((jobIdx or 1) - 1) % #STEMS + 1]
+            local c = s and s.color or {255, 255, 255}
+            return { (c[1] or 255) / 255, (c[2] or 255) / 255, (c[3] or 255) / 255 }
+        end
+        local activeBar = activeJob and jobBarColor(activeJob.index or 1) or jobBarColor(1)
+        if not utilityMode then
             if SETTINGS.darkMode then
                 termTextR, termTextG, termTextB = activeBar[1] * 0.95, activeBar[2] * 0.95, activeBar[3] * 0.95
                 termTextA = 0.92
             else
+                -- Light mode: keep text readable, but nudge toward the active bar color.
                 local ar, ag, ab = readableTerminalAccent(activeBar[1], activeBar[2], activeBar[3])
-                termTextR = (termTextR * 0.85) + (ar * 0.15)
-                termTextG = (termTextG * 0.85) + (ag * 0.15)
-                termTextB = (termTextB * 0.85) + (ab * 0.15)
+                termTextR = ((termTextR or 0.20) * 0.85) + (ar * 0.15)
+                termTextG = ((termTextG or 0.20) * 0.85) + (ag * 0.15)
+                termTextB = ((termTextB or 0.18) * 0.85) + (ab * 0.15)
             end
         end
+        termTextR, termTextG, termTextB, termTextA = termTextR or 0.78, termTextG or 0.78, termTextB or 0.78, termTextA or 1
 
         local termNow = uiNow()
         gfx.set(termBgR, termBgG, termBgB, termBgA)
@@ -16214,7 +16575,7 @@ function drawMultiTrackProgressWindow()
 
         gfx.set(termBorderR, termBorderG, termBorderB, termBorderA)
         gfx.rect(displayX, displayY, displayW, displayH, 0)
-        if SETTINGS.visualFX and not _mtTermUtility then
+        if SETTINGS.visualFX and not utilityMode then
             drawTerminalFx(displayX, displayY, displayW, displayH, termNow, termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
         end
 
@@ -16314,6 +16675,10 @@ function drawMultiTrackProgressWindow()
             if lineY < displayY + displayH - PS(5) then
                 local line = multiTrackQueue.terminalLines[i] or ""
                 if #line > 100 then line = line:sub(1, 97) .. ".." end
+                -- Per-track tint (line prefixes are like: [3] ...). Headers use the same track tint.
+                local lineTrackIdx = tonumber(line:match("^%[(%d+)%]"))
+                local lineAccent = (lineTrackIdx and jobBarColor(lineTrackIdx)) or nil
+
                 if line:match("error") or line:match("Error") or line:match("ERROR") then
                     gfx.set(termErrR, termErrG, termErrB, termErrA)
                 elseif line:match("warning") or line:match("Warning") then
@@ -16322,24 +16687,22 @@ function drawMultiTrackProgressWindow()
                     gfx.set(termProgR, termProgG, termProgB, termProgA)
                 elseif line:match("Separating") or line:match("100%%") then
                     gfx.set(termOkR, termOkG, termOkB, termOkA)
-                elseif not _mtTermUtility then
-                    -- Per-track tint (line prefixes are like: [3] ...). Skipped in utility mode.
-                    local lineTrackIdx = tonumber(line:match("^%[(%d+)%]"))
-                    local lineAccent = (lineTrackIdx and jobBarColor(lineTrackIdx)) or nil
-                    if lineTrackIdx and lineAccent and line:match("%-%-%-%-") then
+                else
+                    if (not utilityMode) and lineTrackIdx and lineAccent and line:match("%-%-%-%-") then
+                        -- Track header line
                         local ar, ag, ab = readableTerminalAccent(lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB)
                         gfx.set(ar, ag, ab, 0.98)
-                    elseif lineAccent and SETTINGS.darkMode then
+                    elseif (not utilityMode) and lineAccent and SETTINGS.darkMode then
+                        -- Dark mode: tint normal lines toward track color
                         local ar, ag, ab = lineAccent[1] or termTextR, lineAccent[2] or termTextG, lineAccent[3] or termTextB
                         gfx.set((termTextR * 0.35) + (ar * 0.65), (termTextG * 0.35) + (ag * 0.65), (termTextB * 0.35) + (ab * 0.65), termTextA)
-                    elseif lineAccent and not SETTINGS.darkMode then
+                    elseif (not utilityMode) and lineAccent and not SETTINGS.darkMode then
+                        -- Light mode: keep it readable; use a subtle tint
                         local ar, ag, ab = readableTerminalAccent(lineAccent[1] or 0.2, lineAccent[2] or 0.2, lineAccent[3] or 0.2)
                         gfx.set((termTextR * 0.8) + (ar * 0.2), (termTextG * 0.8) + (ag * 0.2), (termTextB * 0.8) + (ab * 0.2), termTextA)
                     else
                         gfx.set(termTextR, termTextG, termTextB, termTextA)
                     end
-                else
-                    gfx.set(termTextR, termTextG, termTextB, termTextA)
                 end
                 gfx.x = displayX + PS(5)
                 gfx.y = lineY
@@ -16348,8 +16711,8 @@ function drawMultiTrackProgressWindow()
             end
         end
 
-        -- Blinking cursor (skipped in utility mode)
-        if not _mtTermUtility and math.floor(termNow * 2) % 2 == 0 then
+        -- Blinking cursor
+        if (not utilityMode) and math.floor(termNow * 2) % 2 == 0 then
             gfx.set(termOkR, termOkG, termOkB, 1)
             gfx.x = displayX + PS(5)
             gfx.y = math.min(lineY, displayY + displayH - lineHeight - PS(5))
@@ -16359,7 +16722,7 @@ function drawMultiTrackProgressWindow()
         -- Terminal hint
         gfx.set(termDimR, termDimG, termDimB, termDimA)
         gfx.setfont(1, "Courier", PS(8))
-        local termHint = T("terminal_hint_return_to_art") or "Click >_ to return to art"
+        local termHint = utilityMode and "Click >_ to return to progress" or (T("terminal_hint_return_to_art") or "Click >_ to return to art")
         local termHintW = gfx.measurestr(termHint)
         gfx.x = displayX + (displayW - termHintW) / 2
         gfx.y = displayY + displayH - PS(16)
@@ -16479,9 +16842,11 @@ function drawMultiTrackProgressWindow()
             -- Fill
             local tFillW = math.floor(tBarW * (job.percent or 0) / 100)
             if tFillW > 0 then
-                if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
-                    gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+                if utilityMode then
+                    local ur, ug, ub = utilityProgressColor()
+                    gfx.set(ur, ug, ub, 0.92)
                 else
+                    -- Color based on stem being processed
                     local stemIdx = (i - 1) % #STEMS + 1
                     local stemColor = STEMS[stemIdx].color
                     gfx.set(stemColor[1]/255, stemColor[2]/255, stemColor[3]/255, 0.85)
@@ -16762,25 +17127,26 @@ function drawMultiTrackProgressWindow()
     end
 
 
-    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
-    gfx.setfont(1, "Arial", PS(10))
-    local flarkPart = "flark"
-    local flarkPartW = gfx.measurestr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
-    local audioPart = "AUDIO"
-    local audioPartW = gfx.measurestr(audioPart)
-    local totalLogoW = flarkPartW + audioPartW
-    local logoStartX = (w - totalLogoW) / 2
-    -- Orange text, 50% translucent
-    gfx.set(1.0, 0.5, 0.1, 0.5)
-    gfx.setfont(1, "Arial", PS(10))
-    gfx.x = logoStartX
-    gfx.y = PS(3)
-    gfx.drawstr(flarkPart)
-    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
-    gfx.x = logoStartX + flarkPartW
-    gfx.y = PS(3)
-    gfx.drawstr(audioPart)
+    -- flarkAUDIO logo at top (translucent) - skipped in utility mode
+    if not utilityMode then
+        gfx.setfont(1, "Arial", PS(10))
+        local flarkPart = "flark"
+        local flarkPartW = gfx.measurestr(flarkPart)
+        gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+        local audioPart = "AUDIO"
+        local audioPartW = gfx.measurestr(audioPart)
+        local totalLogoW = flarkPartW + audioPartW
+        local logoStartX = (w - totalLogoW) / 2
+        gfx.set(1.0, 0.5, 0.1, 0.5)
+        gfx.setfont(1, "Arial", PS(10))
+        gfx.x = logoStartX
+        gfx.y = PS(3)
+        gfx.drawstr(flarkPart)
+        gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+        gfx.x = logoStartX + flarkPartW
+        gfx.y = PS(3)
+        gfx.drawstr(audioPart)
+    end
 
     -- === DRAW TOOLTIP (on top of everything, with STEM colors) ===
     if tooltipText then
@@ -16797,9 +17163,11 @@ function drawMultiTrackProgressWindow()
 
     gfx.update()
 
-    -- Allow new art via click/space (anywhere that isn't UI)
+    -- Allow new art via click/space only in the normal visual theme.
     local char = gfx.getchar()
-    UI_Window.handleArtAdvance(multiTrackQueue, mouseDown, char)
+    if not utilityMode then
+        UI_Window.handleArtAdvance(multiTrackQueue, mouseDown, char)
+    end
 
     -- Check for cancel
     if char == -1 or char == 27 or cancelClicked then
