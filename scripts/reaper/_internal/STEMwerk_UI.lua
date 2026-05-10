@@ -611,9 +611,11 @@ local function resolveThemeSelection()
         settingsDarkMode = SETTINGS.darkMode
     end
 
+    local presetId = _G.FORCE_THEME_PRESET or (SETTINGS and SETTINGS.themePreset)
+
     local resolved = {
         mode = settingsDarkMode and "dark" or "light",
-        presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset),
+        presetId = normalizeThemePreset(presetId),
         overridesEnabled = shouldApplyThemeEditorOverrides(),
         settingsDarkMode = settingsDarkMode,
         editorDarkMode = nil,
@@ -923,6 +925,9 @@ function getThemeToggleTooltip()
 end
 
 function cycleThemePreset()
+    if _G.FORCE_THEME_PRESET then
+        return
+    end
     local current = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
     local idx = 1
     for i, presetId in ipairs(THEME_PRESET_ORDER) do
