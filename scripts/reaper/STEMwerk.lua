@@ -10676,39 +10676,39 @@ function renderMainColumns(ctx)
     local presetY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
 
-    local _utilNeutral = utilityMode and {
-        math.floor(THEME.button[1] * 255),
-        math.floor(THEME.button[2] * 255),
-        math.floor(THEME.button[3] * 255),
-    } or nil
-    local function presetColor(c) return utilityMode and _utilNeutral or c end
     local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
-    if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, presetColor({80, 80, 90}), presetsBtnFontSize) then applyPresetKaraoke() end
+    local function drawPresetBtn(py, label, rawColor)
+        if utilityMode then
+            return drawRadio(col1X, py, false, label, nil, colW, nil, nil, presetsBtnFontSize)
+        end
+        return drawButton(col1X, py, colW, btnH, label, false, rawColor, presetsBtnFontSize)
+    end
+    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}) then applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelAll, false, presetColor({80, 80, 90}), presetsBtnFontSize) then applyPresetAll() end
+    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}) then applyPresetAll() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
 
     presetY = presetY + S(28)
 
-    if drawButton(col1X, presetY, colW, btnH, presetLabelVocals, false, presetColor({255, 100, 100}), presetsBtnFontSize) then applyPresetVocalsOnly() end
+    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}) then applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelDrums, false, presetColor({100, 200, 255}), presetsBtnFontSize) then applyPresetDrumsOnly() end
+    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}) then applyPresetDrumsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelBass, false, presetColor({150, 100, 255}), presetsBtnFontSize) then applyPresetBassOnly() end
+    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}) then applyPresetBassOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelOther, false, presetColor({100, 255, 150}), presetsBtnFontSize) then applyPresetOtherOnly() end
+    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}) then applyPresetOtherOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
     if is6Stem then
-        if drawButton(col1X, presetY, colW, btnH, presetLabelPiano, false, presetColor({255, 120, 200}), presetsBtnFontSize) then applyPresetPianoOnly() end
+        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}) then applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + S(22)
-        if drawButton(col1X, presetY, colW, btnH, presetLabelGuitar, false, presetColor({255, 180, 100}), presetsBtnFontSize) then applyPresetGuitarOnly() end
+        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}) then applyPresetGuitarOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + S(22)
     end
@@ -10741,17 +10741,13 @@ function renderMainColumns(ctx)
             local k = tostring(stem.name or ""):lower()
             local displayName = T(k) or stem.name
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
-            local stemBtnColor = stem.color
+            local clicked
             if utilityMode then
-                stemBtnColor = {
-                    math.floor(THEME.button[1] * 255),
-                    math.floor(THEME.button[2] * 255),
-                    math.floor(THEME.button[3] * 255),
-                }
+                clicked = drawRadio(col2X, stemY, stem.selected, label, nil, colW, nil, nil, stemsBtnFontSize)
+            else
+                clicked = drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize)
             end
-            if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stemBtnColor, stemsBtnFontSize) then
-                STEMS[i].selected = not STEMS[i].selected
-            end
+            if clicked then STEMS[i].selected = not STEMS[i].selected end
             local tooltipKey = stemTooltipKeys[stem.name] or "tooltip_stem_other"
             setTooltipWithShortcut(col2X, stemY, colW, btnH, T(tooltipKey), stem.key, stem.color)
             stemY = stemY + S(22)
