@@ -10636,7 +10636,10 @@ function renderMainColumns(ctx)
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
-    local presetsBtnFontSize = S(13)
+    -- In REAPER Native mode, use 82% font size on all buttons for calmer/denser labels.
+    local _ubfs = utilityMode and math.max(S(9), math.floor(S(13) * 0.82 + 0.5)) or S(13)
+
+    local presetsBtnFontSize = _ubfs
 
     local processingLabels = {
         T("parallel") or "Parallel",
@@ -10644,7 +10647,7 @@ function renderMainColumns(ctx)
         T("temp_files_keep") or "Keep",
         T("temp_files_delete") or "Delete",
     }
-    local processingBtnFontSize = S(13)
+    local processingBtnFontSize = _ubfs
 
     local presetY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
@@ -10723,7 +10726,7 @@ function renderMainColumns(ctx)
             stemLabels[#stemLabels + 1] = tostring(dn) .. " (" .. st.key .. ")"
         end
     end
-    local stemsBtnFontSize = S(13)
+    local stemsBtnFontSize = _ubfs
 
     for i, stem in ipairs(STEMS) do
         if not stem.sixStemOnly or is6Stem then
@@ -10754,7 +10757,7 @@ function renderMainColumns(ctx)
     end
     modelLabels[#modelLabels + 1] = T("parallel")
     modelLabels[#modelLabels + 1] = T("sequential")
-    local modelBtnFontSize = S(13)
+    local modelBtnFontSize = _ubfs
 
     local modelY = contentTop + S(20)
     local modelDescKeys = {
@@ -10829,8 +10832,8 @@ function renderMainColumns(ctx)
     local newTracksLabel = stemPlural and T("new_tracks") or T("new_track")
     local inPlaceLabel = T("in_place")
 
-    local outputBtnFontSize = S(13)
-    local afterBtnFontSize = S(13)
+    local outputBtnFontSize = _ubfs
+    local afterBtnFontSize = _ubfs
 
     local outY = contentTop + S(20)
     if drawRadio(col5X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW, nil, nil, outputBtnFontSize) then
@@ -11103,10 +11106,10 @@ function renderFooter(ctx)
 
     drawGlossyPill(stemBtnX, footerRow4Y, stemBtnW, btnH, stemBtnColor[1], stemBtnColor[2], stemBtnColor[3])
 
-    gfx.setfont(1, "Arial", S(13), string.byte('b'))
-    local textY = footerRow4Y + (btnH - gfx.texth) / 2
-
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local _fbf = utilityMode and math.max(S(9), math.floor(S(13) * 0.82 + 0.5)) or S(13)
+    gfx.setfont(1, "Arial", _fbf, string.byte('b'))
+    local textY = footerRow4Y + (btnH - gfx.texth) / 2
     if utilityMode then
         local startText = "Run"
         local startW = gfx.measurestr(startText)
@@ -11179,7 +11182,7 @@ function renderFooter(ctx)
     end
     drawGlossyPill(closeBtnX, footerRow4Y, closeBtnW, btnH, closeR, closeG, closeB)
 
-    gfx.setfont(1, "Arial", S(13), string.byte('b'))
+    gfx.setfont(1, "Arial", _fbf, string.byte('b'))
     local closeText = T("close") or "Close"
     local closeTextW = gfx.measurestr(closeText)
     local closeTextX = closeBtnX + (closeBtnW - closeTextW) / 2
