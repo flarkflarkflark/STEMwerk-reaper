@@ -1265,7 +1265,8 @@ local UI_Window = dofile(script_path .. "_internal/STEMwerk_UI_Window.lua")
 local UI_TOKENS = dofile(script_path .. "_internal/STEMwerk_UI_Tokens.lua")
 local UI_CONTROLS = dofile(script_path .. "_internal/STEMwerk_UI_Controls.lua")
 local UI_BACKGROUNDS = dofile(script_path .. "_internal/STEMwerk_UI_Backgrounds.lua")
-local UI_HELP_LAYOUT = dofile(script_path .. "_internal/STEMwerk_UI_HelpLayout.lua")
+local UI_HELP_LAYOUT    = dofile(script_path .. "_internal/STEMwerk_UI_HelpLayout.lua")
+local UI_PROGRESS       = dofile(script_path .. "_internal/STEMwerk_Progress_Render.lua")
 
 -- Get list of available languages
 local function getAvailableLanguages()
@@ -12302,6 +12303,12 @@ local progressState = {
     doneDetected = false,
 }
 
+UI_PROGRESS.configure({
+    progressState               = progressState,
+    getProcessingWindowTitle    = getProcessingWindowTitle,
+    warnMissingJsWindowStyleApi = warnMissingJsWindowStyleApi,
+})
+
 function getProcessingWindowGeometry()
     local winW = lastDialogW or 380
     local winH = lastDialogH or 340
@@ -12434,115 +12441,7 @@ multiTrackQueue = {
 }
 
 -- Forward declarations for multi-track processing
-local runSingleTrackSeparation
-local startSeparationProcessForJob
-local updateAllJobsProgress
-local allJobsDone
-local getOverallProgress
-local showMultiTrackProgressWindow
-local processAllStemsResult
-
--- Progress window base dimensions for scaling (taller for art)
-local PROGRESS_BASE_W = 480
-local PROGRESS_BASE_H = 420
-
-local function progressUiLabel(key, fallback)
-    local translated = T(key)
-    local rawKey = tostring(key or "")
-    local humanized = rawKey:gsub("_", " ")
-    if translated == nil then
-        return fallback
-    end
-    translated = tostring(translated)
-    if translated == "" or translated == rawKey or translated == humanized then
-        return fallback
-    end
-    return translated
-end
-
-local function normalizeProgressStage(stage)
-    stage = tostring(stage or "")
-    -- Strip timing + device suffixes to keep the terminal line clean.
-    stage = stage:gsub("%s*%b[]", "")
-    stage = stage:gsub("%s*%b()", "")
-    stage = stage:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-    local lower = stage:lower()
-    if stage == "" then
-        stage = progressUiLabel("progress_stage_processing", "Processing")
-    elseif lower:match("^processing[%s%.]*$") then
-        stage = progressUiLabel("progress_stage_processing", "Processing")
-    else
-        local key = nil
-        local flat = lower:gsub("[%s%.:]+$", "")
-        if flat == "loading model" then
-            key = "progress_stage_loading_model"
-        elseif flat == "loading ai model" then
-            key = "progress_stage_loading_ai_model"
-        elseif flat == "starting separation" then
-            key = "progress_stage_starting_separation"
-        elseif flat == "writing stems" then
-            key = "progress_stage_writing_stems"
-        elseif flat == "complete" then
-            key = "progress_stage_complete"
-        end
-        if key then
-            stage = progressUiLabel(key, stage)
-        end
-    end
-    return stage
-end
-
-local function localizeProgressStagePrefix(stageText)
-    local text = tostring(stageText or "")
-    if text == "" then return text end
-    local map = {
-        {"processing", progressUiLabel("progress_stage_processing", "Processing")},
-        {"loading ai model", progressUiLabel("progress_stage_loading_ai_model", "Loading AI model")},
-        {"loading model", progressUiLabel("progress_stage_loading_model", "Loading model")},
-        {"starting separation", progressUiLabel("progress_stage_starting_separation", "Starting separation")},
-        {"writing stems", progressUiLabel("progress_stage_writing_stems", "Writing stems")},
-        {"complete", progressUiLabel("progress_stage_complete", "Complete")},
-    }
-    local trimmed = text:gsub("^%s+", "")
-    local lower = trimmed:lower()
-    for _, entry in ipairs(map) do
-        local src, dst = entry[1], entry[2]
-        if lower == src
-            or lower:sub(1, #src + 1) == (src .. " ")
-            or lower:sub(1, #src + 1) == (src .. "(")
-            or lower:sub(1, #src + 1) == (src .. "[")
-            or lower:sub(1, #src + 1) == (src .. ".")
-        then
-            local suffix = trimmed:sub(#src + 1)
-            suffix = suffix:gsub("^%s+", "")
-            local suffixLower = suffix:lower()
-            if suffixLower == src
-                or suffixLower:sub(1, #src + 1) == (src .. " ")
-                or suffixLower:sub(1, #src + 1) == (src .. "(")
-                or suffixLower:sub(1, #src + 1) == (src .. "[")
-            then
-                suffix = suffix:sub(#src + 1)
-                suffix = suffix:gsub("^%s+", "")
-            end
-            if suffix ~= "" then
-                return dst .. " " .. suffix
-            end
-            return dst
-        end
-    end
-    return text
-end
-
-local function readableTerminalAccent(r, g, b)
-    if SETTINGS.darkMode then
-        return r, g, b
-    end
-    -- Light mode terminal: keep stem tint, but force higher contrast dark variants.
-    local dr = math.max(0.07, math.min(0.33, (r * 0.26) + 0.05))
-    local dg = math.max(0.08, math.min(0.36, (g * 0.28) + 0.06))
-    local db = math.max(0.07, math.min(0.34, (b * 0.26) + 0.05))
-    return dr, dg, db
-end
+local _sep = {}  -- separation forward-declaration namespace
 
 function utilityProgressColor()
     if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
@@ -12559,158 +12458,17 @@ function utilityProgressMutedColor()
     return 0.56, 0.68, 0.58
 end
 
-local function formatProgressLine(rawLine, trackIdx)
-    if not rawLine or rawLine == "" then return nil end
-    local percent, stage = rawLine:match("PROGRESS:(%d+):(.+)")
-    if not percent then return nil end
-    local progressLabel = T("progress_label") or "Progress"
-    local stageLabel = normalizeProgressStage(stage)
-    local prefix = ""
-    if trackIdx then
-        local trackLabel = T("track_prefix") or "Track"
-        prefix = "[" .. tostring(trackLabel) .. " " .. tostring(trackIdx) .. "] "
-    end
-    return string.format("%s%s: %s%% %s", prefix, progressLabel, percent, stageLabel)
-end
-
-local function drawTerminalFx(x, y, w, h, now, borderR, borderG, borderB, progR, progG, progB)
-    if not SETTINGS.visualFX then return end
-    if not x or not y or not w or not h then return end
-    if w < 4 or h < 4 then return end
-    now = now or os.clock()
-    local scale = 1
-    if PROGRESS_BASE_W and PROGRESS_BASE_H then
-        scale = math.min(w / PROGRESS_BASE_W, h / PROGRESS_BASE_H)
-        scale = math.max(0.5, math.min(4.0, scale))
-    end
-    local function px(val) return math.floor(val * scale + 0.5) end
-
-    local scanY = y + (math.floor(now * 22) % math.max(1, math.floor(h - 2)))
-    gfx.set(borderR or 0, borderG or 0, borderB or 0, SETTINGS.darkMode and 0.12 or 0.18)
-    gfx.rect(x + 1, scanY, w - 2, 1, 1)
-
-    local lineStep = px(4)
-    local lineAlpha = SETTINGS.darkMode and 0.05 or 0.04
-    gfx.set(borderR or 0, borderG or 0, borderB or 0, lineAlpha)
-    for yy = y + 1, y + h - 2, lineStep do
-        gfx.line(x + 1, yy, x + w - 2, yy)
-    end
-
-    local barH = px(5)
-    local barW = math.max(px(28), 14)
-    local pad = px(4)
-    local span = math.max(1, w - (pad * 2) - barW)
-    local cycle = 0.72
-    local theta = now * cycle * (math.pi * 2)
-    local smooth = (1 - math.cos(theta)) * 0.5
-    local velocity = math.sin(theta)
-    local edge = 1 - math.min(smooth, 1 - smooth) * 2
-    local squash = edge * edge
-    local ledW = barW * (1 - 0.18 * squash)
-    local ledH = barH * (1 + 0.12 * squash)
-    local ledX = x + pad + (span * smooth) + (barW - ledW) * 0.5
-    local ledY = y + h - pad - ledH
-    local glowW = ledW * 1.6
-    local glowH = ledH * 1.6
-    local glowX = ledX - (glowW - ledW) * 0.5
-    local glowY = ledY - (glowH - ledH) * 0.5
-    local ledR = progR or 1
-    local ledG = progG or 1
-    local ledB = progB or 1
-    local lum = (ledR * 0.2126) + (ledG * 0.7152) + (ledB * 0.0722)
-    local hot = math.max(0, math.min(1, (0.55 - lum) * 1.6))
-    gfx.set(ledR, ledG, ledB, SETTINGS.darkMode and 0.18 or 0.12)
-    gfx.rect(glowX, glowY, glowW, glowH, 1)
-
-    gfx.set(ledR, ledG, ledB, SETTINGS.darkMode and 0.7 or 0.6)
-    gfx.rect(ledX, ledY, ledW, ledH, 1)
-
-    local coreW = ledW * 0.55
-    local coreH = ledH * 0.55
-    local coreX = ledX + (ledW - coreW) * 0.5
-    local coreY = ledY + (ledH - coreH) * 0.5
-    local coreR = ledR + (1 - ledR) * (hot * 0.75)
-    local coreG = ledG + (1 - ledG) * (hot * 0.75)
-    local coreB = ledB + (1 - ledB) * (hot * 0.75)
-    gfx.set(coreR, coreG, coreB, SETTINGS.darkMode and 0.85 or 0.8)
-    gfx.rect(coreX, coreY, coreW, coreH, 1)
-    gfx.set(ledR, ledG, ledB, SETTINGS.darkMode and 0.25 or 0.2)
-    gfx.rect(ledX + 1, ledY + 1, ledW - 2, 1, 1)
-
-    local tailScale = math.min(1, math.abs(velocity) * 1.6) * (1 - 0.25 * squash)
-    local tail1, tail2, tail3, tail4 = px(16) * tailScale, px(30) * tailScale, px(44) * tailScale, px(60) * tailScale
-    local tailDir = velocity >= 0 and -1 or 1
-
-    local tailX = (tailDir == -1) and (ledX - tail1) or ledX
-    local tailW = ledW + tail1
-    gfx.set(ledR, ledG, ledB, SETTINGS.darkMode and 0.32 or 0.24)
-    gfx.rect(tailX, ledY, tailW, ledH, 1)
-
-    tailX = (tailDir == -1) and (ledX - tail2) or ledX
-    tailW = ledW + tail2
-    gfx.set(ledR, ledG, ledB, SETTINGS.darkMode and 0.22 or 0.16)
-    gfx.rect(tailX, ledY, tailW, ledH, 1)
-
-    tailX = (tailDir == -1) and (ledX - tail3) or ledX
-    tailW = ledW + tail3
-    gfx.set(ledR, ledG, ledB, SETTINGS.darkMode and 0.14 or 0.1)
-    gfx.rect(tailX, ledY + 1, tailW, ledH - 1, 1)
-
-    tailX = (tailDir == -1) and (ledX - tail4) or ledX
-    tailW = ledW + tail4
-    gfx.set(ledR, ledG, ledB, SETTINGS.darkMode and 0.09 or 0.06)
-    gfx.rect(tailX, ledY + 2, tailW, 1, 1)
-end
-
--- Progress window resizable flag
-local progressWindowResizableSet = false
-
--- Make progress window resizable
-local function makeProgressWindowResizable()
-    if progressWindowResizableSet then return true end
-    if not reaper.JS_Window_Find then return false end
-    if not reaper.JS_Window_GetLong or not reaper.JS_Window_SetLong then
-        warnMissingJsWindowStyleApi("progress window resize setup")
-        return false
-    end
-
-    local hwnd = reaper.JS_Window_Find(progressState.windowTitle or getProcessingWindowTitle(), true)
-    if not hwnd then return false end
-
-    local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
-    if style then
-        local WS_THICKFRAME = 0x00040000
-        local WS_MAXIMIZEBOX = 0x00010000
-        reaper.JS_Window_SetLong(hwnd, "STYLE", style | WS_THICKFRAME | WS_MAXIMIZEBOX)
-    end
-
-    progressWindowResizableSet = true
-    return true
-end
-
--- Animated waveform data for eye candy
-local waveformState = {
-    bars = {},
-    particles = {},
-    lastUpdate = 0,
-    pulsePhase = 0,
-}
-
--- Initialize waveform bars
-local function initWaveformBars(count)
-    waveformState.bars = {}
-    for i = 1, count do
-        waveformState.bars[i] = {
-            height = math.random() * 0.5 + 0.2,
-            targetHeight = math.random() * 0.8 + 0.2,
-            velocity = 0,
-            phase = math.random() * math.pi * 2,
-        }
-    end
-end
-
 -- Draw progress window with stem colors and eye candy (scalable)
 local function drawProgressWindow()
+    -- Function-level aliases for extracted module (don't count toward chunk local limit)
+    local PROGRESS_BASE_W        = UI_PROGRESS.PROGRESS_BASE_W
+    local PROGRESS_BASE_H        = UI_PROGRESS.PROGRESS_BASE_H
+    local makeProgressWindowResizable = UI_PROGRESS.makeProgressWindowResizable
+    local normalizeProgressStage = UI_PROGRESS.normalizeProgressStage
+    local readableTerminalAccent = UI_PROGRESS.readableTerminalAccent
+    local drawTerminalFx         = UI_PROGRESS.drawTerminalFx
+    local formatProgressLine     = UI_PROGRESS.formatProgressLine
+    local progressUiLabel        = UI_PROGRESS.progressUiLabel
     local w, h = gfx.w, gfx.h
 
     -- Calculate scale based on window size
@@ -13623,52 +13381,6 @@ function getItemDisplayNameForTakes(item)
     return "Item"
 end
 
-local function snapshotTakePlaybackState(take)
-    if not take or not reaper.ValidatePtr(take, "MediaItem_Take*") then return nil end
-    local playrate = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")) or 1.0
-    if playrate < 0.0001 then playrate = 1.0 end
-    local pitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PITCH")) or 0.0
-    local preservePitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "B_PPITCH")) or 0
-    preservePitch = (preservePitch ~= 0) and 1 or 0
-    return {
-        playrate = playrate,
-        pitch = pitch,
-        preservePitch = preservePitch
-    }
-end
-
-local function snapshotItemPlaybackState(item)
-    if not item or not reaper.ValidatePtr(item, "MediaItem*") then return nil end
-    return snapshotTakePlaybackState(reaper.GetActiveTake(item))
-end
-
-local function applyTakePlaybackState(take, state, itemLen)
-    if not take or not state then return end
-    if not reaper.ValidatePtr(take, "MediaItem_Take*") then return end
-
-    local source = reaper.GetMediaItemTake_Source(take)
-    local sourceLen = nil
-    if source and reaper.GetMediaSourceLength then
-        local len = reaper.GetMediaSourceLength(source)
-        sourceLen = tonumber(len)
-    end
-
-    -- Imported separator output is normally already rendered in project-time.
-    -- Only transfer playback-state when source duration matches the expected
-    -- pre-baked length (itemLen * playrate), otherwise we double-apply stretch.
-    if sourceLen and itemLen and itemLen > 0 then
-        local expected = itemLen * (state.playrate or 1.0)
-        local tolerance = math.max(0.01, expected * 0.01)
-        if math.abs(sourceLen - expected) > tolerance then
-            return
-        end
-    end
-
-    reaper.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", state.playrate or 1.0)
-    reaper.SetMediaItemTakeInfo_Value(take, "D_PITCH", state.pitch or 0.0)
-    reaper.SetMediaItemTakeInfo_Value(take, "B_PPITCH", state.preservePitch or 0)
-end
-
 -- Post-processing: explode takes created by in-place output
 -- mode: "none", "explode_new_tracks", "explode_in_place", "explode_in_order"
 explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
@@ -13876,7 +13588,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
             end
         end
     end
-    local sourcePlaybackState = snapshotTakePlaybackState(take)
+    local sourcePlaybackState = GLUE_HELPERS.snapshotTakePlaybackState(take)
 
     reaper.Undo_BeginBlock()
 
@@ -13922,7 +13634,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
                 local newTake = reaper.AddTakeToMediaItem(newItem)
                 reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                 reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
-                applyTakePlaybackState(newTake, sourcePlaybackState, itemLen)
+                GLUE_HELPERS.applyTakePlaybackState(newTake, sourcePlaybackState, itemLen)
                 HELPERS.applyItemColorIfEnabled(newItem, color)
 
                 importedItems[#importedItems + 1] = newItem
@@ -14431,7 +14143,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if tn and tn ~= "" then sourceTrackName = tn end
         
         local sourceItemName = info.sourceItemName or sourceTrackName
-        local sourcePlaybackState = snapshotItemPlaybackState(item)
+        local sourcePlaybackState = GLUE_HELPERS.snapshotItemPlaybackState(item)
         local take = reaper.GetActiveTake(item)
         if take and not info.sourceItemName then
             local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
@@ -14484,7 +14196,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     local newTake = reaper.AddTakeToMediaItem(newItem)
                     reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
                     reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", outputNames.takeName, true)
-                    applyTakePlaybackState(newTake, sourcePlaybackState, ilen)
+                    GLUE_HELPERS.applyTakePlaybackState(newTake, sourcePlaybackState, ilen)
                     HELPERS.applyItemColorIfEnabled(newItem, color)
 
                     importedItems[#importedItems + 1] = newItem
@@ -15070,7 +14782,7 @@ function showResultWindow(selectedStems, message)
 end
 
 -- Run multi-track separation (parallel or sequential based on setting)
-runSingleTrackSeparation = function(trackList)
+_sep.runSingleTrackSeparation = function(trackList)
     refreshPythonPathFromExtState()
     local trustedWindowsRuntime = nil
     if OS == "Windows" then
@@ -15642,11 +15354,11 @@ runSingleTrackSeparation = function(trackList)
     if not multiTrackQueue.sequentialMode then
         -- Start all separation processes in parallel (uses more VRAM)
         for _, job in ipairs(trackJobs) do
-            startSeparationProcessForJob(job, 25)  -- Smaller segments for parallel
+            _sep.startSeparationProcessForJob(job, 25)  -- Smaller segments for parallel
         end
     else
         -- Sequential mode: start only the first job (uses less VRAM)
-        startSeparationProcessForJob(trackJobs[1], 40)  -- Larger segments for sequential
+        _sep.startSeparationProcessForJob(trackJobs[1], 40)  -- Larger segments for sequential
         multiTrackQueue.currentJobIndex = 1
     end
 
@@ -15657,12 +15369,12 @@ runSingleTrackSeparation = function(trackList)
     )
 
     -- Show progress window that monitors all jobs
-    showMultiTrackProgressWindow()
+    _sep.showMultiTrackProgressWindow()
 end
 
 -- Start a separation process for one job (no window, just background process)
 -- segmentSize: optional, defaults to 25 for parallel, 40 for sequential
-startSeparationProcessForJob = function(job, segmentSize)
+_sep.startSeparationProcessForJob = function(job, segmentSize)
     local trustedWindowsRuntime = nil
     if OS == "Windows" then
         trustedWindowsRuntime = getTrustedWindowsRuntimeState()
@@ -15933,7 +15645,7 @@ startSeparationProcessForJob = function(job, segmentSize)
 end
 
 -- Update progress for all jobs from their stdout files
-updateAllJobsProgress = function()
+_sep.updateAllJobsProgress = function()
     for _, job in ipairs(multiTrackQueue.jobs) do
         -- Only check progress for jobs that have been started
         if job.startTime then
@@ -15969,7 +15681,7 @@ updateAllJobsProgress = function()
                         local nextIndex = multiTrackQueue.currentJobIndex + 1
                         if nextIndex <= #multiTrackQueue.jobs then
                             local nextJob = multiTrackQueue.jobs[nextIndex]
-                            startSeparationProcessForJob(nextJob, 40)  -- Larger segments for sequential
+                            _sep.startSeparationProcessForJob(nextJob, 40)  -- Larger segments for sequential
                             multiTrackQueue.currentJobIndex = nextIndex
                         end
                     end
@@ -15997,14 +15709,14 @@ updateAllJobsProgress = function()
         if not runningJob and nextWaitingIndex ~= nil then
             local nextJob = multiTrackQueue.jobs[nextWaitingIndex]
             debugLog("Sequential queue fallback starting job " .. tostring(nextWaitingIndex))
-            startSeparationProcessForJob(nextJob, 40)
+            _sep.startSeparationProcessForJob(nextJob, 40)
             multiTrackQueue.currentJobIndex = math.max(tonumber(multiTrackQueue.currentJobIndex) or 0, nextWaitingIndex)
         end
     end
 end
 
 -- Check if all jobs are done
-allJobsDone = function()
+_sep.allJobsDone = function()
     for _, job in ipairs(multiTrackQueue.jobs) do
         if not job.done then return false end
     end
@@ -16012,7 +15724,7 @@ allJobsDone = function()
 end
 
 -- Calculate overall progress
-getOverallProgress = function()
+_sep.getOverallProgress = function()
     local total = 0
     for _, job in ipairs(multiTrackQueue.jobs) do
         total = total + (job.percent or 0)
@@ -16022,6 +15734,15 @@ end
 
 -- Draw multi-track progress window
 function drawMultiTrackProgressWindow()
+    -- Function-level aliases for extracted module (don't count toward chunk local limit)
+    local PROGRESS_BASE_W         = UI_PROGRESS.PROGRESS_BASE_W
+    local PROGRESS_BASE_H         = UI_PROGRESS.PROGRESS_BASE_H
+    local progressUiLabel         = UI_PROGRESS.progressUiLabel
+    local readableTerminalAccent  = UI_PROGRESS.readableTerminalAccent
+    local drawTerminalFx          = UI_PROGRESS.drawTerminalFx
+    local formatProgressLine      = UI_PROGRESS.formatProgressLine
+    local localizeProgressStagePrefix = UI_PROGRESS.localizeProgressStagePrefix
+    local getOverallProgress      = _sep.getOverallProgress
     local w, h = gfx.w, gfx.h
 
     -- Scale
@@ -16274,7 +15995,7 @@ function drawMultiTrackProgressWindow()
     end
     local barW = w - PS(40)
     local barH = PS(20)
-    local overallProgress = getOverallProgress()
+    local overallProgress = _sep.getOverallProgress()
     local animTime = proceduralArt.time or 0
 
     -- Progress bar background with subtle gradient
@@ -17144,7 +16865,7 @@ function multiTrackProgressLoop()
 
     if loopNow >= (multiTrackQueue.nextPollAt or 0) then
         multiTrackQueue.nextPollAt = loopNow + UI_PACING.multiTrackPollInterval
-        updateAllJobsProgress()
+        _sep.updateAllJobsProgress()
     end
 
     local result = nil
@@ -17169,18 +16890,18 @@ function multiTrackProgressLoop()
             end
         end
 
-        showMessage("Cancelled", progressUiLabel("progress_cancelled_status", "Cancelled"), "info", true)
+        showMessage("Cancelled", UI_PROGRESS.progressUiLabel("progress_cancelled_status", "Cancelled"), "info", true)
         return
     end
 
-    if allJobsDone() then
+    if _sep.allJobsDone() then
         -- Remember any size/position changes made during processing
         captureWindowGeometry(multiTrackQueue.windowTitle or getMultiTrackWindowTitle())
         saveSettings()
 
         gfx.quit()
         -- Process all results
-        processAllStemsResult()
+        _sep.processAllStemsResult()
         return
     end
 
@@ -17188,7 +16909,7 @@ function multiTrackProgressLoop()
 end
 
 -- Show multi-track progress window
-showMultiTrackProgressWindow = function()
+_sep.showMultiTrackProgressWindow = function()
     -- Keep processing settings unchanged while jobs are running.
     updateTheme()
 
@@ -17211,7 +16932,7 @@ end
 -- creating separate global/local variables in different parts of the script.
 
 -- Process all stems after parallel jobs complete
-processAllStemsResult = function()
+_sep.processAllStemsResult = function()
     SW_LOG.logExecResult("timing:finalize_start multi", nil, "")
     reaper.Undo_BeginBlock()
 
@@ -18136,7 +17857,7 @@ function runSeparationWorkflow()
                     timeSelectionItemMap = trackItems
                     debugLog("Multi-track time selection: using per-item jobs across tracks")
             end
-            runSingleTrackSeparation(trackList)
+            _sep.runSingleTrackSeparation(trackList)
             -- If multi-track setup failed before activating the queue, unlock so user can retry
             if not multiTrackQueue.active then
                 debugLog("Multi-track setup did not activate queue; resetting processing guard")
@@ -18152,7 +17873,7 @@ function runSeparationWorkflow()
                 closeProcessingWindow()
             end
             timeSelectionItemMap = trackItems
-            runSingleTrackSeparation(trackList)
+            _sep.runSingleTrackSeparation(trackList)
             if not multiTrackQueue.active then
                 debugLog("Multi-item setup did not activate queue; resetting processing guard")
                 isProcessingActive = false
@@ -18241,7 +17962,7 @@ function runSeparationWorkflow()
             if OS == "Windows" and progressState.windowOpen then
                 closeProcessingWindow()
             end
-            runSingleTrackSeparation(combinedTrackList)
+            _sep.runSingleTrackSeparation(combinedTrackList)
             if not multiTrackQueue.active then
                 debugLog("Combined selection setup did not activate queue; resetting processing guard")
                 isProcessingActive = false
@@ -18274,7 +17995,7 @@ function runSeparationWorkflow()
             if OS == "Windows" and progressState.windowOpen then
                 closeProcessingWindow()
             end
-            runSingleTrackSeparation(trackList)
+            _sep.runSingleTrackSeparation(trackList)
             -- If multi-track setup failed before activating the queue, unlock so user can retry
             if not multiTrackQueue.active then
                 debugLog("Multi-item setup did not activate queue; resetting processing guard")

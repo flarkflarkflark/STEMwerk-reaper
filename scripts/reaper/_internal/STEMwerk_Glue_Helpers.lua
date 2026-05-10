@@ -91,4 +91,45 @@ function M.addPostProcessCandidate(item)
     table.insert(_G.postProcessCandidates, item)
 end
 
+-- Take/item playback-state snapshot helpers (used by separation result processing)
+
+function M.snapshotTakePlaybackState(take)
+    if not take or not reaper.ValidatePtr(take, "MediaItem_Take*") then return nil end
+    local playrate = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")) or 1.0
+    if playrate < 0.0001 then playrate = 1.0 end
+    local pitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "D_PITCH")) or 0.0
+    local preservePitch = tonumber(reaper.GetMediaItemTakeInfo_Value(take, "B_PPITCH")) or 0
+    preservePitch = (preservePitch ~= 0) and 1 or 0
+    return { playrate = playrate, pitch = pitch, preservePitch = preservePitch }
+end
+
+function M.snapshotItemPlaybackState(item)
+    if not item or not reaper.ValidatePtr(item, "MediaItem*") then return nil end
+    return M.snapshotTakePlaybackState(reaper.GetActiveTake(item))
+end
+
+function M.applyTakePlaybackState(take, state, itemLen)
+    if not take or not state then return end
+    if not reaper.ValidatePtr(take, "MediaItem_Take*") then return end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    local sourceLen = nil
+    if source and reaper.GetMediaSourceLength then
+        local len = reaper.GetMediaSourceLength(source)
+        sourceLen = tonumber(len)
+    end
+
+    if sourceLen and itemLen and itemLen > 0 then
+        local expected = itemLen * (state.playrate or 1.0)
+        local tolerance = math.max(0.01, expected * 0.01)
+        if math.abs(sourceLen - expected) > tolerance then
+            return
+        end
+    end
+
+    reaper.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", state.playrate or 1.0)
+    reaper.SetMediaItemTakeInfo_Value(take, "D_PITCH", state.pitch or 0.0)
+    reaper.SetMediaItemTakeInfo_Value(take, "B_PPITCH", state.preservePitch or 0)
+end
+
 return M
