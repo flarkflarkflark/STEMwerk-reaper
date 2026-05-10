@@ -4982,23 +4982,17 @@ local function drawUtilityNativeHelpWindow()
         return hover
     end
 
-    local lightHover = smallBox(dark and "D" or "L", w - pad - 34, 12, 26, 24)
-    local langHover = smallBox(string.upper(SETTINGS.language or "EN"), w - pad - 70, 12, 30, 24)
-    if lightHover and mouseDown and not helpState.wasMouseDown then
-        SETTINGS.darkMode = not SETTINGS.darkMode
-        updateTheme()
-        saveSettings()
-    end
-    if langHover and mouseDown and not helpState.wasMouseDown then
-        local langs = {"en", "nl", "de"}
-        local idx = 1
-        for i, l in ipairs(langs) do if l == SETTINGS.language then idx = i break end end
-        setLanguage(langs[(idx % #langs) + 1])
-        saveSettings()
-    elseif langHover and rightMouseDown and not helpState.wasRightMouseDown then
-        SETTINGS.tooltips = not SETTINGS.tooltips
-        saveSettings()
-    end
+    UI_CONTROLS.drawUtilityControls({
+        S = HS,
+        w = w,
+        mx = mx, my = my,
+        mouseDown = mouseDown,
+        state = helpState,
+        setLanguageFn = setLanguage,
+        themeX = w - pad - 34,
+        themeY = 12,
+        themeSize = 26,
+    })
 
     local tabY = topH + pad
     local tabX = pad
@@ -7429,121 +7423,98 @@ local function drawMessageWindow()
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
     local controlsOpacity = _msgUtility and 1.0 or updateControlsOpacity(messageWindowState, mouseInControls)
 
-    if _msgUtility then
-        -- D/L utility box (same as main dialog)
-        local label = SETTINGS.darkMode and "D" or "L"
-        gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte("b"))
-        local tw = gfx.measurestr(label)
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
-        if themeHover then
-            gfx.set(THEME.buttonHover[1], THEME.buttonHover[2], THEME.buttonHover[3], 0.95)
-        else
-            gfx.set(THEME.button[1], THEME.button[2], THEME.button[3], 0.75)
-        end
-        gfx.rect(themeX + 1, themeY + 1, math.max(1, themeSize - 2), math.max(1, themeSize - 2), 1)
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        gfx.x = themeX + (themeSize - tw) / 2
-        gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
-        gfx.drawstr(label)
-    elseif SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)
-        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
-    else
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    if themeHover and rightMouseDown and not (messageWindowState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
-        cycleThemePreset()
-    end
-    if themeHover and mouseDown and not messageWindowState.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.darkMode = not SETTINGS.darkMode
-        updateTheme()
-        saveSettings()
-    end
-
-    -- Language toggle button (small text showing current language)
     local langW = PS(22)
     local langH = PS(14)
     local langX = themeX - langW - PS(6)
     local langY = themeY + (themeSize - langH) / 2
     local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
+    local fxHover = false
 
-    -- Draw language indicator
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local langCode = string.upper(SETTINGS.language or "EN")
-    local langTextW = gfx.measurestr(langCode)
-
-    if langHover then
-        gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
+    if _msgUtility then
+        UI_CONTROLS.drawUtilityControls({
+            S = PS, w = w, mx = mx, my = my,
+            mouseDown = mouseDown,
+            state = messageWindowState,
+            setLanguageFn = setLanguage,
+            themeX = themeX, themeY = themeY, themeSize = themeSize,
+        })
     else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
-    end
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    -- Handle language toggle click
-    local rightMouseDown = gfx.mouse_cap & 2 == 2
-    if langHover and rightMouseDown and not (messageWindowState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
-        SETTINGS.tooltips = not SETTINGS.tooltips
-        saveSettings()
-    end
-    if langHover and mouseDown and not messageWindowState.wasMouseDown and controlsOpacity > 0.3 then
-        -- Cycle through languages: en -> nl -> de -> en
-        local langs = {"en", "nl", "de"}
-        local currentIdx = 1
-        for i, l in ipairs(langs) do
-            if l == SETTINGS.language then currentIdx = i break end
+        if SETTINGS.darkMode then
+            gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
+            gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
+            gfx.set(0, 0, 0, 1 * controlsOpacity)
+            gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
+        else
+            gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
+            gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
+            gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
+            for i = 0, 7 do
+                local angle = i * math.pi / 4
+                local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
+                local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
+                local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
+                local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
+                gfx.line(x1, y1, x2, y2)
+            end
         end
-        local nextIdx = (currentIdx % #langs) + 1
-        setLanguage(langs[nextIdx])
-        saveSettings()
-    end
-
-    -- === FX TOGGLE (below theme icon) ===
-    local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(3)
-    local fxHover = not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
-
-    local fxAlpha = ((type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and 0 or ((fxHover and 1 or 0.7) * controlsOpacity))
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + PS(1)
-    gfx.drawstr(fxText)
-
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
-    end
-
-    if fxHover and mouseDown and not messageWindowState.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
+        if themeHover and rightMouseDown and not (messageWindowState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
+            cycleThemePreset()
+        end
+        if themeHover and mouseDown and not messageWindowState.wasMouseDown and controlsOpacity > 0.3 then
+            SETTINGS.darkMode = not SETTINGS.darkMode
+            updateTheme()
+            saveSettings()
+        end
+        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+        local langCode = string.upper(SETTINGS.language or "EN")
+        local langTextW = gfx.measurestr(langCode)
+        if langHover then
+            gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
+        else
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
+        end
+        gfx.x = langX + (langW - langTextW) / 2
+        gfx.y = langY
+        gfx.drawstr(langCode)
+        if langHover and rightMouseDown and not (messageWindowState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
+            SETTINGS.tooltips = not SETTINGS.tooltips
+            saveSettings()
+        end
+        if langHover and mouseDown and not messageWindowState.wasMouseDown and controlsOpacity > 0.3 then
+            local langs = {"en", "nl", "de"}
+            local currentIdx = 1
+            for i, l in ipairs(langs) do if l == SETTINGS.language then currentIdx = i break end end
+            setLanguage(langs[(currentIdx % #langs) + 1])
+            saveSettings()
+        end
+        local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
+        local fxX = themeX + (themeSize - fxSize) / 2
+        local fxY = themeY + themeSize + PS(3)
+        fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
+        local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+        if SETTINGS.visualFX then
+            gfx.set(0.4, 0.9, 0.5, fxAlpha)
+        else
+            gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
+        end
+        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+        local fxText = "FX"
+        local fxTextW = gfx.measurestr(fxText)
+        gfx.x = fxX + (fxSize - fxTextW) / 2
+        gfx.y = fxY + PS(1)
+        gfx.drawstr(fxText)
+        if SETTINGS.visualFX then
+            gfx.set(1, 1, 0.5, fxAlpha * 0.8)
+            gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
+            gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
+        else
+            gfx.set(0.8, 0.3, 0.3, fxAlpha)
+            gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
+        end
+        if fxHover and mouseDown and not messageWindowState.wasMouseDown and controlsOpacity > 0.3 then
+            SETTINGS.visualFX = not SETTINGS.visualFX
+            saveSettings()
+        end
     end
 
     -- Track tooltip
@@ -10369,18 +10340,18 @@ function renderTopRightControls(ctx)
 
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     if utilityMode then
-        local label = SETTINGS.darkMode and "D" or "L"
-        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], controlsOpacity)
-        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
-        gfx.set(THEME.button[1], THEME.button[2], THEME.button[3], (themeHover and 0.95 or 0.72) * controlsOpacity)
-        gfx.rect(themeX + 1, themeY + 1, math.max(1, themeSize - 2), math.max(1, themeSize - 2), 1)
-        gfx.setfont(1, "Arial", S(9), string.byte('b'))
-        local labelW = gfx.measurestr(label)
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], controlsOpacity)
-        gfx.x = themeX + (themeSize - labelW) / 2
-        gfx.y = themeY + (themeSize - gfx.texth) / 2
-        gfx.drawstr(label)
-    elseif SETTINGS.darkMode then
+        UI_CONTROLS.drawUtilityControls({
+            S = S,
+            w = gfx.w,
+            mx = gfx.mouse_x, my = gfx.mouse_y,
+            mouseDown = mouseDown,
+            state = GUI,
+            setLanguageFn = setLanguage,
+            themeX = themeX, themeY = themeY, themeSize = themeSize,
+        })
+        return
+    end
+    if SETTINGS.darkMode then
         gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
         gfx.set(0, 0, 0, 1 * controlsOpacity)
@@ -12835,125 +12806,93 @@ local function drawProgressWindow()
     local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(progressState, mouseInControls)
 
     if utilityMode then
-        local bg = THEME.button or THEME.inputBg or {0.25, 0.25, 0.25}
-        local border = THEME.border or {0.45, 0.45, 0.45}
-        local txt = THEME.text or {0.85, 0.85, 0.85}
-        gfx.set(bg[1], bg[2], bg[3], 0.95 * controlsOpacity)
-        gfx.rect(themeX, themeY, themeSize, themeSize, 1)
-        gfx.set(border[1], border[2], border[3], controlsOpacity)
-        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
-        gfx.set(txt[1], txt[2], txt[3], controlsOpacity)
-        gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte('b'))
-        local label = SETTINGS.darkMode and "D" or "L"
-        local lw = gfx.measurestr(label)
-        gfx.x = themeX + (themeSize - lw) / 2
-        gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
-        gfx.drawstr(label)
-    elseif SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)  -- Pure black for moon overlay
-        gfx.circle(themeX + themeSize/2 + 3, themeY + themeSize/2 - 2, themeSize/2 - 3, 1, 1)
+        UI_CONTROLS.drawUtilityControls({
+            S = PS, w = w, mx = mx, my = my,
+            mouseDown = mouseDown,
+            state = progressState,
+            setLanguageFn = setLanguage,
+            themeX = themeX, themeY = themeY, themeSize = themeSize,
+        })
     else
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 1)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 1)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
+        if SETTINGS.darkMode then
+            gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)
+            gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
+            gfx.set(0, 0, 0, 1 * controlsOpacity)
+            gfx.circle(themeX + themeSize/2 + 3, themeY + themeSize/2 - 2, themeSize/2 - 3, 1, 1)
+        else
+            gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
+            gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
+            gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
+            for i = 0, 7 do
+                local angle = i * math.pi / 4
+                local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 1)
+                local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 1)
+                local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
+                local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
+                gfx.line(x1, y1, x2, y2)
+            end
         end
-    end
-
-    -- Theme click and tooltip
-    if themeHover and controlsOpacity > 0.3 then
-        GUI.uiClickedThisFrame = true
-        tooltipText = getThemeToggleTooltip()
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-        if rightMouseDown and not (progressState.wasRightMouseDown or false) then
-            cycleThemePreset()
+        if themeHover and controlsOpacity > 0.3 then
+            GUI.uiClickedThisFrame = true
+            tooltipText = getThemeToggleTooltip()
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+            if rightMouseDown and not (progressState.wasRightMouseDown or false) then cycleThemePreset() end
+            if mouseDown and not progressState.wasMouseDown then
+                SETTINGS.darkMode = not SETTINGS.darkMode; updateTheme(); saveSettings()
+            end
         end
-        if mouseDown and not progressState.wasMouseDown then
-            SETTINGS.darkMode = not SETTINGS.darkMode
-            updateTheme()
-            saveSettings()
+        local langCode = string.upper(SETTINGS.language or "EN")
+        local langW = PS(22)
+        local langH = PS(14)
+        local langX = themeX - langW - PS(6)
+        local langY = themeY + (themeSize - langH) / 2
+        local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
+        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+        local langTextW = gfx.measurestr(langCode)
+        gfx.set(0.5, 0.6, 0.8, (langHover and 1 or 0.4) * controlsOpacity)
+        gfx.x = langX + (langW - langTextW) / 2
+        gfx.y = langY
+        gfx.drawstr(langCode)
+        if langHover and controlsOpacity > 0.3 then
+            GUI.uiClickedThisFrame = true
+            tooltipText = T("tooltip_change_language")
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
         end
-    end
-
-    -- === LANGUAGE TOGGLE (next to theme) ===
-    local langCode = string.upper(SETTINGS.language or "EN")
-    local langW = PS(22)
-    local langH = PS(14)
-    local langX = themeX - langW - PS(6)
-    local langY = themeY + (themeSize - langH) / 2
-    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local langTextW = gfx.measurestr(langCode)
-    gfx.set(0.5, 0.6, 0.8, (langHover and 1 or 0.4) * controlsOpacity)
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    -- Language tooltip and click
-    if langHover and controlsOpacity > 0.3 then
-        GUI.uiClickedThisFrame = true
-        tooltipText = T("tooltip_change_language")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-    end
-    if langHover and rightMouseDown and not (progressState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
-        SETTINGS.tooltips = not SETTINGS.tooltips
-        saveSettings()
-    end
-    if langHover and mouseDown and not progressState.wasMouseDown and controlsOpacity > 0.3 then
-        local langs = {"en", "nl", "de"}
-        local currentIdx = 1
-        for i, l in ipairs(langs) do
-            if l == SETTINGS.language then currentIdx = i break end
+        if langHover and rightMouseDown and not (progressState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
+            SETTINGS.tooltips = not SETTINGS.tooltips; saveSettings()
         end
-        local nextIdx = (currentIdx % #langs) + 1
-        setLanguage(langs[nextIdx])
-        saveSettings()
-    end
-
-    -- === FX TOGGLE (below theme icon) ===
-    local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(3)
-    local fxHover = not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
-
-    local fxAlpha = ((type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and 0 or ((fxHover and 1 or 0.7) * controlsOpacity))
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + PS(1)
-    gfx.drawstr(fxText)
-
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
-    end
-
-    if fxHover and controlsOpacity > 0.3 then
-        GUI.uiClickedThisFrame = true
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-    end
-    if fxHover and mouseDown and not progressState.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
+        if langHover and mouseDown and not progressState.wasMouseDown and controlsOpacity > 0.3 then
+            local langs = {"en", "nl", "de"}
+            local currentIdx = 1
+            for i, l in ipairs(langs) do if l == SETTINGS.language then currentIdx = i break end end
+            setLanguage(langs[(currentIdx % #langs) + 1]); saveSettings()
+        end
+        local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
+        local fxX = themeX + (themeSize - fxSize) / 2
+        local fxY = themeY + themeSize + PS(3)
+        local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
+        local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+        if SETTINGS.visualFX then gfx.set(0.4, 0.9, 0.5, fxAlpha) else gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6) end
+        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+        local fxText = "FX"
+        local fxTextW = gfx.measurestr(fxText)
+        gfx.x = fxX + (fxSize - fxTextW) / 2; gfx.y = fxY + PS(1); gfx.drawstr(fxText)
+        if SETTINGS.visualFX then
+            gfx.set(1, 1, 0.5, fxAlpha * 0.8)
+            gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
+            gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
+        else
+            gfx.set(0.8, 0.3, 0.3, fxAlpha)
+            gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
+        end
+        if fxHover and controlsOpacity > 0.3 then
+            GUI.uiClickedThisFrame = true
+            tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        end
+        if fxHover and mouseDown and not progressState.wasMouseDown and controlsOpacity > 0.3 then
+            SETTINGS.visualFX = not SETTINGS.visualFX; saveSettings()
+        end
     end
 
     -- NOTE: wasMouseDown is set at END of function to allow art click detection
@@ -16137,90 +16076,67 @@ function drawMultiTrackProgressWindow()
     local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(multiTrackQueue, mouseInControls)
 
     if utilityMode then
-        local bg = THEME.button or THEME.inputBg or {0.25, 0.25, 0.25}
-        local border = THEME.border or {0.45, 0.45, 0.45}
-        local txt = THEME.text or {0.85, 0.85, 0.85}
-        gfx.set(bg[1], bg[2], bg[3], 0.95 * controlsOpacity)
-        gfx.rect(themeX, themeY, themeSize, themeSize, 1)
-        gfx.set(border[1], border[2], border[3], controlsOpacity)
-        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
-        gfx.set(txt[1], txt[2], txt[3], controlsOpacity)
-        gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte('b'))
-        local label = SETTINGS.darkMode and "D" or "L"
-        local lw = gfx.measurestr(label)
-        gfx.x = themeX + (themeSize - lw) / 2
-        gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
-        gfx.drawstr(label)
-    elseif SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)  -- Pure black for moon overlay
-        gfx.circle(themeX + themeSize/2 + 3, themeY + themeSize/2 - 2, themeSize/2 - 3, 1, 1)
+        UI_CONTROLS.drawUtilityControls({
+            S = PS, w = w, mx = mx, my = my,
+            mouseDown = mouseDown,
+            state = multiTrackQueue,
+            setLanguageFn = setLanguage,
+            themeX = themeX, themeY = themeY, themeSize = themeSize,
+        })
     else
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 1)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 1)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
+        if SETTINGS.darkMode then
+            gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)
+            gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
+            gfx.set(0, 0, 0, 1 * controlsOpacity)
+            gfx.circle(themeX + themeSize/2 + 3, themeY + themeSize/2 - 2, themeSize/2 - 3, 1, 1)
+        else
+            gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
+            gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
+            gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.7) * controlsOpacity)
+            for i = 0, 7 do
+                local angle = i * math.pi / 4
+                local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 1)
+                local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 1)
+                local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
+                local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
+                gfx.line(x1, y1, x2, y2)
+            end
         end
-    end
-
-    -- Theme click and tooltip
-    if themeHover and controlsOpacity > 0.3 then
-        GUI.uiClickedThisFrame = true
-        tooltipText = getThemeToggleTooltip()
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-        if rightMouseDown and not (multiTrackQueue.wasRightMouseDown or false) then
-            cycleThemePreset()
+        if themeHover and controlsOpacity > 0.3 then
+            GUI.uiClickedThisFrame = true
+            tooltipText = getThemeToggleTooltip()
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+            if rightMouseDown and not (multiTrackQueue.wasRightMouseDown or false) then cycleThemePreset() end
+            if mouseDown and not multiTrackQueue.wasMouseDown then
+                SETTINGS.darkMode = not SETTINGS.darkMode; updateTheme(); saveSettings()
+            end
         end
-        if mouseDown and not multiTrackQueue.wasMouseDown then
-            SETTINGS.darkMode = not SETTINGS.darkMode
-            updateTheme()
-            saveSettings()
+        local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
+        local fxX = themeX + (themeSize - fxSize) / 2
+        local fxY = themeY + themeSize + PS(3)
+        local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
+        local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
+        if SETTINGS.visualFX then gfx.set(0.4, 0.9, 0.5, fxAlpha) else gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6) end
+        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+        local fxText = "FX"
+        local fxTextW = gfx.measurestr(fxText)
+        gfx.x = fxX + (fxSize - fxTextW) / 2; gfx.y = fxY + PS(1); gfx.drawstr(fxText)
+        if SETTINGS.visualFX then
+            gfx.set(1, 1, 0.5, fxAlpha * 0.8)
+            gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
+            gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
+        else
+            gfx.set(0.8, 0.3, 0.3, fxAlpha)
+            gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
         end
-    end
-
-    -- === FX TOGGLE (below theme icon) ===
-    local fxSize = math.max(PS(10), math.floor(PS(16) * iconScale + 0.5))
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(3)
-    local fxHover = not (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
-
-    local fxAlpha = ((type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and 0 or ((fxHover and 1 or 0.7) * controlsOpacity))
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + PS(1)
-    gfx.drawstr(fxText)
-
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
-    end
-
-    if fxHover and controlsOpacity > 0.3 then
-        GUI.uiClickedThisFrame = true
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-    end
-    if fxHover and mouseDown and not multiTrackQueue.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
+        if fxHover and controlsOpacity > 0.3 then
+            GUI.uiClickedThisFrame = true
+            tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        end
+        if fxHover and mouseDown and not multiTrackQueue.wasMouseDown and controlsOpacity > 0.3 then
+            SETTINGS.visualFX = not SETTINGS.visualFX; saveSettings()
+        end
     end
 
     -- Title / branding
@@ -16273,45 +16189,39 @@ function drawMultiTrackProgressWindow()
     end
     gfx.drawstr(string.format(" - %s (%d %s)", runtimeMode, titleJobCount, jobUnitLabel(titleJobCount)))
 
-    -- Language toggle (left of theme toggle)
-    local langW = PS(22)
-    local langH = PS(14)
-    local langX = themeX - langW - PS(6)
-    local langY = themeY + (themeSize - langH) / 2
-    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
-
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local langCode = string.upper(SETTINGS.language or "EN")
-    local langTextW = gfx.measurestr(langCode)
-
-    if langHover then
-        GUI.uiClickedThisFrame = true
-        gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
-        if controlsOpacity > 0.3 then
-            tooltipText = T("tooltip_change_language")
-            tooltipX, tooltipY = mx + PS(10), my + PS(15)
-            if rightMouseDown and not (multiTrackQueue.wasRightMouseDown or false) then
-                SETTINGS.tooltips = not SETTINGS.tooltips
-                saveSettings()
-            end
-            if mouseDown and not multiTrackQueue.wasMouseDown then
-                -- Cycle through languages
-                local langs = {"en", "nl", "de"}
-                local currentIdx = 1
-                for i, l in ipairs(langs) do
-                    if l == SETTINGS.language then currentIdx = i; break end
+    if not utilityMode then
+        -- Language toggle (left of theme toggle)
+        local langW = PS(22)
+        local langH = PS(14)
+        local langX = themeX - langW - PS(6)
+        local langY = themeY + (themeSize - langH) / 2
+        local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
+        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+        local langCode = string.upper(SETTINGS.language or "EN")
+        local langTextW = gfx.measurestr(langCode)
+        if langHover then
+            GUI.uiClickedThisFrame = true
+            gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
+            if controlsOpacity > 0.3 then
+                tooltipText = T("tooltip_change_language")
+                tooltipX, tooltipY = mx + PS(10), my + PS(15)
+                if rightMouseDown and not (multiTrackQueue.wasRightMouseDown or false) then
+                    SETTINGS.tooltips = not SETTINGS.tooltips; saveSettings()
                 end
-                local nextIdx = (currentIdx % #langs) + 1
-                setLanguage(langs[nextIdx])
-                saveSettings()
+                if mouseDown and not multiTrackQueue.wasMouseDown then
+                    local langs = {"en", "nl", "de"}
+                    local currentIdx = 1
+                    for i, l in ipairs(langs) do if l == SETTINGS.language then currentIdx = i; break end end
+                    setLanguage(langs[(currentIdx % #langs) + 1]); saveSettings()
+                end
             end
+        else
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
         end
-    else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
+        gfx.x = langX + (langW - langTextW) / 2
+        gfx.y = langY
+        gfx.drawstr(langCode)
     end
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
-    gfx.drawstr(langCode)
 
     -- Stem indicators (simple colored boxes, like single-track)
     local selectedStems = {}

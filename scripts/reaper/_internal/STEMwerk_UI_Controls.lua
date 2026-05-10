@@ -75,6 +75,51 @@ local function cycleLanguageSetting(setLanguageFn)
     saveSettings()
 end
 
+local function drawUtilityControlsCore(ctx)
+    local S = ctx.S
+    local w = ctx.w
+    local mx, my = ctx.mx, ctx.my
+    local mouseDown = ctx.mouseDown
+    local state = ctx.state or {}
+
+    local iconScale = ctx.iconScale or 0.66
+    local themeSize = ctx.themeSize or math.max(S(12), math.floor(S(20) * iconScale + 0.5))
+    local themeX = ctx.themeX or (w - themeSize - S(10))
+    local themeY = ctx.themeY or S(8)
+    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
+
+    if themeHover then GUI.uiClickedThisFrame = true end
+    drawUtilityThemeToggle(themeX, themeY, themeSize, themeHover, 1.0)
+    if themeHover and mouseDown and not state.wasMouseDown then
+        SETTINGS.darkMode = not SETTINGS.darkMode
+        updateTheme()
+        saveSettings()
+    end
+
+    local langW = S(22)
+    local langH = S(14)
+    local langX = themeX - langW - S(6)
+    local langY = themeY + (themeSize - langH) / 2
+    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
+    local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
+
+    gfx.setfont(1, "Arial", S(9), string.byte("b"))
+    local langCode = string.upper(SETTINGS.language or "EN")
+    local langTextW = gfx.measurestr(langCode)
+    if langHover then
+        GUI.uiClickedThisFrame = true
+        gfx.set(accent[1], accent[2], accent[3], 1)
+        if mouseDown and not state.wasMouseDown then
+            cycleLanguageSetting(ctx.setLanguageFn)
+        end
+    else
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8)
+    end
+    gfx.x = langX + (langW - langTextW) / 2
+    gfx.y = langY
+    gfx.drawstr(langCode)
+end
+
 local function drawHelpControls(ctx)
     local S = ctx.S
     local mx, my = ctx.mx, ctx.my
@@ -92,12 +137,18 @@ local function drawHelpControls(ctx)
     local tooltipX = ctx.tooltipX
     local tooltipY = ctx.tooltipY
 
+    if utilityMode then
+        drawUtilityControlsCore(ctx)
+        ctx.tooltipText = tooltipText
+        ctx.tooltipX = tooltipX
+        ctx.tooltipY = tooltipY
+        return
+    end
+
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
     local iconPalette = getFunctionalIconPalette()
     local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
-    if utilityMode then
-        drawUtilityThemeToggle(themeX, themeY, themeSize, themeHover, controlsOpacity)
-    elseif SETTINGS.darkMode then
+    if SETTINGS.darkMode then
         gfx.set(iconPalette.moon[1], iconPalette.moon[2], iconPalette.moon[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
         gfx.set(iconPalette.moonCutout[1], iconPalette.moonCutout[2], iconPalette.moonCutout[3], 1 * controlsOpacity)
@@ -233,10 +284,19 @@ local function drawResultControls(ctx)
         applyControlsOpacity = _G.updateControlsOpacity
     end
     local utilityMode = isUtilityMode()
-    local controlsOpacity
     if utilityMode then
-        controlsOpacity = 1.0
-    elseif type(applyControlsOpacity) == "function" then
+        ctx.themeX = themeX
+        ctx.themeY = themeY
+        ctx.themeSize = themeSize
+        drawUtilityControlsCore(ctx)
+        ctx.tooltipText = tooltipText
+        ctx.tooltipX = tooltipX
+        ctx.tooltipY = tooltipY
+        return
+    end
+
+    local controlsOpacity
+    if type(applyControlsOpacity) == "function" then
         controlsOpacity = applyControlsOpacity(state, mouseInControls)
     else
         controlsOpacity = mouseInControls and 1.0 or 0.0
@@ -248,9 +308,7 @@ local function drawResultControls(ctx)
     local iconPalette = getFunctionalIconPalette()
     local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
 
-    if utilityMode then
-        drawUtilityThemeToggle(themeX, themeY, themeSize, themeHover, controlsOpacity)
-    elseif SETTINGS.darkMode then
+    if SETTINGS.darkMode then
         gfx.set(iconPalette.moon[1], iconPalette.moon[2], iconPalette.moon[3], (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize / 2, themeY + themeSize / 2, themeSize / 2 - 2, 1, 1)
         gfx.set(iconPalette.moonCutout[1], iconPalette.moonCutout[2], iconPalette.moonCutout[3], 1 * controlsOpacity)
@@ -372,5 +430,7 @@ function M.drawTopRightControls(ctx)
     drawHelpControls(ctx)
     return ctx
 end
+
+M.drawUtilityControls = drawUtilityControlsCore
 
 return M
