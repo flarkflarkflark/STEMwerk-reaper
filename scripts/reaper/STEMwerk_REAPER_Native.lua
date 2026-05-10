@@ -8,4 +8,13 @@ _G.FORCE_THEME_PRESET = "reaper_native"
 
 local info = debug.getinfo(1, "S")
 local script_path = info and info.source and info.source:match("@?(.*[/\\])") or ""
-dofile(script_path .. "STEMwerk.lua")
+local main_path = script_path .. "STEMwerk.lua"
+
+local f = io.open(main_path, "r")
+if not f then
+    reaper.MB("Could not find normal STEMwerk.lua at:\n" .. main_path, "STEMwerk Test Entrypoint Error", 0)
+    return
+end
+f:close()
+
+dofile(main_path)
