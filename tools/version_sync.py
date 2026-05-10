@@ -120,6 +120,7 @@ def main() -> int:
     lua_version_files = [
         "scripts/reaper/STEMwerk.lua",
         "scripts/reaper/STEMwerk-SETUP.lua",
+        "scripts/reaper/STEMwerk_Save_Support_Bundle.lua",
         "scripts/reaper/STEMwerk_AI_Separate.lua",
         "scripts/reaper/STEMwerk_Setup_Toolbar.lua",
         "scripts/reaper/STEMwerk_Explode_Takes.lua",

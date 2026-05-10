@@ -2,12 +2,15 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.1.8" author="flarkAUDIO" time="1778368183">
+      <version name="2.2.2.1.9" author="flarkAUDIO" time="1778373560">
         <changelog><![CDATA[
-- ReaPack-only macOS Apple Silicon Auto/MPS hotfix
-- Auto on Apple Silicon now prefers CPU to avoid a known PyTorch MPS limitation in HTDemucs/audio-separator
-- Explicit Apple MPS remains available with PyTorch MPS fallback enabled
-- Known MPS unsupported-op failures now get a clearer message
+- ReaPack-only support diagnostics hotfix
+- Adds STEMwerk_Save_Support_Bundle.lua
+- Adds Save Support Bundle to the setup/maintenance flow
+- Collects version/platform/runtime diagnostics, Python/FFmpeg/backend info, logs, state files, and sanitized temp inventory
+- Excludes audio/media/model/project payloads
+- Adds headless support-bundle CI coverage across Linux, Windows, and macOS
+- No backend behavior changes
 - No dependency stack changes
 - No installer or release asset changes
 ]]></changelog>
