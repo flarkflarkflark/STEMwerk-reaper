@@ -10600,10 +10600,13 @@ function renderProcessingHeader(ctx)
     local deleteLabel = T("temp_files_delete") or "Delete"
     local tempLabel = SETTINGS.keepTempFiles and keepLabel or deleteLabel
     local tempR, tempG, tempB
+    local _procUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     if SETTINGS.keepTempFiles then
         tempR = THEME.accent[1] * 255
         tempG = THEME.accent[2] * 255
         tempB = THEME.accent[3] * 255
+    elseif _procUtility then
+        tempR, tempG, tempB = 179, 51, 51
     else
         tempR, tempG, tempB = 255, 120, 120
     end
@@ -10679,6 +10682,7 @@ function renderMainColumns(ctx)
         math.floor(THEME.button[3] * 255),
     } or nil
     local function presetColor(c) return utilityMode and _utilNeutral or c end
+    local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
     if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, presetColor({80, 80, 90}), presetsBtnFontSize) then applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
@@ -10740,9 +10744,9 @@ function renderMainColumns(ctx)
             local stemBtnColor = stem.color
             if utilityMode then
                 stemBtnColor = {
-                    math.floor(THEME.buttonPrimary[1] * 255),
-                    math.floor(THEME.buttonPrimary[2] * 255),
-                    math.floor(THEME.buttonPrimary[3] * 255),
+                    math.floor(THEME.button[1] * 255),
+                    math.floor(THEME.button[2] * 255),
+                    math.floor(THEME.button[3] * 255),
                 }
             end
             if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stemBtnColor, stemsBtnFontSize) then
@@ -10920,7 +10924,7 @@ function renderMainColumns(ctx)
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_original"))
 
         afterY = afterY + S(22)
-        local delItemColor = SETTINGS.deleteOriginal and {255, 120, 120} or {160, 160, 160}
+        local delItemColor = SETTINGS.deleteOriginal and _utilDanger or {160, 160, 160}
         if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], afterBoxW, afterBtnFontSize) then
             SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
             if SETTINGS.deleteOriginal then
@@ -10931,7 +10935,7 @@ function renderMainColumns(ctx)
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_original"))
 
         afterY = afterY + S(22)
-        local delTrackColor = SETTINGS.deleteOriginalTrack and {255, 120, 120} or {160, 160, 160}
+        local delTrackColor = SETTINGS.deleteOriginalTrack and _utilDanger or {160, 160, 160}
         if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], afterBoxW, afterBtnFontSize) then
             SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
             if SETTINGS.deleteOriginalTrack then
@@ -10965,7 +10969,7 @@ function renderMainColumns(ctx)
             setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_selection"))
 
             afterY = afterY + S(22)
-            local delSelColor = SETTINGS.deleteSelection and {255, 120, 120} or {160, 160, 160}
+            local delSelColor = SETTINGS.deleteSelection and _utilDanger or {160, 160, 160}
             if drawCheckbox(col6X, afterY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], afterBoxW, afterBtnFontSize) then
                 SETTINGS.deleteSelection = not SETTINGS.deleteSelection
                 if SETTINGS.deleteSelection then
@@ -11335,6 +11339,7 @@ function handleDialogKeyboard(ctx)
 end
 
 function renderFlarkLogo(ctx)
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then return end
     local S = ctx.S
     local w = ctx.w
 
