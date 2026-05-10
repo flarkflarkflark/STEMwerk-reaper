@@ -941,3 +941,9 @@ function cycleThemePreset()
     updateTheme()
     saveSettings()
 end
+
+function isThemeUtilityMode()
+    local presetId = _G.FORCE_THEME_PRESET or (SETTINGS and SETTINGS.themePreset)
+    return normalizeThemePreset(presetId) == "reaper_native"
+end
+

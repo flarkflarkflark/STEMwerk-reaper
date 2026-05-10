@@ -149,12 +149,15 @@ function M.drawTooltipStyled(tooltipText, tooltipX, tooltipY, winW, winH, paddin
     local borderWeight = getThemeBorderWeight(nil, 1)
     drawThemeSurfaceBox(tx, ty, boxW, boxH, ttBg, ttBorder, ttAlpha, 1, radius, borderWeight, 0.75, "tooltip")
 
-    for i = 0, boxW - 1 do
-        local colorIdx = math.floor(i / boxW * 4) + 1
-        colorIdx = math.min(4, math.max(1, colorIdx))
-        local c = STEM_BORDER_COLORS[colorIdx]
-        gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
-        gfx.line(tx + i, ty, tx + i, ty + 2)
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    if not utilityMode then
+        for i = 0, boxW - 1 do
+            local colorIdx = math.floor(i / boxW * 4) + 1
+            colorIdx = math.min(4, math.max(1, colorIdx))
+            local c = STEM_BORDER_COLORS[colorIdx]
+            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
+            gfx.line(tx + i, ty, tx + i, ty + 2)
+        end
     end
 
     gfx.set(ttText[1], ttText[2], ttText[3], 1)
@@ -331,12 +334,15 @@ function M.drawTooltip()
         local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
         drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
 
-        for i = 0, tw - 1 do
-            local colorIdx = math.floor(i / tw * 4) + 1
-            colorIdx = math.min(4, math.max(1, colorIdx))
-            local c = titleColors[colorIdx]
-            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
-            gfx.line(tx + i, ty, tx + i, ty + 2)
+        local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        if not utilityMode then
+            for i = 0, tw - 1 do
+                local colorIdx = math.floor(i / tw * 4) + 1
+                colorIdx = math.min(4, math.max(1, colorIdx))
+                local c = titleColors[colorIdx]
+                gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
+                gfx.line(tx + i, ty, tx + i, ty + 2)
+            end
         end
         local labelX = tx + padding
         local valueX = tx + padding + labelColW
@@ -348,23 +354,26 @@ function M.drawTooltip()
         gfx.x = headerX
         gfx.y = currentY
 
-        local stemIdx = headerText:find("STEM")
-        local prefix = headerText
-        local suffix = ""
-        if stemIdx then
-            prefix = headerText:sub(1, stemIdx - 1)
-            suffix = headerText:sub(stemIdx + 4)
-        end
-
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        gfx.drawstr(prefix)
-        for i, letter in ipairs({ "S", "T", "E", "M" }) do
-            local c = titleColors[i]
-            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
-            gfx.drawstr(letter)
+        if utilityMode then
+            gfx.drawstr(headerText)
+        else
+            local stemIdx = headerText:find("STEM")
+            local prefix = headerText
+            local suffix = ""
+            if stemIdx then
+                prefix = headerText:sub(1, stemIdx - 1)
+                suffix = headerText:sub(stemIdx + 4)
+            end
+            gfx.drawstr(prefix)
+            for i, letter in ipairs({ "S", "T", "E", "M" }) do
+                local c = titleColors[i]
+                gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
+                gfx.drawstr(letter)
+            end
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+            gfx.drawstr(suffix)
         end
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        gfx.drawstr(suffix)
         currentY = currentY + lineH + S(4)
 
         gfx.setfont(1, "Arial", S(10))
@@ -503,12 +512,15 @@ function M.drawTooltip()
         local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
         drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
 
-        for i = 0, tw - 1 do
-            local colorIdx = math.floor(i / tw * 4) + 1
-            colorIdx = math.min(4, math.max(1, colorIdx))
-            local c = tooltipColors[colorIdx]
-            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
-            gfx.line(tx + i, ty, tx + i, ty + 2)
+        local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        if not utilityMode then
+            for i = 0, tw - 1 do
+                local colorIdx = math.floor(i / tw * 4) + 1
+                colorIdx = math.min(4, math.max(1, colorIdx))
+                local c = tooltipColors[colorIdx]
+                gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
+                gfx.line(tx + i, ty, tx + i, ty + 2)
+            end
         end
         gfx.set(ttText[1], ttText[2], ttText[3], 1)
         local x = tx + padding
@@ -546,19 +558,26 @@ function M.drawTooltip()
         local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
         drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
 
-        for i = 0, tw - 1 do
-            local colorIdx = math.floor(i / tw * 4) + 1
-            colorIdx = math.min(4, math.max(1, colorIdx))
-            local c = tooltipColors[colorIdx]
-            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
-            gfx.line(tx + i, ty, tx + i, ty + 2)
+        local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        if not utilityMode then
+            for i = 0, tw - 1 do
+                local colorIdx = math.floor(i / tw * 4) + 1
+                colorIdx = math.min(4, math.max(1, colorIdx))
+                local c = tooltipColors[colorIdx]
+                gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
+                gfx.line(tx + i, ty, tx + i, ty + 2)
+            end
         end
         gfx.set(ttText[1], ttText[2], ttText[3], 1)
         gfx.x = tx + padding
         gfx.y = ty + padding + S(2)
         gfx.drawstr(st.text .. " ")
 
-        gfx.set(st.color[1] / 255, st.color[2] / 255, st.color[3] / 255, 1)
+        if utilityMode then
+            gfx.set(ttText[1], ttText[2], ttText[3], 0.7)
+        else
+            gfx.set(st.color[1] / 255, st.color[2] / 255, st.color[3] / 255, 1)
+        end
         gfx.drawstr("[" .. st.shortcut .. "]")
 
         GUI.shortcutTooltip = nil
@@ -593,11 +612,20 @@ function M.drawCheckbox(x, y, checked, label, r, g, b, fixedW, fontSizeOverride)
     local baseR
     local baseG
     local baseB
+    local _chkUtilLight = not checked
+        and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        and type(isThemeLightMode) == "function" and isThemeLightMode()
     if checked then
         local mult = hover and 1.2 or 1.0
         baseR = (r or 0) / 255 * mult
         baseG = (g or 0) / 255 * mult
         baseB = (b or 0) / 255 * mult
+    elseif _chkUtilLight then
+        local btn = THEME.button or {0.75, 0.75, 0.75}
+        local mult = hover and 1.1 or 1.0
+        baseR = math.min(1, btn[1] * mult)
+        baseG = math.min(1, btn[2] * mult)
+        baseB = math.min(1, btn[3] * mult)
     else
         local brightness = hover and 0.35 or 0.25
         baseR, baseG, baseB = brightness, brightness, brightness
@@ -612,19 +640,26 @@ function M.drawCheckbox(x, y, checked, label, r, g, b, fixedW, fontSizeOverride)
     local textX = x + (boxW - tw) / 2
     local textH = gfx.texth
     local textY = y + (boxH - textH) / 2
-    gfx.set(0, 0, 0, 0.35 * textAlpha)
-    gfx.x, gfx.y = textX + 2, textY + 2
-    gfx.drawstr(labelText)
-    gfx.set(0, 0, 0, 0.55 * textAlpha)
-    gfx.x, gfx.y = textX + 1, textY + 1
-    gfx.drawstr(labelText)
-    gfx.x, gfx.y = textX - 1, textY + 1
-    gfx.drawstr(labelText)
-    gfx.x, gfx.y = textX + 1, textY - 1
-    gfx.drawstr(labelText)
-    gfx.x, gfx.y = textX - 1, textY - 1
-    gfx.drawstr(labelText)
-    gfx.set(1, 1, 1, textAlpha)
+    if _chkUtilLight then
+        local tc = THEME.text or {0.1, 0.1, 0.1}
+        gfx.set(1, 1, 1, 0.18 * textAlpha)
+        gfx.x, gfx.y = textX + 1, textY + 1; gfx.drawstr(labelText)
+        gfx.set(tc[1], tc[2], tc[3], textAlpha)
+    else
+        gfx.set(0, 0, 0, 0.35 * textAlpha)
+        gfx.x, gfx.y = textX + 2, textY + 2
+        gfx.drawstr(labelText)
+        gfx.set(0, 0, 0, 0.55 * textAlpha)
+        gfx.x, gfx.y = textX + 1, textY + 1
+        gfx.drawstr(labelText)
+        gfx.x, gfx.y = textX - 1, textY + 1
+        gfx.drawstr(labelText)
+        gfx.x, gfx.y = textX + 1, textY - 1
+        gfx.drawstr(labelText)
+        gfx.x, gfx.y = textX - 1, textY - 1
+        gfx.drawstr(labelText)
+        gfx.set(1, 1, 1, textAlpha)
+    end
     gfx.x, gfx.y = textX, textY
     gfx.drawstr(labelText)
 
@@ -672,6 +707,9 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
     local baseG
     local baseB
     local baseA
+    local _radioUtilLight = not selected and (not (attentionMult and attentionMult > 0))
+        and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        and type(isThemeLightMode) == "function" and isThemeLightMode()
     if selected then
         local mult = hover and 1.2 or 1.0
         baseR, baseG, baseB, baseA = r / 255 * mult, g / 255 * mult, b / 255 * mult, 1
@@ -680,6 +718,10 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
             local base = hover and 0.55 or 0.45
             baseA = math.min(0.9, math.max(0.25, base * attentionMult))
             baseR, baseG, baseB = r / 255, g / 255, b / 255
+        elseif _radioUtilLight then
+            local btn = THEME.button or {0.75, 0.75, 0.75}
+            local mult = hover and 1.1 or 1.0
+            baseR, baseG, baseB, baseA = math.min(1, btn[1] * mult), math.min(1, btn[2] * mult), math.min(1, btn[3] * mult), 1
         else
             local brightness = hover and 0.35 or 0.25
             baseR, baseG, baseB, baseA = brightness, brightness, brightness, 1
@@ -782,19 +824,26 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
         local textX = x + (boxW - tw) / 2
         local textH = gfx.texth
         local textY = y + (boxH - textH) / 2
-        gfx.set(0, 0, 0, 0.35 * textAlpha)
-        gfx.x, gfx.y = textX + 2, textY + 2
-        gfx.drawstr(labelText)
-        gfx.set(0, 0, 0, 0.55 * textAlpha)
-        gfx.x, gfx.y = textX + 1, textY + 1
-        gfx.drawstr(labelText)
-        gfx.x, gfx.y = textX - 1, textY + 1
-        gfx.drawstr(labelText)
-        gfx.x, gfx.y = textX + 1, textY - 1
-        gfx.drawstr(labelText)
-        gfx.x, gfx.y = textX - 1, textY - 1
-        gfx.drawstr(labelText)
-        gfx.set(1, 1, 1, textAlpha)
+        if _radioUtilLight then
+            local tc = THEME.text or {0.1, 0.1, 0.1}
+            gfx.set(1, 1, 1, 0.18 * textAlpha)
+            gfx.x, gfx.y = textX + 1, textY + 1; gfx.drawstr(labelText)
+            gfx.set(tc[1], tc[2], tc[3], textAlpha)
+        else
+            gfx.set(0, 0, 0, 0.35 * textAlpha)
+            gfx.x, gfx.y = textX + 2, textY + 2
+            gfx.drawstr(labelText)
+            gfx.set(0, 0, 0, 0.55 * textAlpha)
+            gfx.x, gfx.y = textX + 1, textY + 1
+            gfx.drawstr(labelText)
+            gfx.x, gfx.y = textX - 1, textY + 1
+            gfx.drawstr(labelText)
+            gfx.x, gfx.y = textX + 1, textY - 1
+            gfx.drawstr(labelText)
+            gfx.x, gfx.y = textX - 1, textY - 1
+            gfx.drawstr(labelText)
+            gfx.set(1, 1, 1, textAlpha)
+        end
         gfx.x, gfx.y = textX, textY
         gfx.drawstr(labelText)
 

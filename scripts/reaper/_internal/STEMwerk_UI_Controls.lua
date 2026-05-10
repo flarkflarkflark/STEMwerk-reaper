@@ -203,7 +203,9 @@ local function drawResultControls(ctx)
         applyControlsOpacity = _G.updateControlsOpacity
     end
     local controlsOpacity
-    if type(applyControlsOpacity) == "function" then
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+        controlsOpacity = 1.0
+    elseif type(applyControlsOpacity) == "function" then
         controlsOpacity = applyControlsOpacity(state, mouseInControls)
     else
         controlsOpacity = mouseInControls and 1.0 or 0.0
