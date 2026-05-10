@@ -991,19 +991,33 @@ function M.drawButton(x, y, w, h, label, isDefault, color, fontSizeOverride)
     local textX = x + (w - tw) / 2
     local textH = gfx.texth
     local textY = y + (h - textH) / 2
-    gfx.set(0, 0, 0, 0.4)
-    gfx.x, gfx.y = textX + 2, textY + 2
-    gfx.drawstr(labelText)
-    gfx.set(0, 0, 0, 0.6)
-    gfx.x, gfx.y = textX + 1, textY + 1
-    gfx.drawstr(labelText)
-    gfx.x, gfx.y = textX - 1, textY + 1
-    gfx.drawstr(labelText)
-    gfx.x, gfx.y = textX + 1, textY - 1
-    gfx.drawstr(labelText)
-    gfx.x, gfx.y = textX - 1, textY - 1
-    gfx.drawstr(labelText)
-    gfx.set(1, 1, 1, 1)
+
+    -- In utility mode + light mode: use dark text when background is light.
+    local _btnAvg = (baseR + baseG + baseB) / 3
+    local _btnUtilLight = _btnAvg > 0.5
+        and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        and type(isThemeLightMode) == "function" and isThemeLightMode()
+
+    if _btnUtilLight then
+        local tc = THEME.text or {0.1, 0.1, 0.1}
+        gfx.set(1, 1, 1, 0.18)
+        gfx.x, gfx.y = textX + 1, textY + 1; gfx.drawstr(labelText)
+        gfx.set(tc[1], tc[2], tc[3], 1)
+    else
+        gfx.set(0, 0, 0, 0.4)
+        gfx.x, gfx.y = textX + 2, textY + 2
+        gfx.drawstr(labelText)
+        gfx.set(0, 0, 0, 0.6)
+        gfx.x, gfx.y = textX + 1, textY + 1
+        gfx.drawstr(labelText)
+        gfx.x, gfx.y = textX - 1, textY + 1
+        gfx.drawstr(labelText)
+        gfx.x, gfx.y = textX + 1, textY - 1
+        gfx.drawstr(labelText)
+        gfx.x, gfx.y = textX - 1, textY - 1
+        gfx.drawstr(labelText)
+        gfx.set(1, 1, 1, 1)
+    end
     gfx.x, gfx.y = textX, textY
     gfx.drawstr(labelText)
 
