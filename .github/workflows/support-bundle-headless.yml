@@ -1,0 +1,43 @@
+name: Support Bundle Headless
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: support-bundle-headless-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  headless-support-bundle:
+    name: Headless Support Bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Lua
+        uses: leafo/gh-actions-lua@v11
+        with:
+          luaVersion: "5.4"
+
+      - name: Show Lua version
+        shell: bash
+        run: |
+          lua -v
+          luac -v
+
+      - name: Validate support bundle Lua files
+        shell: bash
+        run: |
+          luac -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
+          luac -p tests/support/run_support_bundle_headless.lua
+
+      - name: Run headless support bundle coverage
+        shell: bash
+        run: lua tests/support/run_support_bundle_headless.lua
