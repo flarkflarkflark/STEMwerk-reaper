@@ -10622,14 +10622,15 @@ function renderMainColumns(ctx)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("presets"), col1X, presetsW, mainHeaderFont, contentTop)
 
-    local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
-    local presetLabelAll = (T("all_stems") or "All") .. " (A)"
-    local presetLabelVocals = (T("vocals") or "Vocals") .. " (V)"
-    local presetLabelDrums = (T("drums") or "Drums") .. " (D)"
-    local presetLabelBass = (T("bass") or "Bass") .. " (B)"
-    local presetLabelOther = (T("other") or "Other") .. " (O)"
-    local presetLabelPiano = (T("piano") or "Piano") .. " (P)"
-    local presetLabelGuitar = (T("guitar") or "Guitar") .. " (G)"
+    local _sk = utilityMode  -- shortcut style: lowercase in utility mode
+    local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. (_sk and " (k)" or " (K)")
+    local presetLabelAll     = (T("all_stems") or "All")    .. (_sk and " (a)" or " (A)")
+    local presetLabelVocals  = (T("vocals") or "Vocals")    .. (_sk and " (v)" or " (V)")
+    local presetLabelDrums   = (T("drums") or "Drums")      .. (_sk and " (d)" or " (D)")
+    local presetLabelBass    = (T("bass") or "Bass")        .. (_sk and " (b)" or " (B)")
+    local presetLabelOther   = (T("other") or "Other")      .. (_sk and " (o)" or " (O)")
+    local presetLabelPiano   = (T("piano") or "Piano")      .. (_sk and " (p)" or " (P)")
+    local presetLabelGuitar  = (T("guitar") or "Guitar")    .. (_sk and " (g)" or " (G)")
     local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
     if is6Stem then
         presetLabels[#presetLabels + 1] = presetLabelPiano
@@ -10769,7 +10770,12 @@ function renderMainColumns(ctx)
     for _, model in ipairs(MODELS) do
         local modelAvailable = isModelAvailableInCurrentMode(model.id)
         local modelColor = modelAvailable and nil or {120, 120, 120}
-        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, nil, modelBoxW, nil, nil, modelBtnFontSize) and modelAvailable then
+        local modelDisplayName = model.name
+        if utilityMode then
+            local mk = modelShortcutKeys[model.id]
+            if mk then modelDisplayName = model.name .. " (" .. string.lower(mk) .. ")" end
+        end
+        if drawRadio(col3X, modelY, SETTINGS.model == model.id, modelDisplayName, nil, modelBoxW, nil, nil, modelBtnFontSize) and modelAvailable then
             local prevModel = SETTINGS.model
             SETTINGS.model = model.id
             if prevModel ~= SETTINGS.model then
