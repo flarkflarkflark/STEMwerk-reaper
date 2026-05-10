@@ -891,9 +891,15 @@ function M.drawToggleButton(x, y, w, h, label, selected, color, fontSizeOverride
     local baseB
     if selected then
         local mult = hover and 1.2 or 1.0
-        baseR = (color[1] or 0) / 255 * mult
-        baseG = (color[2] or 0) / 255 * mult
-        baseB = (color[3] or 0) / 255 * mult
+        if color then
+            baseR = (color[1] or 0) / 255 * mult
+            baseG = (color[2] or 0) / 255 * mult
+            baseB = (color[3] or 0) / 255 * mult
+        else
+            baseR = THEME.buttonPrimary[1] * mult
+            baseG = THEME.buttonPrimary[2] * mult
+            baseB = THEME.buttonPrimary[3] * mult
+        end
     else
         local brightness = hover and 0.35 or 0.25
         baseR, baseG, baseB = brightness, brightness, brightness
