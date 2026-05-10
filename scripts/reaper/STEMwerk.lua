@@ -10673,7 +10673,7 @@ function renderMainColumns(ctx)
     local presetY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
 
-    local function presetColor(c) return utilityMode and nil or c end
+    local function presetColor(c) if utilityMode then return nil else return c end end
     if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, presetColor({80, 80, 90}), presetsBtnFontSize) then applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
@@ -10732,7 +10732,7 @@ function renderMainColumns(ctx)
             local k = tostring(stem.name or ""):lower()
             local displayName = T(k) or stem.name
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
-            local stemBtnColor = utilityMode and nil or stem.color
+            local stemBtnColor; if utilityMode then stemBtnColor = nil else stemBtnColor = stem.color end
             if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stemBtnColor, stemsBtnFontSize) then
                 STEMS[i].selected = not STEMS[i].selected
             end

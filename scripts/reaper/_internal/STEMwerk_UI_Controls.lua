@@ -232,6 +232,7 @@ local function drawResultControls(ctx)
     if type(applyControlsOpacity) ~= "function" then
         applyControlsOpacity = _G.updateControlsOpacity
     end
+    local utilityMode = isUtilityMode()
     local controlsOpacity
     if utilityMode then
         controlsOpacity = 1.0
@@ -244,8 +245,6 @@ local function drawResultControls(ctx)
     if themeHover then
         GUI.uiClickedThisFrame = true
     end
-
-    local utilityMode = isUtilityMode()
     local iconPalette = getFunctionalIconPalette()
     local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
 
@@ -270,7 +269,7 @@ local function drawResultControls(ctx)
         end
     end
 
-    if themeHover and rightMouseDown and not (state.wasRightMouseDown or false) and controlsOpacity > 0.3 then
+    if themeHover and not utilityMode and rightMouseDown and not (state.wasRightMouseDown or false) and controlsOpacity > 0.3 then
         cycleThemePreset()
         updateTheme()
     end
@@ -280,7 +279,7 @@ local function drawResultControls(ctx)
         saveSettings()
     end
     if themeHover and controlsOpacity > 0.3 then
-        tooltipText = getThemeToggleTooltip()
+        tooltipText = utilityMode and (T("tooltip_toggle_dark_light") or "Toggle dark / light") or getThemeToggleTooltip()
         tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
     end
 
