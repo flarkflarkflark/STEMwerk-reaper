@@ -174,6 +174,7 @@ local toolbarAssetDir = joinPath(scriptDir, "assets", "toolbar_icons")
 local scriptFiles = {
     "STEMwerk.lua",
     "STEMwerk-SETUP.lua",
+    "STEMwerk_Save_Support_Bundle.lua",
     "STEMwerk_Explode_Takes.lua",
     "STEMwerk_Karaoke.lua",
     "STEMwerk_Vocals_Only.lua",
