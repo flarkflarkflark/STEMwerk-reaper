@@ -8,6 +8,11 @@
 -- Normal flarkAUDIO theme + visual FX enabled.
 -- Does NOT permanently alter user settings (no saveSettings call).
 
+-- Force classic (flashy) theme regardless of user's saved themePreset.
+-- Without this, a user who last ran REAPER Native mode would see utility UI here too.
+_G.FORCE_THEME_PRESET             = "classic"
+_G.STEMWERK_REAPER_NATIVE_UTILITY = nil
+
 _G.STEMWERK_UI_IDLE_BENCHMARK = {
     enabled     = true,
     label       = "flashy",
@@ -37,9 +42,10 @@ f:close()
 dofile(main_path)
 
 -- After dofile: SETTINGS, updateTheme, reaper.GetResourcePath are available.
--- Force FX on without saving to persistent storage.
+-- Force flashy mode without saving to persistent storage.
 if type(SETTINGS) == "table" then
-    SETTINGS.visualFX = true
+    SETTINGS.themePreset = "classic"
+    SETTINGS.visualFX    = true
 end
 if type(updateTheme) == "function" then
     updateTheme()
