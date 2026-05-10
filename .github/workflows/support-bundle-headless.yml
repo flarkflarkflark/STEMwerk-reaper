@@ -44,17 +44,39 @@ jobs:
           & "$luaDir\luac.exe" -v
 
       - name: Show Lua version
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           lua -v
           luac -v
 
+      - name: Show Lua version on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          "/c/Program Files (x86)/Lua/5.1/lua.exe" -v
+          "/c/Program Files (x86)/Lua/5.1/luac.exe" -v
+
       - name: Validate support bundle Lua files
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           luac -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
           luac -p tests/support/run_support_bundle_headless.lua
 
+      - name: Validate support bundle Lua files on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          "/c/Program Files (x86)/Lua/5.1/luac.exe" -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
+          "/c/Program Files (x86)/Lua/5.1/luac.exe" -p tests/support/run_support_bundle_headless.lua
+
       - name: Run headless support bundle coverage
+        if: runner.os != 'Windows'
         shell: bash
         run: lua tests/support/run_support_bundle_headless.lua
+
+      - name: Run headless support bundle coverage on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: '"/c/Program Files (x86)/Lua/5.1/lua.exe" tests/support/run_support_bundle_headless.lua'
