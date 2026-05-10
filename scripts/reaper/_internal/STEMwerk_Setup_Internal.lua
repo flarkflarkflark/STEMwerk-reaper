@@ -184,6 +184,29 @@ local function launchMainStemwerkScript()
     return true
 end
 
+local function runSupportBundleAction()
+    local scriptsDir = resolveSetupScriptsDir()
+    local supportScript = tostring(scriptsDir or "") .. "STEMwerk_Save_Support_Bundle.lua"
+    if not fileExists(supportScript) then
+        msgBox(
+            "STEMwerk Setup",
+            "Missing support bundle script:\n\n" .. tostring(supportScript) .. "\n\nReinstall STEMwerk.",
+            0
+        )
+        return false
+    end
+    local ok, err = pcall(dofile, supportScript)
+    if not ok then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not create the STEMwerk support bundle.\n\nError:\n" .. tostring(err),
+            0
+        )
+        return false
+    end
+    return true
+end
+
 local function quoteArg(s)
     s = tostring(s)
     if s:find('"') then
@@ -3357,6 +3380,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     end
     actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
     actionButtons[#actionButtons + 1] = { label = "Open Capabilities", action = "open_cap" }
+    actionButtons[#actionButtons + 1] = { label = "Save Support Bundle", action = "save_support_bundle" }
     actionButtons[#actionButtons + 1] = { label = "Open Action List", action = "open_action_list" }
     actionButtons[#actionButtons + 1] = { label = "Open REAPER Help", action = "open_help" }
     actionButtons[#actionButtons + 1] = { label = "Copy Summary", action = "copy_summary" }
@@ -3548,6 +3572,13 @@ local function linuxSetupTick()
                         openActionList()
                     elseif b.action == "open_help" then
                         openPath(LINUX_SETUP.helpFile)
+                    elseif b.action == "save_support_bundle" then
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        reaper.defer(function()
+                            runSupportBundleAction()
+                        end)
+                        return
                     elseif b.action == "repair" then
                         local runtime = LINUX_SETUP.runtime
                         local separatorScript = LINUX_SETUP.separatorScript or (SCRIPT_DIR .. "audio_separator_process.py")
@@ -4949,6 +4980,10 @@ local function existingRuntimeSetupMenuTick()
             verifyExistingSetup(runtime, separatorScript)
         elseif chosen == "repair" or chosen == "rebuild-venv" then
             startLinuxSetup(runtime, separatorScript, chosen)
+        elseif chosen == "support-bundle" then
+            reaper.defer(function()
+                runSupportBundleAction()
+            end)
         end
         return
     end
@@ -4980,6 +5015,7 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
             { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
             { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
             { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
+            { id = "support-bundle", label = "Save Support Bundle", sub = "Collect logs and diagnostics, no changes", accent = { 0.26, 0.60, 0.88 } },
             { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } },
             { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } },
             { id = "cancel",       label = "Cancel",        sub = "Exit without changes",              accent = { 0.38, 0.38, 0.42 } },
