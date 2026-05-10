@@ -575,6 +575,18 @@ local function getTempBase()
     return os.getenv("TMPDIR") or "/tmp"
 end
 
+-- Returns the persistent run-log directory that SW_LOG writes to after each run.
+-- Mirrors SW_LOG.getLogDir() from STEMwerk_Log.lua so the bundle can read it
+-- without depending on that module.
+local function getStemwerkCacheLogDir()
+    if OS == "Windows" then
+        local base = os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
+        return joinPath(base, "STEMwerk", "logs")
+    end
+    local cacheBase = os.getenv("XDG_CACHE_HOME") or joinPath(getHome(), ".cache")
+    return joinPath(cacheBase, "STEMwerk", "logs")
+end
+
 local function shouldIgnoreTempFolder(name)
     local lower = tostring(name or ""):lower()
     if lower == "" then return true end
@@ -1397,6 +1409,24 @@ if fileExists(debugLogPath) then
         copiedFiles[#copiedFiles + 1] = "runtime_logs/STEMwerk_debug.log (" .. mode .. ")"
     end
 end
+
+-- Persistent run logs written by SW_LOG.savePersistentRunLogs() after each run.
+local cacheLogDir = getStemwerkCacheLogDir()
+local persistentRunLogs = { separation_log = false, stdout = false }
+for _, name in ipairs({"separation_log.txt", "stdout.txt"}) do
+    local src = joinPath(cacheLogDir, name)
+    if fileExists(src) then
+        local dst = joinPath(bundleDir, "runtime_logs", "run_" .. name)
+        local ok, mode = copySupportTextFile(src, dst, 512 * 1024)
+        if ok then
+            copiedFiles[#copiedFiles + 1] = "runtime_logs/run_" .. name .. " (" .. mode .. ")"
+        end
+        if name == "separation_log.txt" then persistentRunLogs.separation_log = true end
+        if name == "stdout.txt" then persistentRunLogs.stdout = true end
+    end
+end
+appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
+appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
 appendLine(diagnostics, "")
 
 appendLine(diagnostics, "Settings Snapshot")
@@ -1439,8 +1469,12 @@ local tempInventory, _, tempBase, tempSummary = collectTempInventory(bundleDir, 
 appendLine(diagnostics, "Temp Folder Inventory")
 appendKey(diagnostics, "Temp base", tempBase)
 appendKey(diagnostics, "Temp inventory file", "temp_inventory.txt")
-appendKey(diagnostics, "Recent separation_log.txt", tempSummary.separation and "present" or "missing")
-appendKey(diagnostics, "Recent stdout.txt", tempSummary.stdout and "present" or "missing")
+appendKey(diagnostics, "Recent separation_log.txt",
+    persistentRunLogs.separation_log and "present (persistent)" or
+    (tempSummary.separation and "present (temp only)" or "missing"))
+appendKey(diagnostics, "Recent stdout.txt",
+    persistentRunLogs.stdout and "present (persistent)" or
+    (tempSummary.stdout and "present (temp only)" or "missing"))
 appendKey(diagnostics, "Recent stderr.txt", tempSummary.stderr and "present" or "missing")
 appendLine(diagnostics, "")
 

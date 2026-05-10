@@ -1226,7 +1226,7 @@ SETTINGS = {
     language = "en",           -- UI language: en, nl, de
     visualFX = true,           -- Enable/disable visual effects (procedural art backgrounds)
     tooltips = true,           -- Global tooltip toggle
-    keepTempFiles = false,     -- Keep temp working folders/logs after a run
+    keepTempFiles = false,     -- Keep temp audio/work files after a run (logs always preserved)
     device = "auto",           -- Device selection: "auto", "cpu", "cuda:0", "cuda:1", "directml"
 }
 
@@ -11818,10 +11818,6 @@ end
 
 local function cleanupTempWorkDir(dir, opts)
     if not dir or dir == "" then return end
-    if SETTINGS and SETTINGS.keepTempFiles then
-        debugLog("cleanupTempWorkDir: keepTempFiles enabled, skipping " .. tostring(dir))
-        return
-    end
     if not isSafeTempDir(dir) then
         debugLog("cleanupTempWorkDir: skip unsafe path " .. tostring(dir))
         return
@@ -11831,6 +11827,14 @@ local function cleanupTempWorkDir(dir, opts)
     local successOnly = opts.success == true
     if not successOnly then
         debugLog("cleanupTempWorkDir: skipping because run not marked successful for " .. tostring(dir))
+        return
+    end
+
+    -- Always copy run logs to persistent storage first, regardless of keepTempFiles.
+    SW_LOG.savePersistentRunLogs(dir)
+
+    if SETTINGS and SETTINGS.keepTempFiles then
+        debugLog("cleanupTempWorkDir: keepTempFiles enabled, skipping audio cleanup for " .. tostring(dir))
         return
     end
 

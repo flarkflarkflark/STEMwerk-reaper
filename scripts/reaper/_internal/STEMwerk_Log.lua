@@ -118,6 +118,32 @@ function SW_LOG.readExitCode(path)
     return n or v
 end
 
+-- Copy separation_log.txt and stdout.txt from a run's temp output dir to the
+-- persistent log directory, overwriting the previous run's copies.
+-- Called on every successful run regardless of the keepTempFiles setting.
+function SW_LOG.savePersistentRunLogs(outputDir)
+    if not outputDir or outputDir == "" then return end
+    local logDir = SW_LOG.getLogDir()
+    SW_LOG.ensureDir(logDir)
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    for _, name in ipairs({"separation_log.txt", "stdout.txt"}) do
+        local src = outputDir .. sep .. name
+        local f = io.open(src, "rb")
+        if f then
+            local data = f:read("*a")
+            f:close()
+            if data and data ~= "" then
+                local dst = logDir .. sep .. name
+                local out = io.open(dst, "wb")
+                if out then
+                    out:write(data)
+                    out:close()
+                end
+            end
+        end
+    end
+end
+
 function SW_LOG.readFileSnippet(path, maxChars)
     maxChars = maxChars or 1200
     if not path or path == "" then return nil end
