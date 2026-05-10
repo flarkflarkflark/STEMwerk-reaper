@@ -4983,17 +4983,21 @@ local function drawUtilityNativeHelpWindow()
         return hover
     end
 
-    UI_CONTROLS.drawUtilityControls({
+    local _iconScale = 0.66
+    local _themeSize = math.max(HS(12), math.floor(HS(20) * _iconScale + 0.5))
+    local _helpUC = {
         S = HS,
         w = w,
         mx = mx, my = my,
         mouseDown = mouseDown,
+        rightMouseDown = rightMouseDown,
         state = helpState,
         setLanguageFn = setLanguage,
-        themeX = w - pad - 34,
-        themeY = 12,
-        themeSize = 26,
-    })
+        themeX = w - _themeSize - HS(10),
+        themeY = HS(8),
+        themeSize = _themeSize,
+    }
+    UI_CONTROLS.drawUtilityControls(_helpUC)
 
     local tabY = topH + pad
     local tabX = pad
@@ -5070,6 +5074,10 @@ local function drawUtilityNativeHelpWindow()
     local char = gfx.getchar()
     if char == -1 or char == 27 then return "close" end
 
+    if _helpUC and _helpUC.tooltipText then
+        gfx.setfont(1, "Arial", HS(11))
+        drawTooltipStyled(_helpUC.tooltipText, _helpUC.tooltipX, _helpUC.tooltipY, w, h, HS(8), HS(14), math.min(w * 0.62, HS(520)))
+    end
     helpState.wasMouseDown = mouseDown
     helpState.wasRightMouseDown = rightMouseDown
     gfx.update()
@@ -7432,13 +7440,20 @@ local function drawMessageWindow()
     local fxHover = false
 
     if _msgUtility then
-        UI_CONTROLS.drawUtilityControls({
+        local _uc = {
             S = PS, w = w, mx = mx, my = my,
             mouseDown = mouseDown,
+            rightMouseDown = rightMouseDown,
             state = messageWindowState,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
-        })
+        }
+        UI_CONTROLS.drawUtilityControls(_uc)
+        if _uc.tooltipText then
+            tooltipText = _uc.tooltipText
+            tooltipX = _uc.tooltipX
+            tooltipY = _uc.tooltipY
+        end
     else
         if SETTINGS.darkMode then
             gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
@@ -10346,6 +10361,7 @@ function renderTopRightControls(ctx)
             w = gfx.w,
             mx = gfx.mouse_x, my = gfx.mouse_y,
             mouseDown = mouseDown,
+            rightMouseDown = ctx.rightMouseDown,
             state = GUI,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
@@ -12573,13 +12589,20 @@ local function drawProgressWindow()
     local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(progressState, mouseInControls)
 
     if utilityMode then
-        UI_CONTROLS.drawUtilityControls({
+        local _uc = {
             S = PS, w = w, mx = mx, my = my,
             mouseDown = mouseDown,
+            rightMouseDown = rightMouseDown,
             state = progressState,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
-        })
+        }
+        UI_CONTROLS.drawUtilityControls(_uc)
+        if _uc.tooltipText then
+            tooltipText = _uc.tooltipText
+            tooltipX = _uc.tooltipX
+            tooltipY = _uc.tooltipY
+        end
     else
         if SETTINGS.darkMode then
             gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)
@@ -15807,13 +15830,20 @@ function drawMultiTrackProgressWindow()
     local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(multiTrackQueue, mouseInControls)
 
     if utilityMode then
-        UI_CONTROLS.drawUtilityControls({
+        local _uc = {
             S = PS, w = w, mx = mx, my = my,
             mouseDown = mouseDown,
+            rightMouseDown = rightMouseDown,
             state = multiTrackQueue,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
-        })
+        }
+        UI_CONTROLS.drawUtilityControls(_uc)
+        if _uc.tooltipText then
+            tooltipText = _uc.tooltipText
+            tooltipX = _uc.tooltipX
+            tooltipY = _uc.tooltipY
+        end
     else
         if SETTINGS.darkMode then
             gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.5) * controlsOpacity)

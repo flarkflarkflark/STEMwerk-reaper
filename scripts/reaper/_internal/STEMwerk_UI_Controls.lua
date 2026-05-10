@@ -80,7 +80,9 @@ local function drawUtilityControlsCore(ctx)
     local w = ctx.w
     local mx, my = ctx.mx, ctx.my
     local mouseDown = ctx.mouseDown
+    local rightMouseDown = ctx.rightMouseDown or (gfx.mouse_cap & 2 == 2)
     local state = ctx.state or {}
+    local tooltipsOn = not (SETTINGS and SETTINGS.tooltips == false)
 
     local iconScale = ctx.iconScale or 0.66
     local themeSize = ctx.themeSize or math.max(S(12), math.floor(S(20) * iconScale + 0.5))
@@ -95,6 +97,14 @@ local function drawUtilityControlsCore(ctx)
         SETTINGS.darkMode = not SETTINGS.darkMode
         updateTheme()
         saveSettings()
+    end
+    if themeHover and tooltipsOn then
+        ctx.tooltipText = "Toggle dark / light."
+        ctx.tooltipX = mx + S(10)
+        ctx.tooltipY = my + S(15)
+        GUI.tooltip  = ctx.tooltipText
+        GUI.tooltipX = ctx.tooltipX
+        GUI.tooltipY = ctx.tooltipY
     end
 
     -- Language box (left of D/L box, identical visual style)
@@ -129,6 +139,19 @@ local function drawUtilityControlsCore(ctx)
     if langHover and mouseDown and not state.wasMouseDown then
         cycleLanguageSetting(ctx.setLanguageFn)
     end
+    if langHover and rightMouseDown and not state._ucWasRightDown then
+        SETTINGS.tooltips = not SETTINGS.tooltips
+        saveSettings()
+    end
+    state._ucWasRightDown = langHover and rightMouseDown
+    if langHover and tooltipsOn then
+        ctx.tooltipText = "Click to change language. Right-click to toggle tooltips."
+        ctx.tooltipX = mx + S(10)
+        ctx.tooltipY = my + S(15)
+        GUI.tooltip  = ctx.tooltipText
+        GUI.tooltipX = ctx.tooltipX
+        GUI.tooltipY = ctx.tooltipY
+    end
 end
 
 local function drawHelpControls(ctx)
@@ -150,9 +173,6 @@ local function drawHelpControls(ctx)
 
     if utilityMode then
         drawUtilityControlsCore(ctx)
-        ctx.tooltipText = tooltipText
-        ctx.tooltipX = tooltipX
-        ctx.tooltipY = tooltipY
         return
     end
 
@@ -300,9 +320,6 @@ local function drawResultControls(ctx)
         ctx.themeY = themeY
         ctx.themeSize = themeSize
         drawUtilityControlsCore(ctx)
-        ctx.tooltipText = tooltipText
-        ctx.tooltipX = tooltipX
-        ctx.tooltipY = tooltipY
         return
     end
 
