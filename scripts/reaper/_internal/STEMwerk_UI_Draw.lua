@@ -398,7 +398,11 @@ function M.drawTooltip()
             local stemX = valueX
             for i, stem in ipairs(activeStems) do
                 local stemLabel = stemDisplayName(stem)
-                gfx.set(stem.color[1] / 255, stem.color[2] / 255, stem.color[3] / 255, 1)
+                if utilityMode then
+                    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+                else
+                    gfx.set(stem.color[1] / 255, stem.color[2] / 255, stem.color[3] / 255, 1)
+                end
                 gfx.x = stemX
                 gfx.y = currentY
                 gfx.drawstr(stemLabel)
@@ -427,7 +431,9 @@ function M.drawTooltip()
         gfx.x = labelX
         gfx.y = currentY
         gfx.drawstr(T("rich_takes_label") or "Takes")
-        if SETTINGS.createTakes then
+        if utilityMode then
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        elseif SETTINGS.createTakes then
             gfx.set(0.4, 0.9, 0.5, 1)
         else
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
@@ -440,7 +446,11 @@ function M.drawTooltip()
         gfx.x = labelX
         gfx.y = currentY
         gfx.drawstr(T("rich_target_label") or "Target")
-        gfx.set(1.0, 0.6, 0.2, 1)
+        if utilityMode then
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        else
+            gfx.set(1.0, 0.6, 0.2, 1)
+        end
         gfx.x = valueX
         gfx.drawstr(targetText)
 

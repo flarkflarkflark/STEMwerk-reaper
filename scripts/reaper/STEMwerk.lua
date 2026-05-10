@@ -7388,37 +7388,36 @@ local function drawMessageWindow()
     messageWindowState.lastMX = mx
     messageWindowState.lastMY = my
 
-    -- Pure black/white background
-    if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 1)
-    else
-        gfx.set(1, 1, 1, 1)
-    end
+    local _msgUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+
+    -- Background
+    gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
     gfx.rect(0, 0, w, h, 1)
 
-    -- Draw procedural art background with zoom/pan/rotation
-    local artX = messageWindowState.artPanX or 0
-    local artY = messageWindowState.artPanY or 0
-    local artZoom = messageWindowState.artZoom or 1.0
-    local artRot = messageWindowState.artRotation or 0
+    if not _msgUtility then
+        -- Draw procedural art background with zoom/pan/rotation
+        local artX = messageWindowState.artPanX or 0
+        local artY = messageWindowState.artPanY or 0
+        local artZoom = messageWindowState.artZoom or 1.0
+        local artRot = messageWindowState.artRotation or 0
 
-    -- Apply zoom by adjusting draw area
-    local zoomedW = w * artZoom
-    local zoomedH = h * artZoom
-    local drawX = (w - zoomedW) / 2 + artX
-    local drawY = (h - zoomedH) / 2 + artY
+        local zoomedW = w * artZoom
+        local zoomedH = h * artZoom
+        local drawX = (w - zoomedW) / 2 + artX
+        local drawY = (h - zoomedH) / 2 + artY
 
-    drawProceduralArt(drawX, drawY, zoomedW, zoomedH, proceduralArt.time, artRot, true)
+        drawProceduralArt(drawX, drawY, zoomedW, zoomedH, proceduralArt.time, artRot, true)
 
-    -- Semi-transparent overlay for UI readability
-    if SETTINGS.darkMode then
-        gfx.set(0, 0, 0, 0.6)
-    else
-        gfx.set(1, 1, 1, 0.6)
+        -- Semi-transparent overlay for UI readability
+        if SETTINGS.darkMode then
+            gfx.set(0, 0, 0, 0.6)
+        else
+            gfx.set(1, 1, 1, 0.6)
+        end
+        gfx.rect(0, 0, w, h, 1)
     end
-    gfx.rect(0, 0, w, h, 1)
 
-    -- Theme toggle button (sun/moon icon, top right)
+    -- Top-right controls
     local iconScale = 0.66
     local themeSize = math.max(PS(12), math.floor(PS(20) * iconScale + 0.5))
     local themeX = w - themeSize - PS(10)
@@ -7428,12 +7427,29 @@ local function drawMessageWindow()
     local controlsLeft = themeX - PS(60)
     local controlsBottom = themeY + themeSize + PS(30)
     local mouseInControls = (mx >= controlsLeft) and (my >= 0) and (my <= controlsBottom)
-    local controlsOpacity = updateControlsOpacity(messageWindowState, mouseInControls)
+    local controlsOpacity = _msgUtility and 1.0 or updateControlsOpacity(messageWindowState, mouseInControls)
 
-    if SETTINGS.darkMode then
+    if _msgUtility then
+        -- D/L utility box (same as main dialog)
+        local label = SETTINGS.darkMode and "D" or "L"
+        gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte("b"))
+        local tw = gfx.measurestr(label)
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.rect(themeX, themeY, themeSize, themeSize, 0)
+        if themeHover then
+            gfx.set(THEME.buttonHover[1], THEME.buttonHover[2], THEME.buttonHover[3], 0.95)
+        else
+            gfx.set(THEME.button[1], THEME.button[2], THEME.button[3], 0.75)
+        end
+        gfx.rect(themeX + 1, themeY + 1, math.max(1, themeSize - 2), math.max(1, themeSize - 2), 1)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = themeX + (themeSize - tw) / 2
+        gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
+        gfx.drawstr(label)
+    elseif SETTINGS.darkMode then
         gfx.set(0.7, 0.7, 0.5, (themeHover and 1 or 0.6) * controlsOpacity)
         gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1 * controlsOpacity)  -- Pure black for moon overlay
+        gfx.set(0, 0, 0, 1 * controlsOpacity)
         gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
     else
         gfx.set(0.9, 0.7, 0.2, (themeHover and 1 or 0.8) * controlsOpacity)
@@ -7572,49 +7588,49 @@ local function drawMessageWindow()
     gfx.y = PS(68)
     gfx.drawstr(tagline)
 
-    -- === Animated waveform visualization (BELOW tagline) ===
-    local waveY = PS(95)
-    local waveH = PS(50)
-    local waveW = w - PS(60)
-    local waveX = PS(30)
+    if not _msgUtility then
+        -- === Animated waveform visualization (BELOW tagline) ===
+        local waveY = PS(95)
+        local waveH = PS(50)
+        local waveW = w - PS(60)
+        local waveX = PS(30)
 
-    -- Draw 4 layered waveforms (one for each stem color)
-    for stemIdx = 1, 4 do
-        local color = stemColors[stemIdx]
-        gfx.set(color[1], color[2], color[3], 0.4)
+        for stemIdx = 1, 4 do
+            local color = stemColors[stemIdx]
+            gfx.set(color[1], color[2], color[3], 0.4)
 
-        local freq = 2 + stemIdx * 0.7
-        local amp = waveH / 4 * (1 - (stemIdx - 1) * 0.15)
-        local phase = time * 2 + stemIdx * 1.5
+            local freq = 2 + stemIdx * 0.7
+            local amp = waveH / 4 * (1 - (stemIdx - 1) * 0.15)
+            local phase = time * 2 + stemIdx * 1.5
 
-        local prevX, prevY
-        for i = 0, waveW do
-            local x = waveX + i
-            local t = i / waveW * math.pi * freq + phase
-            local y = waveY + waveH/2 + math.sin(t) * amp * math.sin(i / waveW * math.pi)
-
-            if prevX then
-                gfx.line(prevX, prevY, x, y)
+            local prevX, prevY
+            for i = 0, waveW do
+                local x = waveX + i
+                local t = i / waveW * math.pi * freq + phase
+                local y = waveY + waveH/2 + math.sin(t) * amp * math.sin(i / waveW * math.pi)
+                if prevX then gfx.line(prevX, prevY, x, y) end
+                prevX, prevY = x, y
             end
-            prevX, prevY = x, y
         end
     end
 
-    -- === Message (animated, bold, pulsing) ===
+    -- === Message ===
     gfx.setfont(1, "Arial", PS(14), string.byte('b'))
 
-    -- Pulsing effect: oscillate between dim and bright
-    local pulseAlpha = 0.6 + math.sin(time * 3) * 0.4
-
-    -- Gradient through STEM colors
-    local colorPhase = (time * 0.5) % 4
-    local colorIdx = math.floor(colorPhase) + 1
-    local nextColorIdx = (colorIdx % 4) + 1
-    local colorBlend = colorPhase % 1
-
-    local r = stemColors[colorIdx][1] * (1 - colorBlend) + stemColors[nextColorIdx][1] * colorBlend
-    local g = stemColors[colorIdx][2] * (1 - colorBlend) + stemColors[nextColorIdx][2] * colorBlend
-    local b = stemColors[colorIdx][3] * (1 - colorBlend) + stemColors[nextColorIdx][3] * colorBlend
+    local r, g, b, pulseAlpha
+    if _msgUtility then
+        r, g, b = THEME.textDim[1], THEME.textDim[2], THEME.textDim[3]
+        pulseAlpha = 1
+    else
+        pulseAlpha = 0.6 + math.sin(time * 3) * 0.4
+        local colorPhase = (time * 0.5) % 4
+        local colorIdx = math.floor(colorPhase) + 1
+        local nextColorIdx = (colorIdx % 4) + 1
+        local colorBlend = colorPhase % 1
+        r = stemColors[colorIdx][1] * (1 - colorBlend) + stemColors[nextColorIdx][1] * colorBlend
+        g = stemColors[colorIdx][2] * (1 - colorBlend) + stemColors[nextColorIdx][2] * colorBlend
+        b = stemColors[colorIdx][3] * (1 - colorBlend) + stemColors[nextColorIdx][3] * colorBlend
+    end
 
     gfx.set(r, g, b, pulseAlpha)
 
@@ -7647,11 +7663,13 @@ local function drawMessageWindow()
         tooltipY = my + PS(15)
     end
 
-    -- Subtle underline animation (growing/shrinking)
-    local underlineW = msgBlockW * (0.5 + math.sin(time * 2) * 0.3)
-    local underlineX = (w - underlineW) / 2
-    gfx.set(r, g, b, pulseAlpha * 0.5)
-    gfx.line(underlineX, msgBottomY + PS(6), underlineX + underlineW, msgBottomY + PS(6))
+    -- Subtle underline (animated in normal mode, static separator in utility mode)
+    if not _msgUtility then
+        local underlineW = msgBlockW * (0.5 + math.sin(time * 2) * 0.3)
+        local underlineX = (w - underlineW) / 2
+        gfx.set(r, g, b, pulseAlpha * 0.5)
+        gfx.line(underlineX, msgBottomY + PS(6), underlineX + underlineW, msgBottomY + PS(6))
+    end
 
     -- Shared button dimensions for consistency
     local btnW = PS(70)
@@ -7660,25 +7678,27 @@ local function drawMessageWindow()
     local totalBtnsW = btnW * 2 + btnSpacing
     local btnY = h - PS(40)
 
-    -- Help button (blue, left)
+    -- Help button (left)
     local helpBtnX = (w - totalBtnsW) / 2
     local helpHover = mx >= helpBtnX and mx <= helpBtnX + btnW and my >= btnY and my <= btnY + btnH
 
-    if helpHover then
-        gfx.set(0.3, 0.5, 0.8, 1)  -- Brighter blue on hover
+    if _msgUtility then
+        local hR = helpHover and THEME.buttonPrimaryHover[1] or THEME.buttonPrimary[1]
+        local hG = helpHover and THEME.buttonPrimaryHover[2] or THEME.buttonPrimary[2]
+        local hB = helpHover and THEME.buttonPrimaryHover[3] or THEME.buttonPrimary[3]
+        drawGlossyPill(helpBtnX, btnY, btnW, btnH, hR, hG, hB)
     else
-        gfx.set(0.2, 0.4, 0.7, 0.9)  -- Blue
-    end
-    -- Draw rounded (pill-shaped) button
-    for i = 0, btnH - 1 do
-        local radius = btnH / 2
-        local inset = 0
-        if i < radius then
-            inset = radius - math.sqrt(math.max(0, radius * radius - (radius - i) * (radius - i)))
-        elseif i > btnH - radius then
-            inset = radius - math.sqrt(math.max(0, radius * radius - (i - (btnH - radius)) * (i - (btnH - radius))))
+        if helpHover then gfx.set(0.3, 0.5, 0.8, 1) else gfx.set(0.2, 0.4, 0.7, 0.9) end
+        for i = 0, btnH - 1 do
+            local radius = btnH / 2
+            local inset = 0
+            if i < radius then
+                inset = radius - math.sqrt(math.max(0, radius * radius - (radius - i) * (radius - i)))
+            elseif i > btnH - radius then
+                inset = radius - math.sqrt(math.max(0, radius * radius - (i - (btnH - radius)) * (i - (btnH - radius))))
+            end
+            gfx.line(helpBtnX + inset, btnY + i, helpBtnX + btnW - inset, btnY + i)
         end
-        gfx.line(helpBtnX + inset, btnY + i, helpBtnX + btnW - inset, btnY + i)
     end
     gfx.set(1, 1, 1, 1)
     gfx.setfont(1, "Arial", PS(13), string.byte('b'))
@@ -7686,9 +7706,9 @@ local function drawMessageWindow()
     local helpTextW = gfx.measurestr(helpText)
     gfx.x = helpBtnX + (btnW - helpTextW) / 2
     gfx.y = btnY + (btnH - gfx.texth) / 2
+    if _msgUtility then gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1) end
     gfx.drawstr(helpText)
 
-    -- Help button tooltip
     if helpHover and not tooltipText then
         tooltipText = T("help_tooltip")
         tooltipX = mx + PS(10)
@@ -7699,22 +7719,23 @@ local function drawMessageWindow()
     local btnX = helpBtnX + btnW + btnSpacing
     local hover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
 
-    -- Red button color
-    if hover then
-        gfx.set(0.9, 0.3, 0.3, 1)
+    local closeR = hover and 0.9 or 0.72
+    local closeG = hover and 0.3 or 0.20
+    local closeB = hover and 0.3 or 0.20
+    if _msgUtility then
+        drawGlossyPill(btnX, btnY, btnW, btnH, closeR, closeG, closeB)
     else
-        gfx.set(0.7, 0.2, 0.2, 1)
-    end
-    -- Draw rounded (pill-shaped) button
-    for i = 0, btnH - 1 do
-        local radius = btnH / 2
-        local inset = 0
-        if i < radius then
-            inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
-        elseif i > btnH - radius then
-            inset = radius - math.sqrt(radius * radius - (i - (btnH - radius)) * (i - (btnH - radius)))
+        gfx.set(closeR, closeG, closeB, 1)
+        for i = 0, btnH - 1 do
+            local radius = btnH / 2
+            local inset = 0
+            if i < radius then
+                inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
+            elseif i > btnH - radius then
+                inset = radius - math.sqrt(radius * radius - (i - (btnH - radius)) * (i - (btnH - radius)))
+            end
+            gfx.line(btnX + inset, btnY + i, btnX + btnW - inset, btnY + i)
         end
-        gfx.line(btnX + inset, btnY + i, btnX + btnW - inset, btnY + i)
     end
 
     gfx.set(1, 1, 1, 1)
@@ -7725,7 +7746,6 @@ local function drawMessageWindow()
     gfx.y = btnY + (btnH - gfx.texth) / 2
     gfx.drawstr(closeText)
 
-    -- Close button tooltip
     if hover and not tooltipText then
         tooltipText = T("exit_tooltip")
         tooltipX = mx + PS(10)
@@ -10601,6 +10621,7 @@ function renderMainColumns(ctx)
     local S = ctx.S
     local contentTop = ctx.contentTop or S(45)
     local is6Stem = ctx.is6Stem
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
 
     gfx.setfont(1, "Arial", S(13))
     local mainHeaderFont = S(10)
@@ -10652,32 +10673,33 @@ function renderMainColumns(ctx)
     local presetY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
 
-    if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, {80, 80, 90}, presetsBtnFontSize) then applyPresetKaraoke() end
+    local function presetColor(c) return utilityMode and nil or c end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelKaraoke, false, presetColor({80, 80, 90}), presetsBtnFontSize) then applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelAll, false, {80, 80, 90}, presetsBtnFontSize) then applyPresetAll() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelAll, false, presetColor({80, 80, 90}), presetsBtnFontSize) then applyPresetAll() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
 
     presetY = presetY + S(28)
 
-    if drawButton(col1X, presetY, colW, btnH, presetLabelVocals, false, {255, 100, 100}, presetsBtnFontSize) then applyPresetVocalsOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelVocals, false, presetColor({255, 100, 100}), presetsBtnFontSize) then applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelDrums, false, {100, 200, 255}, presetsBtnFontSize) then applyPresetDrumsOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelDrums, false, presetColor({100, 200, 255}), presetsBtnFontSize) then applyPresetDrumsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelBass, false, {150, 100, 255}, presetsBtnFontSize) then applyPresetBassOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelBass, false, presetColor({150, 100, 255}), presetsBtnFontSize) then applyPresetBassOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + S(22)
-    if drawButton(col1X, presetY, colW, btnH, presetLabelOther, false, {100, 255, 150}, presetsBtnFontSize) then applyPresetOtherOnly() end
+    if drawButton(col1X, presetY, colW, btnH, presetLabelOther, false, presetColor({100, 255, 150}), presetsBtnFontSize) then applyPresetOtherOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
     if is6Stem then
-        if drawButton(col1X, presetY, colW, btnH, presetLabelPiano, false, {255, 120, 200}, presetsBtnFontSize) then applyPresetPianoOnly() end
+        if drawButton(col1X, presetY, colW, btnH, presetLabelPiano, false, presetColor({255, 120, 200}), presetsBtnFontSize) then applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + S(22)
-        if drawButton(col1X, presetY, colW, btnH, presetLabelGuitar, false, {255, 180, 100}, presetsBtnFontSize) then applyPresetGuitarOnly() end
+        if drawButton(col1X, presetY, colW, btnH, presetLabelGuitar, false, presetColor({255, 180, 100}), presetsBtnFontSize) then applyPresetGuitarOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + S(22)
     end
@@ -10710,7 +10732,8 @@ function renderMainColumns(ctx)
             local k = tostring(stem.name or ""):lower()
             local displayName = T(k) or stem.name
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
-            if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize) then
+            local stemBtnColor = utilityMode and nil or stem.color
+            if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stemBtnColor, stemsBtnFontSize) then
                 STEMS[i].selected = not STEMS[i].selected
             end
             local tooltipKey = stemTooltipKeys[stem.name] or "tooltip_stem_other"
@@ -13367,9 +13390,8 @@ local function drawProgressWindow()
 
         else
             -- === ART INFO VIEW ===
-            -- Keep the art clean; allow regenerating without overlay labels.
             local artHover = mx >= displayX and mx <= displayX + displayW and my >= displayY and my <= displayY + displayH
-            if artHover then
+            if artHover and not utilityMode then
                 tooltipText = T("click_new_art")
                 tooltipX, tooltipY = mx + PS(10), my + PS(15)
                 if mouseDown and not progressState.wasMouseDown then
