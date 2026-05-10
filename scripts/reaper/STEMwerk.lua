@@ -1267,6 +1267,7 @@ local UI_CONTROLS = dofile(script_path .. "_internal/STEMwerk_UI_Controls.lua")
 local UI_BACKGROUNDS = dofile(script_path .. "_internal/STEMwerk_UI_Backgrounds.lua")
 local UI_HELP_LAYOUT    = dofile(script_path .. "_internal/STEMwerk_UI_HelpLayout.lua")
 local UI_PROGRESS       = dofile(script_path .. "_internal/STEMwerk_Progress_Render.lua")
+local UI_PATH_INPUT     = dofile(script_path .. "_internal/STEMwerk_UI_PathInput.lua")
 
 -- Get list of available languages
 local function getAvailableLanguages()
@@ -8771,6 +8772,223 @@ function drawMainDialogModalOverlay()
     gfx.set(bg, bg, bg, 0.55 * fade)
     gfx.rect(0, 0, gfx.w, gfx.h, 1)
 
+    -- ── Path-input modal ──────────────────────────────────────────────────────
+    if tostring(modal.mode or "") == "path_input" then
+        if not modal.pathInput then
+            modal.pathInput = UI_PATH_INPUT.newState(tostring(modal.inputValue or ""))
+        end
+        local ps = modal.pathInput
+
+        if char == 13 then
+            local sv, fn = ps.value, modal.onSubmit
+            GUI.modal = nil
+            if fn then fn(sv) end
+            return
+        elseif char == 27 then
+            local fn = modal.onCancel
+            GUI.modal = nil
+            if fn then fn() end
+            return
+        else
+            UI_PATH_INPUT.handleKey(ps, char)
+        end
+
+        local piPad    = S(14)
+        local piTopBar = S(3)
+        local piBtnW   = S(90)
+        local piBtnH   = S(28)
+        local piInputH = S(32)
+        local piIconR  = S(12)
+        local piMaxW   = math.min(gfx.w - S(40), S(500))
+        local piBoxW   = piMaxW
+        local piContW  = piBoxW - piPad * 2
+        local piTxtX   = piPad + piIconR * 2 + S(10)
+        local piTxtW   = piContW - (piIconR * 2 + S(10))
+        local piTitle  = tostring(modal.title or "")
+        local piMsg    = tostring(modal.message or "")
+        local piIco    = tostring(modal.icon or "info")
+        local piLabel  = tostring(modal.inputLabel or "Folder path:")
+
+        gfx.setfont(1, "Arial", S(13), string.byte('b'))
+        local piTitleH = gfx.texth
+        gfx.setfont(1, "Arial", S(12))
+        local piLineH  = gfx.texth + S(2)
+        local piLines  = _wrapTextToWidth(piMsg, math.max(S(100), piTxtW))
+        if #piLines == 0 then piLines = {piMsg} end
+
+        local piClearW  = S(28)
+        local piInputX  = (gfx.w - piBoxW) / 2 + piTxtX
+        local piInputW  = piBoxW - piTxtX - piPad        -- full-width inside box
+        local piFieldW  = piInputW - piClearW - S(4)
+        local piHintH   = UI_PATH_INPUT.hasClipboard() and 0 or piLineH
+        local piBoxH    = piPad + piTopBar + S(10) + piTitleH + S(8)
+                        + (#piLines * piLineH) + S(10)
+                        + piLineH + piInputH + S(4)      -- label + field
+                        + piHintH
+                        + S(8) + piBtnH + piPad
+        piBoxH = math.max(piBoxH, S(190))
+
+        local piBoxX = (gfx.w - piBoxW) / 2
+        local piBoxY = (gfx.h - piBoxH) / 2
+        local piR    = getThemeRadius(S, 12, math.floor(math.min(piBoxW, piBoxH) / 2))
+        local piBW   = getThemeBorderWeight(S, 1)
+        drawThemeSurfaceBox(piBoxX, piBoxY, piBoxW, piBoxH, THEME.inputBg, THEME.border, 0.985, 0.95, piR, piBW, 1.25 * fade, "card")
+
+        for i = 0, math.floor(piBoxW) - 1 do
+            local ci = math.min(4, math.max(1, math.floor(i / piBoxW * 4) + 1))
+            local c  = STEM_BORDER_COLORS[ci]
+            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.92 * fade)
+            gfx.line(piBoxX + i, piBoxY + 1, piBoxX + i, piBoxY + piTopBar)
+        end
+
+        local piIcoX = piBoxX + piPad + piIconR
+        local piIcoY = piBoxY + piPad + piTopBar + S(12)
+        local piIcoC = (piIco == "error") and {1.0, 0.35, 0.35}
+                    or (piIco == "warning") and THEME.accent
+                    or {0.35, 0.75, 1.0}
+        gfx.set(piIcoC[1], piIcoC[2], piIcoC[3], 1)
+        gfx.circle(piIcoX, piIcoY, piIconR, 1, 1)
+        gfx.set(0, 0, 0, 0.65)
+        gfx.circle(piIcoX, piIcoY, piIconR, 0, 1)
+        gfx.set(1, 1, 1, 1)
+        gfx.setfont(1, "Arial", S(14), string.byte('b'))
+        local piSym  = (piIco == "info") and "i" or "!"
+        local piSymW = gfx.measurestr(piSym)
+        gfx.x = piIcoX - piSymW / 2
+        gfx.y = piIcoY - gfx.texth / 2 - 1
+        gfx.drawstr(piSym)
+
+        local piTX = piBoxX + piTxtX
+        local piTY = piBoxY + piPad + piTopBar + S(4)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.setfont(1, "Arial", S(14), string.byte('b'))
+        gfx.x = piTX; gfx.y = piTY
+        gfx.drawstr(piTitle)
+
+        gfx.setfont(1, "Arial", S(12))
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        local piY = piTY + piTitleH + S(8)
+        for _, ln in ipairs(piLines) do
+            gfx.x = piTX; gfx.y = piY; gfx.drawstr(tostring(ln)); piY = piY + piLineH
+        end
+
+        piY = piY + S(10)
+        gfx.setfont(1, "Arial", S(11))
+        gfx.x = piInputX; gfx.y = piY; gfx.drawstr(piLabel)
+
+        local piFieldY = piY + piLineH
+        local piIR     = getThemeRadius(S, math.floor(piInputH / 2), math.floor(piInputH / 2))
+        drawThemeSurfaceBox(piInputX, piFieldY, piFieldW, piInputH, THEME.inputBg, THEME.border, 0.98, 0.95, piIR, piBW, 0.5, "card")
+
+        gfx.setfont(1, "Arial", S(12))
+        local piPadTX  = S(8)
+        local piAvailW = piFieldW - piPadTX * 2
+        local piDisp, piCurX, piAllSel = UI_PATH_INPUT.getDisplayInfo(ps, piAvailW, gfx.measurestr)
+
+        if piAllSel then
+            local piSelW = math.min(gfx.measurestr(piDisp), piFieldW - piPadTX * 2)
+            gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.35)
+            gfx.rect(piInputX + piPadTX, piFieldY + S(4), piSelW, piInputH - S(8), 1)
+        end
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = piInputX + piPadTX
+        gfx.y = piFieldY + (piInputH - gfx.texth) / 2
+        gfx.drawstr(piDisp)
+
+        if not piAllSel and math.floor(os.clock() * 2) % 2 == 0 then
+            local piCaretX = math.min(piInputX + piFieldW - S(4), piInputX + piPadTX + piCurX + S(1))
+            gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+            gfx.rect(piCaretX, piFieldY + S(5), math.max(1, S(1.5)), piInputH - S(10), 1)
+        end
+
+        local piClearX = piInputX + piFieldW + S(4)
+        local piClearHov = mx >= piClearX and mx <= piClearX + piClearW
+                       and my >= piFieldY and my <= piFieldY + piInputH
+        drawThemeSurfaceBox(piClearX, piFieldY, piClearW, piInputH,
+            piClearHov and THEME.buttonHover or THEME.button, THEME.border, 1, 0.95, piIR, piBW, 0.95, "button")
+        gfx.setfont(1, "Arial", S(14), string.byte('b'))
+        local piXStr = "x"
+        local piXW   = gfx.measurestr(piXStr)
+        gfx.set(piClearHov and 1 or THEME.textDim[1], piClearHov and 1 or THEME.textDim[2], piClearHov and 1 or THEME.textDim[3], 1)
+        gfx.x = piClearX + (piClearW - piXW) / 2
+        gfx.y = piFieldY + (piInputH - gfx.texth) / 2
+        gfx.drawstr(piXStr)
+
+        if piHintH > 0 then
+            gfx.setfont(1, "Arial", S(10))
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.6)
+            gfx.x = piInputX; gfx.y = piFieldY + piInputH + S(2)
+            gfx.drawstr("Install SWS extension to enable Ctrl+V paste")
+        end
+
+        local piBtnY   = piFieldY + piInputH + piHintH + S(8)
+        local piBrowseW = S(110)
+        local hasBrowse = UI_PATH_INPUT.hasBrowse()
+        local piBrowseAlpha = hasBrowse and 1.0 or 0.38
+        local piBrowseHov   = hasBrowse and mx >= piInputX and mx <= piInputX + piBrowseW
+                           and my >= piBtnY and my <= piBtnY + piBtnH
+        drawThemeSurfaceBox(piInputX, piBtnY, piBrowseW, piBtnH,
+            piBrowseHov and THEME.buttonHover or THEME.button,
+            THEME.border, 1, 0.95 * piBrowseAlpha, piR, piBW, 0.95 * piBrowseAlpha, "button")
+        gfx.setfont(1, "Arial", S(12))
+        local piBLabel = T("browse") or "Browse..."
+        local piBLabelW = gfx.measurestr(piBLabel)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], piBrowseAlpha)
+        gfx.x = piInputX + (piBrowseW - piBLabelW) / 2
+        gfx.y = piBtnY + (piBtnH - gfx.texth) / 2
+        gfx.drawstr(piBLabel)
+
+        if not hasBrowse and mx >= piInputX and mx <= piInputX + piBrowseW
+                and my >= piBtnY and my <= piBtnY + piBtnH then
+            setTooltip(piInputX, piBtnY, piBrowseW, piBtnH, "js_ReaScriptAPI required for folder browsing")
+        end
+
+        local piOkX    = piBoxX + piBoxW - piPad - piBtnW
+        local piCnlX   = piOkX - piBtnW - S(8)
+        local piOkHov  = mx >= piOkX and mx <= piOkX + piBtnW and my >= piBtnY and my <= piBtnY + piBtnH
+        local piCnlHov = mx >= piCnlX and mx <= piCnlX + piBtnW and my >= piBtnY and my <= piBtnY + piBtnH
+        local piBR     = getThemeRadius(S, math.floor(piBtnH / 2), math.floor(piBtnH / 2))
+        drawThemeSurfaceBox(piOkX, piBtnY, piBtnW, piBtnH, piOkHov and THEME.buttonPrimaryHover or THEME.buttonPrimary, THEME.border, 1, 0.95, piBR, piBW, 0.95, "button")
+        gfx.set(1, 1, 1, 1)
+        gfx.setfont(1, "Arial", S(12), string.byte('b'))
+        local piOkTxt = T("ok") or "OK"
+        local piOkTW  = gfx.measurestr(piOkTxt)
+        gfx.x = piOkX + (piBtnW - piOkTW) / 2; gfx.y = piBtnY + (piBtnH - gfx.texth) / 2
+        gfx.drawstr(piOkTxt)
+        drawThemeSurfaceBox(piCnlX, piBtnY, piBtnW, piBtnH, piCnlHov and THEME.buttonHover or THEME.button, THEME.border, 1, 0.95, piBR, piBW, 0.95, "button")
+        gfx.set(1, 1, 1, 1)
+        local piCnlTxt = T("cancel") or "Cancel"
+        local piCnlTW  = gfx.measurestr(piCnlTxt)
+        gfx.x = piCnlX + (piBtnW - piCnlTW) / 2; gfx.y = piBtnY + (piBtnH - gfx.texth) / 2
+        gfx.drawstr(piCnlTxt)
+
+        local piOver   = mx >= piBoxX and mx <= piBoxX + piBoxW and my >= piBoxY and my <= piBoxY + piBoxH
+        local piWas    = GUI.modalWasMouseDown
+        local piRel    = not mouseDown
+        if piClearHov and piRel and piWas then
+            ps.value = ""; ps.cursor = 0; ps.allSelected = false
+        end
+        if piBrowseHov and piRel and piWas then
+            GUI.modalWasMouseDown = false
+            local dir = UI_PATH_INPUT.browseForFolder(ps.value)
+            if dir then ps.value = dir; ps.cursor = #dir; ps.allSelected = false end
+        elseif piOkHov and piRel and piWas then
+            local sv, fn = ps.value, modal.onSubmit
+            GUI.modal = nil
+            if fn then fn(sv) end
+            return
+        elseif (piCnlHov and piRel and piWas) or (piRel and piWas and not piOver) then
+            local fn = modal.onCancel
+            GUI.modal = nil
+            if fn then fn() end
+            return
+        end
+
+        GUI.modalWasMouseDown = mouseDown
+        return
+    end
+    -- ── End path-input modal ──────────────────────────────────────────────────
+
     -- Layout
     local pad = S(14)
     local iconR = S(12)
@@ -11232,7 +11450,7 @@ end
 
 openCustomFolderDialog = function()
     GUI.modal = {
-        mode = "input",
+        mode = "path_input",
         title = HELPERS.getCustomFolderPromptTitle(),
         message = HELPERS.getStemFilesCustomPathTooltip(),
         inputLabel = HELPERS.getCustomFolderPromptLabel(),
