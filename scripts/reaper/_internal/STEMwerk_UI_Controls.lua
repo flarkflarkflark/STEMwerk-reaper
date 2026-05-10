@@ -88,6 +88,7 @@ local function drawUtilityControlsCore(ctx)
     local themeY = ctx.themeY or S(8)
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
 
+    -- D/L box (right)
     if themeHover then GUI.uiClickedThisFrame = true end
     drawUtilityThemeToggle(themeX, themeY, themeSize, themeHover, 1.0)
     if themeHover and mouseDown and not state.wasMouseDown then
@@ -96,28 +97,38 @@ local function drawUtilityControlsCore(ctx)
         saveSettings()
     end
 
-    local langW = S(22)
-    local langH = S(14)
-    local langX = themeX - langW - S(6)
-    local langY = themeY + (themeSize - langH) / 2
-    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
-    local accent = getColorOrFallback("accent", {0.4, 0.6, 0.9})
+    -- Language box (left of D/L box, identical visual style)
+    local langBoxW = themeSize
+    local langBoxX = themeX - langBoxW - S(4)
+    local langBoxY = themeY
+    local langHover = mx >= langBoxX and mx <= langBoxX + langBoxW
+                   and my >= langBoxY and my <= langBoxY + themeSize
 
-    gfx.setfont(1, "Arial", S(9), string.byte("b"))
+    local bg     = getColorOrFallback("buttonBg",   {0.25, 0.25, 0.25})
+    local border = getColorOrFallback("border",     {0.45, 0.45, 0.45})
+    local text   = getColorOrFallback("textPrimary",{0.90, 0.90, 0.90})
+
+    gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte("b"))
     local langCode = string.upper(SETTINGS.language or "EN")
     local langTextW = gfx.measurestr(langCode)
+
+    gfx.set(border[1], border[2], border[3], 1)
+    gfx.rect(langBoxX, langBoxY, langBoxW, themeSize, 0)
     if langHover then
         GUI.uiClickedThisFrame = true
-        gfx.set(accent[1], accent[2], accent[3], 1)
-        if mouseDown and not state.wasMouseDown then
-            cycleLanguageSetting(ctx.setLanguageFn)
-        end
+        gfx.set(bg[1] + 0.08, bg[2] + 0.08, bg[3] + 0.08, 0.95)
     else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8)
+        gfx.set(bg[1], bg[2], bg[3], 0.75)
     end
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
+    gfx.rect(langBoxX + 1, langBoxY + 1, math.max(1, langBoxW - 2), math.max(1, themeSize - 2), 1)
+    gfx.set(text[1], text[2], text[3], 1)
+    gfx.x = langBoxX + (langBoxW - langTextW) / 2
+    gfx.y = langBoxY + math.floor((themeSize - gfx.texth) / 2)
     gfx.drawstr(langCode)
+
+    if langHover and mouseDown and not state.wasMouseDown then
+        cycleLanguageSetting(ctx.setLanguageFn)
+    end
 end
 
 local function drawHelpControls(ctx)

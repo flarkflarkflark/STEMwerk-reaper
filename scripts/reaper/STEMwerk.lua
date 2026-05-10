@@ -15743,6 +15743,7 @@ function drawMultiTrackProgressWindow()
     local formatProgressLine      = UI_PROGRESS.formatProgressLine
     local localizeProgressStagePrefix = UI_PROGRESS.localizeProgressStagePrefix
     local getOverallProgress      = _sep.getOverallProgress
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     local w, h = gfx.w, gfx.h
 
     -- Scale
