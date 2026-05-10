@@ -10677,38 +10677,54 @@ function renderMainColumns(ctx)
     gfx.setfont(1, "Arial", S(13))
 
     local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
-    local function drawPresetBtn(py, label, rawColor)
+    local _pa = {}
+    if utilityMode then
+        local function ss(i) return STEMS[i] and STEMS[i].selected or false end
+        local v, d, b, o = ss(1), ss(2), ss(3), ss(4)
+        local g, p = ss(5), ss(6)
+        local no56 = not is6Stem or ((not g) and (not p))
+        local yes56 = not is6Stem or (g and p)
+        _pa.karaoke = (not v) and d and b and o and yes56
+        _pa.all     = v and d and b and o and yes56
+        _pa.vocals  = v and (not d) and (not b) and (not o) and no56
+        _pa.drums   = (not v) and d and (not b) and (not o) and no56
+        _pa.bass    = (not v) and (not d) and b and (not o) and no56
+        _pa.other   = (not v) and (not d) and (not b) and o and no56
+        _pa.guitar  = is6Stem and (not v) and (not d) and (not b) and (not o) and g and (not p)
+        _pa.piano   = is6Stem and (not v) and (not d) and (not b) and (not o) and (not g) and p
+    end
+    local function drawPresetBtn(py, label, rawColor, isActive)
         if utilityMode then
-            return drawRadio(col1X, py, false, label, nil, colW, nil, nil, presetsBtnFontSize)
+            return drawRadio(col1X, py, isActive, label, nil, colW, nil, nil, presetsBtnFontSize)
         end
         return drawButton(col1X, py, colW, btnH, label, false, rawColor, presetsBtnFontSize)
     end
-    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}) then applyPresetKaraoke() end
+    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, _pa.karaoke) then applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}) then applyPresetAll() end
+    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}, _pa.all) then applyPresetAll() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
 
     presetY = presetY + S(28)
 
-    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}) then applyPresetVocalsOnly() end
+    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals) then applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}) then applyPresetDrumsOnly() end
+    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums) then applyPresetDrumsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}) then applyPresetBassOnly() end
+    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass) then applyPresetBassOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}) then applyPresetOtherOnly() end
+    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other) then applyPresetOtherOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
     if is6Stem then
-        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}) then applyPresetPianoOnly() end
+        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + S(22)
-        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}) then applyPresetGuitarOnly() end
+        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then applyPresetGuitarOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + S(22)
     end
