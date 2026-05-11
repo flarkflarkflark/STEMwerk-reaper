@@ -108,7 +108,7 @@ local function drawUtilityControlsCore(ctx)
         saveSettings()
     end
     if themeHover and tooltipsOn then
-        ctx.tooltipText = "Toggle dark / light."
+        ctx.tooltipText = T("tooltip_theme") or (T("tooltip_theme") or "Toggle dark / light.")
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
         GUI.tooltip  = ctx.tooltipText
@@ -154,7 +154,7 @@ local function drawUtilityControlsCore(ctx)
     end
     state._ucWasRightDown = langHover and rightMouseDown
     if langHover and tooltipsOn then
-        ctx.tooltipText = "Click to change language. Right-click to toggle tooltips."
+        ctx.tooltipText = T("tooltip_lang") or (T("tooltip_lang") or "Change language. Right-click: toggle tooltips.")
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
         GUI.tooltip  = ctx.tooltipText
@@ -185,7 +185,7 @@ local function drawUtilityControlsCore(ctx)
         toggleUIMode()
     end
     if uiHover and tooltipsOn then
-        ctx.tooltipText = "Switch UI mode."
+        ctx.tooltipText = T("tooltip_ui_mode") or (T("tooltip_ui_mode") or "Switch UI mode.")
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
         GUI.tooltip  = ctx.tooltipText
@@ -277,7 +277,7 @@ local function drawHelpControls(ctx)
     gfx.drawstr(langCode)
 
     if langHover and controlsOpacity > 0.3 then
-        tooltipText = T("tooltip_change_language")
+        tooltipText = T("tooltip_lang")
         tooltipX, tooltipY = mx + S(10), my + S(15)
     end
     if langHover and rightMouseDown and not state.wasRightMouseDown and controlsOpacity > 0.3 then
@@ -301,7 +301,7 @@ local function drawHelpControls(ctx)
     gfx.y = langY
     gfx.drawstr(uiTextVis)
     if uiHover_vis and controlsOpacity > 0.3 then
-        tooltipText = "Switch UI mode."
+        tooltipText = T("tooltip_ui_mode") or (T("tooltip_ui_mode") or "Switch UI mode.")
         tooltipX, tooltipY = mx + S(10), my + S(15)
         if mouseDown and not state.wasMouseDown then
             toggleUIMode()
@@ -338,7 +338,7 @@ local function drawHelpControls(ctx)
 
         if fxHover and controlsOpacity > 0.3 then
             local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable FX") or (T("fx_enable") or "Enable FX")
-            tooltipText = fxTip .. " Right-click: switch to REAPER Native UI."
+            tooltipText = fxTip .. " " .. (T("fx_switch_native_suffix") or (T("fx_switch_native_suffix") or "Right-click: switch to REAPER Native UI."))
             tooltipX, tooltipY = mx + S(10), my + S(15)
         end
         if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
@@ -435,7 +435,7 @@ local function drawResultControls(ctx)
         saveSettings()
     end
     if themeHover and controlsOpacity > 0.3 then
-        tooltipText = utilityMode and (T("tooltip_toggle_dark_light") or "Toggle dark / light") or getThemeToggleTooltip()
+        tooltipText = utilityMode and (T("tooltip_theme") or (T("tooltip_theme") or "Toggle dark / light.")) or getThemeToggleTooltip()
         tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
     end
 
@@ -488,7 +488,7 @@ local function drawResultControls(ctx)
     if langHover then
         gfx.set(accent[1], accent[2], accent[3], 1 * controlsOpacity)
         if controlsOpacity > 0.3 then
-            tooltipText = T("tooltip_change_language") or "Click to change language"
+            tooltipText = T("tooltip_lang") or (T("tooltip_lang") or "Change language. Right-click: toggle tooltips.")
             tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
             if rightMouseDown and not (state.wasRightMouseDown or false) then
                 SETTINGS.tooltips = not SETTINGS.tooltips

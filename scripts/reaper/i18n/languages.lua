@@ -21,9 +21,16 @@ local LANGUAGES = {
         path_current_label = "Current:",
         path_not_set = "not set",
         path_rightclick_manual_hint = "Right-click: type or paste path manually.",
+        tooltip_change_language = "Change language. Right-click: toggle tooltips.",
+        tooltip_lang = "Change language. Right-click: toggle tooltips.",
+        tooltip_theme = "Toggle dark / light.",
+        tooltip_ui_mode = "Switch UI mode.",
+        tooltip_logo_help = "Open Help",
+        logo_tooltip = "Open Help",
         process_action = "Process",
         save_support_bundle = "Save Support Bundle",
         save_support_bundle_tooltip = "Save logs and diagnostics for support.",
+        fx_switch_native_suffix = "Right-click: switch to REAPER Native UI.",
 
         -- Main dialog
         presets = "Presets:",
@@ -134,8 +141,6 @@ local LANGUAGES = {
         tooltip_quick_settings = "Quick settings",
         click_to_stemperate = "Click to STEMwerk",
         double_click_reset = "Double-click to reset",
-        tooltip_change_language = "Click to change language\nRight-click: toggle tooltips",
-        tooltip_logo_help = "Click for help - Select tracks/items, choose stems, click STEMwerk!",
         tooltip_new_tracks = "Create separate tracks for each stem",
         tooltip_in_place = "Replace original with stems as takes",
         tooltip_keep_takes = "Keep stems as takes on one item",
@@ -423,7 +428,6 @@ local LANGUAGES = {
         fx_enable = "Enable visual effects",
         fx_disable = "Disable visual effects",
     },
-
     nl = {
         -- General
         help = "Help",
@@ -443,9 +447,16 @@ local LANGUAGES = {
         path_current_label = "Huidig:",
         path_not_set = "niet ingesteld",
         path_rightclick_manual_hint = "Rechtsklik: typ of plak handmatig een pad.",
+        tooltip_change_language = "Taal wijzigen. Rechtsklik: tooltips aan/uit.",
+        tooltip_lang = "Taal wijzigen. Rechtsklik: tooltips aan/uit.",
+        tooltip_theme = "Donker / licht wisselen.",
+        tooltip_ui_mode = "UI-modus wisselen.",
+        tooltip_logo_help = "Help openen",
+        logo_tooltip = "Help openen",
         process_action = "Verwerken",
         save_support_bundle = "Supportbundel opslaan",
         save_support_bundle_tooltip = "Logs en diagnostiek opslaan voor support.",
+        fx_switch_native_suffix = "Rechtsklik: wissel naar REAPER Native UI.",
 
         -- Main dialog
         presets = "Presets:",
@@ -556,8 +567,6 @@ local LANGUAGES = {
         tooltip_quick_settings = "Snelle instellingen",
         click_to_stemperate = "Klik om STEMwerk te starten",
         double_click_reset = "Dubbelklik om te resetten",
-        tooltip_change_language = "Klik om taal te wijzigen\nRechtsklik: tooltips aan/uit",
-        tooltip_logo_help = "Klik voor help - Selecteer tracks/items, kies stems, klik STEMwerk!",
         tooltip_new_tracks = "Maak aparte tracks voor elke stem",
         tooltip_in_place = "Vervang origineel met stems als takes",
         tooltip_keep_takes = "Houd stems als takes op één item",
@@ -843,7 +852,6 @@ local LANGUAGES = {
         fx_enable = "Visuele effecten inschakelen",
         fx_disable = "Visuele effecten uitschakelen",
     },
-
     de = {
         -- General
         help = "Hilfe",
@@ -859,13 +867,20 @@ local LANGUAGES = {
         help_tooltip = "Hilfe & Art Gallery anzeigen (F1)",
         exit_tooltip = "STEMwerk beenden",
         browse = "Durchsuchen",
-        path_browse_folder_hint = "Ordner für benutzerdefinierten Stem-Ordner auswählen.",
+        path_browse_folder_hint = "Ordner fuer benutzerdefinierten Stem-Ordner auswaehlen.",
         path_current_label = "Aktuell:",
         path_not_set = "nicht festgelegt",
-        path_rightclick_manual_hint = "Rechtsklick: Pfad manuell eingeben oder einfügen.",
+        path_rightclick_manual_hint = "Rechtsklick: Pfad manuell eingeben oder einfuegen.",
+        tooltip_change_language = "Sprache wechseln. Rechtsklick: Tooltips ein/aus.",
+        tooltip_lang = "Sprache wechseln. Rechtsklick: Tooltips ein/aus.",
+        tooltip_theme = "Dunkel / hell wechseln.",
+        tooltip_ui_mode = "UI-Modus wechseln.",
+        tooltip_logo_help = "Hilfe oeffnen",
+        logo_tooltip = "Hilfe oeffnen",
         process_action = "Verarbeiten",
         save_support_bundle = "Support-Paket speichern",
         save_support_bundle_tooltip = "Logs und Diagnosedaten fuer den Support speichern.",
+        fx_switch_native_suffix = "Rechtsklick: zu REAPER Native UI wechseln.",
 
         -- Main dialog
         presets = "Presets:",
@@ -976,8 +991,6 @@ local LANGUAGES = {
         tooltip_quick_settings = "Schnelle Einstellungen",
         click_to_stemperate = "Klicken zum STEMwerk",
         double_click_reset = "Doppelklick zum Zuruecksetzen",
-        tooltip_change_language = "Klicken um Sprache zu aendern\nRechtsklick: Tooltips an/aus",
-        tooltip_logo_help = "Klicken fuer Hilfe - Tracks/Items waehlen, Stems waehlen, STEMwerk klicken!",
         tooltip_new_tracks = "Separate Tracks fuer jeden Stem erstellen",
         tooltip_in_place = "Original durch Stems als Takes ersetzen",
         tooltip_keep_takes = "Stems als Takes auf einem Item behalten",
@@ -1262,7 +1275,6 @@ local LANGUAGES = {
         -- FX toggle
         fx_enable = "Visuelle Effekte aktivieren",
         fx_disable = "Visuelle Effekte deaktivieren",
-    },
-}
+    },}
 
 return LANGUAGES

@@ -7699,7 +7699,7 @@ local function drawMessageWindow()
         tooltipX = mx + PS(10)
         tooltipY = my + PS(15)
     elseif langHover and controlsOpacity > 0.3 then
-        tooltipText = T("tooltip_change_language")
+        tooltipText = T("tooltip_lang")
         tooltipX = mx + PS(10)
         tooltipY = my + PS(15)
     elseif fxHover and controlsOpacity > 0.3 then
@@ -10801,7 +10801,7 @@ function renderTopRightControls(ctx)
     gfx.drawstr(langCode)
 
     if langHover and controlsOpacity > 0.3 then
-        setTooltip(langX, langY, langW, langH, T("tooltip_change_language"))
+        setTooltip(langX, langY, langW, langH, T("tooltip_lang"))
         if rightMouseDown and not mainDialogArt.wasRightMouseDown then
             SETTINGS.tooltips = not SETTINGS.tooltips
             saveSettings()
@@ -10843,7 +10843,7 @@ function renderTopRightControls(ctx)
 
         if fxHover and controlsOpacity > 0.3 then
             local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable FX") or (T("fx_enable") or "Enable FX")
-            setTooltip(fxX - S(2), fxY - S(2), fxSize + S(4), fxSize + S(4), fxTip .. " Right-click: switch to REAPER Native UI.")
+            setTooltip(fxX - S(2), fxY - S(2), fxSize + S(4), fxSize + S(4), fxTip .. " " .. (T("fx_switch_native_suffix") or "Right-click: switch to REAPER Native UI."))
             if mouseDown and not GUI.wasMouseDown then
                 SETTINGS.visualFX = not SETTINGS.visualFX
                 saveSettings()
@@ -11536,7 +11536,7 @@ function renderFooter(ctx)
     gfx.setfont(1, "Arial", _fbf, string.byte('b'))
     local textY = footerRow4Y + (btnH - gfx.texth) / 2
 
-    local actionText = (utilityMode and "Run") or (T("process_action") or "Process")
+    local actionText = T("process_action") or "Process"
     local actionW = gfx.measurestr(actionText)
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.x = stemBtnX + (stemBtnW - actionW) / 2
@@ -13026,7 +13026,7 @@ local function drawProgressWindow()
         gfx.drawstr(langCode)
         if langHover and controlsOpacity > 0.3 then
             GUI.uiClickedThisFrame = true
-            tooltipText = T("tooltip_change_language")
+            tooltipText = T("tooltip_lang")
             tooltipX, tooltipY = mx + PS(10), my + PS(15)
         end
         if langHover and rightMouseDown and not (progressState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
@@ -16355,7 +16355,7 @@ function drawMultiTrackProgressWindow()
             GUI.uiClickedThisFrame = true
             gfx.set(0.4, 0.6, 0.9, 1 * controlsOpacity)
             if controlsOpacity > 0.3 then
-                tooltipText = T("tooltip_change_language")
+                tooltipText = T("tooltip_lang")
                 tooltipX, tooltipY = mx + PS(10), my + PS(15)
                 if rightMouseDown and not (multiTrackQueue.wasRightMouseDown or false) then
                     SETTINGS.tooltips = not SETTINGS.tooltips; saveSettings()
