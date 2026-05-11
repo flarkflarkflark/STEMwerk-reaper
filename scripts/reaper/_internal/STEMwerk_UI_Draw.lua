@@ -63,6 +63,7 @@ end
 function M.fitTextToBox(text, availableW, baseFontSize, minFontSize)
     text = tostring(text or "")
     local fontSize = baseFontSize
+    gfx.setfont(1, "Arial", fontSize)
     local tw = gfx.measurestr(text)
     if tw > availableW and availableW > 0 then
         local scale = availableW / tw
