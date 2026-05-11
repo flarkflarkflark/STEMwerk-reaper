@@ -8930,6 +8930,7 @@ function drawMainDialogModalOverlay()
     if tostring(modal.mode or "") == "path_input" then
         if not modal.pathInput then
             modal.pathInput = UI_PATH_INPUT.newState(tostring(modal.inputValue or ""))
+            modal.openedMouseDown = mouseDown
         end
         local ps = modal.pathInput
 
@@ -8988,17 +8989,23 @@ function drawMainDialogModalOverlay()
         local piBW   = getThemeBorderWeight(S, 1)
         drawThemeSurfaceBox(piBoxX, piBoxY, piBoxW, piBoxH, THEME.inputBg, THEME.border, 0.985, 0.95, piR, piBW, 1.25 * fade, "card")
 
-        for i = 0, math.floor(piBoxW) - 1 do
-            local ci = math.min(4, math.max(1, math.floor(i / piBoxW * 4) + 1))
-            local c  = STEM_BORDER_COLORS[ci]
-            gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.92 * fade)
-            gfx.line(piBoxX + i, piBoxY + 1, piBoxX + i, piBoxY + piTopBar)
+        if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+            gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.5 * fade)
+            gfx.line(piBoxX + 1, piBoxY + 1, piBoxX + piBoxW - 2, piBoxY + 1)
+        else
+            for i = 0, math.floor(piBoxW) - 1 do
+                local ci = math.min(4, math.max(1, math.floor(i / piBoxW * 4) + 1))
+                local c  = STEM_BORDER_COLORS[ci]
+                gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.92 * fade)
+                gfx.line(piBoxX + i, piBoxY + 1, piBoxX + i, piBoxY + piTopBar)
+            end
         end
 
         local piIcoX = piBoxX + piPad + piIconR
         local piIcoY = piBoxY + piPad + piTopBar + S(12)
         local piIcoC = (piIco == "error") and {1.0, 0.35, 0.35}
                     or (piIco == "warning") and THEME.accent
+                    or (type(isThemeUtilityMode) == "function" and isThemeUtilityMode()) and {THEME.border[1], THEME.border[2], THEME.border[3]}
                     or {0.35, 0.75, 1.0}
         gfx.set(piIcoC[1], piIcoC[2], piIcoC[3], 1)
         gfx.circle(piIcoX, piIcoY, piIconR, 1, 1)
@@ -9085,7 +9092,7 @@ function drawMainDialogModalOverlay()
             piBrowseHov and THEME.buttonHover or THEME.button,
             THEME.border, 1, 0.95 * piBrowseAlpha, piR, piBW, 0.95 * piBrowseAlpha, "button")
         gfx.setfont(1, "Arial", S(12))
-        local piBLabel = T("browse") or "Browse..."
+        local piBLabel = T("browse") or "Browse"
         local piBLabelW = gfx.measurestr(piBLabel)
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], piBrowseAlpha)
         gfx.x = piInputX + (piBrowseW - piBLabelW) / 2
@@ -9094,7 +9101,7 @@ function drawMainDialogModalOverlay()
 
         if not hasBrowse and mx >= piInputX and mx <= piInputX + piBrowseW
                 and my >= piBtnY and my <= piBtnY + piBtnH then
-            setTooltip(piInputX, piBtnY, piBrowseW, piBtnH, "js_ReaScriptAPI required for folder browsing")
+            setTooltip(piInputX, piBtnY, piBrowseW, piBtnH, "Folder picker requires js_ReaScriptAPI. Paste or type a path manually.")
         end
 
         local piOkX    = piBoxX + piBoxW - piPad - piBtnW
@@ -9131,13 +9138,14 @@ function drawMainDialogModalOverlay()
             GUI.modal = nil
             if fn then fn(sv) end
             return
-        elseif (piCnlHov and piRel and piWas) or (piRel and piWas and not piOver) then
+        elseif (piCnlHov and piRel and piWas) or (piRel and piWas and not piOver and not modal.openedMouseDown) then
             local fn = modal.onCancel
             GUI.modal = nil
             if fn then fn() end
             return
         end
 
+        if modal.openedMouseDown and not mouseDown then modal.openedMouseDown = false end
         GUI.modalWasMouseDown = mouseDown
         return
     end
@@ -11273,10 +11281,25 @@ function renderMainColumns(ctx)
         elseif #customPathLabel > 24 then
             customPathLabel = "..." .. customPathLabel:sub(-21)
         end
-        if drawButton(col5X, outY, outBoxW, btnH, customPathLabel, false, {80, 80, 90}, outputBtnFontSize) then
-            openCustomFolderDialog()
+        if UI_PATH_INPUT.hasBrowse() then
+            if drawButton(col5X, outY, outBoxW, btnH, customPathLabel, false, {80, 80, 90}, outputBtnFontSize) then
+                openCustomFolderDialog()
+            end
+            if ctx.rightMouseDown and ctx.mx >= col5X and ctx.mx <= col5X + outBoxW and ctx.my >= outY and ctx.my <= outY + btnH then
+                openCustomFolderDialogManual()
+            end
+            local _bHint = T("browse_folder_hint") or "Browse for custom stem folder."
+            local _curDir = HELPERS.trimString(SETTINGS.customStemDir)
+            local _curLbl = T("path_current_label") or "Current:"
+            local _curVal = (_curDir ~= "") and _curDir or (T("path_not_set") or "not set")
+            local _rcHint = T("path_rightclick_manual_hint") or "Right-click: type or paste path manually."
+            setTooltip(col5X, outY, outBoxW, btnH, _bHint .. "\n" .. _curLbl .. " " .. _curVal .. "\n" .. _rcHint)
+        else
+            if drawButton(col5X, outY, outBoxW, btnH, customPathLabel, false, {80, 80, 90}, outputBtnFontSize) then
+                openCustomFolderDialogManual()
+            end
+            setTooltip(col5X, outY, outBoxW, btnH, HELPERS.trimString(SETTINGS.customStemDir) ~= "" and SETTINGS.customStemDir or HELPERS.getStemFilesCustomPathTooltip())
         end
-        setTooltip(col5X, outY, outBoxW, btnH, HELPERS.trimString(SETTINGS.customStemDir) ~= "" and SETTINGS.customStemDir or HELPERS.getStemFilesCustomPathTooltip())
     end
 
     if SETTINGS.createNewTracks then
@@ -11610,7 +11633,7 @@ openDialogWarning = function(title, message)
     GUI.modalWasMouseDown = false
 end
 
-openCustomFolderDialog = function()
+openCustomFolderDialogManual = function()
     GUI.modal = {
         mode = "path_input",
         title = HELPERS.getCustomFolderPromptTitle(),
@@ -11624,6 +11647,18 @@ openCustomFolderDialog = function()
         end,
     }
     GUI.modalWasMouseDown = false
+end
+
+openCustomFolderDialog = function()
+    if UI_PATH_INPUT.hasBrowse() then
+        local dir = UI_PATH_INPUT.browseForFolder(SETTINGS.customStemDir or "")
+        if dir and dir ~= "" then
+            SETTINGS.customStemDir = HELPERS.trimString(dir)
+            saveSettings()
+        end
+        return
+    end
+    openCustomFolderDialogManual()
 end
 
 canStartProcessingFromDialog = function()

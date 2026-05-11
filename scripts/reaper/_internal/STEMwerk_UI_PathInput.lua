@@ -31,26 +31,20 @@ end
 -- ── Folder picker (js_ReaScriptAPI) ──────────────────────────────────────────
 
 function M.hasBrowse()
-    return type(reaper.JS_Dialog_BrowseForOpenFiles) == "function"
+    return type(reaper.JS_Dialog_BrowseForFolder) == "function"
 end
 
--- Opens a native file picker and extracts the parent directory of the selected
--- file. Returns the directory string on success, nil on cancel or unavailability.
--- The caption tells the user to navigate to their desired folder and select any
--- file inside it; this avoids needing a folder-picker API that REAPER lacks.
+-- Opens a native OS folder picker. Returns the selected folder path on success,
+-- nil on cancel or when js_ReaScriptAPI is unavailable.
 function M.browseForFolder(initialPath)
     if not M.hasBrowse() then return nil end
     local start = tostring(initialPath or "")
     if start == "" and type(reaper.GetProjectPath) == "function" then
         start = reaper.GetProjectPath("") or ""
     end
-    local ok, files = reaper.JS_Dialog_BrowseForOpenFiles(
-        "Navigate to folder, then select any file inside it", start, "", "", false)
-    if ok and ok ~= 0 and type(files) == "string" and files ~= "" then
-        local nul = files:find("\0", 1, true)
-        if nul then files = files:sub(1, nul - 1) end
-        local dir = files:match("^(.*)[/\\][^/\\]+$")
-        return (dir and dir ~= "") and dir or files
+    local ok, path = reaper.JS_Dialog_BrowseForFolder("Select folder", start)
+    if ok and ok ~= 0 and type(path) == "string" and path ~= "" then
+        return path
     end
     return nil
 end
