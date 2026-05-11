@@ -5051,17 +5051,17 @@ local function drawUtilityNativeHelpWindow()
     local pad = math.max(12, math.floor(math.min(w, h) * 0.025))
     local helpScale = math.max(1.0, math.min(1.65, math.min(w / 760, h / 520)))
     local function HS(val) return math.floor(val * helpScale + 0.5) end
-    local topH = HS(54)
+    local topH = HS(58)
     col(border, 0.5)
     gfx.line(0, topH, w, topH)
 
-    gfx.setfont(1, "Arial", HS(20), string.byte('b'))
+    gfx.setfont(1, "Arial", HS(22), string.byte('b'))
     col(text, 1)
     gfx.x, gfx.y = pad, 12
     gfx.drawstr("STEMwerk Help")
-    gfx.setfont(1, "Arial", HS(11))
+    gfx.setfont(1, "Arial", HS(12))
     col(muted, 1)
-    gfx.x, gfx.y = pad + HS(170), HS(18)
+    gfx.x, gfx.y = pad + HS(185), HS(20)
     gfx.drawstr("Setup, stems and workflow")
 
     local function smallBox(label, x, y, ww, hh)
@@ -5096,11 +5096,11 @@ local function drawUtilityNativeHelpWindow()
 
     local tabY = topH + pad
     local tabX = pad
-    local tabH = HS(34)
+    local tabH = HS(36)
     local clickedTab = nil
     for i, tab in ipairs(tabs) do
-        gfx.setfont(1, "Arial", HS(12))
-        local tabW = math.max(HS(80), gfx.measurestr(tab[1]) + HS(22))
+        gfx.setfont(1, "Arial", HS(13))
+        local tabW = math.max(HS(86), gfx.measurestr(tab[1]) + HS(24))
         local hover = mx >= tabX and mx <= tabX + tabW and my >= tabY and my <= tabY + tabH
         col((helpState.currentTab == i) and activeBg or (hover and panel or bg), 1)
         gfx.rect(tabX, tabY, tabW, tabH, 1)
@@ -5133,13 +5133,13 @@ local function drawUtilityNativeHelpWindow()
     gfx.line(contentX, contentY, contentX + contentW, contentY)
 
     local tab = tabs[helpState.currentTab]
-    local lineH = HS(20)
+    local lineH = HS(21)
     local maxW = contentW - 42
 
     -- Single-column renderer (used when tab returns a plain line array)
     local function drawSingleCol(lines, startY)
         local y = startY
-        gfx.setfont(1, "Arial", HS(14))
+        gfx.setfont(1, "Arial", HS(15))
         for _, rawLine in ipairs(lines) do
             if y > contentY + contentH - 20 then break end
             if rawLine == "" then
@@ -5166,7 +5166,7 @@ local function drawUtilityNativeHelpWindow()
     -- Two-column renderer (used when tab returns {__columns=true, left=fn, right=fn})
     local function drawOneCol(lines, startX, colW, startY)
         local y = startY
-        gfx.setfont(1, "Arial", HS(14))
+        gfx.setfont(1, "Arial", HS(15))
         for _, rawLine in ipairs(lines) do
             if y > contentY + contentH - 20 then break end
             if rawLine == "" then
@@ -5203,7 +5203,7 @@ local function drawUtilityNativeHelpWindow()
         drawSingleCol(type(tabContent) == "table" and tabContent or {}, contentY + HS(14))
     end
 
-    local btnW, btnH = HS(96), HS(32)
+    local btnW, btnH = HS(108), HS(34)
     local btnX, btnY = (w - btnW) / 2, h - HS(54)
     local backHover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
     local backFill = backHover
@@ -5230,8 +5230,10 @@ local function drawUtilityNativeHelpWindow()
     end
 
     if _helpUC and _helpUC.tooltipText then
-        gfx.setfont(1, "Arial", HS(11))
-        drawTooltipStyled(_helpUC.tooltipText, _helpUC.tooltipX, _helpUC.tooltipY, w, h, HS(8), HS(14), math.min(w * 0.62, HS(520)))
+        local ttPad = HS(6)
+        local ttLineH = HS(15)
+        gfx.setfont(1, "Arial", HS(12))
+        drawTooltipStyled(_helpUC.tooltipText, _helpUC.tooltipX, _helpUC.tooltipY, w, h, ttPad, ttLineH, math.min(w * 0.58, HS(500)))
     end
     helpState.wasMouseDown = mouseDown
     helpState.wasRightMouseDown = rightMouseDown
