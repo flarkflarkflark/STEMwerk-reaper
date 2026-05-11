@@ -11566,27 +11566,39 @@ function renderFooter(ctx)
     local closeBtnW = stemBtnW
     local closeBtnHover = mx >= closeBtnX and mx <= closeBtnX + closeBtnW and my >= footerRow4Y and my <= footerRow4Y + btnH
 
-    local closeR, closeG, closeB = 0.7, 0.2, 0.2
-    if closeBtnHover then
-        closeR, closeG, closeB = 0.9, 0.3, 0.3
+    if utilityMode then
+        local closeCol = closeBtnHover and (THEME.buttonHover or THEME.button) or THEME.button
+        closeCol = closeCol or {0.24, 0.24, 0.24}
+        drawGlossyPill(closeBtnX, footerRow4Y, closeBtnW, btnH, closeCol[1], closeCol[2], closeCol[3])
+    else
+        local closeR, closeG, closeB = 0.7, 0.2, 0.2
+        if closeBtnHover then
+            closeR, closeG, closeB = 0.9, 0.3, 0.3
+        end
+        drawGlossyPill(closeBtnX, footerRow4Y, closeBtnW, btnH, closeR, closeG, closeB)
     end
-    drawGlossyPill(closeBtnX, footerRow4Y, closeBtnW, btnH, closeR, closeG, closeB)
 
     gfx.setfont(1, "Arial", _fbf, string.byte('b'))
     local closeText = T("close") or "Close"
     local closeTextW = gfx.measurestr(closeText)
     local closeTextX = closeBtnX + (closeBtnW - closeTextW) / 2
     local closeTextY = footerRow4Y + (btnH - gfx.texth) / 2
-    gfx.set(0, 0, 0, 0.4)
-    gfx.x, gfx.y = closeTextX + 2, closeTextY + 2; gfx.drawstr(closeText)
-    gfx.set(0, 0, 0, 0.6)
-    gfx.x, gfx.y = closeTextX + 1, closeTextY + 1; gfx.drawstr(closeText)
-    gfx.x, gfx.y = closeTextX - 1, closeTextY + 1; gfx.drawstr(closeText)
-    gfx.x, gfx.y = closeTextX + 1, closeTextY - 1; gfx.drawstr(closeText)
-    gfx.x, gfx.y = closeTextX - 1, closeTextY - 1; gfx.drawstr(closeText)
-    gfx.set(1, 1, 1, 1)
-    gfx.x, gfx.y = closeTextX, closeTextY
-    gfx.drawstr(closeText)
+    if utilityMode then
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x, gfx.y = closeTextX, closeTextY
+        gfx.drawstr(closeText)
+    else
+        gfx.set(0, 0, 0, 0.4)
+        gfx.x, gfx.y = closeTextX + 2, closeTextY + 2; gfx.drawstr(closeText)
+        gfx.set(0, 0, 0, 0.6)
+        gfx.x, gfx.y = closeTextX + 1, closeTextY + 1; gfx.drawstr(closeText)
+        gfx.x, gfx.y = closeTextX - 1, closeTextY + 1; gfx.drawstr(closeText)
+        gfx.x, gfx.y = closeTextX + 1, closeTextY - 1; gfx.drawstr(closeText)
+        gfx.x, gfx.y = closeTextX - 1, closeTextY - 1; gfx.drawstr(closeText)
+        gfx.set(1, 1, 1, 1)
+        gfx.x, gfx.y = closeTextX, closeTextY
+        gfx.drawstr(closeText)
+    end
 
     if closeBtnHover and GUI.wasMouseDown and not ctx.mouseDown then
         GUI.result = false
