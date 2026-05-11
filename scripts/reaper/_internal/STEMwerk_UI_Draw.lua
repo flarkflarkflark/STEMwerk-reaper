@@ -625,6 +625,9 @@ function M.drawCheckbox(x, y, checked, label, r, g, b, fixedW, fontSizeOverride)
     local _chkUtilLight = not checked
         and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
         and type(isThemeLightMode) == "function" and isThemeLightMode()
+    local _chkUtilDark = not _chkUtilLight
+        and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        and not (type(isThemeLightMode) == "function" and isThemeLightMode())
     if checked then
         local mult = hover and 1.2 or 1.0
         baseR = (r or 0) / 255 * mult
@@ -644,7 +647,9 @@ function M.drawCheckbox(x, y, checked, label, r, g, b, fixedW, fontSizeOverride)
 
     local textAlpha = checked and 1 or (hover and 0.95 or 0.85)
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = math.max(S(10), math.floor(baseFontSize * 0.86 + 0.5))
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local hardMin = utilityMode and S(8) or S(10)
+    local minFontSize = math.max(hardMin, math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
     local labelText, tw, usedFontSize = fitControlLabel(label, boxW - padding * 2, baseFontSize, 0.86, minFontSize)
     local textX = x + (boxW - tw) / 2
@@ -655,6 +660,11 @@ function M.drawCheckbox(x, y, checked, label, r, g, b, fixedW, fontSizeOverride)
         gfx.set(1, 1, 1, 0.18 * textAlpha)
         gfx.x, gfx.y = textX + 1, textY + 1; gfx.drawstr(labelText)
         gfx.set(tc[1], tc[2], tc[3], textAlpha)
+    elseif _chkUtilDark then
+        gfx.set(0, 0, 0, 0.15 * textAlpha)
+        gfx.x, gfx.y = textX + 1, textY + 1
+        gfx.drawstr(labelText)
+        gfx.set(1, 1, 1, textAlpha)
     else
         gfx.set(0, 0, 0, 0.35 * textAlpha)
         gfx.x, gfx.y = textX + 2, textY + 2
@@ -720,6 +730,9 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
     local _radioUtilLight = not selected and (not (attentionMult and attentionMult > 0))
         and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
         and type(isThemeLightMode) == "function" and isThemeLightMode()
+    local _radioUtilDark = not _radioUtilLight
+        and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        and not (type(isThemeLightMode) == "function" and isThemeLightMode())
     if selected then
         local mult = hover and 1.2 or 1.0
         baseR, baseG, baseB, baseA = r / 255 * mult, g / 255 * mult, b / 255 * mult, 1
@@ -741,7 +754,9 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
 
     local textAlpha = selected and 1 or (hover and 0.95 or 0.85)
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = lockFontSize and baseFontSize or math.max(S(10), math.floor(baseFontSize * 0.86 + 0.5))
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local hardMin = utilityMode and S(8) or S(10)
+    local minFontSize = lockFontSize and baseFontSize or math.max(hardMin, math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
 
     if icon == "explode" then
@@ -839,6 +854,11 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
             gfx.set(1, 1, 1, 0.18 * textAlpha)
             gfx.x, gfx.y = textX + 1, textY + 1; gfx.drawstr(labelText)
             gfx.set(tc[1], tc[2], tc[3], textAlpha)
+        elseif _radioUtilDark then
+            gfx.set(0, 0, 0, 0.15 * textAlpha)
+            gfx.x, gfx.y = textX + 1, textY + 1
+            gfx.drawstr(labelText)
+            gfx.set(1, 1, 1, textAlpha)
         else
             gfx.set(0, 0, 0, 0.35 * textAlpha)
             gfx.x, gfx.y = textX + 2, textY + 2
@@ -908,7 +928,9 @@ function M.drawToggleButton(x, y, w, h, label, selected, color, fontSizeOverride
 
     local textAlpha = selected and 1 or (hover and 0.9 or 0.75)
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = math.max(S(10), math.floor(baseFontSize * 0.86 + 0.5))
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local hardMin = utilityMode and S(8) or S(10)
+    local minFontSize = math.max(hardMin, math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
     local labelText, tw, usedFontSize = fitControlLabel(label, w - padding * 2, baseFontSize, 0.86, minFontSize)
     local textX = x + (w - tw) / 2
@@ -985,7 +1007,9 @@ function M.drawButton(x, y, w, h, label, isDefault, color, fontSizeOverride)
     drawGlossyPill(x, y, w, h, baseR, baseG, baseB)
 
     local baseFontSize = fontSizeOverride or S(13)
-    local minFontSize = math.max(S(10), math.floor(baseFontSize * 0.84 + 0.5))
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local hardMin = utilityMode and S(8) or S(10)
+    local minFontSize = math.max(hardMin, math.floor(baseFontSize * 0.84 + 0.5))
     local padding = S(4)
     local labelText, tw, usedFontSize = fitControlLabel(label, w - padding * 2, baseFontSize, 0.84, minFontSize)
     local textX = x + (w - tw) / 2
@@ -997,12 +1021,20 @@ function M.drawButton(x, y, w, h, label, isDefault, color, fontSizeOverride)
     local _btnUtilLight = _btnAvg > 0.5
         and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
         and type(isThemeLightMode) == "function" and isThemeLightMode()
+    local _btnUtilDark = not _btnUtilLight
+        and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        and not (type(isThemeLightMode) == "function" and isThemeLightMode())
 
     if _btnUtilLight then
         local tc = THEME.text or {0.1, 0.1, 0.1}
         gfx.set(1, 1, 1, 0.18)
         gfx.x, gfx.y = textX + 1, textY + 1; gfx.drawstr(labelText)
         gfx.set(tc[1], tc[2], tc[3], 1)
+    elseif _btnUtilDark then
+        gfx.set(0, 0, 0, 0.15)
+        gfx.x, gfx.y = textX + 1, textY + 1
+        gfx.drawstr(labelText)
+        gfx.set(1, 1, 1, 1)
     else
         gfx.set(0, 0, 0, 0.4)
         gfx.x, gfx.y = textX + 2, textY + 2

@@ -8743,7 +8743,8 @@ local function drawRadio(x, y, selected, label, color, fixedW, attentionMult, ic
 end
 
 local function calcUniformRadioFontSize(labels, boxW, reservedLeft)
-    local baseFontSize = S(13)
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local baseFontSize = utilityMode and math.max(S(8), math.floor(S(13) * 0.72 + 0.5)) or S(13)
     local minFontSize = S(9)
     local padding = S(4)
     local availableW = (boxW or 0) - padding * 2 - (reservedLeft or 0)
