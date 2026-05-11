@@ -11,7 +11,7 @@ ACTIVE_THEME = ACTIVE_THEME or nil
 
 -- ── Theme preset registry ──────────────────────────────────────────────────────
 
-THEME_PRESET_ORDER = {"classic", "ember", "ice", "mono", "studio", "aurora", "copper", "reaper_native"}
+THEME_PRESET_ORDER = {"classic", "ember", "ice", "mono", "studio", "aurora", "copper"}
 
 THEME_PRESETS = {
     classic = {

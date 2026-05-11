@@ -75,6 +75,13 @@ local function cycleLanguageSetting(setLanguageFn)
     saveSettings()
 end
 
+local function toggleUIMode()
+    if _G.FORCE_THEME_PRESET then return end
+    SETTINGS.themePreset = isUtilityMode() and "classic" or "reaper_native"
+    updateTheme()
+    saveSettings()
+end
+
 local function drawUtilityControlsCore(ctx)
     local S = ctx.S
     local w = ctx.w
@@ -86,11 +93,13 @@ local function drawUtilityControlsCore(ctx)
 
     local iconScale = ctx.iconScale or 0.66
     local themeSize = ctx.themeSize or math.max(S(12), math.floor(S(20) * iconScale + 0.5))
-    local themeX = ctx.themeX or (w - themeSize - S(10))
     local themeY = ctx.themeY or S(8)
+    -- Layout right-to-left: [EN] [D] [UI]
+    local uiBoxX  = w - themeSize - S(4)           -- [UI] rightmost
+    local themeX  = uiBoxX - themeSize - S(4)       -- [D]
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
 
-    -- D/L box (right)
+    -- D/L box (middle)
     if themeHover then GUI.uiClickedThisFrame = true end
     drawUtilityThemeToggle(themeX, themeY, themeSize, themeHover, 1.0)
     if themeHover and mouseDown and not state.wasMouseDown then
@@ -146,6 +155,37 @@ local function drawUtilityControlsCore(ctx)
     state._ucWasRightDown = langHover and rightMouseDown
     if langHover and tooltipsOn then
         ctx.tooltipText = "Click to change language. Right-click to toggle tooltips."
+        ctx.tooltipX = mx + S(10)
+        ctx.tooltipY = my + S(15)
+        GUI.tooltip  = ctx.tooltipText
+        GUI.tooltipX = ctx.tooltipX
+        GUI.tooltipY = ctx.tooltipY
+    end
+
+    -- [UI] mode box (rightmost, layout: [EN] [D] [UI])
+    local uiHover = mx >= uiBoxX and mx <= uiBoxX + themeSize
+                 and my >= themeY and my <= themeY + themeSize
+    if uiHover then GUI.uiClickedThisFrame = true end
+    gfx.setfont(1, "Arial", math.max(8, math.floor(themeSize * 0.62)), string.byte("b"))
+    local uiLabel  = "UI"
+    local uiLabelW = gfx.measurestr(uiLabel)
+    gfx.set(border[1], border[2], border[3], 1)
+    gfx.rect(uiBoxX, themeY, themeSize, themeSize, 0)
+    if uiHover then
+        gfx.set(bg[1] + 0.08, bg[2] + 0.08, bg[3] + 0.08, 0.95)
+    else
+        gfx.set(bg[1], bg[2], bg[3], 0.75)
+    end
+    gfx.rect(uiBoxX + 1, themeY + 1, math.max(1, themeSize - 2), math.max(1, themeSize - 2), 1)
+    gfx.set(text[1], text[2], text[3], 1)
+    gfx.x = uiBoxX + (themeSize - uiLabelW) / 2
+    gfx.y = themeY + math.floor((themeSize - gfx.texth) / 2)
+    gfx.drawstr(uiLabel)
+    if uiHover and mouseDown and not state.wasMouseDown and not _G.FORCE_THEME_PRESET then
+        toggleUIMode()
+    end
+    if uiHover and tooltipsOn then
+        ctx.tooltipText = "Switch UI mode."
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
         GUI.tooltip  = ctx.tooltipText
@@ -217,6 +257,12 @@ local function drawHelpControls(ctx)
     local langY = themeY + (themeSize - langH) / 2
     local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
 
+    -- [UI] text (left of lang, Visual mode)
+    local uiW_vis = S(16)
+    local uiX_vis = langX - uiW_vis - S(4)
+    local uiHover_vis = mx >= uiX_vis and mx <= uiX_vis + uiW_vis
+                     and my >= langY and my <= langY + langH
+
     gfx.setfont(1, "Arial", S(9), string.byte("b"))
     local langCode = string.upper(SETTINGS.language or "EN")
     local langTextW = gfx.measurestr(langCode)
@@ -240,6 +286,26 @@ local function drawHelpControls(ctx)
     end
     if langHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
         cycleLanguageSetting(ctx.setLanguageFn)
+    end
+
+    -- [UI] mode text (Visual mode, left of lang)
+    gfx.setfont(1, "Arial", S(9), string.byte("b"))
+    local uiTextVis = "UI"
+    local uiTextVisW = gfx.measurestr(uiTextVis)
+    if uiHover_vis and controlsOpacity > 0.3 then
+        gfx.set(accent[1], accent[2], accent[3], 1 * controlsOpacity)
+    else
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
+    end
+    gfx.x = uiX_vis + (uiW_vis - uiTextVisW) / 2
+    gfx.y = langY
+    gfx.drawstr(uiTextVis)
+    if uiHover_vis and controlsOpacity > 0.3 then
+        tooltipText = "Switch UI mode."
+        tooltipX, tooltipY = mx + S(10), my + S(15)
+        if mouseDown and not state.wasMouseDown then
+            toggleUIMode()
+        end
     end
 
     if not utilityMode then
@@ -271,12 +337,16 @@ local function drawHelpControls(ctx)
         end
 
         if fxHover and controlsOpacity > 0.3 then
-            tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
+            local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable FX") or (T("fx_enable") or "Enable FX")
+            tooltipText = fxTip .. " Right-click: switch to REAPER Native UI."
             tooltipX, tooltipY = mx + S(10), my + S(15)
         end
         if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
             SETTINGS.visualFX = not SETTINGS.visualFX
             saveSettings()
+        end
+        if fxHover and rightMouseDown and not state.wasRightMouseDown and controlsOpacity > 0.3 then
+            toggleUIMode()
         end
     end
 

@@ -1221,7 +1221,7 @@ SETTINGS = {
     deleteOriginalTrack = false,
     muteOriginalTrack = false, -- Mute original track(s) after separation
     darkMode = true,           -- Dark/Light theme toggle
-    themePreset = "classic",   -- Theme accent preset (classic/ember/ice/mono)
+    themePreset = "reaper_native", -- Default: REAPER Native. User can switch to Visual via [UI].
     parallelProcessing = true, -- Process multiple tracks in parallel (uses more GPU memory)
     language = "en",           -- UI language: en, nl, de
     visualFX = true,           -- Enable/disable visual effects (procedural art backgrounds)
@@ -10673,9 +10673,15 @@ function renderTopRightControls(ctx)
         end
 
         if fxHover and controlsOpacity > 0.3 then
-            setTooltip(fxX - S(2), fxY - S(2), fxSize + S(4), fxSize + S(4), SETTINGS.visualFX and T("fx_disable") or T("fx_enable"))
+            local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable FX") or (T("fx_enable") or "Enable FX")
+            setTooltip(fxX - S(2), fxY - S(2), fxSize + S(4), fxSize + S(4), fxTip .. " Right-click: switch to REAPER Native UI.")
             if mouseDown and not GUI.wasMouseDown then
                 SETTINGS.visualFX = not SETTINGS.visualFX
+                saveSettings()
+            end
+            if rightMouseDown and not mainDialogArt.wasRightMouseDown then
+                SETTINGS.themePreset = "reaper_native"
+                updateTheme()
                 saveSettings()
             end
         end
