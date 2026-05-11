@@ -15819,7 +15819,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     local execLogPath = job.execLogPath or SW_LOG.getLogPath()
     local jobTag = "item_" .. tostring(job.index or 0)
     job.percent = 0
-    job.stage = "Starting backend..."
+    job.stage = T("progress_starting_backend") or "Starting backend..."
     job.startTime = os.time()
     SW_TIMING.beginJob(job.index, { track = job.trackName, audio_dur = job.audioDuration, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "", mode = multiTrackQueue.sequentialMode and "sequential" or "parallel" })
     multiTrackQueue.currentIndex = tonumber(job.index) or 0
@@ -16116,7 +16116,7 @@ _sep.updateAllJobsProgress = function()
         else
             -- Job not yet started (sequential mode)
             job.percent = 0
-            job.stage = "Queued"
+            job.stage = T("progress_queued") or "Queued"
         end
     end
 
@@ -16998,7 +16998,7 @@ function drawMultiTrackProgressWindow()
                 end
                 gfx.x = tBarX + tBarW + PS(8)
                 gfx.y = yPos + PS(2)
-                gfx.drawstr(isWaiting and "Waiting" or (T("mt_done_label") or "Done"))
+                gfx.drawstr(isWaiting and (T("progress_waiting") or "Waiting") or (T("mt_done_label") or "Done"))
             else
                 gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
                 gfx.x = tBarX + tBarW + PS(8)

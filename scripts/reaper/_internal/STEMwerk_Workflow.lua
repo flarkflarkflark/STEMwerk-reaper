@@ -219,7 +219,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     C.progressState.pidFile = pidFile
     C.progressState.exitCodeFile = exitCodeFile
     C.progressState.percent = 0
-    C.progressState.stage = "Starting backend..."
+    C.progressState.stage = C.T("progress_starting_backend") or "Starting backend..."
     C.progressState.startTime = os.time()
     C.progressState.lastActivityAt = C.progressState.startTime
     C.progressState.lastActivityReason = "process_start"
@@ -732,7 +732,7 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     C.updateTheme()
 
     if OS == "Windows" and C.progressState.windowOpen then
-        showProcessingPlaceholderWindow("Initializing...")
+        showProcessingPlaceholderWindow(C.T("progress_initializing") or "Initializing...")
     end
 
     -- Start the process
@@ -753,7 +753,7 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     if not C.progressState.windowOpen then
         ensureProcessingWindowOpen()
     end
-    C.progressState.stage = "Starting backend..."
+    C.progressState.stage = C.T("progress_starting_backend") or "Starting backend..."
 
     C.progressState.running = true
     -- DEBUG: Write launcher_debug.txt with all relevant details before generating VBS launcher

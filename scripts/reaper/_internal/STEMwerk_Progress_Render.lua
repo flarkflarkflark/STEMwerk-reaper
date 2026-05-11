@@ -46,7 +46,9 @@ local function normalizeProgressStage(stage)
     else
         local key = nil
         local flat = lower:gsub("[%s%.:]+$", "")
-        if flat == "loading model" then
+        if flat == "initializing" then
+            key = "progress_initializing"
+        elseif flat == "loading model" then
             key = "progress_stage_loading_model"
         elseif flat == "loading ai model" then
             key = "progress_stage_loading_ai_model"
@@ -68,6 +70,7 @@ local function localizeProgressStagePrefix(stageText)
     local text = tostring(stageText or "")
     if text == "" then return text end
     local map = {
+        {"initializing",        progressUiLabel("progress_initializing",             "Initializing")},
         {"processing",          progressUiLabel("progress_stage_processing",         "Processing")},
         {"loading ai model",    progressUiLabel("progress_stage_loading_ai_model",   "Loading AI model")},
         {"loading model",       progressUiLabel("progress_stage_loading_model",      "Loading model")},
