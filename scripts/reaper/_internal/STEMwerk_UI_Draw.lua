@@ -359,21 +359,8 @@ function M.drawTooltip()
         if utilityMode then
             gfx.drawstr(headerText)
         else
-            local stemIdx = headerText:find("STEM")
-            local prefix = headerText
-            local suffix = ""
-            if stemIdx then
-                prefix = headerText:sub(1, stemIdx - 1)
-                suffix = headerText:sub(stemIdx + 4)
-            end
-            gfx.drawstr(prefix)
-            for i, letter in ipairs({ "S", "T", "E", "M" }) do
-                local c = titleColors[i]
-                gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 1)
-                gfx.drawstr(letter)
-            end
-            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-            gfx.drawstr(suffix)
+            -- Ensure no special "STEM" rendering in Visual mode for the tooltip header
+            gfx.drawstr(headerText)
         end
         currentY = currentY + lineH + S(4)
 
