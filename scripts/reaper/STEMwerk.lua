@@ -125,6 +125,7 @@ execHidden = SYSTEM.execHidden
 exec_capture = SYSTEM.exec_capture
 
 dofile(script_path .. "_internal/STEMwerk_Log.lua")
+dofile(script_path .. "_internal/STEMwerk_Timing.lua")
 
 SELF_CHECK_LOGGED = false
 function logSelfCheckOnce()
@@ -14656,6 +14657,7 @@ function processStemsResult(stems)
     end
     stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
 
+    if SW_TIMING then SW_TIMING.mark("single", "import_start") end
     if timeSelectionMode then
         -- Time selection mode: respect user's setting
         if SETTINGS.createNewTracks then
@@ -14904,6 +14906,11 @@ function processStemsResult(stems)
     reaper.UpdateArrange()
 
     -- Show custom result window
+    if SW_TIMING then
+        SW_TIMING.mark("single", "import_end")
+        SW_TIMING.endJob("single", "success")
+        SW_TIMING.endRun("success")
+    end
     SW_LOG.logExecResult("timing:finalize_end single", nil, "")
     showResultWindow(selectedStemData, resultData or resultMsg)
 end
@@ -15765,6 +15772,7 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.currentJobIndex = 0
     multiTrackQueue.globalStartTime = os.time()  -- Track total elapsed time
     multiTrackQueue.totalAudioDuration = 0  -- Will be updated when jobs start
+    SW_TIMING.beginRun({ mode = multiTrackQueue.sequentialMode and "sequential" or "parallel", job_count = #trackJobs, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
 
     if not multiTrackQueue.sequentialMode then
         -- Start all separation processes in parallel (uses more VRAM)
@@ -15813,6 +15821,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     job.percent = 0
     job.stage = "Starting.."
     job.startTime = os.time()
+    SW_TIMING.beginJob(job.index, { track = job.trackName, audio_dur = job.audioDuration, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "", mode = multiTrackQueue.sequentialMode and "sequential" or "parallel" })
     multiTrackQueue.currentIndex = tonumber(job.index) or 0
     multiTrackQueue.currentTrackName = job.sourceTrackName or job.trackName or ""
     multiTrackQueue.currentSourceTrack = job.track or nil
@@ -16086,6 +16095,7 @@ _sep.updateAllJobsProgress = function()
                 doneFile:close()
                 if not job.done then
                     job.done = true
+                    SW_TIMING.mark(job.index, "output_detected")
                     SW_LOG.logExecResult(
                         "timing:job_done job=" .. tostring(job.index) .. " dir=" .. tostring(job.trackDir),
                         nil,
@@ -17459,6 +17469,7 @@ _sep.processAllStemsResult = function()
             local namingItem = job.sourceItemName or job.sourceItemDisplayName or namingTrack
             stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem)
             job.importedStemPaths = stems
+            if SW_TIMING then SW_TIMING.mark(job.index, "import_start") end
             if SETTINGS.createNewTracks then
                 -- New tracks mode: create separate tracks for each stem
                 -- Use per-job selection range: if time selection exists, use it; otherwise use the job's source item position/length
@@ -17618,10 +17629,12 @@ _sep.processAllStemsResult = function()
                     debugLog("  ERROR: No valid source item for in-place replacement")
                 end
             end
+            if SW_TIMING then SW_TIMING.mark(job.index, "import_end") end
             table.insert(trackNames, job.trackName)
         else
             debugLog("  No stems found, skipping")
         end
+        if SW_TIMING then SW_TIMING.endJob(job.index, job.hadImportedStems and "success" or "no_stems") end
     end
     local sourceTrackCountWithStems = 0
     for _ in pairs(sourceTracksWithStems) do sourceTrackCountWithStems = sourceTrackCountWithStems + 1 end
@@ -17956,6 +17969,7 @@ _sep.processAllStemsResult = function()
     -- Reset processing guard
     isProcessingActive = false
 
+    SW_TIMING.endRun("success", { total_audio = totalAudioDur, rtf = realtimeFactor })
     SW_LOG.logExecResult("timing:finalize_end multi", nil, "")
     showResultWindow(selectedStemData, resultData)
 end
@@ -18280,12 +18294,17 @@ function runSeparationWorkflow()
     debugLog("Temp dir: " .. WORKFLOW_TEMP_DIR)
     debugLog("Temp input: " .. WORKFLOW_TEMP_INPUT)
 
+    SW_TIMING.beginRun({ mode = "single", model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
+    SW_TIMING.beginJob("single", { model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
+
     local extracted, err, sourceItem, trackList, trackItems
 	    if timeSelectionMode then
 	        debugLog("Rendering time selection to WAV..")
 	        timeSelectionItemMap = nil
 	        selectedItemsNoTimeMap = nil
+	        SW_TIMING.mark("single", "render_start")
 	        extracted, err, sourceItem, trackList, trackItems = renderTimeSelectionToWav(WORKFLOW_TEMP_INPUT)
+	        SW_TIMING.mark("single", "render_end")
         debugLog("Render result: extracted=" .. tostring(extracted) .. ", err=" .. tostring(err))
 
         -- Check for multi-track mode
@@ -18450,7 +18469,9 @@ function runSeparationWorkflow()
         local origItemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
         local origItemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
 
+        SW_TIMING.mark("single", "render_start")
         extracted, err = renderItemToWav(selectedItem, WORKFLOW_TEMP_INPUT)
+        SW_TIMING.mark("single", "render_end")
         -- Check if we rendered a sub-selection (not the whole item)
         local renderPos, renderLen = nil, nil  -- These would come from renderItemToWav if supported
         if renderPos and renderLen then

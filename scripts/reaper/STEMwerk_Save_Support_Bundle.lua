@@ -1421,6 +1421,8 @@ local persistentDiagFiles = {
     "stderr.txt",
     "exit_code.txt",
     "done.txt",
+    "separation_timing_summary.txt",
+    "separation_timing_jobs.jsonl",
 }
 for _, name in ipairs(persistentDiagFiles) do
     local src = joinPath(cacheLogDir, name)

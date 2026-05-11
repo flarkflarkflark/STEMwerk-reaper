@@ -230,6 +230,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     C.progressState.lastLogChangeAt = C.progressState.startTime
     C.progressState.lastDoneChangeAt = C.progressState.startTime
     C.progressState.cancelRequested = false
+    C.progressState.timingDone = {}
+    if SW_TIMING then SW_TIMING.mark("single", "process_launch") end
     C.progressState.execLogPath = SW_LOG.getLogPath()
     local execLogPath = C.progressState.execLogPath or SW_LOG.getLogPath()
     local jobTag = "single"
@@ -566,6 +568,14 @@ function WORKFLOW.progressLoop()
         if prevPercent < 87 and C.progressState.percent >= 87 then
             debugLog("[LOG] Progress reached ~87% (" .. tostring(C.progressState.percent) .. ") stage=" .. tostring(C.progressState.stage))
         end
+        if SW_TIMING then
+            local pct = C.progressState.percent or 0
+            local td = C.progressState.timingDone or {}
+            if pct > 0  and not td.first_progress then td.first_progress = true; SW_TIMING.mark("single", "first_progress") end
+            if pct >= 50 and not td.p50          then td.p50 = true;           SW_TIMING.mark("single", "progress_50") end
+            if pct >= 90 and not td.p90          then td.p90 = true;           SW_TIMING.mark("single", "progress_90") end
+            C.progressState.timingDone = td
+        end
     end
 
     if loopNow >= (C.progressState.nextFrameAt or 0) then
@@ -594,6 +604,7 @@ function WORKFLOW.progressLoop()
         if C.progressState.outputDir and C.progressState.outputDir ~= "" then
             SW_LOG.preserveDiagnosticsForRun(C.progressState.outputDir, { reason = "user_cancel" })
         end
+        if SW_TIMING then SW_TIMING.endJob("single", "user_cancel"); SW_TIMING.endRun("user_cancel") end
 
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
         HELPERS.killProcessFromPidFile(C.progressState.pidFile)
