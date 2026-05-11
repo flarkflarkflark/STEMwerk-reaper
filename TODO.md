@@ -134,6 +134,25 @@ Toolbar + Icons + Toolbarscripts:
 	- Avoid unnecessary torch reinstall when runtime verification already passes
 - [ ] Build the next full release assets from a cleaned-up `main`
 	- ReaPack/package metadata, repo tree, and release payload should agree
+- [ ] Path input / native folder picker cleanup
+	- Do not use file-picker-as-folder-picker workaround
+	- Prefer native OS folder picker via js_ReaScriptAPI if available
+	- If js_ReaScriptAPI is missing: disable Browse, show tooltip "Folder picker requires js_ReaScriptAPI. Paste or type a path manually."
+	- Fix modal opening click being treated as outside-cancel
+	- Browse label should be capitalized
+	- Add tooltips and i18n where appropriate
+	- Keep path input reusable for: custom stem folder, support bundle save location, Python path, FFmpeg path, runtime/model/cache folders
+- [ ] OutputPlan / ImportPlan refactor
+	- Investigate why multiple selected media items on the same source track can produce folders/stem tracks in reversed or unexpected order
+	- Do not quick-fix with reverse loops
+	- Build deterministic OutputPlan / ImportPlan:
+		- Collect selected items first
+		- Store source_track_guid / source_item_guid / item_position / item_length / original order
+		- Sort by source track + timeline position + tie-breaker
+		- Create folders/stem tracks from plan
+		- Import must not depend on job completion order
+	- Future UI grouping: Output (New tracks / In-place / Folder), Group (Per item / Per track / Selection)
+	- Naming/wildcard system later: $source, $track, $item, $stem, $model, $date, $index, $take, $project
 
 ## Support / diagnostics
 
@@ -206,6 +225,14 @@ Toolbar + Icons + Toolbarscripts:
 
 ## UI / theme polish
 
+- [ ] REAPER Native: button typography polish
+	- Native main button labels still feel slightly too large/heavy
+	- Use column-label font size (e.g. “Presets:”) as baseline reference for Native button text
+	- Button labels may be slightly larger than column labels if needed for readability
+	- Reduce/soften button text outline/shadow in Native mode
+	- Keep main title “STEMwerk” unchanged
+	- Do not affect flarkAUDIO Visual mode unless unavoidable
+	- Test EN/NL/DE — translated labels are longer
 - [ ] Add optional UI/theme accessibility polish
 	- Optional “REAPER Native” theme
 	- Reduced visual FX mode
@@ -222,6 +249,8 @@ Toolbar + Icons + Toolbarscripts:
 
 ## Future
 
+- **Better ETA estimates / historical ETA:** Backend progress percentage is not linear enough for reliable ETA (progress may jump from ~31% to complete). Do not calculate ETA from `progressState.percent`. Future approach: persist compact timing history per completed job, grouped by model/device/mode/stem count where feasible; use median historical duration per source audio second; estimate total job duration from source duration; show ETA only when enough comparable history exists; hide ETA if confidence is low. Keep elapsed/status display as the reliable baseline in the meantime.
+- **Progress/terminal UX — phase messages:** Status labels are improved and localized; timing diagnostics are available. Potential future improvements: clearer phase messages if the window-lifecycle allows (currently the GFX window closes before output detection and import phases), elapsed-only display as reliable baseline, historical ETA once timing history exists, better multi-track job summary. No backend or progress-math changes unless explicitly planned.
 - **Timeline Alignment / Trim Silence:** Trim the input to the AI-engine to the actual `AudioAccessor` boundaries within a time selection. Currently, if a time selection is larger than the media item, the engine processes the extra silence, which wastes GPU time.
 - **Sample Rate Mismatches / Drift:** Investigate potential sub-sample timing drifts when items with different sample rates than the REAPER project are processed via a time selection.
 - **Padding Clicks / Fades:** When items are padded with silence to match a longer time selection, apply a micro-fade to prevent DC-offset clicks at the zero-crossing.
