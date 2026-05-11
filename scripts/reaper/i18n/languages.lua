@@ -16,6 +16,8 @@ local LANGUAGES = {
         select_audio_tooltip = "Select tracks, media items, or make a time selection",
         help_tooltip = "View Help & Art Gallery (F1)",
         exit_tooltip = "Exit STEMwerk",
+        save_support_bundle = "Save Support Bundle",
+        save_support_bundle_tooltip = "Save logs and diagnostics for support.",
 
         -- Main dialog
         presets = "Presets:",
@@ -430,6 +432,8 @@ local LANGUAGES = {
         select_audio_tooltip = "Selecteer tracks, media-items of maak een tijdselectie",
         help_tooltip = "Bekijk Help & Art Gallery (F1)",
         exit_tooltip = "Sluit STEMwerk",
+        save_support_bundle = "Supportbundel opslaan",
+        save_support_bundle_tooltip = "Logs en diagnostiek opslaan voor support.",
 
         -- Main dialog
         presets = "Presets:",
@@ -842,6 +846,8 @@ local LANGUAGES = {
         select_audio_tooltip = "Tracks, Medien-Items oder Zeitauswahl waehlen",
         help_tooltip = "Hilfe & Art Gallery anzeigen (F1)",
         exit_tooltip = "STEMwerk beenden",
+        save_support_bundle = "Support-Paket speichern",
+        save_support_bundle_tooltip = "Logs und Diagnosedaten fuer den Support speichern.",
 
         -- Main dialog
         presets = "Presets:",

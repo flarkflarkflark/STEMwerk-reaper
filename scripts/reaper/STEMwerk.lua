@@ -7547,6 +7547,8 @@ local function drawMessageWindow()
     messageWindowState.lastMY = my
 
     local _msgUtility = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local _isErrorMode = (messageWindowState.icon == "error")
+    local bundleHover = false
 
     -- Background
     gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
@@ -7819,6 +7821,32 @@ local function drawMessageWindow()
     local btnSpacing = PS(10)
     local totalBtnsW = btnW * 2 + btnSpacing
     local btnY = h - PS(40)
+
+    if _isErrorMode then
+        local bundleText = T("save_support_bundle") or "Save Support Bundle"
+        local bundleBtnW = totalBtnsW
+        local bundleBtnH = btnH
+        local bundleBtnX = (w - bundleBtnW) / 2
+        local bundleBtnY = btnY - bundleBtnH - PS(8)
+        bundleHover = mx >= bundleBtnX and mx <= bundleBtnX + bundleBtnW
+            and my >= bundleBtnY and my <= bundleBtnY + bundleBtnH
+        local bR = bundleHover and THEME.buttonPrimaryHover[1] or THEME.buttonPrimary[1]
+        local bG = bundleHover and THEME.buttonPrimaryHover[2] or THEME.buttonPrimary[2]
+        local bB = bundleHover and THEME.buttonPrimaryHover[3] or THEME.buttonPrimary[3]
+        drawGlossyPill(bundleBtnX, bundleBtnY, bundleBtnW, bundleBtnH, bR, bG, bB)
+        gfx.setfont(1, "Arial", PS(13), string.byte('b'))
+        local bTw = gfx.measurestr(bundleText)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = bundleBtnX + (bundleBtnW - bTw) / 2
+        gfx.y = bundleBtnY + (bundleBtnH - gfx.texth) / 2
+        gfx.drawstr(bundleText)
+        setTooltip(bundleBtnX, bundleBtnY, bundleBtnW, bundleBtnH, T("save_support_bundle_tooltip"))
+        if bundleHover and (gfx.mouse_cap & 1 == 1) and not messageWindowState.wasMouseDown then
+            reaper.defer(function()
+                dofile(script_path .. "STEMwerk_Save_Support_Bundle.lua")
+            end)
+        end
+    end
 
     -- Help button (left)
     local helpBtnX = (w - totalBtnsW) / 2
