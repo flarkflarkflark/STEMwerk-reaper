@@ -9681,29 +9681,6 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     for i = 1, #deviceList do
         deviceLabels[#deviceLabels + 1] = deviceList[i].uiName or deviceList[i].name
     end
-    local deviceRadioFontSize = getUniformFontSizeCached("main_device_col", deviceLabels, deviceBoxW)
-    local function tightenFontSizeToFit(labels, boxW, fontSize)
-        local padding = S(4)
-        local availableW = (boxW or 0) - padding * 2
-        if availableW <= 0 then return fontSize end
-        local size = fontSize
-        local minSize = S(9)
-        while size > minSize do
-            gfx.setfont(1, "Arial", size)
-            local fits = true
-            for _, text in ipairs(labels or {}) do
-                local w = gfx.measurestr(tostring(text or ""))
-                if w > availableW then
-                    fits = false
-                    break
-                end
-            end
-            if fits then break end
-            size = size - 1
-        end
-        return size
-    end
-    deviceRadioFontSize = tightenFontSizeToFit(deviceLabels, deviceBoxW, deviceRadioFontSize)
 
     -- Device options with tooltips
     local deviceDescKeys = {
@@ -9747,7 +9724,8 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     for _, device in ipairs(deviceList) do
         local label = device.uiName or device.name
         -- Use theme accent color for the selected device (same as Model selection)
-        if drawRadio(col4X, deviceY, SETTINGS.device == device.id, label, nil, deviceBoxW, nil, nil, deviceRadioFontSize, true) then
+        -- Use common fixed font size; drawRadio will handle individual shrink-to-fit if needed.
+        if drawRadio(col4X, deviceY, SETTINGS.device == device.id, label, nil, deviceBoxW, nil, nil, commonBtnFontSize) then
             SETTINGS.device = device.id
             saveSettings()
         end
