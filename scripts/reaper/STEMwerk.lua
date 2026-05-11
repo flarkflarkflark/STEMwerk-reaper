@@ -1978,7 +1978,7 @@ local function drawWavingStemwerkLogo(opts)
 
     local flags = bold and string.byte('b') or 0
     gfx.setfont(1, fontName, fontSize, flags)
-    
+
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
 
     if utilityMode then
@@ -11295,7 +11295,7 @@ function renderMainColumns(ctx)
             if ctx.rightMouseDown and ctx.mx >= col5X and ctx.mx <= col5X + outBoxW and ctx.my >= outY and ctx.my <= outY + btnH then
                 openCustomFolderDialogManual()
             end
-            local _bHint = T("browse_folder_hint") or "Browse for custom stem folder."
+            local _bHint = T("path_browse_folder_hint") or "Browse for custom stem folder."
             local _curDir = HELPERS.trimString(SETTINGS.customStemDir)
             local _curLbl = T("path_current_label") or "Current:"
             local _curVal = (_curDir ~= "") and _curDir or (T("path_not_set") or "not set")
@@ -11535,58 +11535,13 @@ function renderFooter(ctx)
     local _fbf = utilityMode and math.max(S(9), math.floor(S(13) * 0.82 + 0.5)) or S(13)
     gfx.setfont(1, "Arial", _fbf, string.byte('b'))
     local textY = footerRow4Y + (btnH - gfx.texth) / 2
-    if utilityMode then
-        local startText = "Run"
-        local startW = gfx.measurestr(startText)
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        gfx.x = stemBtnX + (stemBtnW - startW) / 2
-        gfx.y = textY
-        gfx.drawstr(startText)
-    else
-        local letters = {"S", "T", "E", "M", "w", "e", "r", "k"}
-        local letterWidths = {}
-        local totalWidth = 0
-        for i, letter in ipairs(letters) do
-            local lw = gfx.measurestr(letter)
-            letterWidths[i] = lw
-            totalWidth = totalWidth + lw
-        end
-        local textX = stemBtnX + (stemBtnW - totalWidth) / 2
 
-        local stemColors = {
-            {255/255, 100/255, 100/255},
-            {100/255, 200/255, 255/255},
-            {150/255, 100/255, 255/255},
-            {100/255, 255/255, 150/255},
-        }
-
-        local offsets = {
-            {1, 1}, {-1, 1}, {1, -1}, {-1, -1},
-        }
-        for _, off in ipairs(offsets) do
-            local ox = textX + off[1]
-            local oy = textY + off[2]
-            gfx.set(0, 0, 0, 0.6)
-            for i, letter in ipairs(letters) do
-                gfx.x = ox
-                gfx.y = oy
-                gfx.drawstr(letter)
-                ox = ox + letterWidths[i]
-            end
-        end
-
-        for i, letter in ipairs(letters) do
-            if i <= 4 then
-                gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
-            else
-                gfx.set(1, 1, 1, 1)
-            end
-            gfx.x = textX
-            gfx.y = textY
-            gfx.drawstr(letter)
-            textX = textX + letterWidths[i]
-        end
-    end
+    local actionText = (utilityMode and "Run") or (T("process_action") or "Process")
+    local actionW = gfx.measurestr(actionText)
+    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    gfx.x = stemBtnX + (stemBtnW - actionW) / 2
+    gfx.y = textY
+    gfx.drawstr(actionText)
 
     setRichTooltip(stemBtnX, footerRow4Y, stemBtnW, btnH)
 
@@ -11872,7 +11827,7 @@ end
 
 function dialogLoop()
     local loopNow = uiNow()
-    
+
     -- Check for theme updates from Editor
     local lastRefresh = reaper.GetExtState("STEMwerk", "THEME_REFRESH")
     if lastRefresh ~= "" and lastRefresh ~= GUI._lastThemeRefresh then
@@ -14533,9 +14488,9 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
 
         local folderTrack = nil
         local sourceTrackName = "Selection"
-        if refTrack then 
-            local _, tn = reaper.GetTrackName(refTrack) 
-            if tn and tn ~= "" then sourceTrackName = tn end 
+        if refTrack then
+            local _, tn = reaper.GetTrackName(refTrack)
+            if tn and tn ~= "" then sourceTrackName = tn end
         end
         local sourceItemName = sourceTrackName -- Fallback for items when using selection
 
@@ -14599,7 +14554,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         local sourceTrackName = "Track"
         local _, tn = reaper.GetTrackName(track)
         if tn and tn ~= "" then sourceTrackName = tn end
-        
+
         local sourceItemName = info.sourceItemName or sourceTrackName
         local sourcePlaybackState = GLUE_HELPERS.snapshotItemPlaybackState(item)
         local take = reaper.GetActiveTake(item)
@@ -15188,7 +15143,7 @@ function resultWindowLoop()
         GUI._lastThemeRefresh = lastRefresh
         updateTheme()
     end
-    
+
     if drawResultWindow() then
         -- Remember any size/position changes made in the complete window
         captureWindowGeometry(resultWindowState.windowTitle or getCompleteWindowTitle())
@@ -17182,10 +17137,10 @@ function drawMultiTrackProgressWindow()
     local statusBlockY = h - statusBlockH
     local segSize = multiTrackQueue.sequentialMode and "40" or "25"
     local modeStr = multiTrackQueue.sequentialMode and "Seq" or "Par"
-    
+
     -- Fix misleading GPU reporting
     local modeSuffix = ""
-    
+
     local totalMins = math.floor(globalElapsed / 60)
     local totalSecs = math.floor(globalElapsed % 60)
     local mtTime = T("mt_time") or "Time"
@@ -17199,7 +17154,7 @@ function drawMultiTrackProgressWindow()
         local etaLabel = T("eta_label") or "ETA:"
         etaText = string.format(" | %s %d:%02d", tostring(etaLabel), etaMins, etaSecs)
     end
-    
+
     local runModel = effectiveRunModel()
     local modelDisplay = (runModel == "htdemucs_ft")
         and (T("model_label_quality") or "Quality")
@@ -18446,7 +18401,7 @@ function runSeparationWorkflow()
 	        if next(explicitTrackItemMap) then
 	            selectedItemsNoTimeMap = explicitTrackItemMap
 	        end
-	
+
 	        -- Build combined track list from selected tracks and tracks of selected items
 	        local trackSet = {}
         if selTrackCount and selTrackCount > 0 then
