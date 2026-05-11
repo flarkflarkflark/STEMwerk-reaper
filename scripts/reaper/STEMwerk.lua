@@ -7577,6 +7577,9 @@ local function drawMessageWindow()
         gfx.rect(0, 0, w, h, 1)
     end
 
+    local tooltipText = nil
+    local tooltipX, tooltipY = 0, 0
+
     -- Top-right controls
     local iconScale = 0.66
     local themeSize = math.max(PS(12), math.floor(PS(20) * iconScale + 0.5))
@@ -7688,24 +7691,29 @@ local function drawMessageWindow()
             SETTINGS.visualFX = not SETTINGS.visualFX
             saveSettings()
         end
+        if fxHover and rightMouseDown and not (messageWindowState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
+            SETTINGS.themePreset = "reaper_native"
+            updateTheme()
+            saveSettings()
+        end
     end
 
     -- Track tooltip
-    local tooltipText = nil
-    local tooltipX, tooltipY = 0, 0
-
-    if themeHover and controlsOpacity > 0.3 then
-        tooltipText = getThemeToggleTooltip()
-        tooltipX = mx + PS(10)
-        tooltipY = my + PS(15)
-    elseif langHover and controlsOpacity > 0.3 then
-        tooltipText = T("tooltip_lang")
-        tooltipX = mx + PS(10)
-        tooltipY = my + PS(15)
-    elseif fxHover and controlsOpacity > 0.3 then
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX = mx + PS(10)
-        tooltipY = my + PS(15)
+    if not _msgUtility then
+        if (not _msgUtility) and themeHover and controlsOpacity > 0.3 then
+            tooltipText = getThemeToggleTooltip()
+            tooltipX = mx + PS(10)
+            tooltipY = my + PS(15)
+        elseif langHover and controlsOpacity > 0.3 then
+            tooltipText = T("tooltip_lang")
+            tooltipX = mx + PS(10)
+            tooltipY = my + PS(15)
+        elseif fxHover and controlsOpacity > 0.3 then
+            local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
+            tooltipText = fxTip .. " " .. (T("fx_switch_native_suffix") or "Right-click: switch to REAPER Native UI.")
+            tooltipX = mx + PS(10)
+            tooltipY = my + PS(15)
+        end
     end
 
     local time = os.clock() - messageWindowState.startTime
@@ -13058,11 +13066,17 @@ local function drawProgressWindow()
         end
         if fxHover and controlsOpacity > 0.3 then
             GUI.uiClickedThisFrame = true
-            tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
+            local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
+            tooltipText = fxTip .. " " .. (T("fx_switch_native_suffix") or "Right-click: switch to REAPER Native UI.")
             tooltipX, tooltipY = mx + PS(10), my + PS(15)
         end
         if fxHover and mouseDown and not progressState.wasMouseDown and controlsOpacity > 0.3 then
             SETTINGS.visualFX = not SETTINGS.visualFX; saveSettings()
+        end
+        if fxHover and rightMouseDown and not (progressState.wasRightMouseDown or false) and controlsOpacity > 0.3 then
+            SETTINGS.themePreset = "reaper_native"
+            updateTheme()
+            saveSettings()
         end
     end
 
@@ -16283,11 +16297,17 @@ function drawMultiTrackProgressWindow()
         end
         if fxHover and controlsOpacity > 0.3 then
             GUI.uiClickedThisFrame = true
-            tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
+            local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
+            tooltipText = fxTip .. " " .. (T("fx_switch_native_suffix") or "Right-click: switch to REAPER Native UI.")
             tooltipX, tooltipY = mx + PS(10), my + PS(15)
         end
         if fxHover and mouseDown and not multiTrackQueue.wasMouseDown and controlsOpacity > 0.3 then
             SETTINGS.visualFX = not SETTINGS.visualFX; saveSettings()
+        end
+        if fxHover and rightMouseDown and not (multiTrackQueue.wasRightMouseDown or false) and controlsOpacity > 0.3 then
+            SETTINGS.themePreset = "reaper_native"
+            updateTheme()
+            saveSettings()
         end
     end
 
