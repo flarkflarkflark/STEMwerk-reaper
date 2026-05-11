@@ -590,6 +590,11 @@ function WORKFLOW.progressLoop()
         C.captureWindowGeometry(WINDOW_PROCESSING)
         C.saveSettings()
 
+        -- Preserve best-effort diagnostics before stopping worker; files may be partial on cancel.
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.preserveDiagnosticsForRun(C.progressState.outputDir, { reason = "user_cancel" })
+        end
+
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
         HELPERS.killProcessFromPidFile(C.progressState.pidFile)
 
