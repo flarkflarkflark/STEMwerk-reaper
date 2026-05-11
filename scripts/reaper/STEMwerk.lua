@@ -4844,14 +4844,18 @@ local function drawUtilityNativeHelpWindow()
     local dark = SETTINGS and SETTINGS.darkMode
 
     local function col(c, a) gfx.set(c[1], c[2], c[3], a or 1) end
-    local bg = dark and {0.10, 0.10, 0.10} or {0.93, 0.93, 0.93}
-    local panel = dark and {0.15, 0.15, 0.15} or {0.84, 0.84, 0.84}
-    local panel2 = dark and {0.12, 0.12, 0.12} or {0.90, 0.90, 0.90}
-    local border = dark and {0.36, 0.36, 0.36} or {0.55, 0.55, 0.55}
-    local text = dark and {0.88, 0.88, 0.88} or {0.08, 0.08, 0.08}
-    local muted = dark and {0.62, 0.62, 0.62} or {0.32, 0.32, 0.32}
-    local hoverBg = dark and {0.23, 0.23, 0.23} or {0.78, 0.78, 0.78}
-    local activeBg = dark and {0.18, 0.34, 0.36} or {0.54, 0.68, 0.70}
+    -- Use resolved THEME so Help matches the main Native UI in both Dark and Light.
+    -- _tc(primary, fallback): returns primary if it is a valid {r,g,b} table, else fallback.
+    local function _tc(p, fb) return (type(p) == "table" and p[1] ~= nil) and p or fb end
+    local T_ = (type(THEME) == "table") and THEME or {}
+    local bg      = _tc(T_.bg,          dark and {0.11,0.11,0.11} or {0.85,0.85,0.85})
+    local panel   = _tc(T_.button,       dark and {0.18,0.18,0.18} or {0.78,0.78,0.78})
+    local panel2  = _tc(T_.bg,            dark and {0.11,0.11,0.11} or {0.85,0.85,0.85})
+    local border  = _tc(T_.border,       dark and {0.32,0.32,0.32} or {0.60,0.60,0.60})
+    local text    = _tc(T_.text,         dark and {0.90,0.90,0.90} or {0.10,0.10,0.10})
+    local muted   = _tc(T_.textDim,      dark and {0.70,0.70,0.70} or {0.30,0.30,0.30})
+    local hoverBg = _tc(T_.buttonHover,  dark and {0.26,0.26,0.26} or {0.86,0.86,0.86})
+    local activeBg = _tc(T_.accent,      dark and {0.30,0.46,0.32} or {0.56,0.68,0.58})
 
     local function tr(key, fallback)
         if type(T) == "function" then
@@ -4870,81 +4874,172 @@ local function drawUtilityNativeHelpWindow()
         if body and body ~= "" then addLine(lines, "  " .. tostring(body)) end
     end
 
+    local HEADING_MARKER = "\x01"
+    local function addHead(lines, s)
+        lines[#lines + 1] = HEADING_MARKER .. tostring(s)
+    end
+
     local tabs = {
         { tr("help_welcome", "Welcome"), function()
             local lines = {}
-            addLine(lines, tr("help_welcome_title", "Welcome to STEMwerk"))
-            addLine(lines, tr("help_welcome_sub", "Stem Separation for REAPER"))
+            addHead(lines, "Welcome to STEMwerk")
+            addLine(lines, "  Stem separation workflow utility for REAPER")
             addLine(lines, "")
-            addPair(lines, tr("help_feature_vocals", "Extract vocals for remixes or karaoke"), tr("help_feature_vocals_desc", "Lead vocals, backing vocals, speech"))
-            addPair(lines, tr("help_feature_drums", "Isolate drums for sampling or practice"), tr("help_feature_drums_desc", "Kick, snare, hi-hats, percussion"))
-            addPair(lines, tr("help_feature_bass", "Separate bass for mixing or transcription"), tr("help_feature_bass_desc", "Bass guitar, synth bass, low frequencies"))
-            addPair(lines, tr("help_feature_other", "Get other instruments cleanly"), tr("help_feature_other_desc", "Guitar, keys, strings, synths, effects"))
+            addHead(lines, "Common uses")
+            addPair(lines, "Vocals", "Extract for karaoke, remix, or vocal isolation")
+            addPair(lines, "Drums", "Isolate for sampling, practice, or groove analysis")
+            addPair(lines, "Bass", "Separate for transcription or low-end mixing")
+            addPair(lines, "Other", "Get guitars, keys, synths, and strings cleanly")
             return lines
         end },
         { tr("help_quickstart", "Quick Start"), function()
-            local lines = {}
-            addLine(lines, tr("help_quickstart_title", "Getting Started"))
-            addLine(lines, tr("help_quickstart_sub", "Follow these simple steps to separate your audio"))
-            addLine(lines, "")
-            addPair(lines, "1. " .. tr("help_step1_title", "Select Audio"), tr("help_step1_detail", tr("help_step1_desc", "Select tracks, items, or make a time selection")))
-            addPair(lines, "2. " .. tr("help_step2_title", "Choose Model & Stems"), tr("help_step2_detail", tr("help_step2_desc", "Pick a preset or select individual stems")))
-            addPair(lines, "3. " .. tr("help_step3_title", "Click STEMwerk"), tr("help_step3_detail", tr("help_step3_desc", "Wait for AI to separate your audio")))
-            addLine(lines, "")
-            addLine(lines, tr("help_pro_tip", "Pro Tip: Use the 6-stem model (htdemucs_6s) for guitar and piano separation!"))
-            addLine(lines, tr("keyboard_shortcuts", "Keyboard shortcuts:"))
-            addLine(lines, "  H = " .. tr("open_help", "Open Help") .. "   ESC = " .. tr("close_cancel", "Close / Cancel") .. "   Enter = " .. tr("start_stemwerk", "Start STEMwerk"))
-            return lines
+            return { __columns = true,
+                left = function()
+                    local l = {}
+                    addHead(l, "Steps")
+                    addLine(l, "  1. Select audio")
+                    addLine(l, "     Tracks, items, or time selection")
+                    addLine(l, "  2. Choose model and stems")
+                    addLine(l, "     Fast / Quality / 6-Stem")
+                    addLine(l, "  3. Set output")
+                    addLine(l, "     New tracks or in-place takes")
+                    addLine(l, "  4. Click Run")
+                    return l
+                end,
+                right = function()
+                    local l = {}
+                    addHead(l, "Keyboard")
+                    addLine(l, "  F1      Open Help")
+                    addLine(l, "  Enter   Run")
+                    addLine(l, "  ESC     Close / Cancel")
+                    addLine(l, "  <- ->   Help tabs")
+                    addLine(l, "")
+                    addHead(l, "Presets")
+                    addLine(l, "  K / I   Karaoke / Instrumental")
+                    addLine(l, "  V D B   Vocals / Drums / Bass")
+                    addLine(l, "  F Q S   Fast / Quality / 6-Stem")
+                    addLine(l, "  1-4     Toggle stems (1-6 in 6-stem)")
+                    return l
+                end
+            }
         end },
         { tr("help_stems", "Stems"), function()
-            local lines = {}
-            addLine(lines, tr("help_stems_title", "About Stems"))
-            addLine(lines, tr("help_stems_sub", "Understanding what each stem contains"))
-            addLine(lines, "")
-            addPair(lines, tr("stem_vocals", "Vocals") .. ": " .. tr("help_stem_vocals_desc", "Lead vocals, backing vocals, speech"), tr("help_stem_vocals_uses", "Perfect for karaoke, vocal isolation, remix, or studying vocal techniques"))
-            addPair(lines, tr("stem_drums", "Drums") .. ": " .. tr("help_stem_drums_desc", "Kick, snare, hi-hats, cymbals, percussion"), tr("help_stem_drums_uses", "Great for drummers, sampling, practice tracks, or groove analysis"))
-            addPair(lines, tr("stem_bass", "Bass") .. ": " .. tr("help_stem_bass_desc", "Bass guitar, synth bass, low frequencies"), tr("help_stem_bass_uses", "Ideal for bass transcription, low-end mixing, or learning bass lines"))
-            addPair(lines, tr("stem_other", "Other") .. ": " .. tr("help_stem_other_desc", "Guitar, keys, strings, synths, effects"), tr("help_stem_other_uses", "Captures everything else: guitars, keys, strings, synths, pads, effects"))
-            addLine(lines, "")
-            addPair(lines, tr("help_6stem_title", "6-Stem Model (htdemucs_6s)"), tr("help_6stem_desc", "Adds Guitar and Piano as separate stems for even more control!"))
-            return lines
+            return { __columns = true,
+                left = function()
+                    local l = {}
+                    addHead(l, "4-Stem")
+                    addLine(l, "  Vocals    Lead vocals, speech")
+                    addLine(l, "  Drums     Drums, percussion")
+                    addLine(l, "  Bass      Low end")
+                    addLine(l, "  Other     Instruments, effects")
+                    addLine(l, "")
+                    addHead(l, "6-Stem  (htdemucs_6s)")
+                    addLine(l, "  Guitar    Isolated guitar")
+                    addLine(l, "  Piano     Isolated piano")
+                    addLine(l, "  Adds to the 4-stem set.")
+                    return l
+                end,
+                right = function()
+                    local l = {}
+                    addHead(l, "Models")
+                    addLine(l, "  htdemucs     Fast")
+                    addLine(l, "  htdemucs_ft  Quality")
+                    addLine(l, "  htdemucs_6s  6-Stem")
+                    addLine(l, "")
+                    addHead(l, "Output")
+                    addLine(l, "  New tracks")
+                    addLine(l, "  In-place as takes")
+                    return l
+                end
+            }
         end },
         { tr("help_reaper", "Reaper"), function()
-            local lines = {}
-            addLine(lines, tr("help_reaper_title", "REAPER Files & Cleanup"))
-            addLine(lines, tr("help_reaper_sub", "How STEMwerk handles temp folders and logs"))
-            addLine(lines, "")
-            addPair(lines, tr("help_reaper_selection_title", "Selection Rules"), tr("help_reaper_selection_body", "Time selection is used only when no items or tracks are selected."))
-            addPair(lines, tr("help_reaper_temp_title", "Temporary Work Folder"), tr("help_reaper_temp_body", "During separation, STEMwerk renders a temporary input file and writes outputs to a STEMwerk_* folder."))
-            addPair(lines, tr("help_reaper_logs_title", "Logs and Diagnostics"), tr("help_reaper_logs_body", "If something fails, STEMwerk saves small logs for debugging."))
-            addPair(lines, tr("help_reaper_cleanup_title", "Cleanup Settings"), tr("help_reaper_cleanup_body", "Use the Keep temp files option under Model to preserve the temp folder for troubleshooting."))
-            return lines
+            return { __columns = true,
+                left = function()
+                    local l = {}
+                    addHead(l, "Selection")
+                    addLine(l, "  Items/tracks take priority.")
+                    addLine(l, "  Time selection is fallback.")
+                    addLine(l, "")
+                    addHead(l, "Temp folder")
+                    addLine(l, "  STEMwerk_* created per run.")
+                    addLine(l, "  Input WAV and output stems.")
+                    return l
+                end,
+                right = function()
+                    local l = {}
+                    addHead(l, "Cleanup and logs")
+                    addLine(l, "  Logs always preserved.")
+                    addLine(l, "  Keep temp files controls")
+                    addLine(l, "  audio/work cleanup only.")
+                    addLine(l, "")
+                    addHead(l, "Support bundle")
+                    addLine(l, "  STEMwerk_Save_Support_Bundle")
+                    addLine(l, "  from REAPER Action List.")
+                    addLine(l, "  Text logs only, no audio.")
+                    return l
+                end
+            }
         end },
-        { tr("help_gallery", "Gallery"), function()
-            local lines = {}
-            addLine(lines, tr("help_gallery", "Gallery"))
-            addLine(lines, "REAPER Native mode intentionally disables the animated gallery and dynamic art controls.")
-            addLine(lines, "")
-            addLine(lines, "Normal STEMwerk still contains the visual art/gallery mode. This local utility view keeps help static and text-only.")
-            addLine(lines, "")
-            addLine(lines, tr("help_gallery_hint", "Use the normal STEMwerk theme if you want the animated gallery controls."))
-            return lines
+        { "UI Modes", function()
+            return { __columns = true,
+                left = function()
+                    local l = {}
+                    addHead(l, "UI mode")
+                    addLine(l, "  Native   Default utility interface")
+                    addLine(l, "  Visual   flarkAUDIO animated UI")
+                    addLine(l, "")
+                    addHead(l, "Switching")
+                    addLine(l, "  [UI]           Native -> Visual")
+                    addLine(l, "  FX right-click  Visual -> Native")
+                    addLine(l, "")
+                    addLine(l, "  Choice is saved.")
+                    return l
+                end,
+                right = function()
+                    local l = {}
+                    addHead(l, "Visual mode only")
+                    addLine(l, "  Day/night right-click")
+                    addLine(l, "  cycles colour presets.")
+                    addLine(l, "  Native is not in that cycle.")
+                    addLine(l, "")
+                    addHead(l, "Dark / Light")
+                    addLine(l, "  [D]/[L] changes brightness.")
+                    addLine(l, "  Works in both modes.")
+                    return l
+                end
+            }
         end },
         { tr("help_about", "About"), function()
-            local lines = {}
-            addLine(lines, tr("about_title", "About STEMwerk"))
-            addLine(lines, tr("about_subtitle", "Stem Separation for REAPER"))
-            addLine(lines, tr("about_version", "Version") .. ": " .. tostring(APP_VERSION or ""))
-            addLine(lines, "")
-            addLine(lines, tr("about_features_title", "Features"))
-            addLine(lines, "- " .. tr("about_feature_1", "4 or 6 stem separation (Vocals, Drums, Bass, Other, Guitar, Piano)"))
-            addLine(lines, "- " .. tr("about_feature_2", "Multiple quality modes (Fast, Quality, 6-Stem)"))
-            addLine(lines, "- " .. tr("about_feature_3", "In-place or new tracks output"))
-            addLine(lines, "- " .. tr("about_feature_4", "Multi-track parallel processing"))
-            addLine(lines, "- " .. tr("about_feature_5", "Procedural art animations in the normal theme"))
-            addLine(lines, "")
-            addLine(lines, tr("about_powered_by", "Powered by") .. ": " .. tr("about_demucs", "Meta's Demucs"))
-            return lines
+            return { __columns = true,
+                left = function()
+                    local l = {}
+                    addHead(l, "STEMwerk")
+                    addLine(l, "  Stem separation for REAPER")
+                    addLine(l, "  " .. tr("about_version","Version") .. ": " .. tostring(APP_VERSION or ""))
+                    addLine(l, "")
+                    addHead(l, "Separation")
+                    addLine(l, "  4-stem: Vocals, Drums, Bass, Other")
+                    addLine(l, "  6-stem: adds Guitar, Piano")
+                    addLine(l, "  Fast / Quality / 6-Stem models")
+                    addLine(l, "  New tracks or in-place output")
+                    return l
+                end,
+                right = function()
+                    local l = {}
+                    addHead(l, "Engine")
+                    addLine(l, "  Demucs / audio-separator")
+                    addLine(l, "")
+                    addHead(l, "UI")
+                    addLine(l, "  REAPER Native by default")
+                    addLine(l, "  flarkAUDIO Visual via [UI]")
+                    addLine(l, "")
+                    addHead(l, "Support")
+                    addLine(l, "  STEMwerk_Save_Support_Bundle")
+                    addLine(l, "  from REAPER Action List")
+                    return l
+                end
+            }
         end },
     }
     if helpState.currentTab < 1 or helpState.currentTab > #tabs then helpState.currentTab = 1 end
@@ -4956,9 +5051,7 @@ local function drawUtilityNativeHelpWindow()
     local helpScale = math.max(1.0, math.min(1.65, math.min(w / 760, h / 520)))
     local function HS(val) return math.floor(val * helpScale + 0.5) end
     local topH = HS(54)
-    col(panel, 1)
-    gfx.rect(0, 0, w, topH, 1)
-    col(border, 1)
+    col(border, 0.5)
     gfx.line(0, topH, w, topH)
 
     gfx.setfont(1, "Arial", HS(20), string.byte('b'))
@@ -4968,7 +5061,7 @@ local function drawUtilityNativeHelpWindow()
     gfx.setfont(1, "Arial", HS(11))
     col(muted, 1)
     gfx.x, gfx.y = pad + HS(170), HS(18)
-    gfx.drawstr("REAPER Native - text only")
+    gfx.drawstr("Setup, stems and workflow")
 
     local function smallBox(label, x, y, ww, hh)
         local hover = mx >= x and mx <= x + ww and my >= y and my <= y + hh
@@ -4984,8 +5077,8 @@ local function drawUtilityNativeHelpWindow()
         return hover
     end
 
-    local _iconScale = 0.66
-    local _themeSize = math.max(HS(12), math.floor(HS(20) * _iconScale + 0.5))
+    local _iconScale = 1.0
+    local _themeSize = math.max(HS(18), math.floor(HS(22) * _iconScale + 0.5))
     local _helpUC = {
         S = HS,
         w = w,
@@ -5002,15 +5095,15 @@ local function drawUtilityNativeHelpWindow()
 
     local tabY = topH + pad
     local tabX = pad
-    local tabH = HS(30)
+    local tabH = HS(34)
     local clickedTab = nil
     for i, tab in ipairs(tabs) do
         gfx.setfont(1, "Arial", HS(12))
         local tabW = math.max(HS(80), gfx.measurestr(tab[1]) + HS(22))
         local hover = mx >= tabX and mx <= tabX + tabW and my >= tabY and my <= tabY + tabH
-        col((helpState.currentTab == i) and activeBg or (hover and hoverBg or panel), 1)
+        col((helpState.currentTab == i) and activeBg or (hover and panel or bg), 1)
         gfx.rect(tabX, tabY, tabW, tabH, 1)
-        col(border, 1)
+        col(border, (helpState.currentTab == i or hover) and 1 or 0.4)
         gfx.rect(tabX, tabY, tabW, tabH, 0)
         col((helpState.currentTab == i and not dark) and {0.02, 0.02, 0.02} or text, 1)
         local tw = gfx.measurestr(tab[1])
@@ -5021,51 +5114,106 @@ local function drawUtilityNativeHelpWindow()
     end
     if clickedTab then helpState.currentTab = clickedTab end
 
+    -- Keyboard hint: right-aligned in the tab row, readable but subtle
+    gfx.setfont(1, "Arial", HS(12))
+    col(text, 0.55)
+    local kbHint = "<-/-> tabs  |  ESC back"
+    local kbHintW = gfx.measurestr(kbHint)
+    gfx.x = w - pad - kbHintW
+    gfx.y = tabY + math.floor((tabH - gfx.texth) / 2)
+    gfx.drawstr(kbHint)
+
     local contentX = pad
     local contentY = tabY + tabH + pad
     local contentW = w - pad * 2
-    local contentH = h - contentY - 54
-    col(panel2, 1)
-    gfx.rect(contentX, contentY, contentW, contentH, 1)
-    col(border, 1)
-    gfx.rect(contentX, contentY, contentW, contentH, 0)
+    local contentH = h - contentY - 44
+    -- Content area: no separate fill — blends into canvas bg. Subtle top border only.
+    col(border, 0.3)
+    gfx.line(contentX, contentY, contentX + contentW, contentY)
 
     local tab = tabs[helpState.currentTab]
-    -- Tab label already shown in tab bar above; do not repeat as content heading.
-    local y = contentY + HS(14)
     local lineH = HS(20)
     local maxW = contentW - 42
-    local contentLines = tab[2]()
-    gfx.setfont(1, "Arial", HS(14))
-    for _, rawLine in ipairs(contentLines) do
-        if y > contentY + contentH - 20 then break end
-        if rawLine == "" then
-            y = y + math.floor(lineH * 0.7)
-        else
-            local isIndented = rawLine:match("^%s") ~= nil
-            local drawX = contentX + (isIndented and 38 or 22)
-            local wrapW = maxW - (isIndented and 16 or 0)
-            local wrapped = _wrapTextToWidth(tostring(rawLine):gsub("^%s+", ""), wrapW)
-            for _, ln in ipairs(wrapped) do
-                if y > contentY + contentH - 20 then break end
-                col(isIndented and muted or text, 1)
-                gfx.x, gfx.y = drawX, y
-                gfx.drawstr(ln)
-                y = y + lineH
+
+    -- Single-column renderer (used when tab returns a plain line array)
+    local function drawSingleCol(lines, startY)
+        local y = startY
+        gfx.setfont(1, "Arial", HS(14))
+        for _, rawLine in ipairs(lines) do
+            if y > contentY + contentH - 20 then break end
+            if rawLine == "" then
+                y = y + math.floor(lineH * 0.7)
+            else
+                local isHead = rawLine:sub(1, 1) == HEADING_MARKER
+                local dLine = isHead and rawLine:sub(2) or rawLine
+                local isInd = (not isHead) and dLine:match("^%s") ~= nil
+                local drawX = contentX + (isInd and 38 or 22)
+                local wrapW = maxW - (isInd and 16 or 0)
+                local wrapped = _wrapTextToWidth(tostring(dLine):gsub("^%s+", ""), wrapW)
+                for _, ln in ipairs(wrapped) do
+                    if y > contentY + contentH - 20 then break end
+                    col(isHead and activeBg or (isInd and muted or text), 1)
+                    gfx.x, gfx.y = drawX, y
+                    gfx.drawstr(ln)
+                    y = y + lineH
+                end
+                y = y + 2
             end
-            y = y + 2
         end
     end
 
+    -- Two-column renderer (used when tab returns {__columns=true, left=fn, right=fn})
+    local function drawOneCol(lines, startX, colW, startY)
+        local y = startY
+        gfx.setfont(1, "Arial", HS(14))
+        for _, rawLine in ipairs(lines) do
+            if y > contentY + contentH - 20 then break end
+            if rawLine == "" then
+                y = y + math.floor(lineH * 0.5)
+            else
+                local isHead = rawLine:sub(1, 1) == HEADING_MARKER
+                local dLine = isHead and rawLine:sub(2) or rawLine
+                local isInd = (not isHead) and dLine:match("^%s") ~= nil
+                local dx = startX + (isInd and 14 or 4)
+                local ww = colW - (isInd and 18 or 8)
+                local wrapped = _wrapTextToWidth(tostring(dLine):gsub("^%s+", ""), ww)
+                for _, ln in ipairs(wrapped) do
+                    if y > contentY + contentH - 20 then break end
+                    col(isHead and activeBg or (isInd and muted or text), 1)
+                    gfx.x, gfx.y = dx, y
+                    gfx.drawstr(ln)
+                    y = y + lineH
+                end
+                y = y + 1
+            end
+        end
+    end
+
+    local tabContent = tab[2]()
+    if type(tabContent) == "table" and tabContent.__columns then
+        local colW = math.floor((contentW - pad) / 2)
+        local divX = contentX + colW + math.floor(pad * 0.5)
+        col(border, 0.35)
+        gfx.line(divX, contentY + HS(8), divX, contentY + contentH - HS(8))
+        local startY = contentY + HS(12)
+        drawOneCol(tabContent.left and tabContent.left() or {}, contentX + HS(6), colW - HS(10), startY)
+        drawOneCol(tabContent.right and tabContent.right() or {}, divX + HS(6), colW - HS(10), startY)
+    else
+        drawSingleCol(type(tabContent) == "table" and tabContent or {}, contentY + HS(14))
+    end
+
     local btnW, btnH = HS(96), HS(32)
-    local btnX, btnY = (w - btnW) / 2, h - 40
+    local btnX, btnY = (w - btnW) / 2, h - HS(54)
     local backHover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
-    col(backHover and hoverBg or panel, 1)
+    local backFill = backHover
+        and _tc(T_.buttonPrimaryHover, dark and {0.36,0.54,0.38} or {0.62,0.74,0.64})
+        or activeBg
+    col(backFill, 1)
     gfx.rect(btnX, btnY, btnW, btnH, 1)
     col(border, 1)
     gfx.rect(btnX, btnY, btnW, btnH, 0)
     gfx.setfont(1, "Arial", HS(13), string.byte('b'))
-    col(text, 1)
+    col(dark and text or {0.04, 0.04, 0.04}, 1)
     local backText = tr("back", "Back")
     local bw = gfx.measurestr(backText)
     gfx.x, gfx.y = btnX + (btnW - bw) / 2, btnY + (btnH - gfx.texth) / 2
@@ -5074,6 +5222,11 @@ local function drawUtilityNativeHelpWindow()
     if backHover and mouseDown and not helpState.wasMouseDown then return "close" end
     local char = gfx.getchar()
     if char == -1 or char == 27 then return "close" end
+    if char == 1818584692 then          -- Left arrow: previous tab
+        helpState.currentTab = math.max(1, helpState.currentTab - 1)
+    elseif char == 1919379572 then      -- Right arrow: next tab
+        helpState.currentTab = math.min(#tabs, helpState.currentTab + 1)
+    end
 
     if _helpUC and _helpUC.tooltipText then
         gfx.setfont(1, "Arial", HS(11))
@@ -10756,7 +10909,9 @@ function renderDialogBackground(ctx)
         mainDialogArt.isDragging = false
     end
 
-    if SETTINGS.darkMode then
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() and THEME and THEME.bg then
+        gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+    elseif SETTINGS.darkMode then
         gfx.set(0, 0, 0, 1)
     else
         gfx.set(1, 1, 1, 1)
@@ -10875,8 +11030,8 @@ function renderMainColumns(ctx)
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
-    -- In REAPER Native mode, use 82% font size on all buttons for calmer/denser labels.
-    local _ubfs = utilityMode and math.max(S(9), math.floor(S(13) * 0.82 + 0.5)) or S(13)
+    -- In REAPER Native mode, use 72% font size on all buttons for calmer/denser labels.
+    local _ubfs = utilityMode and math.max(S(8), math.floor(S(13) * 0.72 + 0.5)) or S(13)
 
     local presetsBtnFontSize = _ubfs
 
