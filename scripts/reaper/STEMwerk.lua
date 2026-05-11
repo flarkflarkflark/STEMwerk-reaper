@@ -17145,6 +17145,15 @@ function multiTrackProgressLoop()
         multiTrackQueue.active = false
         isProcessingActive = false  -- Reset guard so workflow can be restarted
 
+        -- Preserve best-effort diagnostics before stopping workers; files may be partial on cancel.
+        if multiTrackQueue.jobs then
+            for _, job in ipairs(multiTrackQueue.jobs) do
+                if job.trackDir and job.trackDir ~= "" then
+                    SW_LOG.preserveDiagnosticsForRun(job.trackDir, { reason = "user_cancel" })
+                end
+            end
+        end
+
         -- Best-effort kill of all running workers so cancel is immediate and doesn't slow next run
         if multiTrackQueue.jobs then
             for _, job in ipairs(multiTrackQueue.jobs) do
@@ -17462,6 +17471,16 @@ _sep.processAllStemsResult = function()
     -- If nothing was created, surface the Python log instead of silently returning to main().
     -- Also undo any mute/delete actions that may have been applied earlier in this function.
     if totalStemsCreated == 0 then
+        -- Preserve diagnostics for all jobs before surfacing the error.
+        if multiTrackQueue.jobs then
+            for _, job in ipairs(multiTrackQueue.jobs) do
+                if job.trackDir and job.trackDir ~= "" then
+                    local ec = SW_LOG.readExitCode(job.exitCodeFile)
+                    SW_LOG.preserveDiagnosticsForRun(job.trackDir, { reason = "no_stems", exitCode = ec })
+                end
+            end
+        end
+
         -- Use the first job's log as the primary error (usually enough).
         local firstJob = multiTrackQueue.jobs and multiTrackQueue.jobs[1] or nil
         local logPath = firstJob and firstJob.logFile or nil

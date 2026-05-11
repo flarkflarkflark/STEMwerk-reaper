@@ -157,3 +157,60 @@ function SW_LOG.readFileSnippet(path, maxChars)
     end
     return content
 end
+
+-- Copy all available diagnostic files from a run's temp output dir to the
+-- persistent log directory. Intended for incomplete or failed runs.
+-- Missing source files are silently skipped.
+-- Also writes run_summary.txt summarising the outcome.
+-- opts: { reason = string, exitCode = number|string|nil }
+function SW_LOG.preserveDiagnosticsForRun(outputDir, opts)
+    if not outputDir or outputDir == "" then return end
+    local logDir = SW_LOG.getLogDir()
+    SW_LOG.ensureDir(logDir)
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    opts = opts or {}
+    local reason = tostring(opts.reason or "unknown")
+
+    local diagnosticFiles = {
+        "separation_log.txt",
+        "stdout.txt",
+        "stderr.txt",
+        "exit_code.txt",
+        "done.txt",
+        "output_detection.txt",
+    }
+    for _, name in ipairs(diagnosticFiles) do
+        local src = outputDir .. sep .. name
+        local f = io.open(src, "rb")
+        if f then
+            local fileData = f:read("*a")
+            f:close()
+            if fileData then
+                local dst = logDir .. sep .. name
+                local out = io.open(dst, "wb")
+                if out then
+                    out:write(fileData)
+                    out:close()
+                end
+            end
+        end
+    end
+
+    local exitCode = opts.exitCode
+    if exitCode == nil then
+        exitCode = SW_LOG.readExitCode(outputDir .. sep .. "exit_code.txt")
+    end
+    local lines = {
+        "--- STEMwerk Run Summary ---",
+        "timestamp: " .. os.date("%Y-%m-%d %H:%M:%S"),
+        "reason: " .. reason,
+    }
+    if exitCode ~= nil then
+        lines[#lines + 1] = "exit_code: " .. tostring(exitCode)
+    end
+    local sf = io.open(logDir .. sep .. "run_summary.txt", "wb")
+    if sf then
+        sf:write(table.concat(lines, "\n") .. "\n")
+        sf:close()
+    end
+end

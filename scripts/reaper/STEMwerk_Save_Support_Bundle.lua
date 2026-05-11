@@ -1410,10 +1410,19 @@ if fileExists(debugLogPath) then
     end
 end
 
--- Persistent run logs written by SW_LOG.savePersistentRunLogs() after each run.
+-- Persistent run logs written by SW_LOG after each run (success or failure).
 local cacheLogDir = getStemwerkCacheLogDir()
-local persistentRunLogs = { separation_log = false, stdout = false }
-for _, name in ipairs({"separation_log.txt", "stdout.txt"}) do
+local persistentRunLogs = { run_summary = false, separation_log = false, stdout = false }
+local persistentDiagFiles = {
+    "run_summary.txt",
+    "output_detection.txt",
+    "separation_log.txt",
+    "stdout.txt",
+    "stderr.txt",
+    "exit_code.txt",
+    "done.txt",
+}
+for _, name in ipairs(persistentDiagFiles) do
     local src = joinPath(cacheLogDir, name)
     if fileExists(src) then
         local dst = joinPath(bundleDir, "runtime_logs", "run_" .. name)
@@ -1421,10 +1430,12 @@ for _, name in ipairs({"separation_log.txt", "stdout.txt"}) do
         if ok then
             copiedFiles[#copiedFiles + 1] = "runtime_logs/run_" .. name .. " (" .. mode .. ")"
         end
+        if name == "run_summary.txt" then persistentRunLogs.run_summary = true end
         if name == "separation_log.txt" then persistentRunLogs.separation_log = true end
         if name == "stdout.txt" then persistentRunLogs.stdout = true end
     end
 end
+appendKey(diagnostics, "Persistent run_summary.txt", persistentRunLogs.run_summary and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
 appendLine(diagnostics, "")
