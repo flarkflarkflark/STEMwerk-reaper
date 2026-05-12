@@ -89,6 +89,24 @@ accept_python_version() {
   return 1
 }
 
+mac_apple_silicon_host() {
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]
+}
+
+python_arch_details() {
+  if [ -z "${1:-}" ] || [ ! -x "$1" ]; then
+    return 1
+  fi
+  "$1" - <<'PY' 2>/dev/null
+import platform, struct, sysconfig
+print("{}|{}|{}".format(platform.machine() or "", sysconfig.get_platform() or "", struct.calcsize("P") * 8))
+PY
+}
+
+python_runtime_arch() {
+  python_arch_details "$1" | awk -F'|' 'NR==1 { print $1 }'
+}
+
 log_python_candidate() {
   _candidate_path="$1"
   _candidate_version="$2"
@@ -104,6 +122,9 @@ log_python_candidate() {
 log_macos_diagnostics() {
   log "=== macOS runtime diagnostics ==="
   log "uname -m: $(uname -m 2>/dev/null || echo unknown)"
+  log "hw.optional.arm64: $(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
+  log "host architecture profile: ${MAC_ARCH:-unknown}"
+  log "process architecture: ${MAC_UNAME_ARCH:-unknown}"
   if command -v sw_vers >/dev/null 2>&1; then
     log "sw_vers productVersion: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
     log "sw_vers buildVersion: $(sw_vers -buildVersion 2>/dev/null || echo unknown)"
@@ -111,15 +132,28 @@ log_macos_diagnostics() {
   if [ -n "${PYTHON}" ] && [ -x "${PYTHON}" ]; then
     log "selected python path: ${PYTHON}"
     log "selected python version: ${SELECTED_PYTHON_VERSION:-unknown}"
+    log "selected python arch: ${PYTHON_ARCH:-unknown}"
+    log "selected python sysconfig platform: ${PYTHON_SYSCONFIG_PLATFORM:-unknown}"
+    log "selected python pointer bits: ${PYTHON_POINTER_BITS:-unknown}"
     "${PYTHON}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
-import platform, sys
+import os, platform, struct, sys, sysconfig
 print("python sys.version:", sys.version.replace("\n", " "))
 print("python platform.machine:", platform.machine())
 print("python platform.platform:", platform.platform())
+print("python sysconfig.get_platform:", sysconfig.get_platform())
+print("python pointer_bits:", struct.calcsize("P") * 8)
+print("python PYTORCH_ENABLE_MPS_FALLBACK:", os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", ""))
+try:
+    import torch
+    mps = getattr(getattr(torch, "backends", None), "mps", None)
+    print("python torch.mps.is_built:", mps.is_built() if mps and hasattr(mps, "is_built") else "")
+    print("python torch.mps.is_available:", mps.is_available() if mps and hasattr(mps, "is_available") else "")
+except Exception as exc:
+    print("python torch import error:", exc)
 PY
   fi
-  if [ "$(uname -m)" = "arm64" ]; then
-    log "expected backend path: Apple Silicon (MPS-capable when available)"
+  if [ "${MAC_ARCH:-}" = "arm64" ]; then
+    log "expected backend path: Apple Silicon host (native arm64 Python required; MPS-capable when available)"
   else
     log "expected backend path: Intel macOS CPU-only fallback (no MPS)"
   fi
@@ -349,9 +383,34 @@ evaluate_python_candidate() {
     return 1
   fi
   if accept_python_version "${_resolved_path}"; then
-    log_python_candidate "${_resolved_path}" "${_version_text}" "accepted" "supported"
+    _arch_details=$(python_arch_details "${_resolved_path}" || true)
+    _python_arch=$(printf "%s" "${_arch_details}" | awk -F'|' 'NR==1 { print $1 }')
+    _python_platform=$(printf "%s" "${_arch_details}" | awk -F'|' 'NR==1 { print $2 }')
+    _python_bits=$(printf "%s" "${_arch_details}" | awk -F'|' 'NR==1 { print $3 }')
+    _python_arch_summary="python_arch=${_python_arch:-unknown}; sysconfig=${_python_platform:-unknown}"
+    if [ "${MAC_APPLE_SILICON_HOST:-0}" = "1" ]; then
+      case "${_python_arch}" in
+        arm64|aarch64)
+          ;;
+        *)
+          _rejected_reason="rosetta_python_on_apple_silicon; ${_python_arch_summary}"
+          log_python_candidate "${_resolved_path}" "${_version_text}" "rejected" "${_rejected_reason}"
+          if [ -z "${FIRST_UNSUPPORTED_PYTHON_PATH}" ]; then
+            FIRST_UNSUPPORTED_PYTHON_PATH="${_resolved_path}"
+            FIRST_UNSUPPORTED_PYTHON_VERSION="${_version_text}"
+            FIRST_REJECTED_PYTHON_REASON="rosetta_python_on_apple_silicon"
+          fi
+          return 1
+          ;;
+      esac
+    fi
+    _accepted_reason="supported; ${_python_arch_summary}"
+    log_python_candidate "${_resolved_path}" "${_version_text}" "accepted" "${_accepted_reason}"
     PYTHON="${_resolved_path}"
     SELECTED_PYTHON_VERSION="${_version_text}"
+    PYTHON_ARCH="${_python_arch}"
+    PYTHON_SYSCONFIG_PLATFORM="${_python_platform}"
+    PYTHON_POINTER_BITS="${_python_bits}"
     return 0
   fi
 
@@ -374,7 +433,13 @@ write_state() {
       [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
       [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
       [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
+      [ -n "${MAC_ARCH:-}" ] && echo "MAC_HOST_ARCH=${MAC_ARCH}"
+      [ -n "${MAC_UNAME_ARCH:-}" ] && echo "MAC_PROCESS_ARCH=${MAC_UNAME_ARCH}"
+      [ -n "${MAC_APPLE_SILICON_HOST:-}" ] && echo "MAC_APPLE_SILICON_HOST=${MAC_APPLE_SILICON_HOST}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
+      [ -n "${PYTHON_ARCH}" ] && echo "PYTHON_ARCH=${PYTHON_ARCH}"
+      [ -n "${PYTHON_SYSCONFIG_PLATFORM}" ] && echo "PYTHON_SYSCONFIG_PLATFORM=${PYTHON_SYSCONFIG_PLATFORM}"
+      [ -n "${PYTHON_POINTER_BITS}" ] && echo "PYTHON_POINTER_BITS=${PYTHON_POINTER_BITS}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
@@ -446,7 +511,16 @@ fi
 log "Bootstrap started"
 log "Requested mode: ${MODE}"
 log "Downloaded models are kept at: $(model_cache_dir)"
-MAC_ARCH="$(uname -m 2>/dev/null || echo unknown)"
+MAC_UNAME_ARCH="$(uname -m 2>/dev/null || echo unknown)"
+MAC_APPLE_SILICON_HOST="0"
+if mac_apple_silicon_host; then
+  MAC_APPLE_SILICON_HOST="1"
+  MAC_ARCH="arm64"
+else
+  MAC_ARCH="${MAC_UNAME_ARCH}"
+fi
+log "macOS process architecture (uname -m): ${MAC_UNAME_ARCH}"
+log "macOS Apple Silicon host flag (hw.optional.arm64): ${MAC_APPLE_SILICON_HOST}"
 if [ "${MAC_ARCH}" = "x86_64" ]; then
   MACOS_CONSTRAINTS_FILE="${MACOS_INTEL_CONSTRAINTS_FILE}"
   PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_INTEL}"
@@ -480,7 +554,7 @@ VENV_PY=""
 PACKAGE="audio-separator==0.23.0"
 ONNX_PACKAGE="onnxruntime"
 ONNX_FALLBACK_PACKAGE=""
-if [ "$(uname -m)" = "arm64" ]; then
+if [ "${MAC_ARCH}" = "arm64" ]; then
   ONNX_PACKAGE="onnxruntime-silicon"
   ONNX_FALLBACK_PACKAGE="onnxruntime"
 fi
@@ -491,8 +565,12 @@ STEP_INDEX=""
 STEP_TOTAL="4"
 STEP_LABEL=""
 SELECTED_PYTHON_VERSION=""
+PYTHON_ARCH=""
+PYTHON_SYSCONFIG_PLATFORM=""
+PYTHON_POINTER_BITS=""
 FIRST_UNSUPPORTED_PYTHON_PATH=""
 FIRST_UNSUPPORTED_PYTHON_VERSION=""
+FIRST_REJECTED_PYTHON_REASON=""
 SEEN_PYTHON_PATHS="|"
 
 set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
@@ -557,7 +635,12 @@ fi
 set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
 
 if [ -z "${PYTHON}" ]; then
-  if [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
+  if [ "${FIRST_REJECTED_PYTHON_REASON:-}" = "rosetta_python_on_apple_silicon" ]; then
+    PYTHON_MESSAGE="Apple Silicon Mac detected, but STEMwerk is using an Intel/Rosetta Python runtime (${FIRST_UNSUPPORTED_PYTHON_PATH}). Please use native Apple Silicon REAPER if applicable, install/use an arm64 or universal2 Python running natively, then rebuild the STEMwerk runtime."
+    log "${PYTHON_MESSAGE}"
+    printf "%s\n" "${PYTHON_MESSAGE}" >&2
+    set_status "missing_python" "rosetta_python_on_apple_silicon"
+  elif [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
     PYTHON_MESSAGE="Detected Python ${FIRST_UNSUPPORTED_PYTHON_VERSION} at ${FIRST_UNSUPPORTED_PYTHON_PATH}, but STEMwerk currently supports Python 3.10-3.12 on macOS. Please install Python 3.11 or 3.12, or let STEMwerk use one if already present."
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
@@ -625,7 +708,7 @@ else
         cat "${_audio_tmp_log}" >> "${LOG_FILE}" 2>/dev/null || true
         if [ "${_audio_rc}" -ne 0 ]; then
           if grep -Eiq "No matching distribution found for torch|no matching distributions available for your environment.*torch|depends on torch" "${_audio_tmp_log}" 2>/dev/null; then
-            if [ "$(uname -m)" = "x86_64" ]; then
+            if [ "${MAC_ARCH}" = "x86_64" ]; then
               log "audio-separator install failed: PyTorch wheels unavailable for this Intel macOS/Python combination"
               set_status "deps_failed" "audio_separator_torch_unavailable_macos_intel"
             else
