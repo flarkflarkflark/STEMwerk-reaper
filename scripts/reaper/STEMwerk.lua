@@ -1426,6 +1426,51 @@ local function isEffectiveRun6Stem()
     return effectiveRunModel() == "htdemucs_6s"
 end
 
+stemIsSelectableForCurrentModel = function(stem)
+    return stem and ((not stem.sixStemOnly) or isEffectiveRun6Stem())
+end
+
+countSelectableSelectedStems = function(skipIndex)
+    local count = 0
+    for i, stem in ipairs(STEMS or {}) do
+        if i ~= skipIndex and stem.selected and stemIsSelectableForCurrentModel(stem) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+ensureAtLeastOneStemSelected = function()
+    if countSelectableSelectedStems(nil) > 0 then
+        return false
+    end
+    for _, stem in ipairs(STEMS or {}) do
+        if stemIsSelectableForCurrentModel(stem) then
+            stem.selected = true
+            return true
+        end
+    end
+    return false
+end
+
+toggleStemSelection = function(index)
+    local stem = STEMS and STEMS[index]
+    if not stem or not stemIsSelectableForCurrentModel(stem) then
+        return false
+    end
+
+    if stem.selected then
+        if countSelectableSelectedStems(index) <= 0 then
+            return false
+        end
+        stem.selected = false
+        return true
+    end
+
+    stem.selected = true
+    return true
+end
+
 
 local GLUE_HELPERS = dofile(script_path .. "_internal/STEMwerk_Glue_Helpers.lua")
 
@@ -11162,7 +11207,7 @@ function renderMainColumns(ctx)
             else
                 clicked = drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize)
             end
-            if clicked then STEMS[i].selected = not STEMS[i].selected end
+            if clicked then toggleStemSelection(i) end
             local tooltipKey = stemTooltipKeys[stem.name] or "tooltip_stem_other"
             setTooltipWithShortcut(col2X, stemY, colW, btnH, T(tooltipKey), stem.key, stem.color)
             stemY = stemY + S(22)
@@ -11213,6 +11258,7 @@ function renderMainColumns(ctx)
                     for _, st in ipairs(STEMS) do
                         if st.sixStemOnly then st.selected = false end
                     end
+                    ensureAtLeastOneStemSelected()
                 end
                 saveSettings()
             end
@@ -11702,6 +11748,10 @@ canStartProcessingFromDialog = function()
         end
     end
     if not validSelected then
+        ensureAtLeastOneStemSelected()
+        validSelected = countSelectableSelectedStems(nil) > 0
+    end
+    if not validSelected then
         openDialogWarning(
             T("no_stems_selected") or "No Stems Selected",
             T("please_select_stem") or "Please select at least one stem."
@@ -11734,12 +11784,12 @@ function handleDialogKeyboard(ctx)
         if canStartProcessingFromDialog() then
             GUI.result = true
         end
-    elseif char == 49 then STEMS[1].selected = not STEMS[1].selected
-    elseif char == 50 then STEMS[2].selected = not STEMS[2].selected
-    elseif char == 51 then STEMS[3].selected = not STEMS[3].selected
-    elseif char == 52 then STEMS[4].selected = not STEMS[4].selected
-    elseif char == 53 and SETTINGS.model == "htdemucs_6s" then STEMS[5].selected = not STEMS[5].selected
-    elseif char == 54 and SETTINGS.model == "htdemucs_6s" then STEMS[6].selected = not STEMS[6].selected
+    elseif char == 49 then toggleStemSelection(1)
+    elseif char == 50 then toggleStemSelection(2)
+    elseif char == 51 then toggleStemSelection(3)
+    elseif char == 52 then toggleStemSelection(4)
+    elseif char == 53 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(5)
+    elseif char == 54 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(6)
     elseif char == 118 or char == 86 then applyPresetVocalsOnly()
     elseif char == 100 or char == 68 then applyPresetDrumsOnly()
     elseif char == 98 or char == 66 then applyPresetBassOnly()
@@ -11753,12 +11803,14 @@ function handleDialogKeyboard(ctx)
         if isModelAvailableInCurrentMode("htdemucs") then
             SETTINGS.model = "htdemucs"
             for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
+            ensureAtLeastOneStemSelected()
             saveSettings()
         end
     elseif char == 113 or char == 81 then
         if isModelAvailableInCurrentMode("htdemucs_ft") then
             SETTINGS.model = "htdemucs_ft"
             for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
+            ensureAtLeastOneStemSelected()
             saveSettings()
         end
     elseif char == 115 or char == 83 then
