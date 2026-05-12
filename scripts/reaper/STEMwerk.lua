@@ -11579,7 +11579,12 @@ function renderFooter(ctx)
     local durationLabel = nil
     local durationW = 0
     if outDuration and outDuration ~= "" then
-        durationLabel = tostring(outDuration)
+        local durationPrefix = T("footer_audio_total") or "Audio total"
+        local durationText = tostring(outDuration)
+        if durationText:find(":") and not durationText:find("%a") then
+            durationText = durationText .. " min"
+        end
+        durationLabel = tostring(durationPrefix) .. ": " .. durationText
         durationW = gfx.measurestr(durationLabel)
     end
     local locMaxW = availableW
