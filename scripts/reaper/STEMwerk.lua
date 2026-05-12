@@ -10707,15 +10707,18 @@ function renderHelpTabs(ctx)
     local S = ctx.S
     local w = ctx.w or gfx.w
     local time = ctx.time or os.clock()
-    local logoY = S(12)
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local logoY = utilityMode and S(8) or S(12)
+    local logoFontSize = utilityMode and S(21) or S(24)
+    local logoAmp = utilityMode and S(1) or S(2)
 
-    gfx.setfont(1, "Arial", S(24), string.byte('b'))
+    gfx.setfont(1, "Arial", logoFontSize, string.byte('b'))
     local logoStartX, _, logoTotalWidth, logoH = drawWavingStemwerkLogo({
         w = w,
         y = logoY,
-        fontSize = S(24),
+        fontSize = logoFontSize,
         time = time,
-        amp = S(2),
+        amp = logoAmp,
         speed = 3,
         phase = 0.5,
         alphaStem = 1,
@@ -10735,7 +10738,7 @@ function renderHelpTabs(ctx)
     end
 
     if not ctx.contentTop then
-        ctx.contentTop = S(45)
+        ctx.contentTop = utilityMode and S(41) or S(45)
     end
 end
 
