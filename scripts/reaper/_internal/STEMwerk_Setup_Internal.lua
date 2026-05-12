@@ -39,6 +39,15 @@ end
 local OS = getOS()
 local PATH_SEP = OS == "Windows" and "\\" or "/"
 
+-- Forward-declare shared helpers before any setup action closures use them.
+-- Lua resolves locals lexically at function definition time; without these,
+-- early functions such as runSupportBundleAction can accidentally resolve a
+-- helper as a global and crash later (for example: global 'fileExists').
+local fileExists
+local pathExists
+local ensureDir
+local quoteArg
+
 local function setupPlatformLabel()
     if OS == "Windows" then return "Windows" end
     if OS == "macOS" then return "macOS" end
@@ -207,7 +216,7 @@ local function runSupportBundleAction()
     return true
 end
 
-local function quoteArg(s)
+quoteArg = function(s)
     s = tostring(s)
     if s:find('"') then
         s = s:gsub('"', '\\"')
@@ -273,8 +282,6 @@ local function probeOutputHasUsefulDevices(out)
     return false
 end
 
-local fileExists
-
 local function directRuntimeDeviceProbe(pythonPath)
     if not pythonPath or pythonPath == "" or not fileExists(pythonPath) then
         return nil, nil
@@ -334,7 +341,7 @@ fileExists = function(path)
     return false
 end
 
-local function pathExists(path)
+pathExists = function(path)
     if not path or path == "" then return false end
     local ok = os.rename(path, path)
     if ok then return true end
@@ -346,7 +353,7 @@ local function pathExists(path)
     return false
 end
 
-local function ensureDir(path)
+ensureDir = function(path)
     if not path or path == "" then return false end
     local quoted = quoteArg(path)
     if OS == "Windows" then
