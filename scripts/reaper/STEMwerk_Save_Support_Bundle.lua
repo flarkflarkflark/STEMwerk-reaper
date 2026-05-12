@@ -879,7 +879,7 @@ local function getPlatformDetails()
         local buildVersion = trim(swBuild)
         local arch = trim(unameM)
         local appleSiliconHost = trim(hwArm64) == "1"
-        details.architecture = appleSiliconHost and "arm64-host" or (arch ~= "" and arch or "undetected")
+        details.architecture = arch ~= "" and arch or "undetected"
         if productVersion ~= "" then
             details.osVersion = "macOS " .. productVersion
         end
@@ -891,8 +891,8 @@ local function getPlatformDetails()
         local profile
         if appleSiliconHost then
             profile = "Apple Silicon macOS"
-            if arch == "x86_64" then
-                profile = profile .. " (process under Rosetta/x86_64)"
+            if arch ~= "" and arch ~= "arm64" and arch ~= "aarch64" then
+                profile = profile .. " (process under translated/non-arm64 architecture: " .. arch .. ")"
             end
         else
             profile = "Intel macOS CPU fallback"
@@ -1073,10 +1073,12 @@ local function runPythonProbe(bundleDir, pythonPath)
     end
 
     if result.status == "ok" then
+        local pythonPlatformValue = result.data.python_sysconfig_platform or result.data.python_platform or "missing"
+        local pythonArchAndPlatformSummary = tostring(result.data.python_arch or "missing")
+            .. " / "
+            .. tostring(pythonPlatformValue)
         result.summary[#result.summary + 1] = "Python diagnostics: ok"
-        result.summary[#result.summary + 1] = "python arch/platform: "
-            .. tostring(result.data.python_arch or "missing") .. " / "
-            .. tostring(result.data.python_sysconfig_platform or result.data.python_platform or "missing")
+        result.summary[#result.summary + 1] = "python arch/platform: " .. pythonArchAndPlatformSummary
         result.summary[#result.summary + 1] = "python pointer bits: " .. tostring(result.data.python_pointer_bits or "missing")
         result.summary[#result.summary + 1] = "numpy: " .. (result.data.numpy or "missing")
         result.summary[#result.summary + 1] = "numba: " .. (result.data.numba or "missing")

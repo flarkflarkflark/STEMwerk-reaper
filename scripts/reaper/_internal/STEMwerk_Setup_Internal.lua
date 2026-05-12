@@ -290,18 +290,20 @@ env = {
     'python_pointer_bits': struct.calcsize('P') * 8,
     'mps_fallback_env': os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', ''),
 }
+mps_backend = None
 try:
     import torch
+    mps_backend = getattr(torch.backends, 'mps', None)
     env['torch'] = getattr(torch, '__version__', '')
     env['cuda_available'] = bool(torch.cuda.is_available())
     env['cuda_count'] = int(torch.cuda.device_count()) if env['cuda_available'] else 0
     env['cuda_names'] = [torch.cuda.get_device_name(i) for i in range(env['cuda_count'])] if env['cuda_available'] else []
     try:
-        env['mps_built'] = bool(getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_built())
+        env['mps_built'] = bool(mps_backend is not None and mps_backend.is_built())
     except Exception:
         env['mps_built'] = False
     try:
-        env['mps_available'] = bool(getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_available())
+        env['mps_available'] = bool(mps_backend is not None and mps_backend.is_available())
     except Exception:
         env['mps_available'] = False
 except Exception as e:

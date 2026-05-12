@@ -90,7 +90,7 @@ accept_python_version() {
 }
 
 mac_apple_silicon_host() {
-  [ "$(sysctl -n hw.optional.arm64 2>/dev/null | awk 'NR==1 { print $1 }')" = "1" ]
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]
 }
 
 python_arch_details() {
@@ -387,12 +387,14 @@ evaluate_python_candidate() {
     _python_arch=$(printf "%s" "${_arch_details}" | awk -F'|' 'NR==1 { print $1 }')
     _python_platform=$(printf "%s" "${_arch_details}" | awk -F'|' 'NR==1 { print $2 }')
     _python_bits=$(printf "%s" "${_arch_details}" | awk -F'|' 'NR==1 { print $3 }')
+    _python_arch_summary="python_arch=${_python_arch:-unknown}; sysconfig=${_python_platform:-unknown}"
     if [ "${MAC_APPLE_SILICON_HOST:-0}" = "1" ]; then
       case "${_python_arch}" in
         arm64|aarch64)
           ;;
         *)
-          log_python_candidate "${_resolved_path}" "${_version_text}" "rejected" "apple_silicon_host_requires_native_arm64_python; python_arch=${_python_arch:-unknown}; sysconfig=${_python_platform:-unknown}"
+          _rejected_reason="rosetta_python_on_apple_silicon; ${_python_arch_summary}"
+          log_python_candidate "${_resolved_path}" "${_version_text}" "rejected" "${_rejected_reason}"
           if [ -z "${FIRST_UNSUPPORTED_PYTHON_PATH}" ]; then
             FIRST_UNSUPPORTED_PYTHON_PATH="${_resolved_path}"
             FIRST_UNSUPPORTED_PYTHON_VERSION="${_version_text}"
@@ -402,7 +404,8 @@ evaluate_python_candidate() {
           ;;
       esac
     fi
-    log_python_candidate "${_resolved_path}" "${_version_text}" "accepted" "supported; arch=${_python_arch:-unknown}; sysconfig=${_python_platform:-unknown}"
+    _accepted_reason="supported; ${_python_arch_summary}"
+    log_python_candidate "${_resolved_path}" "${_version_text}" "accepted" "${_accepted_reason}"
     PYTHON="${_resolved_path}"
     SELECTED_PYTHON_VERSION="${_version_text}"
     PYTHON_ARCH="${_python_arch}"
@@ -633,7 +636,7 @@ set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
 
 if [ -z "${PYTHON}" ]; then
   if [ "${FIRST_REJECTED_PYTHON_REASON:-}" = "rosetta_python_on_apple_silicon" ]; then
-    PYTHON_MESSAGE="Apple Silicon Mac detected, but STEMwerk is using an Intel/Rosetta Python runtime (${FIRST_UNSUPPORTED_PYTHON_PATH}). Please use native Apple Silicon REAPER if applicable, install/use an arm64 or universal2 Python running natively, then rebuild the STEMwerk runtime/venv."
+    PYTHON_MESSAGE="Apple Silicon Mac detected, but STEMwerk is using an Intel/Rosetta Python runtime (${FIRST_UNSUPPORTED_PYTHON_PATH}). Please use native Apple Silicon REAPER if applicable, install/use an arm64 or universal2 Python running natively, then rebuild the STEMwerk runtime."
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
     set_status "missing_python" "rosetta_python_on_apple_silicon"
