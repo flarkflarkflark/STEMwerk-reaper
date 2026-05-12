@@ -11250,16 +11250,12 @@ function renderMainColumns(ctx)
             local prevModel = SETTINGS.model
             SETTINGS.model = model.id
             if prevModel ~= SETTINGS.model then
-                if tostring(SETTINGS.model or "") == "htdemucs_6s" then
-                    for _, st in ipairs(STEMS) do
-                        st.selected = true
-                    end
-                else
+                if tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
                     for _, st in ipairs(STEMS) do
                         if st.sixStemOnly then st.selected = false end
                     end
-                    ensureAtLeastOneStemSelected()
                 end
+                ensureAtLeastOneStemSelected()
                 saveSettings()
             end
         end
@@ -11816,7 +11812,7 @@ function handleDialogKeyboard(ctx)
     elseif char == 115 or char == 83 then
         if isModelAvailableInCurrentMode("htdemucs_6s") then
             SETTINGS.model = "htdemucs_6s"
-            for _, st in ipairs(STEMS) do st.selected = true end
+            ensureAtLeastOneStemSelected()
             saveSettings()
         end
     elseif char == 43 or char == 61 then
