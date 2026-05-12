@@ -11492,6 +11492,14 @@ function renderFooter(ctx)
     local footerLines = buildFooterLines()
     local selLine = footerLines.selLine or ""
     local outLine = footerLines.outLine or ""
+    local outDuration = nil
+    do
+        local outMain, duration = tostring(outLine):match("^(.-)%s+·%s+([^·]+)$")
+        if outMain and duration and duration ~= "" then
+            outLine = outMain
+            outDuration = duration
+        end
+    end
     local locLine = footerLines.locLine or ""
     local isWarning = footerLines.isWarning
 
@@ -11526,7 +11534,17 @@ function renderFooter(ctx)
     gfx.drawstr(outLabel)
 
     gfx.setfont(1, "Arial", statusSubFontSize)
-    local locLabel = fitTextToBox(locLine, availableW, statusSubFontSize, statusSubFontSize)
+    local durationLabel = nil
+    local durationW = 0
+    if outDuration and outDuration ~= "" then
+        durationLabel = tostring(outDuration)
+        durationW = gfx.measurestr(durationLabel)
+    end
+    local locMaxW = availableW
+    if durationLabel then
+        locMaxW = math.max(S(120), availableW - durationW - splitGap)
+    end
+    local locLabel = fitTextToBox(locLine, locMaxW, statusSubFontSize, statusSubFontSize)
     if isWarning then
         gfx.set(1, 0.35, 0.35, 0.95)
     else
@@ -11535,6 +11553,17 @@ function renderFooter(ctx)
     gfx.x = statusPadX
     gfx.y = row2Y
     gfx.drawstr(locLabel)
+
+    if durationLabel then
+        if isWarning then
+            gfx.set(1, 0.35, 0.35, 0.95)
+        else
+            gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.82)
+        end
+        gfx.x = w - statusPadX - durationW
+        gfx.y = row2Y
+        gfx.drawstr(durationLabel)
+    end
 
     local footerMarginX = S(10)
     local stemBtnX = w - footerMarginX - stemBtnW
