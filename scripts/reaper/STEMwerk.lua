@@ -1471,6 +1471,52 @@ toggleStemSelection = function(index)
     return true
 end
 
+areAllSelectableStemsSelected = function()
+    local selectableCount = 0
+    for _, stem in ipairs(STEMS or {}) do
+        if stemIsSelectableForCurrentModel(stem) then
+            selectableCount = selectableCount + 1
+            if not stem.selected then
+                return false
+            end
+        end
+    end
+    return selectableCount > 0
+end
+
+selectAllSelectableStems = function()
+    for _, stem in ipairs(STEMS or {}) do
+        if stemIsSelectableForCurrentModel(stem) then
+            stem.selected = true
+        elseif stem.sixStemOnly then
+            stem.selected = false
+        end
+    end
+end
+
+setModelPreservingStemIntent = function(modelId)
+    if not modelId or SETTINGS.model == modelId then
+        return false
+    end
+
+    local wasAllSelected = areAllSelectableStemsSelected()
+    SETTINGS.model = modelId
+
+    if wasAllSelected then
+        selectAllSelectableStems()
+    else
+        if tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
+            for _, st in ipairs(STEMS or {}) do
+                if st.sixStemOnly then st.selected = false end
+            end
+        end
+        ensureAtLeastOneStemSelected()
+    end
+
+    saveSettings()
+    return true
+end
+
 
 local GLUE_HELPERS = dofile(script_path .. "_internal/STEMwerk_Glue_Helpers.lua")
 
@@ -11250,17 +11296,7 @@ function renderMainColumns(ctx)
             if mk then modelDisplayName = model.name .. " (" .. mk .. ")" end
         end
         if drawRadio(col3X, modelY, SETTINGS.model == model.id, modelDisplayName, nil, modelBoxW, nil, nil, modelBtnFontSize) and modelAvailable then
-            local prevModel = SETTINGS.model
-            SETTINGS.model = model.id
-            if prevModel ~= SETTINGS.model then
-                if tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
-                    for _, st in ipairs(STEMS) do
-                        if st.sixStemOnly then st.selected = false end
-                    end
-                end
-                ensureAtLeastOneStemSelected()
-                saveSettings()
-            end
+            setModelPreservingStemIntent(model.id)
         end
         local descKey = modelDescKeys[model.id] or "model_fast_desc"
         local tip = T(descKey)
@@ -11805,23 +11841,15 @@ function handleDialogKeyboard(ctx)
     elseif char == 97 or char == 65 then applyPresetAll()
     elseif char == 102 or char == 70 then
         if isModelAvailableInCurrentMode("htdemucs") then
-            SETTINGS.model = "htdemucs"
-            for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
-            ensureAtLeastOneStemSelected()
-            saveSettings()
+            setModelPreservingStemIntent("htdemucs")
         end
     elseif char == 113 or char == 81 then
         if isModelAvailableInCurrentMode("htdemucs_ft") then
-            SETTINGS.model = "htdemucs_ft"
-            for _, st in ipairs(STEMS) do if st.sixStemOnly then st.selected = false end end
-            ensureAtLeastOneStemSelected()
-            saveSettings()
+            setModelPreservingStemIntent("htdemucs_ft")
         end
     elseif char == 115 or char == 83 then
         if isModelAvailableInCurrentMode("htdemucs_6s") then
-            SETTINGS.model = "htdemucs_6s"
-            ensureAtLeastOneStemSelected()
-            saveSettings()
+            setModelPreservingStemIntent("htdemucs_6s")
         end
     elseif char == 43 or char == 61 then
         local newW = math.min(GUI.maxW, gfx.w + 76)
