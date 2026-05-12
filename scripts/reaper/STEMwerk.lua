@@ -5230,10 +5230,13 @@ local function drawUtilityNativeHelpWindow()
     end
 
     if _helpUC and _helpUC.tooltipText then
-        local ttPad = HS(6)
-        local ttLineH = HS(15)
-        gfx.setfont(1, "Arial", HS(12))
-        drawTooltipStyled(_helpUC.tooltipText, _helpUC.tooltipX, _helpUC.tooltipY, w, h, ttPad, ttLineH, math.min(w * 0.58, HS(500)))
+        local function ttS(v)
+            return (type(S) == "function" and S(v)) or HS(v)
+        end
+        local ttPad = ttS(10)
+        gfx.setfont(1, "Arial", ttS(13))
+        local ttLineH = math.max(gfx.texth + ttS(2), ttS(17))
+        drawTooltipStyled(_helpUC.tooltipText, _helpUC.tooltipX, _helpUC.tooltipY, w, h, ttPad, ttLineH, math.min(w * 0.62, ttS(560)))
     end
     helpState.wasMouseDown = mouseDown
     helpState.wasRightMouseDown = rightMouseDown
