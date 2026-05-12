@@ -281,14 +281,25 @@ local function directRuntimeDeviceProbe(pythonPath)
     end
 
     local py = [[
-import json, importlib.util
-env = {}
+import json, importlib.util, os, platform, struct, sys, sysconfig
+env = {
+    'python_executable': sys.executable,
+    'python_arch': platform.machine(),
+    'python_platform': platform.platform(),
+    'python_sysconfig_platform': sysconfig.get_platform(),
+    'python_pointer_bits': struct.calcsize('P') * 8,
+    'mps_fallback_env': os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', ''),
+}
 try:
     import torch
     env['torch'] = getattr(torch, '__version__', '')
     env['cuda_available'] = bool(torch.cuda.is_available())
     env['cuda_count'] = int(torch.cuda.device_count()) if env['cuda_available'] else 0
     env['cuda_names'] = [torch.cuda.get_device_name(i) for i in range(env['cuda_count'])] if env['cuda_available'] else []
+    try:
+        env['mps_built'] = bool(getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_built())
+    except Exception:
+        env['mps_built'] = False
     try:
         env['mps_available'] = bool(getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_available())
     except Exception:
@@ -298,6 +309,7 @@ except Exception as e:
     env['cuda_available'] = False
     env['cuda_count'] = 0
     env['cuda_names'] = []
+    env['mps_built'] = False
     env['mps_available'] = False
 env['directml_possible'] = importlib.util.find_spec('torch_directml') is not None
 print('STEMWERK_ENV_JSON ' + json.dumps(env, ensure_ascii=False))
@@ -551,6 +563,8 @@ local function prettySetupReason(reason)
             part = "audio-separator install failed: PyTorch is unavailable for this macOS/Python/architecture combination"
         elseif lower == "audio_separator_torch_unavailable_macos_intel" then
             part = "audio-separator install failed: PyTorch is unavailable for this Intel macOS/Python combination (use the official STEMwerk runtime package or a supported macOS/Python combination)"
+        elseif lower == "rosetta_python_on_apple_silicon" then
+            part = "Apple Silicon Mac detected, but STEMwerk is using an Intel/Rosetta Python runtime. Use native Apple Silicon REAPER if applicable, install/use arm64 or universal2 Python running natively, then rebuild the STEMwerk runtime."
         elseif lower == "audio_runtime_deps_install_failed" then
             part = "Audio runtime dependencies install failed"
         elseif lower == "julius_install_failed" then

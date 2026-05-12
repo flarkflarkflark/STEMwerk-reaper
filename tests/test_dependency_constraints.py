@@ -223,6 +223,47 @@ def test_macos_bootstrap_assertion_reports_clear_failure_output():
     assert 'STEMwerk bootstrap failed: pinned runtime assertion failed (%s): %s\\n' in script
 
 
+def test_macos_bootstrap_hardens_apple_silicon_rosetta_python_mismatch():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'sysctl -n hw.optional.arm64' in script
+    assert 'MAC_APPLE_SILICON_HOST="1"' in script
+    assert 'MAC_UNAME_ARCH="$(uname -m 2>/dev/null || echo unknown)"' in script
+    assert 'apple_silicon_host_requires_native_arm64_python' in script
+    assert 'FIRST_REJECTED_PYTHON_REASON="rosetta_python_on_apple_silicon"' in script
+    assert 'set_status "missing_python" "rosetta_python_on_apple_silicon"' in script
+    assert 'selected python sysconfig platform: ${PYTHON_SYSCONFIG_PLATFORM:-unknown}' in script
+
+
+def test_macos_support_bundle_includes_architecture_and_python_probe_details():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'execCommand("sysctl", {"-n", "hw.optional.arm64"}' in script
+    assert 'process under Rosetta/x86_64' in script
+    assert '"import sysconfig"' in script
+    assert "emit('python_arch', platform.machine())" in script
+    assert "emit('python_sysconfig_platform', sysconfig.get_platform())" in script
+    assert "emit('python_pointer_bits', struct.calcsize('P') * 8)" in script
+    assert "emit('mps_fallback_env', os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', ''))" in script
+    assert 'appendKey(diagnostics, "macOS host arch"' in script
+    assert 'appendKey(diagnostics, "Selected Python arch"' in script
+
+
+def test_setup_internal_probe_captures_python_arch_and_mps_built():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "'python_sysconfig_platform': sysconfig.get_platform()" in script
+    assert "'python_pointer_bits': struct.calcsize('P') * 8" in script
+    assert "env['mps_built'] = bool(getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_built())" in script
+    assert 'rosetta_python_on_apple_silicon' in script
+
+
 def test_macos_setup_internal_append_log_helper_is_guarded():
     from pathlib import Path
 
