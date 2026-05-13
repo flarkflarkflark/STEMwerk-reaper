@@ -17740,6 +17740,13 @@ _sep.processAllStemsResult = function()
         globalSelLen = timeSelectionEnd - timeSelectionStart
     end
 
+    -- Build OutputPlan / ImportPlan skeleton
+    local outputPlan = {
+        grouping = "per_item",
+        destination = SETTINGS.createNewTracks and "new_tracks" or "in_place",
+        imports = {}
+    }
+
     for jobIdx, job in ipairs(multiTrackQueue.jobs) do
         debugLog("Job " .. jobIdx .. ": trackDir=" .. tostring(job.trackDir))
         job.hadImportedStems = false
@@ -17775,14 +17782,23 @@ _sep.processAllStemsResult = function()
             )
         end
 
+        local importPlan = {
+            job = job,
+            stems = stems,
+            foundCount = foundCount,
+            hasStems = false
+        }
+
         -- Create stems based on output mode
         if next(stems) then
             local namingTrack = job.sourceTrackName or job.trackName or "Track"
             local namingItem = job.sourceItemName or job.sourceItemDisplayName or namingTrack
             stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem)
             job.importedStemPaths = stems
-            if SW_TIMING then SW_TIMING.mark(job.index, "import_start") end
-            if SETTINGS.createNewTracks then
+            importPlan.stems = stems
+            importPlan.hasStems = true
+
+            if outputPlan.destination == "new_tracks" then
                 -- New tracks mode: create separate tracks for each stem
                 -- Use per-job selection range: if time selection exists, use it; otherwise use the job's source item position/length
                 local jobSelPos = globalSelPos
@@ -17801,7 +17817,7 @@ _sep.processAllStemsResult = function()
                 elseif timeSelectionMode then
                     debugLog("  Time selection mode: using global sel pos=" .. jobSelPos .. ", len=" .. jobSelLen)
                 end
-                debugLog("  Calling createStemTracksForSelection..")
+
                 local itemsOverride = nil
                 if job and job.perItem and job.sourceItems then
                     itemsOverride = {}
@@ -17814,13 +17830,32 @@ _sep.processAllStemsResult = function()
                     end
                 end
                 local useItemNameForTrack = (job and job.perItem) or false
+
+                importPlan.jobSelPos = jobSelPos
+                importPlan.jobSelLen = jobSelLen
+                importPlan.itemsOverride = itemsOverride
+                importPlan.useItemNameForTrack = useItemNameForTrack
+            end
+        end
+        table.insert(outputPlan.imports, importPlan)
+    end
+
+    -- Execute OutputPlan
+    for _, importPlan in ipairs(outputPlan.imports) do
+        local job = importPlan.job
+        local stems = importPlan.stems
+
+        if importPlan.hasStems then
+            if SW_TIMING then SW_TIMING.mark(job.index, "import_start") end
+            if outputPlan.destination == "new_tracks" then
+                debugLog("  Calling createStemTracksForSelection..")
                 SW_LOG.logExecResult(
                     "timing:import_start job=" .. tostring(job.index) .. " mode=new_tracks",
                     nil,
                     ""
                 )
                 local preferredInsertIndex = getImportInsertIndexForJob(job)
-                local count, insertedTrackCount = createStemTracksForSelection(stems, jobSelPos, jobSelLen, job.track, itemsOverride, useItemNameForTrack, preferredInsertIndex)
+                local count, insertedTrackCount = createStemTracksForSelection(stems, importPlan.jobSelPos, importPlan.jobSelLen, job.track, importPlan.itemsOverride, importPlan.useItemNameForTrack, preferredInsertIndex)
                 advanceImportInsertCursorForJob(job, insertedTrackCount)
                 SW_LOG.logExecResult(
                     "timing:import_end job=" .. tostring(job.index) .. " created=" .. tostring(count),
