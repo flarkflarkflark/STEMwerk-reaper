@@ -16601,6 +16601,7 @@ _sep.updateAllJobsProgress = function()
             if doneFile then
                 doneFile:close()
                 if not job.done then
+                    SW_LOG.persistRunDiagnostics(job.trackDir)
                     job.done = true
                     job.stage = "Waiting for import"
                     writeTimingEvent(job, "done_seen", job.index)
@@ -17851,6 +17852,13 @@ function multiTrackProgressLoop()
                 HELPERS.killProcessFromPidFile(job.pidFile)
             end
         end
+        if multiTrackQueue.jobs then
+            for _, job in ipairs(multiTrackQueue.jobs) do
+                if job.trackDir and job.trackDir ~= "" then
+                    SW_LOG.preserveDiagnosticsForRun(job.trackDir, { reason = "user_cancel" })
+                end
+            end
+        end
 
         showMessage("Cancelled", UI_PROGRESS.progressUiLabel("progress_cancelled_status", "Cancelled"), "info", true)
         return
@@ -17897,6 +17905,11 @@ end
 _sep.processAllStemsResult = function()
     SW_LOG.logExecResult("timing:finalize_start multi", nil, "")
     reaper.Undo_BeginBlock()
+    for _, job in ipairs(multiTrackQueue.jobs or {}) do
+        if job and job.trackDir and job.trackDir ~= "" then
+            SW_LOG.persistRunDiagnostics(job.trackDir)
+        end
+    end
 
     local actionCount = 0
     local actionData = nil

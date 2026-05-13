@@ -220,8 +220,16 @@ function WORKFLOW.checkSeparationDone()
         doneFile:close()
         return true
     end
-    -- Also check if progress hit 100%
-    return C.progressState.percent >= 100
+    -- Progress can reach 100 before launcher-owned terminal files are flushed.
+    -- Treat as done only when exit_code.txt exists as a terminal marker.
+    if (tonumber(C.progressState.percent) or 0) >= 100 then
+        local exitFile = io.open(C.progressState.outputDir .. PATH_SEP .. "exit_code.txt", "r")
+        if exitFile then
+            exitFile:close()
+            return true
+        end
+    end
+    return false
 end
 
 -- Start separation process in background (Windows)
@@ -644,6 +652,9 @@ function WORKFLOW.progressLoop()
 
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
         HELPERS.killProcessFromPidFile(C.progressState.pidFile)
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.preserveDiagnosticsForRun(C.progressState.outputDir, { reason = "user_cancel" })
+        end
 
         gfx.quit()
         C.progressState.windowOpen = false
@@ -658,6 +669,9 @@ function WORKFLOW.progressLoop()
         -- Done!
         C.progressState.running = false
         WORKFLOW.updateProgressFromFile()
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.persistRunDiagnostics(C.progressState.outputDir)
+        end
         recordTimingEvent("done_seen")
 
         -- Remember any size/position changes made during processing
@@ -702,6 +716,29 @@ end
 function WORKFLOW.finishSeparationCallback()
     -- Small delay to ensure files are written
     local checkCount = 0
+    local persistAttempts = 0
+    local function fileExistsLocal(path)
+        if not path or path == "" then return false end
+        local f = io.open(path, "r")
+        if f then f:close(); return true end
+        return false
+    end
+    local function persistWithExitCodeRetry(onDone)
+        persistAttempts = persistAttempts + 1
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.persistRunDiagnostics(C.progressState.outputDir)
+        end
+        local hasExitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile) ~= nil
+        if hasExitCode or persistAttempts >= 8 then
+            if onDone then onDone() end
+            return
+        end
+        if fileExistsLocal(C.progressState.outputDir .. PATH_SEP .. "done.txt") then
+            reaper.defer(function() persistWithExitCodeRetry(onDone) end)
+            return
+        end
+        if onDone then onDone() end
+    end
     debugLog("[LOG] finishSeparationCallback: stdoutFile=" .. tostring(C.progressState.stdoutFile) .. ", separationLogFile=" .. tostring(C.progressState.logFile) .. ", outputDir=" .. tostring(C.progressState.outputDir))
     local function checkFiles()
         checkCount = checkCount + 1
@@ -716,48 +753,52 @@ function WORKFLOW.finishSeparationCallback()
 
         if next(stems) then
             debugLog("[LOG] Output detected for job (finishSeparationCallback)")
-            -- Success - process stems
-            isProcessingActive = false  -- Reset guard so workflow can be restarted after result
-            debugLog("[LOG] Import start (processStemsResult)")
-            processStemsResult(stems)
-            debugLog("[LOG] Import end (processStemsResult)")
-            debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
-            C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })
-            debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
+            persistWithExitCodeRetry(function()
+                -- Success - process stems
+                isProcessingActive = false  -- Reset guard so workflow can be restarted after result
+                debugLog("[LOG] Import start (processStemsResult)")
+                processStemsResult(stems)
+                debugLog("[LOG] Import end (processStemsResult)")
+                debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
+                C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })
+                debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
+            end)
         elseif checkCount < 10 then
             -- Retry
             reaper.defer(checkFiles)
         else
             -- Failed
-            isProcessingActive = false  -- Reset guard so workflow can be restarted
-            local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
-            local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 2000) or "(no log output found)"
-            local stdoutSnippet = SW_LOG.readFileSnippet(C.progressState.stdoutFile, 1200)
-            local errMsg = nil
-            if C.buildKnownSeparationFailureMessage then
-                errMsg = C.buildKnownSeparationFailureMessage(
-                    logSnippet,
-                    exitCode,
-                    C.progressState.lastCmd,
-                    C.progressState.logFile,
-                    C.progressState.execLogPath or SW_LOG.getLogPath(),
-                    stdoutSnippet
-                )
-            end
-            if not errMsg then
-                errMsg = "No stems created"
-                    .. "\n\nExit code: " .. tostring(exitCode or "unknown")
-                    .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")
-                    .. "\nLog file: " .. tostring(C.progressState.logFile or "unknown")
-                    .. "\nDebug log: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
-                    .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
-                if stdoutSnippet then
-                    errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+            persistWithExitCodeRetry(function()
+                isProcessingActive = false  -- Reset guard so workflow can be restarted
+                local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
+                local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 2000) or "(no log output found)"
+                local stdoutSnippet = SW_LOG.readFileSnippet(C.progressState.stdoutFile, 1200)
+                local errMsg = nil
+                if C.buildKnownSeparationFailureMessage then
+                    errMsg = C.buildKnownSeparationFailureMessage(
+                        logSnippet,
+                        exitCode,
+                        C.progressState.lastCmd,
+                        C.progressState.logFile,
+                        C.progressState.execLogPath or SW_LOG.getLogPath(),
+                        stdoutSnippet
+                    )
                 end
-            end
-            -- Keep this visible until user closes it; auto-monitor mode can immediately
-            -- bounce back to the main window and hide actionable error details.
-            C.showMessage("Separation Failed", errMsg, "error", false)
+                if not errMsg then
+                    errMsg = "No stems created"
+                        .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+                        .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")
+                        .. "\nLog file: " .. tostring(C.progressState.logFile or "unknown")
+                        .. "\nDebug log: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
+                        .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
+                    if stdoutSnippet then
+                        errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+                    end
+                end
+                -- Keep this visible until user closes it; auto-monitor mode can immediately
+                -- bounce back to the main window and hide actionable error details.
+                C.showMessage("Separation Failed", errMsg, "error", false)
+            end)
         end
     end
     checkFiles()

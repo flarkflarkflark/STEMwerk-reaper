@@ -1119,6 +1119,7 @@ local function classifyFileForBundle(name)
     local lower = tostring(name or ""):lower()
     local textExt = {
         [".txt"] = true, [".log"] = true, [".env"] = true, [".json"] = true,
+        [".jsonl"] = true,
         [".out"] = true, [".err"] = true, [".pid"] = true, [".cfg"] = true,
         [".ini"] = true, [".trace"] = true,
     }
@@ -1210,6 +1211,117 @@ local function collectRuntimeLogs(runtimeDir, bundleDir, copiedFiles)
     if not found then
         appendLine(lines, "- runtime logs folder missing or empty")
     end
+    return lines
+end
+
+local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)
+    local lines = {}
+    local runsRoot = joinPath(cacheLogDir, "runs")
+    local destRoot = joinPath(bundleDir, "runtime_runs")
+    local maxRunsToInclude = 5
+    ensureDir(destRoot)
+
+    if not pathExists(runsRoot) then
+        appendLine(lines, "- persisted runs folder missing")
+        return lines
+    end
+
+    local allowed = {
+        ["timing_events.jsonl"] = true,
+        ["phase_events.jsonl"] = true,
+        ["stdout.txt"] = true,
+        ["separation_log.txt"] = true,
+        ["exit_code.txt"] = true,
+        ["done.txt"] = true,
+    }
+
+    local runDirNames = enumerateSubdirs(runsRoot)
+    if #runDirNames == 0 then
+        appendLine(lines, "- persisted runs folder empty")
+        return lines
+    end
+
+    local runEntries = {}
+    local unknownEntry = nil
+    for _, runName in ipairs(runDirNames) do
+        local runSrc = joinPath(runsRoot, runName)
+        local stat = getPathStat(runSrc)
+        local entry = {
+            name = runName,
+            src = runSrc,
+            epoch = tonumber(stat.epoch) or 0,
+            isUnknown = (runName == "STEMwerk_unknown"),
+        }
+        if entry.isUnknown then
+            unknownEntry = entry
+        else
+            runEntries[#runEntries + 1] = entry
+        end
+    end
+    table.sort(runEntries, function(a, b)
+        if (a.epoch or 0) == (b.epoch or 0) then
+            return tostring(a.name) > tostring(b.name)
+        end
+        return (a.epoch or 0) > (b.epoch or 0)
+    end)
+
+    local selectedRuns = {}
+    for idx, entry in ipairs(runEntries) do
+        if idx <= maxRunsToInclude then
+            selectedRuns[#selectedRuns + 1] = entry
+        end
+    end
+    local includedUnknown = false
+    if #selectedRuns == 0 and unknownEntry then
+        selectedRuns[#selectedRuns + 1] = unknownEntry
+        includedUnknown = true
+    end
+
+    local copiedCount = 0
+    for _, entry in ipairs(selectedRuns) do
+        local runName = entry.name
+        local runSrc = entry.src
+        local runDst = joinPath(destRoot, runName)
+        ensureDir(runDst)
+        for _, jobName in ipairs(enumerateSubdirs(runSrc)) do
+            local jobSrc = joinPath(runSrc, jobName)
+            local jobDst = joinPath(runDst, jobName)
+            ensureDir(jobDst)
+            for _, fileName in ipairs(enumerateFiles(jobSrc)) do
+                if allowed[fileName] then
+                    local src = joinPath(jobSrc, fileName)
+                    local dst = joinPath(jobDst, fileName)
+                    local ok, mode = copySupportTextFile(src, dst, 512 * 1024)
+                    if ok then
+                        copiedCount = copiedCount + 1
+                        copiedFiles[#copiedFiles + 1] = "runtime_runs/" .. runName .. "/" .. jobName .. "/" .. fileName .. " (" .. mode .. ")"
+                    end
+                end
+            end
+        end
+    end
+
+    appendLine(lines, string.format("- persisted run diagnostics copied: %d", copiedCount))
+    local totalAvailable = #runEntries + (unknownEntry and 1 or 0)
+    local skippedOlder = math.max(0, #runEntries - math.min(#runEntries, maxRunsToInclude))
+    appendLine(lines, string.format("- persisted runs available: %d (real=%d, unknown=%d)", totalAvailable, #runEntries, unknownEntry and 1 or 0))
+    appendLine(lines, string.format("- persisted runs included: %d (max %d)", #selectedRuns, maxRunsToInclude))
+    appendLine(lines, string.format("- persisted runs skipped: %d", skippedOlder))
+    appendLine(lines, string.format("- unknown included: %s", includedUnknown and "yes" or "no"))
+    appendLine(lines, string.format("- Persistent run diagnostics: included %d of %d real runs; skipped %d older runs; unknown included %s",
+        math.min(#runEntries, maxRunsToInclude),
+        #runEntries,
+        skippedOlder,
+        includedUnknown and "yes" or "no"))
+    if #selectedRuns > 0 then
+        local ids = {}
+        for _, entry in ipairs(selectedRuns) do
+            ids[#ids + 1] = tostring(entry.name)
+        end
+        appendLine(lines, "- included run_ids: " .. table.concat(ids, ", "))
+        appendLine(lines, "- Included runtime run IDs: " .. table.concat(ids, ", "))
+    end
+    appendKey(lines, "Persisted runs source", runsRoot)
     return lines
 end
 
@@ -1443,6 +1555,11 @@ appendKey(diagnostics, "Persistent run_summary.txt", persistentRunLogs.run_summa
 appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent stemwerk.log", persistentRunLogs.stemwerk_log and cacheLogDir or "missing")
+appendLine(diagnostics, "")
+appendLine(diagnostics, "Persistent Run Diagnostics")
+for _, line in ipairs(collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)) do
+    appendLine(diagnostics, line)
+end
 appendLine(diagnostics, "")
 
 appendLine(diagnostics, "Settings Snapshot")

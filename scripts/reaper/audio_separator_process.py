@@ -105,7 +105,7 @@ def _resolve_stem_path(output_dir: Path, stem_path: Path | str) -> Path:
 
 
 def _setup_reaper_io(output_dir: Optional[str]):
-    """If output_dir is set, write progress/log/done markers into that folder."""
+    """If output_dir is set, write progress/log markers into that folder."""
     global _phase_file, _progress_file
     if not output_dir:
         return None
@@ -115,7 +115,6 @@ def _setup_reaper_io(output_dir: Optional[str]):
     stdout_path = out / "stdout.txt"
     stderr_path = out / "separation_log.txt"
     phase_path = out / "phase_events.jsonl"
-    done_path = out / "done.txt"
 
     stdout_f = open(stdout_path, "w", encoding="utf-8", buffering=1)
     stderr_f = open(stderr_path, "w", encoding="utf-8", buffering=1)
@@ -125,13 +124,10 @@ def _setup_reaper_io(output_dir: Optional[str]):
 
     sys.stderr = _TeeTextIO(sys.stderr, stderr_f)
 
-    def write_done(status: str):
-        try:
-            done_path.write_text(status + "\n", encoding="utf-8")
-        except Exception:
-            pass
-
-    return write_done
+    # done.txt / exit_code.txt are owned by the async launcher wrapper.
+    # Writing done.txt here can race with exit_code emission and cause
+    # diagnostics persistence to snapshot before exit_code.txt exists.
+    return None
 
 
 def _read_simple_env_file(path: Path) -> Dict[str, str]:
