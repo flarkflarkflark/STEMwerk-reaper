@@ -15399,6 +15399,162 @@ function showResultWindow(selectedStems, message)
     end
 end
 
+-- Helper: normalize item name for display/file
+local function normalizeItemName(name)
+    if not name or name == "" then return nil end
+    return name:match("([^/\\]+)%.[^.]*$") or name
+end
+
+-- Helper: get item name fields
+local function getItemNameFields(item, fallbackTrackName)
+    local take = reaper.GetActiveTake(item)
+    local takeName = nil
+    if take then
+        local _, tn = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+        if tn and tn ~= "" then
+            takeName = tn
+        end
+    end
+    local sourceName = nil
+    if take and not takeName then
+        local source = reaper.GetMediaItemTake_Source(take)
+        if source then
+            local sourcePath = reaper.GetMediaSourceFileName(source, "")
+            if sourcePath and sourcePath ~= "" then
+                sourceName = sourcePath:match("([^/\\]+)$") or sourcePath
+            end
+        end
+    end
+    local baseName = normalizeItemName(takeName) or normalizeItemName(sourceName)
+    local displayName = baseName or fallbackTrackName or "Item"
+    return baseName or displayName, displayName
+end
+
+-- Helper: get selected audible items on track
+local function getSelectedAudibleItemsOnTrack(track, soloActive)
+    local items = {}
+    local numItems = reaper.CountTrackMediaItems(track)
+    for j = 0, numItems - 1 do
+        local item = reaper.GetTrackMediaItem(track, j)
+        if item and reaper.ValidatePtr(item, "MediaItem*")
+            and reaper.IsMediaItemSelected(item)
+            and AUDIBILITY.isItemAudible(item, soloActive) then
+            items[#items + 1] = item
+        end
+    end
+    return items
+end
+
+-- Build a SourceItemPlan for stem jobs
+_sep.buildSourceItemPlan = function(trackList, hasTimeSel, perItemMap, noTimeSelectionItemMap)
+    local plan = {}
+    local stats = { perItemCandidates = 0, perItemEligible = 0 }
+    local original_selection_order = 0
+    local soloActive = getProcessingSoloActive()
+
+    for i, track in ipairs(trackList) do
+        local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+        local trackGUID = reaper.GetTrackGUID(track)
+        local _, trackName = reaper.GetTrackName(track)
+        if trackName == "" then trackName = "Track " .. trackIdx end
+
+        local selectedTrackItems = (not hasTimeSel)
+            and ((noTimeSelectionItemMap and noTimeSelectionItemMap[track]) or getSelectedAudibleItemsOnTrack(track, soloActive))
+            or nil
+
+        if perItemMap and hasTimeSel and perItemMap[track] then
+            -- Case 1: Time Selection + Per-item
+            local entries = perItemMap[track] or {}
+            stats.perItemCandidates = stats.perItemCandidates + #entries
+            local eligibleEntries = {}
+            for _, entry in ipairs(entries) do
+                local item = entry.item
+                if item and reaper.ValidatePtr(item, "MediaItem*") and AUDIBILITY.isItemAudible(item, soloActive) then
+                    table.insert(eligibleEntries, entry)
+                end
+            end
+            stats.perItemEligible = stats.perItemEligible + #eligibleEntries
+
+            for _, entry in ipairs(eligibleEntries) do
+                local item = entry.item
+                original_selection_order = original_selection_order + 1
+                local sourceItemName, sourceItemDisplayName = getItemNameFields(item, trackName)
+                table.insert(plan, {
+                    source_track = track,
+                    source_track_guid = trackGUID,
+                    source_track_index = trackIdx,
+                    source_track_name = trackName,
+                    source_item = item,
+                    source_item_guid = reaper.GetItemGUID(item),
+                    item_position = reaper.GetMediaItemInfo_Value(item, "D_POSITION"),
+                    item_length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH"),
+                    item_name = sourceItemDisplayName,
+                    original_selection_order = original_selection_order,
+                    sourceItemName = sourceItemName,
+                    sourceItemDisplayName = sourceItemDisplayName,
+                    selStart = entry.start,
+                    selEnd = entry["end"],
+                    isPerItem = true,
+                    isTimeSelection = true,
+                })
+            end
+        elseif (not hasTimeSel) and ((not SETTINGS.createNewTracks) or (selectedTrackItems and #selectedTrackItems > 1)) then
+            -- Case 2: No time selection + Multi-item (or in-place)
+            local selectedItems = selectedTrackItems or getSelectedAudibleItemsOnTrack(track, soloActive)
+            if selectedItems and #selectedItems > 0 then
+                stats.perItemCandidates = stats.perItemCandidates + #selectedItems
+                stats.perItemEligible = stats.perItemEligible + #selectedItems
+                for _, item in ipairs(selectedItems) do
+                    original_selection_order = original_selection_order + 1
+                    local sourceItemName, sourceItemDisplayName = getItemNameFields(item, trackName)
+                    table.insert(plan, {
+                        source_track = track,
+                        source_track_guid = trackGUID,
+                        source_track_index = trackIdx,
+                        source_track_name = trackName,
+                        source_item = item,
+                        source_item_guid = reaper.GetItemGUID(item),
+                        item_position = reaper.GetMediaItemInfo_Value(item, "D_POSITION"),
+                        item_length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH"),
+                        item_name = sourceItemDisplayName,
+                        original_selection_order = original_selection_order,
+                        sourceItemName = sourceItemName,
+                        sourceItemDisplayName = sourceItemDisplayName,
+                        isPerItem = true,
+                        isTimeSelection = false,
+                    })
+                end
+            end
+        else
+            -- Case 3: Default (One job per track)
+            original_selection_order = original_selection_order + 1
+            table.insert(plan, {
+                source_track = track,
+                source_track_guid = trackGUID,
+                source_track_index = trackIdx,
+                source_track_name = trackName,
+                original_selection_order = original_selection_order,
+                isPerItem = false,
+                isTimeSelection = hasTimeSel,
+            })
+        end
+    end
+
+    table.sort(plan, function(a, b)
+        if a.source_track_index ~= b.source_track_index then
+            return a.source_track_index < b.source_track_index
+        end
+        local posA = a.item_position or 0
+        local posB = b.item_position or 0
+        if posA ~= posB then
+            return posA < posB
+        end
+        return a.original_selection_order < b.original_selection_order
+    end)
+
+    return plan, stats
+end
+
 -- Run multi-track separation (parallel or sequential based on setting)
 _sep.runSingleTrackSeparation = function(trackList)
     refreshPythonPathFromExtState()
@@ -15468,38 +15624,6 @@ _sep.runSingleTrackSeparation = function(trackList)
     selectedItemsNoTimeMap = nil
 
     local soloActive = getProcessingSoloActive()
-    local function trackAudible(track)
-        return AUDIBILITY.isTrackAudible(track, soloActive)
-    end
-
-    local function normalizeItemName(name)
-        if not name or name == "" then return nil end
-        return name:match("([^/\\]+)%.[^.]*$") or name
-    end
-
-    local function getItemNameFields(item, fallbackTrackName)
-        local take = reaper.GetActiveTake(item)
-        local takeName = nil
-        if take then
-            local _, tn = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
-            if tn and tn ~= "" then
-                takeName = tn
-            end
-        end
-        local sourceName = nil
-        if take and not takeName then
-            local source = reaper.GetMediaItemTake_Source(take)
-            if source then
-                local sourcePath = reaper.GetMediaSourceFileName(source, "")
-                if sourcePath and sourcePath ~= "" then
-                    sourceName = sourcePath:match("([^/\\]+)$") or sourcePath
-                end
-            end
-        end
-        local baseName = normalizeItemName(takeName) or normalizeItemName(sourceName)
-        local displayName = baseName or fallbackTrackName or "Item"
-        return baseName or displayName, displayName
-    end
 
     local function renderPerItemOverlapFallback(item, outputPath, overlapStart, overlapEnd)
         if not item or not reaper.ValidatePtr(item, "MediaItem*") then
@@ -15627,11 +15751,14 @@ _sep.runSingleTrackSeparation = function(trackList)
         return
     end
 
+    -- Build SourceItemPlan to decide what to process
+    local sourcePlan, planStats = _sep.buildSourceItemPlan(trackList, hasTimeSel, perItemMap, noTimeSelectionItemMap)
+
     -- Prepare all tracks: extract audio
     local trackJobs = {}
     local jobIndex = 0
-    local perItemCandidates = 0
-    local perItemEligible = 0
+    local perItemCandidates = planStats.perItemCandidates
+    local perItemEligible = planStats.perItemEligible
 
     local function getJobUIColor(track, fallbackIdx)
         -- Returns {r,g,b} in 0..1 for UI tinting. Uses the track's custom color when set.
@@ -15656,166 +15783,91 @@ _sep.runSingleTrackSeparation = function(trackList)
         return { r / 255, g / 255, b / 255 }
     end
 
-    local function getSelectedAudibleItemsOnTrack(track)
-        local items = {}
-        local numItems = reaper.CountTrackMediaItems(track)
-        for j = 0, numItems - 1 do
-            local item = reaper.GetTrackMediaItem(track, j)
-            if item and reaper.ValidatePtr(item, "MediaItem*")
-                and reaper.IsMediaItemSelected(item)
-                and AUDIBILITY.isItemAudible(item, soloActive) then
-                items[#items + 1] = item
-            end
-        end
-        return items
-    end
+    for _, planEntry in ipairs(sourcePlan) do
+        local track = planEntry.source_track
+        local trackName = planEntry.source_track_name
 
-    for i, track in ipairs(trackList) do
-        local _, trackName = reaper.GetTrackName(track)
-        if trackName == "" then trackName = "Track " .. math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")) end
-        local selectedTrackItems = (not hasTimeSel)
-            and ((noTimeSelectionItemMap and noTimeSelectionItemMap[track]) or getSelectedAudibleItemsOnTrack(track))
-            or nil
+        if planEntry.isPerItem then
+            -- Create per-item job
+            jobIndex = jobIndex + 1
+            local itemDir = baseTempDir .. PATH_SEP .. "item_" .. jobIndex
+            makeDir(itemDir)
+            local inputFile = itemDir .. PATH_SEP .. "input.wav"
+            local item = planEntry.source_item
 
-        if perItemMap and hasTimeSel and perItemMap[track] then
-            -- Time selection + per-item jobs for this track (new tracks OR in-place)
-            local entries = perItemMap[track] or {}
-            perItemCandidates = perItemCandidates + #entries
-            local eligibleEntries = {}
-            for _, entry in ipairs(entries) do
-                local item = entry and entry.item or nil
-                if item and reaper.ValidatePtr(item, "MediaItem*") and AUDIBILITY.isItemAudible(item, soloActive) then
-                    table.insert(eligibleEntries, entry)
-                end
-            end
-
-            table.sort(eligibleEntries, function(a, b)
-                local ia = tonumber(a and a.start) or tonumber(a and a.pos) or 0
-                local ib = tonumber(b and b.start) or tonumber(b and b.pos) or 0
-                if ia ~= ib then return ia < ib end
-                return tostring(a and a.item or "") < tostring(b and b.item or "")
-            end)
-            perItemEligible = perItemEligible + #eligibleEntries
-            for itemIdx, entry in ipairs(eligibleEntries) do
-                local item = entry.item
-                jobIndex = jobIndex + 1
-                local itemDir = baseTempDir .. PATH_SEP .. "item_" .. jobIndex
-                makeDir(itemDir)
-                local inputFile = itemDir .. PATH_SEP .. "input.wav"
-
-                local extracted, err, renderStart, renderLen = renderItemToWav(item, inputFile, entry.start, entry["end"])
+            local extracted, err, renderStart, renderLen
+            if planEntry.isTimeSelection then
+                extracted, err, renderStart, renderLen = renderItemToWav(item, inputFile, planEntry.selStart, planEntry.selEnd)
                 if not extracted then
-                    extracted, err, renderStart, renderLen = renderPerItemOverlapFallback(item, inputFile, entry.start, entry["end"])
+                    extracted, err, renderStart, renderLen = renderPerItemOverlapFallback(item, inputFile, planEntry.selStart, planEntry.selEnd)
                 end
-                if extracted then
-                    local sourceItemName, sourceItemDisplayName = getItemNameFields(item, trackName)
-                    local itemName = sourceItemDisplayName
-                    local audioDuration = renderLen or 0
-                    if audioDuration <= 0 then
-                        local fallbackLen = entry.len or 0
-                        if fallbackLen > 0 then
-                            audioDuration = fallbackLen
-                        else
-                            local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                            local itemEnd = itemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                            audioDuration = math.max(0, math.min(timeSelectionEnd, itemEnd) - math.max(timeSelectionStart, itemPos))
-                        end
-                    end
-
-                    table.insert(trackJobs, {
-                        track = track,
-                        trackName = trackName,
-                        uiColor = getJobUIColor(track, jobIndex),
-                        trackDir = itemDir,
-                        inputFile = inputFile,
-                        sourceItem = item,
-                        sourceItems = {item},
-                        itemNames = itemName,
-                        sourceTrackName = trackName,
-                        sourceItemName = sourceItemName,
-                        sourceItemDisplayName = sourceItemDisplayName,
-                        itemCount = 1,
-                        expectedItemCount = 1,
-                        expectedStemCount = selectedStemCount,
-                        selPos = renderStart or entry.start,
-                        selLen = renderLen or entry.len,
-                        index = jobIndex,
-                        audioDuration = audioDuration,
-                        perItem = true,
-                    })
-                else
-                    local ef = io.open(itemDir .. PATH_SEP .. "extract_error.txt", "w")
-                    if ef then
-                        ef:write("Track: " .. tostring(trackName) .. "\n")
-                        ef:write("Item index: " .. tostring(itemIdx) .. "/" .. tostring(#eligibleEntries) .. "\n")
-                        ef:write("Error: " .. tostring(err) .. "\n")
-                        ef:close()
-                    end
-                    debugLog("Per-item extract failed: " .. tostring(err))
-                end
+            else
+                extracted, err = renderSingleItemToWav(item, inputFile)
+                renderStart = planEntry.item_position
+                renderLen = planEntry.item_length
             end
-        elseif inPlaceMultiItem or (SETTINGS.createNewTracks and not hasTimeSel and selectedTrackItems and #selectedTrackItems > 1) then
-            -- No time selection + multiple selected items on one track:
-            -- build one job per item so new-tracks mode doesn't silently process only the first item.
-            local selectedItems = selectedTrackItems or getSelectedAudibleItemsOnTrack(track)
-            table.sort(selectedItems, function(a, b)
-                local pa = (a and reaper.ValidatePtr(a, "MediaItem*")) and reaper.GetMediaItemInfo_Value(a, "D_POSITION") or 0
-                local pb = (b and reaper.ValidatePtr(b, "MediaItem*")) and reaper.GetMediaItemInfo_Value(b, "D_POSITION") or 0
-                if pa ~= pb then return pa < pb end
-                return tostring(a or "") < tostring(b or "")
-            end)
 
-            for itemIdx, item in ipairs(selectedItems) do
-                jobIndex = jobIndex + 1
-                local itemDir = baseTempDir .. PATH_SEP .. "item_" .. jobIndex
-                makeDir(itemDir)
-                local inputFile = itemDir .. PATH_SEP .. "input.wav"
-
-                local extracted, err = renderSingleItemToWav(item, inputFile)
-                if extracted then
-                    local sourceItemName, sourceItemDisplayName = getItemNameFields(item, trackName)
-                    local itemName = sourceItemDisplayName
-
-                    -- Get audio duration without spawning ffprobe/CMD
-                    local audioDuration = reaper.GetMediaItemInfo_Value(item, "D_LENGTH") or 0
-
-                    table.insert(trackJobs, {
-                        track = track,
-                        trackName = trackName .. " [" .. itemIdx .. "/" .. #selectedItems .. "]",
-                        uiColor = getJobUIColor(track, jobIndex),
-                        trackDir = itemDir,
-                        inputFile = inputFile,
-                        sourceItem = item,
-                        sourceItems = {item},  -- Only this one item
-                        itemNames = itemName,
-                        sourceTrackName = trackName,
-                        sourceItemName = sourceItemName,
-                        sourceItemDisplayName = sourceItemDisplayName,
-                        itemCount = 1,
-                        expectedItemCount = 1,
-                        expectedStemCount = selectedStemCount,
-                        index = jobIndex,
-                        audioDuration = audioDuration,
-                        selPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION") or 0,
-                        selLen = audioDuration,
-                        perItem = true,
-                    })
+            if extracted then
+                local sourceItemName = planEntry.sourceItemName
+                local sourceItemDisplayName = planEntry.sourceItemDisplayName
+                local itemName = sourceItemDisplayName
+                local audioDuration = renderLen or 0
+                if audioDuration <= 0 then
+                    audioDuration = planEntry.item_length or 0
                 end
+
+                local displayTrackName = trackName
+                if not planEntry.isTimeSelection then
+                    -- Restore original Case 2 naming: Track Name [1/2]
+                    local selectedItems = (noTimeSelectionItemMap and noTimeSelectionItemMap[track]) or getSelectedAudibleItemsOnTrack(track, soloActive)
+                    displayTrackName = trackName .. " [" .. planEntry.original_selection_order .. "/" .. #selectedItems .. "]"
+                end
+
+                table.insert(trackJobs, {
+                    track = track,
+                    trackName = displayTrackName,
+                    uiColor = getJobUIColor(track, jobIndex),
+                    trackDir = itemDir,
+                    inputFile = inputFile,
+                    sourceItem = item,
+                    sourceItems = {item},
+                    itemNames = itemName,
+                    sourceTrackName = trackName,
+                    sourceItemName = sourceItemName,
+                    sourceItemDisplayName = sourceItemDisplayName,
+                    itemCount = 1,
+                    expectedItemCount = 1,
+                    expectedStemCount = selectedStemCount,
+                    selPos = renderStart,
+                    selLen = renderLen,
+                    index = jobIndex,
+                    audioDuration = audioDuration,
+                    perItem = true,
+                })
+            else
+                local ef = io.open(itemDir .. PATH_SEP .. "extract_error.txt", "w")
+                if ef then
+                    ef:write("Track: " .. tostring(trackName) .. "\n")
+                    ef:write("Item: " .. tostring(planEntry.item_name) .. "\n")
+                    ef:write("Error: " .. tostring(err) .. "\n")
+                    ef:close()
+                end
+                debugLog("Per-item extract failed: " .. tostring(err))
             end
         else
-            -- Original behavior: one job per track (combines items or uses time selection)
+            -- Combined track job (one job per track)
             jobIndex = jobIndex + 1
             local trackDir = baseTempDir .. PATH_SEP .. "track_" .. jobIndex
             makeDir(trackDir)
             local inputFile = trackDir .. PATH_SEP .. "input.wav"
 
-            -- Use appropriate render function based on whether time selection exists
             local extracted, err, sourceItem, allSourceItems
             if hasTimeSel then
                 extracted, err, sourceItem, allSourceItems = renderTrackTimeSelectionToWav(track, inputFile)
             else
                 extracted, err, sourceItem, allSourceItems = renderTrackSelectedItemsToWav(track, inputFile)
             end
+
             if extracted then
                 -- Get media item name(s) for display
                 local itemNames = {}
@@ -15893,28 +15945,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         return
     end
 
-    table.sort(trackJobs, function(a, b)
-        local function trackIndex(job)
-            local tr = job and job.track or nil
-            if tr and reaper.ValidatePtr(tr, "MediaTrack*") then
-                return math.floor(reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"))
-            end
-            return 999999
-        end
-        local function itemPosition(job)
-            if job and tonumber(job.selPos) then return tonumber(job.selPos) end
-            local item = job and job.sourceItem or nil
-            if item and reaper.ValidatePtr(item, "MediaItem*") then
-                return reaper.GetMediaItemInfo_Value(item, "D_POSITION") or 0
-            end
-            return 0
-        end
-        local ta, tb = trackIndex(a), trackIndex(b)
-        if ta ~= tb then return ta < tb end
-        local pa, pb = itemPosition(a), itemPosition(b)
-        if pa ~= pb then return pa < pb end
-        return (tonumber(a and a.index) or 0) < (tonumber(b and b.index) or 0)
-    end)
+    -- Jobs are already sorted by the sourcePlan
 
     -- Store jobs in queue for progress tracking
     multiTrackQueue.jobs = trackJobs
