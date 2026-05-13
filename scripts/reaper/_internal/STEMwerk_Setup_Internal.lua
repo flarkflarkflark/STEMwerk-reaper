@@ -4,6 +4,17 @@
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
+--
+-- TODO(v2.2.2.3+):
+-- - Expand language support beyond EN/NL/DE.
+-- - Target additional languages: Chinese, Russian, Spanish, French, Portuguese,
+--   Korean, Italian, Finnish, Vietnamese.
+-- - Make STEMwerk Setup window multilingual.
+-- - Add/use setup language selector.
+-- - Persist selected setup language via ExtState("STEMwerk", "language").
+-- - Keep main UI, setup UI, support-bundle/status messages, and first-run flow
+--   on the same language setting.
+-- - Use EN as default/fallback when unset or unknown.
 
 local EXT_SECTION = "STEMwerk"
 local BOOTSTRAP_GUARD_STALE_SECONDS = 600
