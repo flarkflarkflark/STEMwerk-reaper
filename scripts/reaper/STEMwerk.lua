@@ -14483,7 +14483,7 @@ function deleteSelectionInItems(startTime, endTime)
 end
 
 -- Create new tracks for stems from time selection (no original item)
-function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack)
+function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack, preferredInsertIndex)
     reaper.Undo_BeginBlock()
     lastNoAudibleOverlap = false
     local importedItems = {}
@@ -14494,6 +14494,40 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
     end
     local function itemAudible(item)
         return AUDIBILITY.isItemAudible(item, soloActive)
+    end
+
+    -- Import-order stabilization: when multiple per-item jobs target the same
+    -- source track, repeatedly inserting directly below the source track makes
+    -- later jobs appear above earlier ones. Keep a per-call insertion cursor so
+    -- per-item outputs are appended in timeline/import order. The multi-job
+    -- importer can seed this cursor with preferredInsertIndex.
+    local insertCursorByTrack = {}
+    local function getTrackKey(track)
+        return tostring(track or "")
+    end
+    local function getInsertIndexForTrack(track)
+        if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
+            return preferredInsertIndex or 0
+        end
+        local key = getTrackKey(track)
+        if insertCursorByTrack[key] == nil then
+            if preferredInsertIndex and sourceTrack and track == sourceTrack then
+                insertCursorByTrack[key] = preferredInsertIndex
+            else
+                insertCursorByTrack[key] = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+            end
+        end
+        return insertCursorByTrack[key]
+    end
+    local function advanceInsertIndexForTrack(track, insertedTrackCount)
+        insertedTrackCount = tonumber(insertedTrackCount) or 0
+        if insertedTrackCount <= 0 or not track or not reaper.ValidatePtr(track, "MediaTrack*") then
+            return
+        end
+        local key = getTrackKey(track)
+        if insertCursorByTrack[key] ~= nil then
+            insertCursorByTrack[key] = insertCursorByTrack[key] + insertedTrackCount
+        end
     end
     -- If there is a time-selection and selected items overlap it, create a set
     -- of stem tracks directly under each source track for each such selected item.
@@ -14624,8 +14658,8 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
             return 0
         end
-        local trackIdx = 0
-        if refTrack then trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(refTrack, "IP_TRACKNUMBER")) end
+        local trackIdx = getInsertIndexForTrack(refTrack)
+        local insertedTrackCount = 0
 
         local selectedCount = 0
         for _, stem in ipairs(STEMS) do if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end end
@@ -14640,6 +14674,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
 
         if SETTINGS.createFolder then
             reaper.InsertTrackAtIndex(trackIdx, true)
+            insertedTrackCount = insertedTrackCount + 1
             folderTrack = reaper.GetTrack(0, trackIdx)
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
@@ -14654,6 +14689,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 local stemPath = stemPaths[stem.name:lower()]
                 if stemPath then
                     reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
+                    insertedTrackCount = insertedTrackCount + 1
                     local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
                     UI_Window.ensureTrackHeight(newTrack)
                     local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
@@ -14683,11 +14719,25 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         HELPERS.refreshImportedMediaItems(importedItems, importedPaths)
         reaper.UpdateArrange()
         reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
-        return importedCount
+        return importedCount, insertedTrackCount
     end
 
-    -- Process each selected item that overlaps the time selection
+    -- Process each selected item that overlaps the time selection. Sort by
+    -- source track and timeline position so output ordering is deterministic.
+    table.sort(itemsToProcess, function(a, b)
+        local ta = a and a.item and reaper.ValidatePtr(a.item, "MediaItem*") and reaper.GetMediaItem_Track(a.item) or nil
+        local tb = b and b.item and reaper.ValidatePtr(b.item, "MediaItem*") and reaper.GetMediaItem_Track(b.item) or nil
+        local ia = ta and math.floor(reaper.GetMediaTrackInfo_Value(ta, "IP_TRACKNUMBER")) or 999999
+        local ib = tb and math.floor(reaper.GetMediaTrackInfo_Value(tb, "IP_TRACKNUMBER")) or 999999
+        if ia ~= ib then return ia < ib end
+        local pa = tonumber(a and a.pos) or 0
+        local pb = tonumber(b and b.pos) or 0
+        if pa ~= pb then return pa < pb end
+        return tostring(a and a.item or "") < tostring(b and b.item or "")
+    end)
+
     local totalCreated = 0
+    local totalInsertedTrackCount = 0
     for _, info in ipairs(itemsToProcess) do
         local item = info.item
         local ipos = info.pos
@@ -14718,11 +14768,13 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         end
         local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, "Stems")
 
-        local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+        local trackIdx = getInsertIndexForTrack(track)
+        local insertedForThisItem = 0
 
         local folderTrack = nil
         if SETTINGS.createFolder then
             reaper.InsertTrackAtIndex(trackIdx, true)
+            insertedForThisItem = insertedForThisItem + 1
             folderTrack = reaper.GetTrack(0, trackIdx)
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
@@ -14740,6 +14792,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 local stemPath = stemPaths[stem.name:lower()]
                 if stemPath then
                     reaper.InsertTrackAtIndex(trackIdx + createdForThisItem, true)
+                    insertedForThisItem = insertedForThisItem + 1
                     local newTrack = reaper.GetTrack(0, trackIdx + createdForThisItem)
                 UI_Window.ensureTrackHeight(newTrack)
                     local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
@@ -14767,6 +14820,8 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if folderTrack and createdForThisItem > 0 then
             reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + createdForThisItem - 1), "I_FOLDERDEPTH", -1)
         end
+        advanceInsertIndexForTrack(track, insertedForThisItem)
+        totalInsertedTrackCount = totalInsertedTrackCount + insertedForThisItem
 
         ::continue_item::
     end
@@ -14775,7 +14830,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
     HELPERS.refreshImportedMediaItems(importedItems, importedPaths)
     reaper.UpdateArrange()
     reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection (per-item)", -1)
-    return totalCreated
+    return totalCreated, totalInsertedTrackCount
 end
 
 -- Store temp directory for async workflow
@@ -15634,6 +15689,12 @@ _sep.runSingleTrackSeparation = function(trackList)
                 end
             end
 
+            table.sort(eligibleEntries, function(a, b)
+                local ia = tonumber(a and a.start) or tonumber(a and a.pos) or 0
+                local ib = tonumber(b and b.start) or tonumber(b and b.pos) or 0
+                if ia ~= ib then return ia < ib end
+                return tostring(a and a.item or "") < tostring(b and b.item or "")
+            end)
             perItemEligible = perItemEligible + #eligibleEntries
             for itemIdx, entry in ipairs(eligibleEntries) do
                 local item = entry.item
@@ -15697,6 +15758,12 @@ _sep.runSingleTrackSeparation = function(trackList)
             -- No time selection + multiple selected items on one track:
             -- build one job per item so new-tracks mode doesn't silently process only the first item.
             local selectedItems = selectedTrackItems or getSelectedAudibleItemsOnTrack(track)
+            table.sort(selectedItems, function(a, b)
+                local pa = (a and reaper.ValidatePtr(a, "MediaItem*")) and reaper.GetMediaItemInfo_Value(a, "D_POSITION") or 0
+                local pb = (b and reaper.ValidatePtr(b, "MediaItem*")) and reaper.GetMediaItemInfo_Value(b, "D_POSITION") or 0
+                if pa ~= pb then return pa < pb end
+                return tostring(a or "") < tostring(b or "")
+            end)
 
             for itemIdx, item in ipairs(selectedItems) do
                 jobIndex = jobIndex + 1
@@ -15825,6 +15892,29 @@ _sep.runSingleTrackSeparation = function(trackList)
         showMessage("Error", "Failed to extract audio from any tracks.", "error")
         return
     end
+
+    table.sort(trackJobs, function(a, b)
+        local function trackIndex(job)
+            local tr = job and job.track or nil
+            if tr and reaper.ValidatePtr(tr, "MediaTrack*") then
+                return math.floor(reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"))
+            end
+            return 999999
+        end
+        local function itemPosition(job)
+            if job and tonumber(job.selPos) then return tonumber(job.selPos) end
+            local item = job and job.sourceItem or nil
+            if item and reaper.ValidatePtr(item, "MediaItem*") then
+                return reaper.GetMediaItemInfo_Value(item, "D_POSITION") or 0
+            end
+            return 0
+        end
+        local ta, tb = trackIndex(a), trackIndex(b)
+        if ta ~= tb then return ta < tb end
+        local pa, pb = itemPosition(a), itemPosition(b)
+        if pa ~= pb then return pa < pb end
+        return (tonumber(a and a.index) or 0) < (tonumber(b and b.index) or 0)
+    end)
 
     -- Store jobs in queue for progress tracking
     multiTrackQueue.jobs = trackJobs
@@ -17573,6 +17663,33 @@ _sep.processAllStemsResult = function()
 
     local is6Stem = isEffectiveRun6Stem()
 
+    -- Track insertion cursor for multi-job imports. Without this, each per-item
+    -- job inserts directly below the same source track, so later items push
+    -- earlier outputs downward and the visible order becomes reversed.
+    local importInsertCursorByTrack = {}
+    local function getImportInsertIndexForJob(job)
+        local tr = job and job.track or nil
+        if not tr or not reaper.ValidatePtr(tr, "MediaTrack*") then
+            return nil
+        end
+        local key = tostring(tr)
+        if importInsertCursorByTrack[key] == nil then
+            importInsertCursorByTrack[key] = math.floor(reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"))
+        end
+        return importInsertCursorByTrack[key]
+    end
+    local function advanceImportInsertCursorForJob(job, insertedTrackCount)
+        insertedTrackCount = tonumber(insertedTrackCount) or 0
+        local tr = job and job.track or nil
+        if insertedTrackCount <= 0 or not tr or not reaper.ValidatePtr(tr, "MediaTrack*") then
+            return
+        end
+        local key = tostring(tr)
+        if importInsertCursorByTrack[key] ~= nil then
+            importInsertCursorByTrack[key] = importInsertCursorByTrack[key] + insertedTrackCount
+        end
+    end
+
     -- Use a stable selection range for item placement (avoid any stale globals).
     local globalSelPos = itemPos
     local globalSelLen = itemLen
@@ -17660,7 +17777,9 @@ _sep.processAllStemsResult = function()
                     nil,
                     ""
                 )
-                local count = createStemTracksForSelection(stems, jobSelPos, jobSelLen, job.track, itemsOverride, useItemNameForTrack)
+                local preferredInsertIndex = getImportInsertIndexForJob(job)
+                local count, insertedTrackCount = createStemTracksForSelection(stems, jobSelPos, jobSelLen, job.track, itemsOverride, useItemNameForTrack, preferredInsertIndex)
+                advanceImportInsertCursorForJob(job, insertedTrackCount)
                 SW_LOG.logExecResult(
                     "timing:import_end job=" .. tostring(job.index) .. " created=" .. tostring(count),
                     nil,
