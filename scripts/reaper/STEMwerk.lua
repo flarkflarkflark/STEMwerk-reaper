@@ -17862,9 +17862,14 @@ _sep.processAllStemsResult = function()
         globalSelLen = timeSelectionEnd - timeSelectionStart
     end
 
-    -- Build OutputPlan / ImportPlan skeleton
+    -- Build OutputPlan / ImportPlan skeleton.
+    -- Production/default behavior is "per_item": one output group per selected source item.
+    -- "source_track" is a hidden internal prototype path for New Tracks import grouping only:
+    -- items on the same source track share one planned output group. Keep this as manual
+    -- developer code-flip testing only; do not expose/enable by default until New Tracks,
+    -- In-place, Replace, and quick-action semantics are finalized by product/UX decisions.
     local outputGrouping = "per_item"
-    -- Internal experimental path only (keep default per_item):
+    -- Internal/manual developer flip only:
     -- outputGrouping = "source_track"
     local outputPlan = {
         grouping = outputGrouping,
