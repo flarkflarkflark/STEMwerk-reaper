@@ -8,7 +8,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
 from .devices import select_device
 from .models import resolve_model_name
@@ -121,6 +121,7 @@ class StemSeparator:
             raise ValueError(f"Unknown quality preset '{quality}'. Use one of {sorted(QUALITY_PRESETS)}.")
         self.quality = normalized_quality
         self.on_progress: Optional[ProgressCallback] = None
+        self.on_phase: Optional[Callable[[str], None]] = None
 
     def _emit_progress(self, percent: float, message: str) -> None:
         callback = self.on_progress
@@ -128,6 +129,15 @@ class StemSeparator:
             return
         try:
             callback(percent, message)
+        except Exception:
+            pass
+
+    def _emit_phase(self, phase_name: str) -> None:
+        callback = self.on_phase
+        if callback is None:
+            return
+        try:
+            callback(phase_name)
         except Exception:
             pass
 
@@ -217,6 +227,9 @@ class StemSeparator:
         model_name = resolve_model_name(self.model)
 
         self._emit_progress(0.0, "Initializing")
+        # Closest safe model/backend setup wrapper: device selection, separator
+        # construction/cache lookup, and optional audio-separator load_model().
+        self._emit_phase("model_setup_start")
 
         if str(self.device).lower() == "cpu":
             for key in ("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES"):
@@ -342,6 +355,7 @@ class StemSeparator:
             self._emit_progress(6.0, f"Using cached model [{effective_device_name}]")
 
         self._set_separator_output(separator, output_path)
+        self._emit_phase("model_setup_end")
 
         self._emit_progress(11.0, f"Starting separation [{effective_device_name}]")
 
@@ -400,11 +414,13 @@ class StemSeparator:
         progress_worker = threading.Thread(target=progress_thread, daemon=True)
         progress_worker.start()
 
+        self._emit_phase("separate_start")
         try:
             output_files = separator.separate(str(input_path)) or []
         finally:
             processing_done.set()
             progress_worker.join(timeout=1.0)
+            self._emit_phase("separate_end")
 
         self._emit_progress(92.0, "Writing stems")
 

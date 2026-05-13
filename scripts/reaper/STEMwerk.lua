@@ -12221,6 +12221,79 @@ local function fileSizeBytes(p)
     return tonumber(sz) or -1
 end
 
+local TIMING_UNIX_OFFSET = nil
+local function writeTimingEvent(target, eventName, jobIndex, fields)
+    local jobDir = nil
+    if type(target) == "table" then
+        jobDir = target.trackDir or target.outputDir
+        jobIndex = jobIndex or target.index or target.jobIndex
+    else
+        jobDir = target
+    end
+    if not jobDir or jobDir == "" or not eventName or eventName == "" then return end
+
+    local function nowSeconds()
+        if reaper and reaper.time_precise then
+            if not TIMING_UNIX_OFFSET then
+                TIMING_UNIX_OFFSET = os.time() - reaper.time_precise()
+            end
+            return TIMING_UNIX_OFFSET + reaper.time_precise()
+        end
+        return os.time()
+    end
+
+    local function jsonEscape(value)
+        local text = tostring(value or "")
+        text = text:gsub("\\", "\\\\")
+        text = text:gsub('"', '\\"')
+        text = text:gsub("\n", "\\n")
+        text = text:gsub("\r", "\\r")
+        text = text:gsub("\t", "\\t")
+        return text
+    end
+
+    local function jsonValue(value)
+        if value == nil then return "null" end
+        local valueType = type(value)
+        if valueType == "number" then return string.format("%.6f", value) end
+        if valueType == "boolean" then return value and "true" or "false" end
+        return '"' .. jsonEscape(value) .. '"'
+    end
+
+    local values = {
+        time = nowSeconds(),
+        event = eventName,
+        job_index = jobIndex,
+        job_dir = jobDir,
+    }
+    if fields then
+        for key, value in pairs(fields) do
+            values[key] = value
+        end
+    end
+
+    local orderedKeys = { "time", "event", "job_index", "job_dir", "percent", "stage", "mode" }
+    local parts = {}
+    local emitted = {}
+    for _, key in ipairs(orderedKeys) do
+        if values[key] ~= nil then
+            parts[#parts + 1] = '"' .. key .. '":' .. jsonValue(values[key])
+            emitted[key] = true
+        end
+    end
+    for key, value in pairs(values) do
+        if not emitted[key] then
+            parts[#parts + 1] = '"' .. jsonEscape(key) .. '":' .. jsonValue(value)
+        end
+    end
+
+    local handle = io.open(jobDir .. PATH_SEP .. "timing_events.jsonl", "a")
+    if handle then
+        handle:write("{" .. table.concat(parts, ",") .. "}\n")
+        handle:close()
+    end
+end
+
 -- Run ffmpeg extraction and capture stdout+stderr to a log file for debugging.
 -- Returns: ok(bool), ffmpegLogPath(string), exitCode(number|nil)
 local function runFfmpegExtract(sourceFile, offsetSec, durationSec, outputPath)
@@ -13906,6 +13979,7 @@ WORKFLOW.configure({
     cleanupTempWorkDir            = cleanupTempWorkDir,
     drawProgressWindow            = drawProgressWindow,
     refreshPythonPathFromExtState = refreshPythonPathFromExtState,
+    recordTimingEvent             = writeTimingEvent,
 })
 
 MESSAGES.configure({
@@ -14986,6 +15060,9 @@ function processStemsResult(stems)
     end
     stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
 
+    writeTimingEvent(WORKFLOW_TEMP_DIR, "import_start", "single", {
+        mode = SETTINGS.createNewTracks and "new_tracks" or "in_place",
+    })
     if SW_TIMING then SW_TIMING.mark("single", "import_start") end
     if timeSelectionMode then
         -- Time selection mode: respect user's setting
@@ -15235,6 +15312,9 @@ function processStemsResult(stems)
     reaper.UpdateArrange()
 
     -- Show custom result window
+    writeTimingEvent(WORKFLOW_TEMP_DIR, "import_end", "single", {
+        mode = SETTINGS.createNewTracks and "new_tracks" or "in_place",
+    })
     if SW_TIMING then
         SW_TIMING.mark("single", "import_end")
         SW_TIMING.endJob("single", "success")
@@ -15929,6 +16009,7 @@ _sep.runSingleTrackSeparation = function(trackList)
             local item = planEntry.source_item
 
             local extracted, err, renderStart, renderLen
+            writeTimingEvent(itemDir, "lua_extract_start", jobIndex)
             if planEntry.isTimeSelection then
                 extracted, err, renderStart, renderLen = renderItemToWav(item, inputFile, planEntry.selStart, planEntry.selEnd)
                 if not extracted then
@@ -15939,6 +16020,7 @@ _sep.runSingleTrackSeparation = function(trackList)
                 renderStart = planEntry.item_position
                 renderLen = planEntry.item_length
             end
+            writeTimingEvent(itemDir, "lua_extract_end", jobIndex, { ok = extracted and true or false })
 
             if extracted then
                 local sourceItemName = planEntry.sourceItemName
@@ -15995,11 +16077,13 @@ _sep.runSingleTrackSeparation = function(trackList)
             local inputFile = trackDir .. PATH_SEP .. "input.wav"
 
             local extracted, err, sourceItem, allSourceItems
+            writeTimingEvent(trackDir, "lua_extract_start", jobIndex)
             if hasTimeSel then
                 extracted, err, sourceItem, allSourceItems = renderTrackTimeSelectionToWav(track, inputFile)
             else
                 extracted, err, sourceItem, allSourceItems = renderTrackSelectedItemsToWav(track, inputFile)
             end
+            writeTimingEvent(trackDir, "lua_extract_end", jobIndex, { ok = extracted and true or false })
 
             if extracted then
                 -- Get media item name(s) for display
@@ -16302,6 +16386,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     )
     job.lastCmd = pythonCmd
     SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
+    writeTimingEvent(job, "python_launch", job.index, { mode = multiTrackQueue.sequentialMode and "sequential" or "parallel" })
     if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
         debugLog("Job " .. tostring(job.index) .. " device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
     end
@@ -16351,7 +16436,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
                 " Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii;" ..
                 " Wait-Process -Id $p.Id;" ..
                 " $ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii;" ..
-                " Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii"
+                " if ($ec -eq 0) { Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii } else { Set-Content -Path '" .. doneF .. "' -Value 'ERROR' -Encoding ascii }"
 
             vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
             vbsFile:write('cmd = "powershell -NoProfile -ExecutionPolicy Bypass -Command ""' .. psInner .. '"""\n')
@@ -16433,8 +16518,12 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             script:write('  wait "$worker_pid"\n')
             script:write("  rc=$?\n")
             script:write('  echo "$rc" > "$EXITCODE"\n')
-            script:write('  if [ "$rc" -ne 0 ]; then echo "EXIT:$rc" >> "$STDERR"; fi\n')
-            script:write('  echo DONE > "$DONE"\n')
+            script:write('  if [ "$rc" -eq 0 ]; then\n')
+            script:write('    echo DONE > "$DONE"\n')
+            script:write('  else\n')
+            script:write('    echo "EXIT:$rc" >> "$STDERR"\n')
+            script:write('    echo ERROR > "$DONE"\n')
+            script:write('  fi\n')
             script:write(") &\n")
             script:close()
 
@@ -16474,7 +16563,30 @@ _sep.updateAllJobsProgress = function()
                 for line in f:lines() do
                     local percent, stage = line:match("PROGRESS:(%d+):(.+)")
                     if percent then
-                        lastProgress = { percent = tonumber(percent), stage = stage }
+                        local progressPercent = tonumber(percent)
+                        lastProgress = { percent = progressPercent, stage = stage }
+                        job.timingSeen = job.timingSeen or {}
+                        local function markProgressEvent(flagName, eventName)
+                            if not job.timingSeen[flagName] then
+                                job.timingSeen[flagName] = true
+                                writeTimingEvent(job, eventName, job.index, {
+                                    percent = progressPercent,
+                                    stage = stage,
+                                })
+                            end
+                        end
+                        if progressPercent and progressPercent > 0 then
+                            markProgressEvent("first_progress_seen", "first_progress_seen")
+                        end
+                        if progressPercent and progressPercent >= 50 then
+                            markProgressEvent("progress_50_seen", "progress_50_seen")
+                        end
+                        if progressPercent and progressPercent >= 87 then
+                            markProgressEvent("progress_87_or_88_seen", "progress_87_or_88_seen")
+                        end
+                        if progressPercent and progressPercent >= 90 then
+                            markProgressEvent("progress_90_or_92_seen", "progress_90_or_92_seen")
+                        end
                     end
                 end
                 f:close()
@@ -16491,6 +16603,7 @@ _sep.updateAllJobsProgress = function()
                 if not job.done then
                     job.done = true
                     job.stage = "Waiting for import"
+                    writeTimingEvent(job, "done_seen", job.index)
                     SW_TIMING.mark(job.index, "output_detected")
                     SW_LOG.logExecResult(
                         "timing:job_done job=" .. tostring(job.index) .. " dir=" .. tostring(job.trackDir),
@@ -18068,6 +18181,9 @@ _sep.processAllStemsResult = function()
         local stems = importPlan.stems
 
         if importPlan.hasStems then
+            writeTimingEvent(job, "import_start", job.index, {
+                mode = outputPlan.destination == "new_tracks" and "new_tracks" or "in_place",
+            })
             if SW_TIMING then SW_TIMING.mark(job.index, "import_start") end
             if outputPlan.destination == "new_tracks" then
                 debugLog("  Calling createStemTracksForSelection..")
@@ -18233,6 +18349,9 @@ _sep.processAllStemsResult = function()
                     debugLog("  ERROR: No valid source item for in-place replacement")
                 end
             end
+            writeTimingEvent(job, "import_end", job.index, {
+                mode = outputPlan.destination == "new_tracks" and "new_tracks" or "in_place",
+            })
             if SW_TIMING then SW_TIMING.mark(job.index, "import_end") end
             table.insert(trackNames, job.trackName)
         else
@@ -18906,9 +19025,11 @@ function runSeparationWorkflow()
 	        debugLog("Rendering time selection to WAV..")
 	        timeSelectionItemMap = nil
 	        selectedItemsNoTimeMap = nil
+	        writeTimingEvent(WORKFLOW_TEMP_DIR, "lua_extract_start", "single")
 	        SW_TIMING.mark("single", "render_start")
 	        extracted, err, sourceItem, trackList, trackItems = renderTimeSelectionToWav(WORKFLOW_TEMP_INPUT)
 	        SW_TIMING.mark("single", "render_end")
+	        writeTimingEvent(WORKFLOW_TEMP_DIR, "lua_extract_end", "single", { ok = extracted and true or false })
         debugLog("Render result: extracted=" .. tostring(extracted) .. ", err=" .. tostring(err))
 
         -- Check for multi-track mode
@@ -19073,9 +19194,11 @@ function runSeparationWorkflow()
         local origItemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
         local origItemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
 
+        writeTimingEvent(WORKFLOW_TEMP_DIR, "lua_extract_start", "single")
         SW_TIMING.mark("single", "render_start")
         extracted, err = renderItemToWav(selectedItem, WORKFLOW_TEMP_INPUT)
         SW_TIMING.mark("single", "render_end")
+        writeTimingEvent(WORKFLOW_TEMP_DIR, "lua_extract_end", "single", { ok = extracted and true or false })
         -- Check if we rendered a sub-selection (not the whole item)
         local renderPos, renderLen = nil, nil  -- These would come from renderItemToWav if supported
         if renderPos and renderLen then
@@ -19145,6 +19268,7 @@ function runSeparationWorkflow()
         progressState.uiColor = getTrackUIColor(uiTrack)
     end
     -- Start separation with progress UI (async)
+    writeTimingEvent(WORKFLOW_TEMP_DIR, "python_launch", "single", { mode = "single" })
     WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, SETTINGS.model)
     debugLog("runSeparationWithProgress called")
 end

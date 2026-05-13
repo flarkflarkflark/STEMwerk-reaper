@@ -45,6 +45,42 @@ local function touchProgressActivity(reason)
     end
 end
 
+local function recordTimingEvent(eventName, fields)
+    if C.recordTimingEvent and C.progressState and C.progressState.outputDir then
+        C.recordTimingEvent(C.progressState.outputDir, eventName, "single", fields)
+    end
+end
+
+local function markSingleProgressMilestones(pct, stage)
+    if not SW_TIMING then
+        return
+    end
+    pct = tonumber(pct) or 0
+    local td = C.progressState.timingDone or {}
+
+    if pct > 0 and not td.first_progress then
+        td.first_progress = true
+        SW_TIMING.mark("single", "first_progress")
+        recordTimingEvent("first_progress_seen", { percent = pct, stage = stage })
+    end
+    if pct >= 50 and not td.p50 then
+        td.p50 = true
+        SW_TIMING.mark("single", "progress_50")
+        recordTimingEvent("progress_50_seen", { percent = pct, stage = stage })
+    end
+    if pct >= 87 and not td.p87 then
+        td.p87 = true
+        recordTimingEvent("progress_87_or_88_seen", { percent = pct, stage = stage })
+    end
+    if pct >= 90 and not td.p90 then
+        td.p90 = true
+        SW_TIMING.mark("single", "progress_90")
+        recordTimingEvent("progress_90_or_92_seen", { percent = pct, stage = stage })
+    end
+
+    C.progressState.timingDone = td
+end
+
 local function refreshProgressActivityFromFiles()
     local now = os.time()
     local changed = false
@@ -153,7 +189,11 @@ function WORKFLOW.updateProgressFromFile()
     for line in f:lines() do
         local percent, stage = line:match("PROGRESS:(%d+):(.+)")
         if percent then
-            lastProgress = { percent = tonumber(percent), stage = stage }
+            local pct = tonumber(percent) or 0
+            lastProgress = { percent = pct, stage = stage }
+            -- Record milestones at the first observed threshold crossing, using
+            -- the actual line values (e.g. 92/Writing stems) instead of a later 100/Complete fallback.
+            markSingleProgressMilestones(pct, stage)
         end
     end
     f:close()
@@ -411,7 +451,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
                 "Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii; " ..
                 "Wait-Process -Id $p.Id; " ..
                 "$ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii; " ..
-                "Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii"
+                "if ($ec -eq 0) { Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii } else { Set-Content -Path '" .. doneF .. "' -Value 'ERROR' -Encoding ascii }"
 
             -- VBS: create shell and run PowerShell command invisibly (0 = hidden window)
             vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
@@ -522,8 +562,12 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             script:write('  wait "$worker_pid"\n')
             script:write("  rc=$?\n")
             script:write('  echo "$rc" > "$EXITCODE"\n')
-            script:write('  if [ "$rc" -ne 0 ]; then echo "EXIT:$rc" >> "$STDERR"; fi\n')
-            script:write('  echo DONE > "$DONE"\n')
+            script:write('  if [ "$rc" -eq 0 ]; then\n')
+            script:write('    echo DONE > "$DONE"\n')
+            script:write('  else\n')
+            script:write('    echo "EXIT:$rc" >> "$STDERR"\n')
+            script:write('    echo ERROR > "$DONE"\n')
+            script:write('  fi\n')
             script:write(") &\n")
             script:close()
 
@@ -567,14 +611,6 @@ function WORKFLOW.progressLoop()
         WORKFLOW.updateProgressFromFile()
         if prevPercent < 87 and C.progressState.percent >= 87 then
             debugLog("[LOG] Progress reached ~87% (" .. tostring(C.progressState.percent) .. ") stage=" .. tostring(C.progressState.stage))
-        end
-        if SW_TIMING then
-            local pct = C.progressState.percent or 0
-            local td = C.progressState.timingDone or {}
-            if pct > 0  and not td.first_progress then td.first_progress = true; SW_TIMING.mark("single", "first_progress") end
-            if pct >= 50 and not td.p50          then td.p50 = true;           SW_TIMING.mark("single", "progress_50") end
-            if pct >= 90 and not td.p90          then td.p90 = true;           SW_TIMING.mark("single", "progress_90") end
-            C.progressState.timingDone = td
         end
     end
 
@@ -621,6 +657,8 @@ function WORKFLOW.progressLoop()
     if WORKFLOW.checkSeparationDone() then
         -- Done!
         C.progressState.running = false
+        WORKFLOW.updateProgressFromFile()
+        recordTimingEvent("done_seen")
 
         -- Remember any size/position changes made during processing
         C.captureWindowGeometry(WINDOW_PROCESSING)

@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -26,6 +27,7 @@ StemSeparator = None
 get_available_devices = None
 select_device = None
 core_devices = None
+stemwerk_core_file = None
 _core_loaded = False
 
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
@@ -33,10 +35,11 @@ MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 
 
 def _require_core() -> None:
-    global StemSeparator, get_available_devices, select_device, core_devices, _core_loaded
+    global StemSeparator, get_available_devices, select_device, core_devices, stemwerk_core_file, _core_loaded
     if _core_loaded:
         return
     try:
+        import stemwerk_core as _stemwerk_core
         from stemwerk_core import StemSeparator as _StemSeparator
         from stemwerk_core import get_available_devices as _get_available_devices
         from stemwerk_core import select_device as _select_device
@@ -50,6 +53,7 @@ def _require_core() -> None:
     get_available_devices = _get_available_devices
     select_device = _select_device
     core_devices = _core_devices
+    stemwerk_core_file = getattr(_stemwerk_core, "__file__", None)
     _core_loaded = True
 
 
@@ -74,6 +78,7 @@ class _TeeTextIO:
 
 
 _progress_file = None
+_phase_file = None
 
 
 def _windows_no_window_kwargs() -> Dict[str, int]:
@@ -101,7 +106,7 @@ def _resolve_stem_path(output_dir: Path, stem_path: Path | str) -> Path:
 
 def _setup_reaper_io(output_dir: Optional[str]):
     """If output_dir is set, write progress/log/done markers into that folder."""
-    global _progress_file
+    global _phase_file, _progress_file
     if not output_dir:
         return None
 
@@ -109,11 +114,14 @@ def _setup_reaper_io(output_dir: Optional[str]):
     out.mkdir(parents=True, exist_ok=True)
     stdout_path = out / "stdout.txt"
     stderr_path = out / "separation_log.txt"
+    phase_path = out / "phase_events.jsonl"
     done_path = out / "done.txt"
 
     stdout_f = open(stdout_path, "w", encoding="utf-8", buffering=1)
     stderr_f = open(stderr_path, "w", encoding="utf-8", buffering=1)
+    phase_f = open(phase_path, "w", encoding="utf-8", buffering=1)
     _progress_file = stdout_f
+    _phase_file = phase_f
 
     sys.stderr = _TeeTextIO(sys.stderr, stderr_f)
 
@@ -250,6 +258,22 @@ def emit_progress(percent: float, stage: str = ""):
     try:
         sys.stdout.write(line)
         sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def emit_phase(phase_name: str):
+    """Write timestamped phase markers to a per-job JSONL file."""
+    global _phase_file
+    if _phase_file is None:
+        return
+    event = {
+        "time": time.time(),
+        "phase": str(phase_name),
+    }
+    try:
+        _phase_file.write(json.dumps(event, separators=(",", ":")) + "\n")
+        _phase_file.flush()
     except Exception:
         pass
 
@@ -757,6 +781,7 @@ def main():
         print(f"STEMWERK_DIAG runtime_base_prefix={getattr(sys, 'base_prefix', '')}", file=sys.stderr)
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
+    emit_phase("python_start")
     ffmpeg_path = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
     if ffmpeg_path is not None:
@@ -796,6 +821,8 @@ def main():
         return 1
 
     _require_core()
+    if stemwerk_core_file:
+        print(f"STEMWERK_DIAG stemwerk_core_file={stemwerk_core_file}", file=sys.stderr)
 
     if not os.path.exists(args.input):
         print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
@@ -836,7 +863,9 @@ def main():
         _enable_mps_runtime_fallback(device_preference, resolved_device)
         runtime_env = _emit_runtime_diagnostics(resolved_device)
 
+        emit_phase("model_setup_start")
         sep = StemSeparator(model=args.model, device=resolved_device)
+        emit_phase("model_setup_end")
 
         def reaper_progress(pct: float, msg: str):
             emit_progress(pct, msg)
@@ -844,8 +873,13 @@ def main():
         sep.on_progress = reaper_progress
 
         with _working_directory(output_root):
+            emit_phase("separate_start")
             result = sep.separate(args.input, str(output_root), stems=stems or None)
-        
+            emit_phase("separate_end")
+
+        # audio-separator writes model outputs inside sep.separate(); this phase
+        # brackets the REAPER-facing output mapping and final stem renames.
+        emit_phase("stem_write_start")
         # Mapping logica voor REAPER compatibiliteit
         stem_mapping = {
             'vocals': ['vocals', 'vocal', 'Vocals'],
@@ -881,9 +915,12 @@ def main():
             reaper_stems[target_name] = str(new_path)
             print(f"  {target_name}:  {new_path}", file=sys.stderr)
 
+        emit_phase("stem_write_end")
+
         # Print de JSON die Lua verwacht
         print(json.dumps(reaper_stems))
 
+        emit_phase("python_done")
         if write_done:
             write_done("DONE")
 
@@ -906,6 +943,7 @@ def main():
                 print(f"STEMWERK_MPS_CONTEXT {key}={value}", file=sys.stderr)
         print(f"ERROR: {exc}", file=sys.stderr)
         print(traceback_text, file=sys.stderr, end="" if traceback_text.endswith("\n") else "\n")
+        emit_phase("python_error")
         if write_done:
             write_done("ERROR")
         return 1
