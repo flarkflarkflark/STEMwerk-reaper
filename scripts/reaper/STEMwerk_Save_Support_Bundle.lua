@@ -1412,7 +1412,7 @@ end
 
 -- Persistent run logs written by SW_LOG after each run (success or failure).
 local cacheLogDir = getStemwerkCacheLogDir()
-local persistentRunLogs = { run_summary = false, separation_log = false, stdout = false }
+local persistentRunLogs = { run_summary = false, separation_log = false, stdout = false, stemwerk_log = false }
 local persistentDiagFiles = {
     "run_summary.txt",
     "output_detection.txt",
@@ -1423,6 +1423,7 @@ local persistentDiagFiles = {
     "done.txt",
     "separation_timing_summary.txt",
     "separation_timing_jobs.jsonl",
+    "stemwerk.log",
 }
 for _, name in ipairs(persistentDiagFiles) do
     local src = joinPath(cacheLogDir, name)
@@ -1435,11 +1436,13 @@ for _, name in ipairs(persistentDiagFiles) do
         if name == "run_summary.txt" then persistentRunLogs.run_summary = true end
         if name == "separation_log.txt" then persistentRunLogs.separation_log = true end
         if name == "stdout.txt" then persistentRunLogs.stdout = true end
+        if name == "stemwerk.log" then persistentRunLogs.stemwerk_log = true end
     end
 end
 appendKey(diagnostics, "Persistent run_summary.txt", persistentRunLogs.run_summary and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
+appendKey(diagnostics, "Persistent stemwerk.log", persistentRunLogs.stemwerk_log and cacheLogDir or "missing")
 appendLine(diagnostics, "")
 
 appendLine(diagnostics, "Settings Snapshot")
