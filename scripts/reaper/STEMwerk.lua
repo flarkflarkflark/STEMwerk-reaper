@@ -14494,11 +14494,13 @@ function deleteSelectionInItems(startTime, endTime)
 end
 
 -- Create new tracks for stems from time selection (no original item)
-function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack, preferredInsertIndex)
+function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack, preferredInsertIndex, options)
     reaper.Undo_BeginBlock()
     lastNoAudibleOverlap = false
     local importedItems = {}
     local importedPaths = {}
+    local shouldReturnTrackTargets = type(options) == "table" and options.returnTrackTargets == true
+    local createdTrackTargets = shouldReturnTrackTargets and { contexts = {} } or nil
     local soloActive = getProcessingSoloActive()
     local function trackAudible(track)
         return AUDIBILITY.isTrackAudible(track, soloActive)
@@ -14539,6 +14541,45 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if insertCursorByTrack[key] ~= nil then
             insertCursorByTrack[key] = insertCursorByTrack[key] + insertedTrackCount
         end
+    end
+    local function isValidTrack(track)
+        return track and reaper.ValidatePtr(track, "MediaTrack*")
+    end
+    local function getPlannedTrackTargets(context)
+        if type(options) ~= "table" then return nil end
+        local resolver = options.resolveTrackTargets
+        if type(resolver) == "function" then
+            local ok, targets = pcall(resolver, context)
+            if ok and type(targets) == "table" then
+                return targets
+            end
+        end
+        local planned = options.plannedTracks
+        if type(planned) ~= "table" then return nil end
+        if context and context.item and type(planned.byItem) == "table" then
+            local byItemTargets = planned.byItem[tostring(context.item)]
+            if type(byItemTargets) == "table" then
+                return byItemTargets
+            end
+        end
+        if context and context.kind == "selection_fallback" and type(planned.selection) == "table" then
+            return planned.selection
+        end
+        return nil
+    end
+    local function getPlannedStemTrack(targets, stem)
+        if type(targets) ~= "table" or type(targets.stemTracks) ~= "table" then return nil end
+        return targets.stemTracks[stem.name:lower()] or targets.stemTracks[stem.name]
+    end
+    local function recordCreatedTargets(context, folderTrack, stemTracks)
+        if not createdTrackTargets then return end
+        createdTrackTargets.contexts[#createdTrackTargets.contexts + 1] = {
+            kind = context and context.kind or nil,
+            item = context and context.item or nil,
+            sourceTrack = context and context.sourceTrack or nil,
+            folderTrack = folderTrack,
+            stemTracks = stemTracks or {}
+        }
     end
     -- If there is a time-selection and selected items overlap it, create a set
     -- of stem tracks directly under each source track for each such selected item.
@@ -14676,6 +14717,13 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         for _, stem in ipairs(STEMS) do if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end end
 
         local folderTrack = nil
+        local stemTrackTargets = {}
+        local plannedTargets = getPlannedTrackTargets({
+            kind = "selection_fallback",
+            sourceTrack = refTrack,
+            selectionPos = selPos,
+            selectionLen = selLen
+        })
         local sourceTrackName = "Selection"
         if refTrack then
             local _, tn = reaper.GetTrackName(refTrack)
@@ -14684,14 +14732,21 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         local sourceItemName = sourceTrackName -- Fallback for items when using selection
 
         if SETTINGS.createFolder then
-            reaper.InsertTrackAtIndex(trackIdx, true)
-            insertedTrackCount = insertedTrackCount + 1
-            folderTrack = reaper.GetTrack(0, trackIdx)
+            local plannedFolderTrack = plannedTargets and plannedTargets.folderTrack or nil
+            if isValidTrack(plannedFolderTrack) then
+                folderTrack = plannedFolderTrack
+            else
+                reaper.InsertTrackAtIndex(trackIdx, true)
+                insertedTrackCount = insertedTrackCount + 1
+                folderTrack = reaper.GetTrack(0, trackIdx)
+            end
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
             ensureTrackHeight(folderTrack)
-            trackIdx = trackIdx + 1
+            if not isValidTrack(plannedFolderTrack) then
+                trackIdx = trackIdx + 1
+            end
         end
 
         local importedCount = 0
@@ -14699,9 +14754,15 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             if stem.selected then
                 local stemPath = stemPaths[stem.name:lower()]
                 if stemPath then
-                    reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
-                    insertedTrackCount = insertedTrackCount + 1
-                    local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
+                    local plannedStemTrack = getPlannedStemTrack(plannedTargets, stem)
+                    local newTrack = nil
+                    if isValidTrack(plannedStemTrack) then
+                        newTrack = plannedStemTrack
+                    else
+                        reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
+                        insertedTrackCount = insertedTrackCount + 1
+                        newTrack = reaper.GetTrack(0, trackIdx + importedCount)
+                    end
                     UI_Window.ensureTrackHeight(newTrack)
                     local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
@@ -14717,6 +14778,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     HELPERS.applyItemColorIfEnabled(newItem, color)
                     importedItems[#importedItems + 1] = newItem
                     importedPaths[#importedPaths + 1] = stemPath
+                    stemTrackTargets[stem.name:lower()] = newTrack
                     importedCount = importedCount + 1
                 end
             end
@@ -14725,12 +14787,16 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if folderTrack and importedCount > 0 then
             reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + importedCount - 1), "I_FOLDERDEPTH", -1)
         end
+        recordCreatedTargets({
+            kind = "selection_fallback",
+            sourceTrack = refTrack
+        }, folderTrack, stemTrackTargets)
 
         reaper.PreventUIRefresh(-1)
         HELPERS.refreshImportedMediaItems(importedItems, importedPaths)
         reaper.UpdateArrange()
         reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection", -1)
-        return importedCount, insertedTrackCount
+        return importedCount, insertedTrackCount, createdTrackTargets
     end
 
     -- Process each selected item that overlaps the time selection. Sort by
@@ -14783,15 +14849,30 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         local insertedForThisItem = 0
 
         local folderTrack = nil
+        local stemTrackTargets = {}
+        local plannedTargets = getPlannedTrackTargets({
+            kind = "per_item",
+            item = item,
+            sourceTrack = track,
+            itemPos = ipos,
+            itemLen = ilen
+        })
         if SETTINGS.createFolder then
-            reaper.InsertTrackAtIndex(trackIdx, true)
-            insertedForThisItem = insertedForThisItem + 1
-            folderTrack = reaper.GetTrack(0, trackIdx)
+            local plannedFolderTrack = plannedTargets and plannedTargets.folderTrack or nil
+            if isValidTrack(plannedFolderTrack) then
+                folderTrack = plannedFolderTrack
+            else
+                reaper.InsertTrackAtIndex(trackIdx, true)
+                insertedForThisItem = insertedForThisItem + 1
+                folderTrack = reaper.GetTrack(0, trackIdx)
+            end
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
             UI_Window.ensureTrackHeight(folderTrack)
-            trackIdx = trackIdx + 1
+            if not isValidTrack(plannedFolderTrack) then
+                trackIdx = trackIdx + 1
+            end
         end
 
         local createdForThisItem = 0
@@ -14802,9 +14883,15 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             if stem.selected then
                 local stemPath = stemPaths[stem.name:lower()]
                 if stemPath then
-                    reaper.InsertTrackAtIndex(trackIdx + createdForThisItem, true)
-                    insertedForThisItem = insertedForThisItem + 1
-                    local newTrack = reaper.GetTrack(0, trackIdx + createdForThisItem)
+                    local plannedStemTrack = getPlannedStemTrack(plannedTargets, stem)
+                    local newTrack = nil
+                    if isValidTrack(plannedStemTrack) then
+                        newTrack = plannedStemTrack
+                    else
+                        reaper.InsertTrackAtIndex(trackIdx + createdForThisItem, true)
+                        insertedForThisItem = insertedForThisItem + 1
+                        newTrack = reaper.GetTrack(0, trackIdx + createdForThisItem)
+                    end
                 UI_Window.ensureTrackHeight(newTrack)
                     local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
                     reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
@@ -14822,6 +14909,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
 
                     importedItems[#importedItems + 1] = newItem
                     importedPaths[#importedPaths + 1] = stemPath
+                    stemTrackTargets[stem.name:lower()] = newTrack
                     createdForThisItem = createdForThisItem + 1
                     totalCreated = totalCreated + 1
                 end
@@ -14831,6 +14919,11 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if folderTrack and createdForThisItem > 0 then
             reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + createdForThisItem - 1), "I_FOLDERDEPTH", -1)
         end
+        recordCreatedTargets({
+            kind = "per_item",
+            item = item,
+            sourceTrack = track
+        }, folderTrack, stemTrackTargets)
         advanceInsertIndexForTrack(track, insertedForThisItem)
         totalInsertedTrackCount = totalInsertedTrackCount + insertedForThisItem
 
@@ -14841,7 +14934,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
     HELPERS.refreshImportedMediaItems(importedItems, importedPaths)
     reaper.UpdateArrange()
     reaper.Undo_EndBlock("STEMwerk: Create stem tracks from selection (per-item)", -1)
-    return totalCreated, totalInsertedTrackCount
+    return totalCreated, totalInsertedTrackCount, createdTrackTargets
 end
 
 -- Store temp directory for async workflow
