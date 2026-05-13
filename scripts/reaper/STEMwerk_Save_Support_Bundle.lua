@@ -14,6 +14,32 @@ local function msgBox(title, text, boxType)
     return 0
 end
 
+local function getLanguageCode()
+    if reaper and reaper.GetExtState then
+        local lang = tostring(reaper.GetExtState(EXT_SECTION, "language") or ""):lower()
+        if lang ~= "" then return lang end
+    end
+    return "en"
+end
+
+local function trSupportBundleCollecting()
+    local lang = getLanguageCode()
+    if lang == "nl" then return "Supportbundel wordt verzameld…" end
+    if lang == "de" then return "Support-Bundle wird gesammelt…" end
+    return "Collecting support bundle…"
+end
+
+local function showCollectingStatus()
+    local text = trSupportBundleCollecting()
+    if reaper and reaper.TrackCtl_SetToolTip then
+        local x, y = 0, 0
+        if reaper.GetMousePosition then
+            x, y = reaper.GetMousePosition()
+        end
+        reaper.TrackCtl_SetToolTip(text, x + 8, y + 8, true)
+    end
+end
+
 local function getScriptDir()
     local info = debug.getinfo(1, "S")
     return (info and info.source and info.source:match("@?(.*[/\\])")) or ""
@@ -1443,6 +1469,7 @@ local function collectTempInventory(bundleDir, copiedFiles)
     return inventoryLines, copied, tempBase, summary
 end
 
+local function performBundleCollection()
 local resourcePath = getResourcePath()
 local _, bundleSuffix = timestampParts(os.time())
 local bundleName = "STEMwerk-support-bundle-" .. bundleSuffix
@@ -1450,8 +1477,7 @@ local bundleParent = joinPath(resourcePath, "STEMwerk-support-bundles")
 local bundleDir = joinPath(bundleParent, bundleName)
 
 if not ensureDir(bundleParent) or not ensureDir(bundleDir) then
-    msgBox("STEMwerk Support Bundle", "Could not create bundle folder:\n" .. tostring(bundleDir), 0)
-    return
+    return false, "Could not create bundle folder:\n" .. tostring(bundleDir)
 end
 
 local reapackVersion = detectReaPackVersion(resourcePath)
@@ -1663,8 +1689,69 @@ writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory,
 writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
 writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
 
-local prompt = "STEMwerk support bundle created:\n\n" .. bundleDir .. "\n\nOpen the folder now?"
-local choice = msgBox("STEMwerk Support Bundle", prompt, 4)
-if choice == 6 then
-    openPath(bundleDir)
+return true, bundleDir
 end
+
+local function runWithBusyWindow()
+    local busyTitle = "STEMwerk Support Bundle"
+    local busyText = trSupportBundleCollecting()
+    local busyOpen = false
+
+    local function drawBusyWindow()
+        if not gfx then return end
+        gfx.set(0.08, 0.08, 0.08, 1.0)
+        gfx.rect(0, 0, gfx.w, gfx.h, 1)
+        gfx.set(1, 1, 1, 1)
+        gfx.setfont(1, "Arial", 20)
+        gfx.x = 20
+        gfx.y = 18
+        gfx.drawstr(busyTitle)
+        gfx.setfont(1, "Arial", 16)
+        gfx.x = 20
+        gfx.y = 56
+        gfx.drawstr(busyText)
+        gfx.update()
+    end
+
+    local function closeBusyWindow()
+        if busyOpen and gfx and gfx.quit then
+            pcall(gfx.quit)
+        end
+        busyOpen = false
+    end
+
+    local function showResult(resultOk, resultValue)
+        if resultOk then
+            local bundleDir = tostring(resultValue or "")
+            local prompt = "STEMwerk support bundle created:\n\n" .. bundleDir .. "\n\nOpen the folder now?"
+            local choice = msgBox("STEMwerk Support Bundle", prompt, 4)
+            if choice == 6 then
+                openPath(bundleDir)
+            end
+        else
+            msgBox("STEMwerk Support Bundle", "Could not create the STEMwerk support bundle.\n\nError:\n" .. tostring(resultValue), 0)
+        end
+    end
+
+    local function runTask()
+        local resultOk, resultValue = performBundleCollection()
+        closeBusyWindow()
+        if reaper and reaper.defer then
+            reaper.defer(function() showResult(resultOk, resultValue) end)
+        else
+            showResult(resultOk, resultValue)
+        end
+    end
+
+    if gfx and gfx.init and reaper and reaper.defer then
+        gfx.init(busyTitle, 480, 120, 0)
+        busyOpen = true
+        drawBusyWindow()
+        reaper.defer(runTask)
+    else
+        showCollectingStatus()
+        runTask()
+    end
+end
+
+runWithBusyWindow()
