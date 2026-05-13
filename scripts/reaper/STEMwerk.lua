@@ -7676,6 +7676,17 @@ local function drawMessageWindow()
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
 
+    local function setTooltip(x, y, ww, hh, text)
+        if not text or text == "" then return false end
+        if mx >= x and mx <= x + ww and my >= y and my <= y + hh then
+            tooltipText = text
+            tooltipX = mx + PS(10)
+            tooltipY = my + PS(15)
+            return true
+        end
+        return false
+    end
+
     -- Top-right controls
     local iconScale = 0.66
     local themeSize = math.max(PS(12), math.floor(PS(20) * iconScale + 0.5))
