@@ -14571,6 +14571,15 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         if type(targets) ~= "table" or type(targets.stemTracks) ~= "table" then return nil end
         return targets.stemTracks[stem.name:lower()] or targets.stemTracks[stem.name]
     end
+    local function shouldKeepPlannedFolderName(targets)
+        return type(targets) == "table" and targets.preserveFolderName == true
+    end
+    local function shouldKeepPlannedStemTrackNames(targets)
+        return type(targets) == "table" and targets.preserveStemTrackNames == true
+    end
+    local function shouldKeepPlannedFolderDepth(targets)
+        return type(targets) == "table" and targets.preserveFolderDepth == true
+    end
     local function recordCreatedTargets(context, folderTrack, stemTracks)
         if not createdTrackTargets then return end
         createdTrackTargets.contexts[#createdTrackTargets.contexts + 1] = {
@@ -14740,10 +14749,16 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 insertedTrackCount = insertedTrackCount + 1
                 folderTrack = reaper.GetTrack(0, trackIdx)
             end
-            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
-            reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
-            HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
-            ensureTrackHeight(folderTrack)
+            if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
+                reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
+            end
+            if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderDepth(plannedTargets)) then
+                reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
+            end
+            if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
+                HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
+                ensureTrackHeight(folderTrack)
+            end
             if not isValidTrack(plannedFolderTrack) then
                 trackIdx = trackIdx + 1
             end
@@ -14764,10 +14779,14 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                         newTrack = reaper.GetTrack(0, trackIdx + importedCount)
                     end
                     UI_Window.ensureTrackHeight(newTrack)
-                    local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
-                    reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+                    if not (isValidTrack(plannedStemTrack) and shouldKeepPlannedStemTrackNames(plannedTargets)) then
+                        local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceTrackName) or (sourceTrackName .. " - " .. stem.name)
+                        reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+                    end
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-                    HELPERS.applyTrackColorIfEnabled(newTrack, color)
+                    if not (isValidTrack(plannedStemTrack) and shouldKeepPlannedStemTrackNames(plannedTargets)) then
+                        HELPERS.applyTrackColorIfEnabled(newTrack, color)
+                    end
                     local newItem = reaper.AddMediaItemToTrack(newTrack)
                     reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selPos)
                     reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
@@ -14784,7 +14803,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             end
         end
 
-        if folderTrack and importedCount > 0 then
+        if folderTrack and importedCount > 0 and not shouldKeepPlannedFolderDepth(plannedTargets) then
             reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + importedCount - 1), "I_FOLDERDEPTH", -1)
         end
         recordCreatedTargets({
@@ -14866,10 +14885,16 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 insertedForThisItem = insertedForThisItem + 1
                 folderTrack = reaper.GetTrack(0, trackIdx)
             end
-            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
-            reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
-            HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
-            UI_Window.ensureTrackHeight(folderTrack)
+            if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
+                reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
+            end
+            if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderDepth(plannedTargets)) then
+                reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
+            end
+            if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
+                HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
+                UI_Window.ensureTrackHeight(folderTrack)
+            end
             if not isValidTrack(plannedFolderTrack) then
                 trackIdx = trackIdx + 1
             end
@@ -14892,11 +14917,15 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                         insertedForThisItem = insertedForThisItem + 1
                         newTrack = reaper.GetTrack(0, trackIdx + createdForThisItem)
                     end
-                UI_Window.ensureTrackHeight(newTrack)
+                    UI_Window.ensureTrackHeight(newTrack)
                     local outputNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, stem.name)
-                    reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
+                    if not (isValidTrack(plannedStemTrack) and shouldKeepPlannedStemTrackNames(plannedTargets)) then
+                        reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", outputNames.trackName, true)
+                    end
                     local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-                    HELPERS.applyTrackColorIfEnabled(newTrack, color)
+                    if not (isValidTrack(plannedStemTrack) and shouldKeepPlannedStemTrackNames(plannedTargets)) then
+                        HELPERS.applyTrackColorIfEnabled(newTrack, color)
+                    end
 
                     local newItem = reaper.AddMediaItemToTrack(newTrack)
                     reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", ipos)
@@ -14916,7 +14945,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
             end
         end
 
-        if folderTrack and createdForThisItem > 0 then
+        if folderTrack and createdForThisItem > 0 and not shouldKeepPlannedFolderDepth(plannedTargets) then
             reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + createdForThisItem - 1), "I_FOLDERDEPTH", -1)
         end
         recordCreatedTargets({
@@ -17834,8 +17863,11 @@ _sep.processAllStemsResult = function()
     end
 
     -- Build OutputPlan / ImportPlan skeleton
+    local outputGrouping = "per_item"
+    -- Internal experimental path only (keep default per_item):
+    -- outputGrouping = "source_track"
     local outputPlan = {
-        grouping = "per_item",
+        grouping = outputGrouping,
         destination = SETTINGS.createNewTracks and "new_tracks" or "in_place",
         imports = {}
     }
@@ -17933,6 +17965,98 @@ _sep.processAllStemsResult = function()
         table.insert(outputPlan.imports, importPlan)
     end
 
+    local function getPlanTrackSortTuple(importPlan)
+        local tr = importPlan and importPlan.job and importPlan.job.track or nil
+        local idx = tr and reaper.ValidatePtr(tr, "MediaTrack*")
+            and math.floor(reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"))
+            or 999999
+        local pos = tonumber(importPlan and importPlan.jobSelPos) or 0
+        local itemKey = importPlan and importPlan.job and importPlan.job.sourceItem and tostring(importPlan.job.sourceItem) or ""
+        return idx, pos, itemKey
+    end
+
+    if outputPlan.destination == "new_tracks" and outputPlan.grouping == "source_track" then
+        table.sort(outputPlan.imports, function(a, b)
+            local ai, ap, ak = getPlanTrackSortTuple(a)
+            local bi, bp, bk = getPlanTrackSortTuple(b)
+            if ai ~= bi then return ai < bi end
+            if ap ~= bp then return ap < bp end
+            return ak < bk
+        end)
+    end
+
+    local sharedTargetsByTrack = {}
+    local function getJobTrackKey(job)
+        local tr = job and job.track or nil
+        if not (tr and reaper.ValidatePtr(tr, "MediaTrack*")) then return nil end
+        return tostring(tr)
+    end
+    local function getTrackDisplayName(job)
+        local tr = job and job.track or nil
+        if tr and reaper.ValidatePtr(tr, "MediaTrack*") then
+            local _, tn = reaper.GetTrackName(tr)
+            if tn and tn ~= "" then return tn end
+        end
+        return (job and (job.sourceTrackName or job.trackName)) or "Track"
+    end
+    local function buildSharedTargetsForTrack(job, stems, preferredInsertIndex)
+        local tr = job and job.track or nil
+        if not (tr and reaper.ValidatePtr(tr, "MediaTrack*")) then return nil, 0 end
+        local trackIdx = preferredInsertIndex
+        if trackIdx == nil then
+            trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"))
+        end
+
+        local insertedTrackCount = 0
+        local targets = {
+            folderTrack = nil,
+            stemTracks = {},
+            preserveFolderName = true,
+            preserveStemTrackNames = true,
+            preserveFolderDepth = true,
+        }
+        local sourceTrackName = getTrackDisplayName(job)
+
+        if SETTINGS.createFolder then
+            reaper.InsertTrackAtIndex(trackIdx, true)
+            insertedTrackCount = insertedTrackCount + 1
+            local folderTrack = reaper.GetTrack(0, trackIdx)
+            targets.folderTrack = folderTrack
+            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
+            reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
+            HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
+            UI_Window.ensureTrackHeight(folderTrack)
+            trackIdx = trackIdx + 1
+        end
+
+        local childCount = 0
+        for _, stem in ipairs(STEMS) do
+            if stem.selected and stems and stems[stem.name:lower()] then
+                reaper.InsertTrackAtIndex(trackIdx + childCount, true)
+                insertedTrackCount = insertedTrackCount + 1
+                local stemTrack = reaper.GetTrack(0, trackIdx + childCount)
+                targets.stemTracks[stem.name:lower()] = stemTrack
+                local stemTrackName = SETTINGS.createFolder and stem.name or (sourceTrackName .. " - " .. stem.name)
+                reaper.GetSetMediaTrackInfo_String(stemTrack, "P_NAME", stemTrackName, true)
+                local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+                HELPERS.applyTrackColorIfEnabled(stemTrack, color)
+                UI_Window.ensureTrackHeight(stemTrack)
+                childCount = childCount + 1
+            end
+        end
+
+        if SETTINGS.createFolder and childCount > 0 then
+            reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + childCount - 1), "I_FOLDERDEPTH", -1)
+        end
+
+        if SETTINGS.createFolder and childCount == 0 and targets.folderTrack then
+            reaper.DeleteTrack(targets.folderTrack)
+            return nil, 0
+        end
+
+        return targets, insertedTrackCount
+    end
+
     -- Execute OutputPlan
     for _, importPlan in ipairs(outputPlan.imports) do
         local job = importPlan.job
@@ -17948,7 +18072,40 @@ _sep.processAllStemsResult = function()
                     ""
                 )
                 local preferredInsertIndex = getImportInsertIndexForJob(job)
-                local count, insertedTrackCount = createStemTracksForSelection(stems, importPlan.jobSelPos, importPlan.jobSelLen, job.track, importPlan.itemsOverride, importPlan.useItemNameForTrack, preferredInsertIndex)
+                local createOptions = nil
+                if outputPlan.grouping == "source_track" then
+                    local trackKey = getJobTrackKey(job)
+                    if trackKey and not sharedTargetsByTrack[trackKey] then
+                        local plannedTargets, insertedForPlan = buildSharedTargetsForTrack(job, stems, preferredInsertIndex)
+                        if plannedTargets then
+                            sharedTargetsByTrack[trackKey] = plannedTargets
+                            advanceImportInsertCursorForJob(job, insertedForPlan)
+                        end
+                    end
+                    if trackKey and sharedTargetsByTrack[trackKey] then
+                        createOptions = {
+                            resolveTrackTargets = function(context)
+                                local contextTrack = context and context.sourceTrack
+                                local key = contextTrack and reaper.ValidatePtr(contextTrack, "MediaTrack*") and tostring(contextTrack) or nil
+                                if key then
+                                    return sharedTargetsByTrack[key]
+                                end
+                                return sharedTargetsByTrack[trackKey]
+                            end
+                        }
+                    end
+                end
+
+                local count, insertedTrackCount = createStemTracksForSelection(
+                    stems,
+                    importPlan.jobSelPos,
+                    importPlan.jobSelLen,
+                    job.track,
+                    importPlan.itemsOverride,
+                    importPlan.useItemNameForTrack,
+                    preferredInsertIndex,
+                    createOptions
+                )
                 advanceImportInsertCursorForJob(job, insertedTrackCount)
                 SW_LOG.logExecResult(
                     "timing:import_end job=" .. tostring(job.index) .. " created=" .. tostring(count),
