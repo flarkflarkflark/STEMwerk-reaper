@@ -7219,46 +7219,99 @@ local function drawArtGallery()
 
         -- (Credits moved to bottom corners - see after content section)
 
-        -- Features section
-        gfx.setfont(1, "Arial", PS(aboutFonts.featuresTitle or 12), string.byte('b'))
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        local featuresTitle = T("about_features_title")
-        local ftW = gfx.measurestr(featuresTitle)
-        gfx.x = centerX - ftW / 2
-        gfx.y = contentY
-        gfx.drawstr(featuresTitle)
+        -- Two-column information layout (Features + Support).
+        local leftColX = math.floor(w * 0.08)
+        local rightColX = math.floor(w * 0.55)
+        local colW = math.max(PS(180), math.floor(w * 0.38))
+        local rightColMaxW = math.max(PS(170), w - rightColX - math.floor(w * 0.08))
+        colW = math.min(colW, rightColMaxW)
+        local leftY = contentY
+        local rightY = contentY
+        local creditY = h - UI(aboutSpacing.creditsBottom or 18)
+        local contentBottom = creditY - PS(24)
 
-        contentY = contentY + PS(aboutSpacing.featuresTitleToListGap or 20)
+        local headingSize = PS(aboutFonts.featuresTitle or 12)
+        local bodySize = PS(aboutFonts.feature or 10)
+        local rowGap = PS(aboutSpacing.featureRowGap or 16)
+        local sectionGap = PS(aboutSpacing.featuresTitleToListGap or 20)
 
-        -- Feature list (centered per line)
-        gfx.setfont(1, "Arial", PS(aboutFonts.feature or 10))
-        local features = {
-            {color = stemColors[1], text = T("about_feature_1")},
-            {color = stemColors[2], text = T("about_feature_2")},
-            {color = stemColors[3], text = T("about_feature_3")},
-            {color = stemColors[4], text = T("about_feature_4")},
-            {color = stemColors[5], text = T("about_feature_5")},
-        }
+        -- Left column: Features
+        do
+            gfx.setfont(1, "Arial", headingSize, string.byte('b'))
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+            local featuresTitle = T("about_features_title")
+            gfx.x = leftColX
+            gfx.y = leftY
+            gfx.drawstr(featuresTitle)
+            leftY = leftY + sectionGap
 
-        local bullet = "●"
-        local bulletW = gfx.measurestr(bullet)
-        local gap = PS(aboutSpacing.featureBulletGap or 10)
+            gfx.setfont(1, "Arial", bodySize)
+            local features = {
+                {color = stemColors[1], text = T("about_feature_1")},
+                {color = stemColors[2], text = T("about_feature_2")},
+                {color = stemColors[3], text = T("about_feature_3")},
+                {color = stemColors[4], text = T("about_feature_4")},
+                {color = stemColors[5], text = T("about_feature_5")},
+            }
+            local bullet = "●"
+            local bulletW = gfx.measurestr(bullet)
+            local bulletGap = PS(aboutSpacing.featureBulletGap or 10)
+            local textW = math.max(PS(120), colW - bulletW - bulletGap)
 
-        for _, feat in ipairs(features) do
-            local textW = gfx.measurestr(feat.text)
-            local lineW = bulletW + gap + textW
-            local x0 = centerX - lineW / 2
-            gfx.set(feat.color[1], feat.color[2], feat.color[3], 0.8)
-            gfx.x = x0
-            gfx.y = contentY
-            gfx.drawstr(bullet)
-            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-            gfx.x = x0 + bulletW + gap
-            gfx.drawstr(feat.text)
-            contentY = contentY + PS(aboutSpacing.featureRowGap or 16)
+            for _, feat in ipairs(features) do
+                local wrapped = _wrapTextToWidth(feat.text or "", textW)
+                for i, ln in ipairs(wrapped) do
+                    if leftY + rowGap > contentBottom then
+                        break
+                    end
+                    if i == 1 then
+                        gfx.set(feat.color[1], feat.color[2], feat.color[3], 0.8)
+                        gfx.x = leftColX
+                        gfx.y = leftY
+                        gfx.drawstr(bullet)
+                    end
+                    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+                    gfx.x = leftColX + bulletW + bulletGap
+                    gfx.y = leftY
+                    gfx.drawstr(ln)
+                    leftY = leftY + rowGap
+                end
+            end
         end
 
-        contentY = contentY + PS(aboutSpacing.featuresToCreditsGap or 20)
+        -- Right column: Support
+        do
+            gfx.setfont(1, "Arial", headingSize, string.byte('b'))
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+            local supportTitle = T("help_native_support") or "Support"
+            gfx.x = rightColX
+            gfx.y = rightY
+            gfx.drawstr(supportTitle)
+            rightY = rightY + sectionGap
+
+            gfx.setfont(1, "Arial", bodySize)
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+            local supportLines = {
+                T("help_native_support_intro") or "If setup or processing fails:",
+                "- " .. (T("help_native_support_use_bundle") or "Use Save Support Bundle."),
+                "- " .. (T("help_native_support_no_payloads") or "Do not send audio, project, or model files unless asked."),
+                "- " .. (T("help_native_support_context") or "Include your OS, REAPER version, selected model/device, and what you tried."),
+            }
+            for _, line in ipairs(supportLines) do
+                local wrapped = _wrapTextToWidth(tostring(line), colW)
+                for _, ln in ipairs(wrapped) do
+                    if rightY + rowGap > contentBottom then
+                        break
+                    end
+                    gfx.x = rightColX
+                    gfx.y = rightY
+                    gfx.drawstr(ln)
+                    rightY = rightY + rowGap
+                end
+            end
+        end
+
+        contentY = math.max(leftY, rightY) + PS(aboutSpacing.featuresToCreditsGap or 20)
 
         -- (Tip removed; replaced by tooltip on the help hint icon)
 

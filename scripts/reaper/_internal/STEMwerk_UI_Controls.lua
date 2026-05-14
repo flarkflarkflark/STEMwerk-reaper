@@ -257,12 +257,6 @@ local function drawHelpControls(ctx)
     local langY = themeY + (themeSize - langH) / 2
     local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
 
-    -- [UI] text (left of lang, Visual mode)
-    local uiW_vis = S(16)
-    local uiX_vis = langX - uiW_vis - S(4)
-    local uiHover_vis = mx >= uiX_vis and mx <= uiX_vis + uiW_vis
-                     and my >= langY and my <= langY + langH
-
     gfx.setfont(1, "Arial", S(9), string.byte("b"))
     local langCode = string.upper(SETTINGS.language or "EN")
     local langTextW = gfx.measurestr(langCode)
@@ -286,26 +280,6 @@ local function drawHelpControls(ctx)
     end
     if langHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
         cycleLanguageSetting(ctx.setLanguageFn)
-    end
-
-    -- [UI] mode text (Visual mode, left of lang)
-    gfx.setfont(1, "Arial", S(9), string.byte("b"))
-    local uiTextVis = "UI"
-    local uiTextVisW = gfx.measurestr(uiTextVis)
-    if uiHover_vis and controlsOpacity > 0.3 then
-        gfx.set(accent[1], accent[2], accent[3], 1 * controlsOpacity)
-    else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8 * controlsOpacity)
-    end
-    gfx.x = uiX_vis + (uiW_vis - uiTextVisW) / 2
-    gfx.y = langY
-    gfx.drawstr(uiTextVis)
-    if uiHover_vis and controlsOpacity > 0.3 then
-        tooltipText = T("tooltip_ui_mode") or (T("tooltip_ui_mode") or "Switch UI mode.")
-        tooltipX, tooltipY = mx + S(10), my + S(15)
-        if mouseDown and not state.wasMouseDown then
-            toggleUIMode()
-        end
     end
 
     if not utilityMode then
