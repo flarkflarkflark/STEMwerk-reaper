@@ -11670,6 +11670,7 @@ function renderFooter(ctx)
     gfx.x = statusPadX
     gfx.y = row1Y
     gfx.drawstr(selLabel)
+    setTooltip(statusPadX, row1Y, leftW, statusLineH, T("tooltip_footer_selected") or "Shows how many selected items and source tracks will be processed.")
 
     if isWarning then
         gfx.set(1, 0.3, 0.3, 1)
@@ -11679,6 +11680,7 @@ function renderFooter(ctx)
     gfx.x = w - statusPadX - outTw
     gfx.y = row1Y
     gfx.drawstr(outLabel)
+    setTooltip(w - statusPadX - rightW, row1Y, rightW, statusLineH, T("tooltip_footer_output") or "Shows how many stem outputs will be created from the current selection.")
 
     gfx.setfont(1, "Arial", statusSubFontSize)
     local durationLabel = nil
@@ -11705,6 +11707,7 @@ function renderFooter(ctx)
     gfx.x = statusPadX
     gfx.y = row2Y
     gfx.drawstr(locLabel)
+    setTooltip(statusPadX, row2Y, locMaxW, statusSubLineH, T("tooltip_footer_location") or "Shows the current output grouping/storage plan.")
 
     if durationLabel then
         if isWarning then
