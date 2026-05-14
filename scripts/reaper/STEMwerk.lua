@@ -13068,6 +13068,14 @@ multiTrackQueue = {
     nextPollAt = 0,
 }
 
+-- Internal/dev-only parallel worker limiter (no UI yet).
+-- nil = production/default: unchanged unlimited parallel launch behavior
+-- 3/4 were promising internal benchmark candidates on local GPU
+-- Further device/model benchmarks are needed before changing defaults
+local INTERNAL_PARALLEL_JOB_LIMIT = nil
+-- local INTERNAL_PARALLEL_JOB_LIMIT = 3
+-- local INTERNAL_PARALLEL_JOB_LIMIT = 4
+
 -- Forward declarations for multi-track processing
 local _sep = {}  -- separation forward-declaration namespace
 
@@ -16194,6 +16202,7 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.requestedParallel = requestedParallel and true or false
     multiTrackQueue.sequentialMode = not requestedParallel
     multiTrackQueue.forceSequentialReason = nil
+    multiTrackQueue.parallelJobLimit = nil
     local hasPerItemJobs = false
     for _, job in ipairs(trackJobs) do
         if job.perItem then
@@ -16253,9 +16262,19 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.totalAudioDuration = 0  -- Will be updated when jobs start
     SW_TIMING.beginRun({ mode = multiTrackQueue.sequentialMode and "sequential" or "parallel", job_count = #trackJobs, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
 
+    if not multiTrackQueue.sequentialMode and type(INTERNAL_PARALLEL_JOB_LIMIT) == "number" and INTERNAL_PARALLEL_JOB_LIMIT > 0 then
+        multiTrackQueue.parallelJobLimit = math.max(1, math.floor(INTERNAL_PARALLEL_JOB_LIMIT))
+    end
+
     if not multiTrackQueue.sequentialMode then
-        -- Start all separation processes in parallel (uses more VRAM)
-        for _, job in ipairs(trackJobs) do
+        -- Start all jobs (default) or a capped subset (internal dev limiter).
+        local launchCount = #trackJobs
+        if multiTrackQueue.parallelJobLimit then
+            launchCount = math.min(#trackJobs, multiTrackQueue.parallelJobLimit)
+            debugLog("Applying internal parallel job cap: " .. tostring(multiTrackQueue.parallelJobLimit))
+        end
+        for idx, job in ipairs(trackJobs) do
+            if idx > launchCount then break end
             _sep.startSeparationProcessForJob(job, 25)  -- Smaller segments for parallel
         end
     else
@@ -16265,7 +16284,9 @@ _sep.runSingleTrackSeparation = function(trackList)
     end
 
     SW_LOG.logExecResult(
-        "timing:workers_launched count=" .. tostring(#trackJobs) .. " mode=" .. (multiTrackQueue.sequentialMode and "sequential" or "parallel"),
+        "timing:workers_launched count=" .. tostring(#trackJobs)
+            .. " mode=" .. (multiTrackQueue.sequentialMode and "sequential" or "parallel")
+            .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit or "none"),
         nil,
         ""
     )
@@ -16646,6 +16667,21 @@ _sep.updateAllJobsProgress = function()
             debugLog("Sequential queue fallback starting job " .. tostring(nextWaitingIndex))
             _sep.startSeparationProcessForJob(nextJob, 40)
             multiTrackQueue.currentJobIndex = math.max(tonumber(multiTrackQueue.currentJobIndex) or 0, nextWaitingIndex)
+        end
+    elseif multiTrackQueue.parallelJobLimit and multiTrackQueue.active and not progressState.cancelRequested then
+        local activeCount = 0
+        local waitingJobs = {}
+        for _, job in ipairs(multiTrackQueue.jobs) do
+            if job.startTime and not job.done then
+                activeCount = activeCount + 1
+            elseif not job.startTime then
+                waitingJobs[#waitingJobs + 1] = job
+            end
+        end
+        while activeCount < multiTrackQueue.parallelJobLimit and #waitingJobs > 0 do
+            local nextJob = table.remove(waitingJobs, 1)
+            _sep.startSeparationProcessForJob(nextJob, 25)
+            activeCount = activeCount + 1
         end
     end
 end
