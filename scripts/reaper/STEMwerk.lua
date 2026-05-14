@@ -5140,8 +5140,10 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  " .. tr("help_native_about_ui_visual", "flarkAUDIO Visual via [UI]"))
                     addLine(l, "")
                     addHead(l, tr("help_native_support", "Support"))
-                    addLine(l, "  STEMwerk_Save_Support_Bundle")
-                    addLine(l, "  " .. tr("help_native_support_bundle_where", "from REAPER Action List."))
+                    addLine(l, "  " .. tr("help_native_support_intro", "If setup or processing fails:"))
+                    addLine(l, "  - " .. tr("help_native_support_use_bundle", "Use Save Support Bundle."))
+                    addLine(l, "  - " .. tr("help_native_support_no_payloads", "Do not send audio, project, or model files unless asked."))
+                    addLine(l, "  - " .. tr("help_native_support_context", "Include your OS, REAPER version, selected model/device, and what you tried."))
                     return l
                 end
             }
