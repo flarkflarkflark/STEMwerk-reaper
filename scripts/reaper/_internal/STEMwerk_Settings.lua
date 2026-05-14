@@ -71,6 +71,14 @@ function SETTINGS_MOD.normalizeColorMode(mode)
     return "both"
 end
 
+function SETTINGS_MOD.normalizeOutputGrouping(value)
+    local v = tostring(value or ""):lower()
+    if v == "source_track" then
+        return "source_track"
+    end
+    return "per_item"
+end
+
 function SETTINGS_MOD.loadSavedMainWindowPos()
     local getExtState = C.reaper and C.reaper.GetExtState
     if not getExtState then return end
@@ -103,6 +111,13 @@ function SETTINGS_MOD.load()
 
     local createFolder = C.reaper.GetExtState(C.EXT_SECTION, "createFolder")
     if createFolder ~= "" then C.SETTINGS.createFolder = (createFolder == "1") end
+
+    local outputGrouping = C.reaper.GetExtState(C.EXT_SECTION, "outputGrouping")
+    if outputGrouping ~= "" then
+        C.SETTINGS.outputGrouping = SETTINGS_MOD.normalizeOutputGrouping(outputGrouping)
+    else
+        C.SETTINGS.outputGrouping = SETTINGS_MOD.normalizeOutputGrouping(C.SETTINGS.outputGrouping)
+    end
 
     local colorMode = C.reaper.GetExtState(C.EXT_SECTION, "colorMode")
     if colorMode ~= "" then
@@ -244,6 +259,8 @@ function SETTINGS_MOD.save()
     C.reaper.SetExtState(C.EXT_SECTION, "model", C.SETTINGS.model, true)
     C.reaper.SetExtState(C.EXT_SECTION, "createNewTracks", C.SETTINGS.createNewTracks and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "createFolder", C.SETTINGS.createFolder and "1" or "0", true)
+    C.SETTINGS.outputGrouping = SETTINGS_MOD.normalizeOutputGrouping(C.SETTINGS.outputGrouping)
+    C.reaper.SetExtState(C.EXT_SECTION, "outputGrouping", C.SETTINGS.outputGrouping, true)
     C.SETTINGS.colorMode = SETTINGS_MOD.normalizeColorMode(C.SETTINGS.colorMode)
     C.SETTINGS.applyTrackColors = (C.SETTINGS.colorMode ~= "no_track" and C.SETTINGS.colorMode ~= "off")
     C.reaper.SetExtState(C.EXT_SECTION, "applyTrackColors", C.SETTINGS.applyTrackColors and "1" or "0", true)

@@ -1208,6 +1208,7 @@ SETTINGS = {
     model = "htdemucs",
     createNewTracks = true,
     createFolder = false,
+    outputGrouping = "per_item", -- "per_item" (default) or "source_track" (New Tracks grouping)
     applyTrackColors = true,
     colorMode = "both", -- "both", "no_track", "no_media", "off"
     stemFileDestination = "temp", -- "temp", "project_media", "custom"
@@ -1230,6 +1231,14 @@ SETTINGS = {
     keepTempFiles = false,     -- Keep temp audio/work files after a run (logs always preserved)
     device = "auto",           -- Device selection: "auto", "cpu", "cuda:0", "cuda:1", "directml"
 }
+
+local function normalizeOutputGrouping(value)
+    local v = tostring(value or ""):lower()
+    if v == "source_track" then
+        return "source_track"
+    end
+    return "per_item"
+end
 
 -- ========== INTERNATIONALIZATION (i18n) ==========
 
@@ -5041,6 +5050,9 @@ local function drawUtilityNativeHelpWindow()
                     addHead(l, tr("help_native_output", "Output"))
                     addLine(l, "  " .. tr("new_tracks", "New tracks"))
                     addLine(l, "  " .. tr("help_native_in_place_takes", "In-place as takes"))
+                    addLine(l, "")
+                    addHead(l, tr("grouping_label", "Grouping:"))
+                    addLine(l, "  " .. tr("help_native_grouping_note", "Grouping controls whether selected items get their own output groups or share one group per source track."))
                     return l
                 end
             }
@@ -11361,6 +11373,24 @@ function renderMainColumns(ctx)
         SETTINGS.createNewTracks = false
     end
     setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
+
+    outY = outY + S(28)
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    drawColumnHeader(T("grouping_label"), col5X, outBoxW, mainHeaderFont, outY)
+    gfx.setfont(1, "Arial", S(13))
+
+    SETTINGS.outputGrouping = normalizeOutputGrouping(SETTINGS.outputGrouping)
+    outY = outY + S(20)
+    if drawRadio(col5X, outY, SETTINGS.outputGrouping == "per_item", T("grouping_per_item"), nil, outBoxW, nil, nil, outputBtnFontSize) then
+        SETTINGS.outputGrouping = "per_item"
+    end
+    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_grouping_per_item"))
+
+    outY = outY + S(22)
+    if drawRadio(col5X, outY, SETTINGS.outputGrouping == "source_track", T("grouping_per_source_track"), nil, outBoxW, nil, nil, outputBtnFontSize) then
+        SETTINGS.outputGrouping = "source_track"
+    end
+    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_grouping_per_source_track"))
 
     outY = outY + S(28)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
@@ -18041,14 +18071,11 @@ _sep.processAllStemsResult = function()
     end
 
     -- Build OutputPlan / ImportPlan skeleton.
-    -- Production/default behavior is "per_item": one output group per selected source item.
-    -- "source_track" is a hidden internal prototype path for New Tracks import grouping only:
-    -- items on the same source track share one planned output group. Keep this as manual
-    -- developer code-flip testing only; do not expose/enable by default until New Tracks,
-    -- In-place, Replace, and quick-action semantics are finalized by product/UX decisions.
-    local outputGrouping = "per_item"
-    -- Internal/manual developer flip only:
-    -- outputGrouping = "source_track"
+    -- Grouping is a UI setting, but only applied for New Tracks import routing.
+    local outputGrouping = normalizeOutputGrouping(SETTINGS.outputGrouping)
+    if not SETTINGS.createNewTracks then
+        outputGrouping = "per_item"
+    end
     local outputPlan = {
         grouping = outputGrouping,
         destination = SETTINGS.createNewTracks and "new_tracks" or "in_place",
