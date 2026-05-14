@@ -227,6 +227,29 @@ local function runSupportBundleAction()
     return true
 end
 
+local function runSetFfmpegPathAction()
+    local scriptsDir = resolveSetupScriptsDir()
+    local ffmpegScript = tostring(scriptsDir or "") .. "STEMwerk_Set_FFmpegPath.lua"
+    if not fileExists(ffmpegScript) then
+        msgBox(
+            "STEMwerk Setup",
+            "Missing FFmpeg path script:\n\n" .. tostring(ffmpegScript) .. "\n\nReinstall STEMwerk.",
+            0
+        )
+        return false
+    end
+    local ok, err = pcall(dofile, ffmpegScript)
+    if not ok then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not open FFmpeg path setup.\n\nError:\n" .. tostring(err),
+            0
+        )
+        return false
+    end
+    return true
+end
+
 quoteArg = function(s)
     s = tostring(s)
     if s:find('"') then
@@ -555,6 +578,8 @@ local function prettySetupReason(reason)
             part = "Could not upgrade pip/setuptools/wheel"
         elseif lower == "ffmpeg_install_failed" then
             part = "FFmpeg install failed"
+        elseif lower == "ffmpeg_not_found" then
+            part = "STEMwerk could not find FFmpeg"
         elseif lower == "ffmpeg_shim_path" then
             part = "Windows shim FFmpeg path detected (install a real ffmpeg.exe)"
         elseif lower == "stemwerk_core_bundle_incomplete" then
@@ -800,6 +825,25 @@ end
 local function canRunFfmpeg(path)
     path = resolvePath(path)
     return runCommandWithProbe(path, " -version", "ffmpeg version", 8000)
+end
+
+local function resolveUnixFfmpegFallback()
+    for _, candidate in ipairs({
+        getExt("ffmpegPath"),
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/opt/local/bin/ffmpeg",
+        "/opt/homebrew/opt/ffmpeg/bin/ffmpeg",
+        "/usr/local/opt/ffmpeg/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+        "/snap/bin/ffmpeg",
+    }) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) then
+            return resolved
+        end
+    end
+    return ""
 end
 
 local function canImportAudioSeparator(path)
@@ -1848,6 +1892,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         if extFfmpegPath ~= "" then
             state.FFMPEG_PATH = extFfmpegPath
         end
+        if (not state.FFMPEG_PATH or state.FFMPEG_PATH == "") and OS ~= "Windows" then
+            local autoFfmpegPath = resolveUnixFfmpegFallback()
+            if autoFfmpegPath ~= "" then
+                state.FFMPEG_PATH = autoFfmpegPath
+            end
+        end
     end
 
     if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
@@ -2044,6 +2094,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     end
     finalMessage[#finalMessage + 1] = "Failure: " .. failureClass
     finalMessage[#finalMessage + 1] = "Checks: " .. formatCheckErrors(errors)
+    if hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg" then
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Missing FFmpeg"
+        finalMessage[#finalMessage + 1] = "STEMwerk could not find FFmpeg."
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Install FFmpeg with Homebrew:"
+        finalMessage[#finalMessage + 1] = "  brew install ffmpeg"
+        finalMessage[#finalMessage + 1] = "Already installed? Use Set FFmpeg Path."
+    end
     finalMessage[#finalMessage + 1] = ""
     finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)
     finalMessage[#finalMessage + 1] = "FFmpeg path: " .. tostring(verification.ffmpegPath)
@@ -2731,6 +2790,7 @@ local function resolveLinuxFfmpegPath(state)
         getExt("ffmpegPath"),
         "/usr/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
+        "/opt/local/bin/ffmpeg",
         "/snap/bin/ffmpeg",
     }) do
         local resolved = resolvePath(candidate)
@@ -3395,6 +3455,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     else
         actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
         actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+        actionButtons[#actionButtons + 1] = { label = "Set FFmpeg Path...", action = "set_ffmpeg_path" }
     end
     actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
     actionButtons[#actionButtons + 1] = { label = "Open Capabilities", action = "open_cap" }
@@ -3595,6 +3656,13 @@ local function linuxSetupTick()
                         LINUX_SETUP = nil
                         reaper.defer(function()
                             runSupportBundleAction()
+                        end)
+                        return
+                    elseif b.action == "set_ffmpeg_path" then
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        reaper.defer(function()
+                            runSetFfmpegPathAction()
                         end)
                         return
                     elseif b.action == "repair" then

@@ -545,6 +545,7 @@ function canRunFfmpeg(path)
         local candidates = {
             "/opt/homebrew/bin/ffmpeg",
             "/usr/local/bin/ffmpeg",
+            "/opt/local/bin/ffmpeg",
             "/opt/homebrew/opt/ffmpeg/bin/ffmpeg",
             "/usr/local/opt/ffmpeg/bin/ffmpeg",
             "/usr/bin/ffmpeg",

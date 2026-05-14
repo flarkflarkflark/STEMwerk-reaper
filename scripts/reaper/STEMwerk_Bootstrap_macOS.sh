@@ -671,6 +671,7 @@ for p in \
   "${RUNTIME_BASE}/ffmpeg/bin/ffmpeg" \
   "/opt/homebrew/bin/ffmpeg" \
   "/usr/local/bin/ffmpeg" \
+  "/opt/local/bin/ffmpeg" \
   "/opt/homebrew/opt/ffmpeg/bin/ffmpeg" \
   "/usr/local/opt/ffmpeg/bin/ffmpeg" \
   "/usr/bin/ffmpeg"
@@ -688,6 +689,8 @@ if [ -z "${FFMPEG}" ] && [ -n "${BREW}" ]; then
     FFMPEG="/opt/homebrew/bin/ffmpeg"
   elif [ -x "/usr/local/bin/ffmpeg" ]; then
     FFMPEG="/usr/local/bin/ffmpeg"
+  elif [ -x "/opt/local/bin/ffmpeg" ]; then
+    FFMPEG="/opt/local/bin/ffmpeg"
   elif [ -x "/opt/homebrew/opt/ffmpeg/bin/ffmpeg" ]; then
     FFMPEG="/opt/homebrew/opt/ffmpeg/bin/ffmpeg"
   elif [ -x "/usr/local/opt/ffmpeg/bin/ffmpeg" ]; then

@@ -35,6 +35,11 @@ en = {
         process_action = "Process",
         save_support_bundle = "Save Support Bundle",
         save_support_bundle_tooltip = "Save logs and diagnostics for support.",
+        setup_missing_ffmpeg_title = "Missing FFmpeg",
+        setup_missing_ffmpeg_reason = "STEMwerk could not find FFmpeg.",
+        setup_missing_ffmpeg_install = "Install FFmpeg with Homebrew:",
+        setup_missing_ffmpeg_set_path = "Already installed? Use Set FFmpeg Path.",
+        setup_set_ffmpeg_path_action = "Set FFmpeg Path...",
         fx_switch_native_suffix = "Right-click: switch to REAPER Native UI.",
 
         -- Main dialog
@@ -557,6 +562,11 @@ en = {
         process_action = "Verwerken",
         save_support_bundle = "Supportbundel opslaan",
         save_support_bundle_tooltip = "Logs en diagnostiek opslaan voor support.",
+        setup_missing_ffmpeg_title = "FFmpeg ontbreekt",
+        setup_missing_ffmpeg_reason = "STEMwerk kan FFmpeg niet vinden.",
+        setup_missing_ffmpeg_install = "Installeer FFmpeg met Homebrew:",
+        setup_missing_ffmpeg_set_path = "Al geïnstalleerd? Gebruik FFmpeg-pad instellen.",
+        setup_set_ffmpeg_path_action = "FFmpeg-pad instellen...",
         fx_switch_native_suffix = "Rechtsklik: wissel naar REAPER Native UI.",
 
         -- Main dialog
@@ -1077,6 +1087,11 @@ en = {
         process_action = "Verarbeiten",
         save_support_bundle = "Support-Paket speichern",
         save_support_bundle_tooltip = "Logs und Diagnosedaten fuer den Support speichern.",
+        setup_missing_ffmpeg_title = "FFmpeg fehlt",
+        setup_missing_ffmpeg_reason = "STEMwerk konnte FFmpeg nicht finden.",
+        setup_missing_ffmpeg_install = "FFmpeg mit Homebrew installieren:",
+        setup_missing_ffmpeg_set_path = "Bereits installiert? FFmpeg-Pfad festlegen.",
+        setup_set_ffmpeg_path_action = "FFmpeg-Pfad festlegen...",
         fx_switch_native_suffix = "Rechtsklick: zu REAPER Native UI wechseln.",
 
         -- Main dialog
