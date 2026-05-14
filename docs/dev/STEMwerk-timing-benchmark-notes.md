@@ -52,3 +52,25 @@ It prints a per-job table and a run summary with overlap/wallclock indicators.
 - High `max_python_overlap` with weak wallclock improvement can indicate contention pressure.
 - Canceled runs are still useful; helper reports partial rows with `NA` and notes.
 - Current objective is diagnostics only (no GPU limiter added in this slice).
+
+## CPU parallel audit
+
+Local CPU audit (explicit `device=cpu`, 8 jobs, same source set) showed:
+
+- Normal UI sequential: `74.476s`, overlap `1`, success `8/0`.
+- Normal UI parallel unlimited: `77.989s`, overlap `8`, success `8/0`.
+- Toolbar `All Stems` parallel unlimited: `84.170s`, overlap `8`, success `8/0`.
+
+Findings:
+
+- CPU parallel technically works in both normal UI and toolbar quick-preset flow.
+- `All Stems` quick mode appears to use the same `runSeparationWorkflow` concurrency path as normal UI.
+- No evidence that toolbar mode bypasses concurrency guards.
+- In this local benchmark, explicit CPU parallel is slower than CPU sequential and shows stronger contention.
+- Existing `auto_no_gpu` sequential fallback (for `device=auto` without GPU backend) remains justified.
+
+Recommendation:
+
+- Keep CPU auto fallback sequential for now.
+- Keep internal parallel limiter default `nil`.
+- Treat CPU+GPU hybrid scheduling as future research only; do not implement until mixed CPU/GPU benchmarks justify it.
