@@ -4974,43 +4974,43 @@ local function drawUtilityNativeHelpWindow()
     local tabs = {
         { tr("help_welcome", "Welcome"), function()
             local lines = {}
-            addHead(lines, "Welcome to STEMwerk")
-            addLine(lines, "  Stem separation workflow utility for REAPER")
+            addHead(lines, tr("help_welcome_title", "Welcome to STEMwerk"))
+            addLine(lines, "  " .. tr("help_native_welcome_sub", "Stem separation workflow utility for REAPER"))
             addLine(lines, "")
-            addHead(lines, "Common uses")
-            addPair(lines, "Vocals", "Extract for karaoke, remix, or vocal isolation")
-            addPair(lines, "Drums", "Isolate for sampling, practice, or groove analysis")
-            addPair(lines, "Bass", "Separate for transcription or low-end mixing")
-            addPair(lines, "Other", "Get guitars, keys, synths, and strings cleanly")
+            addHead(lines, tr("help_native_common_uses", "Common uses"))
+            addPair(lines, tr("help_native_vocals", "Vocals"), tr("help_native_vocals_desc", "Extract for karaoke, remix, or vocal isolation"))
+            addPair(lines, tr("help_native_drums", "Drums"), tr("help_native_drums_desc", "Isolate for sampling, practice, or groove analysis"))
+            addPair(lines, tr("help_native_bass", "Bass"), tr("help_native_bass_desc", "Separate for transcription or low-end mixing"))
+            addPair(lines, tr("help_native_other", "Other"), tr("help_native_other_desc", "Get guitars, keys, synths, and strings cleanly"))
             return lines
         end },
         { tr("help_quickstart", "Quick Start"), function()
             return { __columns = true,
                 left = function()
                     local l = {}
-                    addHead(l, "Steps")
-                    addLine(l, "  1. Select audio")
-                    addLine(l, "     Tracks, items, or time selection")
-                    addLine(l, "  2. Choose model and stems")
-                    addLine(l, "     Fast / Quality / 6-Stem")
-                    addLine(l, "  3. Set output")
-                    addLine(l, "     New tracks or in-place takes")
-                    addLine(l, "  4. Click Run")
+                    addHead(l, tr("help_native_steps", "Steps"))
+                    addLine(l, "  1. " .. tr("help_native_step_select_audio", "Select audio"))
+                    addLine(l, "     " .. tr("help_native_step_select_audio_desc", "Tracks, items, or time selection"))
+                    addLine(l, "  2. " .. tr("help_native_step_choose_model", "Choose model and stems"))
+                    addLine(l, "     " .. tr("help_native_step_choose_model_desc", "Fast / Quality / 6-Stem"))
+                    addLine(l, "  3. " .. tr("help_native_step_set_output", "Set output"))
+                    addLine(l, "     " .. tr("help_native_step_set_output_desc", "New tracks or in-place takes"))
+                    addLine(l, "  4. " .. tr("help_native_step_click_run", "Click Run"))
                     return l
                 end,
                 right = function()
                     local l = {}
-                    addHead(l, "Keyboard")
-                    addLine(l, "  F1      Open Help")
-                    addLine(l, "  Enter   Run")
-                    addLine(l, "  ESC     Close / Cancel")
-                    addLine(l, "  <- ->   Help tabs")
+                    addHead(l, tr("help_native_keyboard", "Keyboard"))
+                    addLine(l, "  F1      " .. tr("open_help", "Open Help"))
+                    addLine(l, "  Enter   " .. tr("help_native_key_run", "Run"))
+                    addLine(l, "  ESC     " .. tr("close_cancel", "Close / Cancel"))
+                    addLine(l, "  <- ->   " .. tr("help_native_key_help_tabs", "Help tabs"))
                     addLine(l, "")
-                    addHead(l, "Presets")
+                    addHead(l, tr("help_native_presets", "Presets"))
                     addLine(l, "  K / I   Karaoke / Instrumental")
                     addLine(l, "  V D B   Vocals / Drums / Bass")
                     addLine(l, "  F Q S   Fast / Quality / 6-Stem")
-                    addLine(l, "  1-4     Toggle stems (1-6 in 6-stem)")
+                    addLine(l, "  1-4     " .. tr("help_native_key_toggle_stems", "Toggle stems (1-6 in 6-stem)"))
                     return l
                 end
             }
@@ -5019,28 +5019,28 @@ local function drawUtilityNativeHelpWindow()
             return { __columns = true,
                 left = function()
                     local l = {}
-                    addHead(l, "4-Stem")
-                    addLine(l, "  Vocals    Lead vocals, speech")
-                    addLine(l, "  Drums     Drums, percussion")
-                    addLine(l, "  Bass      Low end")
-                    addLine(l, "  Other     Instruments, effects")
+                    addHead(l, tr("help_native_4stem", "4-Stem"))
+                    addLine(l, "  " .. tr("help_native_vocals", "Vocals") .. "    " .. tr("help_native_4stem_vocals_desc", "Lead vocals, speech"))
+                    addLine(l, "  " .. tr("help_native_drums", "Drums") .. "     " .. tr("help_native_4stem_drums_desc", "Drums, percussion"))
+                    addLine(l, "  " .. tr("help_native_bass", "Bass") .. "      " .. tr("help_native_4stem_bass_desc", "Low end"))
+                    addLine(l, "  " .. tr("help_native_other", "Other") .. "     " .. tr("help_native_4stem_other_desc", "Instruments, effects"))
                     addLine(l, "")
-                    addHead(l, "6-Stem  (htdemucs_6s)")
-                    addLine(l, "  Guitar    Isolated guitar")
-                    addLine(l, "  Piano     Isolated piano")
-                    addLine(l, "  Adds to the 4-stem set.")
+                    addHead(l, tr("help_native_6stem", "6-Stem  (htdemucs_6s)"))
+                    addLine(l, "  " .. tr("help_native_6stem_guitar", "Guitar") .. "    " .. tr("help_native_6stem_guitar_desc", "Isolated guitar"))
+                    addLine(l, "  " .. tr("help_native_6stem_piano", "Piano") .. "     " .. tr("help_native_6stem_piano_desc", "Isolated piano"))
+                    addLine(l, "  " .. tr("help_native_6stem_adds", "Adds to the 4-stem set."))
                     return l
                 end,
                 right = function()
                     local l = {}
-                    addHead(l, "Models")
+                    addHead(l, tr("help_native_models", "Models"))
                     addLine(l, "  htdemucs     Fast")
                     addLine(l, "  htdemucs_ft  Quality")
                     addLine(l, "  htdemucs_6s  6-Stem")
                     addLine(l, "")
-                    addHead(l, "Output")
-                    addLine(l, "  New tracks")
-                    addLine(l, "  In-place as takes")
+                    addHead(l, tr("help_native_output", "Output"))
+                    addLine(l, "  " .. tr("new_tracks", "New tracks"))
+                    addLine(l, "  " .. tr("help_native_in_place_takes", "In-place as takes"))
                     return l
                 end
             }
@@ -5049,55 +5049,55 @@ local function drawUtilityNativeHelpWindow()
             return { __columns = true,
                 left = function()
                     local l = {}
-                    addHead(l, "Selection")
-                    addLine(l, "  Items/tracks take priority.")
-                    addLine(l, "  Time selection is fallback.")
+                    addHead(l, tr("help_native_selection", "Selection"))
+                    addLine(l, "  " .. tr("help_native_selection_priority", "Items/tracks take priority."))
+                    addLine(l, "  " .. tr("help_native_selection_fallback", "Time selection is fallback."))
                     addLine(l, "")
-                    addHead(l, "Temp folder")
-                    addLine(l, "  STEMwerk_* created per run.")
-                    addLine(l, "  Input WAV and output stems.")
+                    addHead(l, tr("help_native_temp_folder", "Temp folder"))
+                    addLine(l, "  " .. tr("help_native_temp_per_run", "STEMwerk_* created per run."))
+                    addLine(l, "  " .. tr("help_native_temp_io", "Input WAV and output stems."))
                     return l
                 end,
                 right = function()
                     local l = {}
-                    addHead(l, "Cleanup and logs")
-                    addLine(l, "  Logs always preserved.")
-                    addLine(l, "  Keep temp files controls")
-                    addLine(l, "  audio/work cleanup only.")
+                    addHead(l, tr("help_native_cleanup_logs", "Cleanup and logs"))
+                    addLine(l, "  " .. tr("help_native_logs_preserved", "Logs always preserved."))
+                    addLine(l, "  " .. tr("help_native_keep_temp_controls", "Keep temp files controls"))
+                    addLine(l, "  " .. tr("help_native_cleanup_scope", "audio/work cleanup only."))
                     addLine(l, "")
-                    addHead(l, "Support bundle")
+                    addHead(l, tr("help_native_support_bundle", "Support bundle"))
                     addLine(l, "  STEMwerk_Save_Support_Bundle")
-                    addLine(l, "  from REAPER Action List.")
-                    addLine(l, "  Text logs only, no audio.")
+                    addLine(l, "  " .. tr("help_native_support_bundle_where", "from REAPER Action List."))
+                    addLine(l, "  " .. tr("help_native_support_bundle_scope", "Text logs only, no audio."))
                     return l
                 end
             }
         end },
-        { "UI Modes", function()
+        { tr("help_ui_modes", "UI Modes"), function()
             return { __columns = true,
                 left = function()
                     local l = {}
-                    addHead(l, "UI mode")
-                    addLine(l, "  Native   Default utility interface")
-                    addLine(l, "  Visual   flarkAUDIO animated UI")
+                    addHead(l, tr("help_native_ui_mode", "UI mode"))
+                    addLine(l, "  " .. tr("help_native_ui_mode_native", "Native") .. "   " .. tr("help_native_ui_mode_native_desc", "Default utility interface"))
+                    addLine(l, "  " .. tr("help_native_ui_mode_visual", "Visual") .. "   " .. tr("help_native_ui_mode_visual_desc", "flarkAUDIO animated UI"))
                     addLine(l, "")
-                    addHead(l, "Switching")
-                    addLine(l, "  [UI]           Native -> Visual")
-                    addLine(l, "  FX right-click  Visual -> Native")
+                    addHead(l, tr("help_native_switching", "Switching"))
+                    addLine(l, "  [UI]           " .. tr("help_native_switch_ui", "Native -> Visual"))
+                    addLine(l, "  FX right-click  " .. tr("help_native_switch_fx", "Visual -> Native"))
                     addLine(l, "")
-                    addLine(l, "  Choice is saved.")
+                    addLine(l, "  " .. tr("help_native_choice_saved", "Choice is saved."))
                     return l
                 end,
                 right = function()
                     local l = {}
-                    addHead(l, "Visual mode only")
-                    addLine(l, "  Day/night right-click")
-                    addLine(l, "  cycles colour presets.")
-                    addLine(l, "  Native is not in that cycle.")
+                    addHead(l, tr("help_native_visual_only", "Visual mode only"))
+                    addLine(l, "  " .. tr("help_native_visual_cycle_1", "Day/night right-click"))
+                    addLine(l, "  " .. tr("help_native_visual_cycle_2", "cycles colour presets."))
+                    addLine(l, "  " .. tr("help_native_visual_cycle_3", "Native is not in that cycle."))
                     addLine(l, "")
-                    addHead(l, "Dark / Light")
-                    addLine(l, "  [D]/[L] changes brightness.")
-                    addLine(l, "  Works in both modes.")
+                    addHead(l, tr("help_native_dark_light", "Dark / Light"))
+                    addLine(l, "  " .. tr("help_native_dark_light_1", "[D]/[L] changes brightness."))
+                    addLine(l, "  " .. tr("help_native_dark_light_2", "Works in both modes."))
                     return l
                 end
             }
@@ -5107,28 +5107,28 @@ local function drawUtilityNativeHelpWindow()
                 left = function()
                     local l = {}
                     addHead(l, "STEMwerk")
-                    addLine(l, "  Stem separation for REAPER")
+                    addLine(l, "  " .. tr("help_native_welcome_sub", "Stem separation workflow utility for REAPER"))
                     addLine(l, "  " .. tr("about_version","Version") .. ": " .. tostring(APP_VERSION or ""))
                     addLine(l, "")
-                    addHead(l, "Separation")
-                    addLine(l, "  4-stem: Vocals, Drums, Bass, Other")
-                    addLine(l, "  6-stem: adds Guitar, Piano")
-                    addLine(l, "  Fast / Quality / 6-Stem models")
-                    addLine(l, "  New tracks or in-place output")
+                    addHead(l, tr("help_native_separation", "Separation"))
+                    addLine(l, "  " .. tr("help_native_about_4stem", "4-stem: Vocals, Drums, Bass, Other"))
+                    addLine(l, "  " .. tr("help_native_about_6stem", "6-stem: adds Guitar, Piano"))
+                    addLine(l, "  " .. tr("help_native_about_models", "Fast / Quality / 6-Stem models"))
+                    addLine(l, "  " .. tr("help_native_about_output", "New tracks or in-place output"))
                     return l
                 end,
                 right = function()
                     local l = {}
-                    addHead(l, "Engine")
-                    addLine(l, "  Demucs / audio-separator")
+                    addHead(l, tr("help_native_engine", "Engine"))
+                    addLine(l, "  " .. tr("help_native_about_engine", "Demucs / audio-separator"))
                     addLine(l, "")
-                    addHead(l, "UI")
-                    addLine(l, "  REAPER Native by default")
-                    addLine(l, "  flarkAUDIO Visual via [UI]")
+                    addHead(l, tr("help_native_ui", "UI"))
+                    addLine(l, "  " .. tr("help_native_about_ui_default", "REAPER Native by default"))
+                    addLine(l, "  " .. tr("help_native_about_ui_visual", "flarkAUDIO Visual via [UI]"))
                     addLine(l, "")
-                    addHead(l, "Support")
+                    addHead(l, tr("help_native_support", "Support"))
                     addLine(l, "  STEMwerk_Save_Support_Bundle")
-                    addLine(l, "  from REAPER Action List")
+                    addLine(l, "  " .. tr("help_native_support_bundle_where", "from REAPER Action List."))
                     return l
                 end
             }
@@ -5149,11 +5149,11 @@ local function drawUtilityNativeHelpWindow()
     gfx.setfont(1, "Arial", HS(22), string.byte('b'))
     col(text, 1)
     gfx.x, gfx.y = pad, 12
-    gfx.drawstr("STEMwerk Help")
+    gfx.drawstr(tr("help_native_title", "STEMwerk Help"))
     gfx.setfont(1, "Arial", HS(12))
     col(muted, 1)
     gfx.x, gfx.y = pad + HS(185), HS(20)
-    gfx.drawstr("Setup, stems and workflow")
+    gfx.drawstr(tr("help_native_subtitle", "Setup, stems and workflow"))
 
     local function smallBox(label, x, y, ww, hh)
         local hover = mx >= x and mx <= x + ww and my >= y and my <= y + hh
@@ -5209,7 +5209,7 @@ local function drawUtilityNativeHelpWindow()
     -- Keyboard hint: right-aligned in the tab row, readable but subtle
     gfx.setfont(1, "Arial", HS(12))
     col(text, 0.55)
-    local kbHint = "<-/-> tabs  |  ESC back"
+    local kbHint = tr("help_native_tabs_hint", "<-/-> tabs  |  ESC back")
     local kbHintW = gfx.measurestr(kbHint)
     gfx.x = w - pad - kbHintW
     gfx.y = tabY + math.floor((tabH - gfx.texth) / 2)
@@ -17651,15 +17651,33 @@ function drawMultiTrackProgressWindow()
         local trackUnit = (numJobs == 1) and (T("footer_track") or "track") or (T("footer_tracks") or "tracks")
         local stemUnit = (expectedStems == 1) and (T("stem") or "stem") or (T("stems") or "stems")
 
-        if anyPerItem then
-            local tpl = trSafeProgress("mt_footer_summary_items", "%d/%d %s | Queue %d | Audio %.1fs/%.1fs | %d %s")
-            summaryLine1 = string.format(tpl,
-                completedJobs, processedItemTotal, itemUnit, queuedItemCount, displayProcessedAudio, displayTotalDur, expectedStems, stemUnit)
-        else
-            local tpl = trSafeProgress("mt_footer_summary_tracks", "%d/%d %s | Audio %.1fs/%.1fs | %d %s")
-            summaryLine1 = string.format(tpl,
-                completedJobs, numJobs, trackUnit, displayProcessedAudio, displayTotalDur, expectedStems, stemUnit)
+        local activeJobs = 0
+        local waitingJobs = 0
+        for _, job in ipairs(multiTrackQueue.jobs or {}) do
+            if job.done then
+                -- completedJobs already tracked elsewhere
+            elseif job.startTime then
+                activeJobs = activeJobs + 1
+            else
+                waitingJobs = waitingJobs + 1
+            end
         end
+
+        local summaryDoneCount = anyPerItem and processedItemTotal or numJobs
+        local summaryUnit = anyPerItem and itemUnit or trackUnit
+        local tpl = trSafeProgress("mt_footer_summary_concurrency", "%d/%d %s | Active %d | Waiting %d | Audio %.1fs/%.1fs | %d %s")
+        summaryLine1 = string.format(
+            tpl,
+            completedJobs,
+            summaryDoneCount,
+            summaryUnit,
+            activeJobs,
+            waitingJobs,
+            displayProcessedAudio,
+            displayTotalDur,
+            expectedStems,
+            stemUnit
+        )
 
         if realtimeFactor > 0 then
             local speedFmt = trSafeProgress("mt_footer_speed_line", "Speed %.2fx realtime")
@@ -17689,16 +17707,9 @@ function drawMultiTrackProgressWindow()
     local statusRowGap = hasSummaryFooter and PS(4) or 0
     local statusBlockH = statusLineH * (hasSummaryFooter and 2 or 1) + statusBlockPadY * 2 + statusRowGap
     local statusBlockY = h - statusBlockH
-    local segSize = multiTrackQueue.sequentialMode and "40" or "25"
-    local modeStr = multiTrackQueue.sequentialMode and "Seq" or "Par"
-
-    -- Fix misleading GPU reporting
-    local modeSuffix = ""
-
     local totalMins = math.floor(globalElapsed / 60)
     local totalSecs = math.floor(globalElapsed % 60)
     local mtTime = T("mt_time") or "Time"
-    local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
     local cancelBtnText = progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
     local etaText = ""
@@ -17706,17 +17717,22 @@ function drawMultiTrackProgressWindow()
         local etaMins = math.floor(eta / 60)
         local etaSecs = math.floor(eta % 60)
         local etaLabel = T("eta_label") or "ETA:"
-        etaText = string.format(" | %s %d:%02d", tostring(etaLabel), etaMins, etaSecs)
+        etaText = string.format(" | %s ±%d:%02d", tostring(etaLabel), etaMins, etaSecs)
     end
 
     local runModel = effectiveRunModel()
     local modelDisplay = (runModel == "htdemucs_ft")
         and (T("model_label_quality") or "Quality")
         or ((runModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+    local modeDisplay = multiTrackQueue.sequentialMode and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
+    if (not multiTrackQueue.sequentialMode) and multiTrackQueue.parallelJobLimit then
+        local capLabel = T("mt_parallel_cap") or "Parallel cap %d"
+        modeDisplay = string.format(capLabel, multiTrackQueue.parallelJobLimit)
+    end
     local leftParts = {
         string.format("%s: %d:%02d%s", mtTime, totalMins, totalSecs, etaText),
-        string.format("%s: %s %s", mtSeg, segSize, modeStr),
         modelDisplay,
+        modeDisplay,
     }
     local rightParts = {}
     if activeJob then
