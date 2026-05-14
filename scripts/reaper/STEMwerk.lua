@@ -9495,6 +9495,7 @@ end
 local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFontSize, mainHeaderFont)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("device") or "Device", col4X, deviceColW, mainHeaderFont, contentTop)
+    setTooltip(col4X, contentTop, deviceColW, S(16), T("tooltip_section_device") or "Choose CPU, GPU, or automatic backend selection.")
     gfx.setfont(1, "Arial", S(13))
 
     local deviceBoxW = deviceColW
@@ -11093,6 +11094,7 @@ function renderProcessingHeader(ctx)
     y = y + S(8)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("processing_mode") or "Processing:", x, w, headerFont, y)
+    setTooltip(x, y, w, S(16), T("tooltip_section_processing") or "Choose sequential or parallel processing.")
     gfx.setfont(1, "Arial", S(13))
     y = y + S(20)
     local modeLabel = SETTINGS.parallelProcessing and (T("parallel") or "Parallel") or (T("sequential") or "Sequential")
@@ -11107,6 +11109,7 @@ function renderProcessingHeader(ctx)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     local tempHeaderY = y
     drawColumnHeader(T("temp_files") or "Temp files:", x, w, headerFont, tempHeaderY)
+    setTooltip(x, tempHeaderY, w, S(16), T("tooltip_section_cleanup") or "Choose what happens to temporary working files after processing.")
     gfx.setfont(1, "Arial", S(13))
 
     y = tempHeaderY + S(20)
@@ -11163,6 +11166,7 @@ function renderMainColumns(ctx)
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("presets"), col1X, presetsW, mainHeaderFont, contentTop)
+    setTooltip(col1X, contentTop, presetsW, S(16), T("tooltip_section_presets") or "Quick choices for common stem sets.")
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
@@ -11248,6 +11252,7 @@ function renderMainColumns(ctx)
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(is6Stem and T("stems_6") or "Stems:", col2X, stemsW, mainHeaderFont, contentTop)
+    setTooltip(col2X, contentTop, stemsW, S(16), T("tooltip_section_stems") or "Choose which stems to create.")
 
     local stemY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
@@ -11289,6 +11294,7 @@ function renderMainColumns(ctx)
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("model"), col3X, modelColW, mainHeaderFont, contentTop)
+    setTooltip(col3X, contentTop, modelColW, S(16), T("tooltip_section_model") or "Choose speed/quality and stem model.")
     gfx.setfont(1, "Arial", S(13))
 
     local modelBoxW = modelColW
@@ -11346,6 +11352,7 @@ function renderMainColumns(ctx)
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("output"), col5X, outputColW, mainHeaderFont, contentTop)
+    setTooltip(col5X, contentTop, outputColW, S(16), T("tooltip_section_output") or "Choose where STEMwerk imports the results in REAPER.")
     gfx.setfont(1, "Arial", S(13))
 
     local outBoxW = outputColW
@@ -11382,7 +11389,12 @@ function renderMainColumns(ctx)
     gfx.set(groupingHeaderCol[1], groupingHeaderCol[2], groupingHeaderCol[3], 1)
     drawColumnHeader(T("grouping_label"), col5X, outBoxW, mainHeaderFont, outY)
     gfx.setfont(1, "Arial", S(13))
-    setTooltip(col5X, outY, outBoxW, S(16), groupingEnabled and nil or groupingTooltipBlocked)
+    local groupingHeaderTip = T("tooltip_section_grouping") or "Choose whether selected items get separate output groups or share one group per source track."
+    if groupingEnabled then
+        setTooltip(col5X, outY, outBoxW, S(16), groupingHeaderTip)
+    else
+        setTooltip(col5X, outY, outBoxW, S(16), groupingTooltipBlocked)
+    end
 
     SETTINGS.outputGrouping = normalizeOutputGrouping(SETTINGS.outputGrouping)
     outY = outY + S(20)
@@ -11405,6 +11417,7 @@ function renderMainColumns(ctx)
     outY = outY + S(28)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(HELPERS.getStemFilesHeaderLabel(), col5X, outBoxW, mainHeaderFont, outY)
+    setTooltip(col5X, outY, outBoxW, S(16), T("tooltip_section_storage") or "Choose where generated stem files are stored.")
     gfx.setfont(1, "Arial", S(13))
 
     outY = outY + S(20)
@@ -11463,6 +11476,7 @@ function renderMainColumns(ctx)
 
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         drawColumnHeader(T("after"), col6X, afterBoxW, mainHeaderFont, contentTop)
+        setTooltip(col6X, contentTop, afterBoxW, S(16), T("tooltip_section_after") or "Optional actions to apply after processing.")
         gfx.setfont(1, "Arial", S(13))
 
         if drawRadio(col6X, afterY, true, HELPERS.getColorModeButtonLabel(), HELPERS.getColorModeButtonColor(), afterBoxW, nil, nil, afterBtnFontSize) then
@@ -11548,6 +11562,7 @@ function renderMainColumns(ctx)
         local afterBoxW = afterColW
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         drawColumnHeader(T("after"), col6X, afterBoxW, mainHeaderFont, contentTop)
+        setTooltip(col6X, contentTop, afterBoxW, S(16), T("tooltip_section_after") or "Optional actions to apply after processing.")
         gfx.setfont(1, "Arial", S(13))
 
         local selectedMultiTakeCount = getSelectedMultiTakeCountRespectingTimeSelection()
