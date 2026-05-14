@@ -11375,22 +11375,31 @@ function renderMainColumns(ctx)
     setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
 
     outY = outY + S(28)
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local groupingEnabled = SETTINGS.createNewTracks == true
+    local groupingTooltipBlocked = T("tooltip_grouping_new_tracks_only") or "Grouping only applies to New Tracks output."
+    local groupingHeaderCol = groupingEnabled and THEME.textDim or THEME.textHint
+    gfx.set(groupingHeaderCol[1], groupingHeaderCol[2], groupingHeaderCol[3], 1)
     drawColumnHeader(T("grouping_label"), col5X, outBoxW, mainHeaderFont, outY)
     gfx.setfont(1, "Arial", S(13))
+    setTooltip(col5X, outY, outBoxW, S(16), groupingEnabled and nil or groupingTooltipBlocked)
 
     SETTINGS.outputGrouping = normalizeOutputGrouping(SETTINGS.outputGrouping)
     outY = outY + S(20)
-    if drawRadio(col5X, outY, SETTINGS.outputGrouping == "per_item", T("grouping_per_item"), nil, outBoxW, nil, nil, outputBtnFontSize) then
+    local groupingBtnColor = groupingEnabled
+        and { THEME.accent[1] * 255, THEME.accent[2] * 255, THEME.accent[3] * 255 }
+        or {130, 130, 130}
+    local clickedPerItem = drawRadio(col5X, outY, SETTINGS.outputGrouping == "per_item", T("grouping_per_item"), groupingBtnColor, outBoxW, nil, nil, outputBtnFontSize)
+    if groupingEnabled and clickedPerItem then
         SETTINGS.outputGrouping = "per_item"
     end
-    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_grouping_per_item"))
+    setTooltip(col5X, outY, outBoxW, btnH, groupingEnabled and T("tooltip_grouping_per_item") or groupingTooltipBlocked)
 
     outY = outY + S(22)
-    if drawRadio(col5X, outY, SETTINGS.outputGrouping == "source_track", T("grouping_per_source_track"), nil, outBoxW, nil, nil, outputBtnFontSize) then
+    local clickedPerSourceTrack = drawRadio(col5X, outY, SETTINGS.outputGrouping == "source_track", T("grouping_per_source_track"), groupingBtnColor, outBoxW, nil, nil, outputBtnFontSize)
+    if groupingEnabled and clickedPerSourceTrack then
         SETTINGS.outputGrouping = "source_track"
     end
-    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_grouping_per_source_track"))
+    setTooltip(col5X, outY, outBoxW, btnH, groupingEnabled and T("tooltip_grouping_per_source_track") or groupingTooltipBlocked)
 
     outY = outY + S(28)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
