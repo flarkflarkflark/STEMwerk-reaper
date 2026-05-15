@@ -9621,7 +9621,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         deviceList = filtered
     end
 
-    if OS == "macOS" and ARCH == "arm64" then
+    if OS == "macOS" and ARCH == "arm64" and not (DEVICE_RUNTIME and DEVICE_RUNTIME.experimentalMpsEnabled and DEVICE_RUNTIME.experimentalMpsEnabled()) then
         local filtered = {}
         for _, d in ipairs(deviceList) do
             if d.type ~= "mps" and tostring(d.id or "") ~= "mps" then

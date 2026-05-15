@@ -11,6 +11,13 @@ function DEVICE_RUNTIME.configure(ctx)
     end
 end
 
+function DEVICE_RUNTIME.experimentalMpsEnabled()
+    local v = os.getenv("STEMWERK_EXPERIMENTAL_MPS")
+    if not v or v == "" then return false end
+    local s = tostring(v):lower()
+    return s == "1" or s == "true" or s == "yes" or s == "on"
+end
+
 function DEVICE_RUNTIME.runtimeDeviceSafeList()
     return {
         { id = "auto", name = "Auto", type = "auto", desc = "Auto-select best available backend (or CPU fallback)." },
@@ -348,7 +355,7 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
         devices = filtered
     end
 
-    if OS == "macOS" and ARCH == "arm64" then
+    if OS == "macOS" and ARCH == "arm64" and not DEVICE_RUNTIME.experimentalMpsEnabled() then
         local filtered = {}
         for _, d in ipairs(devices) do
             if d.type ~= "mps" and tostring(d.id or "") ~= "mps" then
@@ -413,7 +420,7 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
     RUNTIME_DEVICE_NOTE_KEY = buildDeviceNoteFromEnvJson(envJson, devices)
     RUNTIME_DEVICE_LAST_PROBE = now
 
-    if OS == "macOS" and ARCH == "arm64" and SETTINGS.device == "mps" then
+    if OS == "macOS" and ARCH == "arm64" and SETTINGS.device == "mps" and not DEVICE_RUNTIME.experimentalMpsEnabled() then
         SETTINGS.device = "cpu"
         saveSettings()
     end
@@ -1128,7 +1135,7 @@ end
 function DEVICE_RUNTIME.normalizeRequestedDeviceForRuntime(requestedDevice)
     local req = tostring(requestedDevice or "auto")
     if req == "" then return "auto" end
-    if req == "mps" and OS == "macOS" and ARCH == "arm64" then return "cpu" end
+    if req == "mps" and OS == "macOS" and ARCH == "arm64" and not DEVICE_RUNTIME.experimentalMpsEnabled() then return "cpu" end
     if req == "auto" or req == "cpu" or req == "mps" then return req end
 
     local list = RUNTIME_DEVICES or C.DEVICES or {}

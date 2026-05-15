@@ -32,6 +32,14 @@ _core_loaded = False
 
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
+EXPERIMENTAL_MPS_ENV = "STEMWERK_EXPERIMENTAL_MPS"
+
+
+def _experimental_mps_enabled() -> bool:
+    value = os.environ.get(EXPERIMENTAL_MPS_ENV)
+    if not value:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _is_darwin_arm64() -> bool:
@@ -49,6 +57,9 @@ def _enforce_mps_demucs_cpu_policy(requested_device: str, resolved_device: str, 
     if not _is_darwin_arm64():
         return resolved_device
     if not _is_demucs_model(model_name):
+        return resolved_device
+    if _experimental_mps_enabled():
+        print("STEMWERK_DIAG experimental_mps_enabled=1 demucs_mps_policy=bypassed", file=sys.stderr)
         return resolved_device
     requested = str(requested_device or "")
     print("STEMWERK_MPS_DISABLED_FOR_DEMUCS=1", file=sys.stderr)
@@ -423,6 +434,7 @@ def _build_env_json() -> Dict[str, object]:
         "pythonpath_env": os.environ.get("PYTHONPATH"),
         "ld_library_path_env": os.environ.get("LD_LIBRARY_PATH"),
         "mps_fallback_env": os.environ.get(MPS_FALLBACK_ENV),
+        "experimental_mps_enabled": _experimental_mps_enabled(),
         "torch": None,
         "torch_version": None,
         "torchaudio_version": None,
@@ -530,6 +542,7 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     print(f"STEMWERK_DIAG mps_built={env.get('mps_built')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG experimental_mps_enabled={env.get('experimental_mps_enabled')}", file=sys.stderr)
     print(f"STEMWERK_DIAG selected_device={selected_device}", file=sys.stderr)
     return env
 
