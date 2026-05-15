@@ -9621,6 +9621,16 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         deviceList = filtered
     end
 
+    if OS == "macOS" and ARCH == "arm64" then
+        local filtered = {}
+        for _, d in ipairs(deviceList) do
+            if d.type ~= "mps" and tostring(d.id or "") ~= "mps" then
+                filtered[#filtered + 1] = d
+            end
+        end
+        deviceList = filtered
+    end
+
     local function hasNumberedDevice(prefix)
         for _, d in ipairs(deviceList) do
             if d.id and tostring(d.id):match("^" .. prefix .. ":%d+$") then

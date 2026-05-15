@@ -34,6 +34,32 @@ MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 
 
+def _is_darwin_arm64() -> bool:
+    return sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+
+
+def _is_demucs_model(model_name: Optional[str]) -> bool:
+    name = str(model_name or "").lower()
+    return name.startswith("htdemucs") or name.startswith("hdemucs")
+
+
+def _enforce_mps_demucs_cpu_policy(requested_device: str, resolved_device: str, model_name: str) -> str:
+    if resolved_device != "mps":
+        return resolved_device
+    if not _is_darwin_arm64():
+        return resolved_device
+    if not _is_demucs_model(model_name):
+        return resolved_device
+    requested = str(requested_device or "")
+    print("STEMWERK_MPS_DISABLED_FOR_DEMUCS=1", file=sys.stderr)
+    print("STEMWERK_MPS_DISABLED_REASON=mps_demucs_output_channels_unsupported", file=sys.stderr)
+    print(f"STEMWERK_MPS_CONTEXT requested_device={requested}", file=sys.stderr)
+    print("STEMWERK_MPS_CONTEXT selected_device=cpu", file=sys.stderr)
+    print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
+    print("STEMWERK_DIAG selected_device=cpu", file=sys.stderr)
+    return "cpu"
+
+
 def _require_core() -> None:
     global StemSeparator, get_available_devices, select_device, core_devices, stemwerk_core_file, _core_loaded
     if _core_loaded:
@@ -857,6 +883,7 @@ def main():
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         _enable_mps_runtime_fallback(device_preference, resolved_device)
+        resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, args.model)
         runtime_env = _emit_runtime_diagnostics(resolved_device)
 
         emit_phase("model_setup_start")
