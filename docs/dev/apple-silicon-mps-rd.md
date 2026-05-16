@@ -136,8 +136,10 @@ To trigger it:
    - `duration_seconds`: length of the synthetic stereo WAV the job
      generates as input. Default `10`.
 4. The job installs the macOS Apple Silicon pinned stack
-   (`torch==2.5.1`, `audio-separator==0.23.0`, etc.), generates a
-   synthetic stereo sine-tone WAV, then for each selected model runs:
+   (`torch==2.5.1`, `audio-separator==0.23.0`, etc.), installs FFmpeg
+   via Homebrew (`brew install ffmpeg` — required for Demucs
+   preprocessing), generates a synthetic stereo sine-tone WAV, then for
+   each selected model runs:
    ```
    STEMWERK_EXPERIMENTAL_MPS=1 PYTORCH_ENABLE_MPS_FALLBACK=1 \
      python scripts/reaper/audio_separator_process.py \

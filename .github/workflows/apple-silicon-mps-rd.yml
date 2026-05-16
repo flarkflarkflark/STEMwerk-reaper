@@ -90,6 +90,22 @@ jobs:
           print(f"mps_available={torch.backends.mps.is_available()}")
           PY
 
+      - name: Install FFmpeg via Homebrew
+        run: |
+          # macos-14 ships Homebrew at /opt/homebrew (arm64). Make sure that
+          # prefix is on PATH for this step and for every subsequent step
+          # (the Python subprocess in `Run MPS test matrix` needs ffmpeg on
+          # PATH; without it audio_separator_process.py emits
+          # ffmpeg_path=NOT_FOUND and Demucs preprocessing fails before MPS
+          # is ever exercised).
+          if [ -x /opt/homebrew/bin/brew ]; then
+            echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+          fi
+          brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+          which ffmpeg
+          ffmpeg -version | head -n 1
+
       - name: Generate synthetic stereo WAV
         env:
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
