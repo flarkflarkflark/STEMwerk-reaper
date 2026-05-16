@@ -9313,7 +9313,7 @@ function drawMainDialogModalOverlay()
 
         if not hasBrowse and mx >= piInputX and mx <= piInputX + piBrowseW
                 and my >= piBtnY and my <= piBtnY + piBtnH then
-            setTooltip(piInputX, piBtnY, piBrowseW, piBtnH, "Folder picker requires js_ReaScriptAPI. Paste or type a path manually.")
+            setTooltip(piInputX, piBtnY, piBrowseW, piBtnH, "Folder picker unavailable. Paste or type a path manually.")
         end
 
         local piOkX    = piBoxX + piBoxW - piPad - piBtnW
@@ -11699,6 +11699,17 @@ function renderFooter(ctx)
     local statusBlockH = statusLineH + statusSubLineH + statusBlockPadY * 2 + statusRowGap
     local statusBarH = statusBlockH
     local statusBarY = h - statusBarH
+    local footerTooltipText = nil
+    local footerTooltipX, footerTooltipY = 0, 0
+    local function setFooterTooltip(x, y, ww, hh, text)
+        if SETTINGS and SETTINGS.tooltips == false then return end
+        if not text or text == "" then return end
+        if ctx.mx >= x and ctx.mx <= x + ww and ctx.my >= y and ctx.my <= y + hh then
+            footerTooltipText = text
+            footerTooltipX = ctx.mx + S(10)
+            footerTooltipY = ctx.my + S(15)
+        end
+    end
 
     local footerRow4Y = statusBarY - S(10) - btnH
     local footerLines = buildFooterLines()
@@ -11735,7 +11746,7 @@ function renderFooter(ctx)
     gfx.x = statusPadX
     gfx.y = row1Y
     gfx.drawstr(selLabel)
-    setTooltip(statusPadX, row1Y, leftW, statusLineH, T("tooltip_footer_selected") or "Shows how many selected items and source tracks will be processed.")
+    setFooterTooltip(statusPadX, row1Y, leftW, statusLineH, T("tooltip_footer_selected") or "Shows how many selected items and source tracks will be processed.")
 
     if isWarning then
         gfx.set(1, 0.3, 0.3, 1)
@@ -11745,7 +11756,7 @@ function renderFooter(ctx)
     gfx.x = w - statusPadX - outTw
     gfx.y = row1Y
     gfx.drawstr(outLabel)
-    setTooltip(w - statusPadX - rightW, row1Y, rightW, statusLineH, T("tooltip_footer_output") or "Shows how many stem outputs will be created from the current selection.")
+    setFooterTooltip(w - statusPadX - rightW, row1Y, rightW, statusLineH, T("tooltip_footer_output") or "Shows how many stem outputs will be created from the current selection.")
 
     gfx.setfont(1, "Arial", statusSubFontSize)
     local durationLabel = nil
@@ -11772,7 +11783,7 @@ function renderFooter(ctx)
     gfx.x = statusPadX
     gfx.y = row2Y
     gfx.drawstr(locLabel)
-    setTooltip(statusPadX, row2Y, locMaxW, statusSubLineH, T("tooltip_footer_location") or "Shows the current output grouping/storage plan.")
+    setFooterTooltip(statusPadX, row2Y, locMaxW, statusSubLineH, T("tooltip_footer_location") or "Shows the current output grouping/storage plan.")
 
     if durationLabel then
         if isWarning then
@@ -11855,7 +11866,12 @@ function renderFooter(ctx)
     if closeBtnHover and GUI.wasMouseDown and not ctx.mouseDown then
         GUI.result = false
     end
-    setTooltip(closeBtnX, footerRow4Y, closeBtnW, btnH, T("tooltip_close"))
+    setFooterTooltip(closeBtnX, footerRow4Y, closeBtnW, btnH, T("tooltip_close"))
+    if footerTooltipText and not GUI.richTooltip and not GUI.shortcutTooltip then
+        GUI.tooltip = footerTooltipText
+        GUI.tooltipX = footerTooltipX
+        GUI.tooltipY = footerTooltipY
+    end
 
     GUI.wasMouseDown = ctx.mouseDown
 end
@@ -17301,16 +17317,27 @@ function drawMultiTrackProgressWindow()
                 termProgR, termProgG, termProgB, termProgA = 0.24, 0.40, 0.24, 1
             end
         elseif SETTINGS.darkMode then
-            termBgR, termBgG, termBgB, termBgA = 0.98, 0.98, 0.99, 0.98
-            termBorderR, termBorderG, termBorderB, termBorderA = 0.15, 0.55, 0.2, 0.45
-            termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.75, 0.92, 0.78, 1
-            termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.05, 0.08, 0.05, 1
-            termTextR, termTextG, termTextB, termTextA = 0.08, 0.12, 0.08, 0.95
-            termDimR, termDimG, termDimB, termDimA = 0.20, 0.30, 0.20, 0.75
-            termOkR, termOkG, termOkB, termOkA = 0.12, 0.45, 0.18, 1
-            termWarnR, termWarnG, termWarnB, termWarnA = 0.65, 0.45, 0.05, 1
-            termErrR, termErrG, termErrB, termErrA = 0.75, 0.10, 0.10, 1
-            termProgR, termProgG, termProgB, termProgA = 0.08, 0.35, 0.75, 1
+            termBgR, termBgG, termBgB, termBgA = 0.07, 0.08, 0.09, 0.98
+            termBorderR, termBorderG, termBorderB, termBorderA = 0.24, 0.34, 0.28, 0.85
+            termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.13, 0.17, 0.15, 1
+            termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.82, 0.88, 0.84, 1
+            termTextR, termTextG, termTextB, termTextA = 0.78, 0.82, 0.80, 1
+            termDimR, termDimG, termDimB, termDimA = 0.50, 0.56, 0.53, 1
+            termOkR, termOkG, termOkB, termOkA = 0.52, 0.78, 0.58, 1
+            termWarnR, termWarnG, termWarnB, termWarnA = 0.88, 0.70, 0.32, 1
+            termErrR, termErrG, termErrB, termErrA = 0.90, 0.44, 0.44, 1
+            termProgR, termProgG, termProgB, termProgA = 0.54, 0.78, 0.62, 1
+        else
+            termBgR, termBgG, termBgB, termBgA = 0.95, 0.95, 0.93, 1
+            termBorderR, termBorderG, termBorderB, termBorderA = 0.55, 0.55, 0.50, 1
+            termHeaderR, termHeaderG, termHeaderB, termHeaderA = 0.87, 0.88, 0.84, 1
+            termHeaderTextR, termHeaderTextG, termHeaderTextB, termHeaderTextA = 0.11, 0.12, 0.11, 1
+            termTextR, termTextG, termTextB, termTextA = 0.16, 0.17, 0.16, 1
+            termDimR, termDimG, termDimB, termDimA = 0.40, 0.40, 0.37, 1
+            termOkR, termOkG, termOkB, termOkA = 0.23, 0.41, 0.24, 1
+            termWarnR, termWarnG, termWarnB, termWarnA = 0.56, 0.40, 0.11, 1
+            termErrR, termErrG, termErrB, termErrA = 0.70, 0.16, 0.16, 1
+            termProgR, termProgG, termProgB, termProgA = 0.24, 0.42, 0.26, 1
         end
 
         -- Accent tint: use the currently active track color for header/border (nice "alive" feedback).
@@ -17347,14 +17374,18 @@ function drawMultiTrackProgressWindow()
         local activeBar = activeJob and jobBarColor(activeJob.index or 1) or jobBarColor(1)
         if not utilityMode then
             if SETTINGS.darkMode then
-                termTextR, termTextG, termTextB = activeBar[1] * 0.95, activeBar[2] * 0.95, activeBar[3] * 0.95
-                termTextA = 0.92
+                -- Keep dark mode readable first, then tint toward active bar color.
+                termTextR = ((termTextR or 0.78) * 0.82) + (activeBar[1] * 0.18)
+                termTextG = ((termTextG or 0.82) * 0.82) + (activeBar[2] * 0.18)
+                termTextB = ((termTextB or 0.80) * 0.82) + (activeBar[3] * 0.18)
+                termTextA = 1
             else
                 -- Light mode: keep text readable, but nudge toward the active bar color.
                 local ar, ag, ab = readableTerminalAccent(activeBar[1], activeBar[2], activeBar[3])
-                termTextR = ((termTextR or 0.20) * 0.85) + (ar * 0.15)
-                termTextG = ((termTextG or 0.20) * 0.85) + (ag * 0.15)
-                termTextB = ((termTextB or 0.18) * 0.85) + (ab * 0.15)
+                termTextR = ((termTextR or 0.16) * 0.90) + (ar * 0.10)
+                termTextG = ((termTextG or 0.17) * 0.90) + (ag * 0.10)
+                termTextB = ((termTextB or 0.16) * 0.90) + (ab * 0.10)
+                termTextA = 1
             end
         end
         termTextR, termTextG, termTextB, termTextA = termTextR or 0.78, termTextG or 0.78, termTextB or 0.78, termTextA or 1

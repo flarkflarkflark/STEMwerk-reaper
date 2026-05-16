@@ -319,7 +319,7 @@ local function drawHelpControls(ctx)
             SETTINGS.visualFX = not SETTINGS.visualFX
             saveSettings()
         end
-        if fxHover and rightMouseDown and not state.wasRightMouseDown and controlsOpacity > 0.3 then
+        if fxHover and rightMouseDown and not state.wasRightMouseDown then
             toggleUIMode()
         end
     end

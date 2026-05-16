@@ -35,6 +35,10 @@ This README describes the current public stable release, `v2.2.2.2`. Future deve
 - Installer icon assets are restored
 
 **UI / Workflow**
+- STEMwerk now includes a cleaner, calmer REAPER-Native UI mode. It is designed to feel more DAW-like and less visually busy while keeping the existing flarkAUDIO Visual mode available.
+- Existing users keep their saved UI preference after update.
+- You can switch UI mode from the top-right UI control.
+- Light/dark mode remains available as before.
 - New output grouping option: **Per item / Per track**
 - Source-track grouping applies only to **New Tracks**
 - Storage labels are clarified (`Storage/Opslag/Speicherort`)

@@ -30,8 +30,60 @@ end
 
 -- ── Folder picker (js_ReaScriptAPI) ──────────────────────────────────────────
 
+local function _isWindows()
+    return reaper.GetOS and reaper.GetOS():match("Win") ~= nil
+end
+
+local function _trim(s)
+    return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function _browseForFolderWindowsFallback(initialPath)
+    if not _isWindows() or type(reaper.ExecProcess) ~= "function" then
+        return nil
+    end
+
+    local start = _trim(initialPath)
+    local escStart = start:gsub("'", "''")
+    local ps = table.concat({
+        "[void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms');",
+        "$dlg = New-Object System.Windows.Forms.FolderBrowserDialog;",
+        "$dlg.Description = 'Select folder';",
+        "$dlg.ShowNewFolderButton = $true;",
+        "if ('" .. escStart .. "' -ne '') { $dlg.SelectedPath = '" .. escStart .. "' };",
+        "if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {",
+        "  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;",
+        "  Write-Output $dlg.SelectedPath",
+        "}"
+    }, " ")
+
+    local cmd = 'powershell -NoProfile -STA -Command "' .. ps:gsub('"', '\\"') .. '"'
+    local out = reaper.ExecProcess(cmd, 120000)
+    if type(out) ~= "string" or out == "" then
+        return nil
+    end
+
+    local picked = nil
+    for line in out:gmatch("[^\r\n]+") do
+        local t = _trim(line)
+        if t ~= "" and not t:match("^%d+$") then
+            picked = t
+        end
+    end
+    if picked and picked ~= "" then
+        return picked
+    end
+    return nil
+end
+
 function M.hasBrowse()
-    return type(reaper.JS_Dialog_BrowseForFolder) == "function"
+    if type(reaper.JS_Dialog_BrowseForFolder) == "function" then
+        return true
+    end
+    if _isWindows() and type(reaper.ExecProcess) == "function" then
+        return true
+    end
+    return false
 end
 
 -- Opens a native OS folder picker. Returns the selected folder path on success,
@@ -42,9 +94,17 @@ function M.browseForFolder(initialPath)
     if start == "" and type(reaper.GetProjectPath) == "function" then
         start = reaper.GetProjectPath("") or ""
     end
-    local ok, path = reaper.JS_Dialog_BrowseForFolder("Select folder", start)
-    if ok and ok ~= 0 and type(path) == "string" and path ~= "" then
-        return path
+
+    if type(reaper.JS_Dialog_BrowseForFolder) == "function" then
+        local ok, path = reaper.JS_Dialog_BrowseForFolder("Select folder", start)
+        if ok and ok ~= 0 and type(path) == "string" and path ~= "" then
+            return path
+        end
+    elseif _isWindows() then
+        local picked = _browseForFolderWindowsFallback(start)
+        if picked and picked ~= "" then
+            return picked
+        end
     end
     return nil
 end
