@@ -13666,7 +13666,7 @@ local function drawProgressWindow()
     if nerdHover then
         GUI.uiClickedThisFrame = true
         if utilityMode then
-            tooltipText = progressState.showTerminal and "Hide terminal output" or "Show terminal output"
+            tooltipText = progressState.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         elseif progressState.showTerminal then
             tooltipText = T("tooltip_nerd_mode_hide") or "Switch to Art View"
         else
@@ -17233,7 +17233,7 @@ function drawMultiTrackProgressWindow()
 
     if nerdHover then
         if utilityMode then
-            tooltipText = multiTrackQueue.showTerminal and "Hide terminal output" or "Show terminal output"
+            tooltipText = multiTrackQueue.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         else
             tooltipText = multiTrackQueue.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         end

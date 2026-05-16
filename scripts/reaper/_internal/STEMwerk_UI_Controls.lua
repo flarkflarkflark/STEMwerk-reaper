@@ -443,12 +443,17 @@ local function drawResultControls(ctx)
             GUI.uiClickedThisFrame = true
         end
         if fxHover and mouseDown and not state.wasMouseDown and controlsOpacity > 0.3 then
+            SETTINGS.visualFX = not SETTINGS.visualFX
+            saveSettings()
+        end
+        if fxHover and rightMouseDown and not (state.wasRightMouseDown or false) and controlsOpacity > 0.3 then
             SETTINGS.themePreset = "reaper_native"
             updateTheme()
             saveSettings()
         end
         if fxHover and controlsOpacity > 0.3 then
-            tooltipText = T("tooltip_switch_native_ui") or "Switch to REAPER Native UI."
+            local fxTip = SETTINGS.visualFX and (T("fx_disable") or "Disable visual effects") or (T("fx_enable") or "Enable visual effects")
+            tooltipText = fxTip .. " " .. (T("fx_switch_native_suffix") or "Right-click: switch to REAPER Native UI.")
             tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
         end
     end
