@@ -102,7 +102,7 @@ Name: "cleanup_models"; Description: "{cm:TaskCleanupModels}"; Flags: unchecked
 
 [Files]
 ; Core files needed to run in REAPER
-Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,.DS_Store,._*,__MACOSX\*,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,themes\*,assets\toolbar_icons\stemwerk_*.png,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\i18n\*"; DestDir: "{app}\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 #if BundleRuntime == "1"

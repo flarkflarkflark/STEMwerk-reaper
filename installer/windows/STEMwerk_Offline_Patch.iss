@@ -44,16 +44,29 @@ CreateAppDir=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,.DS_Store,._*,__MACOSX\*,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,themes\*,assets\toolbar_icons\stemwerk_*.png,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\i18n\*"; DestDir: "{app}\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Code]
-function InstallRootLooksValid(const Dir: string): Boolean;
+function InstallRootLooksModern(const Dir: string): Boolean;
 begin
   Result :=
     FileExists(AddBackslash(Dir) + 'STEMwerk.lua') and
     FileExists(AddBackslash(Dir) + 'i18n\languages.lua');
+end;
+
+function InstallRootLooksLegacy(const Dir: string): Boolean;
+begin
+  Result :=
+    FileExists(AddBackslash(Dir) + 'STEMwerk.lua') and
+    FileExists(AddBackslash(Dir) + 'audio_separator_process.py') and
+    FileExists(AddBackslash(Dir) + '_internal\STEMwerk_Setup_Internal.lua');
+end;
+
+function InstallRootLooksValid(const Dir: string): Boolean;
+begin
+  Result := InstallRootLooksModern(Dir) or InstallRootLooksLegacy(Dir);
 end;
 
 function InitializeSetup: Boolean;
@@ -66,7 +79,9 @@ begin
     SuppressibleMsgBox(
       'This patch updates an existing STEMwerk offline installation.' + #13#10 + #13#10 +
       'Select your current STEMwerk install folder in the next step.' + #13#10 +
-      'Expected folder contents include STEMwerk.lua and i18n\\languages.lua.',
+      'Accepted folder markers are either:' + #13#10 +
+      '- Modern: STEMwerk.lua + i18n\\languages.lua' + #13#10 +
+      '- Legacy: STEMwerk.lua + audio_separator_process.py + _internal\\STEMwerk_Setup_Internal.lua',
       mbInformation,
       MB_OK,
       IDOK
@@ -84,9 +99,9 @@ begin
     begin
       SuppressibleMsgBox(
         'Choose the existing STEMwerk installation folder.' + #13#10 + #13#10 +
-        'The selected folder must already contain:' + #13#10 +
-        '- STEMwerk.lua' + #13#10 +
-        '- i18n\\languages.lua',
+        'The selected folder must already match one of these layouts:' + #13#10 +
+        '- Modern: STEMwerk.lua + i18n\\languages.lua' + #13#10 +
+        '- Legacy: STEMwerk.lua + audio_separator_process.py + _internal\\STEMwerk_Setup_Internal.lua',
         mbError,
         MB_OK,
         IDOK
