@@ -22,14 +22,7 @@
 #define OutputSuffix GetEnv('STEMWERK_OUTPUT_SUFFIX')
 
 #define ModelPayloadSubdir GetEnv('STEMWERK_MODEL_PAYLOAD_SUBDIR')
-#if ModelPayloadSubdir == ""
-  #define ModelPayloadSubdir "models"
-#endif
-
 #define WheelPayloadSubdir GetEnv('STEMWERK_WHEEL_PAYLOAD_SUBDIR')
-#if WheelPayloadSubdir == ""
-  #define WheelPayloadSubdir "wheels"
-#endif
 
 #if BundleRuntime == "1"
   #define MinimumFreeSpaceMB "12288"
@@ -116,8 +109,12 @@ Source: "payload\ffmpeg\ffmpeg-release-essentials.zip"; DestDir: "{app}\_bundled
   #else
     #error STEMWERK_BUNDLE_RUNTIME=1 but payload\ffmpeg\ffmpeg-release-essentials.zip is missing.
   #endif
+#if WheelPayloadSubdir != ""
 Source: "payload\{#WheelPayloadSubdir}\*"; DestDir: "{app}\_bundled\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+#endif
+#if ModelPayloadSubdir != ""
 Source: "payload\{#ModelPayloadSubdir}\*"; DestDir: "{localappdata}\STEMwerk\models"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+#endif
 #endif
 
 ; Helpful docs
