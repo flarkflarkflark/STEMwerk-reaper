@@ -2196,7 +2196,7 @@ local function summarizeInstallerState(state)
             lines[#lines + 1] = "FFmpeg: " .. tostring(state.FFMPEG_PATH)
         end
     else
-        lines[#lines + 1] = "Installer state not found."
+        lines[#lines + 1] = "Installer state not found. Please run the STEMwerk Setup Installer again."
     end
     return lines
 end
@@ -2511,8 +2511,8 @@ local function windowsVerifyTick()
         end
         lines[#lines + 1] = ""
         if not WINDOWS_VERIFY.pythonOk then
-            lines[#lines + 1] = "Python is missing or unusable."
-            lines[#lines + 1] = "Install Python 3.11 (64-bit) from python.org, then re-run setup."
+            lines[#lines + 1] = "Python runtime is missing or unusable. Please run the STEMwerk Setup Installer again."
+            lines[#lines + 1] = "Manual/test ZIP installs require a working Python 3.11 (64-bit) runtime."
         elseif not WINDOWS_VERIFY.ffmpegOk then
             lines[#lines + 1] = "FFmpeg is missing."
             lines[#lines + 1] = "Install FFmpeg or re-run the installer, then re-run setup."
