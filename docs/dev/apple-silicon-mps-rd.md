@@ -146,12 +146,26 @@ To trigger it:
        <input.wav> <output_dir> --model <model> --device mps
    ```
    capturing exit code, elapsed time, stdout, and stderr.
-5. Each model's run is classified as `PASS`,
-   `FAIL_MPS_UNSUPPORTED_OP` (matched by the
-   `STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536` marker or the
-   raw `Output channels > 65536` torch message), or `FAIL_OTHER`. A
-   classified failure does **not** fail the job — the workflow is for
+5. Each model's run is classified as one of:
+   - `PASS` (exit code 0)
+   - `FAIL_MPS_UNSUPPORTED_OP` (matched by the
+     `STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536` marker or
+     the raw `Output channels > 65536` torch message)
+   - `FAIL_MPS_OOM` (matched on `MPS backend out of memory` —
+     `RuntimeError` raised by torch when the runner's unified-memory
+     allocator refuses a tensor allocation)
+   - `FAIL_OTHER` (any other non-zero exit)
+
+   A classified failure does **not** fail the job — the workflow is for
    data collection.
+
+   The optional `mps_high_watermark_ratio` input sets
+   `PYTORCH_MPS_HIGH_WATERMARK_RATIO` for the subprocess (`0.0`
+   disables the watermark entirely; this is the standard torch escape
+   hatch for OOM-on-MPS testing). Leave blank for torch's default
+   behavior. This is an R&D-only knob and is **not** a production
+   recommendation — disabling the watermark can crash the runner under
+   memory pressure rather than failing gracefully.
 6. Artifacts are uploaded as `apple-silicon-mps-rd-<run_id>` and
    include `rd_results/summary.md`, `rd_results/summary.json`, per-model
    `stdout.log` / `stderr.log`, the `phase_events.jsonl` /
@@ -161,6 +175,36 @@ To trigger it:
 Use the artifact summary to fill in the model matrix above. Do **not**
 commit results back into this document automatically — review them
 first.
+
+### Current finding (GitHub-hosted `macos-14` runner, 2026-05-16)
+
+First hardware data from a GitHub-hosted Apple Silicon runner with
+`STEMWERK_EXPERIMENTAL_MPS=1`:
+
+- The runner is genuinely Apple Silicon: `platform=Darwin
+  machine=arm64`, `torch.backends.mps.is_built()=True`,
+  `torch.backends.mps.is_available()=True`, and the experimental flag
+  bypasses the device-rewrite gates so `selected_device=mps` reaches
+  torch.
+- With FFmpeg installed, Demucs preprocessing runs and inference
+  actually starts on MPS — the runner is **no longer blocked** by the
+  `Output channels > 65536` cliff that originally motivated the CPU
+  policy.
+- All three Demucs presets (`htdemucs`, `htdemucs_ft`, `htdemucs_6s`)
+  failed with `RuntimeError: MPS backend out of memory` (e.g.
+  "MPS allocated: 112.00 MB / 1.38 GB, max allowed: 7.93 GB, tried to
+  allocate 256 bytes" — torch's high-watermark allocator refusing
+  small allocations once the soft limit is hit). Classified as
+  `FAIL_MPS_OOM`.
+
+This does not change the production policy: the
+`release/2.2.2.2` baseline still keeps Apple Silicon Demucs on CPU,
+and there is no plan to ship MPS to users from this branch. The next
+R&D step is to retry the matrix with
+`mps_high_watermark_ratio=0.0` to see whether the runs complete when
+the watermark is disabled (and whether the resulting stems are
+correct), and to extend the matrix to the MDX-NET ONNX models, which
+do not go through the same torch allocator path.
 
 ### Model matrix (to fill in)
 
