@@ -1,0 +1,248 @@
+name: Apple Silicon MPS R&D
+
+# R&D only. Manually triggered. Does not run on push/PR, does not tag, does
+# not release. Tests whether Demucs models can run on PyTorch's MPS backend
+# on a GitHub-hosted Apple Silicon runner with the experimental opt-in flag.
+# See docs/dev/apple-silicon-mps-rd.md for context.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model to test (or 'all' for the Demucs matrix)"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - htdemucs
+          - htdemucs_ft
+          - htdemucs_6s
+      duration_seconds:
+        description: "Length of synthetic test audio in seconds"
+        required: true
+        default: "10"
+        type: string
+
+jobs:
+  mps-rd:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show runner diagnostics
+        env:
+          RUNNER_OS_CONTEXT: ${{ runner.os }}
+          RUNNER_ARCH_CONTEXT: ${{ runner.arch }}
+          RUNNER_NAME_CONTEXT: ${{ runner.name }}
+        run: |
+          echo "runner.os=${RUNNER_OS_CONTEXT}"
+          echo "runner.arch=${RUNNER_ARCH_CONTEXT}"
+          echo "runner.name=${RUNNER_NAME_CONTEXT}"
+          uname -a
+          uname -m
+          sw_vers
+          python3 --version
+
+      - name: Verify vendored stemwerk-core bundle
+        run: |
+          test -f scripts/reaper/vendor/stemwerk-core/pyproject.toml
+          test -f scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py
+
+      - name: Create venv and install MPS R&D dependencies
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -c scripts/reaper/constraints/macos.txt \
+            "numpy==1.26.4" \
+            "torch==2.5.1" \
+            "torchvision==0.20.1" \
+            "torchaudio==2.5.1"
+          pip install "llvmlite==0.42.0" "numba==0.59.1"
+          pip install "soundfile>=0.12.1"
+          pip install ./scripts/reaper/vendor/stemwerk-core
+          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"
+          pip install --force-reinstall --no-deps \
+            "numpy==1.26.4" \
+            "torch==2.5.1" \
+            "torchvision==0.20.1" \
+            "torchaudio==2.5.1"
+          pip install onnxruntime-silicon || pip install onnxruntime
+
+      - name: Show torch MPS diagnostics
+        run: |
+          . .venv/bin/activate
+          python - <<'PY'
+          import platform
+          import sys
+          import torch
+          print(f"python_version={platform.python_version()}")
+          print(f"platform_machine={platform.machine()}")
+          print(f"torch_version={torch.__version__}")
+          print(f"mps_built={torch.backends.mps.is_built()}")
+          print(f"mps_available={torch.backends.mps.is_available()}")
+          PY
+
+      - name: Generate synthetic stereo WAV
+        env:
+          DURATION_SECONDS: ${{ inputs.duration_seconds }}
+        run: |
+          . .venv/bin/activate
+          mkdir -p rd_input
+          python - <<'PY'
+          import os
+          import numpy as np
+          import soundfile as sf
+
+          duration = float(os.environ.get("DURATION_SECONDS", "10"))
+          sr = 44100
+          n = int(sr * duration)
+          t = np.arange(n, dtype=np.float32) / sr
+          # Two distinct tones per channel so the input isn't degenerate.
+          left = 0.2 * np.sin(2 * np.pi * 220.0 * t).astype(np.float32)
+          right = 0.2 * np.sin(2 * np.pi * 330.0 * t).astype(np.float32)
+          stereo = np.stack([left, right], axis=1)
+          sf.write("rd_input/test_tone.wav", stereo, sr, subtype="PCM_16")
+          print(f"wrote rd_input/test_tone.wav duration={duration}s sr={sr}")
+          PY
+
+      - name: Run MPS test matrix
+        env:
+          STEMWERK_EXPERIMENTAL_MPS: "1"
+          PYTORCH_ENABLE_MPS_FALLBACK: "1"
+          SELECTED_MODEL: ${{ inputs.model }}
+        run: |
+          . .venv/bin/activate
+          mkdir -p rd_results
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          selected = os.environ.get("SELECTED_MODEL", "all").strip()
+          all_models = ["htdemucs", "htdemucs_ft", "htdemucs_6s"]
+          if selected == "all":
+              models = all_models
+          else:
+              models = [selected]
+
+          results_root = Path("rd_results")
+          results_root.mkdir(parents=True, exist_ok=True)
+          input_wav = Path("rd_input/test_tone.wav").resolve()
+
+          MPS_UNSUPPORTED_MARKER = (
+              "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
+          )
+
+          def classify(exit_code: int, stdout: str, stderr: str) -> str:
+              combined = stdout + "\n" + stderr
+              if exit_code == 0:
+                  return "PASS"
+              if MPS_UNSUPPORTED_MARKER in combined:
+                  return "FAIL_MPS_UNSUPPORTED_OP"
+              if "Output channels > 65536" in combined:
+                  return "FAIL_MPS_UNSUPPORTED_OP"
+              return "FAIL_OTHER"
+
+          summary = []
+          overall_failed = False
+
+          for model in models:
+              model_dir = results_root / model
+              model_dir.mkdir(parents=True, exist_ok=True)
+              cmd = [
+                  sys.executable,
+                  "scripts/reaper/audio_separator_process.py",
+                  str(input_wav),
+                  str(model_dir.resolve()),
+                  "--model",
+                  model,
+                  "--device",
+                  "mps",
+              ]
+              print(f"\n=== Running {model} ===")
+              print("CMD:", " ".join(cmd), flush=True)
+              env = os.environ.copy()
+              env["STEMWERK_EXPERIMENTAL_MPS"] = "1"
+              env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+              start = time.time()
+              proc = subprocess.run(
+                  cmd,
+                  capture_output=True,
+                  text=True,
+                  env=env,
+              )
+              elapsed = time.time() - start
+
+              (model_dir / "stdout.log").write_text(proc.stdout or "")
+              (model_dir / "stderr.log").write_text(proc.stderr or "")
+              # audio_separator_process.py also writes stdout.txt /
+              # separation_log.txt / phase_events.jsonl into the output dir.
+
+              classification = classify(proc.returncode, proc.stdout or "", proc.stderr or "")
+              if classification != "PASS":
+                  overall_failed = True
+
+              entry = {
+                  "model": model,
+                  "exit_code": proc.returncode,
+                  "elapsed_seconds": round(elapsed, 3),
+                  "classification": classification,
+                  "stdout_path": str((model_dir / "stdout.log").as_posix()),
+                  "stderr_path": str((model_dir / "stderr.log").as_posix()),
+                  "phase_events_path": str((model_dir / "phase_events.jsonl").as_posix()),
+              }
+              summary.append(entry)
+              print(json.dumps(entry, indent=2), flush=True)
+
+          summary_json = results_root / "summary.json"
+          summary_json.write_text(json.dumps({"results": summary}, indent=2))
+
+          md_lines = [
+              "# Apple Silicon MPS R&D run",
+              "",
+              f"Models tested: {', '.join(m['model'] for m in summary)}",
+              "",
+              "| Model | Classification | Exit | Elapsed (s) |",
+              "|-------|----------------|------|-------------|",
+          ]
+          for entry in summary:
+              md_lines.append(
+                  f"| {entry['model']} | {entry['classification']} "
+                  f"| {entry['exit_code']} | {entry['elapsed_seconds']} |"
+              )
+          (results_root / "summary.md").write_text("\n".join(md_lines) + "\n")
+
+          # Do not fail the job on a classified MPS failure — the point of
+          # this workflow is to collect data, not to gate anything.
+          sys.exit(0)
+          PY
+
+      - name: Show summary
+        if: always()
+        run: |
+          if [ -f rd_results/summary.md ]; then
+            cat rd_results/summary.md
+          fi
+
+      - name: Upload R&D artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-silicon-mps-rd-${{ github.run_id }}
+          path: |
+            rd_results/**
+            rd_input/**
+          if-no-files-found: warn
