@@ -9,17 +9,44 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 STEMwerk-reaper is a REAPER script that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend (audio-separator/Demucs) and keeps processing on your machine.
 
 ### Stable release note
-This README describes the current public stable release, `v2.2.2.1`. Future development continues on separate branches, but the features documented here reflect the current stable release line.
+This README describes the current public stable release, `v2.2.2.2`. Future development continues on separate branches, but the features documented here reflect the current stable release line.
 
-`v2.2.2.1` is a stabilization and packaging release. Compared with older `2.2.1.x` builds, the `2.2.2.x` line includes a visual refresh with refined STEMwerk theme styling, better dark and light UI consistency, improved setup/progress/complete window presentation, and better multilingual layout fit.
+`v2.2.2.2` is a reliability and packaging parity release on top of the `2.2.2.x` UI/workflow line.
 
-#### What's new in v2.2.2.1
-- **Windows installer hardening**: bootstrap improvements and reduced normal installer size (source/master toolbar PNGs excluded from the installed payload; runtime strips and singles are still included)
-- **Progress/UI fixes**: fixed duplicate stage text (e.g. `Processing Processing`), improved cancel handling and status reporting, fixed i18n fallback text issues
-- **Offline patch path expanded**: the offline patch installer now supports older existing installs, including v2.2.1.4 and v2.2.2.0-style setups
-- **macOS/Linux torch pin**: bootstrap now pins `torch` and `torchaudio` to `2.5.1` to avoid a PyTorch 2.6+ Demucs model-loading failure (`weights_only` default change); existing venvs with `torch >= 2.6` are automatically rebuilt
-- **Better diagnostics**: separation logs now include Python/torch/torchaudio/onnxruntime/device information to make support easier
-- **Toolbar refresh**: updated toolbar setup assets and installer packaging
+#### What's new in v2.2.2.2
+**Reliability / Support**
+- Better support bundle diagnostics
+- Runtime run artifacts are included in support bundles
+- Busy/status window is shown while saving a support bundle
+- Support guidance is improved in both Native and Visual Help
+- Generated `dist/` output is now ignored to avoid accidental commits
+
+**macOS / Apple Silicon**
+- Missing FFmpeg recovery is improved
+- Setup checks Homebrew and MacPorts FFmpeg paths, including `/opt/local/bin/ffmpeg`
+- Setup can guide users to **Set FFmpeg Path**
+- Apple Silicon MPS is detected for diagnostics, but Demucs separation now uses CPU fallback for reliability
+- This avoids a known PyTorch/MPS failure path with Demucs on Apple Silicon
+- MPS acceleration remains experimental/R&D, not a normal production route in this release
+
+**Windows / Installer**
+- Offline patch now accepts both modern and legacy install layouts
+- Installer payload excludes are restored for non-runtime/source assets
+- Installer icon assets are restored
+
+**UI / Workflow**
+- New output grouping option: **Per item / Per track**
+- Source-track grouping applies only to **New Tracks**
+- Storage labels are clarified (`Storage/Opslag/Speicherort`)
+- Cleanup labels are clarified (`Cleanup/Opruimen/Aufräumen`)
+- Section and footer tooltips are added
+- Native/Visual Help support information is improved
+- Visible EN/NL/DE i18n polish
+
+**Diagnostics / Performance**
+- Phase/timing diagnostics for GPU scheduling analysis
+- Timing summary helper utilities
+- Internal parallel job limiter prototype exists, but remains off by default
 
 Release validation: Windows VM smoke PASS, Windows NVIDIA laptop smoke PASS (including Quality separation and cancel), Linux AMD sanity PASS.
 
@@ -78,7 +105,7 @@ Windows release assets may also include bundled or offline-oriented installers f
 You should still run `STEMwerk-SETUP.lua` when asked to verify or repair the runtime inside REAPER.
 
 ## Backend Support
-Windows is the primary validated path for the `v2.2.2.1` release. macOS and Linux receive backend dependency hardening in this release.
+Windows is the primary validated path for the `v2.2.2.2` release.
 
 ### CPU
 - Windows: validated, including CPU/VM setups
@@ -86,7 +113,7 @@ Windows is the primary validated path for the `v2.2.2.1` release. macOS and Linu
 - Linux: supported
 
 ### Windows GPU
-- NVIDIA: CUDA validated on `v2.2.2.1`
+- NVIDIA: CUDA validated on `v2.2.2.2`
 - AMD / Intel GPU: DirectML route (`torch-directml` + `onnxruntime-directml`), validated on Windows AMD
 
 ### Linux GPU
@@ -96,29 +123,31 @@ Windows is the primary validated path for the `v2.2.2.1` release. macOS and Linu
 
 ### Apple Silicon
 - CPU is supported
-- Platform-specific acceleration should be treated as best-effort; Apple Silicon reports are welcome
+- Apple Silicon MPS is detected for diagnostics only in this release path
+- Demucs separation uses CPU fallback for reliability on Apple Silicon
+- MPS acceleration remains experimental/R&D and is not a normal production route in `v2.2.2.2`
 
 ## Downloads
 
 ### Which installer should I use?
-- **New Windows users**: use `STEMwerk-Setup-2.2.2.1.exe` — the standard online installer
-- **Windows users who want embedded Python + FFmpeg**: use `STEMwerk-Setup-2.2.2.1-bundled.exe`
-- **Existing Windows users updating from a previous install**: use `STEMwerk-Setup-2.2.2.1-offline-patch.exe` — supports v2.2.1.4 and v2.2.2.0-style installs
+- **New Windows users**: use `STEMwerk-Setup-2.2.2.2.exe` — the standard online installer
+- **Windows users who want embedded Python + FFmpeg**: use `STEMwerk-Setup-2.2.2.2-bundled.exe`
+- **Existing Windows users updating from a previous install**: use `STEMwerk-Setup-2.2.2.2-offline-patch.exe` — supports modern and legacy install layouts
 - **Fully offline Windows users who need all models pre-bundled**: use the Google Drive allmodels installers below
 - **Linux users**: use the AppImage, `.deb`, or `.rpm` package
 - **macOS and Linux ReaPack users**: install/update through ReaPack, then run STEMwerk setup/repair in REAPER if the backend runtime needs checking or rebuilding
 - **Windows ReaPack users**: ReaPack updates the scripts, but it is not the recommended first-time setup path on Windows; use the Windows installer first if the runtime is missing or not yet prepared
 
-### GitHub release assets (v2.2.2.1)
+### GitHub release assets (v2.2.2.2)
 
 | File | Description | Size |
 |---|---|---:|
-| `STEMwerk-Setup-2.2.2.1.exe` | Windows standard installer | 3.33 MB |
-| `STEMwerk-Setup-2.2.2.1-bundled.exe` | Windows bundled installer (Python + FFmpeg included) | 133 MB |
-| `STEMwerk-Setup-2.2.2.1-offline-patch.exe` | Windows offline patch/update helper | 3.42 MB |
-| `STEMwerk-v2.2.2.1-Linux-x86_64.AppImage` | Linux portable build | 1.21 MB |
-| `STEMwerk-v2.2.2.1-Linux-amd64.deb` | Debian/Ubuntu package | 0.93 MB |
-| `STEMwerk-v2.2.2.1-Linux-x86_64.rpm` | RPM package | 0.95 MB |
+| `STEMwerk-Setup-2.2.2.2.exe` | Windows standard installer | 3.33 MB |
+| `STEMwerk-Setup-2.2.2.2-bundled.exe` | Windows bundled installer (Python + FFmpeg included) | 133 MB |
+| `STEMwerk-Setup-2.2.2.2-offline-patch.exe` | Windows offline patch/update helper | 3.42 MB |
+| `STEMwerk-v2.2.2.2-Linux-x86_64.AppImage` | Linux portable build | 1.21 MB |
+| `STEMwerk-v2.2.2.2-Linux-amd64.deb` | Debian/Ubuntu package | 0.93 MB |
+| `STEMwerk-v2.2.2.2-Linux-x86_64.rpm` | RPM package | 0.95 MB |
 
 Linux packages were repacked after publish to remove non-runtime source toolbar PNGs and junk files from the package payload. Runtime files and toolbar assets are preserved; no runtime code changed.
 
@@ -129,9 +158,9 @@ These are fully offline Windows installers that include all runtime packages and
 
 | File | Target | Size | Download |
 |---|---|---:|---|
-| `STEMwerk-Setup-2.2.2.1-offline-bundled-cpu-allmodels.exe` | Windows CPU | 871.3 MB | [Google Drive](https://drive.google.com/file/d/1wIvR8QFKxAYANoSjhjdq45MjBXZjQRS_/view?usp=drive_link) |
-| `STEMwerk-Setup-2.2.2.1-offline-bundled-amd-gpu-allmodels.exe` | Windows AMD GPU / DirectML | 903.7 MB | [Google Drive](https://drive.google.com/file/d/1e_FZ276MEyRsQ-SmrV7PRBw43wLscAHC/view?usp=drive_link) |
-| `STEMwerk-Setup-2.2.2.1-offline-bundled-nvidia-gpu-allmodels.exe` | Windows NVIDIA GPU / CUDA | 3.13 GB | [Google Drive](https://drive.google.com/file/d/1mdppCx0qDCkv7dXII_T_sYGTUTf0yHTt/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.2-offline-bundled-cpu-allmodels.exe` | Windows CPU | 871.3 MB | [Google Drive](https://drive.google.com/file/d/1wIvR8QFKxAYANoSjhjdq45MjBXZjQRS_/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.2-offline-bundled-amd-gpu-allmodels.exe` | Windows AMD GPU / DirectML | 903.7 MB | [Google Drive](https://drive.google.com/file/d/1e_FZ276MEyRsQ-SmrV7PRBw43wLscAHC/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.2-offline-bundled-nvidia-gpu-allmodels.exe` | Windows NVIDIA GPU / CUDA | 3.13 GB | [Google Drive](https://drive.google.com/file/d/1mdppCx0qDCkv7dXII_T_sYGTUTf0yHTt/view?usp=drive_link) |
 
 ### First-use model downloads
 If models are not already included in your installer, approximate download sizes on first use:
@@ -145,14 +174,14 @@ Model size is separate from runtime/bootstrap size, and model download size is n
 - The installer is the recommended setup path on Windows.
 - ReaPack is not recommended for first-time Windows setup because it installs scripts only, not the full runtime.
 - During first-time setup, installer steps can appear paused for several minutes while Python/backend packages are resolved.
-- For `v2.2.2.1`, offline or bundled users may also use the offline patch installer path when appropriate.
+- For `v2.2.2.2`, offline or bundled users may also use the offline patch installer path when appropriate.
 - `STEMwerk-SETUP.lua` is a REAPER-side verify/repair tool. It does not replace the Windows installer bootstrap path.
 
 ### Updating from older Windows installs
-- If you already use an older bundled or offline Windows install, `v2.2.2.1` is the current stable target.
-- Prefer `STEMwerk-Setup-2.2.2.1-offline-patch.exe` when you want the smaller update path for an existing compatible install (supports v2.2.1.4 and v2.2.2.0-style setups).
-- If that patch path is not appropriate for your current install state, use the full Windows installer for `v2.2.2.1` instead.
-- Current stable release: [STEMwerk v2.2.2.1](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.1).
+- If you already use an older bundled or offline Windows install, `v2.2.2.2` is the current stable target.
+- Prefer `STEMwerk-Setup-2.2.2.2-offline-patch.exe` when you want the smaller update path for an existing compatible install.
+- If that patch path is not appropriate for your current install state, use the full Windows installer for `v2.2.2.2` instead.
+- Current stable release: [STEMwerk v2.2.2.2](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2).
 - After any installer update, run `STEMwerk-SETUP.lua` once to verify paths/runtime state.
 - If setup still reports missing runtime/bootstrap pieces, rerun the installer first, then rerun `STEMwerk-SETUP.lua`.
 
@@ -234,7 +263,7 @@ Note: REAPER does not auto-register scripts in the Action List. Use Actions → 
 - If no stems are created and you need help, please provide: `bootstrap.log`, any available `separation_log.txt`, `stdout.txt`, and `stderr.txt`.
 - NVIDIA offline bundled troubleshooting (related to issue #11):
   - If separation works online but fails offline, verify models are present in `%LOCALAPPDATA%\\STEMwerk\\models` and that the installed variant actually includes the model set you selected.
-  - Re-run the matching offline bundled installer variant (for example `STEMwerk-Setup-2.2.2.1-offline-bundled-nvidia-gpu-allmodels.exe`) and test once with internet disabled to confirm the offline path.
+  - Re-run the matching offline bundled installer variant (for example `STEMwerk-Setup-2.2.2.2-offline-bundled-nvidia-gpu-allmodels.exe`) and test once with internet disabled to confirm the offline path.
   - Bundled/offline installers intentionally disable the pre-setup "cleanup models" task to avoid deleting freshly bundled model payloads.
 
 ## REAPER workflows
