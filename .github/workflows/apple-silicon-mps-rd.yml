@@ -23,6 +23,11 @@ on:
         required: true
         default: "10"
         type: string
+      mps_high_watermark_ratio:
+        description: "Optional PYTORCH_MPS_HIGH_WATERMARK_RATIO override (e.g. 0.0 to disable the watermark). Leave blank for torch default. R&D-only knob, not a production recommendation."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   mps-rd:
@@ -134,6 +139,7 @@ jobs:
           STEMWERK_EXPERIMENTAL_MPS: "1"
           PYTORCH_ENABLE_MPS_FALLBACK: "1"
           SELECTED_MODEL: ${{ inputs.model }}
+          MPS_HIGH_WATERMARK_RATIO: ${{ inputs.mps_high_watermark_ratio }}
         run: |
           . .venv/bin/activate
           mkdir -p rd_results
@@ -169,6 +175,8 @@ jobs:
                   return "FAIL_MPS_UNSUPPORTED_OP"
               if "Output channels > 65536" in combined:
                   return "FAIL_MPS_UNSUPPORTED_OP"
+              if "MPS backend out of memory" in combined:
+                  return "FAIL_MPS_OOM"
               return "FAIL_OTHER"
 
           summary = []
@@ -192,6 +200,10 @@ jobs:
               env = os.environ.copy()
               env["STEMWERK_EXPERIMENTAL_MPS"] = "1"
               env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+              watermark = os.environ.get("MPS_HIGH_WATERMARK_RATIO", "").strip()
+              if watermark:
+                  env["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = watermark
+                  print(f"STEMWERK_RD_DIAG PYTORCH_MPS_HIGH_WATERMARK_RATIO={watermark}", flush=True)
 
               start = time.time()
               proc = subprocess.run(
