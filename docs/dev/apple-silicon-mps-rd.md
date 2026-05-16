@@ -118,6 +118,48 @@ isolates whether MPS works at all on this machine. The load-only probe
 (`test_demucs_on_mps_load_only`) is intentionally `xfail` on failure
 since it is the known-broken path.
 
+### Running the GitHub-hosted MPS R&D workflow
+
+If you don't have a local Apple Silicon Mac, the workflow
+`.github/workflows/apple-silicon-mps-rd.yml` runs the same probe on a
+GitHub-hosted `macos-14` arm64 runner. It is `workflow_dispatch` only —
+it never runs on push or pull_request, never tags, never releases.
+
+To trigger it:
+
+1. Go to the **Actions** tab, pick **Apple Silicon MPS R&D**, click
+   **Run workflow**.
+2. Pick a target branch (typically `rd/apple-silicon-mps-backend`).
+3. Inputs:
+   - `model`: `all` (Demucs matrix), or one of `htdemucs`,
+     `htdemucs_ft`, `htdemucs_6s`.
+   - `duration_seconds`: length of the synthetic stereo WAV the job
+     generates as input. Default `10`.
+4. The job installs the macOS Apple Silicon pinned stack
+   (`torch==2.5.1`, `audio-separator==0.23.0`, etc.), generates a
+   synthetic stereo sine-tone WAV, then for each selected model runs:
+   ```
+   STEMWERK_EXPERIMENTAL_MPS=1 PYTORCH_ENABLE_MPS_FALLBACK=1 \
+     python scripts/reaper/audio_separator_process.py \
+       <input.wav> <output_dir> --model <model> --device mps
+   ```
+   capturing exit code, elapsed time, stdout, and stderr.
+5. Each model's run is classified as `PASS`,
+   `FAIL_MPS_UNSUPPORTED_OP` (matched by the
+   `STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536` marker or the
+   raw `Output channels > 65536` torch message), or `FAIL_OTHER`. A
+   classified failure does **not** fail the job — the workflow is for
+   data collection.
+6. Artifacts are uploaded as `apple-silicon-mps-rd-<run_id>` and
+   include `rd_results/summary.md`, `rd_results/summary.json`, per-model
+   `stdout.log` / `stderr.log`, the `phase_events.jsonl` /
+   `separation_log.txt` emitted by `audio_separator_process.py`, and the
+   generated input WAV.
+
+Use the artifact summary to fill in the model matrix above. Do **not**
+commit results back into this document automatically — review them
+first.
+
 ### Model matrix (to fill in)
 
 | Model | Family | Requested device | Effective device | Result | Failure message | Elapsed | Output validity |
