@@ -13996,6 +13996,14 @@ local function drawProgressWindow()
     local statusRowGap = hasSummaryFooter and PS(4) or 0
     local statusBlockH = statusLineH * (hasSummaryFooter and 2 or 1) + statusBlockPadY * 2 + statusRowGap
     local statusBlockY = h - statusBlockH
+    local function setFooterTooltip(x, y, ww, hh, text)
+        if SETTINGS and SETTINGS.tooltips == false then return end
+        if not text or text == "" then return end
+        if mx >= x and mx <= x + ww and my >= y and my <= y + hh then
+            tooltipText = text
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        end
+    end
     gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], statusBlockAlpha)
     gfx.rect(0, statusBlockY, w, statusBlockH, 1)
     gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], statusBlockBorderAlpha)
@@ -14038,9 +14046,11 @@ local function drawProgressWindow()
     gfx.x = statusPadX
     gfx.y = row1Y
     gfx.drawstr(leftLabel)
+    setFooterTooltip(statusPadX, row1Y, leftW, statusLineH, T("tooltip_footer_selected") or "Shows the current processing selection/time context.")
     gfx.x = w - statusPadX - rightTw
     gfx.y = row1Y
     gfx.drawstr(rightLabel)
+    setFooterTooltip(w - statusPadX - rightW, row1Y, rightW, statusLineH, T("tooltip_footer_output") or "Shows current processing target and completion hint.")
 
     if hasSummaryFooter then
         local summaryFontSize = PS(9)
@@ -14051,11 +14061,13 @@ local function drawProgressWindow()
         gfx.x = statusPadX
         gfx.y = row2Y
         gfx.drawstr(summaryLeftLabel)
+        setFooterTooltip(statusPadX, row2Y, leftW, statusLineH, T("tooltip_footer_location") or "Shows runtime details and progress summary.")
         if summaryRight and summaryRight ~= "" then
             gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.68)
             gfx.x = w - statusPadX - summaryRightTw
             gfx.y = row2Y
             gfx.drawstr(summaryRightLabel)
+            setFooterTooltip(w - statusPadX - rightW, row2Y, rightW, statusLineH, T("tooltip_footer_location") or "Shows runtime details and progress summary.")
         end
     end
 
@@ -17861,6 +17873,14 @@ function drawMultiTrackProgressWindow()
     local statusRowGap = hasSummaryFooter and PS(4) or 0
     local statusBlockH = statusLineH * (hasSummaryFooter and 2 or 1) + statusBlockPadY * 2 + statusRowGap
     local statusBlockY = h - statusBlockH
+    local function setFooterTooltip(x, y, ww, hh, text)
+        if SETTINGS and SETTINGS.tooltips == false then return end
+        if not text or text == "" then return end
+        if mx >= x and mx <= x + ww and my >= y and my <= y + hh then
+            tooltipText = text
+            tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        end
+    end
     local totalMins = math.floor(globalElapsed / 60)
     local totalSecs = math.floor(globalElapsed % 60)
     local mtTime = T("mt_time") or "Time"
@@ -17945,9 +17965,11 @@ function drawMultiTrackProgressWindow()
     gfx.x = statusPadX
     gfx.y = row1Y
     gfx.drawstr(leftLabel)
+    setFooterTooltip(statusPadX, row1Y, leftW, statusLineH, T("tooltip_footer_selected") or "Shows aggregate batch processing state.")
     gfx.x = gfx.w - statusPadX - rightTw
     gfx.y = row1Y
     gfx.drawstr(rightLabel)
+    setFooterTooltip(gfx.w - statusPadX - rightW, row1Y, rightW, statusLineH, T("tooltip_footer_output") or "Shows active batch target and control hint.")
 
     if hasSummaryFooter then
         local summaryFontSize = PS(9)
@@ -17960,11 +17982,13 @@ function drawMultiTrackProgressWindow()
         gfx.x = statusPadX
         gfx.y = row2Y
         gfx.drawstr(summaryLeftLabel)
+        setFooterTooltip(statusPadX, row2Y, leftW, statusLineH, T("tooltip_footer_location") or "Shows batch summary and throughput.")
         if summaryRight ~= "" then
             gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.68)
             gfx.x = gfx.w - statusPadX - summaryRightTw
             gfx.y = row2Y
             gfx.drawstr(summaryRightLabel)
+            setFooterTooltip(gfx.w - statusPadX - rightW, row2Y, rightW, statusLineH, T("tooltip_footer_location") or "Shows batch summary and throughput.")
         end
     end
 

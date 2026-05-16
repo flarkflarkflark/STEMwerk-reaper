@@ -209,12 +209,13 @@ function SETTINGS_MOD.load()
     end
 
     local language = C.reaper.GetExtState(C.EXT_SECTION, "language")
-    if language ~= "" then
-        C.SETTINGS.language = language
+    local normalizedLanguage = normalizeLanguageCode(language)
+    if normalizedLanguage then
+        C.SETTINGS.language = normalizedLanguage
     else
-        C.SETTINGS.language = detectSystemLanguage()
-        C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
+        C.SETTINGS.language = "en"
     end
+    C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
 
     local appliedLanguage = C.setLanguage(C.SETTINGS.language)
     if not appliedLanguage then
