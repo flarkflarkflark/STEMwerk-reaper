@@ -28,6 +28,7 @@ copy_linux_payload() {
     "$root_dir/scripts/reaper/" \
     "$root_dir/i18n" \
     "$root_dir/installer/assets/stemwerk.svg" \
+    "$root_dir/installer/assets/stemwerk.png" \
     "$root_dir/README.md" \
     "$root_dir/LICENSE" \
     "$dest_dir/"

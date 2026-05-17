@@ -20,10 +20,23 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 rm -rf "$BUILD_DIR"
-mkdir -p "$OUT_DIR" "$PKG_ROOT/DEBIAN" "$PKG_ROOT/usr/share/stemwerk-reaper"
+mkdir -p "$OUT_DIR" \
+  "$PKG_ROOT/DEBIAN" \
+  "$PKG_ROOT/usr/share/stemwerk-reaper" \
+  "$PKG_ROOT/usr/share/icons/hicolor/512x512/apps" \
+  "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps"
 
 # Copy only what we need
 copy_linux_payload "$ROOT_DIR" "$PKG_ROOT/usr/share/stemwerk-reaper"
+
+if [[ -f "$PKG_ROOT/usr/share/stemwerk-reaper/stemwerk.png" ]]; then
+  cp -f "$PKG_ROOT/usr/share/stemwerk-reaper/stemwerk.png" \
+    "$PKG_ROOT/usr/share/icons/hicolor/512x512/apps/stemwerk.png"
+fi
+if [[ -f "$PKG_ROOT/usr/share/stemwerk-reaper/stemwerk.svg" ]]; then
+  cp -f "$PKG_ROOT/usr/share/stemwerk-reaper/stemwerk.svg" \
+    "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps/stemwerk.svg"
+fi
 
 cat > "$PKG_ROOT/DEBIAN/control" <<EOF
 Package: stemwerk
@@ -59,7 +72,7 @@ if command -v zenity >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}"
 elif command -v kdialog >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   kdialog --msgbox "$RICH_MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || true
 elif command -v notify-send >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-  notify-send "STEMwerk Installer" "$PLAIN_MESSAGE" >/dev/null 2>&1 || true
+  notify-send -i stemwerk "STEMwerk Installer" "$PLAIN_MESSAGE" >/dev/null 2>&1 || true
 fi
 EOF
 chmod 0755 "$PKG_ROOT/DEBIAN/postinst"
