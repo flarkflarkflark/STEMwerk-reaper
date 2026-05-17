@@ -2303,13 +2303,19 @@ end
 
 local function finalizeWindowsVerify(success, lines)
     if not WINDOWS_VERIFY then return end
-    WINDOWS_VERIFY.finalized = true
-    WINDOWS_VERIFY.finalSuccess = success == true
-    if success and lines and lines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
-        table.remove(lines, 1)
+    local runtime = WINDOWS_VERIFY.runtime
+    local separatorScript = WINDOWS_VERIFY.separatorScript
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local finalLines = lines or WINDOWS_VERIFY.statusLines or {}
+    if success and finalLines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
+        table.remove(finalLines, 1)
     end
-    WINDOWS_VERIFY.statusLines = lines or WINDOWS_VERIFY.statusLines
-    WINDOWS_VERIFY.title = success and "Setup complete." or "Setup needs attention."
+    gfx.quit()
+    WINDOWS_VERIFY = nil
+    reaper.defer(function()
+        showDeferredFinalWindow(runtime, stateFile, logFile, finalLines, success == true, separatorScript)
+    end)
 end
 
 local function windowsVerifyTick()
