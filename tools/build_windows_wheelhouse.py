@@ -34,7 +34,6 @@ TARGET_ENV = {
 SKIP_DEP_NAMES = {
     "diffq",      # non-Windows dependency
     "julius",     # no reliable win_amd64 wheel on index
-    "samplerate", # no reliable win_amd64 wheel on index
 }
 
 
@@ -167,6 +166,7 @@ def seeded_requirements(include_directml: bool) -> Iterable[str]:
         "rotary-embedding-torch>=0.6.1,<0.7.0",
         "scipy>=1.13.0,<2.0.0",
         "six>=1.16",
+        "samplerate==0.1.0",
         "tqdm",
         "onnxruntime==1.24.4",
         "torch==2.4.1",

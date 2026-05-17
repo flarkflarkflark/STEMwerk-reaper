@@ -158,6 +158,16 @@ local function isWindowsStorePythonPath(path)
         or p:find("/microsoft/windowsapps/python", 1, true)
 end
 
+local function isUsableWindowsPythonPath(path)
+    if not path or path == "" then return false end
+    if isWindowsStorePythonPath(path) then return false end
+    local p = tostring(path)
+    local lower = p:lower()
+    if lower == "python" or lower == "python.exe" then return false end
+    if type(C.isAbsolutePath) == "function" and not C.isAbsolutePath(p) then return false end
+    return fileExists(p)
+end
+
 local function readBootstrapEnvPython(runtime)
     if not runtime or not runtime.base then return "" end
     local PATH_SEP = C.PATH_SEP or "/"
@@ -182,17 +192,23 @@ local function readBootstrapEnvPython(runtime)
 end
 
 local function resolveWindowsPythonPath(runtime)
+    local caps = M.readCapabilities and M.readCapabilities() or nil
+    local capPy = caps and caps.kv and caps.kv.PYTHON_PATH or ""
+    if isUsableWindowsPythonPath(capPy) then
+        return capPy
+    end
+
     local bootstrapPy = readBootstrapEnvPython(runtime)
-    if bootstrapPy ~= "" and not isWindowsStorePythonPath(bootstrapPy) and fileExists(bootstrapPy) then
+    if isUsableWindowsPythonPath(bootstrapPy) then
         return bootstrapPy
     end
 
-    if runtime and runtime.venvPython and fileExists(runtime.venvPython) and not isWindowsStorePythonPath(runtime.venvPython) then
+    if runtime and isUsableWindowsPythonPath(runtime.venvPython) then
         return runtime.venvPython
     end
 
     local extPath = type(C.getExtStateValue) == "function" and C.getExtStateValue("pythonPath") or nil
-    if extPath and extPath ~= "" and not isWindowsStorePythonPath(extPath) and fileExists(extPath) then
+    if isUsableWindowsPythonPath(extPath) then
         return extPath
     end
 
@@ -202,7 +218,7 @@ local function resolveWindowsPythonPath(runtime)
     h:close()
     for line in out:gmatch("[^\r\n]+") do
         local p = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if p ~= "" and fileExists(p) and not isWindowsStorePythonPath(p) then
+        if isUsableWindowsPythonPath(p) then
             return p
         end
     end
@@ -569,6 +585,13 @@ function M.canImportAudioSeparator(pythonPath)
     return false
 end
 
+local function canImportModule(pythonPath, moduleName)
+    if not pythonPath or pythonPath == "" or not moduleName or moduleName == "" then return false end
+    local cmd = commandQuote(pythonPath) .. " -c " .. commandQuote("import " .. moduleName)
+    local rc = select(1, execCommandWithOutput(cmd, 15000))
+    return tonumber(rc) == 0
+end
+
 function M.safeDofile(path)
     if not path or path == "" then
         return false, "missing"
@@ -684,6 +707,12 @@ function M.verifyRuntimeAfterBootstrap()
     if pythonOk and not M.canImportAudioSeparator(pythonPath) then
         errors[#errors + 1] = "audio_separator_missing"
     end
+    if pythonOk and not canImportModule(pythonPath, "samplerate") then
+        errors[#errors + 1] = "samplerate_missing"
+    end
+    if pythonOk and not canImportModule(pythonPath, "stemwerk_core") then
+        errors[#errors + 1] = "stemwerk_core_missing"
+    end
 
     if #errors > 0 then
         logExec("runtime_verify_failed", -1, table.concat(errors, ","))
@@ -792,9 +821,19 @@ function M.ensureDependenciesInteractive()
     end
 
     local missing = {}
-    if not pythonOk then missing[#missing + 1] = "Python runtime" end
+    if not pythonOk then missing[#missing + 1] = "Python runtime (invalid path or not executable)" end
     if not ffmpegOk then missing[#missing + 1] = "FFmpeg" end
-    if pythonOk and ffmpegOk and (not audioOk) then missing[#missing + 1] = "separator runtime (audio-separator/onnxruntime)" end
+    if pythonOk and ffmpegOk and (not audioOk) then missing[#missing + 1] = "audio_separator/onnxruntime runtime" end
+    if runtimeErrors and #runtimeErrors > 0 then
+        local hasSamplerate = false
+        local hasCore = false
+        for _, err in ipairs(runtimeErrors) do
+            if err == "samplerate_missing" then hasSamplerate = true end
+            if err == "stemwerk_core_missing" then hasCore = true end
+        end
+        if hasSamplerate then missing[#missing + 1] = "samplerate runtime" end
+        if hasCore then missing[#missing + 1] = "stemwerk_core runtime" end
+    end
 
     local runtime = M.getRuntimePaths()
     local msg =
