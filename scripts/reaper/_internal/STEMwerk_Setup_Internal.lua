@@ -2312,10 +2312,9 @@ local function finalizeWindowsVerify(success, lines)
     if success and finalLines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
         table.remove(finalLines, 1)
     end
-    gfx.quit()
     WINDOWS_VERIFY = nil
     reaper.defer(function()
-        showDeferredFinalWindow(runtime, stateFile, logFile, finalLines, success == true, separatorScript)
+        showDeferredFinalWindow(runtime, stateFile, logFile, finalLines, success == true, separatorScript, true)
     end)
 end
 
@@ -2502,7 +2501,6 @@ local function windowsVerifyTick()
                 result.finalMessage[#result.finalMessage + 1] = "Note: Installer metadata was incomplete, but runtime checks passed."
             end
             finalizeWindowsVerify(true, result.finalMessage)
-            reaper.defer(windowsVerifyTick)
             return
         end
 
@@ -2536,15 +2534,16 @@ local function windowsVerifyTick()
         lines[#lines + 1] = ""
         lines[#lines + 1] = "Log: " .. tostring(logFile)
         finalizeWindowsVerify(false, lines)
-        reaper.defer(windowsVerifyTick)
         return
     end
 end
 
-local function windowsVerifyStart(runtime, separatorScript)
+local function windowsVerifyStart(runtime, separatorScript, reuseWindow)
     ensureDir(runtime.runtimeState)
     ensureDir(runtime.runtimeLogs)
-    gfx.init(setupWindowTitle("Windows"), 900, 620, 0, 140, 100)
+    if not reuseWindow then
+        gfx.init(setupWindowTitle("Windows"), 900, 620, 0, 140, 100)
+    end
     WINDOWS_VERIFY = {
         runtime = runtime,
         separatorScript = separatorScript,
@@ -4293,7 +4292,7 @@ end
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
 -- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
 -- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
-showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript)
+showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript, reuseWindow)
     if not gfx then
         msgBox("STEMwerk Setup", table.concat(finalMessage or {}, "\n"), finalSuccess and 0 or 16)
         return
@@ -4301,7 +4300,9 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
 
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
-    gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
+    if not reuseWindow then
+        gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
+    end
     LINUX_SETUP = {
         runtime         = runtime,
         mode            = "final",
@@ -5203,26 +5204,30 @@ local function existingRuntimeSetupMenuTick()
     end
 
     if chosen then
-        gfx.quit()
         local runtime = m.runtime
         local separatorScript = m.separatorScript
         SETUP_MENU = nil
         if chosen == "verify" then
             if OS == "Windows" then
-                windowsVerifyStart(runtime, separatorScript)
+                windowsVerifyStart(runtime, separatorScript, true)
             else
+                gfx.quit()
                 verifyExistingSetup(runtime, separatorScript)
             end
         elseif chosen == "repair" or chosen == "rebuild-venv" then
             if OS == "Windows" then
-                windowsVerifyStart(runtime, separatorScript)
+                windowsVerifyStart(runtime, separatorScript, true)
             else
+                gfx.quit()
                 startLinuxSetup(runtime, separatorScript, chosen)
             end
         elseif chosen == "support-bundle" then
+            gfx.quit()
             reaper.defer(function()
                 runSupportBundleAction()
             end)
+        elseif chosen == "cancel" then
+            gfx.quit()
         end
         return
     end
