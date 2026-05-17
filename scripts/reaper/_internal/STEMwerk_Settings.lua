@@ -83,9 +83,9 @@ function SETTINGS_MOD.loadSavedMainWindowPos()
     local getExtState = C.reaper and C.reaper.GetExtState
     if not getExtState then return end
 
-    local savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos")
+    local savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos_main")
     if savedPosMain == "" then
-        savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos_main")
+        savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos")
     end
 
     if savedPosMain ~= "" then

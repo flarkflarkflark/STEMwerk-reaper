@@ -194,6 +194,7 @@ install_linux_torch_stack() {
       return 1
       ;;
   esac
+  enforce_numpy_runtime_range || set_status "deps_failed" "numpy_range_enforce_failed"
 }
 
 assert_pinned_torch_stack() {
@@ -201,6 +202,8 @@ assert_pinned_torch_stack() {
   _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
 expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
+def core(ver):
+    return str(ver).split("+", 1)[0]
 try:
     import torch
     torch_ver = getattr(torch, "__version__", "")
@@ -213,7 +216,7 @@ try:
 except Exception as exc:
     print("error|torchaudio_import|" + str(exc))
     raise SystemExit(0)
-if torch_ver == expected_torch and torchaudio_ver == expected_torchaudio:
+if core(torch_ver) == expected_torch and core(torchaudio_ver) == expected_torchaudio:
     print("ok|" + torch_ver + "|" + torchaudio_ver)
 else:
     print("bad|" + torch_ver + "|" + torchaudio_ver)
@@ -228,6 +231,14 @@ PY
   log_step "Pinned torch assertion failed: ${_probe}"
   printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
   return 1
+}
+
+enforce_numpy_runtime_range() {
+  if [ -z "${VENV_PY}" ] || [ ! -x "${VENV_PY}" ]; then
+    return 1
+  fi
+  log_step "Enforcing runtime numpy range: >=1.26,<2"
+  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir "numpy>=1.26,<2" >> "${LOG_FILE}" 2>&1
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -678,8 +689,8 @@ PY
       log_step "CUDA/NVIDIA package overrides blocked via constraints"
     fi
 
-    log_step "Installing numpy<2.4"
-    "${VENV_PY}" -m pip install "numpy<2.4" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+    log_step "Installing numpy>=1.26,<2"
+    "${VENV_PY}" -m pip install "numpy>=1.26,<2" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
 
     log_stage "Installing STEMwerk-core"
     core_install_rc=0
@@ -806,9 +817,56 @@ if [ -z "${FFMPEG}" ] || ! "${FFMPEG}" -version >/dev/null 2>&1; then
 fi
 
 set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
+RUNTIME_STRICT_OK=1
 
 if [ -n "${PYTHON}" ] && [ -n "${VENV_PY}" ]; then
   log_step "Final verification"
+  RUNTIME_VERIFY_PROBE=$(STEMWERK_BACKEND="${BACKEND}" "${VENV_PY}" - <<'PY'
+import os
+import sys
+backend = os.environ.get("STEMWERK_BACKEND", "cpu")
+errors = []
+try:
+    import numpy as np
+    if int(str(getattr(np, "__version__", "0")).split(".", 1)[0]) >= 2:
+        errors.append("numpy_major_gte_2")
+except Exception as exc:
+    errors.append("numpy_import_failed:" + str(exc))
+try:
+    import numba  # noqa: F401
+except Exception as exc:
+    errors.append("numba_import_failed:" + str(exc))
+try:
+    import audio_separator  # noqa: F401
+except Exception as exc:
+    errors.append("audio_separator_import_failed:" + str(exc))
+for mod_name in ("onnxruntime", "stemwerk_core"):
+    try:
+        __import__(mod_name)
+    except Exception as exc:
+        errors.append(mod_name + "_import_failed:" + str(exc))
+try:
+    import torch
+    if backend == "rocm":
+        hip = getattr(getattr(torch, "version", None), "hip", None)
+        if not (hip is not None and torch.cuda.is_available() and int(torch.cuda.device_count()) > 0):
+            errors.append("rocm_runtime_probe_failed")
+    elif backend == "cuda":
+        if not (torch.cuda.is_available() and int(torch.cuda.device_count()) > 0):
+            errors.append("cuda_runtime_probe_failed")
+except Exception as exc:
+    errors.append("torch_import_failed:" + str(exc))
+if errors:
+    print(";".join(errors))
+    sys.exit(1)
+print("ok")
+PY
+)
+  if [ $? -ne 0 ]; then
+    log_step "Final runtime probe failed: ${RUNTIME_VERIFY_PROBE}"
+    set_status "deps_failed" "runtime_verify_failed"
+    RUNTIME_STRICT_OK=0
+  fi
   if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
     set_status "audio_separator_check_failed" "audio_separator_missing_after_setup"
   fi
@@ -882,13 +940,13 @@ else
   FINAL_OK=0
 fi
 
-if [ -n "${PYTHON_PATH}" ] && [ "${STATUS}" = "deps_failed" ]; then
+if [ -n "${PYTHON_PATH}" ] && [ "${STATUS}" = "deps_failed" ] && [ "${RUNTIME_STRICT_OK}" -eq 1 ]; then
   log_step "Clearing sticky deps_failed status after successful verification"
   STATUS="ok"
   STATUS_REASON=""
 fi
 
-if [ "${FINAL_OK}" -eq 1 ] && { [ "${STATUS}" = "ok" ] || [ "${STATUS}" = "deps_failed" ]; }; then
+if [ "${FINAL_OK}" -eq 1 ] && [ "${RUNTIME_STRICT_OK}" -eq 1 ] && { [ "${STATUS}" = "ok" ] || [ "${STATUS}" = "deps_failed" ]; }; then
   STATUS="ok"
   STATUS_REASON=""
 fi
