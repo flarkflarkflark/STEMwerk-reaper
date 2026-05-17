@@ -47,8 +47,8 @@ SetupIconFile=..\assets\stemwerk.ico
 #if FileExists('..\assets\stemwerk-wizard.bmp')
 WizardImageFile=..\assets\stemwerk-wizard.bmp
 #endif
-#if FileExists('..\assets\stemwerk-wizard-small-opt-stemwerk-colors-v2-centered-widewerk.bmp')
-WizardSmallImageFile=..\assets\stemwerk-wizard-small-opt-stemwerk-colors-v2-centered-widewerk.bmp
+#if FileExists('..\assets\stemwerk-wizard-small-logo.bmp')
+WizardSmallImageFile=..\assets\stemwerk-wizard-small-logo.bmp
 #endif
 DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
