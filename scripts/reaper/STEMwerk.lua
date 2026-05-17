@@ -8237,7 +8237,9 @@ local function messageWindowLoop()
     messageWindowState.nextFrameAt = loopNow + pacingFrameInterval("messageFrameInterval", "messageFrameIntervalFx")
 
     -- Save window position for next time
-    if reaper.JS_Window_Find then
+    -- On macOS, avoid JS_Window_GetRect for live position updates because its
+    -- frame-origin coordinates can drift from gfx.init client expectations.
+    if OS ~= "macOS" and reaper.JS_Window_Find then
         local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
         if hwnd then
             local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
@@ -10032,7 +10034,9 @@ end
 
 function GUI._updateDialogPosition()
     local updatedPos = false
-    if reaper.JS_Window_GetRect then
+    -- macOS: prefer gfx-derived coordinates for persisted main window placement.
+    -- JS rects can report frame-based Y that reopens follow-up windows too high.
+    if OS ~= "macOS" and reaper.JS_Window_GetRect then
         local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
         if hwnd then
             local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
