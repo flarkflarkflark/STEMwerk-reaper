@@ -58,6 +58,7 @@ local fileExists
 local pathExists
 local ensureDir
 local quoteArg
+local showDeferredFinalWindow
 
 local function setupPlatformLabel()
     if OS == "Windows" then return "Windows" end
@@ -4292,7 +4293,7 @@ end
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
 -- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
 -- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
-local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript)
+showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript)
     if not gfx then
         msgBox("STEMwerk Setup", table.concat(finalMessage or {}, "\n"), finalSuccess and 0 or 16)
         return
