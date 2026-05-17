@@ -2714,6 +2714,92 @@ local function openPath(path)
     end
 end
 
+local function isWindowsPythonAliasPath(path)
+    local p = trim(path):lower()
+    return p == "python" or p == "python.exe" or p == "py" or p == "py.exe"
+end
+
+local function setupResolveWindowsPython(runtime, state, capState)
+    local capPython = resolvePath(capState and capState.PYTHON_PATH or "")
+    local statePython = resolvePath((state and (state.PYTHON_PATH or state.VENV_PYTHON)) or "")
+    local extPythonRaw = trim(getExt("pythonPath") or "")
+    local extPython = resolvePath(extPythonRaw)
+
+    local function usablePath(p)
+        if p == "" then return false end
+        if not isAbsolutePath(p) then return false end
+        if isWindowsStorePythonPath(p) then return false end
+        return fileExists(p)
+    end
+
+    local extValid = usablePath(extPython) and (not isWindowsPythonAliasPath(extPythonRaw))
+    if extValid then
+        return extPython, "ExtState"
+    end
+    if usablePath(capPython) then
+        return capPython, "capabilities.env"
+    end
+    if usablePath(statePython) then
+        return statePython, "bootstrap.env"
+    end
+    local runtimePython = resolvePath(runtime and runtime.venvPython or "")
+    if usablePath(runtimePython) then
+        return runtimePython, "runtime venv"
+    end
+    return extPython ~= "" and extPython or statePython, "unresolved"
+end
+
+local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local state = fileExists(stateFile) and parseStateFile(stateFile) or {}
+    local capState = fileExists(capFile) and parseStateFile(capFile) or {}
+    local extPythonRaw = trim(getExt("pythonPath") or "")
+    local extFfmpeg = trim(getExt("ffmpegPath") or "")
+    local profile = trim(capState.PROFILE or state.PROFILE or "")
+    local backend = trim(capState.BACKEND or state.BACKEND or "")
+    local verification = trim(capState.VERIFICATION or "")
+    local status = trim(state.STATUS or "")
+    local reason = trim(state.STATUS_REASON or "")
+    local ffmpeg = trim(resolvePath(capState.FFMPEG_PATH or state.FFMPEG_PATH or extFfmpeg))
+    local python, pythonSource = setupResolveWindowsPython(runtime, state, capState)
+    local needsRepair = false
+
+    if status ~= "" and status ~= "ok" then needsRepair = true end
+    if verification ~= "" and verification ~= "ok" then needsRepair = true end
+    if trim(capState.AUDIO_SEPARATOR or "") == "missing" then needsRepair = true end
+    if trim(capState.STEMWERK_CORE or "") == "missing" then needsRepair = true end
+    if python == "" or (not isAbsolutePath(python)) or (not fileExists(python)) then needsRepair = true end
+    if ffmpeg == "" or (not fileExists(ffmpeg)) then needsRepair = true end
+
+    local deps = {
+        audio_separator = trim(capState.AUDIO_SEPARATOR or ""),
+        stemwerk_core = trim(capState.STEMWERK_CORE or ""),
+        samplerate = trim(capState.SAMPLERATE or state.SAMPLERATE or ""),
+        julius = trim(capState.JULIUS or state.JULIUS or ""),
+    }
+    for k, v in pairs(deps) do
+        if v == "" then deps[k] = "unknown" end
+    end
+
+    return {
+        runtimeBase = runtime.base or "",
+        modelDir = getModelCacheDir(),
+        setupStatus = (status ~= "" and status or "unknown"),
+        setupReason = reason,
+        profile = (profile ~= "" and profile or "unknown"),
+        backend = (backend ~= "" and backend or "unknown"),
+        pythonPath = python or "",
+        pythonSource = pythonSource or "unknown",
+        extPython = extPythonRaw ~= "" and extPythonRaw or "(empty)",
+        ffmpegPath = ffmpeg ~= "" and ffmpeg or "unknown",
+        verification = verification ~= "" and verification or "unknown",
+        deps = deps,
+        updateDetected = lastSetupVersion ~= "" and setupVersion ~= "" and lastSetupVersion ~= setupVersion,
+        needsRepair = needsRepair,
+    }
+end
+
 local function drawButton(label, x, y, w, h, style)
     local bg = { 0.2, 0.2, 0.2, 1 }
     local border = { 1, 1, 1, 1 }
@@ -4678,6 +4764,46 @@ local function existingRuntimeSetupMenuTick()
         end
     end
 
+    if OS == "Windows" and m.windowsOverview then
+        local o = m.windowsOverview
+        local statusLine = "Last setup: " .. tostring(prettySetupStatus(o.setupStatus))
+        if trim(o.setupReason or "") ~= "" then
+            statusLine = statusLine .. " (" .. tostring(prettySetupReason(o.setupReason)) .. ")"
+        end
+        local rows = {
+            "Profile/backend: " .. tostring(o.profile) .. " / " .. tostring(o.backend),
+            "Python: " .. tostring(o.pythonPath) .. " [" .. tostring(o.pythonSource) .. "]",
+            "FFmpeg: " .. tostring(o.ffmpegPath),
+            "Verification: " .. tostring(o.verification),
+            "audio_separator: " .. tostring(o.deps.audio_separator),
+            "stemwerk_core: " .. tostring(o.deps.stemwerk_core),
+            "samplerate: " .. tostring(o.deps.samplerate),
+            "julius: " .. tostring(o.deps.julius),
+        }
+        if y + linuxLineHeight(16) <= infoBottom then
+            gfx.setfont(1, "Arial", linuxFontSize(12))
+            gfx.set(o.needsRepair and 0.97 or 0.55, o.needsRepair and 0.80 or 0.57, o.needsRepair and 0.15 or 0.62, 1)
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr(statusLine)
+            y = y + linuxLineHeight(16)
+        end
+        local rowChars = math.max(18, math.floor((bodyW - 20) / math.max(6, linuxFontSize(11) * 0.56)))
+        gfx.setfont(1, "Arial", linuxFontSize(11))
+        gfx.set(0.78, 0.80, 0.84, 1)
+        for _, line in ipairs(rows) do
+            local wrapped = cappedWrap(line, rowChars, 2)
+            for _, wl in ipairs(wrapped) do
+                if y + linuxLineHeight(14) > infoBottom then break end
+                gfx.x = bodyX
+                gfx.y = y
+                gfx.drawstr(wl)
+                y = y + linuxLineHeight(14)
+            end
+            if y + linuxLineHeight(14) > infoBottom then break end
+        end
+    end
+
     if m.updateDetected and y + linuxLineHeight(18) <= infoBottom then
         gfx.setfont(1, "Arial Bold", linuxFontSize(12))
         gfx.set(0.97, 0.80, 0.15, 1)
@@ -5033,6 +5159,18 @@ local function existingRuntimeSetupMenuTick()
 
     gfx.update()
 
+    if chosen == "open-logs" then
+        openPath(m.runtime.runtimeLogs)
+        reaper.defer(existingRuntimeSetupMenuTick)
+        return
+    end
+
+    if chosen == "open-runtime" then
+        openPath(m.runtime.base)
+        reaper.defer(existingRuntimeSetupMenuTick)
+        return
+    end
+
     if chosen == "delete-runtime" then
         local ctx = getRuntimeDeleteContext(m.runtime)
         m.confirmModal = {
@@ -5063,9 +5201,17 @@ local function existingRuntimeSetupMenuTick()
         local separatorScript = m.separatorScript
         SETUP_MENU = nil
         if chosen == "verify" then
-            verifyExistingSetup(runtime, separatorScript)
+            if OS == "Windows" then
+                windowsVerifyStart(runtime, separatorScript)
+            else
+                verifyExistingSetup(runtime, separatorScript)
+            end
         elseif chosen == "repair" or chosen == "rebuild-venv" then
-            startLinuxSetup(runtime, separatorScript, chosen)
+            if OS == "Windows" then
+                windowsVerifyStart(runtime, separatorScript)
+            else
+                startLinuxSetup(runtime, separatorScript, chosen)
+            end
         elseif chosen == "support-bundle" then
             reaper.defer(function()
                 runSupportBundleAction()
@@ -5087,6 +5233,25 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
     local versionMatch = (lastSetupVersion == "" or lastSetupVersion == currentVersion)
     local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
 
+    local windowsOverview = nil
+    if OS == "Windows" then
+        windowsOverview = buildWindowsSetupOverview(runtime, currentVersion, lastSetupVersion)
+    end
+
+    local choices = {
+        { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
+        { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
+        { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
+        { id = "support-bundle", label = "Save Support Bundle", sub = "Collect logs and diagnostics, no changes", accent = { 0.26, 0.60, 0.88 } },
+        { id = "open-logs",    label = "Open logs folder", sub = "Open runtime logs", accent = { 0.35, 0.56, 0.82 } },
+        { id = "open-runtime", label = "Open runtime folder", sub = "Open runtime base", accent = { 0.35, 0.56, 0.82 } },
+    }
+    if OS ~= "Windows" then
+        choices[#choices + 1] = { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } }
+        choices[#choices + 1] = { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } }
+    end
+    choices[#choices + 1] = { id = "cancel", label = "Cancel", sub = "Exit without changes", accent = { 0.38, 0.38, 0.42 } }
+
     SETUP_MENU = {
         runtime         = runtime,
         separatorScript = separatorScript,
@@ -5097,15 +5262,8 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
         currentVersion  = currentVersion,
         lastSetupVersion = lastSetupVersion,
         updateDetected  = updateDetected,
-        choices = {
-            { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
-            { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
-            { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
-            { id = "support-bundle", label = "Save Support Bundle", sub = "Collect logs and diagnostics, no changes", accent = { 0.26, 0.60, 0.88 } },
-            { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } },
-            { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } },
-            { id = "cancel",       label = "Cancel",        sub = "Exit without changes",              accent = { 0.38, 0.38, 0.42 } },
-        },
+        windowsOverview = windowsOverview,
+        choices = choices,
     }
     gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
     reaper.defer(existingRuntimeSetupMenuTick)
@@ -5144,12 +5302,7 @@ local function main()
     end
 
     if OS == "Windows" then
-        local intro =
-            "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
-            .. "On Windows, REAPER-side setup verifies the installed runtime and points you back to the installer if repair is needed.\n\n"
-            .. "Continue?"
-        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then return end
-        windowsVerifyRepair(runtime, separatorScript)
+        startExistingRuntimeSetupMenu(runtime, separatorScript)
         return
     end
 
