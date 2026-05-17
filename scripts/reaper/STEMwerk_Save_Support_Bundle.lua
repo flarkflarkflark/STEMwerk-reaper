@@ -274,6 +274,11 @@ local function basename(path)
     return clean:match("([^/\\]+)$") or clean
 end
 
+local function dirname(path)
+    local clean = stripTrailingSep(path)
+    return clean:match("^(.*)[/\\][^/\\]+$") or ""
+end
+
 local function sanitizePathValue(path)
     local value = trim(path)
     if value == "" then return "missing" end
@@ -1141,6 +1146,121 @@ local function runPythonProbe(bundleDir, pythonPath)
     return result
 end
 
+local function psLiteral(text)
+    return "'" .. tostring(text or ""):gsub("'", "''") .. "'"
+end
+
+local function tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+    if trim(pythonPath) == "" or not fileExists(pythonPath) then
+        return false, "Python runtime unavailable for zip", "python"
+    end
+    local scriptPath = joinPath(bundleParent, "_support_bundle_zip_" .. tostring(os.time()) .. ".py")
+    local script = table.concat({
+        "import os",
+        "import sys",
+        "import zipfile",
+        "",
+        "bundle_dir = os.path.abspath(sys.argv[1])",
+        "zip_path = os.path.abspath(sys.argv[2])",
+        "parent = os.path.dirname(bundle_dir)",
+        "base = os.path.basename(bundle_dir.rstrip('/\\\\'))",
+        "",
+        "if os.path.exists(zip_path):",
+        "    os.remove(zip_path)",
+        "",
+        "with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:",
+        "    for root, dirs, files in os.walk(bundle_dir):",
+        "        rel_root = os.path.relpath(root, parent)",
+        "        if rel_root == '.':",
+        "            rel_root = base",
+        "        if not files and not dirs:",
+        "            zf.writestr(rel_root.rstrip('/\\\\') + '/', '')",
+        "        for name in files:",
+        "            src = os.path.join(root, name)",
+        "            rel = os.path.relpath(src, parent)",
+        "            zf.write(src, rel)",
+    }, "\n")
+    if not writeFile(scriptPath, script, "wb") then
+        return false, "Could not write zip helper script", "python"
+    end
+    local rc, out = execCommand(pythonPath, {scriptPath, bundleDir, zipPath}, 60000)
+    if fileExists(scriptPath) then os.remove(scriptPath) end
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "python"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("python zip failed (rc=" .. tostring(rc) .. ")"), "python"
+end
+
+local function tryCreateZipWithPowerShell(bundleDir, zipPath)
+    if OS ~= "Windows" then
+        return false, "PowerShell zip is Windows-only", "powershell"
+    end
+    local script = table.concat({
+        "$src = " .. psLiteral(bundleDir),
+        "$dst = " .. psLiteral(zipPath),
+        "if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue }",
+        "Compress-Archive -LiteralPath $src -DestinationPath $dst -CompressionLevel Optimal -Force",
+    }, "; ")
+    local rc, out = execPowerShell(script, 60000)
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "powershell"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("powershell zip failed (rc=" .. tostring(rc) .. ")"), "powershell"
+end
+
+local function tryCreateZipWithDitto(bundleDir, zipPath)
+    if OS ~= "macOS" then
+        return false, "ditto zip is macOS-only", "ditto"
+    end
+    local rc, out = execCommand("ditto", {"-c", "-k", "--keepParent", bundleDir, zipPath}, 60000)
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "ditto"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("ditto zip failed (rc=" .. tostring(rc) .. ")"), "ditto"
+end
+
+local function tryCreateZipWithZipCommand(bundleParent, bundleName, zipPath)
+    local shell = fileExists("/bin/sh") and "/bin/sh" or "sh"
+    local cmd = "cd " .. quoteArg(bundleParent)
+        .. " && zip -r -q "
+        .. quoteArg(basename(zipPath))
+        .. " "
+        .. quoteArg(bundleName)
+    local rc, out = execCommand(shell, {"-lc", cmd}, 60000)
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "zip"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("zip command failed (rc=" .. tostring(rc) .. ")"), "zip"
+end
+
+local function createZipArchive(bundleParent, bundleDir, bundleName, pythonPath)
+    local zipPath = joinPath(bundleParent, bundleName .. ".zip")
+    if fileExists(zipPath) then
+        os.remove(zipPath)
+    end
+
+    local errors = {}
+    local ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+    if ok then return true, zipPath, "", method end
+    errors[#errors + 1] = method .. ": " .. tostring(err)
+
+    if OS == "Windows" then
+        ok, err, method = tryCreateZipWithPowerShell(bundleDir, zipPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+    elseif OS == "macOS" then
+        ok, err, method = tryCreateZipWithDitto(bundleDir, zipPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+    end
+
+    ok, err, method = tryCreateZipWithZipCommand(bundleParent, bundleName, zipPath)
+    if ok then return true, zipPath, "", method end
+    errors[#errors + 1] = method .. ": " .. tostring(err)
+
+    return false, "", table.concat(errors, " | "), ""
+end
+
 local function classifyFileForBundle(name)
     local lower = tostring(name or ""):lower()
     local textExt = {
@@ -1689,7 +1809,16 @@ writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory,
 writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
 writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
 
-return true, bundleDir
+local zipOk, zipPath, zipError, zipMethod = createZipArchive(bundleParent, bundleDir, bundleName, detectedPythonPath)
+
+return true, {
+    bundleDir = bundleDir,
+    bundleParent = bundleParent,
+    zipPath = zipPath,
+    zipCreated = zipOk,
+    zipError = zipError,
+    zipMethod = zipMethod,
+}
 end
 
 local function runWithBusyWindow()
@@ -1722,11 +1851,28 @@ local function runWithBusyWindow()
 
     local function showResult(resultOk, resultValue)
         if resultOk then
-            local bundleDir = tostring(resultValue or "")
-            local prompt = "STEMwerk support bundle created:\n\n" .. bundleDir .. "\n\nOpen the folder now?"
+            local payload = (type(resultValue) == "table") and resultValue or { bundleDir = tostring(resultValue or "") }
+            local bundleDir = tostring(payload.bundleDir or "")
+            local bundleParent = tostring(payload.bundleParent or dirname(bundleDir))
+            local zipCreated = payload.zipCreated == true and trim(payload.zipPath or "") ~= ""
+            local zipPath = tostring(payload.zipPath or "")
+            local prompt
+            if zipCreated then
+                prompt = "STEMwerk support bundle ZIP created:\n\n" .. zipPath
+                    .. "\n\nSource folder:\n" .. bundleDir
+                    .. "\n\nOpen the support-bundles folder now?"
+            else
+                local zipNote = ""
+                if trim(payload.zipError or "") ~= "" then
+                    zipNote = "\n\nZIP creation failed (non-fatal):\n" .. tostring(payload.zipError)
+                end
+                prompt = "STEMwerk support bundle created:\n\n" .. bundleDir
+                    .. zipNote
+                    .. "\n\nOpen the folder now?"
+            end
             local choice = msgBox("STEMwerk Support Bundle", prompt, 4)
             if choice == 6 then
-                openPath(bundleDir)
+                openPath((zipCreated and bundleParent ~= "") and bundleParent or bundleDir)
             end
         else
             msgBox("STEMwerk Support Bundle", "Could not create the STEMwerk support bundle.\n\nError:\n" .. tostring(resultValue), 0)
