@@ -933,7 +933,7 @@ end
 local function getPythonVersion(path)
     if trim(path) == "" then return "missing" end
     if OS == "Windows" then
-        return "skipped on Windows for speed"
+        return "skipped for speed"
     end
     local rc, out = execCommand(path, {"--version"}, 8000)
     if rc ~= 0 or trim(out) == "" then
@@ -952,7 +952,7 @@ end
 local function getFfmpegVersion(path)
     if trim(path) == "" then return "missing" end
     if OS == "Windows" then
-        return "skipped on Windows for speed"
+        return "skipped for speed"
     end
     local rc, out = execCommand(path, {"-version"}, 8000)
     local line = trim((out:gsub("\r", "")):match("([^\n]+)") or "")
@@ -1029,9 +1029,9 @@ local function getPlatformDetails()
         local arch = trim(os.getenv("PROCESSOR_ARCHITEW6432") or os.getenv("PROCESSOR_ARCHITECTURE") or "")
         details.architecture = arch ~= "" and arch or "undetected"
         details.osVersion = trim(REAPER_OS_RAW) ~= "" and trim(REAPER_OS_RAW) or "Windows"
-        details.extraSummary[#details.extraSummary + 1] = "Windows version/build: metadata skipped on Windows for speed"
+        details.extraSummary[#details.extraSummary + 1] = "Windows version/build: metadata skipped for speed"
         details.extraSummary[#details.extraSummary + 1] = "CPU architecture: " .. details.architecture
-        details.rawBlocks[#details.rawBlocks + 1] = "[windows-version]\nmetadata skipped on Windows for speed"
+        details.rawBlocks[#details.rawBlocks + 1] = "[windows-version]\nmetadata skipped for speed"
     end
 
     return details
@@ -1046,8 +1046,8 @@ local function runPythonProbe(bundleDir, pythonPath)
     }
     if OS == "Windows" then
         result.status = "skipped"
-        result.summary[#result.summary + 1] = "Python diagnostics: skipped on Windows for speed"
-        result.rawOutput = "Python diagnostics skipped on Windows for speed.\n"
+        result.summary[#result.summary + 1] = "Python diagnostics: skipped for speed"
+        result.rawOutput = "Python diagnostics skipped for speed.\n"
         return result
     end
     if trim(pythonPath) == "" then
@@ -2388,7 +2388,7 @@ local function collectTempInventory(bundleDir, copiedFiles)
                 name = name,
                 path = full,
                 epoch = 0,
-                mtime = "metadata skipped on Windows for speed",
+                mtime = "metadata skipped for speed",
             }
         end
     end
@@ -2935,7 +2935,8 @@ end
 
 local function runWithBusyWindow()
     local busyTitle = "STEMwerk Support Bundle"
-    local busyText = trSupportBundleCollecting()
+    local busyText = "Saving Support Bundle..."
+    local busySubtitle = "Collecting logs and diagnostics. This should only take a few seconds."
     local busyOpen = false
 
     local function drawBusyWindow()
@@ -2951,6 +2952,10 @@ local function runWithBusyWindow()
         gfx.x = 20
         gfx.y = 56
         gfx.drawstr(busyText)
+        gfx.setfont(1, "Arial", 14)
+        gfx.x = 20
+        gfx.y = 84
+        gfx.drawstr(busySubtitle)
         gfx.update()
     end
 
@@ -3002,10 +3007,17 @@ local function runWithBusyWindow()
     end
 
     if gfx and gfx.init and reaper and reaper.defer then
-        gfx.init(busyTitle, 480, 120, 0)
+        gfx.init(busyTitle, 700, 140, 0)
         busyOpen = true
         drawBusyWindow()
-        reaper.defer(runTask)
+        if OS == "macOS" then
+            reaper.defer(function()
+                drawBusyWindow()
+                reaper.defer(runTask)
+            end)
+        else
+            reaper.defer(runTask)
+        end
     else
         showCollectingStatus()
         runTask()
