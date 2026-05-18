@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
 	<img src="docs/assets/STEMwerk.gif" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
 </p>
 
@@ -15,24 +15,46 @@ This README describes the current public stable release, `v2.2.2.2`. Future deve
 
 #### What's new in v2.2.2.2
 **Reliability / Support**
-- Better support bundle diagnostics
-- Runtime run artifacts are included in support bundles
+- Support bundles now create a ready-to-upload `.zip` next to the source folder
+- Windows support bundle collection is now bounded and much faster
+- Support bundles include timing diagnostics and a compact recent processing summary (`processing_summary.txt`) with model/backend/mode/job count and realtime speed where available
+- Runtime run artifacts and recent run logs are included in support bundles, while audio/model/wheel/binary/runtime payloads remain excluded
 - Busy/status window is shown while saving a support bundle
 - Support guidance is improved in both Native and Visual Help
-- Generated `dist/` output is now ignored to avoid accidental commits
+- Generated `dist/` output is ignored to avoid accidental commits
+
+**Setup / Runtime**
+- Windows now has an in-REAPER setup/status overview similar to Linux/macOS
+- Windows setup actions include Check only, Repair, Rebuild venv, Save Support Bundle, Open logs folder, and Open runtime folder
+- Stale/invalid Windows `pythonPath` values (for example `python`) are no longer preferred when a valid runtime Python is known
+- Offline Windows bundled installers restore required `samplerate==0.1.0` wheel payloads for NVIDIA, AMD/DirectML, and CPU packages
+- Offline setup now hard-fails or repairs missing samplerate/runtime dependencies instead of reporting success too early
+- Bundled `julius` fallback remains available for offline repair paths
 
 **macOS / Apple Silicon**
 - Missing FFmpeg recovery is improved
 - Setup checks Homebrew and MacPorts FFmpeg paths, including `/opt/local/bin/ffmpeg`
 - Setup can guide users to **Set FFmpeg Path**
-- Apple Silicon MPS is detected for diagnostics, but Demucs separation now uses CPU fallback for reliability
+- Intel macOS setup uses conservative CPU fallback defaults
+- Apple Silicon MPS is detected for diagnostics, but Demucs separation uses CPU fallback for reliability
 - This avoids a known PyTorch/MPS failure path with Demucs on Apple Silicon
 - MPS acceleration remains experimental/R&D, not a normal production route in this release
+- The no-audio/select-audio window now follows the main STEMwerk window placement more reliably on macOS
 
 **Windows / Installer**
 - Offline patch now accepts both modern and legacy install layouts
 - Installer payload excludes are restored for non-runtime/source assets
-- Installer icon assets are restored
+- Windows installer EXE icon uses the correct STEMwerk app icon
+- Windows installer wizard header now uses the correct compact STEMwerk logo
+- A stray installer status/header repaint artifact near the top-right logo area is suppressed
+- Bundled/offline installers include the restored samplerate payload required for offline audio-separator runtime repair
+
+**Packaging / Icons**
+- Obsolete file-based `themes/` payloads are removed from release script packages
+- Toolbar setup script and toolbar icon assets are included in release payloads
+- Linux AppImage/deb/rpm/Arch packages now install/use STEMwerk icon metadata where supported
+- AppImage icon metadata uses the square STEMwerk icon and `.DirIcon`
+- Linux package hicolor icons are installed where applicable
 
 **UI / Workflow**
 - STEMwerk now includes a cleaner, calmer REAPER-Native UI mode. It is designed to feel more DAW-like and less visually busy while keeping the existing flarkAUDIO Visual mode available.
@@ -42,7 +64,7 @@ This README describes the current public stable release, `v2.2.2.2`. Future deve
 - New output grouping option: **Per item / Per track**
 - Source-track grouping applies only to **New Tracks**
 - Storage labels are clarified (`Storage/Opslag/Speicherort`)
-- Cleanup labels are clarified (`Cleanup/Opruimen/Aufräumen`)
+- Cleanup labels are clarified (`Cleanup/Opruimen/Aufraumen`)
 - Section and footer tooltips are added
 - Native/Visual Help support information is improved
 - Visible EN/NL/DE i18n polish
@@ -50,6 +72,8 @@ This README describes the current public stable release, `v2.2.2.2`. Future deve
 **Diagnostics / Performance**
 - Phase/timing diagnostics for GPU scheduling analysis
 - Timing summary helper utilities
+- Support bundles include `support_bundle_timings.txt`
+- Support bundles include `processing_summary.txt` for recent processing speed/results where available
 - Internal parallel job limiter prototype exists, but remains off by default
 
 Release validation: Windows VM smoke PASS, Windows NVIDIA laptop smoke PASS (including Quality separation and cancel), Linux AMD sanity PASS.
@@ -134,9 +158,9 @@ Windows is the primary validated path for the `v2.2.2.2` release.
 ## Downloads
 
 ### Which installer should I use?
-- **New Windows users**: use `STEMwerk-Setup-2.2.2.2.exe` — the standard online installer
+- **New Windows users**: use `STEMwerk-Setup-2.2.2.2.exe` â€” the standard online installer
 - **Windows users who want embedded Python + FFmpeg**: use `STEMwerk-Setup-2.2.2.2-bundled.exe`
-- **Existing Windows users updating from a previous install**: use `STEMwerk-Setup-2.2.2.2-offline-patch.exe` — supports modern and legacy install layouts
+- **Existing Windows users updating from a previous install**: use `STEMwerk-Setup-2.2.2.2-offline-patch.exe` â€” supports modern and legacy install layouts
 - **Fully offline Windows users who need all models pre-bundled**: use the Google Drive allmodels installers below
 - **Linux users**: use the AppImage, `.deb`, or `.rpm` package
 - **macOS and Linux ReaPack users**: install/update through ReaPack, then run STEMwerk setup/repair in REAPER if the backend runtime needs checking or rebuilding
@@ -236,15 +260,15 @@ To add the repository for the first time:
 
 ### REAPER Action List: which scripts to use
 To avoid confusion, only these are meant for normal use:
-- `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) — use this for manual installs, ReaPack installs, and the normal bootstrap/repair flow on macOS/Linux.
-- `STEMwerk: Main` (`STEMwerk.lua`) — the main UI.
-- `STEMwerk: Karaoke`, `STEMwerk: Vocals Only`, `STEMwerk: Drums Only`, `STEMwerk: Bass Only`, `STEMwerk: All Stems` — optional presets.
-- `Stemwerk: Explode Takes (In Place)` (`STEMwerk_Explode_Takes.lua`) — quick tool for selected multi-take items.
+- `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) â€” use this for manual installs, ReaPack installs, and the normal bootstrap/repair flow on macOS/Linux.
+- `STEMwerk: Main` (`STEMwerk.lua`) â€” the main UI.
+- `STEMwerk: Karaoke`, `STEMwerk: Vocals Only`, `STEMwerk: Drums Only`, `STEMwerk: Bass Only`, `STEMwerk: All Stems` â€” optional presets.
+- `Stemwerk: Explode Takes (In Place)` (`STEMwerk_Explode_Takes.lua`) â€” quick tool for selected multi-take items.
 
 Internal/troubleshooting (not for regular use):
-- everything under `scripts/reaper/_internal/` — runtime helpers used by the public scripts
+- everything under `scripts/reaper/_internal/` â€” runtime helpers used by the public scripts
 
-Note: REAPER does not auto-register scripts in the Action List. Use Actions → ReaScript → Load ReaScript… or run `STEMwerk_Setup_Toolbar.lua` to register the standard actions.
+Note: REAPER does not auto-register scripts in the Action List. Use Actions â†’ ReaScript â†’ Load ReaScriptâ€¦ or run `STEMwerk_Setup_Toolbar.lua` to register the standard actions.
 
 ### Toolbar icons (manual assign)
 - STEMwerk ships a language-neutral icon pack under `scripts/reaper/assets/toolbar_icons/`.
@@ -331,3 +355,6 @@ Before tagging/releases:
 ## License / author
 MIT License.
 Author: flarkAUDIO (flarkaudio@pm.me)
+
+
+
