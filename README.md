@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
 	<img src="docs/assets/STEMwerk.gif" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
 </p>
 
@@ -13,70 +13,24 @@ This README describes the current public stable release, `v2.2.2.2`. Future deve
 
 `v2.2.2.2` is a reliability and packaging parity release on top of the `2.2.2.x` UI/workflow line.
 
+<img src="https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/v2.2.2.2/STEMwerk-v2.2.2.2-REAPER-Native-UI.png" alt="STEMwerk v2.2.2.2 REAPER-Native UI" width="720">
+
 #### What's new in v2.2.2.2
-**Reliability / Support**
-- Support bundles now create a ready-to-upload `.zip` next to the source folder
-- Windows support bundle collection is now bounded and much faster
-- Support bundles include timing diagnostics and a compact recent processing summary (`processing_summary.txt`) with model/backend/mode/job count and realtime speed where available
-- Runtime run artifacts and recent run logs are included in support bundles, while audio/model/wheel/binary/runtime payloads remain excluded
-- Busy/status window is shown while saving a support bundle
-- Support guidance is improved in both Native and Visual Help
-- Generated `dist/` output is ignored to avoid accidental commits
+`v2.2.2.2` is a reliability, setup, packaging, and supportability release.
 
-**Setup / Runtime**
-- Windows now has an in-REAPER setup/status overview similar to Linux/macOS
-- Windows setup actions include Check only, Repair, Rebuild venv, Save Support Bundle, Open logs folder, and Open runtime folder
-- Stale/invalid Windows `pythonPath` values (for example `python`) are no longer preferred when a valid runtime Python is known
-- Offline Windows bundled installers restore required `samplerate==0.1.0` wheel payloads for NVIDIA, AMD/DirectML, and CPU packages
-- Offline setup now hard-fails or repairs missing samplerate/runtime dependencies instead of reporting success too early
-- Bundled `julius` fallback remains available for offline repair paths
+- Adds a cleaner REAPER-Native UI mode alongside the existing flarkAUDIO Visual mode
+- Improves Windows setup/status/repair flow inside REAPER (`Check only`, `Repair`, `Rebuild venv`)
+- Support bundles now produce a folder plus a ready-to-upload `.zip`
+- Support bundles include `support_bundle_timings.txt` and `processing_summary.txt`
+- Windows support-bundle collection is faster and bounded; macOS busy-window repaint is polished
+- Restores offline `samplerate==0.1.0` payloads and keeps bundled `julius` fallback/repair path
+- Polishes installer icon/header/status rendering behavior
+- Removes obsolete `themes/` payload from release packaging
+- Includes toolbar setup script and toolbar icon assets in release payloads
+- Improves Linux package icon metadata
+- Apple Silicon MPS remains experimental/R&D; this release does not claim production MPS acceleration
 
-**macOS / Apple Silicon**
-- Missing FFmpeg recovery is improved
-- Setup checks Homebrew and MacPorts FFmpeg paths, including `/opt/local/bin/ffmpeg`
-- Setup can guide users to **Set FFmpeg Path**
-- Intel macOS setup uses conservative CPU fallback defaults
-- Apple Silicon MPS is detected for diagnostics, but Demucs separation uses CPU fallback for reliability
-- This avoids a known PyTorch/MPS failure path with Demucs on Apple Silicon
-- MPS acceleration remains experimental/R&D, not a normal production route in this release
-- The no-audio/select-audio window now follows the main STEMwerk window placement more reliably on macOS
-
-**Windows / Installer**
-- Offline patch now accepts both modern and legacy install layouts
-- Installer payload excludes are restored for non-runtime/source assets
-- Windows installer EXE icon uses the correct STEMwerk app icon
-- Windows installer wizard header now uses the correct compact STEMwerk logo
-- A stray installer status/header repaint artifact near the top-right logo area is suppressed
-- Bundled/offline installers include the restored samplerate payload required for offline audio-separator runtime repair
-
-**Packaging / Icons**
-- Obsolete file-based `themes/` payloads are removed from release script packages
-- Toolbar setup script and toolbar icon assets are included in release payloads
-- Linux AppImage/deb/rpm/Arch packages now install/use STEMwerk icon metadata where supported
-- AppImage icon metadata uses the square STEMwerk icon and `.DirIcon`
-- Linux package hicolor icons are installed where applicable
-
-**UI / Workflow**
-- STEMwerk now includes a cleaner, calmer REAPER-Native UI mode. It is designed to feel more DAW-like and less visually busy while keeping the existing flarkAUDIO Visual mode available.
-- Existing users keep their saved UI preference after update.
-- You can switch UI mode from the top-right UI control.
-- Light/dark mode remains available as before.
-- New output grouping option: **Per item / Per track**
-- Source-track grouping applies only to **New Tracks**
-- Storage labels are clarified (`Storage/Opslag/Speicherort`)
-- Cleanup labels are clarified (`Cleanup/Opruimen/Aufraumen`)
-- Section and footer tooltips are added
-- Native/Visual Help support information is improved
-- Visible EN/NL/DE i18n polish
-
-**Diagnostics / Performance**
-- Phase/timing diagnostics for GPU scheduling analysis
-- Timing summary helper utilities
-- Support bundles include `support_bundle_timings.txt`
-- Support bundles include `processing_summary.txt` for recent processing speed/results where available
-- Internal parallel job limiter prototype exists, but remains off by default
-
-Release validation: Windows VM smoke PASS, Windows NVIDIA laptop smoke PASS (including Quality separation and cancel), Linux AMD sanity PASS.
+Current stable release: [STEMwerk v2.2.2.2](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2).
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
@@ -158,13 +112,14 @@ Windows is the primary validated path for the `v2.2.2.2` release.
 ## Downloads
 
 ### Which installer should I use?
-- **New Windows users**: use `STEMwerk-Setup-2.2.2.2.exe` â€” the standard online installer
-- **Windows users who want embedded Python + FFmpeg**: use `STEMwerk-Setup-2.2.2.2-bundled.exe`
-- **Existing Windows users updating from a previous install**: use `STEMwerk-Setup-2.2.2.2-offline-patch.exe` â€” supports modern and legacy install layouts
-- **Fully offline Windows users who need all models pre-bundled**: use the Google Drive allmodels installers below
-- **Linux users**: use the AppImage, `.deb`, or `.rpm` package
-- **macOS and Linux ReaPack users**: install/update through ReaPack, then run STEMwerk setup/repair in REAPER if the backend runtime needs checking or rebuilding
-- **Windows ReaPack users**: ReaPack updates the scripts, but it is not the recommended first-time setup path on Windows; use the Windows installer first if the runtime is missing or not yet prepared
+For most existing users with a working STEMwerk setup, ReaPack is the preferred update path for the REAPER scripts/actions on Windows, macOS and Linux.
+
+- **New Windows users**: `STEMwerk-Setup-2.2.2.2.exe`
+- **Windows users who want embedded Python/FFmpeg**: `STEMwerk-Setup-2.2.2.2-bundled.exe`
+- **Existing Windows users who do not use ReaPack or need installer-side repair/update**: `STEMwerk-2.2.2.2-offline-patch.exe`
+- **Fully offline Windows users who need all models**: use the Google Drive allmodels installers from the [v2.2.2.2 release page](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2)
+- **Linux users**: use ReaPack for scripts/actions, or use AppImage/`.deb`/`.rpm`/Arch packages for package-based installs
+- **macOS users**: use ReaPack or the Linux/macOS script package, then run `STEMwerk: Setup` if the backend runtime needs checking/rebuilding
 
 ### GitHub release assets (v2.2.2.2)
 
@@ -172,10 +127,11 @@ Windows is the primary validated path for the `v2.2.2.2` release.
 |---|---|---:|
 | `STEMwerk-Setup-2.2.2.2.exe` | Windows standard installer | 3.33 MB |
 | `STEMwerk-Setup-2.2.2.2-bundled.exe` | Windows bundled installer (Python + FFmpeg included) | 133 MB |
-| `STEMwerk-Setup-2.2.2.2-offline-patch.exe` | Windows offline patch/update helper | 3.42 MB |
-| `STEMwerk-v2.2.2.2-Linux-x86_64.AppImage` | Linux portable build | 1.21 MB |
-| `STEMwerk-v2.2.2.2-Linux-amd64.deb` | Debian/Ubuntu package | 0.93 MB |
-| `STEMwerk-v2.2.2.2-Linux-x86_64.rpm` | RPM package | 0.95 MB |
+| `STEMwerk-2.2.2.2-offline-patch.exe` | Windows offline patch/update helper | 3.42 MB |
+| `STEMwerk-2.2.2.2-x86_64.AppImage` | Linux portable build | 1.21 MB |
+| `stemwerk_2.2.2.2_amd64.deb` | Debian/Ubuntu package | 0.93 MB |
+| `stemwerk-2.2.2.2-1.noarch.rpm` | RPM package | 0.95 MB |
+| `STEMwerk-v2.2.2.2-Linux-macOS-reaper-scripts-6c8d4db.zip` | Linux/macOS REAPER script package | 1.7 MB |
 
 Linux packages were repacked after publish to remove non-runtime source toolbar PNGs and junk files from the package payload. Runtime files and toolbar assets are preserved; no runtime code changed.
 
@@ -186,9 +142,9 @@ These are fully offline Windows installers that include all runtime packages and
 
 | File | Target | Size | Download |
 |---|---|---:|---|
-| `STEMwerk-Setup-2.2.2.2-offline-bundled-cpu-allmodels.exe` | Windows CPU | 871.3 MB | [Google Drive](https://drive.google.com/file/d/1wIvR8QFKxAYANoSjhjdq45MjBXZjQRS_/view?usp=drive_link) |
-| `STEMwerk-Setup-2.2.2.2-offline-bundled-amd-gpu-allmodels.exe` | Windows AMD GPU / DirectML | 903.7 MB | [Google Drive](https://drive.google.com/file/d/1e_FZ276MEyRsQ-SmrV7PRBw43wLscAHC/view?usp=drive_link) |
-| `STEMwerk-Setup-2.2.2.2-offline-bundled-nvidia-gpu-allmodels.exe` | Windows NVIDIA GPU / CUDA | 3.13 GB | [Google Drive](https://drive.google.com/file/d/1mdppCx0qDCkv7dXII_T_sYGTUTf0yHTt/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.2-offline-bundled-cpu-allmodels.exe` | Windows CPU | 871.3 MB | [Google Drive](https://drive.google.com/file/d/1jPN1-DSxjh-DOy_rBjV2MCCO_F1MM3-H/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.2-offline-bundled-amd-gpu-allmodels.exe` | Windows AMD GPU / DirectML | 903.7 MB | [Google Drive](https://drive.google.com/file/d/1mR7CXJ8aY4uaezxfcm5Qa5CIjiQnXTQc/view?usp=drive_link) |
+| `STEMwerk-Setup-2.2.2.2-offline-bundled-nvidia-gpu-allmodels.exe` | Windows NVIDIA GPU / CUDA | 3.13 GB | [Google Drive](https://drive.google.com/file/d/17i6LmjgQOmrqhugt1QhwMSQ-UlJhz2Ma/view?usp=drive_link) |
 
 ### First-use model downloads
 If models are not already included in your installer, approximate download sizes on first use:
@@ -207,7 +163,7 @@ Model size is separate from runtime/bootstrap size, and model download size is n
 
 ### Updating from older Windows installs
 - If you already use an older bundled or offline Windows install, `v2.2.2.2` is the current stable target.
-- Prefer `STEMwerk-Setup-2.2.2.2-offline-patch.exe` when you want the smaller update path for an existing compatible install.
+- Prefer `STEMwerk-2.2.2.2-offline-patch.exe` when you want the smaller update path for an existing compatible install.
 - If that patch path is not appropriate for your current install state, use the full Windows installer for `v2.2.2.2` instead.
 - Current stable release: [STEMwerk v2.2.2.2](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2).
 - After any installer update, run `STEMwerk-SETUP.lua` once to verify paths/runtime state.
@@ -236,7 +192,7 @@ Notes:
 If REAPER cannot find your Python, the setup script lets you point to a specific interpreter.
 
 ### ReaPack
-Import this repository URL into ReaPack:
+Repository URL:
 
 ```text
 https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml
@@ -249,8 +205,12 @@ To install or update:
 4. Run `STEMwerk-SETUP.lua` in the Action List to verify or rebuild the backend runtime if needed.
 
 To add the repository for the first time:
-1. `Extensions -> ReaPack -> Import a repository`
-2. Paste the URL above, then synchronize.
+1. `Extensions -> ReaPack -> Import repositories...`
+2. Add the URL above
+3. Open `Browse packages...`
+4. Search `STEMwerk`
+5. Install/update
+6. Synchronize packages
 
 > **WARNING (Windows)**: ReaPack is not recommended for first-time Windows setup. On Windows, full setup is intentionally handled by the installer; the REAPER setup does not launch bootstrap installers. ReaPack installs only the scripts, so Python/FFmpeg/venv are often missing or resolve to unsupported Windows shim paths. Use the installer (recommended) or the manual developer install instead.
 
