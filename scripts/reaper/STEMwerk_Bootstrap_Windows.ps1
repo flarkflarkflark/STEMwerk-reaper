@@ -40,6 +40,7 @@ $torchDirectMlVersion = "0.2.5.dev240914"
 $onnxRuntimeDirectMlVersion = "1.24.4"
 $audioSeparatorOk = $false
 $stemwerkCoreOk = $false
+$samplerateOk = $false
 $pytorchCudaIndex = "https://download.pytorch.org/whl/cu121"
 $package = "audio-separator==$audioSeparatorVersion"
 $coreExtra = ""
@@ -683,7 +684,7 @@ function EnsureSamplerateRuntime([string]$PythonPath, [string]$BackendName) {
     }
 
     LogLine "samplerate runtime is still missing after repair attempt."
-    LogStatusDetail "samplerate is still missing. Separation may fail for some models; check bootstrap.log for details."
+    LogStatusDetail "samplerate is still missing after repair. Offline/bundled setup cannot continue as OK; run SETUP/Repair."
     return $false
 }
 
@@ -751,8 +752,9 @@ function InstallAndVerifyAudioSeparator([string]$PythonPath, [string]$BackendNam
         return "julius_install_failed"
     }
 
-    if (-not (EnsureSamplerateRuntime $PythonPath $BackendName)) {
-        LogLine "samplerate runtime remains unavailable; continuing with remaining checks."
+    $script:samplerateOk = EnsureSamplerateRuntime $PythonPath $BackendName
+    if (-not $script:samplerateOk) {
+        return "samplerate_install_failed"
     }
 
     if (-not (EnsureOnnxRuntime $PythonPath $BackendName)) {
@@ -1083,7 +1085,7 @@ if ($RuntimeBase) {
     $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
     $bootstrapStatusValue = $status
     $bootstrapReasonValue = $statusReason
-    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk) { "ok" } else { "failed" }
+    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk -and $samplerateOk) { "ok" } else { "failed" }
     $audioSeparatorValue = if ($audioSeparatorOk) { "ok" } else { "missing" }
     $stemwerkCoreValue = if ($stemwerkCoreOk) { "ok" } else { "missing" }
     $pythonValue = if ($python) { $python } else { "" }

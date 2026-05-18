@@ -1,9 +1,20 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.1.9
+-- @version 2.2.2.2
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
+--
+-- TODO(v2.2.2.3+):
+-- - Expand language support beyond EN/NL/DE.
+-- - Target additional languages: Chinese, Russian, Spanish, French, Portuguese,
+--   Korean, Italian, Finnish, Vietnamese.
+-- - Make STEMwerk Setup window multilingual.
+-- - Add/use setup language selector.
+-- - Persist selected setup language via ExtState("STEMwerk", "language").
+-- - Keep main UI, setup UI, support-bundle/status messages, and first-run flow
+--   on the same language setting.
+-- - Use EN as default/fallback when unset or unknown.
 
 local EXT_SECTION = "STEMwerk"
 local BOOTSTRAP_GUARD_STALE_SECONDS = 600
@@ -38,6 +49,16 @@ end
 
 local OS = getOS()
 local PATH_SEP = OS == "Windows" and "\\" or "/"
+
+-- Forward-declare shared helpers before any setup action closures use them.
+-- Lua resolves locals lexically at function definition time; without these,
+-- early functions such as runSupportBundleAction can accidentally resolve a
+-- helper as a global and crash later (for example: global 'fileExists').
+local fileExists
+local pathExists
+local ensureDir
+local quoteArg
+local showDeferredFinalWindow
 
 local function setupPlatformLabel()
     if OS == "Windows" then return "Windows" end
@@ -207,7 +228,30 @@ local function runSupportBundleAction()
     return true
 end
 
-local function quoteArg(s)
+local function runSetFfmpegPathAction()
+    local scriptsDir = resolveSetupScriptsDir()
+    local ffmpegScript = tostring(scriptsDir or "") .. "STEMwerk_Set_FFmpegPath.lua"
+    if not fileExists(ffmpegScript) then
+        msgBox(
+            "STEMwerk Setup",
+            "Missing FFmpeg path script:\n\n" .. tostring(ffmpegScript) .. "\n\nReinstall STEMwerk.",
+            0
+        )
+        return false
+    end
+    local ok, err = pcall(dofile, ffmpegScript)
+    if not ok then
+        msgBox(
+            "STEMwerk Setup",
+            "Could not open FFmpeg path setup.\n\nError:\n" .. tostring(err),
+            0
+        )
+        return false
+    end
+    return true
+end
+
+quoteArg = function(s)
     s = tostring(s)
     if s:find('"') then
         s = s:gsub('"', '\\"')
@@ -273,8 +317,6 @@ local function probeOutputHasUsefulDevices(out)
     return false
 end
 
-local fileExists
-
 local function directRuntimeDeviceProbe(pythonPath)
     if not pythonPath or pythonPath == "" or not fileExists(pythonPath) then
         return nil, nil
@@ -334,7 +376,7 @@ fileExists = function(path)
     return false
 end
 
-local function pathExists(path)
+pathExists = function(path)
     if not path or path == "" then return false end
     local ok = os.rename(path, path)
     if ok then return true end
@@ -346,7 +388,7 @@ local function pathExists(path)
     return false
 end
 
-local function ensureDir(path)
+ensureDir = function(path)
     if not path or path == "" then return false end
     local quoted = quoteArg(path)
     if OS == "Windows" then
@@ -537,6 +579,8 @@ local function prettySetupReason(reason)
             part = "Could not upgrade pip/setuptools/wheel"
         elseif lower == "ffmpeg_install_failed" then
             part = "FFmpeg install failed"
+        elseif lower == "ffmpeg_not_found" then
+            part = "STEMwerk could not find FFmpeg"
         elseif lower == "ffmpeg_shim_path" then
             part = "Windows shim FFmpeg path detected (install a real ffmpeg.exe)"
         elseif lower == "stemwerk_core_bundle_incomplete" then
@@ -782,6 +826,25 @@ end
 local function canRunFfmpeg(path)
     path = resolvePath(path)
     return runCommandWithProbe(path, " -version", "ffmpeg version", 8000)
+end
+
+local function resolveUnixFfmpegFallback()
+    for _, candidate in ipairs({
+        getExt("ffmpegPath"),
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/opt/local/bin/ffmpeg",
+        "/opt/homebrew/opt/ffmpeg/bin/ffmpeg",
+        "/usr/local/opt/ffmpeg/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+        "/snap/bin/ffmpeg",
+    }) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) then
+            return resolved
+        end
+    end
+    return ""
 end
 
 local function canImportAudioSeparator(path)
@@ -1830,6 +1893,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         if extFfmpegPath ~= "" then
             state.FFMPEG_PATH = extFfmpegPath
         end
+        if (not state.FFMPEG_PATH or state.FFMPEG_PATH == "") and OS ~= "Windows" then
+            local autoFfmpegPath = resolveUnixFfmpegFallback()
+            if autoFfmpegPath ~= "" then
+                state.FFMPEG_PATH = autoFfmpegPath
+            end
+        end
     end
 
     if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
@@ -2026,6 +2095,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     end
     finalMessage[#finalMessage + 1] = "Failure: " .. failureClass
     finalMessage[#finalMessage + 1] = "Checks: " .. formatCheckErrors(errors)
+    if hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg" then
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Missing FFmpeg"
+        finalMessage[#finalMessage + 1] = "STEMwerk could not find FFmpeg."
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Install FFmpeg with Homebrew:"
+        finalMessage[#finalMessage + 1] = "  brew install ffmpeg"
+        finalMessage[#finalMessage + 1] = "Already installed? Use Set FFmpeg Path."
+    end
     finalMessage[#finalMessage + 1] = ""
     finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)
     finalMessage[#finalMessage + 1] = "FFmpeg path: " .. tostring(verification.ffmpegPath)
@@ -2119,7 +2197,7 @@ local function summarizeInstallerState(state)
             lines[#lines + 1] = "FFmpeg: " .. tostring(state.FFMPEG_PATH)
         end
     else
-        lines[#lines + 1] = "Installer state not found."
+        lines[#lines + 1] = "Installer state not found. Please run the STEMwerk Setup Installer again."
     end
     return lines
 end
@@ -2226,13 +2304,18 @@ end
 
 local function finalizeWindowsVerify(success, lines)
     if not WINDOWS_VERIFY then return end
-    WINDOWS_VERIFY.finalized = true
-    WINDOWS_VERIFY.finalSuccess = success == true
-    if success and lines and lines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
-        table.remove(lines, 1)
+    local runtime = WINDOWS_VERIFY.runtime
+    local separatorScript = WINDOWS_VERIFY.separatorScript
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local finalLines = lines or WINDOWS_VERIFY.statusLines or {}
+    if success and finalLines[1] == "Setup complete — run STEMwerk.lua from the REAPER Action List" then
+        table.remove(finalLines, 1)
     end
-    WINDOWS_VERIFY.statusLines = lines or WINDOWS_VERIFY.statusLines
-    WINDOWS_VERIFY.title = success and "Setup complete." or "Setup needs attention."
+    WINDOWS_VERIFY = nil
+    reaper.defer(function()
+        showDeferredFinalWindow(runtime, stateFile, logFile, finalLines, success == true, separatorScript, true)
+    end)
 end
 
 local function windowsVerifyTick()
@@ -2418,7 +2501,6 @@ local function windowsVerifyTick()
                 result.finalMessage[#result.finalMessage + 1] = "Note: Installer metadata was incomplete, but runtime checks passed."
             end
             finalizeWindowsVerify(true, result.finalMessage)
-            reaper.defer(windowsVerifyTick)
             return
         end
 
@@ -2434,8 +2516,8 @@ local function windowsVerifyTick()
         end
         lines[#lines + 1] = ""
         if not WINDOWS_VERIFY.pythonOk then
-            lines[#lines + 1] = "Python is missing or unusable."
-            lines[#lines + 1] = "Install Python 3.11 (64-bit) from python.org, then re-run setup."
+            lines[#lines + 1] = "Python runtime is missing or unusable. Please run the STEMwerk Setup Installer again."
+            lines[#lines + 1] = "Manual/test ZIP installs require a working Python 3.11 (64-bit) runtime."
         elseif not WINDOWS_VERIFY.ffmpegOk then
             lines[#lines + 1] = "FFmpeg is missing."
             lines[#lines + 1] = "Install FFmpeg or re-run the installer, then re-run setup."
@@ -2452,15 +2534,16 @@ local function windowsVerifyTick()
         lines[#lines + 1] = ""
         lines[#lines + 1] = "Log: " .. tostring(logFile)
         finalizeWindowsVerify(false, lines)
-        reaper.defer(windowsVerifyTick)
         return
     end
 end
 
-local function windowsVerifyStart(runtime, separatorScript)
+local function windowsVerifyStart(runtime, separatorScript, reuseWindow)
     ensureDir(runtime.runtimeState)
     ensureDir(runtime.runtimeLogs)
-    gfx.init(setupWindowTitle("Windows"), 900, 620, 0, 140, 100)
+    if not reuseWindow then
+        gfx.init(setupWindowTitle("Windows"), 900, 620, 0, 140, 100)
+    end
     WINDOWS_VERIFY = {
         runtime = runtime,
         separatorScript = separatorScript,
@@ -2637,6 +2720,92 @@ local function openPath(path)
     end
 end
 
+local function isWindowsPythonAliasPath(path)
+    local p = trim(path):lower()
+    return p == "python" or p == "python.exe" or p == "py" or p == "py.exe"
+end
+
+local function setupResolveWindowsPython(runtime, state, capState)
+    local capPython = resolvePath(capState and capState.PYTHON_PATH or "")
+    local statePython = resolvePath((state and (state.PYTHON_PATH or state.VENV_PYTHON)) or "")
+    local extPythonRaw = trim(getExt("pythonPath") or "")
+    local extPython = resolvePath(extPythonRaw)
+
+    local function usablePath(p)
+        if p == "" then return false end
+        if not isAbsolutePath(p) then return false end
+        if isWindowsStorePythonPath(p) then return false end
+        return fileExists(p)
+    end
+
+    local extValid = usablePath(extPython) and (not isWindowsPythonAliasPath(extPythonRaw))
+    if extValid then
+        return extPython, "ExtState"
+    end
+    if usablePath(capPython) then
+        return capPython, "capabilities.env"
+    end
+    if usablePath(statePython) then
+        return statePython, "bootstrap.env"
+    end
+    local runtimePython = resolvePath(runtime and runtime.venvPython or "")
+    if usablePath(runtimePython) then
+        return runtimePython, "runtime venv"
+    end
+    return extPython ~= "" and extPython or statePython, "unresolved"
+end
+
+local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
+    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+    local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local state = fileExists(stateFile) and parseStateFile(stateFile) or {}
+    local capState = fileExists(capFile) and parseStateFile(capFile) or {}
+    local extPythonRaw = trim(getExt("pythonPath") or "")
+    local extFfmpeg = trim(getExt("ffmpegPath") or "")
+    local profile = trim(capState.PROFILE or state.PROFILE or "")
+    local backend = trim(capState.BACKEND or state.BACKEND or "")
+    local verification = trim(capState.VERIFICATION or "")
+    local status = trim(state.STATUS or "")
+    local reason = trim(state.STATUS_REASON or "")
+    local ffmpeg = trim(resolvePath(capState.FFMPEG_PATH or state.FFMPEG_PATH or extFfmpeg))
+    local python, pythonSource = setupResolveWindowsPython(runtime, state, capState)
+    local needsRepair = false
+
+    if status ~= "" and status ~= "ok" then needsRepair = true end
+    if verification ~= "" and verification ~= "ok" then needsRepair = true end
+    if trim(capState.AUDIO_SEPARATOR or "") == "missing" then needsRepair = true end
+    if trim(capState.STEMWERK_CORE or "") == "missing" then needsRepair = true end
+    if python == "" or (not isAbsolutePath(python)) or (not fileExists(python)) then needsRepair = true end
+    if ffmpeg == "" or (not fileExists(ffmpeg)) then needsRepair = true end
+
+    local deps = {
+        audio_separator = trim(capState.AUDIO_SEPARATOR or ""),
+        stemwerk_core = trim(capState.STEMWERK_CORE or ""),
+        samplerate = trim(capState.SAMPLERATE or state.SAMPLERATE or ""),
+        julius = trim(capState.JULIUS or state.JULIUS or ""),
+    }
+    for k, v in pairs(deps) do
+        if v == "" then deps[k] = "unknown" end
+    end
+
+    return {
+        runtimeBase = runtime.base or "",
+        modelDir = getModelCacheDir(),
+        setupStatus = (status ~= "" and status or "unknown"),
+        setupReason = reason,
+        profile = (profile ~= "" and profile or "unknown"),
+        backend = (backend ~= "" and backend or "unknown"),
+        pythonPath = python or "",
+        pythonSource = pythonSource or "unknown",
+        extPython = extPythonRaw ~= "" and extPythonRaw or "(empty)",
+        ffmpegPath = ffmpeg ~= "" and ffmpeg or "unknown",
+        verification = verification ~= "" and verification or "unknown",
+        deps = deps,
+        updateDetected = lastSetupVersion ~= "" and setupVersion ~= "" and lastSetupVersion ~= setupVersion,
+        needsRepair = needsRepair,
+    }
+end
+
 local function drawButton(label, x, y, w, h, style)
     local bg = { 0.2, 0.2, 0.2, 1 }
     local border = { 1, 1, 1, 1 }
@@ -2713,6 +2882,7 @@ local function resolveLinuxFfmpegPath(state)
         getExt("ffmpegPath"),
         "/usr/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
+        "/opt/local/bin/ffmpeg",
         "/snap/bin/ffmpeg",
     }) do
         local resolved = resolvePath(candidate)
@@ -3377,6 +3547,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     else
         actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
         actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
+        actionButtons[#actionButtons + 1] = { label = "Set FFmpeg Path...", action = "set_ffmpeg_path" }
     end
     actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
     actionButtons[#actionButtons + 1] = { label = "Open Capabilities", action = "open_cap" }
@@ -3577,6 +3748,13 @@ local function linuxSetupTick()
                         LINUX_SETUP = nil
                         reaper.defer(function()
                             runSupportBundleAction()
+                        end)
+                        return
+                    elseif b.action == "set_ffmpeg_path" then
+                        gfx.quit()
+                        LINUX_SETUP = nil
+                        reaper.defer(function()
+                            runSetFfmpegPathAction()
                         end)
                         return
                     elseif b.action == "repair" then
@@ -4114,7 +4292,7 @@ end
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
 -- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
 -- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
-local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript)
+showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript, reuseWindow)
     if not gfx then
         msgBox("STEMwerk Setup", table.concat(finalMessage or {}, "\n"), finalSuccess and 0 or 16)
         return
@@ -4122,7 +4300,9 @@ local function showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage
 
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
-    gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
+    if not reuseWindow then
+        gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
+    end
     LINUX_SETUP = {
         runtime         = runtime,
         mode            = "final",
@@ -4592,6 +4772,46 @@ local function existingRuntimeSetupMenuTick()
         end
     end
 
+    if OS == "Windows" and m.windowsOverview then
+        local o = m.windowsOverview
+        local statusLine = "Last setup: " .. tostring(prettySetupStatus(o.setupStatus))
+        if trim(o.setupReason or "") ~= "" then
+            statusLine = statusLine .. " (" .. tostring(prettySetupReason(o.setupReason)) .. ")"
+        end
+        local rows = {
+            "Profile/backend: " .. tostring(o.profile) .. " / " .. tostring(o.backend),
+            "Python: " .. tostring(o.pythonPath) .. " [" .. tostring(o.pythonSource) .. "]",
+            "FFmpeg: " .. tostring(o.ffmpegPath),
+            "Verification: " .. tostring(o.verification),
+            "audio_separator: " .. tostring(o.deps.audio_separator),
+            "stemwerk_core: " .. tostring(o.deps.stemwerk_core),
+            "samplerate: " .. tostring(o.deps.samplerate),
+            "julius: " .. tostring(o.deps.julius),
+        }
+        if y + linuxLineHeight(16) <= infoBottom then
+            gfx.setfont(1, "Arial", linuxFontSize(12))
+            gfx.set(o.needsRepair and 0.97 or 0.55, o.needsRepair and 0.80 or 0.57, o.needsRepair and 0.15 or 0.62, 1)
+            gfx.x = bodyX
+            gfx.y = y
+            gfx.drawstr(statusLine)
+            y = y + linuxLineHeight(16)
+        end
+        local rowChars = math.max(18, math.floor((bodyW - 20) / math.max(6, linuxFontSize(11) * 0.56)))
+        gfx.setfont(1, "Arial", linuxFontSize(11))
+        gfx.set(0.78, 0.80, 0.84, 1)
+        for _, line in ipairs(rows) do
+            local wrapped = cappedWrap(line, rowChars, 2)
+            for _, wl in ipairs(wrapped) do
+                if y + linuxLineHeight(14) > infoBottom then break end
+                gfx.x = bodyX
+                gfx.y = y
+                gfx.drawstr(wl)
+                y = y + linuxLineHeight(14)
+            end
+            if y + linuxLineHeight(14) > infoBottom then break end
+        end
+    end
+
     if m.updateDetected and y + linuxLineHeight(18) <= infoBottom then
         gfx.setfont(1, "Arial Bold", linuxFontSize(12))
         gfx.set(0.97, 0.80, 0.15, 1)
@@ -4947,6 +5167,18 @@ local function existingRuntimeSetupMenuTick()
 
     gfx.update()
 
+    if chosen == "open-logs" then
+        openPath(m.runtime.runtimeLogs)
+        reaper.defer(existingRuntimeSetupMenuTick)
+        return
+    end
+
+    if chosen == "open-runtime" then
+        openPath(m.runtime.base)
+        reaper.defer(existingRuntimeSetupMenuTick)
+        return
+    end
+
     if chosen == "delete-runtime" then
         local ctx = getRuntimeDeleteContext(m.runtime)
         m.confirmModal = {
@@ -4972,18 +5204,30 @@ local function existingRuntimeSetupMenuTick()
     end
 
     if chosen then
-        gfx.quit()
         local runtime = m.runtime
         local separatorScript = m.separatorScript
         SETUP_MENU = nil
         if chosen == "verify" then
-            verifyExistingSetup(runtime, separatorScript)
+            if OS == "Windows" then
+                windowsVerifyStart(runtime, separatorScript, true)
+            else
+                gfx.quit()
+                verifyExistingSetup(runtime, separatorScript)
+            end
         elseif chosen == "repair" or chosen == "rebuild-venv" then
-            startLinuxSetup(runtime, separatorScript, chosen)
+            if OS == "Windows" then
+                windowsVerifyStart(runtime, separatorScript, true)
+            else
+                gfx.quit()
+                startLinuxSetup(runtime, separatorScript, chosen)
+            end
         elseif chosen == "support-bundle" then
+            gfx.quit()
             reaper.defer(function()
                 runSupportBundleAction()
             end)
+        elseif chosen == "cancel" then
+            gfx.quit()
         end
         return
     end
@@ -5001,6 +5245,25 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
     local versionMatch = (lastSetupVersion == "" or lastSetupVersion == currentVersion)
     local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
 
+    local windowsOverview = nil
+    if OS == "Windows" then
+        windowsOverview = buildWindowsSetupOverview(runtime, currentVersion, lastSetupVersion)
+    end
+
+    local choices = {
+        { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
+        { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
+        { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
+        { id = "support-bundle", label = "Save Support Bundle", sub = "Collect logs and diagnostics, no changes", accent = { 0.26, 0.60, 0.88 } },
+        { id = "open-logs",    label = "Open logs folder", sub = "Open runtime logs", accent = { 0.35, 0.56, 0.82 } },
+        { id = "open-runtime", label = "Open runtime folder", sub = "Open runtime base", accent = { 0.35, 0.56, 0.82 } },
+    }
+    if OS ~= "Windows" then
+        choices[#choices + 1] = { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } }
+        choices[#choices + 1] = { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } }
+    end
+    choices[#choices + 1] = { id = "cancel", label = "Cancel", sub = "Exit without changes", accent = { 0.38, 0.38, 0.42 } }
+
     SETUP_MENU = {
         runtime         = runtime,
         separatorScript = separatorScript,
@@ -5011,15 +5274,8 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
         currentVersion  = currentVersion,
         lastSetupVersion = lastSetupVersion,
         updateDetected  = updateDetected,
-        choices = {
-            { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
-            { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
-            { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
-            { id = "support-bundle", label = "Save Support Bundle", sub = "Collect logs and diagnostics, no changes", accent = { 0.26, 0.60, 0.88 } },
-            { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } },
-            { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } },
-            { id = "cancel",       label = "Cancel",        sub = "Exit without changes",              accent = { 0.38, 0.38, 0.42 } },
-        },
+        windowsOverview = windowsOverview,
+        choices = choices,
     }
     gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
     reaper.defer(existingRuntimeSetupMenuTick)
@@ -5058,12 +5314,7 @@ local function main()
     end
 
     if OS == "Windows" then
-        local intro =
-            "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
-            .. "On Windows, REAPER-side setup verifies the installed runtime and points you back to the installer if repair is needed.\n\n"
-            .. "Continue?"
-        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then return end
-        windowsVerifyRepair(runtime, separatorScript)
+        startExistingRuntimeSetupMenu(runtime, separatorScript)
         return
     end
 

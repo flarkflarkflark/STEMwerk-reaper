@@ -22,14 +22,7 @@
 #define OutputSuffix GetEnv('STEMWERK_OUTPUT_SUFFIX')
 
 #define ModelPayloadSubdir GetEnv('STEMWERK_MODEL_PAYLOAD_SUBDIR')
-#if ModelPayloadSubdir == ""
-  #define ModelPayloadSubdir "models"
-#endif
-
 #define WheelPayloadSubdir GetEnv('STEMWERK_WHEEL_PAYLOAD_SUBDIR')
-#if WheelPayloadSubdir == ""
-  #define WheelPayloadSubdir "wheels"
-#endif
 
 #if BundleRuntime == "1"
   #define MinimumFreeSpaceMB "12288"
@@ -54,8 +47,8 @@ SetupIconFile=..\assets\stemwerk.ico
 #if FileExists('..\assets\stemwerk-wizard.bmp')
 WizardImageFile=..\assets\stemwerk-wizard.bmp
 #endif
-#if FileExists('..\assets\stemwerk-wizard-small-opt-stemwerk-colors-v2-centered-widewerk.bmp')
-WizardSmallImageFile=..\assets\stemwerk-wizard-small-opt-stemwerk-colors-v2-centered-widewerk.bmp
+#if FileExists('..\assets\stemwerk-wizard-small-logo.bmp')
+WizardSmallImageFile=..\assets\stemwerk-wizard-small-logo.bmp
 #endif
 DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DefaultGroupName=STEMwerk
@@ -102,7 +95,7 @@ Name: "cleanup_models"; Description: "{cm:TaskCleanupModels}"; Flags: unchecked
 
 [Files]
 ; Core files needed to run in REAPER
-Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\scripts\reaper\*"; DestDir: "{app}"; Excludes: "*.bak,*.bak2,*.pyc,.DS_Store,._*,__MACOSX\*,sync_to_reaper.sh,STEMwerk_Enable_Debug.lua,STEMwerk_Disable_Debug.lua,STEMwerk_Set_FFmpegPath.lua,STEMwerk_Set_PythonPath.lua,STEMwerk_separate.lua,__pycache__\*,themes\*,assets\toolbar_icons\stemwerk_*.png,vendor\stemwerk-core\build\*,vendor\stemwerk-core\src\*.egg-info\*"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\..\i18n\*"; DestDir: "{app}\i18n"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 #if BundleRuntime == "1"
@@ -116,8 +109,12 @@ Source: "payload\ffmpeg\ffmpeg-release-essentials.zip"; DestDir: "{app}\_bundled
   #else
     #error STEMWERK_BUNDLE_RUNTIME=1 but payload\ffmpeg\ffmpeg-release-essentials.zip is missing.
   #endif
+#if WheelPayloadSubdir != ""
 Source: "payload\{#WheelPayloadSubdir}\*"; DestDir: "{app}\_bundled\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+#endif
+#if ModelPayloadSubdir != ""
 Source: "payload\{#ModelPayloadSubdir}\*"; DestDir: "{localappdata}\STEMwerk\models"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+#endif
 #endif
 
 ; Helpful docs
@@ -521,6 +518,25 @@ begin
   end;
 end;
 
+function SanitizeStatusUiText(const S: string): string;
+var
+  i: Integer;
+  Ch: Char;
+begin
+  Result := '';
+  for i := 1 to Length(S) do
+  begin
+    Ch := S[i];
+    if (Ch = #9) or (Ch = #10) or (Ch = #13) then
+      Result := Result + Ch
+    else if (Ord(Ch) >= 32) and (Ord(Ch) <> 127) then
+      Result := Result + Ch;
+  end;
+  Result := Trim(Result);
+  if (Result = '?') or (Result = '??') then
+    Result := '';
+end;
+
 function FilterVisibleLogText(const Text: string): string;
 var
   Remaining: string;
@@ -696,7 +712,7 @@ end;
 
 procedure UpdateLogMemo;
 var
-  Path, Text, VisibleText, Detail: string;
+  Path, Text, VisibleText, Detail, DetailText: string;
   WaitingForBootstrap: Boolean;
   WasAtBottom: Boolean;
 begin
@@ -740,12 +756,18 @@ begin
     if WaitingForBootstrap then
       StatusDetailLabel.Caption := ExtractingStatusDetailText
     else if Detail <> '' then
-      StatusDetailLabel.Caption := LText('Current task:', 'Huidige taak:', 'Aktuelle Aufgabe:') + #13#10 +
-        LocalizeStatusDetail(Detail) + #13#10 +
-        LText(
-          'Package installation can take several minutes...',
-          'Pakketinstallatie kan enkele minuten duren...',
-          'Die Paketinstallation kann mehrere Minuten dauern...')
+    begin
+      DetailText := SanitizeStatusUiText(LocalizeStatusDetail(Detail));
+      if DetailText <> '' then
+        StatusDetailLabel.Caption := LText('Current task:', 'Huidige taak:', 'Aktuelle Aufgabe:') + #13#10 +
+          DetailText + #13#10 +
+          LText(
+            'Package installation can take several minutes...',
+            'Pakketinstallatie kan enkele minuten duren...',
+            'Die Paketinstallation kann mehrere Minuten dauern...')
+      else
+        StatusDetailLabel.Caption := DefaultStatusDetailText;
+    end
     else
       StatusDetailLabel.Caption := DefaultStatusDetailText;
   end;
@@ -1023,6 +1045,8 @@ begin
     WizardForm.TasksList.Top := TasksInfoLabel.Top + TasksInfoLabel.Height + ScaleY(10);
 
   WizardForm.StatusLabel.Visible := False;
+  if WizardForm.FilenameLabel <> nil then
+    WizardForm.FilenameLabel.Visible := False;
   y := WizardForm.StatusLabel.Top - ScaleY(18);
   PageW := WizardForm.InstallingPage.ClientWidth;
   ColumnGap := ScaleX(10);
@@ -1102,7 +1126,9 @@ begin
   StatusDetailLabel.Caption := DefaultStatusDetailText;
   StatusDetailLabel.Left := WizardForm.StatusLabel.Left;
   StatusDetailLabel.Top := y + ScaleY(18);
-  StatusDetailLabel.Width := PageW - StatusDetailLabel.Left - ScaleX(8);
+  StatusDetailLabel.Width := PageW - StatusDetailLabel.Left - ScaleX(112);
+  if StatusDetailLabel.Width < ScaleX(280) then
+    StatusDetailLabel.Width := ScaleX(280);
   StatusDetailLabel.Height := ScaleY(72);
 
   StepTop := StatusDetailLabel.Top + StatusDetailLabel.Height + ScaleY(8);

@@ -1,6 +1,6 @@
 -- @description Stemwerk: Save Support Bundle
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.1.9
+-- @version 2.2.2.2
 -- @changelog
 --   Collects a read-only STEMwerk support bundle with runtime diagnostics, logs, and temp-folder inventory.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -12,6 +12,32 @@ local function msgBox(title, text, boxType)
         return reaper.ShowMessageBox(tostring(text or ""), tostring(title or "STEMwerk"), boxType or 0)
     end
     return 0
+end
+
+local function getLanguageCode()
+    if reaper and reaper.GetExtState then
+        local lang = tostring(reaper.GetExtState(EXT_SECTION, "language") or ""):lower()
+        if lang ~= "" then return lang end
+    end
+    return "en"
+end
+
+local function trSupportBundleCollecting()
+    local lang = getLanguageCode()
+    if lang == "nl" then return "Supportbundel wordt verzameld…" end
+    if lang == "de" then return "Support-Bundle wird gesammelt…" end
+    return "Collecting support bundle…"
+end
+
+local function showCollectingStatus()
+    local text = trSupportBundleCollecting()
+    if reaper and reaper.TrackCtl_SetToolTip then
+        local x, y = 0, 0
+        if reaper.GetMousePosition then
+            x, y = reaper.GetMousePosition()
+        end
+        reaper.TrackCtl_SetToolTip(text, x + 8, y + 8, true)
+    end
 end
 
 local function getScriptDir()
@@ -246,6 +272,11 @@ end
 local function basename(path)
     local clean = tostring(path or ""):gsub("[/\\]+$", "")
     return clean:match("([^/\\]+)$") or clean
+end
+
+local function dirname(path)
+    local clean = stripTrailingSep(path)
+    return clean:match("^(.*)[/\\][^/\\]+$") or ""
 end
 
 local function sanitizePathValue(path)
@@ -575,6 +606,18 @@ local function getTempBase()
     return os.getenv("TMPDIR") or "/tmp"
 end
 
+-- Returns the persistent run-log directory that SW_LOG writes to after each run.
+-- Mirrors SW_LOG.getLogDir() from STEMwerk_Log.lua so the bundle can read it
+-- without depending on that module.
+local function getStemwerkCacheLogDir()
+    if OS == "Windows" then
+        local base = os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
+        return joinPath(base, "STEMwerk", "logs")
+    end
+    local cacheBase = os.getenv("XDG_CACHE_HOME") or joinPath(getHome(), ".cache")
+    return joinPath(cacheBase, "STEMwerk", "logs")
+end
+
 local function shouldIgnoreTempFolder(name)
     local lower = tostring(name or ""):lower()
     if lower == "" then return true end
@@ -582,6 +625,59 @@ local function shouldIgnoreTempFolder(name)
     if lower:match("^support%-bundle%-headless%-") then return true end
     if lower:match("^stemwerk[_%-].*support[_%-]bundle[_%-]headless") then return true end
     return false
+end
+
+local SUPPORT_SKIP_DIR_NAMES = {
+    ["stemwerk-support-bundles"] = true,
+    ["support-bundles"] = true,
+    ["models"] = true,
+    [".venv"] = true,
+    ["venv"] = true,
+    ["site-packages"] = true,
+    ["__pycache__"] = true,
+    [".git"] = true,
+    ["_bundled"] = true,
+    ["wheels"] = true,
+    ["wheelhouse"] = true,
+    ["cache"] = true,
+    ["pip"] = true,
+    ["torch"] = true,
+    ["checkpoints"] = true,
+    ["assets"] = true,
+}
+
+local SUPPORT_SKIP_FILE_EXTENSIONS = {
+    [".wav"] = true, [".flac"] = true, [".mp3"] = true, [".aiff"] = true, [".aif"] = true,
+    [".ogg"] = true, [".m4a"] = true, [".mp4"] = true, [".mov"] = true, [".mkv"] = true,
+    [".pth"] = true, [".pt"] = true, [".ckpt"] = true, [".onnx"] = true, [".safetensors"] = true,
+    [".whl"] = true, [".zip"] = true, [".7z"] = true, [".tar"] = true, [".gz"] = true, [".xz"] = true,
+    [".dll"] = true, [".pyd"] = true, [".exe"] = true, [".msi"] = true, [".iso"] = true,
+}
+
+local function shouldSkipSupportDirByName(name)
+    local lower = tostring(name or ""):lower()
+    if lower == "" then
+        return true, "empty-name"
+    end
+    if SUPPORT_SKIP_DIR_NAMES[lower] then
+        return true, "dir-name"
+    end
+    if lower:match("^stemwerk%-support%-bundle%-") then
+        return true, "bundle-dir"
+    end
+    if lower:match("^support%-bundle%-") then
+        return true, "bundle-dir"
+    end
+    return false, ""
+end
+
+local function shouldSkipSupportFileByExt(name)
+    local lower = tostring(name or ""):lower()
+    local ext = lower:match("%.[^%.]+$") or ""
+    if ext ~= "" and SUPPORT_SKIP_FILE_EXTENSIONS[ext] then
+        return true, ext
+    end
+    return false, ""
 end
 
 local function enumerateSubdirs(path)
@@ -772,22 +868,28 @@ local bootstrapGuardPath = joinPath(runtimePaths.runtimeState, "bootstrap.guard"
 local runtimeState = readEnvFile(bootstrapEnvPath)
 local capabilityState = readEnvFile(capabilitiesEnvPath)
 
-local detectedPythonPath = firstUsablePath({
+local pythonPathCandidates = {
     capabilityState.PYTHON_PATH,
     runtimeState.PYTHON_PATH,
     runtimeState.VENV_PYTHON,
     extStateValue("pythonPath"),
     runtimePaths.venvPython,
-    resolveCommandOnPath("python3"),
-    resolveCommandOnPath("python"),
-})
+}
+if OS ~= "Windows" then
+    pythonPathCandidates[#pythonPathCandidates + 1] = resolveCommandOnPath("python3")
+    pythonPathCandidates[#pythonPathCandidates + 1] = resolveCommandOnPath("python")
+end
+local detectedPythonPath = firstUsablePath(pythonPathCandidates)
 
-local detectedFfmpegPath = firstUsablePath({
+local ffmpegPathCandidates = {
     capabilityState.FFMPEG_PATH,
     runtimeState.FFMPEG_PATH,
     extStateValue("ffmpegPath"),
-    resolveCommandOnPath("ffmpeg"),
-})
+}
+if OS ~= "Windows" then
+    ffmpegPathCandidates[#ffmpegPathCandidates + 1] = resolveCommandOnPath("ffmpeg")
+end
+local detectedFfmpegPath = firstUsablePath(ffmpegPathCandidates)
 
 local function detectReaPackVersion(resourcePath)
     local direct = reaper and reaper.ReaPack_GetVersion
@@ -830,6 +932,9 @@ end
 
 local function getPythonVersion(path)
     if trim(path) == "" then return "missing" end
+    if OS == "Windows" then
+        return "skipped for speed"
+    end
     local rc, out = execCommand(path, {"--version"}, 8000)
     if rc ~= 0 or trim(out) == "" then
         rc, out = execCommand(path, {"-V"}, 8000)
@@ -846,6 +951,9 @@ end
 
 local function getFfmpegVersion(path)
     if trim(path) == "" then return "missing" end
+    if OS == "Windows" then
+        return "skipped for speed"
+    end
     local rc, out = execCommand(path, {"-version"}, 8000)
     local line = trim((out:gsub("\r", "")):match("([^\n]+)") or "")
     if line ~= "" then
@@ -919,31 +1027,11 @@ local function getPlatformDetails()
         details.rawBlocks[#details.rawBlocks + 1] = "[/etc/os-release]\n" .. trim(osRelease or "missing")
     else
         local arch = trim(os.getenv("PROCESSOR_ARCHITEW6432") or os.getenv("PROCESSOR_ARCHITECTURE") or "")
-        local rc, regOut = execPowerShell(
-            "$cv = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -ErrorAction Stop; " ..
-            "Write-Output ($cv.ProductName); Write-Output ($cv.DisplayVersion); Write-Output ($cv.CurrentBuildNumber)",
-            6000
-        )
-        local versionLines = {}
-        for line in tostring(regOut or ""):gmatch("[^\r\n]+") do
-            if trim(line) ~= "" then
-                versionLines[#versionLines + 1] = trim(line)
-            end
-        end
         details.architecture = arch ~= "" and arch or "undetected"
-        if rc == 0 and #versionLines > 0 then
-            local name = versionLines[1] or "Windows"
-            local display = versionLines[2] or ""
-            local build = versionLines[3] or ""
-            details.osVersion = trim(table.concat({name, display ~= "" and ("version " .. display) or "", build ~= "" and ("build " .. build) or ""}, " "))
-            details.extraSummary[#details.extraSummary + 1] = "Windows version/build: " .. details.osVersion
-        else
-            local _, verOut = execCommand("cmd.exe", {"/C", "ver"}, 5000)
-            details.extraSummary[#details.extraSummary + 1] = "Windows version/build: " .. trim(verOut)
-            details.osVersion = trim(verOut) ~= "" and trim(verOut) or "Windows"
-        end
+        details.osVersion = trim(REAPER_OS_RAW) ~= "" and trim(REAPER_OS_RAW) or "Windows"
+        details.extraSummary[#details.extraSummary + 1] = "Windows version/build: metadata skipped for speed"
         details.extraSummary[#details.extraSummary + 1] = "CPU architecture: " .. details.architecture
-        details.rawBlocks[#details.rawBlocks + 1] = "[windows-version]\n" .. trim(regOut ~= "" and regOut or "")
+        details.rawBlocks[#details.rawBlocks + 1] = "[windows-version]\nmetadata skipped for speed"
     end
 
     return details
@@ -956,6 +1044,12 @@ local function runPythonProbe(bundleDir, pythonPath)
         status = "missing",
         data = {},
     }
+    if OS == "Windows" then
+        result.status = "skipped"
+        result.summary[#result.summary + 1] = "Python diagnostics: skipped for speed"
+        result.rawOutput = "Python diagnostics skipped for speed.\n"
+        return result
+    end
     if trim(pythonPath) == "" then
         result.summary[#result.summary + 1] = "Python diagnostics: missing (no Python path detected)"
         result.rawOutput = "Python diagnostics missing: no Python path detected.\n"
@@ -1103,10 +1197,133 @@ local function runPythonProbe(bundleDir, pythonPath)
     return result
 end
 
+local function psLiteral(text)
+    return "'" .. tostring(text or ""):gsub("'", "''") .. "'"
+end
+
+local function tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+    if trim(pythonPath) == "" or not fileExists(pythonPath) then
+        return false, "Python runtime unavailable for zip", "python"
+    end
+    local scriptPath = joinPath(bundleParent, "_support_bundle_zip_" .. tostring(os.time()) .. ".py")
+    local script = table.concat({
+        "import os",
+        "import sys",
+        "import zipfile",
+        "",
+        "bundle_dir = os.path.abspath(sys.argv[1])",
+        "zip_path = os.path.abspath(sys.argv[2])",
+        "parent = os.path.dirname(bundle_dir)",
+        "base = os.path.basename(bundle_dir.rstrip('/\\\\'))",
+        "",
+        "if os.path.exists(zip_path):",
+        "    os.remove(zip_path)",
+        "",
+        "with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:",
+        "    for root, dirs, files in os.walk(bundle_dir):",
+        "        rel_root = os.path.relpath(root, parent)",
+        "        if rel_root == '.':",
+        "            rel_root = base",
+        "        if not files and not dirs:",
+        "            zf.writestr(rel_root.rstrip('/\\\\') + '/', '')",
+        "        for name in files:",
+        "            src = os.path.join(root, name)",
+        "            rel = os.path.relpath(src, parent)",
+        "            zf.write(src, rel)",
+    }, "\n")
+    if not writeFile(scriptPath, script, "wb") then
+        return false, "Could not write zip helper script", "python"
+    end
+    local rc, out = execCommand(pythonPath, {scriptPath, bundleDir, zipPath}, 60000)
+    if fileExists(scriptPath) then os.remove(scriptPath) end
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "python"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("python zip failed (rc=" .. tostring(rc) .. ")"), "python"
+end
+
+local function tryCreateZipWithPowerShell(bundleDir, zipPath)
+    if OS ~= "Windows" then
+        return false, "PowerShell zip is Windows-only", "powershell"
+    end
+    local script = table.concat({
+        "$src = " .. psLiteral(bundleDir),
+        "$dst = " .. psLiteral(zipPath),
+        "if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue }",
+        "Compress-Archive -LiteralPath $src -DestinationPath $dst -CompressionLevel Optimal -Force",
+    }, "; ")
+    local rc, out = execPowerShell(script, 60000)
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "powershell"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("powershell zip failed (rc=" .. tostring(rc) .. ")"), "powershell"
+end
+
+local function tryCreateZipWithDitto(bundleDir, zipPath)
+    if OS ~= "macOS" then
+        return false, "ditto zip is macOS-only", "ditto"
+    end
+    local rc, out = execCommand("ditto", {"-c", "-k", "--keepParent", bundleDir, zipPath}, 60000)
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "ditto"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("ditto zip failed (rc=" .. tostring(rc) .. ")"), "ditto"
+end
+
+local function tryCreateZipWithZipCommand(bundleParent, bundleName, zipPath)
+    local shell = fileExists("/bin/sh") and "/bin/sh" or "sh"
+    local cmd = "cd " .. quoteArg(bundleParent)
+        .. " && zip -r -q "
+        .. quoteArg(basename(zipPath))
+        .. " "
+        .. quoteArg(bundleName)
+    local rc, out = execCommand(shell, {"-lc", cmd}, 60000)
+    if rc == 0 and fileExists(zipPath) then
+        return true, "", "zip"
+    end
+    return false, trim(out) ~= "" and trim(out) or ("zip command failed (rc=" .. tostring(rc) .. ")"), "zip"
+end
+
+local function createZipArchive(bundleParent, bundleDir, bundleName, pythonPath)
+    local zipPath = joinPath(bundleParent, bundleName .. ".zip")
+    if fileExists(zipPath) then
+        os.remove(zipPath)
+    end
+
+    local errors = {}
+    local ok, err, method
+    if OS == "Windows" then
+        ok, err, method = tryCreateZipWithPowerShell(bundleDir, zipPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+    elseif OS == "macOS" then
+        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+        ok, err, method = tryCreateZipWithDitto(bundleDir, zipPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+    else
+        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+    end
+
+    ok, err, method = tryCreateZipWithZipCommand(bundleParent, bundleName, zipPath)
+    if ok then return true, zipPath, "", method end
+    errors[#errors + 1] = method .. ": " .. tostring(err)
+
+    return false, "", table.concat(errors, " | "), ""
+end
+
 local function classifyFileForBundle(name)
     local lower = tostring(name or ""):lower()
     local textExt = {
         [".txt"] = true, [".log"] = true, [".env"] = true, [".json"] = true,
+        [".jsonl"] = true,
         [".out"] = true, [".err"] = true, [".pid"] = true, [".cfg"] = true,
         [".ini"] = true, [".trace"] = true,
     }
@@ -1116,6 +1333,9 @@ local function classifyFileForBundle(name)
         [".mp4"] = true, [".mov"] = true, [".avi"] = true, [".mkv"] = true,
         [".pt"] = true, [".pth"] = true, [".ckpt"] = true, [".onnx"] = true,
         [".bin"] = true, [".safetensors"] = true, [".npy"] = true, [".npz"] = true,
+        [".whl"] = true, [".zip"] = true, [".7z"] = true, [".tar"] = true,
+        [".gz"] = true, [".xz"] = true, [".dll"] = true, [".pyd"] = true,
+        [".exe"] = true, [".msi"] = true, [".iso"] = true,
     }
     for ext, _ in pairs(binaryExt) do
         if endsWith(lower, ext) then
@@ -1201,6 +1421,938 @@ local function collectRuntimeLogs(runtimeDir, bundleDir, copiedFiles)
     return lines
 end
 
+local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)
+    local lines = {}
+    local runsRoot = joinPath(cacheLogDir, "runs")
+    local destRoot = joinPath(bundleDir, "runtime_runs")
+    local maxRunsToInclude = 5
+    ensureDir(destRoot)
+
+    if not pathExists(runsRoot) then
+        appendLine(lines, "- persisted runs folder missing")
+        return lines
+    end
+
+    local allowed = {
+        ["timing_events.jsonl"] = true,
+        ["phase_events.jsonl"] = true,
+        ["stdout.txt"] = true,
+        ["separation_log.txt"] = true,
+        ["exit_code.txt"] = true,
+        ["done.txt"] = true,
+    }
+
+    local runDirNames = enumerateSubdirs(runsRoot)
+    if #runDirNames == 0 then
+        appendLine(lines, "- persisted runs folder empty")
+        return lines
+    end
+
+    local runEntries = {}
+    local unknownEntry = nil
+    for _, runName in ipairs(runDirNames) do
+        local runSrc = joinPath(runsRoot, runName)
+        local epoch = 0
+        if OS ~= "Windows" then
+            local stat = getPathStat(runSrc)
+            epoch = tonumber(stat.epoch) or 0
+        end
+        local entry = {
+            name = runName,
+            src = runSrc,
+            epoch = epoch,
+            isUnknown = (runName == "STEMwerk_unknown"),
+        }
+        if entry.isUnknown then
+            unknownEntry = entry
+        else
+            runEntries[#runEntries + 1] = entry
+        end
+    end
+    table.sort(runEntries, function(a, b)
+        if OS == "Windows" then
+            return tostring(a.name) > tostring(b.name)
+        end
+        if (a.epoch or 0) == (b.epoch or 0) then
+            return tostring(a.name) > tostring(b.name)
+        end
+        return (a.epoch or 0) > (b.epoch or 0)
+    end)
+
+    local selectedRuns = {}
+    for idx, entry in ipairs(runEntries) do
+        if idx <= maxRunsToInclude then
+            selectedRuns[#selectedRuns + 1] = entry
+        end
+    end
+    local includedUnknown = false
+    if #selectedRuns == 0 and unknownEntry then
+        selectedRuns[#selectedRuns + 1] = unknownEntry
+        includedUnknown = true
+    end
+
+    local copiedCount = 0
+    for _, entry in ipairs(selectedRuns) do
+        local runName = entry.name
+        local runSrc = entry.src
+        local runDst = joinPath(destRoot, runName)
+        ensureDir(runDst)
+        for _, jobName in ipairs(enumerateSubdirs(runSrc)) do
+            local jobSrc = joinPath(runSrc, jobName)
+            local jobDst = joinPath(runDst, jobName)
+            ensureDir(jobDst)
+            for _, fileName in ipairs(enumerateFiles(jobSrc)) do
+                if allowed[fileName] then
+                    local src = joinPath(jobSrc, fileName)
+                    local dst = joinPath(jobDst, fileName)
+                    local ok, mode = copySupportTextFile(src, dst, 512 * 1024)
+                    if ok then
+                        copiedCount = copiedCount + 1
+                        copiedFiles[#copiedFiles + 1] = "runtime_runs/" .. runName .. "/" .. jobName .. "/" .. fileName .. " (" .. mode .. ")"
+                    end
+                end
+            end
+        end
+    end
+
+    appendLine(lines, string.format("- persisted run diagnostics copied: %d", copiedCount))
+    local totalAvailable = #runEntries + (unknownEntry and 1 or 0)
+    local skippedOlder = math.max(0, #runEntries - math.min(#runEntries, maxRunsToInclude))
+    appendLine(lines, string.format("- persisted runs available: %d (real=%d, unknown=%d)", totalAvailable, #runEntries, unknownEntry and 1 or 0))
+    appendLine(lines, string.format("- persisted runs included: %d (max %d)", #selectedRuns, maxRunsToInclude))
+    appendLine(lines, string.format("- persisted runs skipped: %d", skippedOlder))
+    appendLine(lines, string.format("- unknown included: %s", includedUnknown and "yes" or "no"))
+    appendLine(lines, string.format("- Persistent run diagnostics: included %d of %d real runs; skipped %d older runs; unknown included %s",
+        math.min(#runEntries, maxRunsToInclude),
+        #runEntries,
+        skippedOlder,
+        includedUnknown and "yes" or "no"))
+    if #selectedRuns > 0 then
+        local ids = {}
+        for _, entry in ipairs(selectedRuns) do
+            ids[#ids + 1] = tostring(entry.name)
+        end
+        appendLine(lines, "- included run_ids: " .. table.concat(ids, ", "))
+        appendLine(lines, "- Included runtime run IDs: " .. table.concat(ids, ", "))
+    end
+    appendKey(lines, "Persisted runs source", runsRoot)
+    return lines
+end
+
+local function parseJsonStringField(line, key)
+    local pattern = '"' .. tostring(key) .. '"%s*:%s*"(.-)"'
+    local value = tostring(line or ""):match(pattern)
+    if not value then return nil end
+    value = value:gsub('\\"', '"'):gsub("\\\\", "\\")
+    return trim(value)
+end
+
+local function parseJsonNumberField(line, key)
+    local pattern = '"' .. tostring(key) .. '"%s*:%s*([%-]?[%d]+%.?[%d]*)'
+    local value = tostring(line or ""):match(pattern)
+    return tonumber(value)
+end
+
+local function kvAssignIfUnknown(entry, key, value)
+    local v = trim(value)
+    if v ~= "" and tostring(entry[key] or "") == "unknown" then
+        entry[key] = v
+        return true
+    end
+    return false
+end
+
+local function kvAssignLast(entry, key, value)
+    local v = trim(value)
+    if v ~= "" then
+        entry[key] = v
+    end
+end
+
+local function normalizeRelativeBundlePath(path)
+    return tostring(path or ""):gsub("\\", "/")
+end
+
+local KNOWN_SUMMARY_MODELS = {
+    "htdemucs",
+    "htdemucs_ft",
+    "htdemucs_6s",
+}
+
+local function parseCountValue(text)
+    local n = tostring(text or ""):match("([0-9]+)")
+    local v = tonumber(n)
+    if v then
+        return tostring(math.floor(v))
+    end
+    return nil
+end
+
+local function parseNumericToken(text)
+    local n = tostring(text or ""):match("([%-]?[%d]+%.?[%d]*)")
+    return tonumber(n)
+end
+
+local function formatSecondsValue(raw)
+    local n = parseNumericToken(raw)
+    if not n then return nil end
+    return string.format("%.1fs", n)
+end
+
+local function formatRealtimeValue(raw)
+    local n = parseNumericToken(raw)
+    if not n then return nil end
+    return string.format("%.2fx", n)
+end
+
+local function containsKnownModel(line)
+    local lower = tostring(line or ""):lower()
+    for i = 1, #KNOWN_SUMMARY_MODELS do
+        local model = KNOWN_SUMMARY_MODELS[i]
+        local pattern = "(^|[^%w_%-])(" .. model .. ")([^%w_%-]|$)"
+        local hit = lower:match(pattern)
+        if hit then
+            return model
+        end
+    end
+    return nil
+end
+
+local function setRunResult(entry, result, priority)
+    result = trim(result):lower()
+    if result ~= "success" and result ~= "fail" and result ~= "partial" and result ~= "unknown" then
+        return
+    end
+    local p = tonumber(priority) or 0
+    local currentP = tonumber(entry._resultPriority or 0) or 0
+    if p >= currentP then
+        entry.result = result
+        entry._resultPriority = p
+    end
+end
+
+local function setFailureReason(entry, reason)
+    local value = trim(reason)
+    if value ~= "" and tostring(entry.error_reason or "unknown") == "unknown" then
+        entry.error_reason = value
+    end
+end
+
+local function parseKeyValueLine(line)
+    local key, value = tostring(line or ""):match("^%s*([%w%._%-%s/]+)%s*[:=]%s*(.-)%s*$")
+    if not key then return nil, nil end
+    key = trim(key):lower():gsub("%s+", "_")
+    value = trim(value)
+    if key == "" or value == "" then return nil, nil end
+    return key, value
+end
+
+local function parseSupportRunText(entry, text)
+    for line in tostring(text or ""):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local lower = raw:lower()
+        local key, value = parseKeyValueLine(raw)
+        if key then
+            if key == "result" then
+                local resultValue = value:lower()
+                if resultValue:find("success", 1, true) or resultValue:find("ok", 1, true) or resultValue:find("done", 1, true) then
+                    setRunResult(entry, "success", 4)
+                elseif resultValue:find("partial", 1, true) then
+                    setRunResult(entry, "partial", 4)
+                elseif resultValue:find("fail", 1, true) or resultValue:find("error", 1, true) then
+                    setRunResult(entry, "fail", 4)
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                end
+            elseif key == "mode" then
+                kvAssignIfUnknown(entry, "mode", value)
+            elseif key == "model" then
+                kvAssignIfUnknown(entry, "model", value)
+            elseif key == "selected_model" then
+                kvAssignIfUnknown(entry, "model", value)
+            elseif key == "device" then
+                kvAssignIfUnknown(entry, "device", value)
+            elseif key == "backend" then
+                kvAssignIfUnknown(entry, "backend", value)
+            elseif key == "profile" then
+                kvAssignIfUnknown(entry, "profile", value)
+            elseif key == "jobs" then
+                local count = parseCountValue(value)
+                if count then kvAssignLast(entry, "jobs", count) end
+            elseif key == "items" or key == "item_count" then
+                local count = parseCountValue(value)
+                if count then kvAssignLast(entry, "items", count) end
+            elseif key == "wall_clock_total" then
+                kvAssignLast(entry, "wall_clock_total", formatSecondsValue(value) or value)
+            elseif key == "total_source_duration" or key == "total_source_dur" or key == "source_duration" or key == "total_source_duration_s" then
+                kvAssignLast(entry, "total_source_duration", formatSecondsValue(value) or value)
+            elseif key == "avg_realtime_factor" or key == "realtime_factor" then
+                kvAssignLast(entry, "realtime_factor", formatRealtimeValue(value) or value)
+            elseif key == "speed" then
+                if value:find("x", 1, true) or value:lower():find("realtime", 1, true) then
+                    kvAssignLast(entry, "realtime_factor", formatRealtimeValue(value) or value)
+                end
+            elseif key == "reason" or key == "error" or key == "failure_reason" then
+                if value ~= "" and value:lower() ~= "none" and value ~= "0" then
+                    setFailureReason(entry, value)
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                    setRunResult(entry, "fail", 4)
+                end
+            elseif key == "status" then
+                local status = value:lower()
+                if status:find("fail", 1, true) or status:find("error", 1, true) then
+                    setRunResult(entry, "fail", 4)
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                elseif status:find("success", 1, true) or status:find("ok", 1, true) then
+                    setRunResult(entry, "success", 4)
+                end
+            elseif key == "timestamp" then
+                kvAssignLast(entry, "timestamp", value)
+            elseif key == "exit_code" and tonumber(value) and tonumber(value) ~= 0 then
+                kvAssignLast(entry, "error_reason", "exit_code: " .. tostring(value))
+                entry._exitNonZero = (entry._exitNonZero or 0) + 1
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+                setRunResult(entry, "fail", 4)
+            elseif key == "error_or_cancel" then
+                local ec = tonumber(value)
+                if ec and ec > 0 then
+                    entry._clearFailures = (entry._clearFailures or 0) + ec
+                    setFailureReason(entry, "error_or_cancel: " .. tostring(ec))
+                    setRunResult(entry, "fail", 4)
+                end
+            end
+        end
+
+        local modelFromFlag = raw:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+        if modelFromFlag then
+            kvAssignIfUnknown(entry, "model", modelFromFlag)
+        end
+        local selectedModel = raw:match("^[Ss]elected%s+[Mm]odel%s*[:=]%s*(.+)$")
+        if selectedModel then
+            kvAssignIfUnknown(entry, "model", trim(selectedModel))
+        end
+        if tostring(entry.model or "unknown") == "unknown" then
+            local known = containsKnownModel(raw)
+            if known then kvAssignIfUnknown(entry, "model", known) end
+        end
+
+        local totalDurRaw = raw:match("[Tt]otal[_%s]+source[_%s]+duration%s*[:=]%s*([%d%.]+)")
+            or raw:match("[Ss]ource[_%s]+duration%s*[:=]%s*([%d%.]+)")
+        if totalDurRaw and tostring(entry.total_source_duration or "unknown") == "unknown" then
+            kvAssignLast(entry, "total_source_duration", formatSecondsValue(totalDurRaw) or totalDurRaw)
+        end
+        local realtimeRaw = raw:match("[Aa]vg[_%s]+realtime[_%s]+factor%s*[:=]%s*([%d%.]+)")
+            or raw:match("[Rr]ealtime[_%s]+factor%s*[:=]%s*([%d%.]+)")
+            or raw:match("[Ss]peed%s*[:=]%s*([%d%.]+)%s*x")
+            or raw:match("([%d%.]+)%s*x%s*[Rr]ealtime")
+        if realtimeRaw and tostring(entry.realtime_factor or "unknown") == "unknown" then
+            kvAssignLast(entry, "realtime_factor", formatRealtimeValue(realtimeRaw) or realtimeRaw)
+        end
+
+        if lower:find("processing complete", 1, true) or lower:find("completed successfully", 1, true) then
+            entry._positiveHints = (entry._positiveHints or 0) + 1
+            if tostring(entry.result or "unknown") == "unknown" then
+                setRunResult(entry, "success", 2)
+            end
+        end
+        if lower:find("import_end", 1, true) then
+            entry._positiveHints = (entry._positiveHints or 0) + 1
+        end
+
+        local selected = raw:match("^STEMWERK_DIAG%s+selected_device=(.+)$")
+        if selected then
+            kvAssignIfUnknown(entry, "device", selected)
+        end
+        local requested = raw:match("^STEMWERK_DIAG%s+requested_device=(.+)$")
+        if requested and tostring(entry.device or "unknown") == "unknown" then
+            kvAssignIfUnknown(entry, "device", requested)
+        end
+        local autoSelected = raw:match("^STEMWERK_DIAG%s+auto_selected[_%w]*=([%w%-%_:%.%/]+)")
+        if autoSelected and tostring(entry.device or "unknown") == "unknown" then
+            kvAssignIfUnknown(entry, "device", autoSelected)
+        end
+
+        if lower:find("traceback", 1, true) then
+            entry._clearFailures = (entry._clearFailures or 0) + 1
+            setRunResult(entry, "fail", 4)
+            setFailureReason(entry, "traceback detected")
+        elseif lower:match("^error:%s*.+$") then
+            entry._clearFailures = (entry._clearFailures or 0) + 1
+            setRunResult(entry, "fail", 4)
+            setFailureReason(entry, trim(raw:gsub("^[Ee][Rr][Rr][Oo][Rr]:%s*", "")))
+        end
+    end
+end
+
+local function updateRunFromTimingJson(entry, path, stat)
+    local content = readFile(path, "rb")
+    if not content then return end
+    local foundTime = false
+    for line in tostring(content):gmatch("[^\r\n]+") do
+        local t = parseJsonNumberField(line, "time")
+        if t then
+            foundTime = true
+            if not stat.minTime or t < stat.minTime then stat.minTime = t end
+            if not stat.maxTime or t > stat.maxTime then stat.maxTime = t end
+        end
+        local mode = parseJsonStringField(line, "mode")
+        if mode then kvAssignIfUnknown(entry, "mode", mode) end
+        local model = parseJsonStringField(line, "model")
+        if model then kvAssignIfUnknown(entry, "model", model) end
+        local device = parseJsonStringField(line, "device")
+        if device then kvAssignIfUnknown(entry, "device", device) end
+        local result = parseJsonStringField(line, "result")
+        if result then
+            local lr = result:lower()
+            if lr:find("success", 1, true) or lr:find("done", 1, true) or lr:find("ok", 1, true) then
+                setRunResult(entry, "success", 4)
+            elseif lr:find("partial", 1, true) then
+                setRunResult(entry, "partial", 4)
+            elseif lr:find("fail", 1, true) or lr:find("error", 1, true) then
+                setRunResult(entry, "fail", 4)
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+            end
+        end
+        local audioDur = parseJsonNumberField(line, "audio_dur")
+        if audioDur then
+            stat.audioDurByJob = stat.audioDurByJob or {}
+            local jobId = parseJsonStringField(line, "job_id") or tostring(parseJsonNumberField(line, "job_index") or "")
+            if jobId ~= "" and not stat.audioDurByJob[jobId] then
+                stat.audioDurByJob[jobId] = audioDur
+                stat.totalAudioDur = (stat.totalAudioDur or 0) + audioDur
+            end
+        end
+    end
+    if foundTime and tostring(entry.log_path or "unknown") == "unknown" then
+        entry.log_path = normalizeRelativeBundlePath(relativePath(entry.bundle_root, path))
+    end
+end
+
+local function deriveRunResultFromJobs(entry, stat)
+    local jobs = tonumber(entry.jobs) or 0
+    local doneOk = tonumber(stat.doneOk or 0) or 0
+    local exitErr = tonumber(stat.exitErr or 0) or 0
+    local clearFailures = tonumber(entry._clearFailures or 0) or 0
+    local positives = tonumber(entry._positiveHints or 0) or 0
+
+    if tostring(entry.result or "unknown") == "success" or tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial" then
+        return
+    end
+
+    if jobs > 0 then
+        if doneOk == jobs and clearFailures == 0 and exitErr == 0 then
+            setRunResult(entry, "success", 3)
+        elseif doneOk > 0 and (clearFailures > 0 or exitErr > 0) then
+            setRunResult(entry, "partial", 3)
+        elseif doneOk == 0 and (clearFailures > 0 or exitErr > 0) then
+            setRunResult(entry, "fail", 3)
+        elseif positives > 0 and clearFailures == 0 and exitErr == 0 then
+            setRunResult(entry, "success", 2)
+        else
+            setRunResult(entry, "unknown", 1)
+        end
+    else
+        if clearFailures > 0 or exitErr > 0 then
+            setRunResult(entry, "fail", 2)
+        elseif positives > 0 then
+            setRunResult(entry, "success", 2)
+        else
+            setRunResult(entry, "unknown", 1)
+        end
+    end
+
+    if (tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial")
+        and tostring(entry.error_reason or "unknown") == "unknown" then
+        local reasons = {}
+        if clearFailures > 0 then
+            reasons[#reasons + 1] = string.format("failure markers: %d", clearFailures)
+        end
+        if exitErr > 0 then
+            reasons[#reasons + 1] = string.format("nonzero exit codes: %d", exitErr)
+        end
+        if #reasons > 0 then
+            entry.error_reason = table.concat(reasons, ", ")
+        end
+    end
+end
+
+local function parseRunStemwerkLogSummary(bundleDir, capabilityState, runtimeState)
+    local path = joinPath(bundleDir, "runtime_logs", "run_stemwerk.log")
+    local data = readFile(path, "rb")
+    if not data or trim(data) == "" then
+        return nil
+    end
+
+    local entry = {
+        run_name = "latest_stemwerk_log",
+        timestamp = "unknown",
+        result = "unknown",
+        model = "unknown",
+        backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+        profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+        device = "unknown",
+        mode = "unknown",
+        jobs = "unknown",
+        items = "unknown",
+        wall_clock_total = "unknown",
+        total_source_duration = "unknown",
+        realtime_factor = "unknown",
+        error_reason = "unknown",
+        log_path = "runtime_logs/run_stemwerk.log",
+    }
+
+    local sawLaunch = false
+    local lastRc = nil
+    for line in tostring(data):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local ts = raw:match("^%[([0-9][^%]]+)%]%s+CMD:")
+        if ts then
+            entry.timestamp = ts
+        end
+        local cmd = raw:match("^%[[^%]]+%]%s+CMD:%s*(.+)$")
+        if cmd then
+            if cmd:find("LAUNCH:", 1, true) then
+                sawLaunch = true
+                local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+                if model then kvAssignIfUnknown(entry, "model", model) end
+                local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
+                if device then kvAssignIfUnknown(entry, "device", device) end
+            end
+            local mode = cmd:match("mode=([%w_%-]+)")
+            if mode then kvAssignIfUnknown(entry, "mode", mode) end
+            local jobs = cmd:match("count=(%d+)")
+            if jobs then kvAssignLast(entry, "jobs", jobs) end
+        end
+        parseSupportRunText(entry, raw)
+        local rc = raw:match("^RC:%s*([%-]?%d+)")
+        if rc then
+            lastRc = tonumber(rc)
+            if lastRc and lastRc ~= 0 then
+                entry._exitNonZero = (entry._exitNonZero or 0) + 1
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+            end
+        end
+    end
+
+    if lastRc ~= nil and tostring(entry.result or "unknown") == "unknown" then
+        if lastRc == 0 then
+            setRunResult(entry, "success", 2)
+        else
+            setRunResult(entry, "fail", 2)
+        end
+        if lastRc ~= 0 and tostring(entry.error_reason or "unknown") == "unknown" then
+            entry.error_reason = "exit_code: " .. tostring(lastRc)
+        end
+    end
+    return sawLaunch and entry or nil
+end
+
+local function parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeState)
+    local path = joinPath(bundleDir, "runtime_logs", "run_stemwerk.log")
+    local data = readFile(path, "rb")
+    if not data or trim(data) == "" then
+        return {}
+    end
+
+    local byRun = {}
+    local lastRunId = nil
+    local function getRun(runId)
+        local key = tostring(runId or "")
+        if key == "" then return nil end
+        if not byRun[key] then
+            byRun[key] = {
+                run_name = key,
+                timestamp = "unknown",
+                result = "unknown",
+                model = "unknown",
+                backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+                profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+                device = "unknown",
+                mode = "unknown",
+                jobs = "unknown",
+                items = "unknown",
+                wall_clock_total = "unknown",
+                total_source_duration = "unknown",
+                realtime_factor = "unknown",
+                error_reason = "unknown",
+                log_path = "runtime_logs/run_stemwerk.log",
+                _clearFailures = 0,
+                _positiveHints = 0,
+                _resultPriority = 0,
+                _exitNonZero = 0,
+            }
+        end
+        return byRun[key]
+    end
+
+    for line in tostring(data):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local ts = raw:match("^%[([0-9][^%]]+)%]")
+        local runId = raw:match("(STEMwerk_[%w_%-]+)")
+        if runId then
+            lastRunId = runId
+        end
+
+        local cmd = raw:match("^%[[^%]]+%]%s+CMD:%s*(.+)$") or raw
+        local targetRun = runId and getRun(runId) or (lastRunId and getRun(lastRunId) or nil)
+        if targetRun then
+            if ts then targetRun.timestamp = ts end
+            parseSupportRunText(targetRun, raw)
+
+            local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+            if model then kvAssignIfUnknown(targetRun, "model", model) end
+            local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
+            if device then kvAssignIfUnknown(targetRun, "device", device) end
+            local mode = cmd:match("mode=([%w_%-]+)")
+            if mode then kvAssignIfUnknown(targetRun, "mode", mode) end
+            local jobs = cmd:match("count=(%d+)")
+            if jobs then
+                kvAssignLast(targetRun, "jobs", jobs)
+                if tostring(targetRun.items or "unknown") == "unknown" then
+                    kvAssignLast(targetRun, "items", jobs)
+                end
+            end
+
+            local rc = raw:match("^RC:%s*([%-]?%d+)")
+            if rc then
+                local code = tonumber(rc)
+                if code and code ~= 0 then
+                    targetRun._exitNonZero = (targetRun._exitNonZero or 0) + 1
+                    targetRun._clearFailures = (targetRun._clearFailures or 0) + 1
+                elseif code == 0 and tostring(targetRun.result or "unknown") == "unknown" then
+                    setRunResult(targetRun, "success", 2)
+                end
+            end
+        end
+    end
+    return byRun
+end
+
+local function parseTimingSummaryEntry(bundleDir, capabilityState, runtimeState)
+    local timingSummaryPath = joinPath(bundleDir, "runtime_logs", "run_separation_timing_summary.txt")
+    if not fileExists(timingSummaryPath) then return nil end
+    local data = readFile(timingSummaryPath, "rb")
+    if not data or trim(data) == "" then return nil end
+
+    local entry = {
+        run_name = "latest_persistent",
+        timestamp = "unknown",
+        result = "unknown",
+        model = "unknown",
+        backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+        profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+        device = "unknown",
+        mode = "unknown",
+        jobs = "unknown",
+        items = "unknown",
+        wall_clock_total = "unknown",
+        total_source_duration = "unknown",
+        realtime_factor = "unknown",
+        error_reason = "unknown",
+        log_path = "runtime_logs/run_separation_timing_summary.txt",
+        _clearFailures = 0,
+        _positiveHints = 0,
+        _resultPriority = 0,
+        _exitNonZero = 0,
+    }
+    parseSupportRunText(entry, data)
+    return entry
+end
+
+local function selectMostFrequentValue(counts)
+    local bestValue = nil
+    local bestCount = -1
+    for value, count in pairs(counts or {}) do
+        local c = tonumber(count) or 0
+        if c > bestCount then
+            bestCount = c
+            bestValue = tostring(value)
+        end
+    end
+    return bestValue
+end
+
+local function parseRuntimeStemwerkSessions(bundleDir)
+    local path = joinPath(bundleDir, "runtime_logs", "run_stemwerk.log")
+    local data = readFile(path, "rb")
+    if not data or trim(data) == "" then
+        return {}
+    end
+
+    local sessions = {}
+    local current = nil
+    local function ensureCurrent(ts)
+        if not current then
+            current = {
+                first_ts = ts or "unknown",
+                last_ts = ts or "unknown",
+                modelCounts = {},
+                deviceCounts = {},
+                launches = 0,
+            }
+        end
+    end
+    local function pushSession(ts, jobs, mode)
+        ensureCurrent(ts)
+        local model = selectMostFrequentValue(current.modelCounts) or "unknown"
+        local device = selectMostFrequentValue(current.deviceCounts) or "unknown"
+        sessions[#sessions + 1] = {
+            timestamp = ts or current.last_ts or current.first_ts or "unknown",
+            model = model,
+            device = device,
+            jobs = jobs or "unknown",
+            items = jobs or "unknown",
+            mode = mode or "unknown",
+            log_path = "runtime_logs/run_stemwerk.log",
+        }
+        current = nil
+    end
+
+    for line in tostring(data):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local ts = raw:match("^%[([0-9][^%]]+)%]")
+        local cmd = raw:match("^%[[^%]]+%]%s+CMD:%s*(.+)$")
+        if cmd then
+            local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+            local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
+            if model or device then
+                ensureCurrent(ts)
+                current.last_ts = ts or current.last_ts
+                current.launches = (current.launches or 0) + 1
+                if model then
+                    current.modelCounts[model] = (current.modelCounts[model] or 0) + 1
+                end
+                if device then
+                    current.deviceCounts[device] = (current.deviceCounts[device] or 0) + 1
+                end
+            end
+            local jobs = cmd:match("timing:workers_launched%s+count=(%d+)")
+            local mode = cmd:match("timing:workers_launched.-%s+mode=([%w_%-]+)")
+            if jobs or mode then
+                pushSession(ts, jobs, mode)
+            end
+        end
+    end
+
+    if current and (current.launches or 0) > 0 then
+        pushSession(current.last_ts, tostring(current.launches), "unknown")
+    end
+
+    local newestFirst = {}
+    for i = #sessions, 1, -1 do
+        newestFirst[#newestFirst + 1] = sessions[i]
+    end
+    return newestFirst
+end
+
+local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
+    local out = {}
+    local runsRoot = joinPath(bundleDir, "runtime_runs")
+    local runNames = enumerateSubdirs(runsRoot)
+    table.sort(runNames, function(a, b)
+        return tostring(a) > tostring(b)
+    end)
+
+    local maxRuns = math.min(5, #runNames)
+    for i = 1, maxRuns do
+        local runName = runNames[i]
+        local runDir = joinPath(runsRoot, runName)
+        local jobNames = enumerateSubdirs(runDir)
+        table.sort(jobNames, function(a, b)
+            return tostring(a) < tostring(b)
+        end)
+
+        local entry = {
+            bundle_root = bundleDir,
+            run_name = runName,
+            timestamp = runName,
+            result = "unknown",
+            model = "unknown",
+            backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+            profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+            device = "unknown",
+            mode = "unknown",
+            jobs = tostring(#jobNames),
+            items = "unknown",
+            wall_clock_total = "unknown",
+            total_source_duration = "unknown",
+            realtime_factor = "unknown",
+            error_reason = "unknown",
+            log_path = "unknown",
+            _clearFailures = 0,
+            _positiveHints = 0,
+            _resultPriority = 0,
+        }
+
+        local stat = {
+            minTime = nil,
+            maxTime = nil,
+            totalAudioDur = 0,
+            doneOk = 0,
+            exitErr = 0,
+        }
+
+        for _, jobName in ipairs(jobNames) do
+            local jobDir = joinPath(runDir, jobName)
+            local timingPath = joinPath(jobDir, "timing_events.jsonl")
+            local phasePath = joinPath(jobDir, "phase_events.jsonl")
+            local sepLog = joinPath(jobDir, "separation_log.txt")
+            local stdoutLog = joinPath(jobDir, "stdout.txt")
+            local donePath = joinPath(jobDir, "done.txt")
+            local exitPath = joinPath(jobDir, "exit_code.txt")
+
+            updateRunFromTimingJson(entry, timingPath, stat)
+            updateRunFromTimingJson(entry, phasePath, stat)
+
+            local sepData = readFile(sepLog, "rb")
+            if sepData then
+                parseSupportRunText(entry, sepData)
+                if tostring(entry.log_path or "unknown") == "unknown" then
+                    entry.log_path = normalizeRelativeBundlePath(relativePath(bundleDir, sepLog))
+                end
+            end
+
+            local stdoutData = readFile(stdoutLog, "rb")
+            if stdoutData then
+                parseSupportRunText(entry, stdoutData)
+                if tostring(entry.log_path or "unknown") == "unknown" then
+                    entry.log_path = normalizeRelativeBundlePath(relativePath(bundleDir, stdoutLog))
+                end
+            end
+
+            local doneData = readFile(donePath, "rb")
+            if doneData then
+                local doneState = trim(doneData):lower()
+                if doneState:find("done", 1, true) or doneState:find("success", 1, true) or doneState:find("complete", 1, true) then
+                    stat.doneOk = stat.doneOk + 1
+                    entry._positiveHints = (entry._positiveHints or 0) + 1
+                end
+                parseSupportRunText(entry, doneData)
+                if tostring(entry.log_path or "unknown") == "unknown" then
+                    entry.log_path = normalizeRelativeBundlePath(relativePath(bundleDir, donePath))
+                end
+            end
+
+            local exitData = readFile(exitPath, "rb")
+            if exitData then
+                local code = tonumber(trim(exitData))
+                if code and code ~= 0 then
+                    stat.exitErr = stat.exitErr + 1
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                end
+                parseSupportRunText(entry, "exit_code: " .. tostring(trim(exitData)))
+            end
+        end
+
+        if stat.minTime and stat.maxTime and stat.maxTime >= stat.minTime then
+            local wall = math.max(0, stat.maxTime - stat.minTime)
+            entry.wall_clock_total = string.format("%.1fs", wall)
+            if wall > 0 and (stat.totalAudioDur or 0) > 0 then
+                entry.total_source_duration = string.format("%.1fs", stat.totalAudioDur)
+                entry.realtime_factor = string.format("%.2fx", (stat.totalAudioDur / wall))
+            end
+        elseif (stat.totalAudioDur or 0) > 0 then
+            entry.total_source_duration = string.format("%.1fs", stat.totalAudioDur)
+        end
+
+        deriveRunResultFromJobs(entry, stat)
+        out[#out + 1] = entry
+    end
+
+    local timingSummaryEntry = parseTimingSummaryEntry(bundleDir, capabilityState, runtimeState)
+    local stemwerkByRun = parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeState)
+    local stemwerkSessions = parseRuntimeStemwerkSessions(bundleDir)
+
+    for i = 1, #out do
+        local entry = out[i]
+        local stemLog = stemwerkByRun[tostring(entry.run_name or "")]
+        if stemLog then
+            if tostring(entry.model or "unknown") == "unknown" and tostring(stemLog.model or "unknown") ~= "unknown" then entry.model = stemLog.model end
+            if tostring(entry.device or "unknown") == "unknown" and tostring(stemLog.device or "unknown") ~= "unknown" then entry.device = stemLog.device end
+            if tostring(entry.mode or "unknown") == "unknown" and tostring(stemLog.mode or "unknown") ~= "unknown" then entry.mode = stemLog.mode end
+            if tostring(entry.jobs or "unknown") == "unknown" and tostring(stemLog.jobs or "unknown") ~= "unknown" then entry.jobs = stemLog.jobs end
+            if tostring(entry.items or "unknown") == "unknown" and tostring(stemLog.items or "unknown") ~= "unknown" then entry.items = stemLog.items end
+            if tostring(entry.timestamp or "unknown") == "unknown" and tostring(stemLog.timestamp or "unknown") ~= "unknown" then entry.timestamp = stemLog.timestamp end
+            if tostring(entry.result or "unknown") == "unknown" and tostring(stemLog.result or "unknown") ~= "unknown" then entry.result = stemLog.result end
+            if tostring(entry.error_reason or "unknown") == "unknown" and tostring(stemLog.error_reason or "unknown") ~= "unknown" then entry.error_reason = stemLog.error_reason end
+            if tostring(entry.log_path or "unknown") == "unknown" then entry.log_path = stemLog.log_path end
+        end
+        if tostring(entry.items or "unknown") == "unknown" and tostring(entry.jobs or "unknown") ~= "unknown" then
+            entry.items = entry.jobs
+        end
+
+        local session = stemwerkSessions[i]
+        if session then
+            if tostring(entry.model or "unknown") == "unknown" and tostring(session.model or "unknown") ~= "unknown" then entry.model = session.model end
+            if tostring(entry.device or "unknown") == "unknown" and tostring(session.device or "unknown") ~= "unknown" then entry.device = session.device end
+            if tostring(entry.mode or "unknown") == "unknown" and tostring(session.mode or "unknown") ~= "unknown" then entry.mode = session.mode end
+            if tostring(entry.jobs or "unknown") == "unknown" and tostring(session.jobs or "unknown") ~= "unknown" then entry.jobs = session.jobs end
+            if tostring(entry.items or "unknown") == "unknown" and tostring(session.items or "unknown") ~= "unknown" then entry.items = session.items end
+            if tostring(entry.timestamp or "unknown") == "unknown" and tostring(session.timestamp or "unknown") ~= "unknown" then entry.timestamp = session.timestamp end
+            if tostring(entry.log_path or "unknown") == "unknown" then entry.log_path = session.log_path end
+        end
+    end
+
+    if #out > 0 and timingSummaryEntry then
+        local first = out[1]
+        if tostring(timingSummaryEntry.result or "unknown") ~= "unknown" then first.result = timingSummaryEntry.result end
+        if tostring(timingSummaryEntry.model or "unknown") ~= "unknown" then first.model = timingSummaryEntry.model end
+        if tostring(timingSummaryEntry.device or "unknown") ~= "unknown" then first.device = timingSummaryEntry.device end
+        if tostring(timingSummaryEntry.mode or "unknown") ~= "unknown" then first.mode = timingSummaryEntry.mode end
+        if tostring(timingSummaryEntry.jobs or "unknown") ~= "unknown" then first.jobs = timingSummaryEntry.jobs end
+        if tostring(timingSummaryEntry.items or "unknown") ~= "unknown" then first.items = timingSummaryEntry.items end
+        if tostring(timingSummaryEntry.wall_clock_total or "unknown") ~= "unknown" then first.wall_clock_total = timingSummaryEntry.wall_clock_total end
+        if tostring(timingSummaryEntry.total_source_duration or "unknown") ~= "unknown" then first.total_source_duration = timingSummaryEntry.total_source_duration end
+        if tostring(timingSummaryEntry.realtime_factor or "unknown") ~= "unknown" then first.realtime_factor = timingSummaryEntry.realtime_factor end
+        if tostring(timingSummaryEntry.timestamp or "unknown") ~= "unknown" then first.timestamp = timingSummaryEntry.timestamp end
+        if tostring(first.log_path or "unknown") == "unknown" or tostring(first.log_path or ""):find("runtime_runs/", 1, true) then
+            first.log_path = timingSummaryEntry.log_path
+        end
+    end
+
+    if #out == 0 and timingSummaryEntry then
+        deriveRunResultFromJobs(timingSummaryEntry, { doneOk = 0, exitErr = timingSummaryEntry._exitNonZero or 0 })
+        out[#out + 1] = timingSummaryEntry
+    end
+    if #out == 0 then
+        local stemwerkLogEntry = parseRunStemwerkLogSummary(bundleDir, capabilityState, runtimeState)
+        if stemwerkLogEntry then
+            deriveRunResultFromJobs(stemwerkLogEntry, { doneOk = 0, exitErr = stemwerkLogEntry._exitNonZero or 0 })
+            out[#out + 1] = stemwerkLogEntry
+        end
+    end
+
+    local lines = {}
+    if #out == 0 then
+        lines[#lines + 1] = "No recent processing summary available. See runtime_logs/run_stemwerk.log and runtime_runs/."
+        return lines
+    end
+
+    lines[#lines + 1] = "Recent processing summary (newest first)"
+    lines[#lines + 1] = ""
+    for idx, entry in ipairs(out) do
+        lines[#lines + 1] = string.format("Run %d", idx)
+        lines[#lines + 1] = "run: " .. tostring(entry.run_name or "unknown")
+        lines[#lines + 1] = "timestamp: " .. tostring(entry.timestamp or "unknown")
+        lines[#lines + 1] = "result: " .. tostring(entry.result or "unknown")
+        lines[#lines + 1] = "model: " .. tostring(entry.model or "unknown")
+        lines[#lines + 1] = "backend: " .. tostring(entry.backend or "unknown")
+        lines[#lines + 1] = "profile: " .. tostring(entry.profile or "unknown")
+        lines[#lines + 1] = "device: " .. tostring(entry.device or "unknown")
+        lines[#lines + 1] = "mode: " .. tostring(entry.mode or "unknown")
+        lines[#lines + 1] = "jobs: " .. tostring(entry.jobs or "unknown")
+        lines[#lines + 1] = "items: " .. tostring(entry.items or "unknown")
+        lines[#lines + 1] = "wall_clock_total: " .. tostring(entry.wall_clock_total or "unknown")
+        lines[#lines + 1] = "total_source_duration: " .. tostring(entry.total_source_duration or "unknown")
+        lines[#lines + 1] = "realtime_factor: " .. tostring(entry.realtime_factor or "unknown")
+        if tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial" then
+            lines[#lines + 1] = "failure_reason: " .. tostring(entry.error_reason or "unknown")
+        end
+        lines[#lines + 1] = "bundle_log_path: " .. tostring(entry.log_path or "unknown")
+        lines[#lines + 1] = ""
+    end
+    return lines
+end
+
 local function collectTempInventory(bundleDir, copiedFiles)
     local tempBase = getTempBase()
     local inventoryLines = {}
@@ -1217,22 +2369,32 @@ local function collectTempInventory(bundleDir, copiedFiles)
         return inventoryLines, copied, tempBase, summary
     end
 
+    local caps = {
+        maxFolders = (OS == "Windows") and 5 or 8,
+        maxDepth = (OS == "Windows") and 2 or 3,
+        maxFilesTotal = (OS == "Windows") and 50 or 400,
+        maxDirsTotal = (OS == "Windows") and 120 or 400,
+        maxCopySourceBytes = 512 * 1024,
+        maxCopyOutputBytes = 256 * 1024,
+        maxCopiedBytesTotal = (OS == "Windows") and (2 * 1024 * 1024) or (4 * 1024 * 1024),
+    }
+
     for _, name in ipairs(enumerateSubdirs(tempBase)) do
         local lower = tostring(name):lower()
-        if startsWith(lower, "stemwerk") and not shouldIgnoreTempFolder(name) then
+        local skipDir = shouldSkipSupportDirByName(name)
+        if startsWith(lower, "stemwerk") and not shouldIgnoreTempFolder(name) and not skipDir then
             local full = joinPath(tempBase, name)
-            local stat = getPathStat(full)
             folders[#folders + 1] = {
                 name = name,
                 path = full,
-                epoch = stat.epoch or 0,
-                mtime = stat.mtime or "unknown",
+                epoch = 0,
+                mtime = "metadata skipped for speed",
             }
         end
     end
 
     table.sort(folders, function(a, b)
-        return (a.epoch or 0) > (b.epoch or 0)
+        return tostring(a.name) > tostring(b.name)
     end)
 
     local function sanitizeInventoryDisplayPath(relPath, fileClass)
@@ -1251,53 +2413,145 @@ local function collectTempInventory(bundleDir, copiedFiles)
         return "[STEMWERK_TEMP_DIR]/" .. rel
     end
 
-    local function walkDir(rootDir, relDir, depth, maxDepth)
-        if depth > maxDepth then return end
+    local function logInventoryEntry(stat, action, relPath, class, reason)
+        appendLine(
+            inventoryLines,
+            string.format(
+                "%s | %s | %s | %s | %s%s",
+                stat.mtime or "unavailable",
+                stat.sizeLabel or "unavailable",
+                stat.kind or "file",
+                action,
+                sanitizeInventoryDisplayPath(relPath, class),
+                (trim(reason) ~= "") and (" | " .. tostring(reason)) or ""
+            )
+        )
+    end
+
+    local totals = {
+        scannedFiles = 0,
+        scannedDirs = 0,
+        copiedBytes = 0,
+        hitDepthLimit = false,
+        hitFileLimit = false,
+        hitDirLimit = false,
+    }
+
+    local function walkDir(rootDir, relDir, depth)
+        if depth > caps.maxDepth then
+            if not totals.hitDepthLimit then
+                totals.hitDepthLimit = true
+                appendLine(inventoryLines, string.format("limit: max depth reached at %s", sanitizeInventoryDisplayPath(relDir, "other")))
+            end
+            return
+        end
         local currentDir = relDir == "" and rootDir or joinPath(rootDir, relDir)
+        if totals.scannedDirs >= caps.maxDirsTotal then
+            if not totals.hitDirLimit then
+                totals.hitDirLimit = true
+                appendLine(inventoryLines, string.format("limit: max dirs reached (%d)", caps.maxDirsTotal))
+            end
+            return
+        end
+        totals.scannedDirs = totals.scannedDirs + 1
         for _, fileName in ipairs(enumerateFiles(currentDir)) do
+            if totals.scannedFiles >= caps.maxFilesTotal then
+                if not totals.hitFileLimit then
+                    totals.hitFileLimit = true
+                    appendLine(inventoryLines, string.format("limit: max files reached (%d)", caps.maxFilesTotal))
+                end
+                break
+            end
+            totals.scannedFiles = totals.scannedFiles + 1
             local relPath = relDir == "" and fileName or joinPath(relDir, fileName)
             local fullPath = joinPath(rootDir, relPath)
-            local stat = getPathStat(fullPath)
-            local class = classifyFileForBundle(fileName)
             local lowerName = tostring(fileName):lower()
             if lowerName == "stdout.txt" then summary.stdout = true end
             if lowerName == "stderr.txt" then summary.stderr = true end
             if lowerName == "separation_log.txt" then summary.separation = true end
-            local action = "listed"
-            if class == "excluded_binary" then
-                action = "excluded-binary"
-            elseif class == "text" then
-                local tempDestDir = joinPath(bundleDir, "temp_logs", basename(rootDir))
-                local tempDestPath = joinPath(tempDestDir, relPath)
-                ensureDir(tempDestPath:match("^(.*)[/\\][^/\\]+$") or tempDestDir)
-                local ok, mode = copySupportTextFile(fullPath, tempDestPath, 256 * 1024)
-                if ok then
-                    action = "included-" .. tostring(mode)
-                    copied[#copied + 1] = "temp_logs/" .. sanitizeInventoryDisplayPath(relPath, class)
-                else
-                    action = "text-copy-failed"
-                end
-            end
-            appendLine(
-                inventoryLines,
-                string.format(
-                    "%s | %s | %s | %s | %s%s",
-                    stat.mtime or "unavailable",
-                    stat.sizeLabel or "unavailable",
-                    stat.kind or "file",
-                    action,
-                    sanitizeInventoryDisplayPath(relPath, class),
-                    (not stat.ok and trim(stat.reason) ~= "") and (" | metadata=" .. tostring(stat.reason)) or ""
+
+            local skipByExt, ext = shouldSkipSupportFileByExt(fileName)
+            if skipByExt then
+                logInventoryEntry(
+                    {mtime = "unavailable (skipped)", sizeLabel = "unavailable (skipped)", kind = "file"},
+                    "excluded-extension",
+                    relPath,
+                    "excluded_binary",
+                    "excluded-ext=" .. tostring(ext)
                 )
-            )
+            else
+                local class = classifyFileForBundle(fileName)
+                local action = "listed"
+                local reason = ""
+                local stat = {
+                    ok = true,
+                    kind = "file",
+                    mtime = "unavailable (fast-mode)",
+                    size = nil,
+                    sizeLabel = "unavailable (fast-mode)",
+                    reason = "",
+                }
+                if class == "excluded_binary" then
+                    action = "excluded-binary"
+                    stat.mtime = "unavailable (excluded)"
+                    stat.sizeLabel = "unavailable (excluded)"
+                else
+                    if class == "text" then
+                        local sourceSize = fileSizeBytes(fullPath)
+                        stat.size = sourceSize
+                        stat.sizeLabel = sourceSize and humanBytes(sourceSize) or "unavailable (size probe failed)"
+                        if sourceSize and sourceSize > caps.maxCopySourceBytes then
+                            action = "excluded-too-large"
+                            reason = "source-bytes=" .. tostring(sourceSize) .. " > max=" .. tostring(caps.maxCopySourceBytes)
+                        else
+                            local copyBytes = math.min(tonumber(sourceSize) or caps.maxCopyOutputBytes, caps.maxCopyOutputBytes)
+                            if (totals.copiedBytes + copyBytes) > caps.maxCopiedBytesTotal then
+                                action = "excluded-copy-cap"
+                                reason = "copy-byte-cap=" .. tostring(caps.maxCopiedBytesTotal)
+                            else
+                                local tempDestDir = joinPath(bundleDir, "temp_logs", basename(rootDir))
+                                local tempDestPath = joinPath(tempDestDir, relPath)
+                                ensureDir(tempDestPath:match("^(.*)[/\\][^/\\]+$") or tempDestDir)
+                                local ok, mode = copySupportTextFile(fullPath, tempDestPath, caps.maxCopyOutputBytes)
+                                if ok then
+                                    action = "included-" .. tostring(mode)
+                                    totals.copiedBytes = totals.copiedBytes + copyBytes
+                                    copied[#copied + 1] = "temp_logs/" .. sanitizeInventoryDisplayPath(relPath, class)
+                                else
+                                    action = "text-copy-failed"
+                                end
+                            end
+                        end
+                    end
+                end
+                logInventoryEntry(
+                    stat,
+                    action,
+                    relPath,
+                    class,
+                    (not stat.ok and trim(stat.reason) ~= "") and ("metadata=" .. tostring(stat.reason)) or reason
+                )
+            end
         end
         for _, subDirName in ipairs(enumerateSubdirs(currentDir)) do
-            local nextRel = relDir == "" and subDirName or joinPath(relDir, subDirName)
-            walkDir(rootDir, nextRel, depth + 1, maxDepth)
+            if totals.scannedDirs >= caps.maxDirsTotal then
+                break
+            end
+            local skipDir, skipReason = shouldSkipSupportDirByName(subDirName)
+            if skipDir then
+                local relPath = relDir == "" and subDirName or joinPath(relDir, subDirName)
+                appendLine(inventoryLines, string.format("skip-dir | %s | reason=%s", sanitizeInventoryDisplayPath(relPath, "other"), tostring(skipReason)))
+            else
+                local nextRel = relDir == "" and subDirName or joinPath(relDir, subDirName)
+                walkDir(rootDir, nextRel, depth + 1)
+            end
         end
     end
 
-    local maxFolders = math.min(#folders, 8)
+    local maxFolders = math.min(#folders, caps.maxFolders)
+    if #folders > maxFolders then
+        appendLine(inventoryLines, string.format("Temp folders limited: scanning %d of %d newest STEMwerk folders", maxFolders, #folders))
+    end
     if maxFolders == 0 then
         appendLine(inventoryLines, "No STEMwerk temp folders found under: " .. tempBase)
     end
@@ -1309,8 +2563,24 @@ local function collectTempInventory(bundleDir, copiedFiles)
             inventoryLines,
             string.format("[Folder] %s | [STEMWERK_TEMP_DIR] (%s)", folder.mtime, basename(folder.path))
         )
-        walkDir(folder.path, "", 0, 3)
+        walkDir(folder.path, "", 0)
+        if totals.scannedFiles >= caps.maxFilesTotal then
+            break
+        end
     end
+
+    appendLine(
+        inventoryLines,
+        string.format(
+            "summary | files=%d/%d dirs=%d/%d copied_bytes=%d/%d",
+            totals.scannedFiles,
+            caps.maxFilesTotal,
+            totals.scannedDirs,
+            caps.maxDirsTotal,
+            totals.copiedBytes,
+            caps.maxCopiedBytesTotal
+        )
+    )
 
     for i = 1, #copied do
         copiedFiles[#copiedFiles + 1] = copied[i]
@@ -1319,185 +2589,439 @@ local function collectTempInventory(bundleDir, copiedFiles)
     return inventoryLines, copied, tempBase, summary
 end
 
-local resourcePath = getResourcePath()
-local _, bundleSuffix = timestampParts(os.time())
-local bundleName = "STEMwerk-support-bundle-" .. bundleSuffix
-local bundleParent = joinPath(resourcePath, "STEMwerk-support-bundles")
-local bundleDir = joinPath(bundleParent, bundleName)
+local function performBundleCollection()
+    local resourcePath = getResourcePath()
+    local _, bundleSuffix = timestampParts(os.time())
+    local bundleName = "STEMwerk-support-bundle-" .. bundleSuffix
+    local bundleParent = joinPath(resourcePath, "STEMwerk-support-bundles")
+    local bundleDir = joinPath(bundleParent, bundleName)
 
-if not ensureDir(bundleParent) or not ensureDir(bundleDir) then
-    msgBox("STEMwerk Support Bundle", "Could not create bundle folder:\n" .. tostring(bundleDir), 0)
-    return
+    if not ensureDir(bundleParent) or not ensureDir(bundleDir) then
+        return false, "Could not create bundle folder:\n" .. tostring(bundleDir)
+    end
+
+    local phaseTimings = {}
+    local timingsFile = joinPath(bundleDir, "support_bundle_timings.txt")
+    local timingLines = {}
+    local totalStartedAt = os.clock()
+
+    local function flushTimings()
+        writeFile(timingsFile, table.concat(timingLines, "\n") .. "\n", "wb")
+    end
+
+    local function timingEvent(phase, state, note)
+        timingLines[#timingLines + 1] = string.format(
+            "%s | %s | %s%s",
+            os.date("%Y-%m-%d %H:%M:%S"),
+            tostring(phase),
+            tostring(state),
+            trim(note) ~= "" and (" | " .. tostring(note)) or ""
+        )
+        flushTimings()
+    end
+
+    local function finalizeTimingsAfterZip()
+        local hasCreateZipEnd = false
+        local hasTotalEnd = false
+        for i = 1, #timingLines do
+            local line = tostring(timingLines[i] or "")
+            if line:find("| create_zip | end", 1, true) then
+                hasCreateZipEnd = true
+            end
+            if line:find("| total | end", 1, true) then
+                hasTotalEnd = true
+            end
+        end
+        if not hasCreateZipEnd then
+            timingLines[#timingLines + 1] = string.format(
+                "%s | create_zip | end | duration=%.3f",
+                os.date("%Y-%m-%d %H:%M:%S"),
+                tonumber(phaseTimings.create_zip) or 0
+            )
+        end
+        if not hasTotalEnd then
+            timingLines[#timingLines + 1] = string.format(
+                "%s | total | end | duration=%.3f",
+                os.date("%Y-%m-%d %H:%M:%S"),
+                tonumber(phaseTimings.total) or 0
+            )
+        end
+        flushTimings()
+    end
+
+    local function phaseStart(name)
+        timingEvent(name, "start", string.format("cpu_elapsed=%.3f", math.max(0, os.clock() - totalStartedAt)))
+        return os.clock()
+    end
+
+    local function phaseDone(name, startedAt)
+        local elapsed = math.max(0, os.clock() - tonumber(startedAt or 0))
+        phaseTimings[name] = elapsed
+        timingEvent(name, "end", string.format("duration=%.3f", elapsed))
+        return elapsed
+    end
+
+    timingEvent("total_start", "start", "bundle=" .. bundleName)
+
+    local rootStartedAt = phaseStart("collect_root_diagnostics")
+    local reapackVersion = detectReaPackVersion(resourcePath)
+    local platform = getPlatformDetails()
+    local reaperVersion = reaper and reaper.GetAppVersion and tostring(reaper.GetAppVersion() or "") or "undetected"
+    local bundleTimestamp = os.date("%Y-%m-%d %H:%M:%S")
+    phaseDone("collect_root_diagnostics", rootStartedAt)
+
+    local probesStartedAt = phaseStart("collect_probes")
+    local pythonProbe = runPythonProbe(bundleDir, detectedPythonPath)
+    local pythonVersion = pythonProbe.data.python_version or getPythonVersion(detectedPythonPath)
+    local ffmpegVersion = getFfmpegVersion(detectedFfmpegPath)
+    phaseDone("collect_probes", probesStartedAt)
+
+    local diagnostics = {}
+    appendLine(diagnostics, "=== COPY/PASTE VERSION AND PLATFORM SUMMARY ===")
+    appendKey(diagnostics, "STEMwerk package version", packageVersion ~= "" and packageVersion or "missing")
+    appendKey(diagnostics, "ReaPack version", reapackVersion)
+    appendKey(diagnostics, "Main script @version", mainHeaderVersion ~= "" and mainHeaderVersion or "missing")
+    appendKey(diagnostics, "Main script APP_VERSION", mainAppVersion ~= "" and mainAppVersion or "missing")
+    appendKey(diagnostics, "OS", platform.osName)
+    appendKey(diagnostics, "OS version", platform.osVersion)
+    appendKey(diagnostics, "Architecture", platform.architecture)
+    appendKey(diagnostics, "REAPER version", reaperVersion ~= "" and reaperVersion or "undetected")
+    appendKey(diagnostics, "REAPER resource path", resourcePath)
+    appendKey(diagnostics, "Runtime base path", runtimeBase)
+    appendKey(diagnostics, "Python path", sanitizePathValue(detectedPythonPath))
+    appendKey(diagnostics, "Python version", pythonVersion)
+    appendKey(diagnostics, "FFmpeg path", sanitizePathValue(detectedFfmpegPath))
+    appendKey(diagnostics, "FFmpeg version", ffmpegVersion)
+    appendKey(diagnostics, "Bundle created", bundleTimestamp)
+    appendKey(diagnostics, "Bundle path", bundleDir)
+    for i = 1, #platform.extraSummary do
+        appendLine(diagnostics, platform.extraSummary[i])
+    end
+    appendLine(diagnostics, "=== END VERSION AND PLATFORM SUMMARY ===")
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "STEMwerk Support Bundle")
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Install Detection")
+    appendKey(diagnostics, "Install root", INSTALL.root or "missing")
+    appendKey(diagnostics, "Install scripts dir", INSTALL.scriptsDir or "missing")
+    appendKey(diagnostics, "Canonical scripts root", INSTALL.canonical or "missing")
+    appendKey(diagnostics, "ReaPack scripts root", INSTALL.reapack or "missing")
+    appendKey(diagnostics, "Install status", INSTALL.status or "undetected")
+    appendKey(diagnostics, "Runtime base source", runtimeBaseSource)
+    appendKey(diagnostics, "Setup action @version", setupVersion ~= "" and setupVersion or "missing")
+    appendKey(diagnostics, "REAPER GetOS raw", REAPER_OS_RAW ~= "" and REAPER_OS_RAW or "missing")
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Runtime State Files")
+    local copiedFiles = {}
+    local stateStartedAt = phaseStart("collect_state")
+    for _, line in ipairs(collectStateFiles(runtimePaths.runtimeState, bundleDir, copiedFiles)) do
+        appendLine(diagnostics, line)
+    end
+    phaseDone("collect_state", stateStartedAt)
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Runtime Logs")
+    local runtimeLogsStartedAt = phaseStart("collect_runtime_logs")
+    for _, line in ipairs(collectRuntimeLogs(runtimePaths.runtimeLogs, bundleDir, copiedFiles)) do
+        appendLine(diagnostics, line)
+    end
+    local debugLogPath = joinPath(getTempBase(), "STEMwerk_debug.log")
+    appendLine(diagnostics, "Known Extra Logs")
+    appendKey(diagnostics, "Temp debug log", fileExists(debugLogPath) and debugLogPath or "missing")
+    if fileExists(debugLogPath) then
+        local ok, mode = copySupportTextFile(debugLogPath, joinPath(bundleDir, "runtime_logs", "STEMwerk_debug.log"), 512 * 1024)
+        if ok then
+            copiedFiles[#copiedFiles + 1] = "runtime_logs/STEMwerk_debug.log (" .. mode .. ")"
+        end
+    end
+    phaseDone("collect_runtime_logs", runtimeLogsStartedAt)
+    appendLine(diagnostics, "")
+
+    local cacheLogDir = getStemwerkCacheLogDir()
+    local persistentRunLogs = { run_summary = false, separation_log = false, stdout = false, stemwerk_log = false }
+    local recentRunsStartedAt = phaseStart("collect_recent_runs")
+    local persistentDiagFiles = {
+        "run_summary.txt",
+        "output_detection.txt",
+        "separation_log.txt",
+        "stdout.txt",
+        "stderr.txt",
+        "exit_code.txt",
+        "done.txt",
+        "separation_timing_summary.txt",
+        "separation_timing_jobs.jsonl",
+        "stemwerk.log",
+    }
+    for _, name in ipairs(persistentDiagFiles) do
+        local src = joinPath(cacheLogDir, name)
+        if fileExists(src) then
+            local dst = joinPath(bundleDir, "runtime_logs", "run_" .. name)
+            local ok, mode = copySupportTextFile(src, dst, 512 * 1024)
+            if ok then
+                copiedFiles[#copiedFiles + 1] = "runtime_logs/run_" .. name .. " (" .. mode .. ")"
+            end
+            if name == "run_summary.txt" then persistentRunLogs.run_summary = true end
+            if name == "separation_log.txt" then persistentRunLogs.separation_log = true end
+            if name == "stdout.txt" then persistentRunLogs.stdout = true end
+            if name == "stemwerk.log" then persistentRunLogs.stemwerk_log = true end
+        end
+    end
+    appendKey(diagnostics, "Persistent run_summary.txt", persistentRunLogs.run_summary and cacheLogDir or "missing")
+    appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
+    appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
+    appendKey(diagnostics, "Persistent stemwerk.log", persistentRunLogs.stemwerk_log and cacheLogDir or "missing")
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "Persistent Run Diagnostics")
+    for _, line in ipairs(collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)) do
+        appendLine(diagnostics, line)
+    end
+    phaseDone("collect_recent_runs", recentRunsStartedAt)
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Settings Snapshot")
+    local selectedModel = trim(extStateValue("model"))
+    if selectedModel == "" then selectedModel = "htdemucs" end
+    appendKey(diagnostics, "Backend/device mode", trim(extStateValue("device")) ~= "" and trim(extStateValue("device")) or "auto")
+    appendKey(diagnostics, "Capability profile", trim(capabilityState.PROFILE) ~= "" and trim(capabilityState.PROFILE) or "missing")
+    appendKey(diagnostics, "Capability backend", trim(capabilityState.BACKEND) ~= "" and trim(capabilityState.BACKEND) or "missing")
+    appendKey(diagnostics, "Capability verification", trim(capabilityState.VERIFICATION) ~= "" and trim(capabilityState.VERIFICATION) or "missing")
+    appendKey(diagnostics, "Bootstrap status", trim(capabilityState.BOOTSTRAP_STATUS) ~= "" and trim(capabilityState.BOOTSTRAP_STATUS) or trim(runtimeState.STATUS) ~= "" and trim(runtimeState.STATUS) or "missing")
+    appendKey(diagnostics, "Quality/model mode", selectedModel .. " (" .. modelModeLabel(selectedModel) .. ")")
+    appendKey(diagnostics, "Output track mode", extBool("createNewTracks") and "new tracks" or "in place / takes")
+    appendKey(diagnostics, "Create folder", boolLabel(extBool("createFolder")))
+    appendKey(diagnostics, "Stem file destination", trim(extStateValue("stemFileDestination")) ~= "" and trim(extStateValue("stemFileDestination")) or "temp")
+    appendKey(diagnostics, "Custom stem folder", sanitizeUserFolder(extStateValue("customStemDir")))
+    appendKey(diagnostics, "Post-process takes", trim(extStateValue("postProcessTakes")) ~= "" and trim(extStateValue("postProcessTakes")) or "none")
+    appendKey(diagnostics, "Language", trim(extStateValue("language")) ~= "" and trim(extStateValue("language")) or "system/default")
+    appendKey(diagnostics, "Parallel processing", boolLabel(extBool("parallelProcessing")))
+    appendKey(diagnostics, "Keep temp files", boolLabel(extBool("keepTempFiles")))
+    appendKey(diagnostics, "Color mode", trim(extStateValue("colorMode")) ~= "" and trim(extStateValue("colorMode")) or "both")
+    appendKey(diagnostics, "Theme preset", trim(extStateValue("themePreset")) ~= "" and trim(extStateValue("themePreset")) or "classic")
+    appendKey(diagnostics, "Visual FX", boolLabel(extBool("visualFX")))
+    appendKey(diagnostics, "Tooltips", boolLabel(extBool("tooltips")))
+    appendKey(diagnostics, "Mute original", boolLabel(extBool("muteOriginal")))
+    appendKey(diagnostics, "Mute selection", boolLabel(extBool("muteSelection")))
+    appendKey(diagnostics, "Delete original", boolLabel(extBool("deleteOriginal")))
+    appendKey(diagnostics, "Delete selection", boolLabel(extBool("deleteSelection")))
+    appendKey(diagnostics, "Delete original track", boolLabel(extBool("deleteOriginalTrack")))
+    appendKey(diagnostics, "Mute original track", boolLabel(extBool("muteOriginalTrack")))
+    appendKey(diagnostics, "Debug mode", boolLabel(extBool("debugMode") or extBool("debug")))
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Python Dependency Diagnostics")
+    for i = 1, #pythonProbe.summary do
+        appendLine(diagnostics, "- " .. pythonProbe.summary[i])
+    end
+    appendLine(diagnostics, "")
+
+    local tempInventoryStartedAt = phaseStart("collect_temp_inventory")
+    local tempInventory, _, tempBase, tempSummary = collectTempInventory(bundleDir, copiedFiles)
+    phaseDone("collect_temp_inventory", tempInventoryStartedAt)
+    appendLine(diagnostics, "Temp Folder Inventory")
+    appendKey(diagnostics, "Temp base", tempBase)
+    appendKey(diagnostics, "Temp inventory file", "temp_inventory.txt")
+    appendKey(diagnostics, "Recent separation_log.txt",
+        persistentRunLogs.separation_log and "present (persistent)" or
+        (tempSummary.separation and "present (temp only)" or "missing"))
+    appendKey(diagnostics, "Recent stdout.txt",
+        persistentRunLogs.stdout and "present (persistent)" or
+        (tempSummary.stdout and "present (temp only)" or "missing"))
+    appendKey(diagnostics, "Recent stderr.txt", tempSummary.stderr and "present" or "missing")
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Collected Files")
+    if #copiedFiles == 0 then
+        appendLine(diagnostics, "- no files copied")
+    else
+        table.sort(copiedFiles)
+        for i = 1, #copiedFiles do
+            appendLine(diagnostics, "- " .. copiedFiles[i])
+        end
+    end
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "Intentional Exclusions")
+    appendLine(diagnostics, "- audio/media files (wav, mp3, flac, aiff, m4a, video)")
+    appendLine(diagnostics, "- model/runtime payload files (.onnx, .pt, .pth, .bin, .safetensors, .npy, .npz)")
+    appendLine(diagnostics, "- user project media and project-specific output folders")
+    appendLine(diagnostics, "- large binary temp artifacts; inventory lists them as excluded when seen")
+    appendLine(diagnostics, "")
+
+    local readme = {
+        "STEMwerk Support Bundle",
+        "",
+        "This bundle was created by the REAPER action:",
+        "  STEMwerk_Save_Support_Bundle.lua",
+        "",
+        "Included:",
+        "- diagnostics.txt with version/platform/runtime summary",
+        "- runtime state files from the STEMwerk state folder when present",
+        "- runtime logs from the STEMwerk logs folder when present",
+        "- recent persisted run diagnostics/logs",
+        "- processing_summary.txt with recent processing speed/results",
+        "- minimal temp_inventory.txt from recent STEMwerk temp folders",
+        "- support_bundle_timings.txt with phase timing checkpoints",
+        "- platform_details.txt with platform probe output",
+        "- python_diagnostics.txt with dependency probe output when available",
+        "- See processing_summary.txt for recent processing results and speed.",
+        "",
+        "Intentionally excluded:",
+        "- source audio, rendered stems, project media, and other user media",
+        "- model files and other large runtime payloads",
+        "- large binary temp artifacts",
+        "",
+        "Bundle folder:",
+        "  " .. bundleDir,
+        "",
+    }
+
+    writeFile(joinPath(bundleDir, "README.txt"), table.concat(readme, "\n"), "wb")
+    writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory, "\n"), "wb")
+    writeFile(joinPath(bundleDir, "processing_summary.txt"), table.concat(buildProcessingSummary(bundleDir, capabilityState, runtimeState), "\n"), "wb")
+    writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
+    writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
+
+    local zipStartedAt = phaseStart("create_zip")
+    local zipOk, zipPath, zipError, zipMethod = createZipArchive(bundleParent, bundleDir, bundleName, detectedPythonPath)
+    phaseDone("create_zip", zipStartedAt)
+
+    phaseTimings.total = math.max(0, os.clock() - totalStartedAt)
+    timingEvent("total", "end", string.format("duration=%.3f", phaseTimings.total))
+    finalizeTimingsAfterZip()
+
+    appendLine(diagnostics, "Support Bundle Phase Timings (seconds)")
+    appendKey(diagnostics, "total_start", "see support_bundle_timings.txt")
+    appendKey(diagnostics, "collect_root_diagnostics", string.format("%.3f", phaseTimings.collect_root_diagnostics or 0))
+    appendKey(diagnostics, "collect_state", string.format("%.3f", phaseTimings.collect_state or 0))
+    appendKey(diagnostics, "collect_runtime_logs", string.format("%.3f", phaseTimings.collect_runtime_logs or 0))
+    appendKey(diagnostics, "collect_recent_runs", string.format("%.3f", phaseTimings.collect_recent_runs or 0))
+    appendKey(diagnostics, "collect_temp_inventory", string.format("%.3f", phaseTimings.collect_temp_inventory or 0))
+    appendKey(diagnostics, "collect_probes", string.format("%.3f", phaseTimings.collect_probes or 0))
+    appendKey(diagnostics, "create_zip", string.format("%.3f", phaseTimings.create_zip or 0))
+    appendKey(diagnostics, "total", string.format("%.3f", phaseTimings.total or 0))
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "Zip Scope")
+    appendKey(diagnostics, "Zip source folder", bundleDir)
+    appendKey(diagnostics, "Zip parent folder", bundleParent)
+    appendKey(diagnostics, "Zip target", zipOk and zipPath or (bundleName .. ".zip (failed)"))
+    appendLine(diagnostics, "")
+
+    writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
+    writeFile(
+        joinPath(bundleDir, "support_bundle_result.txt"),
+        table.concat({
+            "bundle_dir=" .. tostring(bundleDir),
+            "zip_created=" .. (zipOk and "true" or "false"),
+            "zip_path=" .. tostring(zipPath or ""),
+            "zip_method=" .. tostring(zipMethod or ""),
+            "zip_error=" .. tostring(zipError or ""),
+            "create_zip_seconds=" .. string.format("%.3f", phaseTimings.create_zip or 0),
+            "total_seconds=" .. string.format("%.3f", phaseTimings.total or 0),
+        }, "\n") .. "\n",
+        "wb"
+    )
+    flushTimings()
+
+    return true, {
+        bundleDir = bundleDir,
+        bundleParent = bundleParent,
+        zipPath = zipPath,
+        zipCreated = zipOk,
+        zipError = zipError,
+        zipMethod = zipMethod,
+    }
 end
 
-local reapackVersion = detectReaPackVersion(resourcePath)
-local platform = getPlatformDetails()
-local pythonProbe = runPythonProbe(bundleDir, detectedPythonPath)
-local pythonVersion = pythonProbe.data.python_version or getPythonVersion(detectedPythonPath)
-local ffmpegVersion = getFfmpegVersion(detectedFfmpegPath)
-local reaperVersion = reaper and reaper.GetAppVersion and tostring(reaper.GetAppVersion() or "") or "undetected"
-local bundleTimestamp = os.date("%Y-%m-%d %H:%M:%S")
+local function runWithBusyWindow()
+    local busyTitle = "STEMwerk Support Bundle"
+    local busyText = "Saving Support Bundle..."
+    local busySubtitle = "Collecting logs and diagnostics. This should only take a few seconds."
+    local busyOpen = false
 
-local diagnostics = {}
-appendLine(diagnostics, "=== COPY/PASTE VERSION AND PLATFORM SUMMARY ===")
-appendKey(diagnostics, "STEMwerk package version", packageVersion ~= "" and packageVersion or "missing")
-appendKey(diagnostics, "ReaPack version", reapackVersion)
-appendKey(diagnostics, "Main script @version", mainHeaderVersion ~= "" and mainHeaderVersion or "missing")
-appendKey(diagnostics, "Main script APP_VERSION", mainAppVersion ~= "" and mainAppVersion or "missing")
-appendKey(diagnostics, "OS", platform.osName)
-appendKey(diagnostics, "OS version", platform.osVersion)
-appendKey(diagnostics, "Architecture", platform.architecture)
-appendKey(diagnostics, "REAPER version", reaperVersion ~= "" and reaperVersion or "undetected")
-appendKey(diagnostics, "REAPER resource path", resourcePath)
-appendKey(diagnostics, "Runtime base path", runtimeBase)
-appendKey(diagnostics, "Python path", sanitizePathValue(detectedPythonPath))
-appendKey(diagnostics, "Python version", pythonVersion)
-appendKey(diagnostics, "FFmpeg path", sanitizePathValue(detectedFfmpegPath))
-appendKey(diagnostics, "FFmpeg version", ffmpegVersion)
-appendKey(diagnostics, "Bundle created", bundleTimestamp)
-appendKey(diagnostics, "Bundle path", bundleDir)
-for i = 1, #platform.extraSummary do
-    appendLine(diagnostics, platform.extraSummary[i])
-end
-appendLine(diagnostics, "=== END VERSION AND PLATFORM SUMMARY ===")
-appendLine(diagnostics, "")
-appendLine(diagnostics, "STEMwerk Support Bundle")
-appendLine(diagnostics, "")
+    local function drawBusyWindow()
+        if not gfx then return end
+        gfx.set(0.08, 0.08, 0.08, 1.0)
+        gfx.rect(0, 0, gfx.w, gfx.h, 1)
+        gfx.set(1, 1, 1, 1)
+        gfx.setfont(1, "Arial", 20)
+        gfx.x = 20
+        gfx.y = 18
+        gfx.drawstr(busyTitle)
+        gfx.setfont(1, "Arial", 16)
+        gfx.x = 20
+        gfx.y = 56
+        gfx.drawstr(busyText)
+        gfx.setfont(1, "Arial", 14)
+        gfx.x = 20
+        gfx.y = 84
+        gfx.drawstr(busySubtitle)
+        gfx.update()
+    end
 
-appendLine(diagnostics, "Install Detection")
-appendKey(diagnostics, "Install root", INSTALL.root or "missing")
-appendKey(diagnostics, "Install scripts dir", INSTALL.scriptsDir or "missing")
-appendKey(diagnostics, "Canonical scripts root", INSTALL.canonical or "missing")
-appendKey(diagnostics, "ReaPack scripts root", INSTALL.reapack or "missing")
-appendKey(diagnostics, "Install status", INSTALL.status or "undetected")
-appendKey(diagnostics, "Runtime base source", runtimeBaseSource)
-appendKey(diagnostics, "Setup action @version", setupVersion ~= "" and setupVersion or "missing")
-appendKey(diagnostics, "REAPER GetOS raw", REAPER_OS_RAW ~= "" and REAPER_OS_RAW or "missing")
-appendLine(diagnostics, "")
+    local function closeBusyWindow()
+        if busyOpen and gfx and gfx.quit then
+            pcall(gfx.quit)
+        end
+        busyOpen = false
+    end
 
-appendLine(diagnostics, "Runtime State Files")
-local copiedFiles = {}
-for _, line in ipairs(collectStateFiles(runtimePaths.runtimeState, bundleDir, copiedFiles)) do
-    appendLine(diagnostics, line)
-end
-appendLine(diagnostics, "")
+    local function showResult(resultOk, resultValue)
+        if resultOk then
+            local payload = (type(resultValue) == "table") and resultValue or { bundleDir = tostring(resultValue or "") }
+            local bundleDir = tostring(payload.bundleDir or "")
+            local bundleParent = tostring(payload.bundleParent or dirname(bundleDir))
+            local zipCreated = payload.zipCreated == true and trim(payload.zipPath or "") ~= ""
+            local zipPath = tostring(payload.zipPath or "")
+            local prompt
+            if zipCreated then
+                prompt = "STEMwerk support bundle ZIP created:\n\n" .. zipPath
+                    .. "\n\nSource folder:\n" .. bundleDir
+                    .. "\n\nOpen the support-bundles folder now?"
+            else
+                local zipNote = ""
+                if trim(payload.zipError or "") ~= "" then
+                    zipNote = "\n\nZIP creation failed (non-fatal):\n" .. tostring(payload.zipError)
+                end
+                prompt = "STEMwerk support bundle created:\n\n" .. bundleDir
+                    .. zipNote
+                    .. "\n\nOpen the folder now?"
+            end
+            local choice = msgBox("STEMwerk Support Bundle", prompt, 4)
+            if choice == 6 then
+                openPath((zipCreated and bundleParent ~= "") and bundleParent or bundleDir)
+            end
+        else
+            msgBox("STEMwerk Support Bundle", "Could not create the STEMwerk support bundle.\n\nError:\n" .. tostring(resultValue), 0)
+        end
+    end
 
-appendLine(diagnostics, "Runtime Logs")
-for _, line in ipairs(collectRuntimeLogs(runtimePaths.runtimeLogs, bundleDir, copiedFiles)) do
-    appendLine(diagnostics, line)
-end
-appendLine(diagnostics, "")
+    local function runTask()
+        local resultOk, resultValue = performBundleCollection()
+        closeBusyWindow()
+        if reaper and reaper.defer then
+            reaper.defer(function() showResult(resultOk, resultValue) end)
+        else
+            showResult(resultOk, resultValue)
+        end
+    end
 
-local debugLogPath = joinPath(getTempBase(), "STEMwerk_debug.log")
-appendLine(diagnostics, "Known Extra Logs")
-appendKey(diagnostics, "Temp debug log", fileExists(debugLogPath) and debugLogPath or "missing")
-if fileExists(debugLogPath) then
-    local ok, mode = copySupportTextFile(debugLogPath, joinPath(bundleDir, "runtime_logs", "STEMwerk_debug.log"), 512 * 1024)
-    if ok then
-        copiedFiles[#copiedFiles + 1] = "runtime_logs/STEMwerk_debug.log (" .. mode .. ")"
+    if gfx and gfx.init and reaper and reaper.defer then
+        gfx.init(busyTitle, 700, 140, 0)
+        busyOpen = true
+        drawBusyWindow()
+        if OS == "macOS" then
+            reaper.defer(function()
+                drawBusyWindow()
+                reaper.defer(runTask)
+            end)
+        else
+            reaper.defer(runTask)
+        end
+    else
+        showCollectingStatus()
+        runTask()
     end
 end
-appendLine(diagnostics, "")
 
-appendLine(diagnostics, "Settings Snapshot")
-local selectedModel = trim(extStateValue("model"))
-if selectedModel == "" then selectedModel = "htdemucs" end
-appendKey(diagnostics, "Backend/device mode", trim(extStateValue("device")) ~= "" and trim(extStateValue("device")) or "auto")
-appendKey(diagnostics, "Capability profile", trim(capabilityState.PROFILE) ~= "" and trim(capabilityState.PROFILE) or "missing")
-appendKey(diagnostics, "Capability backend", trim(capabilityState.BACKEND) ~= "" and trim(capabilityState.BACKEND) or "missing")
-appendKey(diagnostics, "Capability verification", trim(capabilityState.VERIFICATION) ~= "" and trim(capabilityState.VERIFICATION) or "missing")
-appendKey(diagnostics, "Bootstrap status", trim(capabilityState.BOOTSTRAP_STATUS) ~= "" and trim(capabilityState.BOOTSTRAP_STATUS) or trim(runtimeState.STATUS) ~= "" and trim(runtimeState.STATUS) or "missing")
-appendKey(diagnostics, "Quality/model mode", selectedModel .. " (" .. modelModeLabel(selectedModel) .. ")")
-appendKey(diagnostics, "Output track mode", extBool("createNewTracks") and "new tracks" or "in place / takes")
-appendKey(diagnostics, "Create folder", boolLabel(extBool("createFolder")))
-appendKey(diagnostics, "Stem file destination", trim(extStateValue("stemFileDestination")) ~= "" and trim(extStateValue("stemFileDestination")) or "temp")
-appendKey(diagnostics, "Custom stem folder", sanitizeUserFolder(extStateValue("customStemDir")))
-appendKey(diagnostics, "Post-process takes", trim(extStateValue("postProcessTakes")) ~= "" and trim(extStateValue("postProcessTakes")) or "none")
-appendKey(diagnostics, "Language", trim(extStateValue("language")) ~= "" and trim(extStateValue("language")) or "system/default")
-appendKey(diagnostics, "Parallel processing", boolLabel(extBool("parallelProcessing")))
-appendKey(diagnostics, "Keep temp files", boolLabel(extBool("keepTempFiles")))
-appendKey(diagnostics, "Color mode", trim(extStateValue("colorMode")) ~= "" and trim(extStateValue("colorMode")) or "both")
-appendKey(diagnostics, "Theme preset", trim(extStateValue("themePreset")) ~= "" and trim(extStateValue("themePreset")) or "classic")
-appendKey(diagnostics, "Visual FX", boolLabel(extBool("visualFX")))
-appendKey(diagnostics, "Tooltips", boolLabel(extBool("tooltips")))
-appendKey(diagnostics, "Mute original", boolLabel(extBool("muteOriginal")))
-appendKey(diagnostics, "Mute selection", boolLabel(extBool("muteSelection")))
-appendKey(diagnostics, "Delete original", boolLabel(extBool("deleteOriginal")))
-appendKey(diagnostics, "Delete selection", boolLabel(extBool("deleteSelection")))
-appendKey(diagnostics, "Delete original track", boolLabel(extBool("deleteOriginalTrack")))
-appendKey(diagnostics, "Mute original track", boolLabel(extBool("muteOriginalTrack")))
-appendKey(diagnostics, "Debug mode", boolLabel(extBool("debugMode") or extBool("debug")))
-appendLine(diagnostics, "")
-
-appendLine(diagnostics, "Python Dependency Diagnostics")
-for i = 1, #pythonProbe.summary do
-    appendLine(diagnostics, "- " .. pythonProbe.summary[i])
-end
-appendLine(diagnostics, "")
-
-local tempInventory, _, tempBase, tempSummary = collectTempInventory(bundleDir, copiedFiles)
-appendLine(diagnostics, "Temp Folder Inventory")
-appendKey(diagnostics, "Temp base", tempBase)
-appendKey(diagnostics, "Temp inventory file", "temp_inventory.txt")
-appendKey(diagnostics, "Recent separation_log.txt", tempSummary.separation and "present" or "missing")
-appendKey(diagnostics, "Recent stdout.txt", tempSummary.stdout and "present" or "missing")
-appendKey(diagnostics, "Recent stderr.txt", tempSummary.stderr and "present" or "missing")
-appendLine(diagnostics, "")
-
-appendLine(diagnostics, "Collected Files")
-if #copiedFiles == 0 then
-    appendLine(diagnostics, "- no files copied")
-else
-    table.sort(copiedFiles)
-    for i = 1, #copiedFiles do
-        appendLine(diagnostics, "- " .. copiedFiles[i])
-    end
-end
-appendLine(diagnostics, "")
-appendLine(diagnostics, "Intentional Exclusions")
-appendLine(diagnostics, "- audio/media files (wav, mp3, flac, aiff, m4a, video)")
-appendLine(diagnostics, "- model/runtime payload files (.onnx, .pt, .pth, .bin, .safetensors, .npy, .npz)")
-appendLine(diagnostics, "- user project media and project-specific output folders")
-appendLine(diagnostics, "- large binary temp artifacts; inventory lists them as excluded when seen")
-appendLine(diagnostics, "")
-
-local readme = {
-    "STEMwerk Support Bundle",
-    "",
-    "This bundle was created by the REAPER action:",
-    "  STEMwerk_Save_Support_Bundle.lua",
-    "",
-    "Included:",
-    "- diagnostics.txt with version/platform/runtime summary",
-    "- runtime state files from the STEMwerk state folder when present",
-    "- runtime logs from the STEMwerk logs folder when present",
-    "- small text logs copied from recent STEMwerk temp folders",
-    "- temp_inventory.txt listing recent STEMwerk temp-folder contents",
-    "- platform_details.txt with raw OS command output",
-    "- python_diagnostics.txt with dependency probe output when Python could be queried",
-    "",
-    "Intentionally excluded:",
-    "- source audio, rendered stems, project media, and other user media",
-    "- model files and other large runtime payloads",
-    "- large binary temp artifacts",
-    "",
-    "Privacy note:",
-    "- Full runtime, Python, FFmpeg, and REAPER resource paths are included because they are often necessary for support.",
-    "- Custom/project/media output paths are sanitized or omitted.",
-    "",
-    "Bundle folder:",
-    "  " .. bundleDir,
-    "",
-}
-
-writeFile(joinPath(bundleDir, "README.txt"), table.concat(readme, "\n"), "wb")
-writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
-writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory, "\n"), "wb")
-writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
-writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
-
-local prompt = "STEMwerk support bundle created:\n\n" .. bundleDir .. "\n\nOpen the folder now?"
-local choice = msgBox("STEMwerk Support Bundle", prompt, 4)
-if choice == 6 then
-    openPath(bundleDir)
-end
+runWithBusyWindow()

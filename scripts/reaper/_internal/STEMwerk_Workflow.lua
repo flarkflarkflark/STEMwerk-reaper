@@ -45,6 +45,42 @@ local function touchProgressActivity(reason)
     end
 end
 
+local function recordTimingEvent(eventName, fields)
+    if C.recordTimingEvent and C.progressState and C.progressState.outputDir then
+        C.recordTimingEvent(C.progressState.outputDir, eventName, "single", fields)
+    end
+end
+
+local function markSingleProgressMilestones(pct, stage)
+    if not SW_TIMING then
+        return
+    end
+    pct = tonumber(pct) or 0
+    local td = C.progressState.timingDone or {}
+
+    if pct > 0 and not td.first_progress then
+        td.first_progress = true
+        SW_TIMING.mark("single", "first_progress")
+        recordTimingEvent("first_progress_seen", { percent = pct, stage = stage })
+    end
+    if pct >= 50 and not td.p50 then
+        td.p50 = true
+        SW_TIMING.mark("single", "progress_50")
+        recordTimingEvent("progress_50_seen", { percent = pct, stage = stage })
+    end
+    if pct >= 87 and not td.p87 then
+        td.p87 = true
+        recordTimingEvent("progress_87_or_88_seen", { percent = pct, stage = stage })
+    end
+    if pct >= 90 and not td.p90 then
+        td.p90 = true
+        SW_TIMING.mark("single", "progress_90")
+        recordTimingEvent("progress_90_or_92_seen", { percent = pct, stage = stage })
+    end
+
+    C.progressState.timingDone = td
+end
+
 local function refreshProgressActivityFromFiles()
     local now = os.time()
     local changed = false
@@ -153,7 +189,11 @@ function WORKFLOW.updateProgressFromFile()
     for line in f:lines() do
         local percent, stage = line:match("PROGRESS:(%d+):(.+)")
         if percent then
-            lastProgress = { percent = tonumber(percent), stage = stage }
+            local pct = tonumber(percent) or 0
+            lastProgress = { percent = pct, stage = stage }
+            -- Record milestones at the first observed threshold crossing, using
+            -- the actual line values (e.g. 92/Writing stems) instead of a later 100/Complete fallback.
+            markSingleProgressMilestones(pct, stage)
         end
     end
     f:close()
@@ -180,8 +220,16 @@ function WORKFLOW.checkSeparationDone()
         doneFile:close()
         return true
     end
-    -- Also check if progress hit 100%
-    return C.progressState.percent >= 100
+    -- Progress can reach 100 before launcher-owned terminal files are flushed.
+    -- Treat as done only when exit_code.txt exists as a terminal marker.
+    if (tonumber(C.progressState.percent) or 0) >= 100 then
+        local exitFile = io.open(C.progressState.outputDir .. PATH_SEP .. "exit_code.txt", "r")
+        if exitFile then
+            exitFile:close()
+            return true
+        end
+    end
+    return false
 end
 
 -- Start separation process in background (Windows)
@@ -219,7 +267,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     C.progressState.pidFile = pidFile
     C.progressState.exitCodeFile = exitCodeFile
     C.progressState.percent = 0
-    C.progressState.stage = "Starting.."
+    C.progressState.stage = C.T("progress_starting_backend") or "Starting backend..."
     C.progressState.startTime = os.time()
     C.progressState.lastActivityAt = C.progressState.startTime
     C.progressState.lastActivityReason = "process_start"
@@ -230,6 +278,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
     C.progressState.lastLogChangeAt = C.progressState.startTime
     C.progressState.lastDoneChangeAt = C.progressState.startTime
     C.progressState.cancelRequested = false
+    C.progressState.timingDone = {}
+    if SW_TIMING then SW_TIMING.mark("single", "process_launch") end
     C.progressState.execLogPath = SW_LOG.getLogPath()
     local execLogPath = C.progressState.execLogPath or SW_LOG.getLogPath()
     local jobTag = "single"
@@ -409,7 +459,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
                 "Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii; " ..
                 "Wait-Process -Id $p.Id; " ..
                 "$ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii; " ..
-                "Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii"
+                "if ($ec -eq 0) { Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii } else { Set-Content -Path '" .. doneF .. "' -Value 'ERROR' -Encoding ascii }"
 
             -- VBS: create shell and run PowerShell command invisibly (0 = hidden window)
             vbsFile:write('Set sh = CreateObject("WScript.Shell")\n')
@@ -520,8 +570,12 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             script:write('  wait "$worker_pid"\n')
             script:write("  rc=$?\n")
             script:write('  echo "$rc" > "$EXITCODE"\n')
-            script:write('  if [ "$rc" -ne 0 ]; then echo "EXIT:$rc" >> "$STDERR"; fi\n')
-            script:write('  echo DONE > "$DONE"\n')
+            script:write('  if [ "$rc" -eq 0 ]; then\n')
+            script:write('    echo DONE > "$DONE"\n')
+            script:write('  else\n')
+            script:write('    echo "EXIT:$rc" >> "$STDERR"\n')
+            script:write('    echo ERROR > "$DONE"\n')
+            script:write('  fi\n')
             script:write(") &\n")
             script:close()
 
@@ -590,8 +644,17 @@ function WORKFLOW.progressLoop()
         C.captureWindowGeometry(WINDOW_PROCESSING)
         C.saveSettings()
 
+        -- Preserve best-effort diagnostics before stopping worker; files may be partial on cancel.
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.preserveDiagnosticsForRun(C.progressState.outputDir, { reason = "user_cancel" })
+        end
+        if SW_TIMING then SW_TIMING.endJob("single", "user_cancel"); SW_TIMING.endRun("user_cancel") end
+
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
         HELPERS.killProcessFromPidFile(C.progressState.pidFile)
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.preserveDiagnosticsForRun(C.progressState.outputDir, { reason = "user_cancel" })
+        end
 
         gfx.quit()
         C.progressState.windowOpen = false
@@ -605,6 +668,11 @@ function WORKFLOW.progressLoop()
     if WORKFLOW.checkSeparationDone() then
         -- Done!
         C.progressState.running = false
+        WORKFLOW.updateProgressFromFile()
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.persistRunDiagnostics(C.progressState.outputDir)
+        end
+        recordTimingEvent("done_seen")
 
         -- Remember any size/position changes made during processing
         C.captureWindowGeometry(WINDOW_PROCESSING)
@@ -648,6 +716,29 @@ end
 function WORKFLOW.finishSeparationCallback()
     -- Small delay to ensure files are written
     local checkCount = 0
+    local persistAttempts = 0
+    local function fileExistsLocal(path)
+        if not path or path == "" then return false end
+        local f = io.open(path, "r")
+        if f then f:close(); return true end
+        return false
+    end
+    local function persistWithExitCodeRetry(onDone)
+        persistAttempts = persistAttempts + 1
+        if C.progressState.outputDir and C.progressState.outputDir ~= "" then
+            SW_LOG.persistRunDiagnostics(C.progressState.outputDir)
+        end
+        local hasExitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile) ~= nil
+        if hasExitCode or persistAttempts >= 8 then
+            if onDone then onDone() end
+            return
+        end
+        if fileExistsLocal(C.progressState.outputDir .. PATH_SEP .. "done.txt") then
+            reaper.defer(function() persistWithExitCodeRetry(onDone) end)
+            return
+        end
+        if onDone then onDone() end
+    end
     debugLog("[LOG] finishSeparationCallback: stdoutFile=" .. tostring(C.progressState.stdoutFile) .. ", separationLogFile=" .. tostring(C.progressState.logFile) .. ", outputDir=" .. tostring(C.progressState.outputDir))
     local function checkFiles()
         checkCount = checkCount + 1
@@ -662,48 +753,52 @@ function WORKFLOW.finishSeparationCallback()
 
         if next(stems) then
             debugLog("[LOG] Output detected for job (finishSeparationCallback)")
-            -- Success - process stems
-            isProcessingActive = false  -- Reset guard so workflow can be restarted after result
-            debugLog("[LOG] Import start (processStemsResult)")
-            processStemsResult(stems)
-            debugLog("[LOG] Import end (processStemsResult)")
-            debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
-            C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })
-            debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
+            persistWithExitCodeRetry(function()
+                -- Success - process stems
+                isProcessingActive = false  -- Reset guard so workflow can be restarted after result
+                debugLog("[LOG] Import start (processStemsResult)")
+                processStemsResult(stems)
+                debugLog("[LOG] Import end (processStemsResult)")
+                debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
+                C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })
+                debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
+            end)
         elseif checkCount < 10 then
             -- Retry
             reaper.defer(checkFiles)
         else
             -- Failed
-            isProcessingActive = false  -- Reset guard so workflow can be restarted
-            local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
-            local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 2000) or "(no log output found)"
-            local stdoutSnippet = SW_LOG.readFileSnippet(C.progressState.stdoutFile, 1200)
-            local errMsg = nil
-            if C.buildKnownSeparationFailureMessage then
-                errMsg = C.buildKnownSeparationFailureMessage(
-                    logSnippet,
-                    exitCode,
-                    C.progressState.lastCmd,
-                    C.progressState.logFile,
-                    C.progressState.execLogPath or SW_LOG.getLogPath(),
-                    stdoutSnippet
-                )
-            end
-            if not errMsg then
-                errMsg = "No stems created"
-                    .. "\n\nExit code: " .. tostring(exitCode or "unknown")
-                    .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")
-                    .. "\nLog file: " .. tostring(C.progressState.logFile or "unknown")
-                    .. "\nDebug log: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
-                    .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
-                if stdoutSnippet then
-                    errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+            persistWithExitCodeRetry(function()
+                isProcessingActive = false  -- Reset guard so workflow can be restarted
+                local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
+                local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 2000) or "(no log output found)"
+                local stdoutSnippet = SW_LOG.readFileSnippet(C.progressState.stdoutFile, 1200)
+                local errMsg = nil
+                if C.buildKnownSeparationFailureMessage then
+                    errMsg = C.buildKnownSeparationFailureMessage(
+                        logSnippet,
+                        exitCode,
+                        C.progressState.lastCmd,
+                        C.progressState.logFile,
+                        C.progressState.execLogPath or SW_LOG.getLogPath(),
+                        stdoutSnippet
+                    )
                 end
-            end
-            -- Keep this visible until user closes it; auto-monitor mode can immediately
-            -- bounce back to the main window and hide actionable error details.
-            C.showMessage("Separation Failed", errMsg, "error", false)
+                if not errMsg then
+                    errMsg = "No stems created"
+                        .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+                        .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")
+                        .. "\nLog file: " .. tostring(C.progressState.logFile or "unknown")
+                        .. "\nDebug log: " .. tostring(C.progressState.execLogPath or SW_LOG.getLogPath())
+                        .. "\n\nOutput (first 2000 chars):\n" .. logSnippet
+                    if stdoutSnippet then
+                        errMsg = errMsg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+                    end
+                end
+                -- Keep this visible until user closes it; auto-monitor mode can immediately
+                -- bounce back to the main window and hide actionable error details.
+                C.showMessage("Separation Failed", errMsg, "error", false)
+            end)
         end
     end
     checkFiles()
@@ -716,7 +811,7 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     C.updateTheme()
 
     if OS == "Windows" and C.progressState.windowOpen then
-        showProcessingPlaceholderWindow("Initializing...")
+        showProcessingPlaceholderWindow(C.T("progress_initializing") or "Initializing...")
     end
 
     -- Start the process
@@ -737,7 +832,7 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     if not C.progressState.windowOpen then
         ensureProcessingWindowOpen()
     end
-    C.progressState.stage = type(C.T) == "function" and (C.T("starting") or "Starting...") or "Starting..."
+    C.progressState.stage = C.T("progress_starting_backend") or "Starting backend..."
 
     C.progressState.running = true
     -- DEBUG: Write launcher_debug.txt with all relevant details before generating VBS launcher

@@ -9,6 +9,7 @@ WHEELHOUSE_SUBDIR="${STEMWERK_WHEELHOUSE_SUBDIR:-wheels}"
 WHEELS_DIR="$PAYLOAD_DIR/$WHEELHOUSE_SUBDIR"
 INCLUDE_CUDA_WHEELS="${STEMWERK_INCLUDE_CUDA_WHEELS:-1}"
 INCLUDE_DIRECTML_WHEELS="${STEMWERK_INCLUDE_DIRECTML_WHEELS:-0}"
+SKIP_WHEELHOUSE="${STEMWERK_SKIP_WHEELHOUSE:-0}"
 
 PYTHON_FILE="python-3.11.8-amd64.exe"
 PYTHON_URL="https://www.python.org/ftp/python/3.11.8/$PYTHON_FILE"
@@ -51,11 +52,18 @@ download_if_missing() {
 
 download_if_missing "$PYTHON_URL" "$PYTHON_DIR/$PYTHON_FILE"
 download_if_missing "$FFMPEG_URL" "$FFMPEG_DIR/$FFMPEG_FILE"
-download_windows_wheels
+if [[ "$SKIP_WHEELHOUSE" != "1" ]]; then
+  download_windows_wheels
+fi
 
 echo
 echo "Bundled runtime assets ready:"
 ls -lh "$PYTHON_DIR/$PYTHON_FILE" "$FFMPEG_DIR/$FFMPEG_FILE"
-echo
-echo "Bundled wheels ready ($WHEELHOUSE_SUBDIR):"
-ls -lh "$WHEELS_DIR" | sed -n '1,8p'
+if [[ "$SKIP_WHEELHOUSE" == "1" ]]; then
+  echo
+  echo "Skipping wheelhouse fetch (STEMWERK_SKIP_WHEELHOUSE=1)"
+else
+  echo
+  echo "Bundled wheels ready ($WHEELHOUSE_SUBDIR):"
+  ls -lh "$WHEELS_DIR" | sed -n '1,8p'
+fi

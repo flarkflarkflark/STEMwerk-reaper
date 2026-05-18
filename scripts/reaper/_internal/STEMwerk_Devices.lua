@@ -348,6 +348,17 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
         devices = filtered
     end
 
+    if OS == "macOS" and ARCH == "arm64" then
+        local filtered = {}
+        for _, d in ipairs(devices) do
+            if d.type ~= "mps" and tostring(d.id or "") ~= "mps" then
+                filtered[#filtered + 1] = d
+            end
+        end
+        devices = filtered
+    end
+
+
     local directmlPossible = envJsonBool(envJson, "directml_possible")
     if OS ~= "Windows" then
         directmlPossible = false
@@ -401,6 +412,11 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
     RUNTIME_DEVICES = devices
     RUNTIME_DEVICE_NOTE_KEY = buildDeviceNoteFromEnvJson(envJson, devices)
     RUNTIME_DEVICE_LAST_PROBE = now
+
+    if OS == "macOS" and ARCH == "arm64" and SETTINGS.device == "mps" then
+        SETTINGS.device = "cpu"
+        saveSettings()
+    end
 
     local function parseBenchOutput(out)
         if not out then return nil end
@@ -1112,6 +1128,7 @@ end
 function DEVICE_RUNTIME.normalizeRequestedDeviceForRuntime(requestedDevice)
     local req = tostring(requestedDevice or "auto")
     if req == "" then return "auto" end
+    if req == "mps" and OS == "macOS" and ARCH == "arm64" then return "cpu" end
     if req == "auto" or req == "cpu" or req == "mps" then return req end
 
     local list = RUNTIME_DEVICES or C.DEVICES or {}

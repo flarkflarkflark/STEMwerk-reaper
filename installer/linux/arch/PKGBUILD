@@ -12,4 +12,15 @@ sha256sums=('@SHA256@')
 package() {
   install -dm755 "${pkgdir}/usr/share/stemwerk-reaper"
   cp -a "${srcdir}/stemwerk-${pkgver}/"* "${pkgdir}/usr/share/stemwerk-reaper/"
+
+  install -dm755 "${pkgdir}/usr/share/icons/hicolor/512x512/apps"
+  install -dm755 "${pkgdir}/usr/share/icons/hicolor/scalable/apps"
+  if [[ -f "${pkgdir}/usr/share/stemwerk-reaper/stemwerk.png" ]]; then
+    install -m644 "${pkgdir}/usr/share/stemwerk-reaper/stemwerk.png" \
+      "${pkgdir}/usr/share/icons/hicolor/512x512/apps/stemwerk.png"
+  fi
+  if [[ -f "${pkgdir}/usr/share/stemwerk-reaper/stemwerk.svg" ]]; then
+    install -m644 "${pkgdir}/usr/share/stemwerk-reaper/stemwerk.svg" \
+      "${pkgdir}/usr/share/icons/hicolor/scalable/apps/stemwerk.svg"
+  fi
 }

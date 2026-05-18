@@ -83,6 +83,7 @@ local function findFfmpeg()
     elseif OS == "macOS" then
         table.insert(candidates, "/opt/homebrew/bin/ffmpeg")
         table.insert(candidates, "/usr/local/bin/ffmpeg")
+        table.insert(candidates, "/opt/local/bin/ffmpeg")
         table.insert(candidates, "/opt/homebrew/opt/ffmpeg/bin/ffmpeg")
         table.insert(candidates, "/usr/local/opt/ffmpeg/bin/ffmpeg")
         table.insert(candidates, "/usr/bin/ffmpeg")

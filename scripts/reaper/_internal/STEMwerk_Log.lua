@@ -43,6 +43,11 @@ function SW_LOG.getLogPath()
     return SW_LOG.getLogDir() .. sep .. "stemwerk.log"
 end
 
+function SW_LOG.getRunsLogDir()
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    return SW_LOG.getLogDir() .. sep .. "runs"
+end
+
 function SW_LOG.logExecResult(cmd, rc, out)
     local logDir = SW_LOG.getLogDir()
     SW_LOG.ensureDir(logDir)
@@ -118,6 +123,107 @@ function SW_LOG.readExitCode(path)
     return n or v
 end
 
+local function sw_basename(path)
+    local p = tostring(path or ""):gsub("[/\\]+$", "")
+    return p:match("([^/\\]+)$") or p
+end
+
+local function sw_parent(path)
+    local p = tostring(path or "")
+    p = p:gsub("[/\\]+$", "")
+    local parent = p:match("^(.*)[/\\][^/\\]+$")
+    if not parent or parent == "" then return "" end
+    return parent:gsub("[/\\]+$", "")
+end
+
+local function deriveRunAndJobNames(outputDir)
+    local dirName = sw_basename(outputDir)
+    local parentDirName = sw_basename(sw_parent(outputDir))
+    local isJobDir = (dirName == "single")
+        or dirName:match("^item_[%w%-_]+$")
+        or dirName:match("^track_[%w%-_]+$")
+
+    if dirName:match("^STEMwerk[_%-]") then
+        return dirName, "single"
+    end
+    if isJobDir and parentDirName:match("^STEMwerk[_%-]") then
+        return parentDirName, dirName
+    end
+    if parentDirName:match("^STEMwerk[_%-]") then
+        return parentDirName, (dirName ~= "" and dirName or "single")
+    end
+    return "STEMwerk_unknown", (dirName ~= "" and dirName or "single")
+end
+
+local function copyFileIfExists(src, dst)
+    local f = io.open(src, "rb")
+    if not f then return false end
+    local data = f:read("*a")
+    f:close()
+    if data == nil then return false end
+    local out = io.open(dst, "wb")
+    if not out then return false end
+    out:write(data)
+    out:close()
+    return true
+end
+
+function SW_LOG.persistRunDiagnostics(outputDir, opts)
+    if not outputDir or outputDir == "" then return nil end
+    opts = opts or {}
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    local runId, jobName = deriveRunAndJobNames(outputDir)
+    local runDir = SW_LOG.getRunsLogDir() .. sep .. runId
+    local jobDir = runDir .. sep .. jobName
+    SW_LOG.ensureDir(jobDir)
+
+    local allowed = opts.files or {
+        "timing_events.jsonl",
+        "phase_events.jsonl",
+        "stdout.txt",
+        "separation_log.txt",
+        "exit_code.txt",
+        "done.txt",
+    }
+    for _, name in ipairs(allowed) do
+        local src = outputDir .. sep .. name
+        local dst = jobDir .. sep .. name
+        local ok = copyFileIfExists(src, dst)
+        if not ok and opts.logMissing then
+            SW_LOG.logExecResult("persistRunDiagnostics: missing " .. tostring(src), nil, "")
+        end
+    end
+
+    return jobDir
+end
+
+-- Copy separation_log.txt and stdout.txt from a run's temp output dir to the
+-- persistent log directory, overwriting the previous run's copies.
+-- Called on every successful run regardless of the keepTempFiles setting.
+function SW_LOG.savePersistentRunLogs(outputDir)
+    if not outputDir or outputDir == "" then return end
+    SW_LOG.persistRunDiagnostics(outputDir)
+    local logDir = SW_LOG.getLogDir()
+    SW_LOG.ensureDir(logDir)
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    for _, name in ipairs({"separation_log.txt", "stdout.txt"}) do
+        local src = outputDir .. sep .. name
+        local f = io.open(src, "rb")
+        if f then
+            local data = f:read("*a")
+            f:close()
+            if data and data ~= "" then
+                local dst = logDir .. sep .. name
+                local out = io.open(dst, "wb")
+                if out then
+                    out:write(data)
+                    out:close()
+                end
+            end
+        end
+    end
+end
+
 function SW_LOG.readFileSnippet(path, maxChars)
     maxChars = maxChars or 1200
     if not path or path == "" then return nil end
@@ -130,4 +236,62 @@ function SW_LOG.readFileSnippet(path, maxChars)
         content = content:sub(1, maxChars) .. "\n...(truncated)..."
     end
     return content
+end
+
+-- Copy all available diagnostic files from a run's temp output dir to the
+-- persistent log directory. Intended for incomplete or failed runs.
+-- Missing source files are silently skipped.
+-- Also writes run_summary.txt summarising the outcome.
+-- opts: { reason = string, exitCode = number|string|nil }
+function SW_LOG.preserveDiagnosticsForRun(outputDir, opts)
+    if not outputDir or outputDir == "" then return end
+    SW_LOG.persistRunDiagnostics(outputDir)
+    local logDir = SW_LOG.getLogDir()
+    SW_LOG.ensureDir(logDir)
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    opts = opts or {}
+    local reason = tostring(opts.reason or "unknown")
+
+    local diagnosticFiles = {
+        "separation_log.txt",
+        "stdout.txt",
+        "stderr.txt",
+        "exit_code.txt",
+        "done.txt",
+        "output_detection.txt",
+    }
+    for _, name in ipairs(diagnosticFiles) do
+        local src = outputDir .. sep .. name
+        local f = io.open(src, "rb")
+        if f then
+            local fileData = f:read("*a")
+            f:close()
+            if fileData then
+                local dst = logDir .. sep .. name
+                local out = io.open(dst, "wb")
+                if out then
+                    out:write(fileData)
+                    out:close()
+                end
+            end
+        end
+    end
+
+    local exitCode = opts.exitCode
+    if exitCode == nil then
+        exitCode = SW_LOG.readExitCode(outputDir .. sep .. "exit_code.txt")
+    end
+    local lines = {
+        "--- STEMwerk Run Summary ---",
+        "timestamp: " .. os.date("%Y-%m-%d %H:%M:%S"),
+        "reason: " .. reason,
+    }
+    if exitCode ~= nil then
+        lines[#lines + 1] = "exit_code: " .. tostring(exitCode)
+    end
+    local sf = io.open(logDir .. sep .. "run_summary.txt", "wb")
+    if sf then
+        sf:write(table.concat(lines, "\n") .. "\n")
+        sf:close()
+    end
 end

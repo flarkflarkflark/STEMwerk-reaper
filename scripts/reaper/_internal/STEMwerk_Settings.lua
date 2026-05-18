@@ -71,13 +71,21 @@ function SETTINGS_MOD.normalizeColorMode(mode)
     return "both"
 end
 
+function SETTINGS_MOD.normalizeOutputGrouping(value)
+    local v = tostring(value or ""):lower()
+    if v == "source_track" then
+        return "source_track"
+    end
+    return "per_item"
+end
+
 function SETTINGS_MOD.loadSavedMainWindowPos()
     local getExtState = C.reaper and C.reaper.GetExtState
     if not getExtState then return end
 
-    local savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos")
+    local savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos_main")
     if savedPosMain == "" then
-        savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos_main")
+        savedPosMain = C.reaper.GetExtState(C.EXT_SECTION, "window_pos")
     end
 
     if savedPosMain ~= "" then
@@ -103,6 +111,13 @@ function SETTINGS_MOD.load()
 
     local createFolder = C.reaper.GetExtState(C.EXT_SECTION, "createFolder")
     if createFolder ~= "" then C.SETTINGS.createFolder = (createFolder == "1") end
+
+    local outputGrouping = C.reaper.GetExtState(C.EXT_SECTION, "outputGrouping")
+    if outputGrouping ~= "" then
+        C.SETTINGS.outputGrouping = SETTINGS_MOD.normalizeOutputGrouping(outputGrouping)
+    else
+        C.SETTINGS.outputGrouping = SETTINGS_MOD.normalizeOutputGrouping(C.SETTINGS.outputGrouping)
+    end
 
     local colorMode = C.reaper.GetExtState(C.EXT_SECTION, "colorMode")
     if colorMode ~= "" then
@@ -189,14 +204,18 @@ function SETTINGS_MOD.load()
 
     local device = C.reaper.GetExtState(C.EXT_SECTION, "device")
     if device ~= "" then C.SETTINGS.device = device end
+    if C.OS == "macOS" and C.ARCH == "arm64" and tostring(C.SETTINGS.device or "") == "mps" then
+        C.SETTINGS.device = "cpu"
+    end
 
     local language = C.reaper.GetExtState(C.EXT_SECTION, "language")
-    if language ~= "" then
-        C.SETTINGS.language = language
+    local normalizedLanguage = normalizeLanguageCode(language)
+    if normalizedLanguage then
+        C.SETTINGS.language = normalizedLanguage
     else
-        C.SETTINGS.language = detectSystemLanguage()
-        C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
+        C.SETTINGS.language = "en"
     end
+    C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
 
     local appliedLanguage = C.setLanguage(C.SETTINGS.language)
     if not appliedLanguage then
@@ -244,6 +263,8 @@ function SETTINGS_MOD.save()
     C.reaper.SetExtState(C.EXT_SECTION, "model", C.SETTINGS.model, true)
     C.reaper.SetExtState(C.EXT_SECTION, "createNewTracks", C.SETTINGS.createNewTracks and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "createFolder", C.SETTINGS.createFolder and "1" or "0", true)
+    C.SETTINGS.outputGrouping = SETTINGS_MOD.normalizeOutputGrouping(C.SETTINGS.outputGrouping)
+    C.reaper.SetExtState(C.EXT_SECTION, "outputGrouping", C.SETTINGS.outputGrouping, true)
     C.SETTINGS.colorMode = SETTINGS_MOD.normalizeColorMode(C.SETTINGS.colorMode)
     C.SETTINGS.applyTrackColors = (C.SETTINGS.colorMode ~= "no_track" and C.SETTINGS.colorMode ~= "off")
     C.reaper.SetExtState(C.EXT_SECTION, "applyTrackColors", C.SETTINGS.applyTrackColors and "1" or "0", true)
@@ -264,6 +285,9 @@ function SETTINGS_MOD.save()
     C.reaper.SetExtState(C.EXT_SECTION, "tooltips", C.SETTINGS.tooltips and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "keepTempFiles", C.SETTINGS.keepTempFiles and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
+    if C.OS == "macOS" and C.ARCH == "arm64" and tostring(C.SETTINGS.device or "") == "mps" then
+        C.SETTINGS.device = "cpu"
+    end
     C.reaper.SetExtState(C.EXT_SECTION, "device", C.SETTINGS.device, true)
 
     for _, stem in ipairs(C.STEMS) do

@@ -20,6 +20,14 @@ Installs the STEMwerk REAPER scripts and helper files.
 rm -rf %{buildroot}
 mkdir -p %{buildroot}/usr/share/stemwerk-reaper
 cp -a * %{buildroot}/usr/share/stemwerk-reaper/
+mkdir -p %{buildroot}/usr/share/icons/hicolor/512x512/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/scalable/apps
+if [ -f %{buildroot}/usr/share/stemwerk-reaper/stemwerk.png ]; then
+	cp -f %{buildroot}/usr/share/stemwerk-reaper/stemwerk.png %{buildroot}/usr/share/icons/hicolor/512x512/apps/stemwerk.png
+fi
+if [ -f %{buildroot}/usr/share/stemwerk-reaper/stemwerk.svg ]; then
+	cp -f %{buildroot}/usr/share/stemwerk-reaper/stemwerk.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/stemwerk.svg
+fi
 
 %post
 echo
@@ -45,12 +53,14 @@ STEMwerk is installed to /usr/share/stemwerk-reaper
 Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
 		kdialog --msgbox "$RICH_MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || :
 	elif command -v notify-send >/dev/null 2>&1; then
-		notify-send "STEMwerk Installer" "$PLAIN_MESSAGE" >/dev/null 2>&1 || :
+		notify-send -i stemwerk "STEMwerk Installer" "$PLAIN_MESSAGE" >/dev/null 2>&1 || :
 	fi
 fi
 
 %files
 /usr/share/stemwerk-reaper
+/usr/share/icons/hicolor/512x512/apps/stemwerk.png
+/usr/share/icons/hicolor/scalable/apps/stemwerk.svg
 
 %changelog
 * Sun Dec 14 2025 flarkAUDIO <noreply@example.com> - @VERSION@-1

@@ -45,7 +45,7 @@ docker run --rm \
   -v "$WORK_DIR:/src:ro" \
   -v "$WORK_DIR:/out" \
   archlinux:latest \
-  bash -lc "set -euo pipefail; pacman -Sy --noconfirm --needed base-devel zstd; useradd -m builder; mkdir -p /work; cp -a /src/. /work/; chown -R builder:builder /work; su builder -c 'cd /work && makepkg --noconfirm --nosign'; cp -f /work/*.pkg.tar.zst /out/"
+  bash -lc "set -euo pipefail; pacman -Syu --noconfirm --needed base-devel zstd; useradd -m builder; mkdir -p /work; cp -a /src/. /work/; chown -R builder:builder /work; su builder -c 'cd /work && makepkg --noconfirm --nosign'; cp -f /work/*.pkg.tar.zst /out/"
 
 # Copy output package
 dist_pkg="$(ls -1 "$WORK_DIR"/*.pkg.tar.zst | head -n 1)"

@@ -1,4 +1,4 @@
-# STEMwerk Windows Setup Guide
+﻿# STEMwerk Windows Setup Guide
 
 This guide is for the Windows installer build of STEMwerk.
 
@@ -9,76 +9,102 @@ The Windows installer:
 - copied the STEMwerk REAPER scripts into your REAPER Scripts folder
 - prepared the STEMwerk runtime under your local Windows profile
 - created or updated the Python environment used by STEMwerk
-- checked FFmpeg and installed the core Python packages
+- checked FFmpeg and the core runtime Python packages
+- in bundled/offline variants, can include runtime wheels and model payloads
 
-In the normal Windows flow, this installer is the bootstrap step.
+The Windows installer remains the recommended fresh-install/bootstrap route.
 
 ## Offline installer flavors (GPU)
 
-If you downloaded an offline bundled installer, the filename tells you which GPU runtime is included:
+If you downloaded an offline bundled installer, the filename tells you which runtime flavor is bundled:
 
-- `offline-bundled-nvidia`: CUDA wheels for NVIDIA GPUs.
-- `offline-bundled-amd`: DirectML wheels for AMD/Intel GPUs.
+- `offline-bundled-nvidia`: CUDA wheel payload for NVIDIA GPUs
+- `offline-bundled-amd`: DirectML wheel payload for AMD/Intel GPUs
+- CPU/fallback paths are included where applicable for runtime repair
 
-If the installer cannot verify a GPU runtime, STEMwerk will fall back to CPU.
+Offline bundled installers are distributed as `allmodels` variants.
 
-Offline NVIDIA note (issue #11 context):
-- If processing works online but fails offline, verify that models are present in `%LOCALAPPDATA%\\STEMwerk\\models`.
-- Offline bundled installers now ship as `allmodels` variants only.
-- In bundled/offline installers, the "cleanup models" pre-setup task is intentionally disabled to avoid deleting freshly bundled model payloads.
+Samplerate/runtime note:
+
+- Bundled/offline installers include restored `samplerate==0.1.0` wheel payloads for NVIDIA, AMD/DirectML, and CPU package sets.
+- If `samplerate` is missing, Setup/Repair should install it from bundled wheels where available.
+- Verification should not report `ok` before required runtime dependency checks pass.
+
+Bundled-model cleanup note:
+
+- In bundled/offline pre-setup flow, cleanup-models is intentionally disabled to avoid deleting freshly bundled model payloads.
 
 ## What to do next
 
 1. Open REAPER.
-2. Open the Action List.
-3. If STEMwerk is not visible yet, use `Actions -> ReaScript -> Load ReaScript...`.
-4. Browse to `REAPER/Scripts/STEMwerk-reaper/`.
-5. Load `STEMwerk.lua`.
-6. Run `Stemwerk: Main`.
-
-Optional:
-
-- Load `STEMwerk_Setup_Toolbar.lua` to register the standard STEMwerk actions in the Action List.
-- Load the quick presets if you want one-click actions such as Karaoke, Vocals Only, Drums Only, Bass Only, or All Stems.
+2. Run `STEMwerk: Setup` first if you want to check runtime status.
+3. Use `Check only` to verify runtime health.
+4. Run `Stemwerk: Main` for normal use.
+5. If actions are missing, load scripts from `REAPER/Scripts/STEMwerk-reaper/`.
+6. Toolbar setup is optional: `STEMwerk_Setup_Toolbar.lua`.
 
 ## Important Windows note
 
-On Windows, `STEMwerk-SETUP.lua` does not replace the installer bootstrap.
+- The Windows installer remains the recommended fresh-install/bootstrap route.
+- `STEMwerk: Setup` is now the in-REAPER status/repair center after installation.
+- Use Setup for: `Check only`, `Repair`, `Rebuild venv`, `Save Support Bundle`, `Open logs folder`, and `Open runtime folder`.
+- Re-run the installer mainly when script payload itself is missing/damaged, or when you need to reinstall bundled payloads.
 
-If something is missing or the runtime is incomplete:
+## When something is missing
 
-1. re-run the Windows installer first
-2. then check the setup log if needed
+1. Run `STEMwerk: Setup`.
+2. Click `Check only`.
+3. Use `Repair` or `Rebuild venv` if recommended.
+4. Use `Open logs folder` if deeper troubleshooting is needed.
+5. Use `Save Support Bundle` when asking for help.
+6. Re-run the installer only if installation/script payload is missing or damaged.
+
+## Support bundles
+
+Support bundles are stored at:
+
+`%APPDATA%\REAPER\STEMwerk-support-bundles\`
+
+Each save creates both:
+
+- `STEMwerk-support-bundle-YYYYMMDD-HHMMSS\`
+- `STEMwerk-support-bundle-YYYYMMDD-HHMMSS.zip`
+
+Attach the `.zip` when contacting support.
+
+A support bundle includes, where available:
+
+- bootstrap/runtime logs
+- state/capabilities files
+- recent run logs/artifacts
+- `support_bundle_timings.txt`
+- `processing_summary.txt`
+
+Support bundles intentionally exclude audio, model, wheel, binary, and runtime payload files.
+
+Windows collection is speed-bounded; expensive probes/scans may appear as skipped-for-speed to keep Save Support Bundle responsive.
 
 ## Parallel vs Sequential (Multi-track)
-STEMwerk can run multi-track jobs in parallel when Parallel is enabled and more than one job is queued.
 
-It will automatically fall back to Sequential when:
-- device = explicit `DirectML` and more than one job is queued
-- device = `auto` and no GPU backend is available
-- time selection processing splits the work into isolated per-item jobs
-- only 1 job is queued
+STEMwerk can process multi-track jobs in parallel when Parallel is enabled and the selected backend/job layout supports it.
 
-Examples where pure parallel does happen:
-- You select 3 tracks with items, no time selection, Parallel on, device = `cuda:0`. -> 3 jobs at once (per track).
-- You select 5 tracks, Parallel on, device = `auto`, and a GPU is detected. -> 5 jobs at once.
-- You select multiple items across multiple tracks (no time selection), Parallel on, device = `cuda`. -> per-track jobs in parallel.
+It may fall back to Sequential for stability depending on backend, device choice, job layout, time selection/item isolation, or when only one job is queued.
 
-Examples where it does not run in parallel:
-- Parallel on, device = explicit `DirectML`, more than one queued job -> sequential fallback ("DirectML multi-track stability mode").
-- Time selection with multiple items on one track -> per-item jobs -> sequential fallback ("Per-item multi-track isolation").
-- Parallel on, device = `auto`, but no GPU backend -> sequential fallback ("Auto device, no GPU").
-- Only 1 job (1 track) -> sequential by definition.
+Recent Windows DirectML builds can run parallel jobs where supported.
 
-The progress window shows the active mode and the reason when a fallback happens.
+The progress window shows the active mode and the fallback reason when a fallback happens.
 
 ## Open the setup log
 
-The setup log is stored at:
+Bootstrap/setup log:
 
 `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log`
 
-Use it if setup failed, FFmpeg was not detected, or the runtime packages did not finish installing.
+Use the Setup action buttons to open logs/runtime directly.
+
+Support bundle output path:
+
+`%APPDATA%\REAPER\STEMwerk-support-bundles\`
 
 ## What scripts are for normal use
 
@@ -95,9 +121,8 @@ Normal use:
 Support / repair paths:
 
 - `STEMwerk: Setup`
+- `STEMwerk: Save Support Bundle` (action for `STEMwerk_Save_Support_Bundle.lua`)
 
-## When to use Setup
+Optional setup convenience:
 
-On Windows, use `STEMwerk: Setup` only as a REAPER-side support or repair path after installation.
-
-For a fresh Windows installation, the installer is the correct setup route.
+- `STEMwerk_Setup_Toolbar.lua`

@@ -178,9 +178,16 @@ function HELPERS.getStemFileDestinationLabel()
 end
 
 function HELPERS.getStemFilesHeaderLabel()
+    if type(T) == "function" then
+        local localized = T("storage_label")
+        if localized and localized ~= "" and localized ~= "storage_label" then
+            return localized
+        end
+    end
     local lang = HELPERS.getUiLanguageCode()
-    if lang == "de" then return "Stem-Dateien:" end
-    return "Stem files:"
+    if lang == "nl" then return "Opslag:" end
+    if lang == "de" then return "Speicherort:" end
+    return "Storage:"
 end
 
 function HELPERS.getStemFileProjectLabel()

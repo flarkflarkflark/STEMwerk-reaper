@@ -492,6 +492,92 @@ THEME_PRESETS = {
             },
         },
     },
+    reaper_native = {
+        nameKey = "theme_reaper_native",
+        label = "REAPER Native",
+        dark = {
+            bg = {0.14, 0.14, 0.14},
+            bgGradientTop = {0.14, 0.14, 0.14},
+            bgGradientBottom = {0.14, 0.14, 0.14},
+            inputBg = {0.09, 0.09, 0.09},
+            text = {0.90, 0.90, 0.90},
+            textDim = {0.70, 0.70, 0.70},
+            textHint = {0.50, 0.50, 0.50},
+            accent = {0.30, 0.46, 0.32},
+            accentHover = {0.36, 0.54, 0.38},
+            checkbox = {0.09, 0.09, 0.09},
+            checkboxChecked = {0.28, 0.48, 0.30},
+            button = {0.18, 0.18, 0.18},
+            buttonHover = {0.26, 0.26, 0.26},
+            buttonPrimary = {0.30, 0.46, 0.32},
+            buttonPrimaryHover = {0.36, 0.54, 0.38},
+            border = {0.32, 0.32, 0.32},
+            semantic = {
+                panelBg = {0.15, 0.15, 0.15},
+                panelAltBg = {0.12, 0.12, 0.12},
+                cardBg = {0.13, 0.13, 0.13},
+                border = {0.32, 0.32, 0.32},
+                textSecondary = {0.70, 0.70, 0.70},
+                textMuted = {0.50, 0.50, 0.50},
+                tooltipBg = {0.10, 0.10, 0.10},
+                tooltipBorder = {0.32, 0.32, 0.32},
+                tooltipText = {0.90, 0.90, 0.90},
+                iconPrimary = {0.80, 0.80, 0.80},
+                iconMuted = {0.50, 0.50, 0.50},
+                buttonText = {0.90, 0.90, 0.90},
+                success = {0.30, 0.50, 0.30},
+                warning = {0.70, 0.50, 0.20},
+            },
+            style = {
+                cornerRadius = 0,
+                borderWeight = 1,
+                fxIntensity = 0.0,
+                shadowStrength = 0.0,
+                glossStrength = 0.0,
+            },
+        },
+        light = {
+            bg = {0.85, 0.85, 0.85},
+            bgGradientTop = {0.85, 0.85, 0.85},
+            bgGradientBottom = {0.85, 0.85, 0.85},
+            inputBg = {0.95, 0.95, 0.95},
+            text = {0.10, 0.10, 0.10},
+            textDim = {0.30, 0.30, 0.30},
+            textHint = {0.50, 0.50, 0.50},
+            accent = {0.56, 0.68, 0.58},
+            accentHover = {0.62, 0.74, 0.64},
+            checkbox = {0.95, 0.95, 0.95},
+            checkboxChecked = {0.58, 0.72, 0.58},
+            button = {0.78, 0.78, 0.78},
+            buttonHover = {0.86, 0.86, 0.86},
+            buttonPrimary = {0.56, 0.68, 0.58},
+            buttonPrimaryHover = {0.62, 0.74, 0.64},
+            border = {0.60, 0.60, 0.60},
+            semantic = {
+                panelBg = {0.80, 0.80, 0.80},
+                panelAltBg = {0.85, 0.85, 0.85},
+                cardBg = {0.90, 0.90, 0.90},
+                border = {0.60, 0.60, 0.60},
+                textSecondary = {0.30, 0.30, 0.30},
+                textMuted = {0.50, 0.50, 0.50},
+                tooltipBg = {0.95, 0.95, 0.95},
+                tooltipBorder = {0.60, 0.60, 0.60},
+                tooltipText = {0.10, 0.10, 0.10},
+                iconPrimary = {0.20, 0.20, 0.20},
+                iconMuted = {0.50, 0.50, 0.50},
+                buttonText = {0.08, 0.08, 0.08},
+                success = {0.40, 0.60, 0.40},
+                warning = {0.80, 0.60, 0.30},
+            },
+            style = {
+                cornerRadius = 0,
+                borderWeight = 1,
+                fxIntensity = 0.0,
+                shadowStrength = 0.0,
+                glossStrength = 0.0,
+            },
+        },
+    },
 }
 
 -- ── Theme helpers ──────────────────────────────────────────────────────────────
@@ -525,9 +611,11 @@ local function resolveThemeSelection()
         settingsDarkMode = SETTINGS.darkMode
     end
 
+    local presetId = _G.FORCE_THEME_PRESET or (SETTINGS and SETTINGS.themePreset)
+
     local resolved = {
         mode = settingsDarkMode and "dark" or "light",
-        presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset),
+        presetId = normalizeThemePreset(presetId),
         overridesEnabled = shouldApplyThemeEditorOverrides(),
         settingsDarkMode = settingsDarkMode,
         editorDarkMode = nil,
@@ -812,7 +900,8 @@ end
 -- ── Theme UI helpers ───────────────────────────────────────────────────────────
 
 function getThemePresetLabel()
-    local presetId = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
+    local presetId = _G.FORCE_THEME_PRESET or (SETTINGS and SETTINGS.themePreset)
+    presetId = normalizeThemePreset(presetId)
     local preset = THEME_PRESETS[presetId] or THEME_PRESETS.classic
     local key = preset and preset.nameKey
     if LANG and key and LANG[key] then
@@ -829,6 +918,10 @@ function getLangText(key, fallback)
 end
 
 function getThemeToggleTooltip()
+    if type(isThemeUtilityMode) == "function" and isThemeUtilityMode() then
+        local switchTip = SETTINGS.darkMode and getLangText("switch_light", "Click to switch to light mode") or getLangText("switch_dark", "Click to switch to dark mode")
+        return switchTip .. " — REAPER Native mode: fixed utility theme. Run normal STEMwerk to use other themes."
+    end
     local switchTip = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
     local presetLabel = getLangText("theme_preset", "Theme")
     local presetName = getThemePresetLabel()
@@ -837,6 +930,9 @@ function getThemeToggleTooltip()
 end
 
 function cycleThemePreset()
+    if _G.FORCE_THEME_PRESET then
+        return
+    end
     local current = normalizeThemePreset(SETTINGS and SETTINGS.themePreset)
     local idx = 1
     for i, presetId in ipairs(THEME_PRESET_ORDER) do
@@ -850,3 +946,9 @@ function cycleThemePreset()
     updateTheme()
     saveSettings()
 end
+
+function isThemeUtilityMode()
+    local presetId = _G.FORCE_THEME_PRESET or (SETTINGS and SETTINGS.themePreset)
+    return normalizeThemePreset(presetId) == "reaper_native"
+end
+

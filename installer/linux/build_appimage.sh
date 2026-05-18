@@ -23,20 +23,29 @@ mkdir -p "$OUT_DIR" \
   "$APPDIR/usr/bin" \
   "$APPDIR/usr/share/stemwerk" \
   "$APPDIR/usr/share/applications" \
+  "$APPDIR/usr/share/icons/hicolor/512x512/apps" \
   "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
 # Copy only what we need
 copy_linux_payload "$ROOT_DIR" "$APPDIR/usr/share/stemwerk"
 
 # Icon (optional)
+if [[ -f "$ROOT_DIR/installer/assets/stemwerk.png" ]]; then
+  cp -f "$ROOT_DIR/installer/assets/stemwerk.png" "$APPDIR/usr/share/icons/hicolor/512x512/apps/stemwerk.png"
+  cp -f "$ROOT_DIR/installer/assets/stemwerk.png" "$APPDIR/stemwerk.png"
+  rm -f "$APPDIR/.DirIcon"
+  if ! ln -s "stemwerk.png" "$APPDIR/.DirIcon" 2>/dev/null; then
+    cp -f "$APPDIR/stemwerk.png" "$APPDIR/.DirIcon"
+  fi
+fi
 if [[ -f "$ROOT_DIR/installer/assets/stemwerk.svg" ]]; then
   cp -f "$ROOT_DIR/installer/assets/stemwerk.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/stemwerk.svg"
-  # appimagetool expects the icon referenced by the desktop file to be present at AppDir root
-  # as stemwerk.{png,svg,xpm}. Provide svg + .DirIcon for maximum compatibility.
-  cp -f "$ROOT_DIR/installer/assets/stemwerk.svg" "$APPDIR/stemwerk.svg"
-  rm -f "$APPDIR/.DirIcon"
-  if ! ln -s "stemwerk.svg" "$APPDIR/.DirIcon" 2>/dev/null; then
-    cp -f "$APPDIR/stemwerk.svg" "$APPDIR/.DirIcon"
+  if [[ ! -f "$APPDIR/stemwerk.png" ]]; then
+    cp -f "$ROOT_DIR/installer/assets/stemwerk.svg" "$APPDIR/stemwerk.svg"
+    rm -f "$APPDIR/.DirIcon"
+    if ! ln -s "stemwerk.svg" "$APPDIR/.DirIcon" 2>/dev/null; then
+      cp -f "$APPDIR/stemwerk.svg" "$APPDIR/.DirIcon"
+    fi
   fi
 fi
 

@@ -18,6 +18,7 @@ theme_actions.lua
 theme_data.lua
 theme_state.lua
 theme_ui.lua
+/dist/
 installer/linux/dist/
 installer/linux/build/
 installer/linux/build-*/
