@@ -868,22 +868,28 @@ local bootstrapGuardPath = joinPath(runtimePaths.runtimeState, "bootstrap.guard"
 local runtimeState = readEnvFile(bootstrapEnvPath)
 local capabilityState = readEnvFile(capabilitiesEnvPath)
 
-local detectedPythonPath = firstUsablePath({
+local pythonPathCandidates = {
     capabilityState.PYTHON_PATH,
     runtimeState.PYTHON_PATH,
     runtimeState.VENV_PYTHON,
     extStateValue("pythonPath"),
     runtimePaths.venvPython,
-    resolveCommandOnPath("python3"),
-    resolveCommandOnPath("python"),
-})
+}
+if OS ~= "Windows" then
+    pythonPathCandidates[#pythonPathCandidates + 1] = resolveCommandOnPath("python3")
+    pythonPathCandidates[#pythonPathCandidates + 1] = resolveCommandOnPath("python")
+end
+local detectedPythonPath = firstUsablePath(pythonPathCandidates)
 
-local detectedFfmpegPath = firstUsablePath({
+local ffmpegPathCandidates = {
     capabilityState.FFMPEG_PATH,
     runtimeState.FFMPEG_PATH,
     extStateValue("ffmpegPath"),
-    resolveCommandOnPath("ffmpeg"),
-})
+}
+if OS ~= "Windows" then
+    ffmpegPathCandidates[#ffmpegPathCandidates + 1] = resolveCommandOnPath("ffmpeg")
+end
+local detectedFfmpegPath = firstUsablePath(ffmpegPathCandidates)
 
 local function detectReaPackVersion(resourcePath)
     local direct = reaper and reaper.ReaPack_GetVersion
@@ -926,6 +932,9 @@ end
 
 local function getPythonVersion(path)
     if trim(path) == "" then return "missing" end
+    if OS == "Windows" then
+        return "skipped on Windows for speed"
+    end
     local rc, out = execCommand(path, {"--version"}, 8000)
     if rc ~= 0 or trim(out) == "" then
         rc, out = execCommand(path, {"-V"}, 8000)
@@ -942,6 +951,9 @@ end
 
 local function getFfmpegVersion(path)
     if trim(path) == "" then return "missing" end
+    if OS == "Windows" then
+        return "skipped on Windows for speed"
+    end
     local rc, out = execCommand(path, {"-version"}, 8000)
     local line = trim((out:gsub("\r", "")):match("([^\n]+)") or "")
     if line ~= "" then
@@ -1015,31 +1027,11 @@ local function getPlatformDetails()
         details.rawBlocks[#details.rawBlocks + 1] = "[/etc/os-release]\n" .. trim(osRelease or "missing")
     else
         local arch = trim(os.getenv("PROCESSOR_ARCHITEW6432") or os.getenv("PROCESSOR_ARCHITECTURE") or "")
-        local rc, regOut = execPowerShell(
-            "$cv = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -ErrorAction Stop; " ..
-            "Write-Output ($cv.ProductName); Write-Output ($cv.DisplayVersion); Write-Output ($cv.CurrentBuildNumber)",
-            6000
-        )
-        local versionLines = {}
-        for line in tostring(regOut or ""):gmatch("[^\r\n]+") do
-            if trim(line) ~= "" then
-                versionLines[#versionLines + 1] = trim(line)
-            end
-        end
         details.architecture = arch ~= "" and arch or "undetected"
-        if rc == 0 and #versionLines > 0 then
-            local name = versionLines[1] or "Windows"
-            local display = versionLines[2] or ""
-            local build = versionLines[3] or ""
-            details.osVersion = trim(table.concat({name, display ~= "" and ("version " .. display) or "", build ~= "" and ("build " .. build) or ""}, " "))
-            details.extraSummary[#details.extraSummary + 1] = "Windows version/build: " .. details.osVersion
-        else
-            local _, verOut = execCommand("cmd.exe", {"/C", "ver"}, 5000)
-            details.extraSummary[#details.extraSummary + 1] = "Windows version/build: " .. trim(verOut)
-            details.osVersion = trim(verOut) ~= "" and trim(verOut) or "Windows"
-        end
+        details.osVersion = trim(REAPER_OS_RAW) ~= "" and trim(REAPER_OS_RAW) or "Windows"
+        details.extraSummary[#details.extraSummary + 1] = "Windows version/build: metadata skipped on Windows for speed"
         details.extraSummary[#details.extraSummary + 1] = "CPU architecture: " .. details.architecture
-        details.rawBlocks[#details.rawBlocks + 1] = "[windows-version]\n" .. trim(regOut ~= "" and regOut or "")
+        details.rawBlocks[#details.rawBlocks + 1] = "[windows-version]\nmetadata skipped on Windows for speed"
     end
 
     return details
@@ -1052,6 +1044,12 @@ local function runPythonProbe(bundleDir, pythonPath)
         status = "missing",
         data = {},
     }
+    if OS == "Windows" then
+        result.status = "skipped"
+        result.summary[#result.summary + 1] = "Python diagnostics: skipped on Windows for speed"
+        result.rawOutput = "Python diagnostics skipped on Windows for speed.\n"
+        return result
+    end
     if trim(pythonPath) == "" then
         result.summary[#result.summary + 1] = "Python diagnostics: missing (no Python path detected)"
         result.rawOutput = "Python diagnostics missing: no Python path detected.\n"
@@ -1293,16 +1291,23 @@ local function createZipArchive(bundleParent, bundleDir, bundleName, pythonPath)
     end
 
     local errors = {}
-    local ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
-    if ok then return true, zipPath, "", method end
-    errors[#errors + 1] = method .. ": " .. tostring(err)
-
+    local ok, err, method
     if OS == "Windows" then
         ok, err, method = tryCreateZipWithPowerShell(bundleDir, zipPath)
         if ok then return true, zipPath, "", method end
         errors[#errors + 1] = method .. ": " .. tostring(err)
+        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
     elseif OS == "macOS" then
+        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
         ok, err, method = tryCreateZipWithDitto(bundleDir, zipPath)
+        if ok then return true, zipPath, "", method end
+        errors[#errors + 1] = method .. ": " .. tostring(err)
+    else
+        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
         if ok then return true, zipPath, "", method end
         errors[#errors + 1] = method .. ": " .. tostring(err)
     end
@@ -1447,11 +1452,15 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
     local unknownEntry = nil
     for _, runName in ipairs(runDirNames) do
         local runSrc = joinPath(runsRoot, runName)
-        local stat = getPathStat(runSrc)
+        local epoch = 0
+        if OS ~= "Windows" then
+            local stat = getPathStat(runSrc)
+            epoch = tonumber(stat.epoch) or 0
+        end
         local entry = {
             name = runName,
             src = runSrc,
-            epoch = tonumber(stat.epoch) or 0,
+            epoch = epoch,
             isUnknown = (runName == "STEMwerk_unknown"),
         }
         if entry.isUnknown then
@@ -1461,6 +1470,9 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
         end
     end
     table.sort(runEntries, function(a, b)
+        if OS == "Windows" then
+            return tostring(a.name) > tostring(b.name)
+        end
         if (a.epoch or 0) == (b.epoch or 0) then
             return tostring(a.name) > tostring(b.name)
         end
@@ -1544,13 +1556,13 @@ local function collectTempInventory(bundleDir, copiedFiles)
     end
 
     local caps = {
-        maxFolders = (OS == "Windows") and 4 or 8,
+        maxFolders = (OS == "Windows") and 5 or 8,
         maxDepth = (OS == "Windows") and 2 or 3,
-        maxFilesPerTree = (OS == "Windows") and 600 or 1200,
-        maxDirsPerTree = (OS == "Windows") and 200 or 400,
+        maxFilesTotal = (OS == "Windows") and 50 or 400,
+        maxDirsTotal = (OS == "Windows") and 120 or 400,
         maxCopySourceBytes = 512 * 1024,
         maxCopyOutputBytes = 256 * 1024,
-        maxCopiedBytesPerTree = (OS == "Windows") and (2 * 1024 * 1024) or (4 * 1024 * 1024),
+        maxCopiedBytesTotal = (OS == "Windows") and (2 * 1024 * 1024) or (4 * 1024 * 1024),
     }
 
     for _, name in ipairs(enumerateSubdirs(tempBase)) do
@@ -1558,18 +1570,17 @@ local function collectTempInventory(bundleDir, copiedFiles)
         local skipDir = shouldSkipSupportDirByName(name)
         if startsWith(lower, "stemwerk") and not shouldIgnoreTempFolder(name) and not skipDir then
             local full = joinPath(tempBase, name)
-            local stat = getPathStat(full)
             folders[#folders + 1] = {
                 name = name,
                 path = full,
-                epoch = stat.epoch or 0,
-                mtime = stat.mtime or "unknown",
+                epoch = 0,
+                mtime = "metadata skipped on Windows for speed",
             }
         end
     end
 
     table.sort(folders, function(a, b)
-        return (a.epoch or 0) > (b.epoch or 0)
+        return tostring(a.name) > tostring(b.name)
     end)
 
     local function sanitizeInventoryDisplayPath(relPath, fileClass)
@@ -1603,32 +1614,41 @@ local function collectTempInventory(bundleDir, copiedFiles)
         )
     end
 
-    local function walkDir(rootDir, relDir, depth, treeStats)
+    local totals = {
+        scannedFiles = 0,
+        scannedDirs = 0,
+        copiedBytes = 0,
+        hitDepthLimit = false,
+        hitFileLimit = false,
+        hitDirLimit = false,
+    }
+
+    local function walkDir(rootDir, relDir, depth)
         if depth > caps.maxDepth then
-            if not treeStats.hitDepthLimit then
-                treeStats.hitDepthLimit = true
+            if not totals.hitDepthLimit then
+                totals.hitDepthLimit = true
                 appendLine(inventoryLines, string.format("limit: max depth reached at %s", sanitizeInventoryDisplayPath(relDir, "other")))
             end
             return
         end
         local currentDir = relDir == "" and rootDir or joinPath(rootDir, relDir)
-        if treeStats.scannedDirs >= caps.maxDirsPerTree then
-            if not treeStats.hitDirLimit then
-                treeStats.hitDirLimit = true
-                appendLine(inventoryLines, string.format("limit: max dirs reached in %s", basename(rootDir)))
+        if totals.scannedDirs >= caps.maxDirsTotal then
+            if not totals.hitDirLimit then
+                totals.hitDirLimit = true
+                appendLine(inventoryLines, string.format("limit: max dirs reached (%d)", caps.maxDirsTotal))
             end
             return
         end
-        treeStats.scannedDirs = treeStats.scannedDirs + 1
+        totals.scannedDirs = totals.scannedDirs + 1
         for _, fileName in ipairs(enumerateFiles(currentDir)) do
-            if treeStats.scannedFiles >= caps.maxFilesPerTree then
-                if not treeStats.hitFileLimit then
-                    treeStats.hitFileLimit = true
-                    appendLine(inventoryLines, string.format("limit: max files reached in %s", basename(rootDir)))
+            if totals.scannedFiles >= caps.maxFilesTotal then
+                if not totals.hitFileLimit then
+                    totals.hitFileLimit = true
+                    appendLine(inventoryLines, string.format("limit: max files reached (%d)", caps.maxFilesTotal))
                 end
                 break
             end
-            treeStats.scannedFiles = treeStats.scannedFiles + 1
+            totals.scannedFiles = totals.scannedFiles + 1
             local relPath = relDir == "" and fileName or joinPath(relDir, fileName)
             local fullPath = joinPath(rootDir, relPath)
             local lowerName = tostring(fileName):lower()
@@ -1671,9 +1691,9 @@ local function collectTempInventory(bundleDir, copiedFiles)
                             reason = "source-bytes=" .. tostring(sourceSize) .. " > max=" .. tostring(caps.maxCopySourceBytes)
                         else
                             local copyBytes = math.min(tonumber(sourceSize) or caps.maxCopyOutputBytes, caps.maxCopyOutputBytes)
-                            if (treeStats.copiedBytes + copyBytes) > caps.maxCopiedBytesPerTree then
+                            if (totals.copiedBytes + copyBytes) > caps.maxCopiedBytesTotal then
                                 action = "excluded-copy-cap"
-                                reason = "copy-byte-cap=" .. tostring(caps.maxCopiedBytesPerTree)
+                                reason = "copy-byte-cap=" .. tostring(caps.maxCopiedBytesTotal)
                             else
                                 local tempDestDir = joinPath(bundleDir, "temp_logs", basename(rootDir))
                                 local tempDestPath = joinPath(tempDestDir, relPath)
@@ -1681,7 +1701,7 @@ local function collectTempInventory(bundleDir, copiedFiles)
                                 local ok, mode = copySupportTextFile(fullPath, tempDestPath, caps.maxCopyOutputBytes)
                                 if ok then
                                     action = "included-" .. tostring(mode)
-                                    treeStats.copiedBytes = treeStats.copiedBytes + copyBytes
+                                    totals.copiedBytes = totals.copiedBytes + copyBytes
                                     copied[#copied + 1] = "temp_logs/" .. sanitizeInventoryDisplayPath(relPath, class)
                                 else
                                     action = "text-copy-failed"
@@ -1700,7 +1720,7 @@ local function collectTempInventory(bundleDir, copiedFiles)
             end
         end
         for _, subDirName in ipairs(enumerateSubdirs(currentDir)) do
-            if treeStats.scannedDirs >= caps.maxDirsPerTree then
+            if totals.scannedDirs >= caps.maxDirsTotal then
                 break
             end
             local skipDir, skipReason = shouldSkipSupportDirByName(subDirName)
@@ -1709,7 +1729,7 @@ local function collectTempInventory(bundleDir, copiedFiles)
                 appendLine(inventoryLines, string.format("skip-dir | %s | reason=%s", sanitizeInventoryDisplayPath(relPath, "other"), tostring(skipReason)))
             else
                 local nextRel = relDir == "" and subDirName or joinPath(relDir, subDirName)
-                walkDir(rootDir, nextRel, depth + 1, treeStats)
+                walkDir(rootDir, nextRel, depth + 1)
             end
         end
     end
@@ -1729,28 +1749,24 @@ local function collectTempInventory(bundleDir, copiedFiles)
             inventoryLines,
             string.format("[Folder] %s | [STEMWERK_TEMP_DIR] (%s)", folder.mtime, basename(folder.path))
         )
-        local treeStats = {
-            scannedFiles = 0,
-            scannedDirs = 0,
-            copiedBytes = 0,
-            hitDepthLimit = false,
-            hitFileLimit = false,
-            hitDirLimit = false,
-        }
-        walkDir(folder.path, "", 0, treeStats)
-        appendLine(
-            inventoryLines,
-            string.format(
-                "summary | files=%d/%d dirs=%d/%d copied_bytes=%d/%d",
-                treeStats.scannedFiles,
-                caps.maxFilesPerTree,
-                treeStats.scannedDirs,
-                caps.maxDirsPerTree,
-                treeStats.copiedBytes,
-                caps.maxCopiedBytesPerTree
-            )
-        )
+        walkDir(folder.path, "", 0)
+        if totals.scannedFiles >= caps.maxFilesTotal then
+            break
+        end
     end
+
+    appendLine(
+        inventoryLines,
+        string.format(
+            "summary | files=%d/%d dirs=%d/%d copied_bytes=%d/%d",
+            totals.scannedFiles,
+            caps.maxFilesTotal,
+            totals.scannedDirs,
+            caps.maxDirsTotal,
+            totals.copiedBytes,
+            caps.maxCopiedBytesTotal
+        )
+    )
 
     for i = 1, #copied do
         copiedFiles[#copiedFiles + 1] = copied[i]
@@ -1760,273 +1776,301 @@ local function collectTempInventory(bundleDir, copiedFiles)
 end
 
 local function performBundleCollection()
-local resourcePath = getResourcePath()
-local _, bundleSuffix = timestampParts(os.time())
-local bundleName = "STEMwerk-support-bundle-" .. bundleSuffix
-local bundleParent = joinPath(resourcePath, "STEMwerk-support-bundles")
-local bundleDir = joinPath(bundleParent, bundleName)
+    local resourcePath = getResourcePath()
+    local _, bundleSuffix = timestampParts(os.time())
+    local bundleName = "STEMwerk-support-bundle-" .. bundleSuffix
+    local bundleParent = joinPath(resourcePath, "STEMwerk-support-bundles")
+    local bundleDir = joinPath(bundleParent, bundleName)
 
-if not ensureDir(bundleParent) or not ensureDir(bundleDir) then
-    return false, "Could not create bundle folder:\n" .. tostring(bundleDir)
-end
-
-local phaseTimings = {}
-local function startPhase()
-    return os.clock()
-end
-local function endPhase(name, startedAt)
-    phaseTimings[name] = math.max(0, os.clock() - tonumber(startedAt or 0))
-end
-local totalStartedAt = startPhase()
-
-local probesStartedAt = startPhase()
-local reapackVersion = detectReaPackVersion(resourcePath)
-local platform = getPlatformDetails()
-local pythonProbe = runPythonProbe(bundleDir, detectedPythonPath)
-local pythonVersion = pythonProbe.data.python_version or getPythonVersion(detectedPythonPath)
-local ffmpegVersion = getFfmpegVersion(detectedFfmpegPath)
-local reaperVersion = reaper and reaper.GetAppVersion and tostring(reaper.GetAppVersion() or "") or "undetected"
-local bundleTimestamp = os.date("%Y-%m-%d %H:%M:%S")
-endPhase("collect_probe_outputs", probesStartedAt)
-
-local diagnostics = {}
-appendLine(diagnostics, "=== COPY/PASTE VERSION AND PLATFORM SUMMARY ===")
-appendKey(diagnostics, "STEMwerk package version", packageVersion ~= "" and packageVersion or "missing")
-appendKey(diagnostics, "ReaPack version", reapackVersion)
-appendKey(diagnostics, "Main script @version", mainHeaderVersion ~= "" and mainHeaderVersion or "missing")
-appendKey(diagnostics, "Main script APP_VERSION", mainAppVersion ~= "" and mainAppVersion or "missing")
-appendKey(diagnostics, "OS", platform.osName)
-appendKey(diagnostics, "OS version", platform.osVersion)
-appendKey(diagnostics, "Architecture", platform.architecture)
-appendKey(diagnostics, "REAPER version", reaperVersion ~= "" and reaperVersion or "undetected")
-appendKey(diagnostics, "REAPER resource path", resourcePath)
-appendKey(diagnostics, "Runtime base path", runtimeBase)
-appendKey(diagnostics, "Python path", sanitizePathValue(detectedPythonPath))
-appendKey(diagnostics, "Python version", pythonVersion)
-appendKey(diagnostics, "FFmpeg path", sanitizePathValue(detectedFfmpegPath))
-appendKey(diagnostics, "FFmpeg version", ffmpegVersion)
-appendKey(diagnostics, "Bundle created", bundleTimestamp)
-appendKey(diagnostics, "Bundle path", bundleDir)
-for i = 1, #platform.extraSummary do
-    appendLine(diagnostics, platform.extraSummary[i])
-end
-appendLine(diagnostics, "=== END VERSION AND PLATFORM SUMMARY ===")
-appendLine(diagnostics, "")
-appendLine(diagnostics, "STEMwerk Support Bundle")
-appendLine(diagnostics, "")
-
-appendLine(diagnostics, "Install Detection")
-appendKey(diagnostics, "Install root", INSTALL.root or "missing")
-appendKey(diagnostics, "Install scripts dir", INSTALL.scriptsDir or "missing")
-appendKey(diagnostics, "Canonical scripts root", INSTALL.canonical or "missing")
-appendKey(diagnostics, "ReaPack scripts root", INSTALL.reapack or "missing")
-appendKey(diagnostics, "Install status", INSTALL.status or "undetected")
-appendKey(diagnostics, "Runtime base source", runtimeBaseSource)
-appendKey(diagnostics, "Setup action @version", setupVersion ~= "" and setupVersion or "missing")
-appendKey(diagnostics, "REAPER GetOS raw", REAPER_OS_RAW ~= "" and REAPER_OS_RAW or "missing")
-appendLine(diagnostics, "")
-
-appendLine(diagnostics, "Runtime State Files")
-local copiedFiles = {}
-local stateStartedAt = startPhase()
-for _, line in ipairs(collectStateFiles(runtimePaths.runtimeState, bundleDir, copiedFiles)) do
-    appendLine(diagnostics, line)
-end
-endPhase("collect_state", stateStartedAt)
-appendLine(diagnostics, "")
-
-appendLine(diagnostics, "Runtime Logs")
-local runtimeLogsStartedAt = startPhase()
-for _, line in ipairs(collectRuntimeLogs(runtimePaths.runtimeLogs, bundleDir, copiedFiles)) do
-    appendLine(diagnostics, line)
-end
-appendLine(diagnostics, "")
-
-local debugLogPath = joinPath(getTempBase(), "STEMwerk_debug.log")
-appendLine(diagnostics, "Known Extra Logs")
-appendKey(diagnostics, "Temp debug log", fileExists(debugLogPath) and debugLogPath or "missing")
-if fileExists(debugLogPath) then
-    local ok, mode = copySupportTextFile(debugLogPath, joinPath(bundleDir, "runtime_logs", "STEMwerk_debug.log"), 512 * 1024)
-    if ok then
-        copiedFiles[#copiedFiles + 1] = "runtime_logs/STEMwerk_debug.log (" .. mode .. ")"
+    if not ensureDir(bundleParent) or not ensureDir(bundleDir) then
+        return false, "Could not create bundle folder:\n" .. tostring(bundleDir)
     end
-end
 
--- Persistent run logs written by SW_LOG after each run (success or failure).
-local cacheLogDir = getStemwerkCacheLogDir()
-local persistentRunLogs = { run_summary = false, separation_log = false, stdout = false, stemwerk_log = false }
-local persistentDiagFiles = {
-    "run_summary.txt",
-    "output_detection.txt",
-    "separation_log.txt",
-    "stdout.txt",
-    "stderr.txt",
-    "exit_code.txt",
-    "done.txt",
-    "separation_timing_summary.txt",
-    "separation_timing_jobs.jsonl",
-    "stemwerk.log",
-}
-for _, name in ipairs(persistentDiagFiles) do
-    local src = joinPath(cacheLogDir, name)
-    if fileExists(src) then
-        local dst = joinPath(bundleDir, "runtime_logs", "run_" .. name)
-        local ok, mode = copySupportTextFile(src, dst, 512 * 1024)
+    local phaseTimings = {}
+    local timingsFile = joinPath(bundleDir, "support_bundle_timings.txt")
+    local timingLines = {}
+    local totalStartedAt = os.clock()
+
+    local function flushTimings()
+        writeFile(timingsFile, table.concat(timingLines, "\n") .. "\n", "wb")
+    end
+
+    local function timingEvent(phase, state, note)
+        timingLines[#timingLines + 1] = string.format(
+            "%s | %s | %s%s",
+            os.date("%Y-%m-%d %H:%M:%S"),
+            tostring(phase),
+            tostring(state),
+            trim(note) ~= "" and (" | " .. tostring(note)) or ""
+        )
+        flushTimings()
+    end
+
+    local function phaseStart(name)
+        timingEvent(name, "start", string.format("cpu_elapsed=%.3f", math.max(0, os.clock() - totalStartedAt)))
+        return os.clock()
+    end
+
+    local function phaseDone(name, startedAt)
+        local elapsed = math.max(0, os.clock() - tonumber(startedAt or 0))
+        phaseTimings[name] = elapsed
+        timingEvent(name, "end", string.format("duration=%.3f", elapsed))
+        return elapsed
+    end
+
+    timingEvent("total_start", "start", "bundle=" .. bundleName)
+
+    local rootStartedAt = phaseStart("collect_root_diagnostics")
+    local reapackVersion = detectReaPackVersion(resourcePath)
+    local platform = getPlatformDetails()
+    local reaperVersion = reaper and reaper.GetAppVersion and tostring(reaper.GetAppVersion() or "") or "undetected"
+    local bundleTimestamp = os.date("%Y-%m-%d %H:%M:%S")
+    phaseDone("collect_root_diagnostics", rootStartedAt)
+
+    local probesStartedAt = phaseStart("collect_probes")
+    local pythonProbe = runPythonProbe(bundleDir, detectedPythonPath)
+    local pythonVersion = pythonProbe.data.python_version or getPythonVersion(detectedPythonPath)
+    local ffmpegVersion = getFfmpegVersion(detectedFfmpegPath)
+    phaseDone("collect_probes", probesStartedAt)
+
+    local diagnostics = {}
+    appendLine(diagnostics, "=== COPY/PASTE VERSION AND PLATFORM SUMMARY ===")
+    appendKey(diagnostics, "STEMwerk package version", packageVersion ~= "" and packageVersion or "missing")
+    appendKey(diagnostics, "ReaPack version", reapackVersion)
+    appendKey(diagnostics, "Main script @version", mainHeaderVersion ~= "" and mainHeaderVersion or "missing")
+    appendKey(diagnostics, "Main script APP_VERSION", mainAppVersion ~= "" and mainAppVersion or "missing")
+    appendKey(diagnostics, "OS", platform.osName)
+    appendKey(diagnostics, "OS version", platform.osVersion)
+    appendKey(diagnostics, "Architecture", platform.architecture)
+    appendKey(diagnostics, "REAPER version", reaperVersion ~= "" and reaperVersion or "undetected")
+    appendKey(diagnostics, "REAPER resource path", resourcePath)
+    appendKey(diagnostics, "Runtime base path", runtimeBase)
+    appendKey(diagnostics, "Python path", sanitizePathValue(detectedPythonPath))
+    appendKey(diagnostics, "Python version", pythonVersion)
+    appendKey(diagnostics, "FFmpeg path", sanitizePathValue(detectedFfmpegPath))
+    appendKey(diagnostics, "FFmpeg version", ffmpegVersion)
+    appendKey(diagnostics, "Bundle created", bundleTimestamp)
+    appendKey(diagnostics, "Bundle path", bundleDir)
+    for i = 1, #platform.extraSummary do
+        appendLine(diagnostics, platform.extraSummary[i])
+    end
+    appendLine(diagnostics, "=== END VERSION AND PLATFORM SUMMARY ===")
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "STEMwerk Support Bundle")
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Install Detection")
+    appendKey(diagnostics, "Install root", INSTALL.root or "missing")
+    appendKey(diagnostics, "Install scripts dir", INSTALL.scriptsDir or "missing")
+    appendKey(diagnostics, "Canonical scripts root", INSTALL.canonical or "missing")
+    appendKey(diagnostics, "ReaPack scripts root", INSTALL.reapack or "missing")
+    appendKey(diagnostics, "Install status", INSTALL.status or "undetected")
+    appendKey(diagnostics, "Runtime base source", runtimeBaseSource)
+    appendKey(diagnostics, "Setup action @version", setupVersion ~= "" and setupVersion or "missing")
+    appendKey(diagnostics, "REAPER GetOS raw", REAPER_OS_RAW ~= "" and REAPER_OS_RAW or "missing")
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Runtime State Files")
+    local copiedFiles = {}
+    local stateStartedAt = phaseStart("collect_state")
+    for _, line in ipairs(collectStateFiles(runtimePaths.runtimeState, bundleDir, copiedFiles)) do
+        appendLine(diagnostics, line)
+    end
+    phaseDone("collect_state", stateStartedAt)
+    appendLine(diagnostics, "")
+
+    appendLine(diagnostics, "Runtime Logs")
+    local runtimeLogsStartedAt = phaseStart("collect_runtime_logs")
+    for _, line in ipairs(collectRuntimeLogs(runtimePaths.runtimeLogs, bundleDir, copiedFiles)) do
+        appendLine(diagnostics, line)
+    end
+    local debugLogPath = joinPath(getTempBase(), "STEMwerk_debug.log")
+    appendLine(diagnostics, "Known Extra Logs")
+    appendKey(diagnostics, "Temp debug log", fileExists(debugLogPath) and debugLogPath or "missing")
+    if fileExists(debugLogPath) then
+        local ok, mode = copySupportTextFile(debugLogPath, joinPath(bundleDir, "runtime_logs", "STEMwerk_debug.log"), 512 * 1024)
         if ok then
-            copiedFiles[#copiedFiles + 1] = "runtime_logs/run_" .. name .. " (" .. mode .. ")"
+            copiedFiles[#copiedFiles + 1] = "runtime_logs/STEMwerk_debug.log (" .. mode .. ")"
         end
-        if name == "run_summary.txt" then persistentRunLogs.run_summary = true end
-        if name == "separation_log.txt" then persistentRunLogs.separation_log = true end
-        if name == "stdout.txt" then persistentRunLogs.stdout = true end
-        if name == "stemwerk.log" then persistentRunLogs.stemwerk_log = true end
     end
-end
-endPhase("collect_runtime_logs", runtimeLogsStartedAt)
-appendKey(diagnostics, "Persistent run_summary.txt", persistentRunLogs.run_summary and cacheLogDir or "missing")
-appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
-appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
-appendKey(diagnostics, "Persistent stemwerk.log", persistentRunLogs.stemwerk_log and cacheLogDir or "missing")
-appendLine(diagnostics, "")
-appendLine(diagnostics, "Persistent Run Diagnostics")
-local persistedRunsStartedAt = startPhase()
-for _, line in ipairs(collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)) do
-    appendLine(diagnostics, line)
-end
-endPhase("collect_persisted_runs", persistedRunsStartedAt)
-appendLine(diagnostics, "")
+    phaseDone("collect_runtime_logs", runtimeLogsStartedAt)
+    appendLine(diagnostics, "")
 
-appendLine(diagnostics, "Settings Snapshot")
-local selectedModel = trim(extStateValue("model"))
-if selectedModel == "" then selectedModel = "htdemucs" end
-appendKey(diagnostics, "Backend/device mode", trim(extStateValue("device")) ~= "" and trim(extStateValue("device")) or "auto")
-appendKey(diagnostics, "Capability profile", trim(capabilityState.PROFILE) ~= "" and trim(capabilityState.PROFILE) or "missing")
-appendKey(diagnostics, "Capability backend", trim(capabilityState.BACKEND) ~= "" and trim(capabilityState.BACKEND) or "missing")
-appendKey(diagnostics, "Capability verification", trim(capabilityState.VERIFICATION) ~= "" and trim(capabilityState.VERIFICATION) or "missing")
-appendKey(diagnostics, "Bootstrap status", trim(capabilityState.BOOTSTRAP_STATUS) ~= "" and trim(capabilityState.BOOTSTRAP_STATUS) or trim(runtimeState.STATUS) ~= "" and trim(runtimeState.STATUS) or "missing")
-appendKey(diagnostics, "Quality/model mode", selectedModel .. " (" .. modelModeLabel(selectedModel) .. ")")
-appendKey(diagnostics, "Output track mode", extBool("createNewTracks") and "new tracks" or "in place / takes")
-appendKey(diagnostics, "Create folder", boolLabel(extBool("createFolder")))
-appendKey(diagnostics, "Stem file destination", trim(extStateValue("stemFileDestination")) ~= "" and trim(extStateValue("stemFileDestination")) or "temp")
-appendKey(diagnostics, "Custom stem folder", sanitizeUserFolder(extStateValue("customStemDir")))
-appendKey(diagnostics, "Post-process takes", trim(extStateValue("postProcessTakes")) ~= "" and trim(extStateValue("postProcessTakes")) or "none")
-appendKey(diagnostics, "Language", trim(extStateValue("language")) ~= "" and trim(extStateValue("language")) or "system/default")
-appendKey(diagnostics, "Parallel processing", boolLabel(extBool("parallelProcessing")))
-appendKey(diagnostics, "Keep temp files", boolLabel(extBool("keepTempFiles")))
-appendKey(diagnostics, "Color mode", trim(extStateValue("colorMode")) ~= "" and trim(extStateValue("colorMode")) or "both")
-appendKey(diagnostics, "Theme preset", trim(extStateValue("themePreset")) ~= "" and trim(extStateValue("themePreset")) or "classic")
-appendKey(diagnostics, "Visual FX", boolLabel(extBool("visualFX")))
-appendKey(diagnostics, "Tooltips", boolLabel(extBool("tooltips")))
-appendKey(diagnostics, "Mute original", boolLabel(extBool("muteOriginal")))
-appendKey(diagnostics, "Mute selection", boolLabel(extBool("muteSelection")))
-appendKey(diagnostics, "Delete original", boolLabel(extBool("deleteOriginal")))
-appendKey(diagnostics, "Delete selection", boolLabel(extBool("deleteSelection")))
-appendKey(diagnostics, "Delete original track", boolLabel(extBool("deleteOriginalTrack")))
-appendKey(diagnostics, "Mute original track", boolLabel(extBool("muteOriginalTrack")))
-appendKey(diagnostics, "Debug mode", boolLabel(extBool("debugMode") or extBool("debug")))
-appendLine(diagnostics, "")
-
-appendLine(diagnostics, "Python Dependency Diagnostics")
-for i = 1, #pythonProbe.summary do
-    appendLine(diagnostics, "- " .. pythonProbe.summary[i])
-end
-appendLine(diagnostics, "")
-
-local tempInventoryStartedAt = startPhase()
-local tempInventory, _, tempBase, tempSummary = collectTempInventory(bundleDir, copiedFiles)
-endPhase("collect_temp_logs_or_inventory", tempInventoryStartedAt)
-appendLine(diagnostics, "Temp Folder Inventory")
-appendKey(diagnostics, "Temp base", tempBase)
-appendKey(diagnostics, "Temp inventory file", "temp_inventory.txt")
-appendKey(diagnostics, "Recent separation_log.txt",
-    persistentRunLogs.separation_log and "present (persistent)" or
-    (tempSummary.separation and "present (temp only)" or "missing"))
-appendKey(diagnostics, "Recent stdout.txt",
-    persistentRunLogs.stdout and "present (persistent)" or
-    (tempSummary.stdout and "present (temp only)" or "missing"))
-appendKey(diagnostics, "Recent stderr.txt", tempSummary.stderr and "present" or "missing")
-appendLine(diagnostics, "")
-
-appendLine(diagnostics, "Collected Files")
-if #copiedFiles == 0 then
-    appendLine(diagnostics, "- no files copied")
-else
-    table.sort(copiedFiles)
-    for i = 1, #copiedFiles do
-        appendLine(diagnostics, "- " .. copiedFiles[i])
+    local cacheLogDir = getStemwerkCacheLogDir()
+    local persistentRunLogs = { run_summary = false, separation_log = false, stdout = false, stemwerk_log = false }
+    local recentRunsStartedAt = phaseStart("collect_recent_runs")
+    local persistentDiagFiles = {
+        "run_summary.txt",
+        "output_detection.txt",
+        "separation_log.txt",
+        "stdout.txt",
+        "stderr.txt",
+        "exit_code.txt",
+        "done.txt",
+        "separation_timing_summary.txt",
+        "separation_timing_jobs.jsonl",
+        "stemwerk.log",
+    }
+    for _, name in ipairs(persistentDiagFiles) do
+        local src = joinPath(cacheLogDir, name)
+        if fileExists(src) then
+            local dst = joinPath(bundleDir, "runtime_logs", "run_" .. name)
+            local ok, mode = copySupportTextFile(src, dst, 512 * 1024)
+            if ok then
+                copiedFiles[#copiedFiles + 1] = "runtime_logs/run_" .. name .. " (" .. mode .. ")"
+            end
+            if name == "run_summary.txt" then persistentRunLogs.run_summary = true end
+            if name == "separation_log.txt" then persistentRunLogs.separation_log = true end
+            if name == "stdout.txt" then persistentRunLogs.stdout = true end
+            if name == "stemwerk.log" then persistentRunLogs.stemwerk_log = true end
+        end
     end
-end
-appendLine(diagnostics, "")
-appendLine(diagnostics, "Intentional Exclusions")
-appendLine(diagnostics, "- audio/media files (wav, mp3, flac, aiff, m4a, video)")
-appendLine(diagnostics, "- model/runtime payload files (.onnx, .pt, .pth, .bin, .safetensors, .npy, .npz)")
-appendLine(diagnostics, "- user project media and project-specific output folders")
-appendLine(diagnostics, "- large binary temp artifacts; inventory lists them as excluded when seen")
-appendLine(diagnostics, "")
+    appendKey(diagnostics, "Persistent run_summary.txt", persistentRunLogs.run_summary and cacheLogDir or "missing")
+    appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
+    appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
+    appendKey(diagnostics, "Persistent stemwerk.log", persistentRunLogs.stemwerk_log and cacheLogDir or "missing")
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "Persistent Run Diagnostics")
+    for _, line in ipairs(collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)) do
+        appendLine(diagnostics, line)
+    end
+    phaseDone("collect_recent_runs", recentRunsStartedAt)
+    appendLine(diagnostics, "")
 
-local readme = {
-    "STEMwerk Support Bundle",
-    "",
-    "This bundle was created by the REAPER action:",
-    "  STEMwerk_Save_Support_Bundle.lua",
-    "",
-    "Included:",
-    "- diagnostics.txt with version/platform/runtime summary",
-    "- runtime state files from the STEMwerk state folder when present",
-    "- runtime logs from the STEMwerk logs folder when present",
-    "- small text logs copied from recent STEMwerk temp folders",
-    "- temp_inventory.txt listing recent STEMwerk temp-folder contents",
-    "- platform_details.txt with raw OS command output",
-    "- python_diagnostics.txt with dependency probe output when Python could be queried",
-    "",
-    "Intentionally excluded:",
-    "- source audio, rendered stems, project media, and other user media",
-    "- model files and other large runtime payloads",
-    "- large binary temp artifacts",
-    "",
-    "Privacy note:",
-    "- Full runtime, Python, FFmpeg, and REAPER resource paths are included because they are often necessary for support.",
-    "- Custom/project/media output paths are sanitized or omitted.",
-    "",
-    "Bundle folder:",
-    "  " .. bundleDir,
-    "",
-}
+    appendLine(diagnostics, "Settings Snapshot")
+    local selectedModel = trim(extStateValue("model"))
+    if selectedModel == "" then selectedModel = "htdemucs" end
+    appendKey(diagnostics, "Backend/device mode", trim(extStateValue("device")) ~= "" and trim(extStateValue("device")) or "auto")
+    appendKey(diagnostics, "Capability profile", trim(capabilityState.PROFILE) ~= "" and trim(capabilityState.PROFILE) or "missing")
+    appendKey(diagnostics, "Capability backend", trim(capabilityState.BACKEND) ~= "" and trim(capabilityState.BACKEND) or "missing")
+    appendKey(diagnostics, "Capability verification", trim(capabilityState.VERIFICATION) ~= "" and trim(capabilityState.VERIFICATION) or "missing")
+    appendKey(diagnostics, "Bootstrap status", trim(capabilityState.BOOTSTRAP_STATUS) ~= "" and trim(capabilityState.BOOTSTRAP_STATUS) or trim(runtimeState.STATUS) ~= "" and trim(runtimeState.STATUS) or "missing")
+    appendKey(diagnostics, "Quality/model mode", selectedModel .. " (" .. modelModeLabel(selectedModel) .. ")")
+    appendKey(diagnostics, "Output track mode", extBool("createNewTracks") and "new tracks" or "in place / takes")
+    appendKey(diagnostics, "Create folder", boolLabel(extBool("createFolder")))
+    appendKey(diagnostics, "Stem file destination", trim(extStateValue("stemFileDestination")) ~= "" and trim(extStateValue("stemFileDestination")) or "temp")
+    appendKey(diagnostics, "Custom stem folder", sanitizeUserFolder(extStateValue("customStemDir")))
+    appendKey(diagnostics, "Post-process takes", trim(extStateValue("postProcessTakes")) ~= "" and trim(extStateValue("postProcessTakes")) or "none")
+    appendKey(diagnostics, "Language", trim(extStateValue("language")) ~= "" and trim(extStateValue("language")) or "system/default")
+    appendKey(diagnostics, "Parallel processing", boolLabel(extBool("parallelProcessing")))
+    appendKey(diagnostics, "Keep temp files", boolLabel(extBool("keepTempFiles")))
+    appendKey(diagnostics, "Color mode", trim(extStateValue("colorMode")) ~= "" and trim(extStateValue("colorMode")) or "both")
+    appendKey(diagnostics, "Theme preset", trim(extStateValue("themePreset")) ~= "" and trim(extStateValue("themePreset")) or "classic")
+    appendKey(diagnostics, "Visual FX", boolLabel(extBool("visualFX")))
+    appendKey(diagnostics, "Tooltips", boolLabel(extBool("tooltips")))
+    appendKey(diagnostics, "Mute original", boolLabel(extBool("muteOriginal")))
+    appendKey(diagnostics, "Mute selection", boolLabel(extBool("muteSelection")))
+    appendKey(diagnostics, "Delete original", boolLabel(extBool("deleteOriginal")))
+    appendKey(diagnostics, "Delete selection", boolLabel(extBool("deleteSelection")))
+    appendKey(diagnostics, "Delete original track", boolLabel(extBool("deleteOriginalTrack")))
+    appendKey(diagnostics, "Mute original track", boolLabel(extBool("muteOriginalTrack")))
+    appendKey(diagnostics, "Debug mode", boolLabel(extBool("debugMode") or extBool("debug")))
+    appendLine(diagnostics, "")
 
-writeFile(joinPath(bundleDir, "README.txt"), table.concat(readme, "\n"), "wb")
-writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory, "\n"), "wb")
-writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
-writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
+    appendLine(diagnostics, "Python Dependency Diagnostics")
+    for i = 1, #pythonProbe.summary do
+        appendLine(diagnostics, "- " .. pythonProbe.summary[i])
+    end
+    appendLine(diagnostics, "")
 
-local zipStartedAt = startPhase()
-local zipOk, zipPath, zipError, zipMethod = createZipArchive(bundleParent, bundleDir, bundleName, detectedPythonPath)
-endPhase("create_zip", zipStartedAt)
-endPhase("total", totalStartedAt)
+    local tempInventoryStartedAt = phaseStart("collect_temp_inventory")
+    local tempInventory, _, tempBase, tempSummary = collectTempInventory(bundleDir, copiedFiles)
+    phaseDone("collect_temp_inventory", tempInventoryStartedAt)
+    appendLine(diagnostics, "Temp Folder Inventory")
+    appendKey(diagnostics, "Temp base", tempBase)
+    appendKey(diagnostics, "Temp inventory file", "temp_inventory.txt")
+    appendKey(diagnostics, "Recent separation_log.txt",
+        persistentRunLogs.separation_log and "present (persistent)" or
+        (tempSummary.separation and "present (temp only)" or "missing"))
+    appendKey(diagnostics, "Recent stdout.txt",
+        persistentRunLogs.stdout and "present (persistent)" or
+        (tempSummary.stdout and "present (temp only)" or "missing"))
+    appendKey(diagnostics, "Recent stderr.txt", tempSummary.stderr and "present" or "missing")
+    appendLine(diagnostics, "")
 
-appendLine(diagnostics, "Support Bundle Phase Timings (seconds)")
-appendKey(diagnostics, "collect_state", string.format("%.3f", phaseTimings.collect_state or 0))
-appendKey(diagnostics, "collect_runtime_logs", string.format("%.3f", phaseTimings.collect_runtime_logs or 0))
-appendKey(diagnostics, "collect_persisted_runs", string.format("%.3f", phaseTimings.collect_persisted_runs or 0))
-appendKey(diagnostics, "collect_temp_logs_or_inventory", string.format("%.3f", phaseTimings.collect_temp_logs_or_inventory or 0))
-appendKey(diagnostics, "collect_probe_outputs", string.format("%.3f", phaseTimings.collect_probe_outputs or 0))
-appendKey(diagnostics, "create_zip", string.format("%.3f", phaseTimings.create_zip or 0))
-appendKey(diagnostics, "total", string.format("%.3f", phaseTimings.total or 0))
-appendLine(diagnostics, "")
-appendLine(diagnostics, "Zip Scope")
-appendKey(diagnostics, "Zip source folder", bundleDir)
-appendKey(diagnostics, "Zip parent folder", bundleParent)
-appendKey(diagnostics, "Zip target", zipOk and zipPath or (bundleName .. ".zip (failed)"))
-appendLine(diagnostics, "")
+    appendLine(diagnostics, "Collected Files")
+    if #copiedFiles == 0 then
+        appendLine(diagnostics, "- no files copied")
+    else
+        table.sort(copiedFiles)
+        for i = 1, #copiedFiles do
+            appendLine(diagnostics, "- " .. copiedFiles[i])
+        end
+    end
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "Intentional Exclusions")
+    appendLine(diagnostics, "- audio/media files (wav, mp3, flac, aiff, m4a, video)")
+    appendLine(diagnostics, "- model/runtime payload files (.onnx, .pt, .pth, .bin, .safetensors, .npy, .npz)")
+    appendLine(diagnostics, "- user project media and project-specific output folders")
+    appendLine(diagnostics, "- large binary temp artifacts; inventory lists them as excluded when seen")
+    appendLine(diagnostics, "")
 
-writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
+    local readme = {
+        "STEMwerk Support Bundle",
+        "",
+        "This bundle was created by the REAPER action:",
+        "  STEMwerk_Save_Support_Bundle.lua",
+        "",
+        "Included:",
+        "- diagnostics.txt with version/platform/runtime summary",
+        "- runtime state files from the STEMwerk state folder when present",
+        "- runtime logs from the STEMwerk logs folder when present",
+        "- recent persisted run diagnostics/logs",
+        "- minimal temp_inventory.txt from recent STEMwerk temp folders",
+        "- support_bundle_timings.txt with phase timing checkpoints",
+        "- platform_details.txt with platform probe output",
+        "- python_diagnostics.txt with dependency probe output when available",
+        "",
+        "Intentionally excluded:",
+        "- source audio, rendered stems, project media, and other user media",
+        "- model files and other large runtime payloads",
+        "- large binary temp artifacts",
+        "",
+        "Bundle folder:",
+        "  " .. bundleDir,
+        "",
+    }
 
-return true, {
-    bundleDir = bundleDir,
-    bundleParent = bundleParent,
-    zipPath = zipPath,
-    zipCreated = zipOk,
-    zipError = zipError,
-    zipMethod = zipMethod,
-}
+    writeFile(joinPath(bundleDir, "README.txt"), table.concat(readme, "\n"), "wb")
+    writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory, "\n"), "wb")
+    writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
+    writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
+
+    local zipStartedAt = phaseStart("create_zip")
+    local zipOk, zipPath, zipError, zipMethod = createZipArchive(bundleParent, bundleDir, bundleName, detectedPythonPath)
+    phaseDone("create_zip", zipStartedAt)
+
+    phaseTimings.total = math.max(0, os.clock() - totalStartedAt)
+    timingEvent("total", "end", string.format("duration=%.3f", phaseTimings.total))
+
+    appendLine(diagnostics, "Support Bundle Phase Timings (seconds)")
+    appendKey(diagnostics, "total_start", "see support_bundle_timings.txt")
+    appendKey(diagnostics, "collect_root_diagnostics", string.format("%.3f", phaseTimings.collect_root_diagnostics or 0))
+    appendKey(diagnostics, "collect_state", string.format("%.3f", phaseTimings.collect_state or 0))
+    appendKey(diagnostics, "collect_runtime_logs", string.format("%.3f", phaseTimings.collect_runtime_logs or 0))
+    appendKey(diagnostics, "collect_recent_runs", string.format("%.3f", phaseTimings.collect_recent_runs or 0))
+    appendKey(diagnostics, "collect_temp_inventory", string.format("%.3f", phaseTimings.collect_temp_inventory or 0))
+    appendKey(diagnostics, "collect_probes", string.format("%.3f", phaseTimings.collect_probes or 0))
+    appendKey(diagnostics, "create_zip", string.format("%.3f", phaseTimings.create_zip or 0))
+    appendKey(diagnostics, "total", string.format("%.3f", phaseTimings.total or 0))
+    appendLine(diagnostics, "")
+    appendLine(diagnostics, "Zip Scope")
+    appendKey(diagnostics, "Zip source folder", bundleDir)
+    appendKey(diagnostics, "Zip parent folder", bundleParent)
+    appendKey(diagnostics, "Zip target", zipOk and zipPath or (bundleName .. ".zip (failed)"))
+    appendLine(diagnostics, "")
+
+    writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
+    flushTimings()
+
+    return true, {
+        bundleDir = bundleDir,
+        bundleParent = bundleParent,
+        zipPath = zipPath,
+        zipCreated = zipOk,
+        zipError = zipError,
+        zipMethod = zipMethod,
+    }
 end
 
 local function runWithBusyWindow()
