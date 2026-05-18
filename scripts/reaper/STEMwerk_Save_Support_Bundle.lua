@@ -627,6 +627,59 @@ local function shouldIgnoreTempFolder(name)
     return false
 end
 
+local SUPPORT_SKIP_DIR_NAMES = {
+    ["stemwerk-support-bundles"] = true,
+    ["support-bundles"] = true,
+    ["models"] = true,
+    [".venv"] = true,
+    ["venv"] = true,
+    ["site-packages"] = true,
+    ["__pycache__"] = true,
+    [".git"] = true,
+    ["_bundled"] = true,
+    ["wheels"] = true,
+    ["wheelhouse"] = true,
+    ["cache"] = true,
+    ["pip"] = true,
+    ["torch"] = true,
+    ["checkpoints"] = true,
+    ["assets"] = true,
+}
+
+local SUPPORT_SKIP_FILE_EXTENSIONS = {
+    [".wav"] = true, [".flac"] = true, [".mp3"] = true, [".aiff"] = true, [".aif"] = true,
+    [".ogg"] = true, [".m4a"] = true, [".mp4"] = true, [".mov"] = true, [".mkv"] = true,
+    [".pth"] = true, [".pt"] = true, [".ckpt"] = true, [".onnx"] = true, [".safetensors"] = true,
+    [".whl"] = true, [".zip"] = true, [".7z"] = true, [".tar"] = true, [".gz"] = true, [".xz"] = true,
+    [".dll"] = true, [".pyd"] = true, [".exe"] = true, [".msi"] = true, [".iso"] = true,
+}
+
+local function shouldSkipSupportDirByName(name)
+    local lower = tostring(name or ""):lower()
+    if lower == "" then
+        return true, "empty-name"
+    end
+    if SUPPORT_SKIP_DIR_NAMES[lower] then
+        return true, "dir-name"
+    end
+    if lower:match("^stemwerk%-support%-bundle%-") then
+        return true, "bundle-dir"
+    end
+    if lower:match("^support%-bundle%-") then
+        return true, "bundle-dir"
+    end
+    return false, ""
+end
+
+local function shouldSkipSupportFileByExt(name)
+    local lower = tostring(name or ""):lower()
+    local ext = lower:match("%.[^%.]+$") or ""
+    if ext ~= "" and SUPPORT_SKIP_FILE_EXTENSIONS[ext] then
+        return true, ext
+    end
+    return false, ""
+end
+
 local function enumerateSubdirs(path)
     local out = {}
     if not (reaper and reaper.EnumerateSubdirectories) then
@@ -1275,6 +1328,9 @@ local function classifyFileForBundle(name)
         [".mp4"] = true, [".mov"] = true, [".avi"] = true, [".mkv"] = true,
         [".pt"] = true, [".pth"] = true, [".ckpt"] = true, [".onnx"] = true,
         [".bin"] = true, [".safetensors"] = true, [".npy"] = true, [".npz"] = true,
+        [".whl"] = true, [".zip"] = true, [".7z"] = true, [".tar"] = true,
+        [".gz"] = true, [".xz"] = true, [".dll"] = true, [".pyd"] = true,
+        [".exe"] = true, [".msi"] = true, [".iso"] = true,
     }
     for ext, _ in pairs(binaryExt) do
         if endsWith(lower, ext) then
@@ -1487,9 +1543,20 @@ local function collectTempInventory(bundleDir, copiedFiles)
         return inventoryLines, copied, tempBase, summary
     end
 
+    local caps = {
+        maxFolders = (OS == "Windows") and 4 or 8,
+        maxDepth = (OS == "Windows") and 2 or 3,
+        maxFilesPerTree = (OS == "Windows") and 600 or 1200,
+        maxDirsPerTree = (OS == "Windows") and 200 or 400,
+        maxCopySourceBytes = 512 * 1024,
+        maxCopyOutputBytes = 256 * 1024,
+        maxCopiedBytesPerTree = (OS == "Windows") and (2 * 1024 * 1024) or (4 * 1024 * 1024),
+    }
+
     for _, name in ipairs(enumerateSubdirs(tempBase)) do
         local lower = tostring(name):lower()
-        if startsWith(lower, "stemwerk") and not shouldIgnoreTempFolder(name) then
+        local skipDir = shouldSkipSupportDirByName(name)
+        if startsWith(lower, "stemwerk") and not shouldIgnoreTempFolder(name) and not skipDir then
             local full = joinPath(tempBase, name)
             local stat = getPathStat(full)
             folders[#folders + 1] = {
@@ -1521,53 +1588,136 @@ local function collectTempInventory(bundleDir, copiedFiles)
         return "[STEMWERK_TEMP_DIR]/" .. rel
     end
 
-    local function walkDir(rootDir, relDir, depth, maxDepth)
-        if depth > maxDepth then return end
+    local function logInventoryEntry(stat, action, relPath, class, reason)
+        appendLine(
+            inventoryLines,
+            string.format(
+                "%s | %s | %s | %s | %s%s",
+                stat.mtime or "unavailable",
+                stat.sizeLabel or "unavailable",
+                stat.kind or "file",
+                action,
+                sanitizeInventoryDisplayPath(relPath, class),
+                (trim(reason) ~= "") and (" | " .. tostring(reason)) or ""
+            )
+        )
+    end
+
+    local function walkDir(rootDir, relDir, depth, treeStats)
+        if depth > caps.maxDepth then
+            if not treeStats.hitDepthLimit then
+                treeStats.hitDepthLimit = true
+                appendLine(inventoryLines, string.format("limit: max depth reached at %s", sanitizeInventoryDisplayPath(relDir, "other")))
+            end
+            return
+        end
         local currentDir = relDir == "" and rootDir or joinPath(rootDir, relDir)
+        if treeStats.scannedDirs >= caps.maxDirsPerTree then
+            if not treeStats.hitDirLimit then
+                treeStats.hitDirLimit = true
+                appendLine(inventoryLines, string.format("limit: max dirs reached in %s", basename(rootDir)))
+            end
+            return
+        end
+        treeStats.scannedDirs = treeStats.scannedDirs + 1
         for _, fileName in ipairs(enumerateFiles(currentDir)) do
+            if treeStats.scannedFiles >= caps.maxFilesPerTree then
+                if not treeStats.hitFileLimit then
+                    treeStats.hitFileLimit = true
+                    appendLine(inventoryLines, string.format("limit: max files reached in %s", basename(rootDir)))
+                end
+                break
+            end
+            treeStats.scannedFiles = treeStats.scannedFiles + 1
             local relPath = relDir == "" and fileName or joinPath(relDir, fileName)
             local fullPath = joinPath(rootDir, relPath)
-            local stat = getPathStat(fullPath)
-            local class = classifyFileForBundle(fileName)
             local lowerName = tostring(fileName):lower()
             if lowerName == "stdout.txt" then summary.stdout = true end
             if lowerName == "stderr.txt" then summary.stderr = true end
             if lowerName == "separation_log.txt" then summary.separation = true end
-            local action = "listed"
-            if class == "excluded_binary" then
-                action = "excluded-binary"
-            elseif class == "text" then
-                local tempDestDir = joinPath(bundleDir, "temp_logs", basename(rootDir))
-                local tempDestPath = joinPath(tempDestDir, relPath)
-                ensureDir(tempDestPath:match("^(.*)[/\\][^/\\]+$") or tempDestDir)
-                local ok, mode = copySupportTextFile(fullPath, tempDestPath, 256 * 1024)
-                if ok then
-                    action = "included-" .. tostring(mode)
-                    copied[#copied + 1] = "temp_logs/" .. sanitizeInventoryDisplayPath(relPath, class)
-                else
-                    action = "text-copy-failed"
-                end
-            end
-            appendLine(
-                inventoryLines,
-                string.format(
-                    "%s | %s | %s | %s | %s%s",
-                    stat.mtime or "unavailable",
-                    stat.sizeLabel or "unavailable",
-                    stat.kind or "file",
-                    action,
-                    sanitizeInventoryDisplayPath(relPath, class),
-                    (not stat.ok and trim(stat.reason) ~= "") and (" | metadata=" .. tostring(stat.reason)) or ""
+
+            local skipByExt, ext = shouldSkipSupportFileByExt(fileName)
+            if skipByExt then
+                logInventoryEntry(
+                    {mtime = "unavailable (skipped)", sizeLabel = "unavailable (skipped)", kind = "file"},
+                    "excluded-extension",
+                    relPath,
+                    "excluded_binary",
+                    "excluded-ext=" .. tostring(ext)
                 )
-            )
+            else
+                local class = classifyFileForBundle(fileName)
+                local action = "listed"
+                local reason = ""
+                local stat = {
+                    ok = true,
+                    kind = "file",
+                    mtime = "unavailable (fast-mode)",
+                    size = nil,
+                    sizeLabel = "unavailable (fast-mode)",
+                    reason = "",
+                }
+                if class == "excluded_binary" then
+                    action = "excluded-binary"
+                    stat.mtime = "unavailable (excluded)"
+                    stat.sizeLabel = "unavailable (excluded)"
+                else
+                    if class == "text" then
+                        local sourceSize = fileSizeBytes(fullPath)
+                        stat.size = sourceSize
+                        stat.sizeLabel = sourceSize and humanBytes(sourceSize) or "unavailable (size probe failed)"
+                        if sourceSize and sourceSize > caps.maxCopySourceBytes then
+                            action = "excluded-too-large"
+                            reason = "source-bytes=" .. tostring(sourceSize) .. " > max=" .. tostring(caps.maxCopySourceBytes)
+                        else
+                            local copyBytes = math.min(tonumber(sourceSize) or caps.maxCopyOutputBytes, caps.maxCopyOutputBytes)
+                            if (treeStats.copiedBytes + copyBytes) > caps.maxCopiedBytesPerTree then
+                                action = "excluded-copy-cap"
+                                reason = "copy-byte-cap=" .. tostring(caps.maxCopiedBytesPerTree)
+                            else
+                                local tempDestDir = joinPath(bundleDir, "temp_logs", basename(rootDir))
+                                local tempDestPath = joinPath(tempDestDir, relPath)
+                                ensureDir(tempDestPath:match("^(.*)[/\\][^/\\]+$") or tempDestDir)
+                                local ok, mode = copySupportTextFile(fullPath, tempDestPath, caps.maxCopyOutputBytes)
+                                if ok then
+                                    action = "included-" .. tostring(mode)
+                                    treeStats.copiedBytes = treeStats.copiedBytes + copyBytes
+                                    copied[#copied + 1] = "temp_logs/" .. sanitizeInventoryDisplayPath(relPath, class)
+                                else
+                                    action = "text-copy-failed"
+                                end
+                            end
+                        end
+                    end
+                end
+                logInventoryEntry(
+                    stat,
+                    action,
+                    relPath,
+                    class,
+                    (not stat.ok and trim(stat.reason) ~= "") and ("metadata=" .. tostring(stat.reason)) or reason
+                )
+            end
         end
         for _, subDirName in ipairs(enumerateSubdirs(currentDir)) do
-            local nextRel = relDir == "" and subDirName or joinPath(relDir, subDirName)
-            walkDir(rootDir, nextRel, depth + 1, maxDepth)
+            if treeStats.scannedDirs >= caps.maxDirsPerTree then
+                break
+            end
+            local skipDir, skipReason = shouldSkipSupportDirByName(subDirName)
+            if skipDir then
+                local relPath = relDir == "" and subDirName or joinPath(relDir, subDirName)
+                appendLine(inventoryLines, string.format("skip-dir | %s | reason=%s", sanitizeInventoryDisplayPath(relPath, "other"), tostring(skipReason)))
+            else
+                local nextRel = relDir == "" and subDirName or joinPath(relDir, subDirName)
+                walkDir(rootDir, nextRel, depth + 1, treeStats)
+            end
         end
     end
 
-    local maxFolders = math.min(#folders, 8)
+    local maxFolders = math.min(#folders, caps.maxFolders)
+    if #folders > maxFolders then
+        appendLine(inventoryLines, string.format("Temp folders limited: scanning %d of %d newest STEMwerk folders", maxFolders, #folders))
+    end
     if maxFolders == 0 then
         appendLine(inventoryLines, "No STEMwerk temp folders found under: " .. tempBase)
     end
@@ -1579,7 +1729,27 @@ local function collectTempInventory(bundleDir, copiedFiles)
             inventoryLines,
             string.format("[Folder] %s | [STEMWERK_TEMP_DIR] (%s)", folder.mtime, basename(folder.path))
         )
-        walkDir(folder.path, "", 0, 3)
+        local treeStats = {
+            scannedFiles = 0,
+            scannedDirs = 0,
+            copiedBytes = 0,
+            hitDepthLimit = false,
+            hitFileLimit = false,
+            hitDirLimit = false,
+        }
+        walkDir(folder.path, "", 0, treeStats)
+        appendLine(
+            inventoryLines,
+            string.format(
+                "summary | files=%d/%d dirs=%d/%d copied_bytes=%d/%d",
+                treeStats.scannedFiles,
+                caps.maxFilesPerTree,
+                treeStats.scannedDirs,
+                caps.maxDirsPerTree,
+                treeStats.copiedBytes,
+                caps.maxCopiedBytesPerTree
+            )
+        )
     end
 
     for i = 1, #copied do
@@ -1600,6 +1770,16 @@ if not ensureDir(bundleParent) or not ensureDir(bundleDir) then
     return false, "Could not create bundle folder:\n" .. tostring(bundleDir)
 end
 
+local phaseTimings = {}
+local function startPhase()
+    return os.clock()
+end
+local function endPhase(name, startedAt)
+    phaseTimings[name] = math.max(0, os.clock() - tonumber(startedAt or 0))
+end
+local totalStartedAt = startPhase()
+
+local probesStartedAt = startPhase()
 local reapackVersion = detectReaPackVersion(resourcePath)
 local platform = getPlatformDetails()
 local pythonProbe = runPythonProbe(bundleDir, detectedPythonPath)
@@ -1607,6 +1787,7 @@ local pythonVersion = pythonProbe.data.python_version or getPythonVersion(detect
 local ffmpegVersion = getFfmpegVersion(detectedFfmpegPath)
 local reaperVersion = reaper and reaper.GetAppVersion and tostring(reaper.GetAppVersion() or "") or "undetected"
 local bundleTimestamp = os.date("%Y-%m-%d %H:%M:%S")
+endPhase("collect_probe_outputs", probesStartedAt)
 
 local diagnostics = {}
 appendLine(diagnostics, "=== COPY/PASTE VERSION AND PLATFORM SUMMARY ===")
@@ -1647,12 +1828,15 @@ appendLine(diagnostics, "")
 
 appendLine(diagnostics, "Runtime State Files")
 local copiedFiles = {}
+local stateStartedAt = startPhase()
 for _, line in ipairs(collectStateFiles(runtimePaths.runtimeState, bundleDir, copiedFiles)) do
     appendLine(diagnostics, line)
 end
+endPhase("collect_state", stateStartedAt)
 appendLine(diagnostics, "")
 
 appendLine(diagnostics, "Runtime Logs")
+local runtimeLogsStartedAt = startPhase()
 for _, line in ipairs(collectRuntimeLogs(runtimePaths.runtimeLogs, bundleDir, copiedFiles)) do
     appendLine(diagnostics, line)
 end
@@ -1697,15 +1881,18 @@ for _, name in ipairs(persistentDiagFiles) do
         if name == "stemwerk.log" then persistentRunLogs.stemwerk_log = true end
     end
 end
+endPhase("collect_runtime_logs", runtimeLogsStartedAt)
 appendKey(diagnostics, "Persistent run_summary.txt", persistentRunLogs.run_summary and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent separation_log.txt", persistentRunLogs.separation_log and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent stdout.txt", persistentRunLogs.stdout and cacheLogDir or "missing")
 appendKey(diagnostics, "Persistent stemwerk.log", persistentRunLogs.stemwerk_log and cacheLogDir or "missing")
 appendLine(diagnostics, "")
 appendLine(diagnostics, "Persistent Run Diagnostics")
+local persistedRunsStartedAt = startPhase()
 for _, line in ipairs(collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)) do
     appendLine(diagnostics, line)
 end
+endPhase("collect_persisted_runs", persistedRunsStartedAt)
 appendLine(diagnostics, "")
 
 appendLine(diagnostics, "Settings Snapshot")
@@ -1744,7 +1931,9 @@ for i = 1, #pythonProbe.summary do
 end
 appendLine(diagnostics, "")
 
+local tempInventoryStartedAt = startPhase()
 local tempInventory, _, tempBase, tempSummary = collectTempInventory(bundleDir, copiedFiles)
+endPhase("collect_temp_logs_or_inventory", tempInventoryStartedAt)
 appendLine(diagnostics, "Temp Folder Inventory")
 appendKey(diagnostics, "Temp base", tempBase)
 appendKey(diagnostics, "Temp inventory file", "temp_inventory.txt")
@@ -1804,12 +1993,31 @@ local readme = {
 }
 
 writeFile(joinPath(bundleDir, "README.txt"), table.concat(readme, "\n"), "wb")
-writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
 writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory, "\n"), "wb")
 writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
 writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
 
+local zipStartedAt = startPhase()
 local zipOk, zipPath, zipError, zipMethod = createZipArchive(bundleParent, bundleDir, bundleName, detectedPythonPath)
+endPhase("create_zip", zipStartedAt)
+endPhase("total", totalStartedAt)
+
+appendLine(diagnostics, "Support Bundle Phase Timings (seconds)")
+appendKey(diagnostics, "collect_state", string.format("%.3f", phaseTimings.collect_state or 0))
+appendKey(diagnostics, "collect_runtime_logs", string.format("%.3f", phaseTimings.collect_runtime_logs or 0))
+appendKey(diagnostics, "collect_persisted_runs", string.format("%.3f", phaseTimings.collect_persisted_runs or 0))
+appendKey(diagnostics, "collect_temp_logs_or_inventory", string.format("%.3f", phaseTimings.collect_temp_logs_or_inventory or 0))
+appendKey(diagnostics, "collect_probe_outputs", string.format("%.3f", phaseTimings.collect_probe_outputs or 0))
+appendKey(diagnostics, "create_zip", string.format("%.3f", phaseTimings.create_zip or 0))
+appendKey(diagnostics, "total", string.format("%.3f", phaseTimings.total or 0))
+appendLine(diagnostics, "")
+appendLine(diagnostics, "Zip Scope")
+appendKey(diagnostics, "Zip source folder", bundleDir)
+appendKey(diagnostics, "Zip parent folder", bundleParent)
+appendKey(diagnostics, "Zip target", zipOk and zipPath or (bundleName .. ".zip (failed)"))
+appendLine(diagnostics, "")
+
+writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
 
 return true, {
     bundleDir = bundleDir,
