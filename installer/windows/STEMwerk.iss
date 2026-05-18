@@ -518,6 +518,25 @@ begin
   end;
 end;
 
+function SanitizeStatusUiText(const S: string): string;
+var
+  i: Integer;
+  Ch: Char;
+begin
+  Result := '';
+  for i := 1 to Length(S) do
+  begin
+    Ch := S[i];
+    if (Ch = #9) or (Ch = #10) or (Ch = #13) then
+      Result := Result + Ch
+    else if (Ord(Ch) >= 32) and (Ord(Ch) <> 127) then
+      Result := Result + Ch;
+  end;
+  Result := Trim(Result);
+  if (Result = '?') or (Result = '??') then
+    Result := '';
+end;
+
 function FilterVisibleLogText(const Text: string): string;
 var
   Remaining: string;
@@ -693,7 +712,7 @@ end;
 
 procedure UpdateLogMemo;
 var
-  Path, Text, VisibleText, Detail: string;
+  Path, Text, VisibleText, Detail, DetailText: string;
   WaitingForBootstrap: Boolean;
   WasAtBottom: Boolean;
 begin
@@ -737,12 +756,18 @@ begin
     if WaitingForBootstrap then
       StatusDetailLabel.Caption := ExtractingStatusDetailText
     else if Detail <> '' then
-      StatusDetailLabel.Caption := LText('Current task:', 'Huidige taak:', 'Aktuelle Aufgabe:') + #13#10 +
-        LocalizeStatusDetail(Detail) + #13#10 +
-        LText(
-          'Package installation can take several minutes...',
-          'Pakketinstallatie kan enkele minuten duren...',
-          'Die Paketinstallation kann mehrere Minuten dauern...')
+    begin
+      DetailText := SanitizeStatusUiText(LocalizeStatusDetail(Detail));
+      if DetailText <> '' then
+        StatusDetailLabel.Caption := LText('Current task:', 'Huidige taak:', 'Aktuelle Aufgabe:') + #13#10 +
+          DetailText + #13#10 +
+          LText(
+            'Package installation can take several minutes...',
+            'Pakketinstallatie kan enkele minuten duren...',
+            'Die Paketinstallation kann mehrere Minuten dauern...')
+      else
+        StatusDetailLabel.Caption := DefaultStatusDetailText;
+    end
     else
       StatusDetailLabel.Caption := DefaultStatusDetailText;
   end;
@@ -1020,6 +1045,8 @@ begin
     WizardForm.TasksList.Top := TasksInfoLabel.Top + TasksInfoLabel.Height + ScaleY(10);
 
   WizardForm.StatusLabel.Visible := False;
+  if WizardForm.FilenameLabel <> nil then
+    WizardForm.FilenameLabel.Visible := False;
   y := WizardForm.StatusLabel.Top - ScaleY(18);
   PageW := WizardForm.InstallingPage.ClientWidth;
   ColumnGap := ScaleX(10);
@@ -1099,7 +1126,9 @@ begin
   StatusDetailLabel.Caption := DefaultStatusDetailText;
   StatusDetailLabel.Left := WizardForm.StatusLabel.Left;
   StatusDetailLabel.Top := y + ScaleY(18);
-  StatusDetailLabel.Width := PageW - StatusDetailLabel.Left - ScaleX(8);
+  StatusDetailLabel.Width := PageW - StatusDetailLabel.Left - ScaleX(112);
+  if StatusDetailLabel.Width < ScaleX(280) then
+    StatusDetailLabel.Width := ScaleX(280);
   StatusDetailLabel.Height := ScaleY(72);
 
   StepTop := StatusDetailLabel.Top + StatusDetailLabel.Height + ScaleY(8);
