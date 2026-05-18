@@ -1,5 +1,5 @@
-<p align="center">
-	<img src="docs/assets/STEMwerk.gif" alt="STEMwerk-reaper" title="STEMwerk-reaper" width="720" />
+<p align="right">
+  <img src="https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/installer/assets/stemwerk.png" alt="STEMwerk" width="180">
 </p>
 
 Local-first stem separation inside REAPER (open source, ReaPack).<br>
@@ -13,7 +13,7 @@ This README describes the current public stable release, `v2.2.2.2`. Future deve
 
 `v2.2.2.2` is a reliability and packaging parity release on top of the `2.2.2.x` UI/workflow line.
 
-<img src="https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/v2.2.2.2/STEMwerk-v2.2.2.2-REAPER-Native-UI.png" alt="STEMwerk v2.2.2.2 REAPER-Native UI" width="720">
+<img src="https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/v2.2.2.2/STEMwerk-v2.2.2.2-REAPER-Native-UI-cropped-720.png" alt="STEMwerk v2.2.2.2 REAPER-Native UI" width="720">
 
 #### What's new in v2.2.2.2
 `v2.2.2.2` is a reliability, setup, packaging, and supportability release.
