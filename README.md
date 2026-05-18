@@ -312,23 +312,24 @@ Note: REAPER does not auto-register scripts in the Action List. Use Actions Ã¢â€
 ## Parallel vs Sequential (Multi-track)
 Parallel mode is used when `Parallel` is enabled. Sequential mode is used when `Parallel` is disabled.
 
-When `Parallel` is enabled and multiple jobs are queued, STEMwerk still forces Sequential in these cases:
-- Explicit `DirectML` device selection on multi-job runs (Windows stability safeguard).
-- `device = auto` with no detected GPU backend (`Auto device, no GPU`).
+When `Parallel` is enabled and multiple jobs are queued, STEMwerk can run multi-job processing in parallel when backend/device/job layout support it.
 
-If those safeguards do not apply, both per-track and per-item multi-job queues can run in parallel.
+STEMwerk may still fall back to Sequential for stability depending on backend, selected device, job layout, time-selection/per-item isolation, or when only one job is queued.
+
+Recent Windows DirectML builds can run parallel jobs where supported.
 
 Examples where parallel runs:
 - 3 tracks queued, `Parallel` on, device = `cuda:0` -> jobs run in parallel.
-- Multiple selected items across tracks, no time selection, `Parallel` on, device = `cuda` -> per-item jobs run in parallel.
+- Multiple selected items across tracks, no time selection, `Parallel` on, device = `cuda` -> jobs run in parallel where supported.
 - `device = auto` with a detected GPU backend and multiple queued jobs -> parallel.
 
 Examples where sequential is used:
 - `Parallel` is switched off by the user.
-- Explicit `DirectML` with multiple queued jobs -> sequential (`DirectML multi-track stability mode`).
+- Backend/device/job-layout stability safeguards force sequential.
 - `Parallel` on + `device = auto` with no detected GPU backend -> sequential (`Auto device, no GPU`).
+- Single queued job -> sequential by definition.
 
-The progress window shows the active mode and, when applicable, the forced-sequential reason.
+The progress window shows the active mode and, when applicable, the fallback reason.
 
 ## Relationship to STEMwerk-core
 STEMwerk-reaper bundles the same separation pipeline used by STEMwerk-core via `scripts/reaper/audio_separator_process.py` and the `tools/` utilities. The REAPER layer handles DAW integration, UI, and item or track management, while the core handles model execution and device selection.
@@ -355,6 +356,8 @@ Before tagging/releases:
 ## License / author
 MIT License.
 Author: flarkAUDIO (flarkaudio@pm.me)
+
+
 
 
 
