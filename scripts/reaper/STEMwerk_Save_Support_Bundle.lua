@@ -1539,6 +1539,820 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
     return lines
 end
 
+local function parseJsonStringField(line, key)
+    local pattern = '"' .. tostring(key) .. '"%s*:%s*"(.-)"'
+    local value = tostring(line or ""):match(pattern)
+    if not value then return nil end
+    value = value:gsub('\\"', '"'):gsub("\\\\", "\\")
+    return trim(value)
+end
+
+local function parseJsonNumberField(line, key)
+    local pattern = '"' .. tostring(key) .. '"%s*:%s*([%-]?[%d]+%.?[%d]*)'
+    local value = tostring(line or ""):match(pattern)
+    return tonumber(value)
+end
+
+local function kvAssignIfUnknown(entry, key, value)
+    local v = trim(value)
+    if v ~= "" and tostring(entry[key] or "") == "unknown" then
+        entry[key] = v
+        return true
+    end
+    return false
+end
+
+local function kvAssignLast(entry, key, value)
+    local v = trim(value)
+    if v ~= "" then
+        entry[key] = v
+    end
+end
+
+local function normalizeRelativeBundlePath(path)
+    return tostring(path or ""):gsub("\\", "/")
+end
+
+local KNOWN_SUMMARY_MODELS = {
+    "htdemucs",
+    "htdemucs_ft",
+    "htdemucs_6s",
+}
+
+local function parseCountValue(text)
+    local n = tostring(text or ""):match("([0-9]+)")
+    local v = tonumber(n)
+    if v then
+        return tostring(math.floor(v))
+    end
+    return nil
+end
+
+local function parseNumericToken(text)
+    local n = tostring(text or ""):match("([%-]?[%d]+%.?[%d]*)")
+    return tonumber(n)
+end
+
+local function formatSecondsValue(raw)
+    local n = parseNumericToken(raw)
+    if not n then return nil end
+    return string.format("%.1fs", n)
+end
+
+local function formatRealtimeValue(raw)
+    local n = parseNumericToken(raw)
+    if not n then return nil end
+    return string.format("%.2fx", n)
+end
+
+local function containsKnownModel(line)
+    local lower = tostring(line or ""):lower()
+    for i = 1, #KNOWN_SUMMARY_MODELS do
+        local model = KNOWN_SUMMARY_MODELS[i]
+        local pattern = "(^|[^%w_%-])(" .. model .. ")([^%w_%-]|$)"
+        local hit = lower:match(pattern)
+        if hit then
+            return model
+        end
+    end
+    return nil
+end
+
+local function setRunResult(entry, result, priority)
+    result = trim(result):lower()
+    if result ~= "success" and result ~= "fail" and result ~= "partial" and result ~= "unknown" then
+        return
+    end
+    local p = tonumber(priority) or 0
+    local currentP = tonumber(entry._resultPriority or 0) or 0
+    if p >= currentP then
+        entry.result = result
+        entry._resultPriority = p
+    end
+end
+
+local function setFailureReason(entry, reason)
+    local value = trim(reason)
+    if value ~= "" and tostring(entry.error_reason or "unknown") == "unknown" then
+        entry.error_reason = value
+    end
+end
+
+local function parseKeyValueLine(line)
+    local key, value = tostring(line or ""):match("^%s*([%w%._%-%s/]+)%s*[:=]%s*(.-)%s*$")
+    if not key then return nil, nil end
+    key = trim(key):lower():gsub("%s+", "_")
+    value = trim(value)
+    if key == "" or value == "" then return nil, nil end
+    return key, value
+end
+
+local function parseSupportRunText(entry, text)
+    for line in tostring(text or ""):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local lower = raw:lower()
+        local key, value = parseKeyValueLine(raw)
+        if key then
+            if key == "result" then
+                local resultValue = value:lower()
+                if resultValue:find("success", 1, true) or resultValue:find("ok", 1, true) or resultValue:find("done", 1, true) then
+                    setRunResult(entry, "success", 4)
+                elseif resultValue:find("partial", 1, true) then
+                    setRunResult(entry, "partial", 4)
+                elseif resultValue:find("fail", 1, true) or resultValue:find("error", 1, true) then
+                    setRunResult(entry, "fail", 4)
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                end
+            elseif key == "mode" then
+                kvAssignIfUnknown(entry, "mode", value)
+            elseif key == "model" then
+                kvAssignIfUnknown(entry, "model", value)
+            elseif key == "selected_model" then
+                kvAssignIfUnknown(entry, "model", value)
+            elseif key == "device" then
+                kvAssignIfUnknown(entry, "device", value)
+            elseif key == "backend" then
+                kvAssignIfUnknown(entry, "backend", value)
+            elseif key == "profile" then
+                kvAssignIfUnknown(entry, "profile", value)
+            elseif key == "jobs" then
+                local count = parseCountValue(value)
+                if count then kvAssignLast(entry, "jobs", count) end
+            elseif key == "items" or key == "item_count" then
+                local count = parseCountValue(value)
+                if count then kvAssignLast(entry, "items", count) end
+            elseif key == "wall_clock_total" then
+                kvAssignLast(entry, "wall_clock_total", formatSecondsValue(value) or value)
+            elseif key == "total_source_duration" or key == "total_source_dur" or key == "source_duration" or key == "total_source_duration_s" then
+                kvAssignLast(entry, "total_source_duration", formatSecondsValue(value) or value)
+            elseif key == "avg_realtime_factor" or key == "realtime_factor" then
+                kvAssignLast(entry, "realtime_factor", formatRealtimeValue(value) or value)
+            elseif key == "speed" then
+                if value:find("x", 1, true) or value:lower():find("realtime", 1, true) then
+                    kvAssignLast(entry, "realtime_factor", formatRealtimeValue(value) or value)
+                end
+            elseif key == "reason" or key == "error" or key == "failure_reason" then
+                if value ~= "" and value:lower() ~= "none" and value ~= "0" then
+                    setFailureReason(entry, value)
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                    setRunResult(entry, "fail", 4)
+                end
+            elseif key == "status" then
+                local status = value:lower()
+                if status:find("fail", 1, true) or status:find("error", 1, true) then
+                    setRunResult(entry, "fail", 4)
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                elseif status:find("success", 1, true) or status:find("ok", 1, true) then
+                    setRunResult(entry, "success", 4)
+                end
+            elseif key == "timestamp" then
+                kvAssignLast(entry, "timestamp", value)
+            elseif key == "exit_code" and tonumber(value) and tonumber(value) ~= 0 then
+                kvAssignLast(entry, "error_reason", "exit_code: " .. tostring(value))
+                entry._exitNonZero = (entry._exitNonZero or 0) + 1
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+                setRunResult(entry, "fail", 4)
+            elseif key == "error_or_cancel" then
+                local ec = tonumber(value)
+                if ec and ec > 0 then
+                    entry._clearFailures = (entry._clearFailures or 0) + ec
+                    setFailureReason(entry, "error_or_cancel: " .. tostring(ec))
+                    setRunResult(entry, "fail", 4)
+                end
+            end
+        end
+
+        local modelFromFlag = raw:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+        if modelFromFlag then
+            kvAssignIfUnknown(entry, "model", modelFromFlag)
+        end
+        local selectedModel = raw:match("^[Ss]elected%s+[Mm]odel%s*[:=]%s*(.+)$")
+        if selectedModel then
+            kvAssignIfUnknown(entry, "model", trim(selectedModel))
+        end
+        if tostring(entry.model or "unknown") == "unknown" then
+            local known = containsKnownModel(raw)
+            if known then kvAssignIfUnknown(entry, "model", known) end
+        end
+
+        local totalDurRaw = raw:match("[Tt]otal[_%s]+source[_%s]+duration%s*[:=]%s*([%d%.]+)")
+            or raw:match("[Ss]ource[_%s]+duration%s*[:=]%s*([%d%.]+)")
+        if totalDurRaw and tostring(entry.total_source_duration or "unknown") == "unknown" then
+            kvAssignLast(entry, "total_source_duration", formatSecondsValue(totalDurRaw) or totalDurRaw)
+        end
+        local realtimeRaw = raw:match("[Aa]vg[_%s]+realtime[_%s]+factor%s*[:=]%s*([%d%.]+)")
+            or raw:match("[Rr]ealtime[_%s]+factor%s*[:=]%s*([%d%.]+)")
+            or raw:match("[Ss]peed%s*[:=]%s*([%d%.]+)%s*x")
+            or raw:match("([%d%.]+)%s*x%s*[Rr]ealtime")
+        if realtimeRaw and tostring(entry.realtime_factor or "unknown") == "unknown" then
+            kvAssignLast(entry, "realtime_factor", formatRealtimeValue(realtimeRaw) or realtimeRaw)
+        end
+
+        if lower:find("processing complete", 1, true) or lower:find("completed successfully", 1, true) then
+            entry._positiveHints = (entry._positiveHints or 0) + 1
+            if tostring(entry.result or "unknown") == "unknown" then
+                setRunResult(entry, "success", 2)
+            end
+        end
+        if lower:find("import_end", 1, true) then
+            entry._positiveHints = (entry._positiveHints or 0) + 1
+        end
+
+        local selected = raw:match("^STEMWERK_DIAG%s+selected_device=(.+)$")
+        if selected then
+            kvAssignIfUnknown(entry, "device", selected)
+        end
+        local requested = raw:match("^STEMWERK_DIAG%s+requested_device=(.+)$")
+        if requested and tostring(entry.device or "unknown") == "unknown" then
+            kvAssignIfUnknown(entry, "device", requested)
+        end
+        local autoSelected = raw:match("^STEMWERK_DIAG%s+auto_selected[_%w]*=([%w%-%_:%.%/]+)")
+        if autoSelected and tostring(entry.device or "unknown") == "unknown" then
+            kvAssignIfUnknown(entry, "device", autoSelected)
+        end
+
+        if lower:find("traceback", 1, true) then
+            entry._clearFailures = (entry._clearFailures or 0) + 1
+            setRunResult(entry, "fail", 4)
+            setFailureReason(entry, "traceback detected")
+        elseif lower:match("^error:%s*.+$") then
+            entry._clearFailures = (entry._clearFailures or 0) + 1
+            setRunResult(entry, "fail", 4)
+            setFailureReason(entry, trim(raw:gsub("^[Ee][Rr][Rr][Oo][Rr]:%s*", "")))
+        end
+    end
+end
+
+local function updateRunFromTimingJson(entry, path, stat)
+    local content = readFile(path, "rb")
+    if not content then return end
+    local foundTime = false
+    for line in tostring(content):gmatch("[^\r\n]+") do
+        local t = parseJsonNumberField(line, "time")
+        if t then
+            foundTime = true
+            if not stat.minTime or t < stat.minTime then stat.minTime = t end
+            if not stat.maxTime or t > stat.maxTime then stat.maxTime = t end
+        end
+        local mode = parseJsonStringField(line, "mode")
+        if mode then kvAssignIfUnknown(entry, "mode", mode) end
+        local model = parseJsonStringField(line, "model")
+        if model then kvAssignIfUnknown(entry, "model", model) end
+        local device = parseJsonStringField(line, "device")
+        if device then kvAssignIfUnknown(entry, "device", device) end
+        local result = parseJsonStringField(line, "result")
+        if result then
+            local lr = result:lower()
+            if lr:find("success", 1, true) or lr:find("done", 1, true) or lr:find("ok", 1, true) then
+                setRunResult(entry, "success", 4)
+            elseif lr:find("partial", 1, true) then
+                setRunResult(entry, "partial", 4)
+            elseif lr:find("fail", 1, true) or lr:find("error", 1, true) then
+                setRunResult(entry, "fail", 4)
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+            end
+        end
+        local audioDur = parseJsonNumberField(line, "audio_dur")
+        if audioDur then
+            stat.audioDurByJob = stat.audioDurByJob or {}
+            local jobId = parseJsonStringField(line, "job_id") or tostring(parseJsonNumberField(line, "job_index") or "")
+            if jobId ~= "" and not stat.audioDurByJob[jobId] then
+                stat.audioDurByJob[jobId] = audioDur
+                stat.totalAudioDur = (stat.totalAudioDur or 0) + audioDur
+            end
+        end
+    end
+    if foundTime and tostring(entry.log_path or "unknown") == "unknown" then
+        entry.log_path = normalizeRelativeBundlePath(relativePath(entry.bundle_root, path))
+    end
+end
+
+local function deriveRunResultFromJobs(entry, stat)
+    local jobs = tonumber(entry.jobs) or 0
+    local doneOk = tonumber(stat.doneOk or 0) or 0
+    local exitErr = tonumber(stat.exitErr or 0) or 0
+    local clearFailures = tonumber(entry._clearFailures or 0) or 0
+    local positives = tonumber(entry._positiveHints or 0) or 0
+
+    if tostring(entry.result or "unknown") == "success" or tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial" then
+        return
+    end
+
+    if jobs > 0 then
+        if doneOk == jobs and clearFailures == 0 and exitErr == 0 then
+            setRunResult(entry, "success", 3)
+        elseif doneOk > 0 and (clearFailures > 0 or exitErr > 0) then
+            setRunResult(entry, "partial", 3)
+        elseif doneOk == 0 and (clearFailures > 0 or exitErr > 0) then
+            setRunResult(entry, "fail", 3)
+        elseif positives > 0 and clearFailures == 0 and exitErr == 0 then
+            setRunResult(entry, "success", 2)
+        else
+            setRunResult(entry, "unknown", 1)
+        end
+    else
+        if clearFailures > 0 or exitErr > 0 then
+            setRunResult(entry, "fail", 2)
+        elseif positives > 0 then
+            setRunResult(entry, "success", 2)
+        else
+            setRunResult(entry, "unknown", 1)
+        end
+    end
+
+    if (tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial")
+        and tostring(entry.error_reason or "unknown") == "unknown" then
+        local reasons = {}
+        if clearFailures > 0 then
+            reasons[#reasons + 1] = string.format("failure markers: %d", clearFailures)
+        end
+        if exitErr > 0 then
+            reasons[#reasons + 1] = string.format("nonzero exit codes: %d", exitErr)
+        end
+        if #reasons > 0 then
+            entry.error_reason = table.concat(reasons, ", ")
+        end
+    end
+end
+
+local function parseRunStemwerkLogSummary(bundleDir, capabilityState, runtimeState)
+    local path = joinPath(bundleDir, "runtime_logs", "run_stemwerk.log")
+    local data = readFile(path, "rb")
+    if not data or trim(data) == "" then
+        return nil
+    end
+
+    local entry = {
+        run_name = "latest_stemwerk_log",
+        timestamp = "unknown",
+        result = "unknown",
+        model = "unknown",
+        backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+        profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+        device = "unknown",
+        mode = "unknown",
+        jobs = "unknown",
+        items = "unknown",
+        wall_clock_total = "unknown",
+        total_source_duration = "unknown",
+        realtime_factor = "unknown",
+        error_reason = "unknown",
+        log_path = "runtime_logs/run_stemwerk.log",
+    }
+
+    local sawLaunch = false
+    local lastRc = nil
+    for line in tostring(data):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local ts = raw:match("^%[([0-9][^%]]+)%]%s+CMD:")
+        if ts then
+            entry.timestamp = ts
+        end
+        local cmd = raw:match("^%[[^%]]+%]%s+CMD:%s*(.+)$")
+        if cmd then
+            if cmd:find("LAUNCH:", 1, true) then
+                sawLaunch = true
+                local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+                if model then kvAssignIfUnknown(entry, "model", model) end
+                local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
+                if device then kvAssignIfUnknown(entry, "device", device) end
+            end
+            local mode = cmd:match("mode=([%w_%-]+)")
+            if mode then kvAssignIfUnknown(entry, "mode", mode) end
+            local jobs = cmd:match("count=(%d+)")
+            if jobs then kvAssignLast(entry, "jobs", jobs) end
+        end
+        parseSupportRunText(entry, raw)
+        local rc = raw:match("^RC:%s*([%-]?%d+)")
+        if rc then
+            lastRc = tonumber(rc)
+            if lastRc and lastRc ~= 0 then
+                entry._exitNonZero = (entry._exitNonZero or 0) + 1
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+            end
+        end
+    end
+
+    if lastRc ~= nil and tostring(entry.result or "unknown") == "unknown" then
+        if lastRc == 0 then
+            setRunResult(entry, "success", 2)
+        else
+            setRunResult(entry, "fail", 2)
+        end
+        if lastRc ~= 0 and tostring(entry.error_reason or "unknown") == "unknown" then
+            entry.error_reason = "exit_code: " .. tostring(lastRc)
+        end
+    end
+    return sawLaunch and entry or nil
+end
+
+local function parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeState)
+    local path = joinPath(bundleDir, "runtime_logs", "run_stemwerk.log")
+    local data = readFile(path, "rb")
+    if not data or trim(data) == "" then
+        return {}
+    end
+
+    local byRun = {}
+    local lastRunId = nil
+    local function getRun(runId)
+        local key = tostring(runId or "")
+        if key == "" then return nil end
+        if not byRun[key] then
+            byRun[key] = {
+                run_name = key,
+                timestamp = "unknown",
+                result = "unknown",
+                model = "unknown",
+                backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+                profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+                device = "unknown",
+                mode = "unknown",
+                jobs = "unknown",
+                items = "unknown",
+                wall_clock_total = "unknown",
+                total_source_duration = "unknown",
+                realtime_factor = "unknown",
+                error_reason = "unknown",
+                log_path = "runtime_logs/run_stemwerk.log",
+                _clearFailures = 0,
+                _positiveHints = 0,
+                _resultPriority = 0,
+                _exitNonZero = 0,
+            }
+        end
+        return byRun[key]
+    end
+
+    for line in tostring(data):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local ts = raw:match("^%[([0-9][^%]]+)%]")
+        local runId = raw:match("(STEMwerk_[%w_%-]+)")
+        if runId then
+            lastRunId = runId
+        end
+
+        local cmd = raw:match("^%[[^%]]+%]%s+CMD:%s*(.+)$") or raw
+        local targetRun = runId and getRun(runId) or (lastRunId and getRun(lastRunId) or nil)
+        if targetRun then
+            if ts then targetRun.timestamp = ts end
+            parseSupportRunText(targetRun, raw)
+
+            local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+            if model then kvAssignIfUnknown(targetRun, "model", model) end
+            local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
+            if device then kvAssignIfUnknown(targetRun, "device", device) end
+            local mode = cmd:match("mode=([%w_%-]+)")
+            if mode then kvAssignIfUnknown(targetRun, "mode", mode) end
+            local jobs = cmd:match("count=(%d+)")
+            if jobs then
+                kvAssignLast(targetRun, "jobs", jobs)
+                if tostring(targetRun.items or "unknown") == "unknown" then
+                    kvAssignLast(targetRun, "items", jobs)
+                end
+            end
+
+            local rc = raw:match("^RC:%s*([%-]?%d+)")
+            if rc then
+                local code = tonumber(rc)
+                if code and code ~= 0 then
+                    targetRun._exitNonZero = (targetRun._exitNonZero or 0) + 1
+                    targetRun._clearFailures = (targetRun._clearFailures or 0) + 1
+                elseif code == 0 and tostring(targetRun.result or "unknown") == "unknown" then
+                    setRunResult(targetRun, "success", 2)
+                end
+            end
+        end
+    end
+    return byRun
+end
+
+local function parseTimingSummaryEntry(bundleDir, capabilityState, runtimeState)
+    local timingSummaryPath = joinPath(bundleDir, "runtime_logs", "run_separation_timing_summary.txt")
+    if not fileExists(timingSummaryPath) then return nil end
+    local data = readFile(timingSummaryPath, "rb")
+    if not data or trim(data) == "" then return nil end
+
+    local entry = {
+        run_name = "latest_persistent",
+        timestamp = "unknown",
+        result = "unknown",
+        model = "unknown",
+        backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+        profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+        device = "unknown",
+        mode = "unknown",
+        jobs = "unknown",
+        items = "unknown",
+        wall_clock_total = "unknown",
+        total_source_duration = "unknown",
+        realtime_factor = "unknown",
+        error_reason = "unknown",
+        log_path = "runtime_logs/run_separation_timing_summary.txt",
+        _clearFailures = 0,
+        _positiveHints = 0,
+        _resultPriority = 0,
+        _exitNonZero = 0,
+    }
+    parseSupportRunText(entry, data)
+    return entry
+end
+
+local function selectMostFrequentValue(counts)
+    local bestValue = nil
+    local bestCount = -1
+    for value, count in pairs(counts or {}) do
+        local c = tonumber(count) or 0
+        if c > bestCount then
+            bestCount = c
+            bestValue = tostring(value)
+        end
+    end
+    return bestValue
+end
+
+local function parseRuntimeStemwerkSessions(bundleDir)
+    local path = joinPath(bundleDir, "runtime_logs", "run_stemwerk.log")
+    local data = readFile(path, "rb")
+    if not data or trim(data) == "" then
+        return {}
+    end
+
+    local sessions = {}
+    local current = nil
+    local function ensureCurrent(ts)
+        if not current then
+            current = {
+                first_ts = ts or "unknown",
+                last_ts = ts or "unknown",
+                modelCounts = {},
+                deviceCounts = {},
+                launches = 0,
+            }
+        end
+    end
+    local function pushSession(ts, jobs, mode)
+        ensureCurrent(ts)
+        local model = selectMostFrequentValue(current.modelCounts) or "unknown"
+        local device = selectMostFrequentValue(current.deviceCounts) or "unknown"
+        sessions[#sessions + 1] = {
+            timestamp = ts or current.last_ts or current.first_ts or "unknown",
+            model = model,
+            device = device,
+            jobs = jobs or "unknown",
+            items = jobs or "unknown",
+            mode = mode or "unknown",
+            log_path = "runtime_logs/run_stemwerk.log",
+        }
+        current = nil
+    end
+
+    for line in tostring(data):gmatch("[^\r\n]+") do
+        local raw = trim(line)
+        local ts = raw:match("^%[([0-9][^%]]+)%]")
+        local cmd = raw:match("^%[[^%]]+%]%s+CMD:%s*(.+)$")
+        if cmd then
+            local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
+            local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
+            if model or device then
+                ensureCurrent(ts)
+                current.last_ts = ts or current.last_ts
+                current.launches = (current.launches or 0) + 1
+                if model then
+                    current.modelCounts[model] = (current.modelCounts[model] or 0) + 1
+                end
+                if device then
+                    current.deviceCounts[device] = (current.deviceCounts[device] or 0) + 1
+                end
+            end
+            local jobs = cmd:match("timing:workers_launched%s+count=(%d+)")
+            local mode = cmd:match("timing:workers_launched.-%s+mode=([%w_%-]+)")
+            if jobs or mode then
+                pushSession(ts, jobs, mode)
+            end
+        end
+    end
+
+    if current and (current.launches or 0) > 0 then
+        pushSession(current.last_ts, tostring(current.launches), "unknown")
+    end
+
+    local newestFirst = {}
+    for i = #sessions, 1, -1 do
+        newestFirst[#newestFirst + 1] = sessions[i]
+    end
+    return newestFirst
+end
+
+local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
+    local out = {}
+    local runsRoot = joinPath(bundleDir, "runtime_runs")
+    local runNames = enumerateSubdirs(runsRoot)
+    table.sort(runNames, function(a, b)
+        return tostring(a) > tostring(b)
+    end)
+
+    local maxRuns = math.min(5, #runNames)
+    for i = 1, maxRuns do
+        local runName = runNames[i]
+        local runDir = joinPath(runsRoot, runName)
+        local jobNames = enumerateSubdirs(runDir)
+        table.sort(jobNames, function(a, b)
+            return tostring(a) < tostring(b)
+        end)
+
+        local entry = {
+            bundle_root = bundleDir,
+            run_name = runName,
+            timestamp = runName,
+            result = "unknown",
+            model = "unknown",
+            backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
+            profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
+            device = "unknown",
+            mode = "unknown",
+            jobs = tostring(#jobNames),
+            items = "unknown",
+            wall_clock_total = "unknown",
+            total_source_duration = "unknown",
+            realtime_factor = "unknown",
+            error_reason = "unknown",
+            log_path = "unknown",
+            _clearFailures = 0,
+            _positiveHints = 0,
+            _resultPriority = 0,
+        }
+
+        local stat = {
+            minTime = nil,
+            maxTime = nil,
+            totalAudioDur = 0,
+            doneOk = 0,
+            exitErr = 0,
+        }
+
+        for _, jobName in ipairs(jobNames) do
+            local jobDir = joinPath(runDir, jobName)
+            local timingPath = joinPath(jobDir, "timing_events.jsonl")
+            local phasePath = joinPath(jobDir, "phase_events.jsonl")
+            local sepLog = joinPath(jobDir, "separation_log.txt")
+            local stdoutLog = joinPath(jobDir, "stdout.txt")
+            local donePath = joinPath(jobDir, "done.txt")
+            local exitPath = joinPath(jobDir, "exit_code.txt")
+
+            updateRunFromTimingJson(entry, timingPath, stat)
+            updateRunFromTimingJson(entry, phasePath, stat)
+
+            local sepData = readFile(sepLog, "rb")
+            if sepData then
+                parseSupportRunText(entry, sepData)
+                if tostring(entry.log_path or "unknown") == "unknown" then
+                    entry.log_path = normalizeRelativeBundlePath(relativePath(bundleDir, sepLog))
+                end
+            end
+
+            local stdoutData = readFile(stdoutLog, "rb")
+            if stdoutData then
+                parseSupportRunText(entry, stdoutData)
+                if tostring(entry.log_path or "unknown") == "unknown" then
+                    entry.log_path = normalizeRelativeBundlePath(relativePath(bundleDir, stdoutLog))
+                end
+            end
+
+            local doneData = readFile(donePath, "rb")
+            if doneData then
+                local doneState = trim(doneData):lower()
+                if doneState:find("done", 1, true) or doneState:find("success", 1, true) or doneState:find("complete", 1, true) then
+                    stat.doneOk = stat.doneOk + 1
+                    entry._positiveHints = (entry._positiveHints or 0) + 1
+                end
+                parseSupportRunText(entry, doneData)
+                if tostring(entry.log_path or "unknown") == "unknown" then
+                    entry.log_path = normalizeRelativeBundlePath(relativePath(bundleDir, donePath))
+                end
+            end
+
+            local exitData = readFile(exitPath, "rb")
+            if exitData then
+                local code = tonumber(trim(exitData))
+                if code and code ~= 0 then
+                    stat.exitErr = stat.exitErr + 1
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                end
+                parseSupportRunText(entry, "exit_code: " .. tostring(trim(exitData)))
+            end
+        end
+
+        if stat.minTime and stat.maxTime and stat.maxTime >= stat.minTime then
+            local wall = math.max(0, stat.maxTime - stat.minTime)
+            entry.wall_clock_total = string.format("%.1fs", wall)
+            if wall > 0 and (stat.totalAudioDur or 0) > 0 then
+                entry.total_source_duration = string.format("%.1fs", stat.totalAudioDur)
+                entry.realtime_factor = string.format("%.2fx", (stat.totalAudioDur / wall))
+            end
+        elseif (stat.totalAudioDur or 0) > 0 then
+            entry.total_source_duration = string.format("%.1fs", stat.totalAudioDur)
+        end
+
+        deriveRunResultFromJobs(entry, stat)
+        out[#out + 1] = entry
+    end
+
+    local timingSummaryEntry = parseTimingSummaryEntry(bundleDir, capabilityState, runtimeState)
+    local stemwerkByRun = parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeState)
+    local stemwerkSessions = parseRuntimeStemwerkSessions(bundleDir)
+
+    for i = 1, #out do
+        local entry = out[i]
+        local stemLog = stemwerkByRun[tostring(entry.run_name or "")]
+        if stemLog then
+            if tostring(entry.model or "unknown") == "unknown" and tostring(stemLog.model or "unknown") ~= "unknown" then entry.model = stemLog.model end
+            if tostring(entry.device or "unknown") == "unknown" and tostring(stemLog.device or "unknown") ~= "unknown" then entry.device = stemLog.device end
+            if tostring(entry.mode or "unknown") == "unknown" and tostring(stemLog.mode or "unknown") ~= "unknown" then entry.mode = stemLog.mode end
+            if tostring(entry.jobs or "unknown") == "unknown" and tostring(stemLog.jobs or "unknown") ~= "unknown" then entry.jobs = stemLog.jobs end
+            if tostring(entry.items or "unknown") == "unknown" and tostring(stemLog.items or "unknown") ~= "unknown" then entry.items = stemLog.items end
+            if tostring(entry.timestamp or "unknown") == "unknown" and tostring(stemLog.timestamp or "unknown") ~= "unknown" then entry.timestamp = stemLog.timestamp end
+            if tostring(entry.result or "unknown") == "unknown" and tostring(stemLog.result or "unknown") ~= "unknown" then entry.result = stemLog.result end
+            if tostring(entry.error_reason or "unknown") == "unknown" and tostring(stemLog.error_reason or "unknown") ~= "unknown" then entry.error_reason = stemLog.error_reason end
+            if tostring(entry.log_path or "unknown") == "unknown" then entry.log_path = stemLog.log_path end
+        end
+        if tostring(entry.items or "unknown") == "unknown" and tostring(entry.jobs or "unknown") ~= "unknown" then
+            entry.items = entry.jobs
+        end
+
+        local session = stemwerkSessions[i]
+        if session then
+            if tostring(entry.model or "unknown") == "unknown" and tostring(session.model or "unknown") ~= "unknown" then entry.model = session.model end
+            if tostring(entry.device or "unknown") == "unknown" and tostring(session.device or "unknown") ~= "unknown" then entry.device = session.device end
+            if tostring(entry.mode or "unknown") == "unknown" and tostring(session.mode or "unknown") ~= "unknown" then entry.mode = session.mode end
+            if tostring(entry.jobs or "unknown") == "unknown" and tostring(session.jobs or "unknown") ~= "unknown" then entry.jobs = session.jobs end
+            if tostring(entry.items or "unknown") == "unknown" and tostring(session.items or "unknown") ~= "unknown" then entry.items = session.items end
+            if tostring(entry.timestamp or "unknown") == "unknown" and tostring(session.timestamp or "unknown") ~= "unknown" then entry.timestamp = session.timestamp end
+            if tostring(entry.log_path or "unknown") == "unknown" then entry.log_path = session.log_path end
+        end
+    end
+
+    if #out > 0 and timingSummaryEntry then
+        local first = out[1]
+        if tostring(timingSummaryEntry.result or "unknown") ~= "unknown" then first.result = timingSummaryEntry.result end
+        if tostring(timingSummaryEntry.model or "unknown") ~= "unknown" then first.model = timingSummaryEntry.model end
+        if tostring(timingSummaryEntry.device or "unknown") ~= "unknown" then first.device = timingSummaryEntry.device end
+        if tostring(timingSummaryEntry.mode or "unknown") ~= "unknown" then first.mode = timingSummaryEntry.mode end
+        if tostring(timingSummaryEntry.jobs or "unknown") ~= "unknown" then first.jobs = timingSummaryEntry.jobs end
+        if tostring(timingSummaryEntry.items or "unknown") ~= "unknown" then first.items = timingSummaryEntry.items end
+        if tostring(timingSummaryEntry.wall_clock_total or "unknown") ~= "unknown" then first.wall_clock_total = timingSummaryEntry.wall_clock_total end
+        if tostring(timingSummaryEntry.total_source_duration or "unknown") ~= "unknown" then first.total_source_duration = timingSummaryEntry.total_source_duration end
+        if tostring(timingSummaryEntry.realtime_factor or "unknown") ~= "unknown" then first.realtime_factor = timingSummaryEntry.realtime_factor end
+        if tostring(timingSummaryEntry.timestamp or "unknown") ~= "unknown" then first.timestamp = timingSummaryEntry.timestamp end
+        if tostring(first.log_path or "unknown") == "unknown" or tostring(first.log_path or ""):find("runtime_runs/", 1, true) then
+            first.log_path = timingSummaryEntry.log_path
+        end
+    end
+
+    if #out == 0 and timingSummaryEntry then
+        deriveRunResultFromJobs(timingSummaryEntry, { doneOk = 0, exitErr = timingSummaryEntry._exitNonZero or 0 })
+        out[#out + 1] = timingSummaryEntry
+    end
+    if #out == 0 then
+        local stemwerkLogEntry = parseRunStemwerkLogSummary(bundleDir, capabilityState, runtimeState)
+        if stemwerkLogEntry then
+            deriveRunResultFromJobs(stemwerkLogEntry, { doneOk = 0, exitErr = stemwerkLogEntry._exitNonZero or 0 })
+            out[#out + 1] = stemwerkLogEntry
+        end
+    end
+
+    local lines = {}
+    if #out == 0 then
+        lines[#lines + 1] = "No recent processing summary available. See runtime_logs/run_stemwerk.log and runtime_runs/."
+        return lines
+    end
+
+    lines[#lines + 1] = "Recent processing summary (newest first)"
+    lines[#lines + 1] = ""
+    for idx, entry in ipairs(out) do
+        lines[#lines + 1] = string.format("Run %d", idx)
+        lines[#lines + 1] = "run: " .. tostring(entry.run_name or "unknown")
+        lines[#lines + 1] = "timestamp: " .. tostring(entry.timestamp or "unknown")
+        lines[#lines + 1] = "result: " .. tostring(entry.result or "unknown")
+        lines[#lines + 1] = "model: " .. tostring(entry.model or "unknown")
+        lines[#lines + 1] = "backend: " .. tostring(entry.backend or "unknown")
+        lines[#lines + 1] = "profile: " .. tostring(entry.profile or "unknown")
+        lines[#lines + 1] = "device: " .. tostring(entry.device or "unknown")
+        lines[#lines + 1] = "mode: " .. tostring(entry.mode or "unknown")
+        lines[#lines + 1] = "jobs: " .. tostring(entry.jobs or "unknown")
+        lines[#lines + 1] = "items: " .. tostring(entry.items or "unknown")
+        lines[#lines + 1] = "wall_clock_total: " .. tostring(entry.wall_clock_total or "unknown")
+        lines[#lines + 1] = "total_source_duration: " .. tostring(entry.total_source_duration or "unknown")
+        lines[#lines + 1] = "realtime_factor: " .. tostring(entry.realtime_factor or "unknown")
+        if tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial" then
+            lines[#lines + 1] = "failure_reason: " .. tostring(entry.error_reason or "unknown")
+        end
+        lines[#lines + 1] = "bundle_log_path: " .. tostring(entry.log_path or "unknown")
+        lines[#lines + 1] = ""
+    end
+    return lines
+end
+
 local function collectTempInventory(bundleDir, copiedFiles)
     local tempBase = getTempBase()
     local inventoryLines = {}
@@ -1806,6 +2620,35 @@ local function performBundleCollection()
         flushTimings()
     end
 
+    local function finalizeTimingsAfterZip()
+        local hasCreateZipEnd = false
+        local hasTotalEnd = false
+        for i = 1, #timingLines do
+            local line = tostring(timingLines[i] or "")
+            if line:find("| create_zip | end", 1, true) then
+                hasCreateZipEnd = true
+            end
+            if line:find("| total | end", 1, true) then
+                hasTotalEnd = true
+            end
+        end
+        if not hasCreateZipEnd then
+            timingLines[#timingLines + 1] = string.format(
+                "%s | create_zip | end | duration=%.3f",
+                os.date("%Y-%m-%d %H:%M:%S"),
+                tonumber(phaseTimings.create_zip) or 0
+            )
+        end
+        if not hasTotalEnd then
+            timingLines[#timingLines + 1] = string.format(
+                "%s | total | end | duration=%.3f",
+                os.date("%Y-%m-%d %H:%M:%S"),
+                tonumber(phaseTimings.total) or 0
+            )
+        end
+        flushTimings()
+    end
+
     local function phaseStart(name)
         timingEvent(name, "start", string.format("cpu_elapsed=%.3f", math.max(0, os.clock() - totalStartedAt)))
         return os.clock()
@@ -2016,10 +2859,12 @@ local function performBundleCollection()
         "- runtime state files from the STEMwerk state folder when present",
         "- runtime logs from the STEMwerk logs folder when present",
         "- recent persisted run diagnostics/logs",
+        "- processing_summary.txt with recent processing speed/results",
         "- minimal temp_inventory.txt from recent STEMwerk temp folders",
         "- support_bundle_timings.txt with phase timing checkpoints",
         "- platform_details.txt with platform probe output",
         "- python_diagnostics.txt with dependency probe output when available",
+        "- See processing_summary.txt for recent processing results and speed.",
         "",
         "Intentionally excluded:",
         "- source audio, rendered stems, project media, and other user media",
@@ -2033,6 +2878,7 @@ local function performBundleCollection()
 
     writeFile(joinPath(bundleDir, "README.txt"), table.concat(readme, "\n"), "wb")
     writeFile(joinPath(bundleDir, "temp_inventory.txt"), table.concat(tempInventory, "\n"), "wb")
+    writeFile(joinPath(bundleDir, "processing_summary.txt"), table.concat(buildProcessingSummary(bundleDir, capabilityState, runtimeState), "\n"), "wb")
     writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
     writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
 
@@ -2042,6 +2888,7 @@ local function performBundleCollection()
 
     phaseTimings.total = math.max(0, os.clock() - totalStartedAt)
     timingEvent("total", "end", string.format("duration=%.3f", phaseTimings.total))
+    finalizeTimingsAfterZip()
 
     appendLine(diagnostics, "Support Bundle Phase Timings (seconds)")
     appendKey(diagnostics, "total_start", "see support_bundle_timings.txt")
@@ -2061,6 +2908,19 @@ local function performBundleCollection()
     appendLine(diagnostics, "")
 
     writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
+    writeFile(
+        joinPath(bundleDir, "support_bundle_result.txt"),
+        table.concat({
+            "bundle_dir=" .. tostring(bundleDir),
+            "zip_created=" .. (zipOk and "true" or "false"),
+            "zip_path=" .. tostring(zipPath or ""),
+            "zip_method=" .. tostring(zipMethod or ""),
+            "zip_error=" .. tostring(zipError or ""),
+            "create_zip_seconds=" .. string.format("%.3f", phaseTimings.create_zip or 0),
+            "total_seconds=" .. string.format("%.3f", phaseTimings.total or 0),
+        }, "\n") .. "\n",
+        "wb"
+    )
     flushTimings()
 
     return true, {
