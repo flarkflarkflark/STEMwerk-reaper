@@ -1,5 +1,5 @@
-<p align="right">
-  <img src="https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/installer/assets/stemwerk.png" alt="STEMwerk" width="180">
+<p">
+  <img src="https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/installer/assets/stemwerk.png" alt="STEMwerk" width="64">
 </p>
 
 Local-first stem separation inside REAPER (open source, ReaPack).<br>
