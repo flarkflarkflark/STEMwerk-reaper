@@ -1,4 +1,4 @@
-<p">
+<p>
   <img src="https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/installer/assets/stemwerk.png" alt="STEMwerk" width="64">
 </p>
 
