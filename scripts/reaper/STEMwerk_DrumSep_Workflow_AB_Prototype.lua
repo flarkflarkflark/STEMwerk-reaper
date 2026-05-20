@@ -4,6 +4,7 @@ PRIVATE R&D ONLY - NOT FOR REAPACK/PUBLIC RELEASE
 AB smoke runner for DrumSep workflow prototype:
 1) clean_fast
 2) clean_quality
+3) clean_6stem
 on the same selected REAPER item.
 ]]
 
@@ -106,6 +107,23 @@ local function runAB()
         end
     end
 
+    local sixStem = nil
+    local skipSixStem = (fast and fast.ok == false and fast.error_stage == "stage0")
+    if skipSixStem then
+        logLine("mode=clean_6stem skipped due clean_fast stage0 failure")
+    else
+        logLine("mode=clean_6stem start")
+        sixStem = api.runDrumSepWorkflowPrototype("clean_6stem", opts)
+        logLine("mode=clean_6stem ok=" .. tostring(sixStem and sixStem.ok == true))
+        logLine("mode=clean_6stem temp_root=" .. tostring(sixStem and sixStem.temp_root or ""))
+        logLine("mode=clean_6stem imported_stems=" .. stemList(sixStem))
+        if sixStem and not sixStem.ok then
+            logLine("mode=clean_6stem error_stage=" .. tostring(sixStem.error_stage or ""))
+            logLine("mode=clean_6stem error_message=" .. tostring(sixStem.error_message or ""))
+            logLine("mode=clean_6stem log_path=" .. tostring(sixStem.log_path or ""))
+        end
+    end
+
     local elapsed = nowSeconds() - t0
     local fastStatus = (fast and fast.ok) and "PASS" or "FAIL"
     local qualityStatus
@@ -113,6 +131,12 @@ local function runAB()
         qualityStatus = "SKIPPED (clean_fast stage0 failure)"
     else
         qualityStatus = (quality and quality.ok) and "PASS" or "FAIL"
+    end
+    local sixStemStatus
+    if skipSixStem then
+        sixStemStatus = "SKIPPED (clean_fast stage0 failure)"
+    else
+        sixStemStatus = (sixStem and sixStem.ok) and "PASS" or "FAIL"
     end
 
     local lines = {
@@ -125,6 +149,10 @@ local function runAB()
         "clean_quality: " .. qualityStatus,
         "  temp_root: " .. tostring(quality and quality.temp_root or ""),
         "  imported: " .. stemList(quality),
+        "",
+        "clean_6stem: " .. sixStemStatus,
+        "  temp_root: " .. tostring(sixStem and sixStem.temp_root or ""),
+        "  imported: " .. stemList(sixStem),
         "",
         "elapsed_seconds: " .. string.format("%.3f", elapsed),
     }

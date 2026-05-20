@@ -5,8 +5,9 @@ Drum Split workflow runner prototype (blocking/synchronous):
 1) Selected REAPER item -> temp input wav (ffmpeg clip extract)
 2) clean_fast mode: htdemucs -> drums.wav -> DrumSep
 3) clean_quality mode: htdemucs_ft -> drums.wav -> DrumSep
-4) direct_creative mode: DrumSep directly on input.wav (experimental/parked)
-4) Import DrumSep stems as folder + child tracks at selected item position
+4) clean_6stem mode: htdemucs_6s -> drums.wav -> DrumSep
+5) direct_creative mode: DrumSep directly on input.wav (experimental/parked)
+6) Import DrumSep stems as folder + child tracks at selected item position
 ]]
 
 local PYTHON_BIN = "/home/flark/.local/share/STEMwerk/.venv/bin/python" -- private local RX 9070 proof route
@@ -17,10 +18,12 @@ local DRUMSEP_WORKFLOW_MODE = "clean_fast"
 -- allowed:
 -- "clean_fast"       selected item -> htdemucs -> drums.wav -> DrumSep
 -- "clean_quality"    selected item -> htdemucs_ft -> drums.wav -> DrumSep
+-- "clean_6stem"      selected item -> htdemucs_6s -> drums.wav -> DrumSep
 -- "direct_creative"  selected item -> DrumSep directly (experimental/parked due bleed)
 local CLEAN_PARENT_MODELS = {
     clean_fast = "htdemucs",
     clean_quality = "htdemucs_ft",
+    clean_6stem = "htdemucs_6s",
 }
 
 local STEMS = {
@@ -286,7 +289,7 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     end
 
     local mode = tostring(modeOverride or DRUMSEP_WORKFLOW_MODE or "clean_fast")
-    if mode ~= "clean_fast" and mode ~= "clean_quality" and mode ~= "direct_creative" then
+    if mode ~= "clean_fast" and mode ~= "clean_quality" and mode ~= "clean_6stem" and mode ~= "direct_creative" then
         logKV("warning", "Unknown DRUMSEP_WORKFLOW_MODE=" .. mode .. ", falling back to clean_fast")
         mode = "clean_fast"
     end
@@ -296,9 +299,10 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     local stage0 = pathJoin(root, "stage0_input")
     local stage1Fast = pathJoin(root, "stage1_htdemucs")
     local stage1Quality = pathJoin(root, "stage1_htdemucs_ft")
+    local stage16Stem = pathJoin(root, "stage1_htdemucs_6s")
     local stage2 = pathJoin(root, "stage2_drumsep")
     local stage1Direct = pathJoin(root, "stage1_direct_drumsep")
-    makeDir(stage0); makeDir(stage1Fast); makeDir(stage1Quality); makeDir(stage2)
+    makeDir(stage0); makeDir(stage1Fast); makeDir(stage1Quality); makeDir(stage16Stem); makeDir(stage2)
     makeDir(stage1Direct)
     result.mode = mode
     result.temp_root = root
@@ -359,9 +363,15 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     result.stage2_output_dir = stage2
     result.direct_drumsep_output_dir = stage1Direct
 
-    if mode == "clean_fast" or mode == "clean_quality" then
+    if mode == "clean_fast" or mode == "clean_quality" or mode == "clean_6stem" then
         parentModel = CLEAN_PARENT_MODELS[mode] or CLEAN_PARENT_MODELS.clean_fast
-        stage1OutputDir = (mode == "clean_quality") and stage1Quality or stage1Fast
+        if mode == "clean_quality" then
+            stage1OutputDir = stage1Quality
+        elseif mode == "clean_6stem" then
+            stage1OutputDir = stage16Stem
+        else
+            stage1OutputDir = stage1Fast
+        end
         result.stage1_output_dir = stage1OutputDir
         result.parent_model = parentModel
         logKV("parent_model", parentModel)
@@ -375,6 +385,9 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         result.stage1_cmd = stage1Cmd
         stage1Rc = runShell(stage1Cmd, stage1Stdout, stage1Stderr)
         local drumsWav = pathJoin(stage1OutputDir, "drums.wav")
+        if mode == "clean_6stem" then
+            logKV("clean_6stem_note", "using_only_stage1_drums_wav_for_drumsep_input")
+        end
         if stage1Rc ~= 0 or not fileExists(drumsWav) then
             logKV("stage1_cmd", stage1Cmd)
             logKV("stage1_exit_code", stage1Rc)
@@ -442,6 +455,8 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         folderLabel = "Drum Kit Split - Clean/Fast - " .. label
     elseif mode == "clean_quality" then
         folderLabel = "Drum Kit Split - Clean/Quality - " .. label
+    elseif mode == "clean_6stem" then
+        folderLabel = "Drum Kit Split - Clean/6-Stem - " .. label
     else
         folderLabel = "Drum Kit Split - Direct/Experimental - " .. label
     end
@@ -452,13 +467,16 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
 
     local elapsed = nowSeconds() - t0
     logKV("stage0_input_path", inputWav)
-    logKV("stage1_output_dir", (mode == "clean_fast" or mode == "clean_quality") and stage1OutputDir or "skipped")
-    logKV("stage2_output_dir", (mode == "clean_fast" or mode == "clean_quality") and stage2 or "skipped")
+    logKV("stage1_output_dir", (mode == "clean_fast" or mode == "clean_quality" or mode == "clean_6stem") and stage1OutputDir or "skipped")
+    logKV("stage2_output_dir", (mode == "clean_fast" or mode == "clean_quality" or mode == "clean_6stem") and stage2 or "skipped")
     logKV("direct_drumsep_output_dir", mode == "direct_creative" and stage1Direct or "n/a")
-    if mode == "clean_fast" or mode == "clean_quality" then
+    if mode == "clean_fast" or mode == "clean_quality" or mode == "clean_6stem" then
         logKV("stage1_cmd", stage1Cmd)
         logKV("stage2_cmd", stage2Cmd)
         logKV("parent_model", tostring(parentModel or ""))
+        if mode == "clean_6stem" then
+            logKV("clean_6stem_note", "using_only_stage1_drums_wav_for_drumsep_input")
+        end
     else
         logKV("stage1_cmd", "skipped")
         logKV("direct_drumsep_cmd", stage2Cmd)
