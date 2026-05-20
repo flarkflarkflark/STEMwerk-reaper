@@ -262,10 +262,22 @@ quoteArg = function(s)
     return s
 end
 
+local function parseExecProcessResult(result)
+    if type(result) ~= "string" then
+        return nil, ""
+    end
+    local firstLine, rest = result:match("^([^\r\n]*)\r?\n?(.*)$")
+    local rc = tonumber(firstLine)
+    if rc == nil then
+        return nil, result
+    end
+    return rc, rest or ""
+end
+
 local function exec(cmd, timeoutMs)
     timeoutMs = timeoutMs or 1200000
     if reaper and reaper.ExecProcess then
-        local rc, out = reaper.ExecProcess(cmd, timeoutMs)
+        local rc, out = parseExecProcessResult(reaper.ExecProcess(cmd, timeoutMs))
         return tonumber(rc) or -1, out or ""
     end
     local ok = os.execute(cmd)

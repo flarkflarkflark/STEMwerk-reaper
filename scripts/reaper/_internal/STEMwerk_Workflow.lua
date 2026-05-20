@@ -154,8 +154,10 @@ local function applyPlaybackStateToTake(take, playbackState)
     local source = reaper.GetMediaItemTake_Source(take)
     local sourceLen = nil
     if source and reaper.GetMediaSourceLength then
-        local len = reaper.GetMediaSourceLength(source)
-        sourceLen = tonumber(len)
+        local len, lengthIsQN = reaper.GetMediaSourceLength(source)
+        if not lengthIsQN then
+            sourceLen = tonumber(len)
+        end
     end
 
     local itemLen = nil
