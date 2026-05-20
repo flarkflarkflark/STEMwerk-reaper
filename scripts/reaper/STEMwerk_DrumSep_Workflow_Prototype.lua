@@ -76,6 +76,17 @@ local function basenameNoExt(path)
     return name:match("(.+)%.[^.]+$") or name
 end
 
+local function nowSeconds()
+    if reaper and reaper.time_precise then
+        return reaper.time_precise()
+    end
+    return os.clock()
+end
+
+local function logKV(key, value)
+    reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] " .. tostring(key) .. "=" .. tostring(value) .. "\n")
+end
+
 local function createTrackAtIndex(trackIndex, name, color, folderDepth)
     reaper.InsertTrackAtIndex(trackIndex, true)
     local track = reaper.GetTrack(0, trackIndex)
@@ -119,7 +130,12 @@ local function importDrumKitSplit(stage2Dir, sourceLabel, itemStartPos)
     end
 
     if #present == 0 then
-        return false, "No DrumSep stems found (kick/snare/toms/hihat/ride/crash)."
+        return false, {
+            imported = {},
+            missing = missing,
+            failed = {},
+            message = "No DrumSep stems found (kick/snare/toms/hihat/ride/crash).",
+        }
     end
 
     local baseIndex = reaper.CountTracks(0)
@@ -141,12 +157,15 @@ local function importDrumKitSplit(stage2Dir, sourceLabel, itemStartPos)
     local lastChild = reaper.GetTrack(0, baseIndex + #present)
     if lastChild then reaper.SetMediaTrackInfo_Value(lastChild, "I_FOLDERDEPTH", -1) end
 
-    local msg = {
-        "Imported stems: " .. table.concat(importedNames, ", "),
-    }
+    local msg = { "Imported stems: " .. table.concat(importedNames, ", "), }
     if #missing > 0 then msg[#msg + 1] = "Missing stems: " .. table.concat(missing, ", ") end
     if #failed > 0 then msg[#msg + 1] = "Failed stems: " .. table.concat(failed, " | ") end
-    return true, table.concat(msg, "\n")
+    return true, {
+        imported = importedNames,
+        missing = missing,
+        failed = failed,
+        message = table.concat(msg, "\n"),
+    }
 end
 
 local function resolvePython()
@@ -155,6 +174,15 @@ local function resolvePython()
 end
 
 local function main()
+    local t0 = nowSeconds()
+    local selectedCount = reaper.CountSelectedMediaItems(0)
+
+    if selectedCount > 1 then
+        local warningText = "DrumSep workflow prototype processes only the first selected item. Selected items: " .. tostring(selectedCount) .. "."
+        reaper.ShowMessageBox(warningText, "STEMwerk DrumSep Workflow Prototype", 0)
+        logKV("warning", warningText)
+    end
+
     local selectedItem = reaper.GetSelectedMediaItem(0, 0)
     if not selectedItem then
         reaper.ShowMessageBox("Select one media item first.", "STEMwerk DrumSep Workflow Prototype", 0)
@@ -177,6 +205,13 @@ local function main()
     local itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
     local startOffs = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") or 0
     local playRate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+    local sourceTrack = reaper.GetMediaItem_Track(selectedItem)
+    local sourceTrackNum = sourceTrack and reaper.GetMediaTrackInfo_Value(sourceTrack, "IP_TRACKNUMBER") or -1
+    local sourceTrackName = ""
+    if sourceTrack then
+        local _, tn = reaper.GetSetMediaTrackInfo_String(sourceTrack, "P_NAME", "", false)
+        sourceTrackName = tn or ""
+    end
     if playRate <= 0 then
         reaper.ShowMessageBox("Unsupported take playrate (<= 0) for prototype extraction.", "STEMwerk DrumSep Workflow Prototype", 0)
         return
@@ -200,6 +235,18 @@ local function main()
     local stage2 = pathJoin(root, "stage2_drumsep")
     makeDir(stage0); makeDir(stage1); makeDir(stage2)
 
+    logKV("selected_item_count", selectedCount)
+    logKV("selected_item_mode", selectedCount > 1 and "first_selected_only" or "single")
+    logKV("selected_item_index_used", 1)
+    logKV("selected_track_number", sourceTrackNum)
+    logKV("selected_track_name", sourceTrackName)
+    logKV("selected_source_path", sourcePath)
+    logKV("selected_item_start", string.format("%.6f", itemPos))
+    logKV("selected_item_length", string.format("%.6f", itemLen))
+    logKV("selected_take_start_offset", string.format("%.6f", startOffs))
+    logKV("selected_take_playrate", string.format("%.6f", playRate))
+    logKV("temp_root", root)
+
     local inputWav = pathJoin(stage0, "input.wav")
     local ffLog = pathJoin(stage0, "ffmpeg_extract.log")
     local extractOffset = math.max(0, startOffs)
@@ -214,6 +261,9 @@ local function main()
     )
     local ffRc = runShell(ffCmd, nil, ffLog)
     if ffRc ~= 0 or not fileExists(inputWav) then
+        logKV("stage0_cmd", ffCmd)
+        logKV("stage0_exit_code", ffRc)
+        logKV("stage0_log", ffLog)
         reaper.ShowMessageBox(
             "Stage 0 (extract selected item) failed.\n\nLog:\n" .. ffLog,
             "STEMwerk DrumSep Workflow Prototype",
@@ -232,12 +282,14 @@ local function main()
     local stage1Rc = runShell(stage1Cmd, stage1Stdout, stage1Stderr)
     local drumsWav = pathJoin(stage1, "drums.wav")
     if stage1Rc ~= 0 or not fileExists(drumsWav) then
+        logKV("stage1_cmd", stage1Cmd)
+        logKV("stage1_exit_code", stage1Rc)
+        logKV("stage1_log", stage1Stderr)
         reaper.ShowMessageBox(
             "Stage 1 failed or drums.wav missing.\n\nLog:\n" .. stage1Stderr,
             "STEMwerk DrumSep Workflow Prototype",
             0
         )
-        reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] Stage 1 cmd: " .. stage1Cmd .. "\n")
         return
     end
 
@@ -249,41 +301,55 @@ local function main()
     }, " ")
     local stage2Rc = runShell(stage2Cmd, stage2Stdout, stage2Stderr)
     if stage2Rc ~= 0 then
+        logKV("stage2_cmd", stage2Cmd)
+        logKV("stage2_exit_code", stage2Rc)
+        logKV("stage2_log", stage2Stderr)
         reaper.ShowMessageBox(
             "Stage 2 failed.\n\nLog:\n" .. stage2Stderr,
             "STEMwerk DrumSep Workflow Prototype",
             0
         )
-        reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] Stage 2 cmd: " .. stage2Cmd .. "\n")
         return
     end
 
     reaper.Undo_BeginBlock()
     reaper.PreventUIRefresh(1)
     local label = basenameNoExt(sourcePath)
-    local ok, importMsg = importDrumKitSplit(stage2, label, itemPos)
+    local ok, importSummary = importDrumKitSplit(stage2, label, itemPos)
     reaper.PreventUIRefresh(-1)
     reaper.UpdateArrange()
     reaper.Undo_EndBlock("STEMwerk: DrumSep workflow prototype", -1)
 
-    reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] temp_root=" .. root .. "\n")
-    reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] stage1_cmd=" .. stage1Cmd .. "\n")
-    reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] stage2_cmd=" .. stage2Cmd .. "\n")
-    reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] stage1_exit_code=" .. tostring(stage1Rc) .. "\n")
-    reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] stage2_exit_code=" .. tostring(stage2Rc) .. "\n")
-    reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] import_summary=" .. tostring(importMsg or "") .. "\n")
+    local elapsed = nowSeconds() - t0
+    logKV("stage0_input_path", inputWav)
+    logKV("stage1_output_dir", stage1)
+    logKV("stage2_output_dir", stage2)
+    logKV("stage1_cmd", stage1Cmd)
+    logKV("stage2_cmd", stage2Cmd)
+    logKV("stage1_exit_code", stage1Rc)
+    logKV("stage2_exit_code", stage2Rc)
+    logKV("imported_stems", table.concat(importSummary and importSummary.imported or {}, ","))
+    logKV("missing_stems", table.concat(importSummary and importSummary.missing or {}, ","))
+    logKV("elapsed_seconds", string.format("%.3f", elapsed))
+    logKV("import_summary", tostring(importSummary and importSummary.message or ""))
 
     if not ok then
         reaper.ShowMessageBox(
-            "Import failed.\n\n" .. tostring(importMsg or "") .. "\n\nStage 2 log:\n" .. stage2Stderr,
+            "Import failed.\n\n" .. tostring(importSummary and importSummary.message or "") .. "\n\nStage 2 log:\n" .. stage2Stderr,
             "STEMwerk DrumSep Workflow Prototype",
             0
         )
         return
     end
 
+    local importedCount = #(importSummary and importSummary.imported or {})
+    local note = ""
+    if selectedCount > 1 then
+        note = "\n\nNote: first selected item only."
+    end
     reaper.ShowMessageBox(
-        "DrumSep workflow prototype complete.\n\nTemp root:\n" .. root .. "\n\n" .. tostring(importMsg or ""),
+        "DrumSep workflow prototype complete.\n\nImported stems: " .. tostring(importedCount) ..
+        "\nTemp root:\n" .. root .. note,
         "STEMwerk DrumSep Workflow Prototype",
         0
     )
