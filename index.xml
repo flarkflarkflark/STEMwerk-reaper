@@ -2,15 +2,13 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.1" author="flarkAUDIO" time="1778373560">
+      <version name="2.2.2.2.2" author="flarkAUDIO" time="1778373560">
         <changelog><![CDATA[
-- ReaPack-only support diagnostics hotfix
-- Adds STEMwerk_Save_Support_Bundle.lua
-- Adds Save Support Bundle to the setup/maintenance flow
-- Collects version/platform/runtime diagnostics, Python/FFmpeg/backend info, logs, state files, and sanitized temp inventory
-- Excludes audio/media/model/project payloads
-- Adds headless support-bundle CI coverage across Linux, Windows, and macOS
-- No backend behavior changes
+- ReaPack-only API correctness hotfix
+- Improved ReaScript API correctness in setup/support/process handling
+- Fixed Lua ExecProcess return parsing
+- Removed legacy/non-existent AudioAccessor setter calls
+- Avoid treating QN media-source lengths as seconds
 - No dependency stack changes
 - No installer or release asset changes
 ]]></changelog>
