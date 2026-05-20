@@ -33,6 +33,7 @@ _core_loaded = False
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 DRUMSEP_MODEL_FILENAME = "mdx23c-drumsep-aufr33-jarredou.ckpt"
+DRUMSEP_CANONICAL_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
 
 def _is_darwin_arm64() -> bool:
@@ -135,20 +136,37 @@ def _is_drumsep_model(model_name: Optional[str]) -> bool:
     return Path(str(model_name or "")).name.lower() == DRUMSEP_MODEL_FILENAME
 
 
+def _normalize_drumsep_alias(token: str) -> Optional[str]:
+    normalized = re.sub(r"[^a-z0-9]+", "_", token.strip().lower()).strip("_")
+    alias_map = {
+        "kick": "kick",
+        "snare": "snare",
+        "tom": "toms",
+        "toms": "toms",
+        "hihat": "hihat",
+        "hi_hat": "hihat",
+        "hihat": "hihat",
+        "hh": "hihat",
+        "ride": "ride",
+        "crash": "crash",
+    }
+    return alias_map.get(normalized)
+
+
 def _classify_drumsep_stem(path: Path) -> Optional[str]:
     name = path.stem.lower()
-    if "kick" in name:
-        return "kick"
-    if "snare" in name:
-        return "snare"
-    if "toms" in name:
-        return "toms"
-    if "hihat" in name or "(hh)" in name or "_hh_" in name or name.endswith("_hh"):
-        return "hihat"
-    if "ride" in name:
-        return "ride"
-    if "crash" in name:
-        return "crash"
+
+    parenthesized_tokens = re.findall(r"\(([^)]+)\)", name)
+    for token in parenthesized_tokens:
+        canonical = _normalize_drumsep_alias(token)
+        if canonical:
+            return canonical
+
+    tokens = [t for t in re.split(r"[^a-z0-9]+", name) if t]
+    for token in tokens:
+        canonical = _normalize_drumsep_alias(token)
+        if canonical:
+            return canonical
     return None
 
 
@@ -158,7 +176,7 @@ def _collect_drumsep_candidates(output_root: Path, result_stems: Dict[str, Path 
         abs_path = _resolve_stem_path(output_root, stem_path)
         if abs_path.exists():
             candidates.append(abs_path)
-    for wav_path in output_root.glob("*.wav"):
+    for wav_path in sorted(output_root.glob("*.wav")):
         candidates.append(wav_path)
 
     resolved: Dict[str, Path] = {}
@@ -173,11 +191,12 @@ def _collect_drumsep_candidates(output_root: Path, result_stems: Dict[str, Path 
 def _finalize_drumsep_outputs(output_root: Path, result_stems: Dict[str, Path | str]) -> Dict[str, str]:
     discovered = _collect_drumsep_candidates(output_root, result_stems)
     reaper_stems: Dict[str, str] = {}
-    expected = ("kick", "snare", "toms", "hihat", "ride", "crash")
+    missing: List[str] = []
 
-    for stem_name in expected:
+    for stem_name in DRUMSEP_CANONICAL_STEMS:
         source = discovered.get(stem_name)
         if not source or not source.exists():
+            missing.append(stem_name)
             print(f"STEMWERK_WARN missing_drumsep_stem={stem_name}", file=sys.stderr)
             continue
 
@@ -191,6 +210,12 @@ def _finalize_drumsep_outputs(output_root: Path, result_stems: Dict[str, Path | 
 
     if not reaper_stems:
         raise RuntimeError("DrumSep model produced no mappable drum stems")
+
+    status = "complete" if not missing else "partial"
+    print(f"STEMWERK_DRUMSEP_CONTRACT_STATUS={status}", file=sys.stderr)
+    print(f"STEMWERK_DRUMSEP_FOUND={','.join(sorted(reaper_stems.keys()))}", file=sys.stderr)
+    if missing:
+        print(f"STEMWERK_DRUMSEP_MISSING={','.join(missing)}", file=sys.stderr)
     return reaper_stems
 
 
