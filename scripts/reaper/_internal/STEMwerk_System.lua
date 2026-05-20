@@ -114,13 +114,25 @@ function M.pathJoin(a, b)
     return a .. PATH_SEP .. b
 end
 
+function M.parseExecProcessResult(result)
+    if type(result) ~= "string" then
+        return nil, ""
+    end
+    local firstLine, rest = result:match("^([^\r\n]*)\r?\n?(.*)$")
+    local rc = tonumber(firstLine)
+    if rc == nil then
+        return nil, result
+    end
+    return rc, rest or ""
+end
+
 function M.exec_capture(cmd, timeoutMs)
     timeoutMs = timeoutMs or 8000
     if reaper and reaper.ExecProcess then
         if SW_LOG.isWindows() and SW_LOG.commandNeedsWindowsShell(cmd) then
             cmd = SW_LOG.wrapCmdForWindows(cmd)
         end
-        local rc, out = reaper.ExecProcess(cmd, timeoutMs)
+        local rc, out = M.parseExecProcessResult(reaper.ExecProcess(cmd, timeoutMs))
         out = out or ""
         SW_LOG.logExecResult(cmd, rc, out)
         if out ~= "" then
@@ -133,7 +145,7 @@ function M.exec_capture(cmd, timeoutMs)
             local cachePath = home .. sep .. ".cache" .. sep .. "stemwerk_exec_out.txt"
             local inner = "mkdir -p $HOME/.cache && " .. cmd .. " > $HOME/.cache/stemwerk_exec_out.txt 2>&1"
             local sandboxCmd = "sh -lc " .. M.shellQuoteSingle(inner)
-            local rc2 = reaper.ExecProcess(sandboxCmd, timeoutMs)
+            local rc2 = M.parseExecProcessResult(reaper.ExecProcess(sandboxCmd, timeoutMs))
             local f = io.open(cachePath, "r")
             local content = ""
             if f then
@@ -147,7 +159,7 @@ function M.exec_capture(cmd, timeoutMs)
             end
             debugLog("exec_capture: sandbox fallback empty -> flatpak-spawn host fallback")
             local hostCmd = "flatpak-spawn --host sh -lc " .. M.shellQuoteSingle(inner)
-            local rc3 = reaper.ExecProcess(hostCmd, timeoutMs)
+            local rc3 = M.parseExecProcessResult(reaper.ExecProcess(hostCmd, timeoutMs))
             local f2 = io.open(cachePath, "r")
             local content2 = ""
             if f2 then

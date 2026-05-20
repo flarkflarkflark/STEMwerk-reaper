@@ -746,7 +746,13 @@ local function findPython()
             f:write("fileExists: " .. tostring(fileExists(resolved)) .. "\n")
             -- Attempt to run via reaper.ExecProcess if available
             if reaper and reaper.ExecProcess then
-                local rc, out = reaper.ExecProcess(quoteArg(resolved) .. " --version", 8000)
+                local raw = reaper.ExecProcess(quoteArg(resolved) .. " --version", 8000)
+                local rc, out = nil, ""
+                if type(raw) == "string" then
+                    local firstLine, rest = raw:match("^([^\r\n]*)\r?\n?(.*)$")
+                    rc = tonumber(firstLine)
+                    out = (rc ~= nil) and (rest or "") or raw
+                end
                 f:write("ExecProcess rc=" .. tostring(rc) .. " outLen=" .. tostring(out and #out or 0) .. "\n")
                 f:write("ExecProcess out:\n" .. tostring(out) .. "\n")
             end
@@ -12543,13 +12549,8 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
         end
     end
 
-    -- Try to set bounds when available (not required, but can improve correctness).
-    if reaper.GetSet_AudioAccessorStartTime then
-        pcall(function() reaper.GetSet_AudioAccessorStartTime(acc, true, sampleStart) end)
-    end
-    if reaper.GetSet_AudioAccessorEndTime then
-        pcall(function() reaper.GetSet_AudioAccessorEndTime(acc, true, sampleEnd) end)
-    end
+    -- Accessor bounds are read-only via GetAudioAccessorStartTime/EndTime.
+    -- Keep clamp logic above; do not call legacy/non-existent setter variants.
 
     local f = io.open(outputPath, "wb")
     if not f then

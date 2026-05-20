@@ -216,9 +216,21 @@ local function execCapturePipe(cmd)
     return tonumber(code) or -1, out
 end
 
+local function parseExecProcessResult(result)
+    if type(result) ~= "string" then
+        return nil, ""
+    end
+    local firstLine, rest = result:match("^([^\r\n]*)\r?\n?(.*)$")
+    local rc = tonumber(firstLine)
+    if rc == nil then
+        return nil, result
+    end
+    return rc, rest or ""
+end
+
 local function execCapture(cmd, timeoutMs)
     if reaper and reaper.ExecProcess then
-        local rc, out = reaper.ExecProcess(cmd, timeoutMs or 8000)
+        local rc, out = parseExecProcessResult(reaper.ExecProcess(cmd, timeoutMs or 8000))
         return tonumber(rc) or -1, out or ""
     end
     return execCapturePipe(cmd)
