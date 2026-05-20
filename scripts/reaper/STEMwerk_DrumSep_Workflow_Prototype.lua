@@ -149,6 +149,82 @@ local function logKV(key, value)
     reaper.ShowConsoleMsg("[DrumSep Workflow Prototype] " .. tostring(key) .. "=" .. tostring(value) .. "\n")
 end
 
+local function jsonEscape(s)
+    local text = tostring(s or "")
+    text = text:gsub("\\", "\\\\")
+    text = text:gsub('"', '\\"')
+    text = text:gsub("\b", "\\b")
+    text = text:gsub("\f", "\\f")
+    text = text:gsub("\n", "\\n")
+    text = text:gsub("\r", "\\r")
+    text = text:gsub("\t", "\\t")
+    return text
+end
+
+local function isArrayTable(tbl)
+    if type(tbl) ~= "table" then return false end
+    local n = #tbl
+    for k, _ in pairs(tbl) do
+        if type(k) ~= "number" or k < 1 or k > n or k % 1 ~= 0 then
+            return false
+        end
+    end
+    return true
+end
+
+local function jsonEncode(value)
+    local t = type(value)
+    if t == "nil" then
+        return "null"
+    end
+    if t == "boolean" then
+        return value and "true" or "false"
+    end
+    if t == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then
+            return "null"
+        end
+        return tostring(value)
+    end
+    if t == "string" then
+        return '"' .. jsonEscape(value) .. '"'
+    end
+    if t ~= "table" then
+        return '"' .. jsonEscape(tostring(value)) .. '"'
+    end
+    if isArrayTable(value) then
+        local parts = {}
+        for i = 1, #value do
+            parts[#parts + 1] = jsonEncode(value[i])
+        end
+        return "[" .. table.concat(parts, ",") .. "]"
+    end
+    local keys = {}
+    for k, _ in pairs(value) do
+        keys[#keys + 1] = tostring(k)
+    end
+    table.sort(keys)
+    local parts = {}
+    for _, key in ipairs(keys) do
+        parts[#parts + 1] = '"' .. jsonEscape(key) .. '":' .. jsonEncode(value[key])
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function writeTextFile(path, content)
+    local f = io.open(path, "wb")
+    if not f then return false, "open_failed" end
+    f:write(content or "")
+    f:close()
+    return true, nil
+end
+
+local function formatUtcIso(epochSeconds)
+    local epoch = tonumber(epochSeconds)
+    if not epoch then return "" end
+    return os.date("!%Y-%m-%dT%H:%M:%SZ", math.floor(epoch))
+end
+
 local function getTimeSelectionRange()
     local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     if (endTime or 0) > (startTime or 0) then
@@ -928,6 +1004,7 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     local suppressFailureMessage = opts.suppressFailureMessage == true
 
     local t0 = nowSeconds()
+    local startedAtEpoch = os.time()
     local selectedCount = reaper.CountSelectedMediaItems(0)
     local result = {
         ok = false,
@@ -1028,6 +1105,69 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     local perTrackImportLayouts = {}
     local importedItemsAll = {}
     local importedPathsAll = {}
+    local metadataPath = pathJoin(root, "drumkit_run_metadata.json")
+
+    local function persistRunMetadata(status)
+        local finishedAtEpoch = os.time()
+        local sourcesMetadata = {}
+        for idx, sourceEntry in ipairs(resolvedSources or {}) do
+            local srcRes = perSource[idx] or {}
+            sourcesMetadata[#sourcesMetadata + 1] = {
+                index = idx,
+                track_label = sanitizeTrackLabel(sourceEntry.track_name or "", sourceEntry.track_index or idx),
+                source_label = sanitizeSourceLabel(sourceEntry.source_label or "", sourceIndexLabel(idx)),
+                source_kind = tostring(sourceEntry.source_kind or ""),
+                source_path = tostring(sourceEntry.source_path or ""),
+                segment_start = tonumber(sourceEntry.segment_start or 0) or 0,
+                segment_length = tonumber(sourceEntry.segment_length or 0) or 0,
+                extract_offset = tonumber(sourceEntry.extract_offset or 0) or 0,
+                extract_duration = tonumber(sourceEntry.extract_duration or 0) or 0,
+                take_playrate = tonumber(sourceEntry.take_playrate or 1.0) or 1.0,
+                take_pitch = tonumber(sourceEntry.take_pitch or 0.0) or 0.0,
+                take_preserve_pitch = (tonumber(sourceEntry.take_preserve_pitch or 0) or 0) ~= 0,
+                stage0_dir = srcRes.stage0_input_path and pathJoin(srcRes.temp_root or "", "stage0_input") or "",
+                stage1_dir = tostring(srcRes.stage1_output_dir or ""),
+                stage2_dir = tostring(srcRes.stage2_output_dir or ""),
+                imported_stems = srcRes.imported_stems or {},
+                missing_stems = srcRes.missing_stems or {},
+                ok = srcRes.ok == true,
+                error_stage = srcRes.error_stage or "",
+                error_message = srcRes.error_message or "",
+                log_path = srcRes.log_path or "",
+                elapsed_seconds = tonumber(srcRes.elapsed_seconds or 0) or 0,
+            }
+        end
+
+        local metadata = {
+            feature = "Drum Kit Split",
+            prototype = true,
+            temp_root = root,
+            status = tostring(status or ""),
+            mode_label = folderModeLabel(mode, CLEAN_PARENT_MODELS[mode]),
+            workflow_mode = mode,
+            parent_model = CLEAN_PARENT_MODELS[mode] or "",
+            drumsep_model = STAGE2_MODEL,
+            source_resolution_mode = tostring(resolvedSources[1] and resolvedSources[1].source_kind or ""),
+            selection_precedence = tostring(resolvedSources[1] and resolvedSources[1].selection_precedence_note or ""),
+            grouping_mode = outputGrouping,
+            folder_mode = useFolder and "folder_on" or "folder_off",
+            selected_item_count = selectedCount,
+            resolved_sources = #resolvedSources,
+            total_imported_stems = totalImported,
+            started_at = formatUtcIso(startedAtEpoch),
+            finished_at = formatUtcIso(finishedAtEpoch),
+            elapsed_seconds = tonumber(nowSeconds() - t0) or 0,
+            sources = sourcesMetadata,
+        }
+
+        local okWrite, errWrite = writeTextFile(metadataPath, jsonEncode(metadata) .. "\n")
+        if okWrite then
+            result.run_metadata_path = metadataPath
+            logKV("run_metadata_path", metadataPath)
+        else
+            logKV("run_metadata_error", tostring(errWrite or "write_failed"))
+        end
+    end
 
     for idx, sourceEntry in ipairs(resolvedSources) do
         local insertAtIndex = nil
@@ -1148,6 +1288,7 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
             (result.log_path and ("\n\nLog:\n" .. tostring(result.log_path)) or ""),
             suppressFailureMessage
         )
+        persistRunMetadata("failed")
         return result
     end
 
@@ -1164,6 +1305,7 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
             "\nTemp root:\n" .. root,
             suppressFailureMessage
         )
+        persistRunMetadata("partial_success")
         return result
     end
 
@@ -1176,6 +1318,7 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         "\nTemp root:\n" .. root,
         suppressSuccessMessage
     )
+    persistRunMetadata("success")
     return result
 end
 

@@ -1551,6 +1551,124 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
     return lines
 end
 
+local function collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)
+    local lines = {}
+    local tempBase = getTempBase()
+    local destRoot = joinPath(bundleDir, "drumkit_split_runs")
+    local maxRunsToInclude = 5
+    ensureDir(destRoot)
+
+    local runNames = {}
+    for _, name in ipairs(enumerateSubdirs(tempBase)) do
+        local lower = tostring(name or ""):lower()
+        if lower:match("^stemwerk%-drumsep%-workflow%-prototype%-") and not shouldIgnoreTempFolder(lower) then
+            runNames[#runNames + 1] = tostring(name)
+        end
+    end
+    if #runNames == 0 then
+        appendLine(lines, "- no Drum Kit Split prototype temp runs found")
+        appendKey(lines, "Drum Kit runs source", tempBase)
+        return lines
+    end
+
+    local entries = {}
+    for _, runName in ipairs(runNames) do
+        local runSrc = joinPath(tempBase, runName)
+        local stat = getPathStat(runSrc)
+        entries[#entries + 1] = {
+            name = runName,
+            src = runSrc,
+            epoch = tonumber(stat.epoch) or 0,
+        }
+    end
+    table.sort(entries, function(a, b)
+        if (a.epoch or 0) == (b.epoch or 0) then
+            return tostring(a.name) > tostring(b.name)
+        end
+        return (a.epoch or 0) > (b.epoch or 0)
+    end)
+
+    local selected = {}
+    for idx, entry in ipairs(entries) do
+        if idx <= maxRunsToInclude then
+            selected[#selected + 1] = entry
+        end
+    end
+
+    local rootAllowedFiles = {
+        ["drumkit_run_metadata.json"] = true,
+        ["run_metadata.json"] = true,
+        ["source_resolution.json"] = true,
+        ["import_summary.json"] = true,
+    }
+    local stageAllowedFiles = {
+        ["cmd_stdout.txt"] = true,
+        ["cmd_stderr.txt"] = true,
+        ["stdout.txt"] = true,
+        ["separation_log.txt"] = true,
+        ["phase_events.jsonl"] = true,
+        ["ffmpeg_extract.log"] = true,
+    }
+
+    local copiedCount = 0
+    local includedRunNames = {}
+    for _, entry in ipairs(selected) do
+        local runSrc = entry.src
+        local runName = entry.name
+        local runDst = joinPath(destRoot, runName)
+        ensureDir(runDst)
+        includedRunNames[#includedRunNames + 1] = runName
+
+        for _, fileName in ipairs(enumerateFiles(runSrc)) do
+            if rootAllowedFiles[fileName] then
+                local src = joinPath(runSrc, fileName)
+                local dst = joinPath(runDst, fileName)
+                local ok, mode = copySupportTextFile(src, dst, 1024 * 1024)
+                if ok then
+                    copiedCount = copiedCount + 1
+                    copiedFiles[#copiedFiles + 1] = "drumkit_split_runs/" .. runName .. "/" .. fileName .. " (" .. mode .. ")"
+                end
+            end
+        end
+
+        for _, sourceDirName in ipairs(enumerateSubdirs(runSrc)) do
+            if tostring(sourceDirName):match("^source_%d+") then
+                local sourceSrc = joinPath(runSrc, sourceDirName)
+                for _, stageDirName in ipairs(enumerateSubdirs(sourceSrc)) do
+                    if tostring(stageDirName):match("^stage%d") then
+                        local stageSrc = joinPath(sourceSrc, stageDirName)
+                        local stageDst = joinPath(runDst, sourceDirName, stageDirName)
+                        ensureDir(stageDst)
+                        for _, fileName in ipairs(enumerateFiles(stageSrc)) do
+                            if stageAllowedFiles[fileName] then
+                                local src = joinPath(stageSrc, fileName)
+                                local dst = joinPath(stageDst, fileName)
+                                local ok, mode = copySupportTextFile(src, dst, 1024 * 1024)
+                                if ok then
+                                    copiedCount = copiedCount + 1
+                                    copiedFiles[#copiedFiles + 1] = "drumkit_split_runs/" .. runName .. "/" .. sourceDirName .. "/" .. stageDirName .. "/" .. fileName .. " (" .. mode .. ")"
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local skipped = math.max(0, #entries - #selected)
+    appendLine(lines, string.format("- Drum Kit prototype runs available: %d", #entries))
+    appendLine(lines, string.format("- Drum Kit prototype runs included: %d (max %d)", #selected, maxRunsToInclude))
+    appendLine(lines, string.format("- Drum Kit prototype runs skipped: %d", skipped))
+    appendLine(lines, string.format("- Drum Kit prototype diagnostic files copied: %d", copiedCount))
+    if #includedRunNames > 0 then
+        appendLine(lines, "- included run_ids: " .. table.concat(includedRunNames, ", "))
+    end
+    appendLine(lines, "- exclusions: audio/media/reapeaks/model-cache payloads remain excluded")
+    appendKey(lines, "Drum Kit runs source", tempBase)
+    return lines
+end
+
 local function parseJsonStringField(line, key)
     local pattern = '"' .. tostring(key) .. '"%s*:%s*"(.-)"'
     local value = tostring(line or ""):match(pattern)
@@ -2790,6 +2908,14 @@ local function performBundleCollection()
         appendLine(diagnostics, line)
     end
     phaseDone("collect_recent_runs", recentRunsStartedAt)
+    appendLine(diagnostics, "")
+
+    local drumKitRunsStartedAt = phaseStart("collect_drumkit_runs")
+    appendLine(diagnostics, "Drum Kit Split Prototype Diagnostics")
+    for _, line in ipairs(collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)) do
+        appendLine(diagnostics, line)
+    end
+    phaseDone("collect_drumkit_runs", drumKitRunsStartedAt)
     appendLine(diagnostics, "")
 
     appendLine(diagnostics, "Settings Snapshot")
