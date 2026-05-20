@@ -52,10 +52,10 @@ jobs:
 
       - name: Show Lua version on Windows
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          "/c/Program Files (x86)/Lua/5.1/lua.exe" -v
-          "/c/Program Files (x86)/Lua/5.1/luac.exe" -v
+          & "C:\Program Files (x86)\Lua\5.1\lua.exe" -v
+          & "C:\Program Files (x86)\Lua\5.1\luac.exe" -v
 
       - name: Validate support bundle Lua files
         if: runner.os != 'Windows'
@@ -66,10 +66,10 @@ jobs:
 
       - name: Validate support bundle Lua files on Windows
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          "/c/Program Files (x86)/Lua/5.1/luac.exe" -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
-          "/c/Program Files (x86)/Lua/5.1/luac.exe" -p tests/support/run_support_bundle_headless.lua
+          & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
+          & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p tests/support/run_support_bundle_headless.lua
 
       - name: Run headless support bundle coverage
         if: runner.os != 'Windows'
@@ -78,5 +78,5 @@ jobs:
 
       - name: Run headless support bundle coverage on Windows
         if: runner.os == 'Windows'
-        shell: bash
-        run: '"/c/Program Files (x86)/Lua/5.1/lua.exe" tests/support/run_support_bundle_headless.lua'
+        shell: pwsh
+        run: '& "C:\Program Files (x86)\Lua\5.1\lua.exe" tests/support/run_support_bundle_headless.lua'
