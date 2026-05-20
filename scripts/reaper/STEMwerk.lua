@@ -55,11 +55,15 @@ function clearDebugLog() end
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
 local APP_VERSION = "2.2.2.2.2"
-SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
-WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
-WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
-WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_VERSION .. ")"
-WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_VERSION .. ")"
+-- Private/R&D local branch marker for UI display only.
+-- Do not use this for public release/versioning metadata.
+local DISPLAY_VERSION_SUFFIX = "r_n_d-model-registry"
+local APP_DISPLAY_VERSION = APP_VERSION .. "-" .. DISPLAY_VERSION_SUFFIX
+SCRIPT_NAME = "STEMwerk (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_DISPLAY_VERSION .. ")"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
 _G.EXT_SECTION = EXT_SECTION
 local DEBUG = { enabled = false, logPath = nil }
@@ -1332,17 +1336,17 @@ local getAvailableLanguages = I18N.getAvailableLanguages
 
 local function getProcessingWindowTitle()
     local label = (type(T) == "function" and T("window_title_processing")) or "Processing.."
-    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_DISPLAY_VERSION .. ")"
 end
 
 local function getCompleteWindowTitle()
     local label = (type(T) == "function" and T("window_title_complete")) or "Complete"
-    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_DISPLAY_VERSION .. ")"
 end
 
 local function getMultiTrackWindowTitle()
     local label = (type(T) == "function" and T("window_title_multi_track")) or "Multi-Track Progress"
-    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_DISPLAY_VERSION .. ")"
 end
 
 -- Forward declare GUI so early helpers (e.g. handleArtAdvance) can reference it safely.
@@ -5196,7 +5200,7 @@ local function drawUtilityNativeHelpWindow()
                     local l = {}
                     addHead(l, "STEMwerk")
                     addLine(l, "  " .. tr("help_native_welcome_sub", "Stem separation workflow utility for REAPER"))
-                    addLine(l, "  " .. tr("about_version","Version") .. ": " .. tostring(APP_VERSION or ""))
+                    addLine(l, "  " .. tr("about_version","Version") .. ": " .. tostring(APP_DISPLAY_VERSION or ""))
                     addLine(l, "")
                     addHead(l, tr("help_native_separation", "Separation"))
                     addLine(l, "  " .. tr("help_native_about_4stem", "4-stem: Vocals, Drums, Bass, Other"))
