@@ -233,6 +233,7 @@ def test_macos_runtime_verification_rejects_torch_26_plus():
     assert "torch_too_new_for_demucs" in setup_internal
     assert "numpy_too_new_for_demucs" in runtime_setup
     assert "numpy_too_new_for_demucs" in setup_internal
+    assert "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack." in runtime_setup
     assert "macOS Torch version is too new for the bundled Demucs/audio-separator path" in setup_internal
 
 

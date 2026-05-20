@@ -886,7 +886,7 @@ function M.ensureDependenciesInteractive()
             if err == "samplerate_missing" then hasSamplerate = true end
             if err == "stemwerk_core_missing" then hasCore = true end
             if err == "torch_too_new_for_demucs" then
-                missing[#missing + 1] = "macOS Torch version is too new for bundled Demucs/audio-separator; run Rebuild venv or Repair"
+                missing[#missing + 1] = "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack."
             end
             if err == "numpy_too_new_for_demucs" then
                 missing[#missing + 1] = "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv or Repair"
