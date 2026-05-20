@@ -40,6 +40,8 @@ assertEqual(#M.byId("htdemucs_6s").output_schema, 6, "htdemucs_6s output_schema 
 
 assertTrue(M.isSixStem("htdemucs_6s"), "M.isSixStem('htdemucs_6s')")
 assertFalse(M.isSixStem("htdemucs"), "M.isSixStem('htdemucs')")
+assertFalse(M.isSixStem("htdemucs_ft"), "M.isSixStem('htdemucs_ft')")
+assertFalse(M.isSixStem("htdemucs_mmi"), "M.isSixStem('htdemucs_mmi')")
 assertEqual(M.defaultId(), "htdemucs", "M.defaultId()")
 assertEqual(M.mpsPolicy("htdemucs"), "force_cpu_demucs", "M.mpsPolicy('htdemucs')")
 assertNil(M.byId("nonexistent"), "M.byId('nonexistent')")

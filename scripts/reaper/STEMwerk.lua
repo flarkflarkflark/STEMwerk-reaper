@@ -1122,6 +1122,7 @@ local MODEL_FALLBACKS = {
     { id = "htdemucs_ft", i18n_label_key = "model_label_quality", i18n_desc_key = "model_quality_desc" },
     { id = "htdemucs_6s", i18n_label_key = "model_label_6stem", i18n_desc_key = "model_6stem_desc" },
 }
+LEGACY_SIX_STEM_MODEL_ID = "htdemucs_6s"
 
 local function isExistingModelList(metadata)
     if type(metadata) ~= "table" or #metadata ~= #MODEL_FALLBACKS then
@@ -1156,9 +1157,19 @@ local function buildModelsFromMetadata(metadata)
     return models
 end
 
-local function loadModelRegistryMetadata()
+function loadModelRegistryModule()
     local ok, registry = pcall(dofile, script_path .. "_internal/STEMwerk_Models.lua")
-    if not ok or type(registry) ~= "table" or type(registry.list) ~= "function" then
+    if not ok or type(registry) ~= "table" then
+        return nil
+    end
+    return registry
+end
+
+MODEL_REGISTRY = loadModelRegistryModule()
+
+local function loadModelRegistryMetadata(registry)
+    registry = registry or MODEL_REGISTRY
+    if type(registry) ~= "table" or type(registry.list) ~= "function" then
         return nil
     end
     local listedOk, list = pcall(registry.list)
@@ -1171,8 +1182,10 @@ local function loadModelRegistryMetadata()
     return list
 end
 
+MODEL_REGISTRY_METADATA = loadModelRegistryMetadata(MODEL_REGISTRY)
+
 local function loadModels()
-    local models = buildModelsFromMetadata(loadModelRegistryMetadata())
+    local models = buildModelsFromMetadata(MODEL_REGISTRY_METADATA)
     if #models > 0 then
         return models
     end
@@ -1480,6 +1493,29 @@ local function effectiveRunRequestedParallel()
     return (SETTINGS and SETTINGS.parallelProcessing) and true or false
 end
 
+function isRegistrySixStemModel(modelId)
+    if not MODEL_REGISTRY_METADATA then
+        return nil
+    end
+    if type(MODEL_REGISTRY) ~= "table" or type(MODEL_REGISTRY.isSixStem) ~= "function" then
+        return nil
+    end
+    local ok, isSixStem = pcall(MODEL_REGISTRY.isSixStem, modelId)
+    if not ok then
+        return nil
+    end
+    return isSixStem and true or false
+end
+
+function isSixStemModel(modelId)
+    local normalized = tostring(modelId or "")
+    local registryValue = isRegistrySixStemModel(normalized)
+    if registryValue ~= nil then
+        return registryValue
+    end
+    return normalized == LEGACY_SIX_STEM_MODEL_ID
+end
+
 local KNOWN_MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 
 local function isKnownMpsUnsupportedFailure(logSnippet)
@@ -1512,7 +1548,7 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
 end
 
 local function isEffectiveRun6Stem()
-    return effectiveRunModel() == "htdemucs_6s"
+    return isSixStemModel(effectiveRunModel())
 end
 
 stemIsSelectableForCurrentModel = function(stem)
@@ -1594,7 +1630,7 @@ setModelPreservingStemIntent = function(modelId)
     if wasAllSelected then
         selectAllSelectableStems()
     else
-        if tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
+        if not isSixStemModel(SETTINGS.model) then
             for _, st in ipairs(STEMS or {}) do
                 if st.sixStemOnly then st.selected = false end
             end
@@ -10478,7 +10514,7 @@ function HELPERS.hasExplicitOverlapSelection(startTime, endTime)
 end
 
 buildFooterLines = function()
-    local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+    local is6Stem = isSixStemModel(SETTINGS.model)
     local rawSelTrackCount = reaper.CountSelectedTracks(0) or 0
     local rawSelItemCount = reaper.CountSelectedMediaItems(0) or 0
 
@@ -12056,8 +12092,8 @@ function handleDialogKeyboard(ctx)
     elseif char == 50 then toggleStemSelection(2)
     elseif char == 51 then toggleStemSelection(3)
     elseif char == 52 then toggleStemSelection(4)
-    elseif char == 53 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(5)
-    elseif char == 54 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(6)
+    elseif char == 53 and isSixStemModel(SETTINGS.model) then toggleStemSelection(5)
+    elseif char == 54 and isSixStemModel(SETTINGS.model) then toggleStemSelection(6)
     elseif char == 118 or char == 86 then applyPresetVocalsOnly()
     elseif char == 100 or char == 68 then applyPresetDrumsOnly()
     elseif char == 98 or char == 66 then applyPresetBassOnly()
@@ -12244,7 +12280,7 @@ function dialogLoop()
         mouseWheel = gfx.mouse_wheel,
         time = loopNow,
     }
-    ctx.is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+    ctx.is6Stem = isSixStemModel(SETTINGS.model)
 
     handleDialogKeyboard(ctx)
 
@@ -13519,7 +13555,7 @@ local function drawProgressWindow()
     -- Get selected stems for colors
     local selectedStems = {}
     local runModel = effectiveRunModel()
-    local runIs6Stem = (runModel == "htdemucs_6s")
+    local runIs6Stem = isSixStemModel(runModel)
     for _, stem in ipairs(STEMS) do
         if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
             table.insert(selectedStems, stem)
@@ -14016,7 +14052,7 @@ local function drawProgressWindow()
     local footerModel = effectiveRunModel()
     local modelDisplay = (footerModel == "htdemucs_ft")
         and (T("model_label_quality") or "Quality")
-        or ((footerModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+        or (isSixStemModel(footerModel) and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
@@ -17970,7 +18006,7 @@ function drawMultiTrackProgressWindow()
     local runModel = effectiveRunModel()
     local modelDisplay = (runModel == "htdemucs_ft")
         and (T("model_label_quality") or "Quality")
-        or ((runModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+        or (isSixStemModel(runModel) and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local modeDisplay = multiTrackQueue.sequentialMode and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
     if (not multiTrackQueue.sequentialMode) and multiTrackQueue.parallelJobLimit then
         local capLabel = T("mt_parallel_cap") or "Parallel cap %d"
