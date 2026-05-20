@@ -1101,11 +1101,81 @@ RUNTIME_DEVICE_PROBE_DEBUG = nil
 RUNTIME_DEVICE_PROBE = nil
 
 -- Available models
-local MODELS = {
-    { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
-    { id = "htdemucs_ft", name = "Quality", desc = "htdemucs_ft - Best quality, slower (4 stems)" },
-    { id = "htdemucs_6s", name = "6-Stem", desc = "htdemucs_6s - Adds Guitar & Piano separation" },
+local MODEL_LABEL_FALLBACKS = {
+    model_label_fast = "Fast",
+    model_label_quality = "Quality",
+    model_label_6stem = "6-Stem",
 }
+
+local MODEL_DESC_FALLBACKS = {
+    model_fast_desc = "htdemucs - Fastest model, good quality (4 stems)",
+    model_quality_desc = "htdemucs_ft - Best quality, slower (4 stems)",
+    model_6stem_desc = "htdemucs_6s - Adds Guitar & Piano separation",
+}
+
+local MODEL_FALLBACKS = {
+    { id = "htdemucs", i18n_label_key = "model_label_fast", i18n_desc_key = "model_fast_desc" },
+    { id = "htdemucs_ft", i18n_label_key = "model_label_quality", i18n_desc_key = "model_quality_desc" },
+    { id = "htdemucs_6s", i18n_label_key = "model_label_6stem", i18n_desc_key = "model_6stem_desc" },
+}
+
+local function isExistingModelList(metadata)
+    if type(metadata) ~= "table" or #metadata ~= #MODEL_FALLBACKS then
+        return false
+    end
+    for i, fallback in ipairs(MODEL_FALLBACKS) do
+        if type(metadata[i]) ~= "table" or metadata[i].id ~= fallback.id then
+            return false
+        end
+    end
+    return true
+end
+
+local function buildModelsFromMetadata(metadata)
+    local models = {}
+    for _, entry in ipairs(metadata or {}) do
+        local id = tostring(entry.id or "")
+        local labelKey = tostring(entry.i18n_label_key or "")
+        local descKey = tostring(entry.i18n_desc_key or "")
+        local name = MODEL_LABEL_FALLBACKS[labelKey]
+        local desc = MODEL_DESC_FALLBACKS[descKey]
+        if id ~= "" and name and desc then
+            models[#models + 1] = {
+                id = id,
+                name = name,
+                desc = desc,
+                i18n_label_key = labelKey,
+                i18n_desc_key = descKey,
+            }
+        end
+    end
+    return models
+end
+
+local function loadModelRegistryMetadata()
+    local ok, registry = pcall(dofile, script_path .. "_internal/STEMwerk_Models.lua")
+    if not ok or type(registry) ~= "table" or type(registry.list) ~= "function" then
+        return nil
+    end
+    local listedOk, list = pcall(registry.list)
+    if not listedOk or type(list) ~= "table" then
+        return nil
+    end
+    if not isExistingModelList(list) then
+        return nil
+    end
+    return list
+end
+
+local function loadModels()
+    local models = buildModelsFromMetadata(loadModelRegistryMetadata())
+    if #models > 0 then
+        return models
+    end
+    return buildModelsFromMetadata(MODEL_FALLBACKS)
+end
+
+local MODELS = loadModels()
 
 MODEL_AVAILABILITY = {
     bundledLimited = false,
@@ -1113,11 +1183,10 @@ MODEL_AVAILABILITY = {
 }
 
 do
-    local KNOWN_MODEL_IDS = {
-        htdemucs = true,
-        htdemucs_ft = true,
-        htdemucs_6s = true,
-    }
+    local KNOWN_MODEL_IDS = {}
+    for _, model in ipairs(MODELS) do
+        KNOWN_MODEL_IDS[model.id] = true
+    end
 
     local function parseModelAllowlist(raw)
         if not raw or raw == "" then return nil end
@@ -11382,11 +11451,6 @@ function renderMainColumns(ctx)
     local modelBtnFontSize = _ubfs
 
     local modelY = contentTop + S(20)
-    local modelDescKeys = {
-        htdemucs = "model_fast_desc",
-        htdemucs_ft = "model_quality_desc",
-        htdemucs_6s = "model_6stem_desc",
-    }
     local modelShortcutKeys = {
         htdemucs = "F",
         htdemucs_ft = "Q",
@@ -11403,7 +11467,7 @@ function renderMainColumns(ctx)
         if drawRadio(col3X, modelY, SETTINGS.model == model.id, modelDisplayName, nil, modelBoxW, nil, nil, modelBtnFontSize) and modelAvailable then
             setModelPreservingStemIntent(model.id)
         end
-        local descKey = modelDescKeys[model.id] or "model_fast_desc"
+        local descKey = model.i18n_desc_key or "model_fast_desc"
         local tip = T(descKey)
         if not modelAvailable then
             tip = tostring(tip or "") .. "\n\n" .. unavailableModelTooltipSuffix()
