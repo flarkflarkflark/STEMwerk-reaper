@@ -32,6 +32,7 @@ _core_loaded = False
 
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
+DRUMSEP_MODEL_FILENAME = "mdx23c-drumsep-aufr33-jarredou.ckpt"
 
 
 def _is_darwin_arm64() -> bool:
@@ -128,6 +129,69 @@ def _resolve_stem_path(output_dir: Path, stem_path: Path | str) -> Path:
     if path.is_absolute():
         return path
     return output_dir / path
+
+
+def _is_drumsep_model(model_name: Optional[str]) -> bool:
+    return Path(str(model_name or "")).name.lower() == DRUMSEP_MODEL_FILENAME
+
+
+def _classify_drumsep_stem(path: Path) -> Optional[str]:
+    name = path.stem.lower()
+    if "kick" in name:
+        return "kick"
+    if "snare" in name:
+        return "snare"
+    if "toms" in name:
+        return "toms"
+    if "hihat" in name or "(hh)" in name or "_hh_" in name or name.endswith("_hh"):
+        return "hihat"
+    if "ride" in name:
+        return "ride"
+    if "crash" in name:
+        return "crash"
+    return None
+
+
+def _collect_drumsep_candidates(output_root: Path, result_stems: Dict[str, Path | str]) -> Dict[str, Path]:
+    candidates: List[Path] = []
+    for stem_path in result_stems.values():
+        abs_path = _resolve_stem_path(output_root, stem_path)
+        if abs_path.exists():
+            candidates.append(abs_path)
+    for wav_path in output_root.glob("*.wav"):
+        candidates.append(wav_path)
+
+    resolved: Dict[str, Path] = {}
+    for candidate in candidates:
+        stem_name = _classify_drumsep_stem(candidate)
+        if not stem_name:
+            continue
+        resolved[stem_name] = candidate.resolve()
+    return resolved
+
+
+def _finalize_drumsep_outputs(output_root: Path, result_stems: Dict[str, Path | str]) -> Dict[str, str]:
+    discovered = _collect_drumsep_candidates(output_root, result_stems)
+    reaper_stems: Dict[str, str] = {}
+    expected = ("kick", "snare", "toms", "hihat", "ride", "crash")
+
+    for stem_name in expected:
+        source = discovered.get(stem_name)
+        if not source or not source.exists():
+            print(f"STEMWERK_WARN missing_drumsep_stem={stem_name}", file=sys.stderr)
+            continue
+
+        target = output_root / f"{stem_name}.wav"
+        if source.resolve() != target.resolve():
+            if target.exists():
+                os.remove(target)
+            shutil.move(str(source), str(target))
+        reaper_stems[stem_name] = str(target)
+        print(f"  {stem_name}:  {target}", file=sys.stderr)
+
+    if not reaper_stems:
+        raise RuntimeError("DrumSep model produced no mappable drum stems")
+    return reaper_stems
 
 
 def _setup_reaper_io(output_dir: Optional[str]):
@@ -903,40 +967,44 @@ def main():
         # audio-separator writes model outputs inside sep.separate(); this phase
         # brackets the REAPER-facing output mapping and final stem renames.
         emit_phase("stem_write_start")
-        # Mapping logica voor REAPER compatibiliteit
-        stem_mapping = {
-            'vocals': ['vocals', 'vocal', 'Vocals'],
-            'drums':  ['drums', 'drum', 'Drums'],
-            'bass': ['bass', 'Bass'],
-            'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental'],
-            'guitar': ['guitar', 'Guitar'],
-            'piano': ['piano', 'Piano', 'keys', 'Keys']
-        }
+        # Private R&D prototype path: keep DrumSep output contract isolated to this model.
+        if _is_drumsep_model(args.model):
+            reaper_stems = _finalize_drumsep_outputs(output_root, result.stems)
+        else:
+            # Mapping logica voor REAPER compatibiliteit
+            stem_mapping = {
+                'vocals': ['vocals', 'vocal', 'Vocals'],
+                'drums':  ['drums', 'drum', 'Drums'],
+                'bass': ['bass', 'Bass'],
+                'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental'],
+                'guitar': ['guitar', 'Guitar'],
+                'piano': ['piano', 'Piano', 'keys', 'Keys']
+            }
 
-        reaper_stems = {}
-        for stem_name, stem_path in result.stems.items():
-            abs_path = _resolve_stem_path(output_root, stem_path)
-            if not abs_path.exists():
-                raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
-            
-            # Zoek naar de juiste REAPER naam
-            filename = abs_path.stem.lower()
-            target_name = stem_name  # fallback
-            
-            for map_name, patterns in stem_mapping.items():
-                if any(p.lower() in filename for p in patterns):
-                    target_name = map_name
-                    break
-            
-            # Hernoem bestand naar simpele naam (bijv. vocals.wav)
-            new_path = abs_path.parent / f"{target_name}.wav"
-            if abs_path != new_path:
-                if new_path.exists():
-                    os.remove(new_path)
-                shutil.move(str(abs_path), str(new_path))
-            
-            reaper_stems[target_name] = str(new_path)
-            print(f"  {target_name}:  {new_path}", file=sys.stderr)
+            reaper_stems = {}
+            for stem_name, stem_path in result.stems.items():
+                abs_path = _resolve_stem_path(output_root, stem_path)
+                if not abs_path.exists():
+                    raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
+
+                # Zoek naar de juiste REAPER naam
+                filename = abs_path.stem.lower()
+                target_name = stem_name  # fallback
+
+                for map_name, patterns in stem_mapping.items():
+                    if any(p.lower() in filename for p in patterns):
+                        target_name = map_name
+                        break
+
+                # Hernoem bestand naar simpele naam (bijv. vocals.wav)
+                new_path = abs_path.parent / f"{target_name}.wav"
+                if abs_path != new_path:
+                    if new_path.exists():
+                        os.remove(new_path)
+                    shutil.move(str(abs_path), str(new_path))
+
+                reaper_stems[target_name] = str(new_path)
+                print(f"  {target_name}:  {new_path}", file=sys.stderr)
 
         emit_phase("stem_write_end")
 
