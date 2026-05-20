@@ -5,7 +5,7 @@ AB smoke runner for DrumSep workflow prototype:
 1) clean_fast
 2) clean_quality
 3) clean_6stem
-on the same selected REAPER item.
+on the same resolved source set (selected items or time selection).
 ]]
 
 local function getScriptDir()
@@ -39,16 +39,6 @@ local function logLine(msg)
 end
 
 local function runAB()
-    local selectedItem = reaper.GetSelectedMediaItem(0, 0)
-    if not selectedItem then
-        reaper.ShowMessageBox("Select one media item first.", "STEMwerk DrumSep AB Prototype", 0)
-        return
-    end
-    if not reaper.GetActiveTake(selectedItem) then
-        reaper.ShowMessageBox("Selected item has no active take.", "STEMwerk DrumSep AB Prototype", 0)
-        return
-    end
-
     local scriptDir = getScriptDir()
     if not scriptDir then
         reaper.ShowMessageBox("Could not resolve script directory.", "STEMwerk DrumSep AB Prototype", 0)
@@ -70,10 +60,8 @@ local function runAB()
     end
 
     local opts = {
-        selectedItem = selectedItem,
         suppressSuccessMessage = true,
         suppressFailureMessage = true,
-        suppressMultiSelectMessage = true,
     }
 
     logLine("direct_creative_status=experimental_parked_due_bleed")

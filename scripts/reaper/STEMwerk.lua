@@ -1932,7 +1932,8 @@ function HELPERS.getSelectionMonitorState()
     local timeSelStart, timeSelEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     local hasTimeSel = (timeSelEnd or 0) > (timeSelStart or 0)
 
-    local function itemOverlapsTimeSelection(item)
+    local function itemOverlapsTimeSelection(item, requireOverlap)
+        if not requireOverlap then return true end
         if not hasTimeSel then return true end
         if not item or not reaper.ValidatePtr(item, "MediaItem*") then return false end
         local pos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
@@ -1941,13 +1942,13 @@ function HELPERS.getSelectionMonitorState()
         return pos < timeSelEnd and itemEnd > timeSelStart
     end
 
-    local function anyAudibleItemOnTrack(track)
+    local function anyAudibleItemOnTrack(track, requireOverlap)
         if not track or not reaper.ValidatePtr(track, "MediaTrack*") then return false, false end
         local anyOverlap = false
         local itemCount = reaper.CountTrackMediaItems(track) or 0
         for i = 0, itemCount - 1 do
             local item = reaper.GetTrackMediaItem(track, i)
-            if item and itemOverlapsTimeSelection(item) then
+            if item and itemOverlapsTimeSelection(item, requireOverlap) then
                 anyOverlap = true
                 if AUDIBILITY.isItemAudible(item, soloActive) then
                     return true, true
@@ -1958,17 +1959,17 @@ function HELPERS.getSelectionMonitorState()
     end
 
     if selItemCount > 0 then
-        local anySelectedOverlap = false
+        local anySelectedItems = false
         for i = 0, selItemCount - 1 do
             local item = reaper.GetSelectedMediaItem(0, i)
-            if item and itemOverlapsTimeSelection(item) then
-                anySelectedOverlap = true
+            if item and reaper.ValidatePtr(item, "MediaItem*") then
+                anySelectedItems = true
                 if AUDIBILITY.isItemAudible(item, soloActive) then
                     return { actionable = true, hasSource = true, reason = "selected_items_audible" }
                 end
             end
         end
-        if anySelectedOverlap then
+        if anySelectedItems then
             return { actionable = false, hasSource = true, reason = "selected_items_inaudible" }
         end
     end
@@ -1977,7 +1978,8 @@ function HELPERS.getSelectionMonitorState()
         local anyTrackOverlap = false
         for t = 0, selTrackCount - 1 do
             local track = reaper.GetSelectedTrack(0, t)
-            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            -- Selected tracks are explicit selection and should not be invalidated by time selection.
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track, false)
             if overlapOnTrack then anyTrackOverlap = true end
             if audibleOnTrack then
                 return { actionable = true, hasSource = true, reason = "selected_tracks_audible" }
@@ -1993,7 +1995,7 @@ function HELPERS.getSelectionMonitorState()
         local trackCount = reaper.CountTracks(0) or 0
         for t = 0, trackCount - 1 do
             local track = reaper.GetTrack(0, t)
-            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track, true)
             if overlapOnTrack then anyOverlap = true end
             if audibleOnTrack then
                 return { actionable = true, hasSource = true, reason = "time_selection_audible" }
@@ -10649,6 +10651,8 @@ buildFooterLines = function()
     local currentTimeStart, currentTimeEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     local hasTimeSel = currentTimeEnd > currentTimeStart
 
+    local explicitSelectionPresent = (rawSelItemCount > 0) or (rawSelTrackCount > 0)
+
     local selItemCount = 0
     local selItemDur = 0
     local selItemTrackSet = {}
@@ -10657,23 +10661,15 @@ buildFooterLines = function()
         local it = reaper.GetSelectedMediaItem(0, i)
         local tr = it and reaper.GetMediaItem_Track(it)
         if it and tr and AUDIBILITY.isTrackAudible(tr, soloActiveFooter) and AUDIBILITY.isItemAudible(it, soloActiveFooter) then
-            local inTimeSel = true
-            if hasTimeSel then
-                local ipos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
-                local iend = ipos + reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
-                inTimeSel = (ipos < currentTimeEnd and iend > currentTimeStart)
+            selItemCount = selItemCount + 1
+            selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
+            selItemTrackSet[tr] = true
+            local items = selectedItemsByTrack[tr]
+            if not items then
+                items = {}
+                selectedItemsByTrack[tr] = items
             end
-            if inTimeSel then
-                selItemCount = selItemCount + 1
-                selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
-                selItemTrackSet[tr] = true
-                local items = selectedItemsByTrack[tr]
-                if not items then
-                    items = {}
-                    selectedItemsByTrack[tr] = items
-                end
-                items[#items + 1] = it
-            end
+            items[#items + 1] = it
         end
     end
     local selItemTrackCount = 0
@@ -10700,7 +10696,7 @@ buildFooterLines = function()
         timeSelectionMode = false
     end
 
-    local useTimeSel = hasTimeSel and not HELPERS.hasExplicitOverlapSelection(currentTimeStart, currentTimeEnd)
+    local useTimeSel = hasTimeSel and (not explicitSelectionPresent)
     local timeSelResolved = HELPERS.getCachedTimeSelectionTargets(hasTimeSel, useTimeSel, rawSelTrackCount, rawSelItemCount)
     local timeSelItemCount = timeSelResolved and #timeSelResolved.items or 0
     local timeSelTrackCount = timeSelResolved and timeSelResolved.trackCount or 0
@@ -10819,7 +10815,7 @@ buildFooterLines = function()
         end
 
         local useTimeSelNow = useTimeSel
-        if timeSelectionMode == "time_selection" or selectionMode == "time_selection" then
+        if (not explicitSelectionPresent) and (timeSelectionMode == "time_selection" or selectionMode == "time_selection") then
             useTimeSelNow = true
         end
 
@@ -10844,7 +10840,7 @@ buildFooterLines = function()
     local summary = previewOutputSummary()
     local effectiveTargets = summary.targetCount
     local viaTimeSelection = useTimeSel
-    if timeSelectionMode == "time_selection" or selectionMode == "time_selection" then
+    if (not explicitSelectionPresent) and (timeSelectionMode == "time_selection" or selectionMode == "time_selection") then
         viaTimeSelection = true
     end
 
@@ -12215,11 +12211,8 @@ end
 canStartProcessingFromDialog = function()
     if isDrumKitWorkflowActive() then
         syncDrumKitWorkflowState()
-        openDialogWarning(
-            "Drum Kit Split (Private R&D)",
-            "Drum Kit Split workflow is a private R&D prototype in this branch.\n\nUse STEMwerk_DrumSep_Workflow_Prototype.lua for processing for now."
-        )
-        return false
+        -- Private R&D bridge: allow Start from main UI and route to prototype runner.
+        return true
     end
 
     if OS == "Windows" and GUI and GUI.windowsStartupMonitor and not hasAnySelection() then
@@ -12269,6 +12262,63 @@ canStartProcessingFromDialog = function()
     end
 
     return true
+end
+
+local function drumKitPrototypeModeFromSettings()
+    local model = tostring(SETTINGS and SETTINGS.model or "htdemucs")
+    if model == "htdemucs_ft" then return "clean_quality" end
+    if model == "htdemucs_6s" then return "clean_6stem" end
+    return "clean_fast"
+end
+
+local function runDrumKitSplitPrototypeFromMain()
+    syncDrumKitWorkflowState()
+    local mode = drumKitPrototypeModeFromSettings()
+    local scriptPath = script_path .. "STEMwerk_DrumSep_Workflow_Prototype.lua"
+
+    debugLog("=== Drum Kit Split private R&D bridge ===")
+    debugLog("drumkit_bridge_mode=" .. tostring(mode))
+    debugLog("drumkit_bridge_script=" .. tostring(scriptPath))
+    debugLog("drumkit_bridge_note=private_rnd_prototype_path")
+    debugLog("drumkit_bridge_note_stems=prototype_imports_available_drum_stems;ui_subset_not_wired_yet")
+
+    local prevNoAuto = rawget(_G, "STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN")
+    _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = true
+    local okLoad, apiOrErr = pcall(dofile, scriptPath)
+    _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = prevNoAuto
+    if not okLoad then
+        showMessage(
+            "Drum Kit Split (Private R&D)",
+            "Failed to load DrumSep workflow prototype.\n\n" .. tostring(apiOrErr),
+            "error"
+        )
+        return
+    end
+
+    local api = apiOrErr
+    if type(api) ~= "table" or type(api.runDrumSepWorkflowPrototype) ~= "function" then
+        showMessage(
+            "Drum Kit Split (Private R&D)",
+            "DrumSep workflow prototype API is unavailable.",
+            "error"
+        )
+        return
+    end
+
+    local result = api.runDrumSepWorkflowPrototype(mode, {
+        suppressSuccessMessage = false,
+        suppressFailureMessage = false,
+    })
+
+    if not (result and result.ok) then
+        debugLog("drumkit_bridge_result=FAIL")
+        debugLog("drumkit_bridge_error_stage=" .. tostring(result and result.error_stage or ""))
+        debugLog("drumkit_bridge_error_message=" .. tostring(result and result.error_message or ""))
+        return
+    end
+
+    debugLog("drumkit_bridge_result=PASS")
+    debugLog("drumkit_bridge_resolved_sources=" .. tostring(result and result.resolved_source_count or ""))
 end
 
 function handleDialogKeyboard(ctx)
@@ -12391,11 +12441,15 @@ function finalizeDialogLoop(ctx)
         reaper.defer(function() showArtGallery() end)
     elseif GUI.result then
         reaper.defer(function()
-            local ok, err = xpcall(runSeparationWorkflow, function(e)
+            local entrypoint = runSeparationWorkflow
+            if isDrumKitWorkflowActive() then
+                entrypoint = runDrumKitSplitPrototypeFromMain
+            end
+            local ok, err = xpcall(entrypoint, function(e)
                 return tostring(e) .. "\n" .. debug.traceback("", 2)
             end)
             if not ok then
-                debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
+                debugLog("ERROR: processing entrypoint crashed:\n" .. tostring(err))
                 if SW_LOG and SW_LOG.logExecResult then
                     SW_LOG.logExecResult("workflow_crash", -1, tostring(err))
                 end
