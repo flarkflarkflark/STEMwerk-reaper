@@ -2,7 +2,7 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2" author="flarkAUDIO" time="1778373560">
+      <version name="2.2.2.2.1" author="flarkAUDIO" time="1778373560">
         <changelog><![CDATA[
 - ReaPack-only support diagnostics hotfix
 - Adds STEMwerk_Save_Support_Bundle.lua

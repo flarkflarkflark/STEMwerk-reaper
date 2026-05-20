@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description Stemwerk: Main
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2
+-- @version 2.2.2.2.1
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.2.2.2"
+local APP_VERSION = "2.2.2.2.1"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
