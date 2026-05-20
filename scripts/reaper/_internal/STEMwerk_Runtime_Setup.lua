@@ -592,6 +592,55 @@ local function canImportModule(pythonPath, moduleName)
     return tonumber(rc) == 0
 end
 
+local function checkMacOSDemucsCompatibility(pythonPath)
+    if (C.OS or "") ~= "macOS" then return true, nil end
+    if not pythonPath or pythonPath == "" then return true, nil end
+    local script = [=[
+import sys
+def core(v):
+    return str(v).split("+", 1)[0]
+try:
+    import torch
+except Exception as exc:
+    print("torch_import_failed:" + str(exc))
+    sys.exit(1)
+try:
+    import numpy
+except Exception as exc:
+    print("numpy_import_failed:" + str(exc))
+    sys.exit(1)
+t = core(getattr(torch, "__version__", "0.0.0"))
+n = core(getattr(numpy, "__version__", "0.0.0"))
+try:
+    tmj, tmn = [int(x) for x in t.split(".")[:2]]
+except Exception:
+    tmj, tmn = 0, 0
+try:
+    nmj = int(n.split(".", 1)[0])
+except Exception:
+    nmj = 0
+if tmj > 2 or (tmj == 2 and tmn >= 6):
+    print("torch_too_new:" + t)
+    sys.exit(2)
+if nmj >= 2:
+    print("numpy_too_new:" + n)
+    sys.exit(3)
+print("ok")
+]=]
+    local cmd = commandQuote(pythonPath) .. " -c " .. commandQuote(script)
+    local rc, out = execCommandWithOutput(cmd, 15000)
+    local text = trim(out or "")
+    if tonumber(rc) == 0 then return true, nil end
+    logExec("macos_demucs_compat_failed", rc or -1, text)
+    if text:find("torch_too_new:", 1, true) then
+        return false, "torch_too_new_for_demucs"
+    end
+    if text:find("numpy_too_new:", 1, true) then
+        return false, "numpy_too_new_for_demucs"
+    end
+    return false, "macos_demucs_runtime_incompatible"
+end
+
 function M.safeDofile(path)
     if not path or path == "" then
         return false, "missing"
@@ -713,6 +762,12 @@ function M.verifyRuntimeAfterBootstrap()
     if pythonOk and not canImportModule(pythonPath, "stemwerk_core") then
         errors[#errors + 1] = "stemwerk_core_missing"
     end
+    if pythonOk then
+        local compatOk, compatErr = checkMacOSDemucsCompatibility(pythonPath)
+        if not compatOk and compatErr then
+            errors[#errors + 1] = compatErr
+        end
+    end
 
     if #errors > 0 then
         logExec("runtime_verify_failed", -1, table.concat(errors, ","))
@@ -830,6 +885,12 @@ function M.ensureDependenciesInteractive()
         for _, err in ipairs(runtimeErrors) do
             if err == "samplerate_missing" then hasSamplerate = true end
             if err == "stemwerk_core_missing" then hasCore = true end
+            if err == "torch_too_new_for_demucs" then
+                missing[#missing + 1] = "macOS Torch version is too new for bundled Demucs/audio-separator; run Rebuild venv or Repair"
+            end
+            if err == "numpy_too_new_for_demucs" then
+                missing[#missing + 1] = "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv or Repair"
+            end
         end
         if hasSamplerate then missing[#missing + 1] = "samplerate runtime" end
         if hasCore then missing[#missing + 1] = "stemwerk_core runtime" end

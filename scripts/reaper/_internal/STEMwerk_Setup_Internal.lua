@@ -607,6 +607,10 @@ local function prettySetupReason(reason)
             part = "audio-separator runtime verification failed"
         elseif lower == "audio_separator_missing_after_setup" then
             part = "audio-separator is missing after setup"
+        elseif lower == "torch_pin_repair_failed" then
+            part = "macOS Torch pin repair failed; run Rebuild venv/Repair to install the pinned torch stack"
+        elseif lower == "torch_pin_assert_failed" then
+            part = "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack"
         elseif lower == "backend_runtime_install_failed" then
             part = "GPU backend runtime install failed; CPU fallback used"
         elseif lower == "backend_runtime_verify_failed" then
@@ -651,6 +655,11 @@ local function prettyCheckError(err)
     if lower == "ffmpeg_unusable" then return "FFmpeg executable is unusable" end
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
+    if lower == "torch_too_new_for_demucs" then
+        return "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack"
+    end
+    if lower == "numpy_too_new_for_demucs" then return "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv/Repair" end
+    if lower == "macos_demucs_runtime_incompatible" then return "macOS Demucs/audio-separator runtime check failed; run Rebuild venv/Repair" end
     return humanizeToken(err)
 end
 
@@ -1847,6 +1856,52 @@ local function verifyRuntimePaths(state)
 
     if pythonOk and ffmpegOk and not canImportStemwerkCore(resolved.pythonPath) then
         errors[#errors + 1] = "stemwerk_core_missing"
+    end
+    if pythonOk and OS == "macOS" then
+        local script = [=[
+import sys
+def core(v):
+    return str(v).split("+", 1)[0]
+try:
+    import torch
+except Exception as exc:
+    print("torch_import_failed:" + str(exc))
+    sys.exit(1)
+try:
+    import numpy
+except Exception as exc:
+    print("numpy_import_failed:" + str(exc))
+    sys.exit(1)
+t = core(getattr(torch, "__version__", "0.0.0"))
+n = core(getattr(numpy, "__version__", "0.0.0"))
+try:
+    tmj, tmn = [int(x) for x in t.split(".")[:2]]
+except Exception:
+    tmj, tmn = 0, 0
+try:
+    nmj = int(n.split(".", 1)[0])
+except Exception:
+    nmj = 0
+if tmj > 2 or (tmj == 2 and tmn >= 6):
+    print("torch_too_new:" + t)
+    sys.exit(2)
+if nmj >= 2:
+    print("numpy_too_new:" + n)
+    sys.exit(3)
+print("ok")
+]=]
+        local cmd = quoteArg(resolved.pythonPath) .. " -c " .. quoteArg(script)
+        local rc, out = execProcess(cmd, 15000)
+        local text = trim(out or "")
+        if tonumber(rc) ~= 0 then
+            if text:find("torch_too_new:", 1, true) then
+                errors[#errors + 1] = "torch_too_new_for_demucs"
+            elseif text:find("numpy_too_new:", 1, true) then
+                errors[#errors + 1] = "numpy_too_new_for_demucs"
+            else
+                errors[#errors + 1] = "macos_demucs_runtime_incompatible"
+            end
+        end
     end
 
     return {

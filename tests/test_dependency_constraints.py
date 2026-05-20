@@ -223,6 +223,19 @@ def test_macos_bootstrap_assertion_reports_clear_failure_output():
     assert 'STEMwerk bootstrap failed: pinned runtime assertion failed (%s): %s\\n' in script
 
 
+def test_macos_runtime_verification_rejects_torch_26_plus():
+    from pathlib import Path
+
+    runtime_setup = Path("scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua").read_text()
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "torch_too_new_for_demucs" in runtime_setup
+    assert "torch_too_new_for_demucs" in setup_internal
+    assert "numpy_too_new_for_demucs" in runtime_setup
+    assert "numpy_too_new_for_demucs" in setup_internal
+    assert "macOS Torch version is too new for the bundled Demucs/audio-separator path" in setup_internal
+
+
 def test_macos_setup_internal_append_log_helper_is_guarded():
     from pathlib import Path
 
@@ -231,3 +244,13 @@ def test_macos_setup_internal_append_log_helper_is_guarded():
     assert "local appendLogLine" in script
     assert "if appendLogLine then" in script
     assert "appendLogLine = function(logFile, line)" in script
+
+
+def test_macos_setup_internal_reports_torch_drift_repair_guidance():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "torch_too_new_for_demucs" in script
+    assert "torch_pin_repair_failed" in script
+    assert "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack" in script

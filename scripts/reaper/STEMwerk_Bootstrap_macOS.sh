@@ -17,6 +17,7 @@ PINNED_TORCH_VERSION_INTEL="2.2.2"
 PINNED_TORCHVISION_VERSION_INTEL="0.17.2"
 PINNED_TORCHAUDIO_VERSION_INTEL="2.2.2"
 PINNED_TORCH_STACK_LABEL=""
+TORCH_PIN_APPLIED="0"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -165,6 +166,16 @@ PY
 }
 
 install_pinned_torch_stack() {
+  TORCH_PIN_APPLIED="1"
+  log "torch pin applied: true (${PINNED_TORCH_STACK_LABEL})"
+  "${VENV_PY}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
+from importlib.metadata import PackageNotFoundError, version
+for name in ("torch", "torchvision", "torchaudio"):
+    try:
+        print(f"pre_pin_{name}={version(name)}")
+    except PackageNotFoundError:
+        print(f"pre_pin_{name}=missing")
+PY
   log "Installing pinned torch stack (${PINNED_TORCH_STACK_LABEL}): torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
   "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
@@ -317,6 +328,7 @@ log_final_dependency_versions() {
   [ -x "${_venv_py}" ] || return 0
   log "=== final dependency versions ==="
   log "torch_stack_profile=${PINNED_TORCH_STACK_LABEL}"
+  log "torch_pin_applied=${TORCH_PIN_APPLIED}"
   "${_venv_py}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
 from importlib.metadata import PackageNotFoundError, version
 
