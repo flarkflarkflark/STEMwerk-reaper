@@ -265,6 +265,23 @@ local function containsNormalized(haystack, needle)
     return normalizePath(haystack):find(normalizePath(needle), 1, true) ~= nil
 end
 
+local function mockPowerShellZip(cmd)
+    if not IS_WINDOWS then
+        return false
+    end
+    local lower = cmd:lower()
+    if not lower:find("powershell.exe", 1, true) or not lower:find("compress%-archive") then
+        return false
+    end
+
+    local dst = cmd:match("%$dst%s*=%s*'(.-)'%s*;")
+    if not dst or dst == "" then
+        return true, makeFakeHandle("mock PowerShell zip command missing destination\n", 1)
+    end
+    writePlaceholder(dst:gsub("''", "'"))
+    return true, makeFakeHandle("", 0)
+end
+
 local function isWhichCommand(cmd, name)
     local lower = cmd:lower()
     if IS_WINDOWS then
@@ -276,6 +293,11 @@ end
 local function makeCommandInterceptor(context)
     return function(cmd)
         local lower = cmd:lower()
+        local handled, handle = mockPowerShellZip(cmd)
+        if handled then
+            return true, handle
+        end
+
         if context.disableCommandResolution then
             if isWhichCommand(cmd, "python3") or isWhichCommand(cmd, "python")
                 or isWhichCommand(cmd, "ffmpeg") then
@@ -613,10 +635,22 @@ local function assertPresentScenario(bundleDir, context)
     local allText = readBundleText(bundleDir)
 
     assertf(diagnostics:find("STEMwerk package version", 1, true) ~= nil, "diagnostics missing version block")
-    assertf(diagnostics:find("Python version", 1, true) ~= nil and diagnostics:find("3.11.9", 1, true) ~= nil, "diagnostics missing Python version")
-    assertf(diagnostics:find("FFmpeg version", 1, true) ~= nil and diagnostics:find("ffmpeg version 7.0-fake", 1, true) ~= nil, "diagnostics missing FFmpeg version")
+    if IS_WINDOWS then
+        assertf(diagnostics:find("Python version", 1, true) ~= nil and diagnostics:find("skipped for speed", 1, true) ~= nil,
+            "diagnostics missing Windows Python skip marker")
+        assertf(diagnostics:find("FFmpeg version", 1, true) ~= nil and diagnostics:find("skipped for speed", 1, true) ~= nil,
+            "diagnostics missing Windows FFmpeg skip marker")
+    else
+        assertf(diagnostics:find("Python version", 1, true) ~= nil and diagnostics:find("3.11.9", 1, true) ~= nil, "diagnostics missing Python version")
+        assertf(diagnostics:find("FFmpeg version", 1, true) ~= nil and diagnostics:find("ffmpeg version 7.0-fake", 1, true) ~= nil, "diagnostics missing FFmpeg version")
+    end
     assertf(trim(pythonDiagnostics) ~= "", "python_diagnostics.txt is empty")
-    assertf(pythonDiagnostics:find("python_version=3.11.9", 1, true) ~= nil, "python diagnostics missing version payload")
+    if IS_WINDOWS then
+        assertf(pythonDiagnostics:find("Python diagnostics skipped for speed.", 1, true) ~= nil,
+            "Windows python diagnostics missing skip payload")
+    else
+        assertf(pythonDiagnostics:find("python_version=3.11.9", 1, true) ~= nil, "python diagnostics missing version payload")
+    end
     assertf(allText:find("[TEMP_AUDIO_FILE]", 1, true) ~= nil, "sanitization placeholder not present")
     assertf(allText:find("[STEMWERK_TEMP_DIR]", 1, true) ~= nil, "temp directory placeholder not present")
     assertf(tempInventory:find("| file |", 1, true) ~= nil, "temp inventory missing file metadata")
@@ -644,8 +678,13 @@ local function assertMissingScenario(bundleDir)
     assertf(diagnostics:find("FFmpeg path", 1, true) ~= nil and diagnostics:find("missing", 1, true) ~= nil, "missing scenario did not report missing FFmpeg path")
     assertf(diagnostics:find("bootstrap.env", 1, true) ~= nil and diagnostics:find("missing", 1, true) ~= nil, "missing runtime files not reported")
     assertf(trim(pythonDiagnostics) ~= "", "missing scenario python_diagnostics.txt is empty")
-    assertf(pythonDiagnostics:find("no Python path detected", 1, true) ~= nil or pythonDiagnostics:find("missing", 1, true) ~= nil,
-        "missing scenario python diagnostics did not explain the failure")
+    if IS_WINDOWS then
+        assertf(pythonDiagnostics:find("Python diagnostics skipped for speed.", 1, true) ~= nil,
+            "missing scenario Windows python diagnostics missing skip payload")
+    else
+        assertf(pythonDiagnostics:find("no Python path detected", 1, true) ~= nil or pythonDiagnostics:find("missing", 1, true) ~= nil,
+            "missing scenario python diagnostics did not explain the failure")
+    end
 
     assertNoForbiddenFiles(bundleDir)
     assertMaxFileSize(bundleDir, 1024 * 1024)
