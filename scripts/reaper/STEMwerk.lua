@@ -1083,6 +1083,102 @@ STEMS = {
     { name = "Piano",  color = {255, 120, 200}, file = "piano.wav", selected = true, key = "6", sixStemOnly = true },
 }
 
+WORKFLOW_MODE_STANDARD = "standard"
+WORKFLOW_MODE_DRUM_KIT = "drum_kit_split"
+DRUM_KIT_WORKFLOW_MODE = WORKFLOW_MODE_STANDARD
+DRUM_KIT_NORMAL_STEM_SELECTIONS = nil
+
+-- PRIVATE R&D ONLY: Drum Kit Split workflow stems.
+-- Stems always represent the outputs this workflow will import.
+DRUM_KIT_STEMS = {
+    { name = "Kick",   color = {255, 170, 120}, file = "kick.wav",  selected = true, key = "1", sixStemOnly = false },
+    { name = "Snare",  color = {255, 120, 120}, file = "snare.wav", selected = true, key = "2", sixStemOnly = false },
+    { name = "Toms",   color = {255, 210, 120}, file = "toms.wav",  selected = true, key = "3", sixStemOnly = false },
+    { name = "Hi-Hat", color = {210, 255, 120}, file = "hihat.wav", selected = true, key = "4", sixStemOnly = false },
+    { name = "Ride",   color = {120, 220, 255}, file = "ride.wav",  selected = true, key = "5", sixStemOnly = false },
+    { name = "Crash",  color = {180, 180, 255}, file = "crash.wav", selected = true, key = "6", sixStemOnly = false },
+}
+
+function isDrumKitWorkflowActive()
+    return DRUM_KIT_WORKFLOW_MODE == WORKFLOW_MODE_DRUM_KIT
+end
+
+function getActiveStemListForCurrentWorkflow()
+    if isDrumKitWorkflowActive() then
+        return DRUM_KIT_STEMS
+    end
+    return STEMS
+end
+
+function setAllStemSelections(stems, value)
+    for _, st in ipairs(stems or {}) do
+        st.selected = value and true or false
+    end
+end
+
+function captureStemSelections(stems)
+    local out = {}
+    for _, st in ipairs(stems or {}) do
+        out[tostring(st.name or "")] = st.selected and true or false
+    end
+    return out
+end
+
+function applyCapturedStemSelections(stems, selections)
+    if type(selections) ~= "table" then return end
+    for _, st in ipairs(stems or {}) do
+        local key = tostring(st.name or "")
+        if selections[key] ~= nil then
+            st.selected = selections[key] and true or false
+        end
+    end
+end
+
+function syncDrumKitWorkflowState()
+    if not isDrumKitWorkflowActive() then
+        return
+    end
+    -- Drum Kit Split is currently import-only and always uses new tracks.
+    SETTINGS.createNewTracks = true
+    SETTINGS.postProcessTakes = "none"
+    -- Private safety: disable destructive/altering "After" actions in this prototype mode.
+    SETTINGS.muteOriginal = false
+    SETTINGS.deleteOriginal = false
+    SETTINGS.deleteOriginalTrack = false
+    SETTINGS.muteOriginalTrack = false
+    SETTINGS.muteSelection = false
+    SETTINGS.deleteSelection = false
+end
+
+function setWorkflowMode(mode)
+    local normalized = tostring(mode or "")
+    if normalized ~= WORKFLOW_MODE_DRUM_KIT then
+        normalized = WORKFLOW_MODE_STANDARD
+    end
+    if DRUM_KIT_WORKFLOW_MODE == normalized then
+        if normalized == WORKFLOW_MODE_DRUM_KIT then
+            syncDrumKitWorkflowState()
+        end
+        return false
+    end
+
+    if normalized == WORKFLOW_MODE_DRUM_KIT then
+        DRUM_KIT_NORMAL_STEM_SELECTIONS = captureStemSelections(STEMS)
+        setAllStemSelections(DRUM_KIT_STEMS, true)
+        DRUM_KIT_WORKFLOW_MODE = WORKFLOW_MODE_DRUM_KIT
+        if SETTINGS.createFolder == nil or SETTINGS.createFolder == false then
+            SETTINGS.createFolder = true
+        end
+        syncDrumKitWorkflowState()
+    else
+        DRUM_KIT_WORKFLOW_MODE = WORKFLOW_MODE_STANDARD
+        applyCapturedStemSelections(STEMS, DRUM_KIT_NORMAL_STEM_SELECTIONS)
+        DRUM_KIT_NORMAL_STEM_SELECTIONS = nil
+    end
+
+    return true
+end
+
 -- Available processing devices
 DEVICES = {
     { id = "auto", name = "Auto", desc = "Automatically select best GPU" },
@@ -1557,7 +1653,8 @@ end
 
 countSelectableSelectedStems = function(skipIndex)
     local count = 0
-    for i, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for i, stem in ipairs(activeStems or {}) do
         if i ~= skipIndex and stem.selected and stemIsSelectableForCurrentModel(stem) then
             count = count + 1
         end
@@ -1569,7 +1666,8 @@ ensureAtLeastOneStemSelected = function()
     if countSelectableSelectedStems(nil) > 0 then
         return false
     end
-    for _, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for _, stem in ipairs(activeStems or {}) do
         if stemIsSelectableForCurrentModel(stem) then
             stem.selected = true
             return true
@@ -1579,7 +1677,8 @@ ensureAtLeastOneStemSelected = function()
 end
 
 toggleStemSelection = function(index)
-    local stem = STEMS and STEMS[index]
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    local stem = activeStems and activeStems[index]
     if not stem or not stemIsSelectableForCurrentModel(stem) then
         return false
     end
@@ -1598,7 +1697,8 @@ end
 
 areAllSelectableStemsSelected = function()
     local selectableCount = 0
-    for _, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for _, stem in ipairs(activeStems or {}) do
         if stemIsSelectableForCurrentModel(stem) then
             selectableCount = selectableCount + 1
             if not stem.selected then
@@ -1610,7 +1710,8 @@ areAllSelectableStemsSelected = function()
 end
 
 selectAllSelectableStems = function()
-    for _, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for _, stem in ipairs(activeStems or {}) do
         if stemIsSelectableForCurrentModel(stem) then
             stem.selected = true
         elseif stem.sixStemOnly then
@@ -1622,6 +1723,13 @@ end
 setModelPreservingStemIntent = function(modelId)
     if not modelId or SETTINGS.model == modelId then
         return false
+    end
+
+    if isDrumKitWorkflowActive() then
+        SETTINGS.model = modelId
+        syncDrumKitWorkflowState()
+        saveSettings()
+        return true
     end
 
     local wasAllSelected = areAllSelectableStemsSelected()
@@ -10515,6 +10623,8 @@ end
 
 buildFooterLines = function()
     local is6Stem = isSixStemModel(SETTINGS.model)
+    local drumKitMode = isDrumKitWorkflowActive()
+    local activeStems = getActiveStemListForCurrentWorkflow()
     local rawSelTrackCount = reaper.CountSelectedTracks(0) or 0
     local rawSelItemCount = reaper.CountSelectedMediaItems(0) or 0
 
@@ -10640,8 +10750,8 @@ buildFooterLines = function()
     end
 
     local selectedStemCount = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then
             selectedStemCount = selectedStemCount + 1
         end
     end
@@ -10812,8 +10922,8 @@ buildFooterLines = function()
     end
 
     local stemsPerTrack = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then stemsPerTrack = stemsPerTrack + 1 end
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then stemsPerTrack = stemsPerTrack + 1 end
     end
 
     local outLine
@@ -10908,9 +11018,10 @@ buildFooterLines = function()
         end
 
         local selectedNames = {}
-        for _, stem in ipairs(STEMS) do
-            if stem.selected and (not stem.sixStemOnly or is6Stem) then
-                table.insert(selectedNames, T(stem.name:lower()))
+        for _, stem in ipairs(activeStems) do
+            if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then
+                local key = tostring(stem.name or ""):lower()
+                table.insert(selectedNames, T(key) or stem.name)
             end
         end
         local namesStr = table.concat(selectedNames, ", ")
@@ -10943,6 +11054,9 @@ buildFooterLines = function()
                 "Location: %s",
                 trSafe("footer_location_new_tracks", "New tracks")
             )
+        end
+        if drumKitMode then
+            locLine = tostring(locLine or "") .. " · Drum Kit Split → drum-kit stems as new tracks. Model = parent quality."
         end
     end
 
@@ -11325,6 +11439,11 @@ function renderMainColumns(ctx)
     local S = ctx.S
     local contentTop = ctx.contentTop or S(45)
     local is6Stem = ctx.is6Stem
+    local drumKitMode = isDrumKitWorkflowActive()
+    if drumKitMode then
+        syncDrumKitWorkflowState()
+    end
+    local activeStems = getActiveStemListForCurrentWorkflow()
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
 
     gfx.setfont(1, "Arial", S(13))
@@ -11354,14 +11473,15 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
+    local presetLabelDrumKit = "Drum Kit"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
     local presetLabelOther   = (T("other") or "Other")      .. " (O)"
     local presetLabelPiano   = (T("piano") or "Piano")      .. " (P)"
     local presetLabelGuitar  = (T("guitar") or "Guitar")    .. " (G)"
-    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
-    if is6Stem then
+    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelDrumKit, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
+    if is6Stem and not drumKitMode then
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
@@ -11397,6 +11517,11 @@ function renderMainColumns(ctx)
         _pa.other   = (not v) and (not d) and (not b) and o and no56
         _pa.guitar  = is6Stem and (not v) and (not d) and (not b) and (not o) and g and (not p)
         _pa.piano   = is6Stem and (not v) and (not d) and (not b) and (not o) and (not g) and p
+        _pa.drumkit = drumKitMode
+    end
+    local function applyStandardPreset(fn)
+        setWorkflowMode(WORKFLOW_MODE_STANDARD)
+        if type(fn) == "function" then fn() end
     end
     local function drawPresetBtn(py, label, rawColor, isActive)
         if utilityMode then
@@ -11404,39 +11529,49 @@ function renderMainColumns(ctx)
         end
         return drawButton(col1X, py, colW, btnH, label, false, rawColor, presetsBtnFontSize)
     end
-    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, _pa.karaoke) then applyPresetKaraoke() end
+    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, (not drumKitMode) and _pa.karaoke) then applyStandardPreset(applyPresetKaraoke) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}, _pa.all) then applyPresetAll() end
+    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}, (not drumKitMode) and _pa.all) then applyStandardPreset(applyPresetAll) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
+
+    presetY = presetY + S(22)
+    if drawPresetBtn(presetY, presetLabelDrumKit, {140, 110, 230}, _pa.drumkit) then
+        setWorkflowMode(WORKFLOW_MODE_DRUM_KIT)
+    end
+    setTooltip(col1X, presetY, colW, btnH, "Drum Kit Split creates Kick, Snare, Toms, Hi-Hat, Ride and Crash.\nModel controls the parent drum separation quality.")
 
     presetY = presetY + S(28)
 
-    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals) then applyPresetVocalsOnly() end
+    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, (not drumKitMode) and _pa.vocals) then applyStandardPreset(applyPresetVocalsOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums) then applyPresetDrumsOnly() end
+    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, (not drumKitMode) and _pa.drums) then applyStandardPreset(applyPresetDrumsOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass) then applyPresetBassOnly() end
+    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, (not drumKitMode) and _pa.bass) then applyStandardPreset(applyPresetBassOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other) then applyPresetOtherOnly() end
+    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, (not drumKitMode) and _pa.other) then applyStandardPreset(applyPresetOtherOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
-    if is6Stem then
-        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then applyPresetGuitarOnly() end
+    if is6Stem and not drumKitMode then
+        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then applyStandardPreset(applyPresetGuitarOnly) end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + S(22)
-        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then applyPresetPianoOnly() end
+        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then applyStandardPreset(applyPresetPianoOnly) end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + S(22)
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    drawColumnHeader(is6Stem and T("stems_6") or "Stems:", col2X, stemsW, mainHeaderFont, contentTop)
-    setTooltip(col2X, contentTop, stemsW, S(16), T("tooltip_section_stems") or "Choose which stems to create.")
+    local stemsHeaderLabel = drumKitMode and "Stems (Drum Kit):" or (is6Stem and T("stems_6") or "Stems:")
+    drawColumnHeader(stemsHeaderLabel, col2X, stemsW, mainHeaderFont, contentTop)
+    local stemsHeaderTip = drumKitMode
+        and "Stems are the outputs this workflow will import.\nDrum Kit Split outputs: Kick, Snare, Toms, Hi-Hat, Ride, Crash."
+        or (T("tooltip_section_stems") or "Choose which stems to create.")
+    setTooltip(col2X, contentTop, stemsW, S(16), stemsHeaderTip)
 
     local stemY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
@@ -11446,11 +11581,11 @@ function renderMainColumns(ctx)
         Bass = "tooltip_stem_bass",
         Other = "tooltip_stem_other",
         Guitar = "tooltip_stem_guitar",
-        Piano = "tooltip_stem_piano"
+        Piano = "tooltip_stem_piano",
     }
     local stemLabels = {}
-    for _, st in ipairs(STEMS) do
-        if not st.sixStemOnly or is6Stem then
+    for _, st in ipairs(activeStems) do
+        if not st.sixStemOnly or is6Stem or drumKitMode then
             local k = tostring(st.name or ""):lower()
             local dn = T(k) or st.name
             stemLabels[#stemLabels + 1] = tostring(dn) .. " (" .. st.key .. ")"
@@ -11458,8 +11593,8 @@ function renderMainColumns(ctx)
     end
     local stemsBtnFontSize = _ubfs
 
-    for i, stem in ipairs(STEMS) do
-        if not stem.sixStemOnly or is6Stem then
+    for i, stem in ipairs(activeStems) do
+        if not stem.sixStemOnly or is6Stem or drumKitMode then
             local k = tostring(stem.name or ""):lower()
             local displayName = T(k) or stem.name
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
@@ -11470,15 +11605,18 @@ function renderMainColumns(ctx)
                 clicked = drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize)
             end
             if clicked then toggleStemSelection(i) end
-            local tooltipKey = stemTooltipKeys[stem.name] or "tooltip_stem_other"
-            setTooltipWithShortcut(col2X, stemY, colW, btnH, T(tooltipKey), stem.key, stem.color)
+            local tooltipText = stemTooltipKeys[stem.name] and T(stemTooltipKeys[stem.name]) or ("Import " .. tostring(displayName) .. " output stem.")
+            setTooltipWithShortcut(col2X, stemY, colW, btnH, tooltipText, stem.key, stem.color)
             stemY = stemY + S(22)
         end
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("model"), col3X, modelColW, mainHeaderFont, contentTop)
-    setTooltip(col3X, contentTop, modelColW, S(16), T("tooltip_section_model") or "Choose speed/quality and stem model.")
+    local modelHeaderTip = drumKitMode
+        and "Model controls the parent drum separation quality: Fast (htdemucs), Quality (htdemucs_ft), 6-Stem (htdemucs_6s)."
+        or (T("tooltip_section_model") or "Choose speed/quality and stem model.")
+    setTooltip(col3X, contentTop, modelColW, S(16), modelHeaderTip)
     gfx.setfont(1, "Arial", S(13))
 
     local modelBoxW = modelColW
@@ -11535,10 +11673,14 @@ function renderMainColumns(ctx)
     gfx.setfont(1, "Arial", S(13))
 
     local outBoxW = outputColW
+    local forceNewTracksForDrumKit = drumKitMode
+    if forceNewTracksForDrumKit then
+        syncDrumKitWorkflowState()
+    end
 
     local stemCount = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then
             stemCount = stemCount + 1
         end
     end
@@ -11554,12 +11696,33 @@ function renderMainColumns(ctx)
         SETTINGS.createNewTracks = true
         SETTINGS.postProcessTakes = "none"
     end
-    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
-    outY = outY + S(22)
-    if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW, nil, nil, outputBtnFontSize) then
-        SETTINGS.createNewTracks = false
+    if forceNewTracksForDrumKit then
+        setTooltip(col5X, outY, outBoxW, btnH, "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.")
+    else
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
     end
-    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
+    outY = outY + S(22)
+    local inPlaceDisabled = forceNewTracksForDrumKit
+    local inPlaceColor = inPlaceDisabled and {130, 130, 130} or nil
+    if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, inPlaceColor, outBoxW, nil, nil, outputBtnFontSize) then
+        if inPlaceDisabled then
+            openDialogWarning(
+                "Drum Kit Split Output",
+                "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.\n\nIn-place output is disabled in this private R&D prototype."
+            )
+        else
+            SETTINGS.createNewTracks = false
+        end
+    end
+    if inPlaceDisabled then
+        setTooltip(col5X, outY, outBoxW, btnH, "Drum Kit Split mode forces New tracks output.")
+    else
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
+    end
+
+    if inPlaceDisabled then
+        SETTINGS.createNewTracks = true
+    end
 
     outY = outY + S(28)
     local groupingEnabled = SETTINGS.createNewTracks == true
@@ -11669,71 +11832,93 @@ function renderMainColumns(ctx)
         end
         setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_create_folder"))
 
-        afterY = afterY + S(22)
-        if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
-            SETTINGS.muteOriginal = not SETTINGS.muteOriginal
-            if SETTINGS.muteOriginal then
-                SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
-                SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
-            end
-        end
-        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_original"))
-
-        afterY = afterY + S(22)
-        local delItemColor = SETTINGS.deleteOriginal and _utilDanger or {160, 160, 160}
-        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], afterBoxW, afterBtnFontSize) then
-            SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
-            if SETTINGS.deleteOriginal then
-                SETTINGS.muteOriginal = false; SETTINGS.muteOriginalTrack = false
-                SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
-            end
-        end
-        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_original"))
-
-        afterY = afterY + S(22)
-        local delTrackColor = SETTINGS.deleteOriginalTrack and _utilDanger or {160, 160, 160}
-        if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], afterBoxW, afterBtnFontSize) then
-            SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
-            if SETTINGS.deleteOriginalTrack then
-                SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false; SETTINGS.muteOriginalTrack = false
-                SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
-            end
-        end
-        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_track"))
-
-        afterY = afterY + S(22)
-        local muteTrackColor = SETTINGS.muteOriginalTrack and {posR, posG, posB} or {160, 160, 160}
-        if drawCheckbox(col6X, afterY, SETTINGS.muteOriginalTrack, T("mute_track"), muteTrackColor[1], muteTrackColor[2], muteTrackColor[3], afterBoxW, afterBtnFontSize) then
-            SETTINGS.muteOriginalTrack = not SETTINGS.muteOriginalTrack
-            if SETTINGS.muteOriginalTrack then
-                SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
-                SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
-            end
-        end
-        setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_track"))
-
-        local hasTimeSel = hasTimeSelection()
-        if hasTimeSel then
+        if drumKitMode then
             afterY = afterY + S(22)
-            if drawCheckbox(col6X, afterY, SETTINGS.muteSelection, T("mute_selection"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
-                SETTINGS.muteSelection = not SETTINGS.muteSelection
-                if SETTINGS.muteSelection then
-                    SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
-                    SETTINGS.deleteSelection = false
-                end
-            end
-            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_selection"))
+            drawCheckbox(col6X, afterY, true, "Keep original", 140, 190, 140, afterBoxW, afterBtnFontSize)
+            setTooltip(col6X, afterY, afterBoxW, btnH, "Drum Kit prototype keeps original media by default.")
 
             afterY = afterY + S(22)
-            local delSelColor = SETTINGS.deleteSelection and _utilDanger or {160, 160, 160}
-            if drawCheckbox(col6X, afterY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], afterBoxW, afterBtnFontSize) then
-                SETTINGS.deleteSelection = not SETTINGS.deleteSelection
-                if SETTINGS.deleteSelection then
-                    SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
-                    SETTINGS.muteSelection = false
+            drawCheckbox(col6X, afterY, false, "Mute original (disabled)", 140, 140, 140, afterBoxW, afterBtnFontSize)
+            setTooltip(col6X, afterY, afterBoxW, btnH, "Disabled in Drum Kit Split prototype.")
+
+            afterY = afterY + S(22)
+            drawCheckbox(col6X, afterY, false, "Delete original (disabled)", 140, 140, 140, afterBoxW, afterBtnFontSize)
+            setTooltip(col6X, afterY, afterBoxW, btnH, "Destructive actions are disabled in Drum Kit Split prototype.")
+
+            afterY = afterY + S(22)
+            drawCheckbox(col6X, afterY, false, "Delete track (disabled)", 140, 140, 140, afterBoxW, afterBtnFontSize)
+            setTooltip(col6X, afterY, afterBoxW, btnH, "Destructive actions are disabled in Drum Kit Split prototype.")
+
+            afterY = afterY + S(22)
+            drawCheckbox(col6X, afterY, false, "Delete selection (disabled)", 140, 140, 140, afterBoxW, afterBtnFontSize)
+            setTooltip(col6X, afterY, afterBoxW, btnH, "Destructive actions are disabled in Drum Kit Split prototype.")
+        else
+            afterY = afterY + S(22)
+            if drawCheckbox(col6X, afterY, SETTINGS.muteOriginal, T("mute_original"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
+                SETTINGS.muteOriginal = not SETTINGS.muteOriginal
+                if SETTINGS.muteOriginal then
+                    SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
+                    SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
                 end
             end
-            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_selection"))
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_original"))
+
+            afterY = afterY + S(22)
+            local delItemColor = SETTINGS.deleteOriginal and _utilDanger or {160, 160, 160}
+            if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], afterBoxW, afterBtnFontSize) then
+                SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
+                if SETTINGS.deleteOriginal then
+                    SETTINGS.muteOriginal = false; SETTINGS.muteOriginalTrack = false
+                    SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
+                end
+            end
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_original"))
+
+            afterY = afterY + S(22)
+            local delTrackColor = SETTINGS.deleteOriginalTrack and _utilDanger or {160, 160, 160}
+            if drawCheckbox(col6X, afterY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], afterBoxW, afterBtnFontSize) then
+                SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
+                if SETTINGS.deleteOriginalTrack then
+                    SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false; SETTINGS.muteOriginalTrack = false
+                    SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
+                end
+            end
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_track"))
+
+            afterY = afterY + S(22)
+            local muteTrackColor = SETTINGS.muteOriginalTrack and {posR, posG, posB} or {160, 160, 160}
+            if drawCheckbox(col6X, afterY, SETTINGS.muteOriginalTrack, T("mute_track"), muteTrackColor[1], muteTrackColor[2], muteTrackColor[3], afterBoxW, afterBtnFontSize) then
+                SETTINGS.muteOriginalTrack = not SETTINGS.muteOriginalTrack
+                if SETTINGS.muteOriginalTrack then
+                    SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
+                    SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
+                end
+            end
+            setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_track"))
+
+            local hasTimeSel = hasTimeSelection()
+            if hasTimeSel then
+                afterY = afterY + S(22)
+                if drawCheckbox(col6X, afterY, SETTINGS.muteSelection, T("mute_selection"), posR, posG, posB, afterBoxW, afterBtnFontSize) then
+                    SETTINGS.muteSelection = not SETTINGS.muteSelection
+                    if SETTINGS.muteSelection then
+                        SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
+                        SETTINGS.deleteSelection = false
+                    end
+                end
+                setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_mute_selection"))
+
+                afterY = afterY + S(22)
+                local delSelColor = SETTINGS.deleteSelection and _utilDanger or {160, 160, 160}
+                if drawCheckbox(col6X, afterY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], afterBoxW, afterBtnFontSize) then
+                    SETTINGS.deleteSelection = not SETTINGS.deleteSelection
+                    if SETTINGS.deleteSelection then
+                        SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false; SETTINGS.muteOriginalTrack = false
+                        SETTINGS.muteSelection = false
+                    end
+                end
+                setTooltip(col6X, afterY, afterBoxW, btnH, T("tooltip_delete_selection"))
+            end
         end
 
     else
@@ -12028,6 +12213,15 @@ openCustomFolderDialog = function()
 end
 
 canStartProcessingFromDialog = function()
+    if isDrumKitWorkflowActive() then
+        syncDrumKitWorkflowState()
+        openDialogWarning(
+            "Drum Kit Split (Private R&D)",
+            "Drum Kit Split workflow is a private R&D prototype in this branch.\n\nUse STEMwerk_DrumSep_Workflow_Prototype.lua for processing for now."
+        )
+        return false
+    end
+
     if OS == "Windows" and GUI and GUI.windowsStartupMonitor and not hasAnySelection() then
         local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
         openDialogWarning(promptTitle, promptMessage)
@@ -12044,8 +12238,9 @@ canStartProcessingFromDialog = function()
     end
 
     local is6Stem = isEffectiveRun6Stem()
+    local activeStems = getActiveStemListForCurrentWorkflow()
     local validSelected = false
-    for _, stem in ipairs(STEMS) do
+    for _, stem in ipairs(activeStems) do
         if stem.selected and ((not stem.sixStemOnly) or is6Stem) then
             validSelected = true
             break
@@ -12092,17 +12287,19 @@ function handleDialogKeyboard(ctx)
     elseif char == 50 then toggleStemSelection(2)
     elseif char == 51 then toggleStemSelection(3)
     elseif char == 52 then toggleStemSelection(4)
-    elseif char == 53 and isSixStemModel(SETTINGS.model) then toggleStemSelection(5)
-    elseif char == 54 and isSixStemModel(SETTINGS.model) then toggleStemSelection(6)
-    elseif char == 118 or char == 86 then applyPresetVocalsOnly()
-    elseif char == 100 or char == 68 then applyPresetDrumsOnly()
-    elseif char == 98 or char == 66 then applyPresetBassOnly()
-    elseif char == 111 or char == 79 then applyPresetOtherOnly()
-    elseif char == 112 or char == 80 then applyPresetPianoOnly()
-    elseif char == 103 or char == 71 then applyPresetGuitarOnly()
-    elseif char == 107 or char == 75 then applyPresetKaraoke()
-    elseif char == 105 or char == 73 then applyPresetKaraoke()
-    elseif char == 97 or char == 65 then applyPresetAll()
+    elseif char == 53 and (isSixStemModel(SETTINGS.model) or isDrumKitWorkflowActive()) then toggleStemSelection(5)
+    elseif char == 54 and (isSixStemModel(SETTINGS.model) or isDrumKitWorkflowActive()) then toggleStemSelection(6)
+    elseif char == 118 or char == 86 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetVocalsOnly()
+    elseif char == 100 or char == 68 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetDrumsOnly()
+    elseif char == 98 or char == 66 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetBassOnly()
+    elseif char == 111 or char == 79 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetOtherOnly()
+    elseif char == 112 or char == 80 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetPianoOnly()
+    elseif char == 103 or char == 71 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetGuitarOnly()
+    elseif char == 107 or char == 75 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetKaraoke()
+    elseif char == 105 or char == 73 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetKaraoke()
+    elseif char == 97 or char == 65 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetAll()
+    elseif char == 106 or char == 74 then
+        setWorkflowMode(WORKFLOW_MODE_DRUM_KIT)
     elseif char == 102 or char == 70 then
         if isModelAvailableInCurrentMode("htdemucs") then
             setModelPreservingStemIntent("htdemucs")
