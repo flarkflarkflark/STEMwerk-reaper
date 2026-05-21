@@ -1597,6 +1597,7 @@ local function collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)
 
     local rootAllowedFiles = {
         ["drumkit_run_metadata.json"] = true,
+        ["drumkit_events.jsonl"] = true,
         ["run_metadata.json"] = true,
         ["source_resolution.json"] = true,
         ["import_summary.json"] = true,

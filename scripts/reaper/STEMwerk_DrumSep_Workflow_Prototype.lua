@@ -219,6 +219,14 @@ local function writeTextFile(path, content)
     return true, nil
 end
 
+local function appendTextFile(path, content)
+    local f = io.open(path, "ab")
+    if not f then return false, "open_failed" end
+    f:write(content or "")
+    f:close()
+    return true, nil
+end
+
 local function formatUtcIso(epochSeconds)
     local epoch = tonumber(epochSeconds)
     if not epoch then return "" end
@@ -808,12 +816,33 @@ end
 local function runPipelineForSource(mode, sourceEntry, ctx)
     local srcIdxLabel = sourceIndexLabel(ctx and ctx.source_index or sourceEntry and sourceEntry.source_index or 1)
     local srcLabel = sanitizeSourceLabel(sourceEntry and sourceEntry.source_label or "", srcIdxLabel)
+    local emitEvent = (ctx and type(ctx.emit_event) == "function") and ctx.emit_event or nil
+    local sourceIndex = tonumber(ctx and ctx.source_index or sourceEntry and sourceEntry.source_index or 1) or 1
+    local sourceCount = tonumber(ctx and ctx.source_count or 1) or 1
+    local function emitSourceEvent(eventName, fields)
+        if not emitEvent then return end
+        fields = fields or {}
+        fields.event = eventName
+        fields.source_index = sourceIndex
+        fields.source_count = sourceCount
+        fields.track_label = sanitizeTrackLabel(sourceEntry and sourceEntry.track_name or "", sourceEntry and sourceEntry.track_index or sourceIndex)
+        fields.source_label = srcLabel
+        emitEvent(fields)
+    end
+    local function emitFailure(stageName, message, logPath)
+        emitSourceEvent("failure", {
+            stage = stageName,
+            status = "failed",
+            error_message = tostring(message or ""),
+            log_path = tostring(logPath or ""),
+        })
+    end
     local sourceResult = {
         ok = false,
         source_kind = sourceEntry.source_kind,
         source_path = sourceEntry.source_path,
         source_label = srcLabel,
-        source_index = tonumber(ctx and ctx.source_index or sourceEntry and sourceEntry.source_index or 1) or 1,
+        source_index = sourceIndex,
         source_index_label = srcIdxLabel,
         track_name = sourceEntry.track_name,
         segment_start = sourceEntry.segment_start,
@@ -858,6 +887,14 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
     local inputWav = pathJoin(stage0, "input.wav")
     sourceResult.stage0_input_path = inputWav
     local ffLog = pathJoin(stage0, "ffmpeg_extract.log")
+    emitSourceEvent("stage0_extract_start", {
+        stage = "stage0_extract",
+        status = "start",
+        stage_dir = stage0,
+        input_path = tostring(sourceEntry.source_path or ""),
+        output_path = inputWav,
+        ffmpeg_log_path = ffLog,
+    })
     local ffCmd = string.format(
         "%s -y -hide_banner -nostats -loglevel error -i %s -ss %.6f -t %.6f -ar 44100 -ac 2 %s",
         quoteArg(FFMPEG_BIN),
@@ -872,8 +909,17 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
         sourceResult.error_message = "Stage 0 extraction failed."
         sourceResult.log_path = ffLog
         sourceResult.elapsed_seconds = nowSeconds() - sourceT0
+        emitFailure("stage0_extract", sourceResult.error_message, ffLog)
         return sourceResult
     end
+    emitSourceEvent("stage0_extract_done", {
+        stage = "stage0_extract",
+        status = "done",
+        stage_dir = stage0,
+        output_path = inputWav,
+        ffmpeg_log_path = ffLog,
+        exit_code = ffRc,
+    })
 
     local stage1Rc = 0
     local stage2Rc = 0
@@ -901,6 +947,16 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
             quoteArg(ctx.python_bin), quoteArg(ctx.separator_script), quoteArg(inputWav), quoteArg(stage1OutputDir),
             "--model", quoteArg(parentModel), "--device", quoteArg(DEVICE)
         }, " ")
+        emitSourceEvent("stage1_parent_start", {
+            stage = "stage1_parent",
+            status = "start",
+            stage_dir = stage1OutputDir,
+            parent_model = parentModel,
+            stdout_path = stage1Stdout,
+            stderr_path = stage1Stderr,
+            log_path = pathJoin(stage1OutputDir, "separation_log.txt"),
+            command = stage1Cmd,
+        })
         stage1Rc = runShell(stage1Cmd, stage1Stdout, stage1Stderr)
         local drumsWav = pathJoin(stage1OutputDir, "drums.wav")
         if stage1Rc ~= 0 or not fileExists(drumsWav) then
@@ -910,8 +966,20 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
             sourceResult.stage1_exit_code = stage1Rc
             sourceResult.stage1_cmd = stage1Cmd
             sourceResult.elapsed_seconds = nowSeconds() - sourceT0
+            emitFailure("stage1_parent", sourceResult.error_message, stage1Stderr)
             return sourceResult
         end
+        emitSourceEvent("stage1_parent_done", {
+            stage = "stage1_parent",
+            status = "done",
+            stage_dir = stage1OutputDir,
+            parent_model = parentModel,
+            stdout_path = stage1Stdout,
+            stderr_path = stage1Stderr,
+            log_path = pathJoin(stage1OutputDir, "separation_log.txt"),
+            exit_code = stage1Rc,
+            output_path = drumsWav,
+        })
 
         local stage2Stdout = pathJoin(stage2, "cmd_stdout.txt")
         stage2Stderr = pathJoin(stage2, "cmd_stderr.txt")
@@ -919,6 +987,16 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
             quoteArg(ctx.python_bin), quoteArg(ctx.separator_script), quoteArg(drumsWav), quoteArg(stage2),
             "--model", quoteArg(STAGE2_MODEL), "--device", quoteArg(DEVICE)
         }, " ")
+        emitSourceEvent("stage2_drumsep_start", {
+            stage = "stage2_drumsep",
+            status = "start",
+            stage_dir = stage2,
+            drumsep_model = STAGE2_MODEL,
+            stdout_path = stage2Stdout,
+            stderr_path = stage2Stderr,
+            log_path = pathJoin(stage2, "separation_log.txt"),
+            command = stage2Cmd,
+        })
         stage2Rc = runShell(stage2Cmd, stage2Stdout, stage2Stderr)
         if stage2Rc ~= 0 then
             sourceResult.error_stage = "stage2"
@@ -929,8 +1007,19 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
             sourceResult.stage1_cmd = stage1Cmd
             sourceResult.stage2_cmd = stage2Cmd
             sourceResult.elapsed_seconds = nowSeconds() - sourceT0
+            emitFailure("stage2_drumsep", sourceResult.error_message, stage2Stderr)
             return sourceResult
         end
+        emitSourceEvent("stage2_drumsep_done", {
+            stage = "stage2_drumsep",
+            status = "done",
+            stage_dir = stage2,
+            drumsep_model = STAGE2_MODEL,
+            stdout_path = stage2Stdout,
+            stderr_path = stage2Stderr,
+            log_path = pathJoin(stage2, "separation_log.txt"),
+            exit_code = stage2Rc,
+        })
     else
         -- direct_creative: skip htdemucs and run DrumSep directly on stage0 input
         stage1Rc = -1
@@ -941,6 +1030,17 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
             quoteArg(ctx.python_bin), quoteArg(ctx.separator_script), quoteArg(inputWav), quoteArg(stage1Direct),
             "--model", quoteArg(STAGE2_MODEL), "--device", quoteArg(DEVICE)
         }, " ")
+        emitSourceEvent("stage2_drumsep_start", {
+            stage = "stage2_drumsep",
+            status = "start",
+            stage_dir = stage1Direct,
+            drumsep_model = STAGE2_MODEL,
+            stdout_path = directStdout,
+            stderr_path = stage2Stderr,
+            log_path = pathJoin(stage1Direct, "separation_log.txt"),
+            command = stage2Cmd,
+            direct_creative = true,
+        })
         stage2Rc = runShell(stage2Cmd, directStdout, stage2Stderr)
         if stage2Rc ~= 0 then
             sourceResult.error_stage = "stage2_direct"
@@ -951,8 +1051,20 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
             sourceResult.stage1_cmd = "skipped"
             sourceResult.stage2_cmd = stage2Cmd
             sourceResult.elapsed_seconds = nowSeconds() - sourceT0
+            emitFailure("stage2_drumsep", sourceResult.error_message, stage2Stderr)
             return sourceResult
         end
+        emitSourceEvent("stage2_drumsep_done", {
+            stage = "stage2_drumsep",
+            status = "done",
+            stage_dir = stage1Direct,
+            drumsep_model = STAGE2_MODEL,
+            stdout_path = directStdout,
+            stderr_path = stage2Stderr,
+            log_path = pathJoin(stage1Direct, "separation_log.txt"),
+            exit_code = stage2Rc,
+            direct_creative = true,
+        })
     end
 
     local modeLabel = folderModeLabel(mode, parentModel)
@@ -962,6 +1074,11 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
         folderLabel = tostring(ctx.shared_import_layout.folder_label or folderLabel)
     end
 
+    emitSourceEvent("import_start", {
+        stage = "import",
+        status = "start",
+        stage_dir = drumsepOutputDir,
+    })
     local ok, importSummary = importDrumKitSplit(
         drumsepOutputDir,
         folderLabel,
@@ -993,6 +1110,15 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
         sourceResult.error_stage = "import"
         sourceResult.error_message = "Import failed."
         sourceResult.log_path = stage2Stderr
+        emitFailure("import", sourceResult.error_message, stage2Stderr)
+    else
+        emitSourceEvent("import_done", {
+            stage = "import",
+            status = "done",
+            imported_stems = sourceResult.imported_stems,
+            missing_stems = sourceResult.missing_stems,
+            imported_count = #(sourceResult.imported_stems or {}),
+        })
     end
     return sourceResult
 end
@@ -1002,6 +1128,7 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     local selectedItemOverride = opts.selectedItem
     local suppressSuccessMessage = opts.suppressSuccessMessage == true
     local suppressFailureMessage = opts.suppressFailureMessage == true
+    local onEvent = type(opts.onEvent) == "function" and opts.onEvent or nil
 
     local t0 = nowSeconds()
     local startedAtEpoch = os.time()
@@ -1069,11 +1196,35 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     local ts = os.date("%Y%m%d-%H%M%S")
     local root = "/tmp/stemwerk-drumsep-workflow-prototype-" .. ts
     makeDir(root)
+    local eventsPath = pathJoin(root, "drumkit_events.jsonl")
     result.mode = mode
     result.temp_root = root
+    result.events_path = eventsPath
     result.source_path = resolvedSources[1].source_path
     result.resolved_source_count = #resolvedSources
     result.source_resolution_mode = resolvedSources[1].source_kind
+
+    local function emitEvent(fields)
+        fields = fields or {}
+        if not fields.event or fields.event == "" then return end
+        fields.ts = fields.ts or formatUtcIso(os.time())
+        fields.elapsed_seconds = tonumber(fields.elapsed_seconds or (nowSeconds() - t0)) or 0
+        fields.feature = fields.feature or "Drum Kit Split"
+        fields.prototype = true
+        fields.workflow_mode = fields.workflow_mode or mode
+        fields.mode_label = fields.mode_label or folderModeLabel(mode, CLEAN_PARENT_MODELS[mode])
+        fields.temp_root = fields.temp_root or root
+        local okWrite, errWrite = appendTextFile(eventsPath, jsonEncode(fields) .. "\n")
+        if not okWrite then
+            logKV("event_write_error", tostring(errWrite or "write_failed"))
+        end
+        if onEvent then
+            local okCb, errCb = pcall(onEvent, fields)
+            if not okCb then
+                logKV("event_callback_error", tostring(errCb or "callback_failed"))
+            end
+        end
+    end
 
     logKV("workflow_mode", mode)
     if mode == "direct_creative" then
@@ -1088,6 +1239,21 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
     logKV("grouping_mode", outputGrouping)
     logKV("folder_mode", useFolder and "folder_on" or "folder_off")
     logKV("temp_root", root)
+    logKV("events_path", eventsPath)
+
+    emitEvent({
+        event = "run_start",
+        status = "start",
+        parent_model = CLEAN_PARENT_MODELS[mode] or "",
+        drumsep_model = STAGE2_MODEL,
+        grouping_mode = outputGrouping,
+        folder_mode = useFolder and "folder_on" or "folder_off",
+        source_resolution_mode = tostring(resolvedSources[1] and resolvedSources[1].source_kind or ""),
+        selection_precedence = tostring(resolvedSources[1] and resolvedSources[1].selection_precedence_note or ""),
+        selected_item_count = selectedCount,
+        resolved_sources = #resolvedSources,
+        source_count = #resolvedSources,
+    })
 
     local py = resolvePython()
     reaper.Undo_BeginBlock()
@@ -1142,6 +1308,7 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
             feature = "Drum Kit Split",
             prototype = true,
             temp_root = root,
+            event_log_path = eventsPath,
             status = tostring(status or ""),
             mode_label = folderModeLabel(mode, CLEAN_PARENT_MODELS[mode]),
             workflow_mode = mode,
@@ -1204,15 +1371,33 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         if insertAtIndex ~= nil then
             logKV("source_" .. idx .. "_insert_at_index", insertAtIndex)
         end
+        emitEvent({
+            event = "source_start",
+            status = "start",
+            source_index = idx,
+            source_count = #resolvedSources,
+            track_label = sanitizeTrackLabel(sourceEntry.track_name or "", sourceEntry.track_index or idx),
+            source_label = sanitizeSourceLabel(sourceEntry.source_label or "", sourceIndexLabel(idx)),
+            source_kind = tostring(sourceEntry.source_kind or ""),
+            segment_start = tonumber(sourceEntry.segment_start or 0) or 0,
+            segment_length = tonumber(sourceEntry.segment_length or 0) or 0,
+            extract_offset = tonumber(sourceEntry.extract_offset or 0) or 0,
+            extract_duration = tonumber(sourceEntry.extract_duration or 0) or 0,
+            take_playrate = tonumber(sourceEntry.take_playrate or 1.0) or 1.0,
+            take_pitch = tonumber(sourceEntry.take_pitch or 0.0) or 0.0,
+            take_preserve_pitch = (tonumber(sourceEntry.take_preserve_pitch or 0) or 0) ~= 0,
+        })
         local srcRes = runPipelineForSource(mode, sourceEntry, {
             batch_root = root,
             source_index = idx,
+            source_count = #resolvedSources,
             python_bin = py,
             separator_script = separatorScript,
             use_folder = useFolder,
             insert_at_index = insertAtIndex,
             grouping_mode = outputGrouping,
             shared_import_layout = sharedImportLayout,
+            emit_event = emitEvent,
         })
         perSource[#perSource + 1] = srcRes
 
@@ -1251,6 +1436,21 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
             logKV("source_" .. idx .. "_error_message", tostring(srcRes.error_message or ""))
             logKV("source_" .. idx .. "_log_path", tostring(srcRes.log_path or ""))
         end
+        emitEvent({
+            event = "source_done",
+            status = srcRes.ok and "success" or "failed",
+            source_index = idx,
+            source_count = #resolvedSources,
+            track_label = sanitizeTrackLabel(sourceEntry.track_name or "", sourceEntry.track_index or idx),
+            source_label = sanitizeSourceLabel(sourceEntry.source_label or "", sourceIndexLabel(idx)),
+            imported_stems = srcRes.imported_stems or {},
+            missing_stems = srcRes.missing_stems or {},
+            imported_count = #(srcRes.imported_stems or {}),
+            error_stage = srcRes.error_stage or "",
+            error_message = srcRes.error_message or "",
+            log_path = srcRes.log_path or "",
+            source_elapsed_seconds = tonumber(srcRes.elapsed_seconds or 0) or 0,
+        })
     end
 
     if #importedItemsAll > 0 then
@@ -1282,13 +1482,30 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         result.error_stage = firstFailure and firstFailure.error_stage or "pipeline"
         result.error_message = firstFailure and firstFailure.error_message or "No stems imported."
         result.log_path = firstFailure and firstFailure.log_path or nil
+        persistRunMetadata("failed")
+        emitEvent({
+            event = "failure",
+            status = "failed",
+            stage = tostring(result.error_stage or "pipeline"),
+            error_message = tostring(result.error_message or ""),
+            log_path = tostring(result.log_path or ""),
+            resolved_sources = #resolvedSources,
+            total_imported_stems = totalImported,
+            elapsed_seconds = elapsed,
+        })
+        emitEvent({
+            event = "run_done",
+            status = "failed",
+            resolved_sources = #resolvedSources,
+            total_imported_stems = totalImported,
+            elapsed_seconds = elapsed,
+        })
         _showMessage(
             "DrumSep workflow prototype failed.\n\n" ..
             tostring(result.error_message or "No stems imported.") ..
             (result.log_path and ("\n\nLog:\n" .. tostring(result.log_path)) or ""),
             suppressFailureMessage
         )
-        persistRunMetadata("failed")
         return result
     end
 
@@ -1297,6 +1514,16 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         result.error_message = "Partial success: one or more sources failed."
         result.log_path = firstFailure and firstFailure.log_path or nil
         result.import_summary = "Partial success"
+        persistRunMetadata("partial_success")
+        emitEvent({
+            event = "run_done",
+            status = "partial_success",
+            resolved_sources = #resolvedSources,
+            total_imported_stems = totalImported,
+            elapsed_seconds = elapsed,
+            error_message = tostring(result.error_message or ""),
+            log_path = tostring(result.log_path or ""),
+        })
         _showMessage(
             "DrumSep workflow prototype partial success.\n\nMode: " .. mode ..
             "\nResolved sources: " .. tostring(#resolvedSources) ..
@@ -1305,12 +1532,19 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
             "\nTemp root:\n" .. root,
             suppressFailureMessage
         )
-        persistRunMetadata("partial_success")
         return result
     end
 
     result.ok = true
     result.import_summary = "All sources completed."
+    persistRunMetadata("success")
+    emitEvent({
+        event = "run_done",
+        status = "success",
+        resolved_sources = #resolvedSources,
+        total_imported_stems = totalImported,
+        elapsed_seconds = elapsed,
+    })
     _showMessage(
         "DrumSep workflow prototype complete.\n\nMode: " .. mode ..
         "\nResolved sources: " .. tostring(#resolvedSources) ..
@@ -1318,7 +1552,6 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         "\nTemp root:\n" .. root,
         suppressSuccessMessage
     )
-    persistRunMetadata("success")
     return result
 end
 
