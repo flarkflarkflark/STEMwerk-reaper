@@ -58,6 +58,8 @@ local fileExists
 local pathExists
 local ensureDir
 local quoteArg
+local execProcess
+local trim
 local showDeferredFinalWindow
 
 local function setupPlatformLabel()
@@ -314,6 +316,10 @@ local function execCapture(cmd, timeoutMs)
     return rc, out
 end
 
+execProcess = function(cmd, timeoutMs)
+    return execCapture(cmd, timeoutMs or 20000)
+end
+
 local function probeOutputHasUsefulDevices(out)
     if not out or out == "" then return false end
     if out:find("STEMWERK_CUDA_DEVICE\t", 1, true) then return true end
@@ -540,7 +546,7 @@ getExt = function(key)
     return ""
 end
 
-local function trim(s)
+trim = function(s)
     if s == nil then return "" end
     local t = tostring(s)
     t = t:gsub("^%s+", "")

@@ -255,3 +255,42 @@ def test_macos_setup_internal_reports_torch_drift_repair_guidance():
     assert "torch_too_new_for_demucs" in script
     assert "torch_pin_repair_failed" in script
     assert "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack" in script
+
+
+def test_setup_internal_postbootstrap_helpers_are_locally_bound():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local execProcess" in script
+    assert "local trim" in script
+    assert "execProcess = function(cmd, timeoutMs)" in script
+    assert "trim = function(s)" in script
+
+    lines = script.splitlines()
+
+    def line_no(prefix: str) -> int:
+        for idx, line in enumerate(lines, start=1):
+            if line.strip().startswith(prefix):
+                return idx
+        raise AssertionError(f"missing marker: {prefix}")
+
+    # Guard against accidental global fallback: declare these locals before
+    # any setup action/runtime verification closure is defined.
+    assert line_no("local execProcess") < line_no("local function runSupportBundleAction")
+    assert line_no("local trim") < line_no("local function runSupportBundleAction")
+    assert line_no("execProcess = function(cmd, timeoutMs)") < line_no("local function verifyRuntimePaths")
+    assert line_no("trim = function(s)") < line_no("local function verifyRuntimePaths")
+    assert line_no("execProcess = function(cmd, timeoutMs)") < line_no("local function performPostBootstrap")
+    assert line_no("trim = function(s)") < line_no("local function performPostBootstrap")
+
+
+def test_stemwerk_setup_runtime_helpers_use_local_bindings():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "local fileExists = SYSTEM.fileExists" in script
+    assert "local quoteArg = SYSTEM.quoteArg" in script
+    assert "local execProcess = SYSTEM.execProcess" in script
+    assert "\nfileExists = SYSTEM.fileExists" not in script
