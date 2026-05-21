@@ -31,6 +31,7 @@ local PARENT_MODEL_LABELS = {
     htdemucs_6s = "Expanded",
 }
 local runDrumSepWorkflowPrototypeBlocking
+local ASYNC_TEMP_ROOT_KEY = "__drumkit_async_temp_root"
 
 local STEMS = {
     { key = "kick", file = "kick.wav", name = "Kick", color = {255, 174, 66} },
@@ -325,12 +326,96 @@ local function killAsyncStageJob(job)
 end
 
 local function runDrumSepWorkflowPrototypeAsync(modeOverride, opts)
+    opts = opts or {}
     local mode = tostring(modeOverride or DRUMSEP_WORKFLOW_MODE or "clean_fast")
-    local result = runDrumSepWorkflowPrototypeBlocking(mode, opts)
-    result.async_scaffold_only = true
-    result.async_enabled = true
-    result.async_message = "Async launcher helpers scaffolded; blocking pipeline still active in this slice."
-    return result
+    local modeLabel = folderModeLabel(mode, CLEAN_PARENT_MODELS[mode])
+    local tempRoot = tostring(opts[ASYNC_TEMP_ROOT_KEY] or ("/tmp/stemwerk-drumsep-workflow-prototype-" .. os.date("%Y%m%d-%H%M%S")))
+    local eventsPath = pathJoin(tempRoot, "drumkit_events.jsonl")
+    local metadataPath = pathJoin(tempRoot, "drumkit_run_metadata.json")
+    local onComplete = type(opts.onComplete) == "function" and opts.onComplete or nil
+
+    local callbackSent = false
+    local function notifyAsyncComplete(rawResult)
+        if callbackSent then return end
+        callbackSent = true
+        if not onComplete then return end
+        local totalImportedStems = 0
+        if rawResult and type(rawResult.per_source_results) == "table" then
+            for _, srcRes in ipairs(rawResult.per_source_results) do
+                totalImportedStems = totalImportedStems + #((srcRes and srcRes.imported_stems) or {})
+            end
+        elseif rawResult and type(rawResult.imported_stems) == "table" then
+            totalImportedStems = #rawResult.imported_stems
+        end
+        local status = "failed"
+        if rawResult and rawResult.ok == true then
+            status = "success"
+        elseif rawResult and rawResult.error_stage == "partial_failure" then
+            status = "partial_success"
+        elseif rawResult and rawResult.error_stage == "cancelled" then
+            status = "cancelled"
+        end
+        local completionResult = {
+            ok = rawResult and rawResult.ok == true or false,
+            async = true,
+            status = status,
+            workflow_mode = mode,
+            mode_label = modeLabel,
+            temp_root = tostring((rawResult and rawResult.temp_root) or tempRoot or ""),
+            resolved_sources = tonumber((rawResult and rawResult.resolved_source_count) or 0) or 0,
+            total_imported_stems = tonumber(totalImportedStems) or 0,
+            error = rawResult and rawResult.error_message or nil,
+            log_path = rawResult and rawResult.log_path or nil,
+            metadata_path = tostring((rawResult and rawResult.run_metadata_path) or metadataPath or ""),
+            events_path = tostring((rawResult and rawResult.events_path) or eventsPath or ""),
+        }
+        local okCb, errCb = pcall(onComplete, completionResult)
+        if not okCb then
+            logKV("on_complete_callback_error", tostring(errCb or "callback_failed"))
+        end
+    end
+
+    local runOpts = {}
+    for k, v in pairs(opts) do
+        runOpts[k] = v
+    end
+    runOpts.async_enabled = nil
+    runOpts.onComplete = nil
+    runOpts[ASYNC_TEMP_ROOT_KEY] = tempRoot
+
+    reaper.defer(function()
+        local okRun, rawOrErr = xpcall(function()
+            return runDrumSepWorkflowPrototypeBlocking(mode, runOpts)
+        end, debug.traceback)
+        if okRun then
+            notifyAsyncComplete(rawOrErr)
+            return
+        end
+        notifyAsyncComplete({
+            ok = false,
+            error_stage = "async_wrapper",
+            error_message = tostring(rawOrErr or "unknown error"),
+            log_path = nil,
+            temp_root = tempRoot,
+            resolved_source_count = 0,
+            imported_stems = {},
+            run_metadata_path = metadataPath,
+            events_path = eventsPath,
+        })
+    end)
+
+    return {
+        ok = nil,
+        async = true,
+        status = "running",
+        run_id = tempRoot,
+        temp_root = tempRoot,
+        metadata_path = metadataPath,
+        events_path = eventsPath,
+        workflow_mode = mode,
+        mode_label = modeLabel,
+        async_scaffold_only = true,
+    }
 end
 
 local function getScriptDir()
@@ -1445,7 +1530,7 @@ runDrumSepWorkflowPrototypeBlocking = function(modeOverride, opts)
     local useFolder = (createFolderState == "") and true or (createFolderState == "1")
 
     local ts = os.date("%Y%m%d-%H%M%S")
-    local root = "/tmp/stemwerk-drumsep-workflow-prototype-" .. ts
+    local root = tostring(opts[ASYNC_TEMP_ROOT_KEY] or ("/tmp/stemwerk-drumsep-workflow-prototype-" .. ts))
     makeDir(root)
     local eventsPath = pathJoin(root, "drumkit_events.jsonl")
     result.mode = mode
