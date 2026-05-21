@@ -30,6 +30,7 @@ local PARENT_MODEL_LABELS = {
     htdemucs_ft = "Quality",
     htdemucs_6s = "Expanded",
 }
+local runDrumSepWorkflowPrototypeBlocking
 
 local STEMS = {
     { key = "kick", file = "kick.wav", name = "Kick", color = {255, 174, 66} },
@@ -80,6 +81,256 @@ local function runShell(cmd, stdoutPath, stderrPath)
     if type(ok) == "number" then return ok end
     if type(code) == "number" then return code end
     return 1
+end
+
+local function isWindowsHost()
+    if not reaper or not reaper.GetOS then return false end
+    local osName = tostring(reaper.GetOS() or "")
+    return osName:find("Win", 1, true) ~= nil
+end
+
+local function readTextFile(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
+local function trimText(s)
+    local text = tostring(s or "")
+    text = text:gsub("^%s+", "")
+    text = text:gsub("%s+$", "")
+    return text
+end
+
+local function buildAsyncStageJob(sourceCtx, stageName, cmd, stageDir, stdoutPath, stderrPath, opts)
+    sourceCtx = sourceCtx or {}
+    opts = opts or {}
+    local srcIdx = tonumber(sourceCtx.source_index or 1) or 1
+    local srcCount = tonumber(sourceCtx.source_count or 1) or 1
+    local stage = tostring(stageName or "")
+    local job = {
+        id = string.format("src%03d_%s", srcIdx, stage ~= "" and stage or "stage"),
+        source_index = srcIdx,
+        source_count = srcCount,
+        stage = stage,
+        cmd = tostring(cmd or ""),
+        cwd = tostring(opts.cwd or stageDir or ""),
+        stage_dir = tostring(stageDir or ""),
+        stdout_path = tostring(stdoutPath or pathJoin(stageDir or "", "cmd_stdout.txt")),
+        stderr_path = tostring(stderrPath or pathJoin(stageDir or "", "cmd_stderr.txt")),
+        launcher_path = "",
+        pid_file = tostring(opts.pid_file or pathJoin(stageDir or "", "pid.txt")),
+        done_file = tostring(opts.done_file or pathJoin(stageDir or "", "done.txt")),
+        exit_code_file = tostring(opts.exit_code_file or pathJoin(stageDir or "", "exit_code.txt")),
+        log_path = tostring(opts.log_path or pathJoin(stageDir or "", "separation_log.txt")),
+        phase_events_path = tostring(opts.phase_events_path or pathJoin(stageDir or "", "phase_events.jsonl")),
+        status = "queued",
+        pid = nil,
+        exit_code = nil,
+        started_at = nil,
+        finished_at = nil,
+        launched_ok = false,
+        poll_count = 0,
+        failure_reason = nil,
+        platform = isWindowsHost() and "windows" or "unix",
+        launch_cmd = nil,
+        launch_exit_code = nil,
+    }
+    return job
+end
+
+local function writeLauncherForJob(job)
+    if not job or type(job) ~= "table" then return false, "invalid_job" end
+    if not job.stage_dir or job.stage_dir == "" then return false, "missing_stage_dir" end
+    if not job.cmd or job.cmd == "" then return false, "missing_cmd" end
+    makeDir(job.stage_dir)
+
+    if job.platform == "windows" then
+        local launcherPath = pathJoin(job.stage_dir, "run_bg.ps1")
+        local script = table.concat({
+            "$ErrorActionPreference = \"Continue\"",
+            "$cmd = " .. "'" .. tostring(job.cmd):gsub("'", "''") .. "'",
+            "$stdout = " .. "'" .. tostring(job.stdout_path):gsub("'", "''") .. "'",
+            "$stderr = " .. "'" .. tostring(job.stderr_path):gsub("'", "''") .. "'",
+            "$pidFile = " .. "'" .. tostring(job.pid_file):gsub("'", "''") .. "'",
+            "$doneFile = " .. "'" .. tostring(job.done_file):gsub("'", "''") .. "'",
+            "$exitFile = " .. "'" .. tostring(job.exit_code_file):gsub("'", "''") .. "'",
+            "$workDir = " .. "'" .. tostring(job.cwd or job.stage_dir):gsub("'", "''") .. "'",
+            "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pidFile) | Out-Null",
+            "$wrapper = \"& { Set-Location -LiteralPath $workDir; & cmd.exe /c $cmd }\"",
+            "$proc = Start-Process -FilePath \"powershell.exe\" -ArgumentList \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-Command\", $wrapper -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr",
+            "Set-Content -Path $pidFile -Value ($proc.Id.ToString()) -Encoding ASCII",
+            "$proc.WaitForExit()",
+            "Set-Content -Path $exitFile -Value ($proc.ExitCode.ToString()) -Encoding ASCII",
+            "Set-Content -Path $doneFile -Value \"done\" -Encoding ASCII",
+        }, "\n") .. "\n"
+        local okWrite, errWrite = writeTextFile(launcherPath, script)
+        if not okWrite then return false, errWrite or "write_failed" end
+        job.launcher_path = launcherPath
+        job.launch_cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File " .. quoteArg(launcherPath)
+        return true, nil
+    end
+
+    local launcherPath = pathJoin(job.stage_dir, "run_bg.sh")
+    local script = table.concat({
+        "#!/usr/bin/env bash",
+        "set +e",
+        "CMD=" .. quoteArg(job.cmd),
+        "STDOUT_PATH=" .. quoteArg(job.stdout_path),
+        "STDERR_PATH=" .. quoteArg(job.stderr_path),
+        "PID_FILE=" .. quoteArg(job.pid_file),
+        "DONE_FILE=" .. quoteArg(job.done_file),
+        "EXIT_FILE=" .. quoteArg(job.exit_code_file),
+        "WORK_DIR=" .. quoteArg(job.cwd or job.stage_dir),
+        "mkdir -p \"$(dirname \"$PID_FILE\")\"",
+        "(cd \"$WORK_DIR\" && bash -lc \"$CMD\") >\"$STDOUT_PATH\" 2>\"$STDERR_PATH\" &",
+        "PID=$!",
+        "echo \"$PID\" > \"$PID_FILE\"",
+        "wait \"$PID\"",
+        "EC=$?",
+        "echo \"$EC\" > \"$EXIT_FILE\"",
+        "echo done > \"$DONE_FILE\"",
+    }, "\n") .. "\n"
+    local okWrite, errWrite = writeTextFile(launcherPath, script)
+    if not okWrite then return false, errWrite or "write_failed" end
+    os.execute("chmod +x " .. quoteArg(launcherPath))
+    job.launcher_path = launcherPath
+    job.launch_cmd = "bash " .. quoteArg(launcherPath) .. " &"
+    return true, nil
+end
+
+local function launchAsyncStageJob(job)
+    if not job or type(job) ~= "table" then return false, "invalid_job" end
+    local okLauncher, launcherErr = writeLauncherForJob(job)
+    if not okLauncher then
+        job.status = "failed"
+        job.failure_reason = tostring(launcherErr or "launcher_write_failed")
+        return false, job.failure_reason
+    end
+    job.started_at = nowSeconds()
+    local rc = runShell(job.launch_cmd)
+    job.launch_exit_code = rc
+    if rc == 0 then
+        job.status = "running"
+        job.launched_ok = true
+        return true, nil
+    end
+    job.status = "failed"
+    job.launched_ok = false
+    job.failure_reason = "launcher_exit_" .. tostring(rc)
+    return false, job.failure_reason
+end
+
+local function readStageTerminalMarkers(job)
+    if not job or type(job) ~= "table" then return {} end
+    local pidRaw = readTextFile(job.pid_file or "")
+    local doneRaw = readTextFile(job.done_file or "")
+    local exitRaw = readTextFile(job.exit_code_file or "")
+
+    local pid = tonumber(trimText(pidRaw or ""))
+    local done = doneRaw ~= nil
+    local exitCode = tonumber(trimText(exitRaw or ""))
+    return {
+        pid = pid,
+        done = done,
+        exit_code = exitCode,
+        pid_found = pidRaw ~= nil,
+        done_found = doneRaw ~= nil,
+        exit_code_found = exitRaw ~= nil,
+    }
+end
+
+local function pollAsyncStageJob(job)
+    if not job or type(job) ~= "table" then return "failed" end
+    job.poll_count = (tonumber(job.poll_count) or 0) + 1
+    local markers = readStageTerminalMarkers(job)
+    if markers.pid and not job.pid then
+        job.pid = markers.pid
+    end
+    if markers.done then
+        job.finished_at = job.finished_at or nowSeconds()
+        if markers.exit_code ~= nil then
+            job.exit_code = markers.exit_code
+        end
+        if tonumber(job.exit_code or 1) == 0 then
+            job.status = "done"
+            return "done"
+        end
+        job.status = "failed"
+        job.failure_reason = job.failure_reason or ("exit_code_" .. tostring(job.exit_code or "unknown"))
+        return "failed"
+    end
+    if job.status == "cancelled" then
+        return "cancelled"
+    end
+    if job.status ~= "running" then
+        return "failed"
+    end
+    return "running"
+end
+
+local function finalizeAsyncStageJob(job)
+    if not job or type(job) ~= "table" then
+        return { ok = false, status = "failed", error = "invalid_job" }
+    end
+    local duration = nil
+    if job.started_at and job.finished_at then
+        duration = tonumber(job.finished_at - job.started_at) or 0
+    end
+    return {
+        ok = job.status == "done" and tonumber(job.exit_code or 1) == 0,
+        id = job.id,
+        stage = job.stage,
+        status = job.status,
+        pid = job.pid,
+        exit_code = job.exit_code,
+        started_at = job.started_at,
+        finished_at = job.finished_at,
+        elapsed_seconds = duration,
+        poll_count = job.poll_count,
+        launcher_path = job.launcher_path,
+        pid_file = job.pid_file,
+        done_file = job.done_file,
+        exit_code_file = job.exit_code_file,
+        stdout_path = job.stdout_path,
+        stderr_path = job.stderr_path,
+        log_path = job.log_path,
+        phase_events_path = job.phase_events_path,
+        failure_reason = job.failure_reason,
+    }
+end
+
+local function killAsyncStageJob(job)
+    if not job or type(job) ~= "table" then return false, "invalid_job" end
+    local markers = readStageTerminalMarkers(job)
+    local pid = tonumber(job.pid or markers.pid or 0) or 0
+    if pid <= 0 then
+        return false, "missing_pid"
+    end
+    local rc
+    if isWindowsHost() then
+        rc = runShell("taskkill /PID " .. tostring(math.floor(pid)) .. " /T /F")
+    else
+        rc = runShell("kill -TERM " .. tostring(math.floor(pid)))
+    end
+    if rc == 0 then
+        job.status = "cancelled"
+        job.finished_at = job.finished_at or nowSeconds()
+        job.failure_reason = "cancelled"
+        return true, nil
+    end
+    return false, "kill_exit_" .. tostring(rc)
+end
+
+local function runDrumSepWorkflowPrototypeAsync(modeOverride, opts)
+    local mode = tostring(modeOverride or DRUMSEP_WORKFLOW_MODE or "clean_fast")
+    local result = runDrumSepWorkflowPrototypeBlocking(mode, opts)
+    result.async_scaffold_only = true
+    result.async_enabled = true
+    result.async_message = "Async launcher helpers scaffolded; blocking pipeline still active in this slice."
+    return result
 end
 
 local function getScriptDir()
@@ -1123,7 +1374,7 @@ local function runPipelineForSource(mode, sourceEntry, ctx)
     return sourceResult
 end
 
-local function runDrumSepWorkflowPrototype(modeOverride, opts)
+runDrumSepWorkflowPrototypeBlocking = function(modeOverride, opts)
     opts = opts or {}
     local selectedItemOverride = opts.selectedItem
     local suppressSuccessMessage = opts.suppressSuccessMessage == true
@@ -1553,6 +1804,19 @@ local function runDrumSepWorkflowPrototype(modeOverride, opts)
         suppressSuccessMessage
     )
     return result
+end
+
+local function runDrumSepWorkflowPrototype(modeOverride, opts)
+    opts = opts or {}
+    if opts.async_enabled == true then
+        local asyncOpts = {}
+        for k, v in pairs(opts) do
+            asyncOpts[k] = v
+        end
+        asyncOpts.async_enabled = nil
+        return runDrumSepWorkflowPrototypeAsync(modeOverride, asyncOpts)
+    end
+    return runDrumSepWorkflowPrototypeBlocking(modeOverride, opts)
 end
 
 local function main()
