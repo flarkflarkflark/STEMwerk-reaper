@@ -12271,6 +12271,19 @@ local function drumKitPrototypeModeFromSettings()
     return "clean_fast"
 end
 
+function drumKitImportedStemTotal(result)
+    local total = 0
+    if result and type(result.per_source_results) == "table" then
+        for _, src in ipairs(result.per_source_results) do
+            if type(src) == "table" and type(src.imported_stems) == "table" then
+                total = total + #src.imported_stems
+            end
+        end
+    end
+    if total > 0 then return total end
+    return (result and type(result.imported_stems) == "table") and #result.imported_stems or 0
+end
+
 local function runDrumKitSplitPrototypeFromMain()
     syncDrumKitWorkflowState()
     local mode = drumKitPrototypeModeFromSettings()
@@ -12305,20 +12318,76 @@ local function runDrumKitSplitPrototypeFromMain()
         return
     end
 
-    local result = api.runDrumSepWorkflowPrototype(mode, {
-        suppressSuccessMessage = false,
-        suppressFailureMessage = false,
-    })
-
-    if not (result and result.ok) then
-        debugLog("drumkit_bridge_result=FAIL")
-        debugLog("drumkit_bridge_error_stage=" .. tostring(result and result.error_stage or ""))
-        debugLog("drumkit_bridge_error_message=" .. tostring(result and result.error_message or ""))
-        return
+    if type(openDrumKitPrototypeProgressWindow) == "function" then
+        openDrumKitPrototypeProgressWindow(mode)
     end
 
-    debugLog("drumkit_bridge_result=PASS")
-    debugLog("drumkit_bridge_resolved_sources=" .. tostring(result and result.resolved_source_count or ""))
+    local function runPrototypeAfterProgressPaint()
+        local result = api.runDrumSepWorkflowPrototype(mode, {
+            suppressSuccessMessage = true,
+            suppressFailureMessage = true,
+            onEvent = function(event)
+                if type(updateDrumKitPrototypeProgressFromEvent) == "function" then
+                    updateDrumKitPrototypeProgressFromEvent(event)
+                end
+            end,
+        })
+
+        if type(closeDrumKitPrototypeProgressWindow) == "function" then
+            closeDrumKitPrototypeProgressWindow(result)
+        end
+
+        if not (result and result.ok) then
+            debugLog("drumkit_bridge_result=FAIL")
+            debugLog("drumkit_bridge_error_stage=" .. tostring(result and result.error_stage or ""))
+            debugLog("drumkit_bridge_error_message=" .. tostring(result and result.error_message or ""))
+            showMessage(
+                "Drum Kit Split (Private R&D)",
+                "Drum Kit Split prototype failed.\n\n" ..
+                tostring(result and result.error_message or "Unknown error.") ..
+                ((result and result.log_path and result.log_path ~= "") and ("\n\nLog:\n" .. tostring(result.log_path)) or ""),
+                "error",
+                false,
+                function() showStemSelectionDialog() end
+            )
+            return
+        end
+
+        debugLog("drumkit_bridge_result=PASS")
+        debugLog("drumkit_bridge_resolved_sources=" .. tostring(result and result.resolved_source_count or ""))
+        showMessage(
+            "Drum Kit Split (Private R&D)",
+            "Drum Kit Split prototype complete.\n\n" ..
+            "Mode: " .. tostring(result.mode_label or drumKitProgressModeLabel(result.mode or mode)) ..
+            "\nResolved sources: " .. tostring(result.resolved_source_count or "?") ..
+            "\nImported stems total: " .. tostring(drumKitImportedStemTotal(result)) ..
+            "\nTemp root:\n" .. tostring(result.temp_root or ""),
+            "info",
+            false,
+            function() showStemSelectionDialog() end
+        )
+    end
+
+    -- Give REAPER one UI tick to display the prototype status window before the
+    -- private prototype enters blocking os.execute() stages.
+    reaper.defer(function()
+        local okRun, errRun = xpcall(runPrototypeAfterProgressPaint, function(e)
+            return tostring(e) .. "\n" .. debug.traceback("", 2)
+        end)
+        if not okRun then
+            if type(closeDrumKitPrototypeProgressWindow) == "function" then
+                closeDrumKitPrototypeProgressWindow(nil)
+            end
+            debugLog("ERROR: Drum Kit prototype runner crashed:\n" .. tostring(errRun))
+            showMessage(
+                "Drum Kit Split (Private R&D)",
+                "Drum Kit Split prototype crashed.\n\n" .. tostring(errRun),
+                "error",
+                false,
+                function() showStemSelectionDialog() end
+            )
+        end
+    end)
 end
 
 function handleDialogKeyboard(ctx)
@@ -13655,6 +13724,7 @@ local function drawProgressWindow()
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
     local cancelClicked = false
+    local drumKitBlockingPrototype = progressState.drumKitPrototype == true and progressState.cancelUnavailable == true
 
     -- Best-effort: parse actual selected device id/name from the separation log (so UI never lies).
     -- We update at most ~2x/sec to keep it cheap.
@@ -14023,7 +14093,7 @@ local function drawProgressWindow()
     gfx.drawstr(">_")
 
     -- Handle nerd button click and tooltip
-    if nerdHover then
+    if nerdHover and not drumKitBlockingPrototype then
         GUI.uiClickedThisFrame = true
         if utilityMode then
             tooltipText = progressState.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
@@ -14306,8 +14376,9 @@ local function drawProgressWindow()
         or (isSixStemModel(footerModel) and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
-    local mtCancel = T("mt_cancel") or "ESC=cancel"
-    local cancelBtnText = progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
+    local cancelUnavailable = progressState.cancelUnavailable == true
+    local mtCancel = cancelUnavailable and "Cancel unavailable" or (T("mt_cancel") or "ESC=cancel")
+    local cancelBtnText = cancelUnavailable and "Please wait" or progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
 
     local contextItem = timeSelectionSourceItem or selectedItem
     local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
@@ -14375,19 +14446,23 @@ local function drawProgressWindow()
     local cancelBtnX = w - PS(12) - cancelBtnW
     local cancelBtnY = statusBlockY - cancelBtnH - PS(10)
     local cancelHover = mx >= cancelBtnX and mx <= cancelBtnX + cancelBtnW and my >= cancelBtnY and my <= cancelBtnY + cancelBtnH
-    local cancelFill = cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20}
+    local cancelFill = cancelUnavailable
+        and (cancelHover and {0.35, 0.35, 0.35} or {0.28, 0.28, 0.28})
+        or (cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20})
     drawThemeSurfaceBox(cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, cancelFill, THEME.border, 1, 0.98, getThemeRadius(PS, math.floor(cancelBtnH / 2), math.floor(cancelBtnH / 2)), getThemeBorderWeight(PS, 1), 0.35, "button")
-    gfx.set(1, 1, 1, 1)
+    if cancelUnavailable then gfx.set(0.72, 0.72, 0.72, 1) else gfx.set(1, 1, 1, 1) end
     gfx.setfont(1, "Arial", PS(12), string.byte('b'))
     local cancelTextW = gfx.measurestr(cancelBtnText)
     gfx.x = cancelBtnX + (cancelBtnW - cancelTextW) / 2
     gfx.y = cancelBtnY + math.floor((cancelBtnH - gfx.texth) / 2)
     gfx.drawstr(cancelBtnText)
-    if cancelHover then
+    if cancelHover and not drumKitBlockingPrototype then
         GUI.uiClickedThisFrame = true
-        tooltipText = progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
+        tooltipText = cancelUnavailable
+            and "Cancel is unavailable while this private Drum Kit prototype runs blocking stages."
+            or progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
-        if mouseDown and not progressState.wasMouseDown then
+        if (not cancelUnavailable) and mouseDown and not progressState.wasMouseDown then
             cancelClicked = true
             progressState.cancelRequested = true
         end
@@ -14453,7 +14528,7 @@ local function drawProgressWindow()
     end
 
     -- === DRAW TOOLTIP (always on top, with STEM colors) ===
-    if tooltipText then
+    if tooltipText and not drumKitBlockingPrototype then
         gfx.setfont(1, "Arial", PS(11))
         local padding = PS(8)
         local lineH = PS(14)
@@ -14466,6 +14541,154 @@ local function drawProgressWindow()
     progressState.wasRightMouseDown = rightMouseDown
     gfx.update()
     return cancelClicked
+end
+
+DRUM_KIT_PROGRESS_PERCENT_BY_EVENT = {
+    run_start = 2,
+    source_start = 5,
+    stage0_extract_start = 8,
+    stage0_extract_done = 15,
+    stage1_parent_start = 20,
+    stage1_parent_done = 55,
+    stage2_drumsep_start = 60,
+    stage2_drumsep_done = 88,
+    import_start = 92,
+    import_done = 98,
+    run_done = 100,
+}
+
+function drumKitProgressModeLabel(mode)
+    if mode == "clean_quality" then return "Quality" end
+    if mode == "clean_6stem" then return "Expanded" end
+    if mode == "direct_creative" then return "Direct/Experimental" end
+    return "Fast"
+end
+
+function drumKitProgressPercent(event)
+    local eventName = tostring(event and event.event or "")
+    if eventName == "failure" then
+        return tonumber(progressState.percent or 0) or 0
+    end
+    local base = DRUM_KIT_PROGRESS_PERCENT_BY_EVENT[eventName]
+    if not base then return tonumber(progressState.percent or 0) or 0 end
+    local sourceCount = tonumber(event and event.source_count or 0) or 0
+    local sourceIndex = tonumber(event and event.source_index or 0) or 0
+    if sourceCount > 1 and sourceIndex > 0 and base < 100 then
+        local scaled = 2 + (((sourceIndex - 1) + (base / 100)) / sourceCount) * 96
+        return math.max(0, math.min(98, math.floor(scaled + 0.5)))
+    end
+    return base
+end
+
+function formatDrumKitProgressStage(event)
+    event = event or {}
+    local eventName = tostring(event.event or "")
+    local sourceIndex = tonumber(event.source_index or 0) or 0
+    local sourceCount = tonumber(event.source_count or 0) or 0
+    local sourceSuffix = ""
+    if sourceIndex > 0 and sourceCount > 0 then
+        sourceSuffix = string.format(" source %d/%d", sourceIndex, sourceCount)
+    end
+    local trackLabel = tostring(event.track_label or "")
+    local sourceLabel = tostring(event.source_label or "")
+    local sourceContext = trackLabel
+    if sourceLabel ~= "" then
+        sourceContext = sourceContext ~= "" and (sourceContext .. " - " .. sourceLabel) or sourceLabel
+    end
+    if sourceContext ~= "" then sourceContext = " - " .. sourceContext end
+
+    if eventName == "run_start" then
+        return "Drum Kit Split status: starting " .. tostring(event.mode_label or "Fast") .. " (blocking prototype; please wait)"
+    elseif eventName == "source_start" then
+        return "Drum Kit Split status:" .. sourceSuffix .. sourceContext
+    elseif eventName == "stage0_extract_start" then
+        return "Drum Kit Split status: extracting" .. sourceSuffix
+    elseif eventName == "stage0_extract_done" then
+        return "Drum Kit Split status: extract complete" .. sourceSuffix
+    elseif eventName == "stage1_parent_start" then
+        return "Drum Kit Split status: parent separation " .. tostring(event.parent_model or "") .. sourceSuffix .. " (blocking prototype; please wait)"
+    elseif eventName == "stage1_parent_done" then
+        return "Drum Kit Split status: parent separation complete" .. sourceSuffix
+    elseif eventName == "stage2_drumsep_start" then
+        return "Drum Kit Split status: DrumSep split" .. sourceSuffix .. " (blocking prototype; please wait)"
+    elseif eventName == "stage2_drumsep_done" then
+        return "Drum Kit Split status: DrumSep split complete" .. sourceSuffix
+    elseif eventName == "import_start" then
+        return "Drum Kit Split status: importing stems" .. sourceSuffix
+    elseif eventName == "import_done" then
+        return "Drum Kit Split status: import complete" .. sourceSuffix
+    elseif eventName == "source_done" then
+        return "Drum Kit Split status: source complete" .. sourceSuffix
+    elseif eventName == "run_done" then
+        return "Drum Kit Split status: complete"
+    elseif eventName == "failure" then
+        return "Drum Kit Split status: failed during " .. tostring(event.stage or "processing")
+    end
+    return "Drum Kit Split status: running (blocking prototype; please wait)"
+end
+
+openDrumKitPrototypeProgressWindow = function(mode)
+    updateTheme()
+    progressState.drumKitPrototype = true
+    progressState.cancelUnavailable = true
+    progressState.running = true
+    progressState.percent = 0
+    progressState.stage = "Drum Kit Split status: starting " .. drumKitProgressModeLabel(mode) .. " (blocking prototype; please wait)"
+    progressState.outputDir = nil
+    progressState.stdoutFile = nil
+    progressState.logFile = nil
+    progressState.pidFile = nil
+    progressState.exitCodeFile = nil
+    progressState.lastCmd = nil
+    progressState.execLogPath = SW_LOG and SW_LOG.getLogPath and SW_LOG.getLogPath() or nil
+    progressState.startTime = os.time()
+    progressState.lastActivityAt = progressState.startTime
+    progressState.lastActivityReason = "drumkit_prototype_start"
+    progressState.cancelRequested = false
+    progressState.showTerminal = false
+    progressState.terminalLines = {}
+    progressState.terminalScrollPos = 0
+    progressState.lastTerminalUpdate = 0
+    progressState.nextFrameAt = 0
+    progressState.nextPollAt = 0
+    progressState.doneDetected = false
+    captureWindowGeometry(SCRIPT_NAME)
+    if GUI and GUI.snapshotMainGeometry then GUI.snapshotMainGeometry() end
+    ensureProcessingWindowOpen()
+    drawProgressWindow()
+end
+
+updateDrumKitPrototypeProgressFromEvent = function(event)
+    if not (progressState and progressState.drumKitPrototype) then return end
+    event = event or {}
+    progressState.percent = drumKitProgressPercent(event)
+    progressState.stage = formatDrumKitProgressStage(event)
+    progressState.outputDir = tostring(event.temp_root or progressState.outputDir or "")
+    if event.stdout_path and event.stdout_path ~= "" then
+        progressState.stdoutFile = tostring(event.stdout_path)
+    end
+    if event.log_path and event.log_path ~= "" then
+        progressState.logFile = tostring(event.log_path)
+    end
+    if event.command and event.command ~= "" then
+        progressState.lastCmd = tostring(event.command)
+    end
+    progressState.lastActivityAt = os.time()
+    progressState.lastActivityReason = "drumkit_" .. tostring(event.event or "event")
+    if progressState.windowOpen then
+        drawProgressWindow()
+    end
+end
+
+closeDrumKitPrototypeProgressWindow = function(_result)
+    progressState.cancelUnavailable = false
+    progressState.drumKitPrototype = false
+    progressState.cancelRequested = false
+    if progressState.windowOpen then
+        closeProcessingWindow()
+    else
+        progressState.running = false
+    end
 end
 
 -- Refactor flow helpers into module-like namespaces to reduce top-level locals.
