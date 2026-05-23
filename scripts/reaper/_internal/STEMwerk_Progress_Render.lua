@@ -72,7 +72,7 @@ local function localizeProgressStagePrefix(stageText)
     local map = {
         {"initializing",        progressUiLabel("progress_initializing",             "Initializing")},
         {"processing",          progressUiLabel("progress_stage_processing",         "Processing")},
-        {"loading ai model",    progressUiLabel("progress_stage_loading_ai_model",   "Loading AI model")},
+        {"loading ai model",    progressUiLabel("progress_stage_loading_ai_model",   "Loading separation model")},
         {"loading model",       progressUiLabel("progress_stage_loading_model",      "Loading model")},
         {"starting separation", progressUiLabel("progress_stage_starting_separation","Starting separation")},
         {"writing stems",       progressUiLabel("progress_stage_writing_stems",      "Writing stems")},
