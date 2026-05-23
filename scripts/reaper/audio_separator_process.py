@@ -1,4 +1,4 @@
-#!/home/flark/STEMwerk/.venv/bin/python -u
+#!/usr/bin/env python3
 """
 Audio Separator Script for STEMwerk
 Thin wrapper around stemwerk-core for REAPER.
@@ -610,6 +610,22 @@ def _build_env_json() -> Dict[str, object]:
 def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, object]:
     env = _build_env_json()
     env["selected_device"] = selected_device
+    selected = str(selected_device or "")
+    if selected == "cpu":
+        actual_backend = "cpu"
+    elif selected.startswith("cuda:") or selected == "cuda":
+        actual_backend = "cuda"
+    elif selected.startswith(("rocm", "hip", "privateuseone")):
+        actual_backend = "rocm"
+    elif selected.startswith("directml"):
+        actual_backend = "directml"
+    elif selected == "mps":
+        actual_backend = "mps"
+    else:
+        actual_backend = "unknown"
+    env["actual_runtime_backend"] = actual_backend
+    env["actual_torch_device"] = selected or "unknown"
+    env["actual_acceleration_available"] = actual_backend in {"cuda", "rocm", "directml", "mps"}
     print(f"STEMWERK_DIAG python_executable={env.get('python_executable')}", file=sys.stderr)
     print(f"STEMWERK_DIAG python_version={env.get('python_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG platform={env.get('platform')} machine={env.get('platform_machine')}", file=sys.stderr)
@@ -620,6 +636,9 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
     print(f"STEMWERK_DIAG selected_device={selected_device}", file=sys.stderr)
+    print(f"STEMWERK_DIAG actual_runtime_backend={actual_backend}", file=sys.stderr)
+    print(f"STEMWERK_DIAG actual_torch_device={env['actual_torch_device']}", file=sys.stderr)
+    print(f"STEMWERK_DIAG actual_acceleration_available={env['actual_acceleration_available']}", file=sys.stderr)
     return env
 
 
@@ -974,6 +993,15 @@ def main():
         _enable_mps_runtime_fallback(device_preference, resolved_device)
         resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, args.model)
         runtime_env = _emit_runtime_diagnostics(resolved_device)
+        runtime_env["requested_device"] = device_preference
+        runtime_env["worker_requested_device"] = resolved_device
+        try:
+            (output_root / "runtime_device.json").write_text(
+                json.dumps(runtime_env, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            print(f"STEMWERK_WARN runtime_device_json_write_failed={exc}", file=sys.stderr)
 
         emit_phase("model_setup_start")
         sep = StemSeparator(model=args.model, device=resolved_device)
