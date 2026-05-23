@@ -16405,8 +16405,14 @@ _sep.runSingleTrackSeparation = function(trackList)
             debugLog("Forcing sequential multi-track processing (directml_multi_track)")
         end
 
-        -- Respect user's Parallel choice even on CPU.
-        -- Only force sequential if device is "auto" AND we know for sure there is no GPU.
+        -- Explicit CPU requests should always run sequential to avoid unbounded CPU oversubscription.
+        if not multiTrackQueue.sequentialMode and (dev == "cpu" or dev:find("cpu", 1, true) ~= nil) then
+            multiTrackQueue.sequentialMode = true
+            multiTrackQueue.forceSequentialReason = "cpu"
+            debugLog("Forcing sequential multi-track processing (cpu)")
+        end
+
+        -- Only force sequential for AUTO if we know for sure there is no GPU.
         if not multiTrackQueue.sequentialMode and dev == "auto" and not hasRuntimeGpuBackends() then
             multiTrackQueue.sequentialMode = true
             multiTrackQueue.forceSequentialReason = "auto_no_gpu"
@@ -16418,8 +16424,13 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.totalAudioDuration = 0  -- Will be updated when jobs start
     SW_TIMING.beginRun({ mode = multiTrackQueue.sequentialMode and "sequential" or "parallel", job_count = #trackJobs, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
 
-    if not multiTrackQueue.sequentialMode and type(INTERNAL_PARALLEL_JOB_LIMIT) == "number" and INTERNAL_PARALLEL_JOB_LIMIT > 0 then
-        multiTrackQueue.parallelJobLimit = math.max(1, math.floor(INTERNAL_PARALLEL_JOB_LIMIT))
+    if not multiTrackQueue.sequentialMode then
+        -- Bounded default for normal workflow on GPU/auto-with-GPU.
+        local computedParallelLimit = 2
+        if type(INTERNAL_PARALLEL_JOB_LIMIT) == "number" and INTERNAL_PARALLEL_JOB_LIMIT > 0 then
+            computedParallelLimit = math.min(computedParallelLimit, math.max(1, math.floor(INTERNAL_PARALLEL_JOB_LIMIT)))
+        end
+        multiTrackQueue.parallelJobLimit = computedParallelLimit
     end
 
     if not multiTrackQueue.sequentialMode then
