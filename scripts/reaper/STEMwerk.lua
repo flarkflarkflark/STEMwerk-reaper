@@ -8604,50 +8604,26 @@ local function drawMessageWindow()
             }
         end
 
-        local title = trResult("drumkit_result_complete", "Drum Kit Split complete.")
+        local conclusion = trResult("drumkit_result_complete", "Drum Kit Split complete.")
         local panelW = math.max(PS(280), math.min(math.floor(w * 0.52), PS(420)))
         local panelX = (w - panelW) / 2
         local rowH = PS(15)
-        local titleGap = PS(10)
         local panelPadX = PS(12)
         local panelPadY = PS(9)
         local panelH = panelPadY * 2 + (#rows * rowH)
-        local btnWLocal = PS(70)
-        local btnHLocal = PS(20)
-        local btnSpacingLocal = PS(10)
-        local totalBtnsWLocal = btnWLocal * 2 + btnSpacingLocal
         local btnYLocal = h - PS(40)
-        local minGapAboveButtons = PS(22)
-        local titleH = PS(16)
-        msgTopY = PS(156)
-        local panelY = msgTopY + titleH + titleGap
-        local maxPanelBottom = btnYLocal - minGapAboveButtons
-        local desiredPanelBottom = panelY + panelH
-        if desiredPanelBottom > maxPanelBottom then
-            local shiftUp = desiredPanelBottom - maxPanelBottom
-            msgTopY = msgTopY - shiftUp
-            panelY = panelY - shiftUp
-        end
-        local minTop = PS(132)
-        if msgTopY < minTop then
-            local pushDown = minTop - msgTopY
-            msgTopY = msgTopY + pushDown
-            panelY = panelY + pushDown
-        end
-        msgBottomY = panelY + panelH
+        local conclusionGap = PS(10)
+        local minGapAboveButtons = PS(24)
+        local conclusionH = PS(16)
+        local minTop = PS(146)
+        local maxBottom = btnYLocal - minGapAboveButtons
+        local contentH = panelH + conclusionGap + conclusionH
+        local panelY = minTop + math.max(0, (maxBottom - minTop - contentH) / 2)
+        local conclusionY = panelY + panelH + conclusionGap
+        msgTopY = panelY
+        msgBottomY = conclusionY + conclusionH
         msgX = panelX
         msgBlockW = panelW
-
-        gfx.setfont(1, "Arial", PS(14), string.byte('b'))
-        if _msgUtility then
-            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        else
-            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], SETTINGS.darkMode and 0.98 or 0.95)
-        end
-        local titleW = gfx.measurestr(title)
-        gfx.x = (w - titleW) / 2
-        gfx.y = msgTopY
-        gfx.drawstr(title)
 
         if _msgUtility then
             gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.92)
@@ -8678,6 +8654,17 @@ local function drawMessageWindow()
             gfx.y = y
             gfx.drawstr(row.value)
         end
+
+        gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+        if _msgUtility then
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        else
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], SETTINGS.darkMode and 0.98 or 0.95)
+        end
+        local conclusionW = gfx.measurestr(conclusion)
+        gfx.x = (w - conclusionW) / 2
+        gfx.y = conclusionY
+        gfx.drawstr(conclusion)
     else
         local msg = buildMessageWindowBodyText()
         local msgMaxW = math.min(w - PS(70), PS(480))
