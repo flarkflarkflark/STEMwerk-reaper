@@ -12862,7 +12862,7 @@ function checkDrumKitBenchmarkTrigger()
         drumKitBenchmarkRequestId = tostring(os.time())
     end
 
-    drumKitBenchmarkPreviousWorkflowMode = normalizeWorkflowMode(rawWorkflowMode())
+    drumKitBenchmarkPreviousWorkflowMode = normalizeWorkflowMode(reaper.GetExtState(EXT_SECTION, "workflowMode"))
     setWorkflowMode("drum_kit_split", { persist = true })
     syncDrumKitWorkflowState()
 
