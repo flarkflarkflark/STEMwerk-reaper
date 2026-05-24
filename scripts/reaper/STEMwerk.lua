@@ -8115,6 +8115,12 @@ end
 -- Draw message window (replaces reaper.MB for proper positioning)
 -- Styled to match main app window
 function buildMessageWindowBodyText()
+    local function trResult(key, fallback)
+        local v = T(key)
+        if not v or v == "" then return fallback end
+        if v == key or v == key:gsub("_", " ") then return fallback end
+        return v
+    end
     local function formatDrumKitOutputStats(folders, tracks)
         local folderWord = trPlural(
             folders,
@@ -8134,21 +8140,21 @@ function buildMessageWindowBodyText()
     end
     local data = messageWindowState and messageWindowState.messageData or nil
     if type(data) == "table" and data.kind == "drumkit_cancelled" then
-        return T("drumkit_cancelled_message") or "Drum Kit Split cancelled."
+        return trResult("drumkit_cancelled_message", "Drum Kit Split cancelled.")
     end
     if type(data) == "table" and data.kind == "drumkit_result" then
         local lines = {
-            T("drumkit_result_complete") or "Drum Kit Split complete.",
-            string.format(T("drumkit_result_mode") or "Mode: %s", tostring(data.modeLabel or "")),
-            string.format(T("drumkit_result_sources") or "Sources: %d", tonumber(data.sources or 0) or 0),
-            string.format(T("drumkit_result_imported") or "Imported stems: %d", tonumber(data.imported or 0) or 0),
+            trResult("drumkit_result_complete", "Drum Kit Split complete."),
+            string.format(trResult("drumkit_result_mode", "Mode: %s"), tostring(data.modeLabel or "")),
+            string.format(trResult("drumkit_result_sources", "Sources: %d"), tonumber(data.sources or 0) or 0),
+            string.format(trResult("drumkit_result_imported", "Imported stems: %d"), tonumber(data.imported or 0) or 0),
         }
         local folders = tonumber(data.outputFolders or 0) or 0
         local tracks = tonumber(data.outputTracks or 0) or 0
         if folders > 0 and tracks > 0 then
             lines[#lines + 1] = string.format(
                 "%s: %s",
-                T("drumkit_result_output") or "Output",
+                trResult("drumkit_result_output", "Output"),
                 formatDrumKitOutputStats(folders, tracks)
             )
         end
@@ -8157,11 +8163,11 @@ function buildMessageWindowBodyText()
             local mins = math.floor(elapsed / 60)
             local secs = math.floor(elapsed - (mins * 60) + 0.5)
             if secs >= 60 then mins = mins + 1; secs = 0 end
-            lines[#lines + 1] = string.format(T("drumkit_result_time") or "Time: %s", string.format("%d:%02d", mins, secs))
+            lines[#lines + 1] = string.format(trResult("drumkit_result_time", "Time: %s"), string.format("%d:%02d", mins, secs))
         end
         local speed = tonumber(data.speedRealtime or 0) or 0
         if speed > 0 then
-            lines[#lines + 1] = string.format(T("drumkit_result_speed") or "Speed: %.2fx realtime", speed)
+            lines[#lines + 1] = string.format(trResult("drumkit_result_speed", "Speed: %.2fx realtime"), speed)
         end
         return table.concat(lines, "\n")
     end
@@ -8500,6 +8506,12 @@ local function drawMessageWindow()
     local msgX, msgTopY, msgBlockW, msgBottomY = 0, 0, 0, 0
     local drumKitResultData = resultContext and messageWindowState and messageWindowState.messageData or nil
     if type(drumKitResultData) == "table" and drumKitResultData.kind == "drumkit_result" then
+        local function trResult(key, fallback)
+            local v = T(key)
+            if not v or v == "" then return fallback end
+            if v == key or v == key:gsub("_", " ") then return fallback end
+            return v
+        end
         local function formatDrumKitOutputStats(folders, tracks)
             local folderWord = trPlural(
                 folders,
@@ -8533,19 +8545,19 @@ local function drawMessageWindow()
             return label, value
         end
         local rows = {
-            { label = formatTemplateLabel(T("drumkit_result_mode") or "Mode: %s"), value = tostring(drumKitResultData.modeLabel or "") },
-            { label = formatTemplateLabel(T("drumkit_result_sources") or "Sources: %d"), value = tostring(tonumber(drumKitResultData.sources or 0) or 0) },
-            { label = formatTemplateLabel(T("drumkit_result_imported") or "Imported stems: %d"), value = tostring(tonumber(drumKitResultData.imported or 0) or 0) },
+            { label = formatTemplateLabel(trResult("drumkit_result_mode", "Mode: %s")), value = tostring(drumKitResultData.modeLabel or "") },
+            { label = formatTemplateLabel(trResult("drumkit_result_sources", "Sources: %d")), value = tostring(tonumber(drumKitResultData.sources or 0) or 0) },
+            { label = formatTemplateLabel(trResult("drumkit_result_imported", "Imported stems: %d")), value = tostring(tonumber(drumKitResultData.imported or 0) or 0) },
         }
         local outFolders = tonumber(drumKitResultData.outputFolders or 0) or 0
         local outTracks = tonumber(drumKitResultData.outputTracks or 0) or 0
         if outFolders > 0 and outTracks > 0 then
             local outputLine = string.format(
                 "%s: %s",
-                T("drumkit_result_output") or "Output",
+                trResult("drumkit_result_output", "Output"),
                 formatDrumKitOutputStats(outFolders, outTracks)
             )
-            local outputLabel, outputValue = splitRenderedLabelValue(outputLine, formatTemplateLabel(T("drumkit_result_output") or "Output"))
+            local outputLabel, outputValue = splitRenderedLabelValue(outputLine, formatTemplateLabel(trResult("drumkit_result_output", "Output")))
             rows[#rows + 1] = {
                 label = outputLabel,
                 value = outputValue,
@@ -8556,8 +8568,8 @@ local function drawMessageWindow()
             local mins = math.floor(elapsed / 60)
             local secs = math.floor(elapsed - (mins * 60) + 0.5)
             if secs >= 60 then mins = mins + 1; secs = 0 end
-            local timeLine = string.format(T("drumkit_result_time") or "Time: %s", string.format("%d:%02d", mins, secs))
-            local timeLabel, timeValue = splitRenderedLabelValue(timeLine, formatTemplateLabel(T("drumkit_result_time") or "Time"))
+            local timeLine = string.format(trResult("drumkit_result_time", "Time: %s"), string.format("%d:%02d", mins, secs))
+            local timeLabel, timeValue = splitRenderedLabelValue(timeLine, formatTemplateLabel(trResult("drumkit_result_time", "Time")))
             rows[#rows + 1] = {
                 label = timeLabel,
                 value = timeValue,
@@ -8565,15 +8577,15 @@ local function drawMessageWindow()
         end
         local speed = tonumber(drumKitResultData.speedRealtime or 0) or 0
         if speed > 0 then
-            local speedLine = string.format(T("drumkit_result_speed") or "Speed: %.2fx realtime", speed)
-            local speedLabel, speedValue = splitRenderedLabelValue(speedLine, formatTemplateLabel(T("drumkit_result_speed") or "Speed"))
+            local speedLine = string.format(trResult("drumkit_result_speed", "Speed: %.2fx realtime"), speed)
+            local speedLabel, speedValue = splitRenderedLabelValue(speedLine, formatTemplateLabel(trResult("drumkit_result_speed", "Speed")))
             rows[#rows + 1] = {
                 label = speedLabel,
                 value = speedValue,
             }
         end
 
-        local title = T("drumkit_result_complete") or "Drum Kit Split complete."
+        local title = trResult("drumkit_result_complete", "Drum Kit Split complete.")
         local panelW = math.max(PS(280), math.min(math.floor(w * 0.52), PS(420)))
         local panelX = (w - panelW) / 2
         local rowH = PS(15)
