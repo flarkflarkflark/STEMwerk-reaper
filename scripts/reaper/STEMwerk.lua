@@ -24,7 +24,7 @@ function clearDebugLog() end
 -- @about
 --   # STEMwerk - Stem Separation
 --
---   High-quality AI-powered stem separation using Demucs/audio-separator.
+--   High-quality stem separation using Demucs/audio-separator.
 --   Separates the selected media item (or time selection) into stems:
 --   Vocals, Drums, Bass, Other (and optionally Guitar, Piano with 6-stem model).
 --
@@ -55,11 +55,12 @@ function clearDebugLog() end
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
 local APP_VERSION = "2.2.2.2.2"
-SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
-WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
-WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
-WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_VERSION .. ")"
-WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_VERSION .. ")"
+local APP_DISPLAY_VERSION = APP_VERSION
+SCRIPT_NAME = "STEMwerk (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_COMPLETE = "STEMwerk - Complete (v" .. APP_DISPLAY_VERSION .. ")"
+WINDOW_MULTI_TRACK = "STEMwerk - Multi-Track Progress (v" .. APP_DISPLAY_VERSION .. ")"
 local EXT_SECTION = "STEMwerk"  -- For ExtState persistence (keep old name for compatibility)
 _G.EXT_SECTION = EXT_SECTION
 local DEBUG = { enabled = false, logPath = nil }
@@ -1079,6 +1080,116 @@ STEMS = {
     { name = "Piano",  color = {255, 120, 200}, file = "piano.wav", selected = true, key = "6", sixStemOnly = true },
 }
 
+WORKFLOW_MODE_STANDARD = "standard"
+WORKFLOW_MODE_DRUM_KIT = "drum_kit_split"
+DRUM_KIT_WORKFLOW_MODE = WORKFLOW_MODE_STANDARD
+DRUM_KIT_NORMAL_STEM_SELECTIONS = nil
+
+-- PRIVATE R&D ONLY: Drum Kit Split workflow stems.
+-- Stems always represent the outputs this workflow will import.
+DRUM_KIT_STEMS = {
+    { name = "Kick",   color = {255, 170, 120}, file = "kick.wav",  selected = true, key = "1", sixStemOnly = false },
+    { name = "Snare",  color = {255, 120, 120}, file = "snare.wav", selected = true, key = "2", sixStemOnly = false },
+    { name = "Toms",   color = {255, 210, 120}, file = "toms.wav",  selected = true, key = "3", sixStemOnly = false },
+    { name = "Hi-Hat", color = {210, 255, 120}, file = "hihat.wav", selected = true, key = "4", sixStemOnly = false },
+    { name = "Ride",   color = {120, 220, 255}, file = "ride.wav",  selected = true, key = "5", sixStemOnly = false },
+    { name = "Crash",  color = {180, 180, 255}, file = "crash.wav", selected = true, key = "6", sixStemOnly = false },
+}
+
+function isDrumKitWorkflowActive()
+    return DRUM_KIT_WORKFLOW_MODE == WORKFLOW_MODE_DRUM_KIT
+end
+
+function getActiveStemListForCurrentWorkflow()
+    if isDrumKitWorkflowActive() then
+        return DRUM_KIT_STEMS
+    end
+    return STEMS
+end
+
+function setAllStemSelections(stems, value)
+    for _, st in ipairs(stems or {}) do
+        st.selected = value and true or false
+    end
+end
+
+local function isDrumKitPrototypeActionsAllowed()
+    if not (reaper and reaper.GetExtState) then
+        return false
+    end
+    local v = tostring(reaper.GetExtState("STEMwerk-dev", "allow_drumkit_prototype_actions") or ""):lower()
+    return v == "1" or v == "true" or v == "yes" or v == "on"
+end
+
+function captureStemSelections(stems)
+    local out = {}
+    for _, st in ipairs(stems or {}) do
+        out[tostring(st.name or "")] = st.selected and true or false
+    end
+    return out
+end
+
+function applyCapturedStemSelections(stems, selections)
+    if type(selections) ~= "table" then return end
+    for _, st in ipairs(stems or {}) do
+        local key = tostring(st.name or "")
+        if selections[key] ~= nil then
+            st.selected = selections[key] and true or false
+        end
+    end
+end
+
+function syncDrumKitWorkflowState()
+    if not isDrumKitWorkflowActive() then
+        return
+    end
+    -- Drum Kit Split is currently import-only and always uses new tracks.
+    SETTINGS.createNewTracks = true
+    SETTINGS.postProcessTakes = "none"
+end
+
+function setWorkflowMode(mode, opts)
+    local normalized = tostring(mode or ""):lower()
+    if normalized == "drumkit" then
+        normalized = WORKFLOW_MODE_DRUM_KIT
+    elseif normalized == "normal" then
+        normalized = WORKFLOW_MODE_STANDARD
+    end
+    if normalized ~= WORKFLOW_MODE_DRUM_KIT and normalized ~= WORKFLOW_MODE_STANDARD then
+        normalized = WORKFLOW_MODE_STANDARD
+    end
+    local persist = not (type(opts) == "table" and opts.persist == false)
+    if DRUM_KIT_WORKFLOW_MODE == normalized then
+        if normalized == WORKFLOW_MODE_DRUM_KIT then
+            syncDrumKitWorkflowState()
+        end
+        return false
+    end
+
+    if normalized == WORKFLOW_MODE_DRUM_KIT then
+        DRUM_KIT_NORMAL_STEM_SELECTIONS = captureStemSelections(STEMS)
+        setAllStemSelections(DRUM_KIT_STEMS, true)
+        DRUM_KIT_WORKFLOW_MODE = WORKFLOW_MODE_DRUM_KIT
+        if SETTINGS.createFolder == nil or SETTINGS.createFolder == false then
+            SETTINGS.createFolder = true
+        end
+        syncDrumKitWorkflowState()
+    else
+        DRUM_KIT_WORKFLOW_MODE = WORKFLOW_MODE_STANDARD
+        applyCapturedStemSelections(STEMS, DRUM_KIT_NORMAL_STEM_SELECTIONS)
+        DRUM_KIT_NORMAL_STEM_SELECTIONS = nil
+    end
+
+    if reaper and reaper.SetExtState then
+        reaper.SetExtState(EXT_SECTION, "workflowMode", normalized, true)
+    end
+
+    if persist and saveSettings then
+        saveSettings()
+    end
+    return true
+end
+
 -- Available processing devices
 DEVICES = {
     { id = "auto", name = "Auto", desc = "Automatically select best GPU" },
@@ -1101,11 +1212,108 @@ RUNTIME_DEVICE_PROBE_DEBUG = nil
 RUNTIME_DEVICE_PROBE = nil
 
 -- Available models
-local MODELS = {
-    { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
-    { id = "htdemucs_ft", name = "Quality", desc = "htdemucs_ft - Best quality, slower (4 stems)" },
-    { id = "htdemucs_6s", name = "6-Stem", desc = "htdemucs_6s - Adds Guitar & Piano separation" },
+local MODEL_LABEL_FALLBACKS = {
+    model_label_fast = "Fast",
+    model_label_quality = "Quality",
+    model_label_6stem = "6-Stem",
+    model_label_expanded = "Expanded",
 }
+
+local MODEL_DESC_FALLBACKS = {
+    model_fast_desc = "htdemucs - Fastest model, good quality (4 stems)",
+    model_quality_desc = "htdemucs_ft - Best quality, slower (4 stems)",
+    model_6stem_desc = "htdemucs_6s - Adds Guitar & Piano separation",
+}
+
+local MODEL_FALLBACKS = {
+    { id = "htdemucs", i18n_label_key = "model_label_fast", i18n_desc_key = "model_fast_desc" },
+    { id = "htdemucs_ft", i18n_label_key = "model_label_quality", i18n_desc_key = "model_quality_desc" },
+    { id = "htdemucs_6s", i18n_label_key = "model_label_6stem", i18n_desc_key = "model_6stem_desc" },
+}
+LEGACY_SIX_STEM_MODEL_ID = "htdemucs_6s"
+
+local function getModelLabelForWorkflow(modelId, drumKitMode)
+    if tostring(modelId or "") == "htdemucs_ft" then
+        return T("model_label_quality") or MODEL_LABEL_FALLBACKS.model_label_quality
+    end
+    if isSixStemModel(modelId) then
+        if drumKitMode then
+            return T("model_label_expanded") or MODEL_LABEL_FALLBACKS.model_label_expanded
+        end
+        return T("model_label_6stem") or MODEL_LABEL_FALLBACKS.model_label_6stem
+    end
+    return T("model_label_fast") or MODEL_LABEL_FALLBACKS.model_label_fast
+end
+
+local function isExistingModelList(metadata)
+    if type(metadata) ~= "table" or #metadata ~= #MODEL_FALLBACKS then
+        return false
+    end
+    for i, fallback in ipairs(MODEL_FALLBACKS) do
+        if type(metadata[i]) ~= "table" or metadata[i].id ~= fallback.id then
+            return false
+        end
+    end
+    return true
+end
+
+local function buildModelsFromMetadata(metadata)
+    local models = {}
+    for _, entry in ipairs(metadata or {}) do
+        local id = tostring(entry.id or "")
+        local labelKey = tostring(entry.i18n_label_key or "")
+        local descKey = tostring(entry.i18n_desc_key or "")
+        local name = MODEL_LABEL_FALLBACKS[labelKey]
+        local desc = MODEL_DESC_FALLBACKS[descKey]
+        if id ~= "" and name and desc then
+            models[#models + 1] = {
+                id = id,
+                name = name,
+                desc = desc,
+                i18n_label_key = labelKey,
+                i18n_desc_key = descKey,
+            }
+        end
+    end
+    return models
+end
+
+function loadModelRegistryModule()
+    local ok, registry = pcall(dofile, script_path .. "_internal/STEMwerk_Models.lua")
+    if not ok or type(registry) ~= "table" then
+        return nil
+    end
+    return registry
+end
+
+MODEL_REGISTRY = loadModelRegistryModule()
+
+local function loadModelRegistryMetadata(registry)
+    registry = registry or MODEL_REGISTRY
+    if type(registry) ~= "table" or type(registry.list) ~= "function" then
+        return nil
+    end
+    local listedOk, list = pcall(registry.list)
+    if not listedOk or type(list) ~= "table" then
+        return nil
+    end
+    if not isExistingModelList(list) then
+        return nil
+    end
+    return list
+end
+
+MODEL_REGISTRY_METADATA = loadModelRegistryMetadata(MODEL_REGISTRY)
+
+local function loadModels()
+    local models = buildModelsFromMetadata(MODEL_REGISTRY_METADATA)
+    if #models > 0 then
+        return models
+    end
+    return buildModelsFromMetadata(MODEL_FALLBACKS)
+end
+
+local MODELS = loadModels()
 
 MODEL_AVAILABILITY = {
     bundledLimited = false,
@@ -1113,11 +1321,10 @@ MODEL_AVAILABILITY = {
 }
 
 do
-    local KNOWN_MODEL_IDS = {
-        htdemucs = true,
-        htdemucs_ft = true,
-        htdemucs_6s = true,
-    }
+    local KNOWN_MODEL_IDS = {}
+    for _, model in ipairs(MODELS) do
+        KNOWN_MODEL_IDS[model.id] = true
+    end
 
     local function parseModelAllowlist(raw)
         if not raw or raw == "" then return nil end
@@ -1263,17 +1470,17 @@ local getAvailableLanguages = I18N.getAvailableLanguages
 
 local function getProcessingWindowTitle()
     local label = (type(T) == "function" and T("window_title_processing")) or "Processing.."
-    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_DISPLAY_VERSION .. ")"
 end
 
 local function getCompleteWindowTitle()
     local label = (type(T) == "function" and T("window_title_complete")) or "Complete"
-    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_DISPLAY_VERSION .. ")"
 end
 
 local function getMultiTrackWindowTitle()
     local label = (type(T) == "function" and T("window_title_multi_track")) or "Multi-Track Progress"
-    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_VERSION .. ")"
+    return "STEMwerk - " .. tostring(label) .. " (v" .. APP_DISPLAY_VERSION .. ")"
 end
 
 -- Forward declare GUI so early helpers (e.g. handleArtAdvance) can reference it safely.
@@ -1407,6 +1614,29 @@ local function effectiveRunRequestedParallel()
     return (SETTINGS and SETTINGS.parallelProcessing) and true or false
 end
 
+function isRegistrySixStemModel(modelId)
+    if not MODEL_REGISTRY_METADATA then
+        return nil
+    end
+    if type(MODEL_REGISTRY) ~= "table" or type(MODEL_REGISTRY.isSixStem) ~= "function" then
+        return nil
+    end
+    local ok, isSixStem = pcall(MODEL_REGISTRY.isSixStem, modelId)
+    if not ok then
+        return nil
+    end
+    return isSixStem and true or false
+end
+
+function isSixStemModel(modelId)
+    local normalized = tostring(modelId or "")
+    local registryValue = isRegistrySixStemModel(normalized)
+    if registryValue ~= nil then
+        return registryValue
+    end
+    return normalized == LEGACY_SIX_STEM_MODEL_ID
+end
+
 local KNOWN_MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 
 local function isKnownMpsUnsupportedFailure(logSnippet)
@@ -1439,7 +1669,7 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
 end
 
 local function isEffectiveRun6Stem()
-    return effectiveRunModel() == "htdemucs_6s"
+    return isSixStemModel(effectiveRunModel())
 end
 
 stemIsSelectableForCurrentModel = function(stem)
@@ -1448,7 +1678,8 @@ end
 
 countSelectableSelectedStems = function(skipIndex)
     local count = 0
-    for i, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for i, stem in ipairs(activeStems or {}) do
         if i ~= skipIndex and stem.selected and stemIsSelectableForCurrentModel(stem) then
             count = count + 1
         end
@@ -1460,7 +1691,8 @@ ensureAtLeastOneStemSelected = function()
     if countSelectableSelectedStems(nil) > 0 then
         return false
     end
-    for _, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for _, stem in ipairs(activeStems or {}) do
         if stemIsSelectableForCurrentModel(stem) then
             stem.selected = true
             return true
@@ -1470,7 +1702,8 @@ ensureAtLeastOneStemSelected = function()
 end
 
 toggleStemSelection = function(index)
-    local stem = STEMS and STEMS[index]
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    local stem = activeStems and activeStems[index]
     if not stem or not stemIsSelectableForCurrentModel(stem) then
         return false
     end
@@ -1489,7 +1722,8 @@ end
 
 areAllSelectableStemsSelected = function()
     local selectableCount = 0
-    for _, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for _, stem in ipairs(activeStems or {}) do
         if stemIsSelectableForCurrentModel(stem) then
             selectableCount = selectableCount + 1
             if not stem.selected then
@@ -1501,7 +1735,8 @@ areAllSelectableStemsSelected = function()
 end
 
 selectAllSelectableStems = function()
-    for _, stem in ipairs(STEMS or {}) do
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    for _, stem in ipairs(activeStems or {}) do
         if stemIsSelectableForCurrentModel(stem) then
             stem.selected = true
         elseif stem.sixStemOnly then
@@ -1515,13 +1750,20 @@ setModelPreservingStemIntent = function(modelId)
         return false
     end
 
+    if isDrumKitWorkflowActive() then
+        SETTINGS.model = modelId
+        syncDrumKitWorkflowState()
+        saveSettings()
+        return true
+    end
+
     local wasAllSelected = areAllSelectableStemsSelected()
     SETTINGS.model = modelId
 
     if wasAllSelected then
         selectAllSelectableStems()
     else
-        if tostring(SETTINGS.model or "") ~= "htdemucs_6s" then
+        if not isSixStemModel(SETTINGS.model) then
             for _, st in ipairs(STEMS or {}) do
                 if st.sixStemOnly then st.selected = false end
             end
@@ -1550,6 +1792,13 @@ SETTINGS_MOD.configure({
     updateTheme = updateTheme,
     setLanguage = setLanguage,
     ensureSelectedModelIsAvailable = ensureSelectedModelIsAvailable,
+    setWorkflowMode = setWorkflowMode,
+    getWorkflowMode = function()
+        return isDrumKitWorkflowActive() and WORKFLOW_MODE_DRUM_KIT or WORKFLOW_MODE_STANDARD
+    end,
+    getDrumKitStems = function()
+        return DRUM_KIT_STEMS
+    end,
     getWindowState = function()
         return lastDialogX, lastDialogY, lastDialogW, lastDialogH
     end,
@@ -1573,12 +1822,170 @@ DEVICE_RUNTIME.configure({
 })
 SETTINGS_MOD.loadSavedMainWindowPos()
 
+function jsonEscapeValue(v)
+    local s = tostring(v or "")
+    s = s:gsub("\\", "\\\\")
+    s = s:gsub("\"", "\\\"")
+    s = s:gsub("\n", "\\n")
+    s = s:gsub("\r", "\\r")
+    return s
+end
+
+function jsonEncodeRunConfig(value)
+    local t = type(value)
+    if t == "nil" then return "null" end
+    if t == "boolean" then return value and "true" or "false" end
+    if t == "number" then return tostring(value) end
+    if t == "string" then return "\"" .. jsonEscapeValue(value) .. "\"" end
+    if t == "table" then
+        local isArray = (#value > 0)
+        local parts = {}
+        if isArray then
+            for i = 1, #value do
+                parts[#parts + 1] = jsonEncodeRunConfig(value[i])
+            end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+        for k, v in pairs(value) do
+            parts[#parts + 1] = "\"" .. jsonEscapeValue(k) .. "\":" .. jsonEncodeRunConfig(v)
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+    return "null"
+end
+
+function collectSelectedStemNames(stems)
+    local selected = {}
+    for _, stem in ipairs(stems or {}) do
+        if stem.selected then
+            selected[#selected + 1] = tostring(stem.name or "")
+        end
+    end
+    table.sort(selected)
+    return selected
+end
+
+function canonicalTopLevelMode()
+    local persisted = reaper and reaper.GetExtState and reaper.GetExtState(EXT_SECTION, "workflowMode") or ""
+    local src = tostring(persisted or "")
+    if src == "" then
+        if isDrumKitWorkflowActive() then
+            return "drumkit"
+        end
+        return "normal"
+    end
+    if src == WORKFLOW_MODE_DRUM_KIT then
+        return "drumkit"
+    end
+    if src == WORKFLOW_MODE_STANDARD then
+        return "normal"
+    end
+    return "unknown"
+end
+
+function canonicalDrumKitModelMode(modelId)
+    local m = tostring(modelId or "")
+    if m == "htdemucs_ft" then return "quality" end
+    if isSixStemModel(m) then return "expanded" end
+    if m == "htdemucs" then return "fast" end
+    return "unknown"
+end
+
+function canonicalRequestedDeviceClass(deviceId)
+    local d = tostring(deviceId or ""):lower()
+    if d == "auto" then return "auto" end
+    if d == "cpu" then return "cpu" end
+    if d == "gpu" then return "gpu" end
+    if d:match("^cuda") or d:match("^directml") or d:match("^rocm") or d == "mps" or d:match("^privateuseone") then
+        return "gpu"
+    end
+    return "unknown"
+end
+
+function currentPersistedDeviceSetting()
+    local persisted = ""
+    if reaper and reaper.GetExtState then
+        persisted = tostring(reaper.GetExtState(EXT_SECTION, "device") or "")
+    end
+    if persisted ~= "" then
+        return persisted
+    end
+    return tostring(SETTINGS and SETTINGS.device or "auto")
+end
+
+function canonicalBackendLabel(deviceId)
+    local d = tostring(deviceId or ""):lower()
+    if d == "" or d == "auto" then return "unknown" end
+    if d == "cpu" or d:find("cpu", 1, true) then return "cpu" end
+    if d:match("^cuda") then return "cuda" end
+    if d:match("^rocm") or d:match("^hip") or d:match("^privateuseone") then return "rocm" end
+    if d:match("^directml") then return "directml" end
+    if d == "mps" then return "mps" end
+    return "unknown"
+end
+
+function exportRunConfigForMcp()
+    if not reaper or not reaper.SetExtState then return end
+    local mode = canonicalTopLevelMode()
+    local requestedDeviceRaw = currentPersistedDeviceSetting()
+    local requestedDevice = canonicalRequestedDeviceClass(requestedDeviceRaw)
+    local drumkitModelMode = canonicalDrumKitModelMode(SETTINGS and SETTINGS.model)
+    local drumkitModeLabel = getModelLabelForWorkflow(SETTINGS and SETTINGS.model, true)
+    local outputMode = tostring(SETTINGS and SETTINGS.outputGrouping or "per_item")
+    local outputModeSimple = outputMode == "source_track" and "per_track" or "per_item"
+    local payload = {
+        version = 1,
+        timestamp_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        mode = mode,
+        requested_device = requestedDevice,
+        requested_device_id = requestedDeviceRaw,
+        requested_device_class = requestedDevice,
+        worker_requested_device = "unknown",
+        effective_device = "unknown",
+        effective_backend = "unknown",
+        actual_runtime_backend = "unknown",
+        actual_torch_device = "unknown",
+        actual_acceleration_available = false,
+        normal = {
+            selected_stems = collectSelectedStemNames(STEMS),
+            output_grouping = outputMode,
+            output_mode = outputModeSimple
+        },
+        drumkit = {
+            model_mode = drumkitModelMode,
+            model_label = tostring(drumkitModeLabel or ""),
+            selected_parts = collectSelectedStemNames(DRUM_KIT_STEMS),
+            create_folder = SETTINGS and SETTINGS.createFolder and true or false,
+            output_grouping = outputMode,
+            output_mode = outputModeSimple
+        },
+        after = {
+            post_process_takes = tostring(SETTINGS and SETTINGS.postProcessTakes or "none"),
+            mute_original = SETTINGS and SETTINGS.muteOriginal and true or false,
+            mute_selection = SETTINGS and SETTINGS.muteSelection and true or false,
+            delete_original = SETTINGS and SETTINGS.deleteOriginal and true or false,
+            delete_selection = SETTINGS and SETTINGS.deleteSelection and true or false,
+            delete_original_track = SETTINGS and SETTINGS.deleteOriginalTrack and true or false,
+            mute_original_track = SETTINGS and SETTINGS.muteOriginalTrack and true or false
+        },
+        warnings = {
+            "effective backend/device is only known reliably during an active run"
+        }
+    }
+    reaper.SetExtState(EXT_SECTION, "run_config_json", jsonEncodeRunConfig(payload), true)
+end
+
 local function loadSettings()
-    return SETTINGS_MOD.load()
+    local out = SETTINGS_MOD.load()
+    exportRunConfigForMcp()
+    return out
 end
 
 saveSettings = function()
-    return SETTINGS_MOD.save()
+    local out = SETTINGS_MOD.save()
+    exportRunConfigForMcp()
+    return out
 end
 
 -- Register exit function (now that saveSettings is defined)
@@ -1715,7 +2122,8 @@ function HELPERS.getSelectionMonitorState()
     local timeSelStart, timeSelEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     local hasTimeSel = (timeSelEnd or 0) > (timeSelStart or 0)
 
-    local function itemOverlapsTimeSelection(item)
+    local function itemOverlapsTimeSelection(item, requireOverlap)
+        if not requireOverlap then return true end
         if not hasTimeSel then return true end
         if not item or not reaper.ValidatePtr(item, "MediaItem*") then return false end
         local pos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
@@ -1724,13 +2132,13 @@ function HELPERS.getSelectionMonitorState()
         return pos < timeSelEnd and itemEnd > timeSelStart
     end
 
-    local function anyAudibleItemOnTrack(track)
+    local function anyAudibleItemOnTrack(track, requireOverlap)
         if not track or not reaper.ValidatePtr(track, "MediaTrack*") then return false, false end
         local anyOverlap = false
         local itemCount = reaper.CountTrackMediaItems(track) or 0
         for i = 0, itemCount - 1 do
             local item = reaper.GetTrackMediaItem(track, i)
-            if item and itemOverlapsTimeSelection(item) then
+            if item and itemOverlapsTimeSelection(item, requireOverlap) then
                 anyOverlap = true
                 if AUDIBILITY.isItemAudible(item, soloActive) then
                     return true, true
@@ -1741,17 +2149,17 @@ function HELPERS.getSelectionMonitorState()
     end
 
     if selItemCount > 0 then
-        local anySelectedOverlap = false
+        local anySelectedItems = false
         for i = 0, selItemCount - 1 do
             local item = reaper.GetSelectedMediaItem(0, i)
-            if item and itemOverlapsTimeSelection(item) then
-                anySelectedOverlap = true
+            if item and reaper.ValidatePtr(item, "MediaItem*") then
+                anySelectedItems = true
                 if AUDIBILITY.isItemAudible(item, soloActive) then
                     return { actionable = true, hasSource = true, reason = "selected_items_audible" }
                 end
             end
         end
-        if anySelectedOverlap then
+        if anySelectedItems then
             return { actionable = false, hasSource = true, reason = "selected_items_inaudible" }
         end
     end
@@ -1760,7 +2168,8 @@ function HELPERS.getSelectionMonitorState()
         local anyTrackOverlap = false
         for t = 0, selTrackCount - 1 do
             local track = reaper.GetSelectedTrack(0, t)
-            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            -- Selected tracks are explicit selection and should not be invalidated by time selection.
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track, false)
             if overlapOnTrack then anyTrackOverlap = true end
             if audibleOnTrack then
                 return { actionable = true, hasSource = true, reason = "selected_tracks_audible" }
@@ -1776,7 +2185,7 @@ function HELPERS.getSelectionMonitorState()
         local trackCount = reaper.CountTracks(0) or 0
         for t = 0, trackCount - 1 do
             local track = reaper.GetTrack(0, t)
-            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track, true)
             if overlapOnTrack then anyOverlap = true end
             if audibleOnTrack then
                 return { actionable = true, hasSource = true, reason = "time_selection_audible" }
@@ -5026,6 +5435,7 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  K / I   Karaoke / Instrumental")
                     addLine(l, "  V D B   Vocals / Drums / Bass")
                     addLine(l, "  F Q S   Fast / Quality / 6-Stem")
+                    addLine(l, "  X       " .. tr("help_native_key_drumkit", "Drum Kit Split"))
                     addLine(l, "  1-4     " .. tr("help_native_key_toggle_stems", "Toggle stems (1-6 in 6-stem)"))
                     return l
                 end
@@ -5053,6 +5463,11 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  htdemucs     Fast")
                     addLine(l, "  htdemucs_ft  Quality")
                     addLine(l, "  htdemucs_6s  6-Stem")
+                    addLine(l, "")
+                    addHead(l, tr("help_native_drumkit_split", "Drum Kit Split"))
+                    addLine(l, "  " .. tr("help_native_drumkit_step_1", "1) Isolates the drum stem from selected audio"))
+                    addLine(l, "  " .. tr("help_native_drumkit_step_2", "2) Splits that drum stem into Kick, Snare, Toms, Hi-Hat, Ride, Crash"))
+                    addLine(l, "  " .. tr("help_native_drumkit_model_note", "Fast / Quality / Expanded affect only the first isolation step."))
                     addLine(l, "")
                     addHead(l, tr("help_native_output", "Output"))
                     addLine(l, "  " .. tr("new_tracks", "New tracks"))
@@ -5127,12 +5542,13 @@ local function drawUtilityNativeHelpWindow()
                     local l = {}
                     addHead(l, "STEMwerk")
                     addLine(l, "  " .. tr("help_native_welcome_sub", "Stem separation workflow utility for REAPER"))
-                    addLine(l, "  " .. tr("about_version","Version") .. ": " .. tostring(APP_VERSION or ""))
+                    addLine(l, "  " .. tr("about_version","Version") .. ": " .. tostring(APP_DISPLAY_VERSION or ""))
                     addLine(l, "")
                     addHead(l, tr("help_native_separation", "Separation"))
                     addLine(l, "  " .. tr("help_native_about_4stem", "4-stem: Vocals, Drums, Bass, Other"))
                     addLine(l, "  " .. tr("help_native_about_6stem", "6-stem: adds Guitar, Piano"))
                     addLine(l, "  " .. tr("help_native_about_models", "Fast / Quality / 6-Stem models"))
+                    addLine(l, "  " .. tr("help_native_about_drumkit", "Drum Kit Split: isolate drums, then split into Kick/Snare/Toms/Hi-Hat/Ride/Crash"))
                     addLine(l, "  " .. tr("help_native_about_output", "New tracks or in-place output"))
                     return l
                 end,
@@ -6774,6 +7190,7 @@ local function drawArtGallery()
             {icon = "●", color = stemColors[2], title = T("help_feature_drums"), desc = T("help_feature_drums_desc")},
             {icon = "≡", color = stemColors[3], title = T("help_feature_bass"), desc = T("help_feature_bass_desc")},
             {icon = "✦", color = stemColors[4], title = T("help_feature_other"), desc = T("help_feature_other_desc")},
+            {icon = "◉", color = {0.70, 0.60, 1.00}, title = T("help_feature_drumkit"), desc = T("help_feature_drumkit_desc")},
         }
         local featureY = contentY + PS(welcomeSpacing.featuresTop or 100)
         local featureSpacing = PS(welcomeSpacing.featureSpacing or 50)
@@ -7054,6 +7471,55 @@ local function drawArtGallery()
 
             stemY = stemY + cardH + cardGap
         end
+
+        -- Drum Kit Split explainer (right side, integrated — no card surface)
+        local rightAreaX = stemsFrame.x + math.floor(stemsFrame.w * 0.58)
+        local rightX = rightAreaX
+        local rightY = stemsFrame.y + PS(8)
+
+        -- Subtle vertical separator to gently set off this section
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.28)
+        gfx.rect(rightX - PS(16), rightY + PS(4), 1, PS(150), 1)
+
+        local title = T("help_drumkit_title") or "Drum Kit Split"
+        local parts = T("help_drumkit_parts") or "Kick · Snare · Toms · Hi-Hat · Ride · Crash"
+        local line1 = T("help_drumkit_line1") or "First isolate the drum stem."
+        local line2 = T("help_drumkit_line2") or "Then split it into drum kit parts."
+        local shortcut = T("help_drumkit_line3") or "Shortcut: X"
+
+        -- Title — uses Drums stem accent (blue) so it visually ties to the drum row at left
+        gfx.setfont(1, "Arial", PS(17), string.byte('b'))
+        local dkAccent = stemColors[2]
+        if SETTINGS.darkMode then
+            gfx.set(dkAccent[1], dkAccent[2], dkAccent[3], 1)
+        else
+            gfx.set(dkAccent[1] * 0.7, dkAccent[2] * 0.7, dkAccent[3] * 0.7, 1)
+        end
+        gfx.x = rightX
+        gfx.y = rightY
+        gfx.drawstr(title)
+
+        -- Parts list
+        gfx.setfont(1, "Arial", PS(12))
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        gfx.x = rightX
+        gfx.y = rightY + PS(28)
+        gfx.drawstr(parts)
+
+        -- Two short explanation lines, with airier spacing
+        gfx.x = rightX
+        gfx.y = rightY + PS(58)
+        gfx.drawstr(line1)
+        gfx.x = rightX
+        gfx.y = rightY + PS(78)
+        gfx.drawstr(line2)
+
+        -- Shortcut hint (subdued)
+        gfx.setfont(1, "Arial", PS(11), string.byte('b'))
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.95)
+        gfx.x = rightX
+        gfx.y = rightY + PS(108)
+        gfx.drawstr(shortcut)
 
         -- 6-stem model note (translated, better styled)
         if contentH > PS(400) then
@@ -7648,8 +8114,71 @@ end
 
 -- Draw message window (replaces reaper.MB for proper positioning)
 -- Styled to match main app window
+function buildMessageWindowBodyText()
+    local function formatDrumKitOutputStats(folders, tracks)
+        local folderWord = trPlural(
+            folders,
+            "drumkit_result_folder_one",
+            "drumkit_result_folder_many",
+            "folder",
+            "folders"
+        )
+        local trackWord = trPlural(
+            tracks,
+            "drumkit_result_track_one",
+            "drumkit_result_track_many",
+            "track",
+            "tracks"
+        )
+        return string.format("%d %s, %d %s", folders, folderWord, tracks, trackWord)
+    end
+    local data = messageWindowState and messageWindowState.messageData or nil
+    if type(data) == "table" and data.kind == "drumkit_cancelled" then
+        return T("drumkit_cancelled_message") or "Drum Kit Split cancelled."
+    end
+    if type(data) == "table" and data.kind == "drumkit_result" then
+        local lines = {
+            T("drumkit_result_complete") or "Drum Kit Split complete.",
+            string.format(T("drumkit_result_mode") or "Mode: %s", tostring(data.modeLabel or "")),
+            string.format(T("drumkit_result_sources") or "Sources: %d", tonumber(data.sources or 0) or 0),
+            string.format(T("drumkit_result_imported") or "Imported stems: %d", tonumber(data.imported or 0) or 0),
+        }
+        local folders = tonumber(data.outputFolders or 0) or 0
+        local tracks = tonumber(data.outputTracks or 0) or 0
+        if folders > 0 and tracks > 0 then
+            lines[#lines + 1] = string.format(
+                "%s: %s",
+                T("drumkit_result_output") or "Output",
+                formatDrumKitOutputStats(folders, tracks)
+            )
+        end
+        local elapsed = tonumber(data.elapsedSeconds or 0) or 0
+        if elapsed > 0 then
+            local mins = math.floor(elapsed / 60)
+            local secs = math.floor(elapsed - (mins * 60) + 0.5)
+            if secs >= 60 then mins = mins + 1; secs = 0 end
+            lines[#lines + 1] = string.format(T("drumkit_result_time") or "Time: %s", string.format("%d:%02d", mins, secs))
+        end
+        local speed = tonumber(data.speedRealtime or 0) or 0
+        if speed > 0 then
+            lines[#lines + 1] = string.format(T("drumkit_result_speed") or "Speed: %.2fx realtime", speed)
+        end
+        return table.concat(lines, "\n")
+    end
+    return tostring((messageWindowState and messageWindowState.message) or T("select_audio") or "")
+end
+
 local function drawMessageWindow()
     local w, h = gfx.w, gfx.h
+    local resultContext = messageWindowState.resultContext == true
+    if resultContext then
+        GUI.suppressMainTooltips = true
+        GUI.tooltip = nil
+        GUI.tooltipX = 0
+        GUI.tooltipY = 0
+        GUI.richTooltip = nil
+        GUI.shortcutTooltip = nil
+    end
 
     -- Calculate scale based on window size
     local scale = math.min(w / 380, h / 340)
@@ -7788,6 +8317,7 @@ local function drawMessageWindow()
             state = messageWindowState,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
+            allowGlobalTooltipWrite = not resultContext,
         }
         UI_CONTROLS.drawUtilityControls(_uc)
         if _uc.tooltipText then
@@ -7967,30 +8497,182 @@ local function drawMessageWindow()
 
     gfx.set(r, g, b, pulseAlpha)
 
-    local msg = tostring(messageWindowState.message or T("select_audio") or "")
-    local msgMaxW = math.min(w - PS(70), PS(480))
-    local msgLines = _wrapTextToWidth(msg, msgMaxW)
-    if #msgLines == 0 then msgLines = { msg } end
-    local msgLineH = gfx.texth + PS(4)
-    local msgTopY = PS(210)
-    local widestMsgW = 0
-    for _, line in ipairs(msgLines) do
-        widestMsgW = math.max(widestMsgW, gfx.measurestr(line))
-    end
-    local msgBlockW = math.min(msgMaxW, widestMsgW)
-    local msgX = (w - msgBlockW) / 2
-    local msgBottomY = msgTopY
-    for idx, line in ipairs(msgLines) do
-        local lineW = gfx.measurestr(line)
-        gfx.x = (w - lineW) / 2
-        gfx.y = msgTopY + (idx - 1) * msgLineH
-        gfx.drawstr(line)
-        msgBottomY = gfx.y + gfx.texth
+    local msgX, msgTopY, msgBlockW, msgBottomY = 0, 0, 0, 0
+    local drumKitResultData = resultContext and messageWindowState and messageWindowState.messageData or nil
+    if type(drumKitResultData) == "table" and drumKitResultData.kind == "drumkit_result" then
+        local function formatDrumKitOutputStats(folders, tracks)
+            local folderWord = trPlural(
+                folders,
+                "drumkit_result_folder_one",
+                "drumkit_result_folder_many",
+                "folder",
+                "folders"
+            )
+            local trackWord = trPlural(
+                tracks,
+                "drumkit_result_track_one",
+                "drumkit_result_track_many",
+                "track",
+                "tracks"
+            )
+            return string.format("%d %s, %d %s", folders, folderWord, tracks, trackWord)
+        end
+        local function formatTemplateLabel(template)
+            local t = tostring(template or "")
+            t = t:gsub("%%[-+ #0]*%d*%.?%d*[cdiouxXeEfgGaAsq]", "")
+            t = t:gsub("%s*,%s*$", "")
+            t = t:gsub(":%s*$", "")
+            return t
+        end
+        local function splitRenderedLabelValue(rendered, fallbackLabel)
+            local line = tostring(rendered or "")
+            local label, value = line:match("^(.-):%s*(.+)$")
+            if not label or not value then
+                return tostring(fallbackLabel or ""), line
+            end
+            return label, value
+        end
+        local rows = {
+            { label = formatTemplateLabel(T("drumkit_result_mode") or "Mode: %s"), value = tostring(drumKitResultData.modeLabel or "") },
+            { label = formatTemplateLabel(T("drumkit_result_sources") or "Sources: %d"), value = tostring(tonumber(drumKitResultData.sources or 0) or 0) },
+            { label = formatTemplateLabel(T("drumkit_result_imported") or "Imported stems: %d"), value = tostring(tonumber(drumKitResultData.imported or 0) or 0) },
+        }
+        local outFolders = tonumber(drumKitResultData.outputFolders or 0) or 0
+        local outTracks = tonumber(drumKitResultData.outputTracks or 0) or 0
+        if outFolders > 0 and outTracks > 0 then
+            local outputLine = string.format(
+                "%s: %s",
+                T("drumkit_result_output") or "Output",
+                formatDrumKitOutputStats(outFolders, outTracks)
+            )
+            local outputLabel, outputValue = splitRenderedLabelValue(outputLine, formatTemplateLabel(T("drumkit_result_output") or "Output"))
+            rows[#rows + 1] = {
+                label = outputLabel,
+                value = outputValue,
+            }
+        end
+        local elapsed = tonumber(drumKitResultData.elapsedSeconds or 0) or 0
+        if elapsed > 0 then
+            local mins = math.floor(elapsed / 60)
+            local secs = math.floor(elapsed - (mins * 60) + 0.5)
+            if secs >= 60 then mins = mins + 1; secs = 0 end
+            local timeLine = string.format(T("drumkit_result_time") or "Time: %s", string.format("%d:%02d", mins, secs))
+            local timeLabel, timeValue = splitRenderedLabelValue(timeLine, formatTemplateLabel(T("drumkit_result_time") or "Time"))
+            rows[#rows + 1] = {
+                label = timeLabel,
+                value = timeValue,
+            }
+        end
+        local speed = tonumber(drumKitResultData.speedRealtime or 0) or 0
+        if speed > 0 then
+            local speedLine = string.format(T("drumkit_result_speed") or "Speed: %.2fx realtime", speed)
+            local speedLabel, speedValue = splitRenderedLabelValue(speedLine, formatTemplateLabel(T("drumkit_result_speed") or "Speed"))
+            rows[#rows + 1] = {
+                label = speedLabel,
+                value = speedValue,
+            }
+        end
+
+        local title = T("drumkit_result_complete") or "Drum Kit Split complete."
+        local panelW = math.max(PS(280), math.min(math.floor(w * 0.52), PS(420)))
+        local panelX = (w - panelW) / 2
+        local rowH = PS(15)
+        local titleGap = PS(10)
+        local panelPadX = PS(12)
+        local panelPadY = PS(9)
+        local panelH = panelPadY * 2 + (#rows * rowH)
+        local btnWLocal = PS(70)
+        local btnHLocal = PS(20)
+        local btnSpacingLocal = PS(10)
+        local totalBtnsWLocal = btnWLocal * 2 + btnSpacingLocal
+        local btnYLocal = h - PS(40)
+        local minGapAboveButtons = PS(22)
+        local titleH = PS(16)
+        msgTopY = PS(156)
+        local panelY = msgTopY + titleH + titleGap
+        local maxPanelBottom = btnYLocal - minGapAboveButtons
+        local desiredPanelBottom = panelY + panelH
+        if desiredPanelBottom > maxPanelBottom then
+            local shiftUp = desiredPanelBottom - maxPanelBottom
+            msgTopY = msgTopY - shiftUp
+            panelY = panelY - shiftUp
+        end
+        local minTop = PS(132)
+        if msgTopY < minTop then
+            local pushDown = minTop - msgTopY
+            msgTopY = msgTopY + pushDown
+            panelY = panelY + pushDown
+        end
+        msgBottomY = panelY + panelH
+        msgX = panelX
+        msgBlockW = panelW
+
+        gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+        if _msgUtility then
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        else
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], SETTINGS.darkMode and 0.98 or 0.95)
+        end
+        local titleW = gfx.measurestr(title)
+        gfx.x = (w - titleW) / 2
+        gfx.y = msgTopY
+        gfx.drawstr(title)
+
+        if _msgUtility then
+            gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.92)
+            gfx.rect(panelX, panelY, panelW, panelH, 1)
+            gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.65)
+            gfx.rect(panelX, panelY, panelW, panelH, 0)
+        else
+            gfx.set(0, 0, 0, SETTINGS.darkMode and 0.20 or 0.08)
+            gfx.rect(panelX, panelY, panelW, panelH, 1)
+            gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.32)
+            gfx.rect(panelX, panelY, panelW, panelH, 0)
+        end
+
+        gfx.setfont(1, "Arial", PS(11))
+        local maxLabelW = 0
+        for _, row in ipairs(rows) do
+            maxLabelW = math.max(maxLabelW, gfx.measurestr(row.label))
+        end
+        local valueX = panelX + panelPadX + maxLabelW + PS(10)
+        for idx, row in ipairs(rows) do
+            local y = panelY + panelPadY + (idx - 1) * rowH
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+            gfx.x = panelX + panelPadX
+            gfx.y = y
+            gfx.drawstr(row.label)
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+            gfx.x = valueX
+            gfx.y = y
+            gfx.drawstr(row.value)
+        end
+    else
+        local msg = buildMessageWindowBodyText()
+        local msgMaxW = math.min(w - PS(70), PS(480))
+        local msgLines = _wrapTextToWidth(msg, msgMaxW)
+        if #msgLines == 0 then msgLines = { msg } end
+        local msgLineH = gfx.texth + PS(4)
+        msgTopY = resultContext and PS(168) or PS(210)
+        local widestMsgW = 0
+        for _, line in ipairs(msgLines) do
+            widestMsgW = math.max(widestMsgW, gfx.measurestr(line))
+        end
+        msgBlockW = math.min(msgMaxW, widestMsgW)
+        msgX = (w - msgBlockW) / 2
+        msgBottomY = msgTopY
+        for idx, line in ipairs(msgLines) do
+            local lineW = gfx.measurestr(line)
+            gfx.x = (w - lineW) / 2
+            gfx.y = msgTopY + (idx - 1) * msgLineH
+            gfx.drawstr(line)
+            msgBottomY = gfx.y + gfx.texth
+        end
     end
 
     -- Tooltip for message area
     local msgHover = mx >= msgX and mx <= msgX + msgBlockW and my >= msgTopY and my <= msgBottomY
-    if msgHover and not tooltipText then
+    if messageWindowState.monitorSelection and msgHover and not tooltipText then
         tooltipText = T("select_audio_tooltip")
         tooltipX = mx + PS(10)
         tooltipY = my + PS(15)
@@ -8099,14 +8781,18 @@ local function drawMessageWindow()
 
     gfx.set(1, 1, 1, 1)
     gfx.setfont(1, "Arial", PS(13), string.byte('b'))
-    local closeText = T("close")
+    local closeText = resultContext and (T("back") or "Back") or (T("close") or "Close")
     local closeW = gfx.measurestr(closeText)
     gfx.x = btnX + (btnW - closeW) / 2
     gfx.y = btnY + (btnH - gfx.texth) / 2
     gfx.drawstr(closeText)
 
     if hover and not tooltipText then
-        tooltipText = T("exit_tooltip")
+        if resultContext then
+            tooltipText = T("result_back_tooltip") or "Back to STEMwerk"
+        else
+            tooltipText = T("exit_tooltip")
+        end
         tooltipX = mx + PS(10)
         tooltipY = my + PS(15)
     end
@@ -8115,7 +8801,9 @@ local function drawMessageWindow()
     gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
     gfx.setfont(1, "Arial", PS(9))
     local hint
-    if messageWindowState.monitorSelection then
+    if resultContext then
+        hint = T("complete_hint_keys") or "Enter / ESC"
+    elseif messageWindowState.monitorSelection then
         hint = T("hint_monitor")
     else
         hint = T("hint_keys")
@@ -8144,6 +8832,14 @@ local function drawMessageWindow()
         gfx.x = logoStartX + flarkPartW
         gfx.y = PS(3)
         gfx.drawstr(audioPart)
+    end
+
+    if resultContext then
+        GUI.tooltip = nil
+        GUI.tooltipX = 0
+        GUI.tooltipY = 0
+        GUI.richTooltip = nil
+        GUI.shortcutTooltip = nil
     end
 
     -- Draw tooltip if active (with STEM colors)
@@ -8306,6 +9002,9 @@ local function messageWindowLoop()
         gfx.quit()
         messageWindowState.onClose = nil
         messageWindowState.monitorSelection = false
+        messageWindowState.messageData = nil
+        messageWindowState.resultContext = false
+        GUI.suppressMainTooltips = false
         if messageWindowState.monitorSelection then
             local mainHwnd = reaper.GetMainHwnd()
             if mainHwnd and reaper.JS_Window_SetFocus then
@@ -8324,6 +9023,9 @@ local function messageWindowLoop()
         gfx.quit()
         messageWindowState.onClose = nil
         messageWindowState.monitorSelection = false
+        messageWindowState.messageData = nil
+        messageWindowState.resultContext = false
+        GUI.suppressMainTooltips = false
         -- Open Art Gallery - remember whether we came from selection monitoring or a plain start screen
         helpState.openedFrom = cameFromMonitor and "monitor" or "start"
         showArtGallery()
@@ -8402,6 +9104,9 @@ local function setTooltip(x, y, w, h, text)
     if SETTINGS and SETTINGS.tooltips == false then
         return
     end
+    if GUI and GUI.suppressMainTooltips then
+        return
+    end
     local mx, my = gfx.mouse_x, gfx.mouse_y
     if mx >= x and mx <= x + w and my >= y and my <= y + h then
         GUI.tooltip = text
@@ -8413,6 +9118,9 @@ end
 -- Set a rich tooltip for STEMwerk button with colored output stems and target
 local function setRichTooltip(x, y, w, h)
     if SETTINGS and SETTINGS.tooltips == false then
+        return
+    end
+    if GUI and GUI.suppressMainTooltips then
         return
     end
     local mx, my = gfx.mouse_x, gfx.mouse_y
@@ -8428,6 +9136,9 @@ end
 -- color: RGB table for the shortcut color (e.g. {255, 100, 100})
 local function setTooltipWithShortcut(x, y, w, h, text, shortcut, color)
     if SETTINGS and SETTINGS.tooltips == false then
+        return
+    end
+    if GUI and GUI.suppressMainTooltips then
         return
     end
     local mx, my = gfx.mouse_x, gfx.mouse_y
@@ -8516,6 +9227,7 @@ function drawResultWindowControls(ctx)
     ctx.S = ctx.PS
     ctx.setLanguageFn = setLanguage
     ctx.updateControlsOpacityFn = updateControlsOpacity
+    ctx.allowGlobalTooltipWrite = false
     ctx.state = resultWindowState
     UI_CONTROLS.drawTopRightControls(ctx)
 end
@@ -8915,6 +9627,9 @@ UI_DRAW.configure({
     drawThemeSurfaceBox = drawThemeSurfaceBox,
     drawGlossyPill = drawGlossyPill,
     drawGlossyRect = drawGlossyRect,
+    isDrumKitWorkflowActive = isDrumKitWorkflowActive,
+    getActiveStemListForCurrentWorkflow = getActiveStemListForCurrentWorkflow,
+    STEMS = STEMS,
     buildFooterLines = function()
         if type(buildFooterLines) == "function" then
             return buildFooterLines()
@@ -10405,7 +11120,9 @@ function HELPERS.hasExplicitOverlapSelection(startTime, endTime)
 end
 
 buildFooterLines = function()
-    local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+    local is6Stem = isSixStemModel(SETTINGS.model)
+    local drumKitMode = isDrumKitWorkflowActive()
+    local activeStems = getActiveStemListForCurrentWorkflow()
     local rawSelTrackCount = reaper.CountSelectedTracks(0) or 0
     local rawSelItemCount = reaper.CountSelectedMediaItems(0) or 0
 
@@ -10430,6 +11147,8 @@ buildFooterLines = function()
     local currentTimeStart, currentTimeEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
     local hasTimeSel = currentTimeEnd > currentTimeStart
 
+    local explicitSelectionPresent = (rawSelItemCount > 0) or (rawSelTrackCount > 0)
+
     local selItemCount = 0
     local selItemDur = 0
     local selItemTrackSet = {}
@@ -10438,23 +11157,15 @@ buildFooterLines = function()
         local it = reaper.GetSelectedMediaItem(0, i)
         local tr = it and reaper.GetMediaItem_Track(it)
         if it and tr and AUDIBILITY.isTrackAudible(tr, soloActiveFooter) and AUDIBILITY.isItemAudible(it, soloActiveFooter) then
-            local inTimeSel = true
-            if hasTimeSel then
-                local ipos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
-                local iend = ipos + reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
-                inTimeSel = (ipos < currentTimeEnd and iend > currentTimeStart)
+            selItemCount = selItemCount + 1
+            selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
+            selItemTrackSet[tr] = true
+            local items = selectedItemsByTrack[tr]
+            if not items then
+                items = {}
+                selectedItemsByTrack[tr] = items
             end
-            if inTimeSel then
-                selItemCount = selItemCount + 1
-                selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
-                selItemTrackSet[tr] = true
-                local items = selectedItemsByTrack[tr]
-                if not items then
-                    items = {}
-                    selectedItemsByTrack[tr] = items
-                end
-                items[#items + 1] = it
-            end
+            items[#items + 1] = it
         end
     end
     local selItemTrackCount = 0
@@ -10481,7 +11192,7 @@ buildFooterLines = function()
         timeSelectionMode = false
     end
 
-    local useTimeSel = hasTimeSel and not HELPERS.hasExplicitOverlapSelection(currentTimeStart, currentTimeEnd)
+    local useTimeSel = hasTimeSel and (not explicitSelectionPresent)
     local timeSelResolved = HELPERS.getCachedTimeSelectionTargets(hasTimeSel, useTimeSel, rawSelTrackCount, rawSelItemCount)
     local timeSelItemCount = timeSelResolved and #timeSelResolved.items or 0
     local timeSelTrackCount = timeSelResolved and timeSelResolved.trackCount or 0
@@ -10531,8 +11242,8 @@ buildFooterLines = function()
     end
 
     local selectedStemCount = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then
             selectedStemCount = selectedStemCount + 1
         end
     end
@@ -10600,7 +11311,7 @@ buildFooterLines = function()
         end
 
         local useTimeSelNow = useTimeSel
-        if timeSelectionMode == "time_selection" or selectionMode == "time_selection" then
+        if (not explicitSelectionPresent) and (timeSelectionMode == "time_selection" or selectionMode == "time_selection") then
             useTimeSelNow = true
         end
 
@@ -10625,7 +11336,7 @@ buildFooterLines = function()
     local summary = previewOutputSummary()
     local effectiveTargets = summary.targetCount
     local viaTimeSelection = useTimeSel
-    if timeSelectionMode == "time_selection" or selectionMode == "time_selection" then
+    if (not explicitSelectionPresent) and (timeSelectionMode == "time_selection" or selectionMode == "time_selection") then
         viaTimeSelection = true
     end
 
@@ -10703,8 +11414,8 @@ buildFooterLines = function()
     end
 
     local stemsPerTrack = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then stemsPerTrack = stemsPerTrack + 1 end
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then stemsPerTrack = stemsPerTrack + 1 end
     end
 
     local outLine
@@ -10799,9 +11510,10 @@ buildFooterLines = function()
         end
 
         local selectedNames = {}
-        for _, stem in ipairs(STEMS) do
-            if stem.selected and (not stem.sixStemOnly or is6Stem) then
-                table.insert(selectedNames, T(stem.name:lower()))
+        for _, stem in ipairs(activeStems) do
+            if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then
+                local key = tostring(stem.name or ""):lower()
+                table.insert(selectedNames, T(key) or stem.name)
             end
         end
         local namesStr = table.concat(selectedNames, ", ")
@@ -10833,6 +11545,25 @@ buildFooterLines = function()
                 "footer_line_location_simple",
                 "Location: %s",
                 trSafe("footer_location_new_tracks", "New tracks")
+            )
+        end
+        if drumKitMode and SETTINGS.createNewTracks then
+            local folderCountOut = (summary.folderCount or 0) > 0 and summary.folderCount or summary.targetCount
+            local sourceCountOut = summary.targetCount
+            local totalOutputStems = summary.outputStems
+            local modelDisplay = getModelLabelForWorkflow(effectiveRunModel(), true)
+            outLine = trFmt(
+                "footer_line_output_drumkit",
+                "Output: %d drum-stem folders, %d drum tracks from %d tracks",
+                folderCountOut,
+                totalOutputStems,
+                sourceCountOut
+            )
+            locLine = trFmt(
+                "footer_line_location_drumkit",
+                "Location: %s · Drum Kit Split · Model: %s",
+                trSafe("footer_location_new_folder_drum", "New folder with drum stems"),
+                modelDisplay
             )
         end
     end
@@ -11216,6 +11947,11 @@ function renderMainColumns(ctx)
     local S = ctx.S
     local contentTop = ctx.contentTop or S(45)
     local is6Stem = ctx.is6Stem
+    local drumKitMode = isDrumKitWorkflowActive()
+    if drumKitMode then
+        syncDrumKitWorkflowState()
+    end
+    local activeStems = getActiveStemListForCurrentWorkflow()
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
 
     gfx.setfont(1, "Arial", S(13))
@@ -11245,14 +11981,15 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
+    local presetLabelDrumKit = "Drum Kit (X)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
     local presetLabelOther   = (T("other") or "Other")      .. " (O)"
     local presetLabelPiano   = (T("piano") or "Piano")      .. " (P)"
     local presetLabelGuitar  = (T("guitar") or "Guitar")    .. " (G)"
-    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
-    if is6Stem then
+    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelDrumKit, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
+    if is6Stem and not drumKitMode then
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
@@ -11274,7 +12011,7 @@ function renderMainColumns(ctx)
 
     local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
     local _pa = {}
-    if utilityMode then
+    do
         local function ss(i) return STEMS[i] and STEMS[i].selected or false end
         local v, d, b, o = ss(1), ss(2), ss(3), ss(4)
         local g, p = ss(5), ss(6)
@@ -11288,46 +12025,72 @@ function renderMainColumns(ctx)
         _pa.other   = (not v) and (not d) and (not b) and o and no56
         _pa.guitar  = is6Stem and (not v) and (not d) and (not b) and (not o) and g and (not p)
         _pa.piano   = is6Stem and (not v) and (not d) and (not b) and (not o) and (not g) and p
+        _pa.drumkit = drumKitMode
+    end
+    local function applyStandardPreset(fn)
+        setWorkflowMode(WORKFLOW_MODE_STANDARD)
+        if type(fn) == "function" then fn() end
     end
     local function drawPresetBtn(py, label, rawColor, isActive)
         if utilityMode then
             return drawRadio(col1X, py, isActive, label, nil, colW, nil, nil, presetsBtnFontSize)
         end
-        return drawButton(col1X, py, colW, btnH, label, false, rawColor, presetsBtnFontSize)
+        -- Visual mode: share the stem toggle styling — grey when inactive, stem-color when provided,
+        -- otherwise theme accent (matches Quality and the other model radios).
+        local activeColor = rawColor or {THEME.accent[1] * 255, THEME.accent[2] * 255, THEME.accent[3] * 255}
+        return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, activeColor, presetsBtnFontSize)
     end
-    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, _pa.karaoke) then applyPresetKaraoke() end
+    if drawPresetBtn(presetY, presetLabelKaraoke, nil, (not drumKitMode) and _pa.karaoke) then applyStandardPreset(applyPresetKaraoke) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}, _pa.all) then applyPresetAll() end
+    if drawPresetBtn(presetY, presetLabelAll, nil, (not drumKitMode) and _pa.all) then applyStandardPreset(applyPresetAll) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
+
+    presetY = presetY + S(22)
+    if drawPresetBtn(presetY, presetLabelDrumKit, nil, _pa.drumkit) then
+        setWorkflowMode(WORKFLOW_MODE_DRUM_KIT)
+    end
+    setTooltipWithShortcut(
+        col1X,
+        presetY,
+        colW,
+        btnH,
+        T("tooltip_preset_drumkit") or "Split drums into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
+        "X",
+        {140, 110, 230}
+    )
 
     presetY = presetY + S(28)
 
-    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals) then applyPresetVocalsOnly() end
+    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, (not drumKitMode) and _pa.vocals) then applyStandardPreset(applyPresetVocalsOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums) then applyPresetDrumsOnly() end
+    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, (not drumKitMode) and _pa.drums) then applyStandardPreset(applyPresetDrumsOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass) then applyPresetBassOnly() end
+    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, (not drumKitMode) and _pa.bass) then applyStandardPreset(applyPresetBassOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other) then applyPresetOtherOnly() end
+    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, (not drumKitMode) and _pa.other) then applyStandardPreset(applyPresetOtherOnly) end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
-    if is6Stem then
-        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then applyPresetGuitarOnly() end
+    if is6Stem and not drumKitMode then
+        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then applyStandardPreset(applyPresetGuitarOnly) end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + S(22)
-        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then applyPresetPianoOnly() end
+        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then applyStandardPreset(applyPresetPianoOnly) end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + S(22)
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    drawColumnHeader(is6Stem and T("stems_6") or "Stems:", col2X, stemsW, mainHeaderFont, contentTop)
-    setTooltip(col2X, contentTop, stemsW, S(16), T("tooltip_section_stems") or "Choose which stems to create.")
+    local stemsHeaderLabel = drumKitMode and (T("drum_stems_label") or "Drum Stems:") or (is6Stem and T("stems_6") or "Stems:")
+    drawColumnHeader(stemsHeaderLabel, col2X, stemsW, mainHeaderFont, contentTop)
+    local stemsHeaderTip = drumKitMode
+        and (T("tooltip_drum_stems_section") or "Choose which drum kit parts to import.")
+        or (T("tooltip_section_stems") or "Choose which stems to create.")
+    setTooltip(col2X, contentTop, stemsW, S(16), stemsHeaderTip)
 
     local stemY = contentTop + S(20)
     gfx.setfont(1, "Arial", S(13))
@@ -11337,22 +12100,34 @@ function renderMainColumns(ctx)
         Bass = "tooltip_stem_bass",
         Other = "tooltip_stem_other",
         Guitar = "tooltip_stem_guitar",
-        Piano = "tooltip_stem_piano"
+        Piano = "tooltip_stem_piano",
+        Kick = "tooltip_stem_kick",
+        Snare = "tooltip_stem_snare",
+        Toms = "tooltip_stem_toms",
+        ["Hi-Hat"] = "tooltip_stem_hihat",
+        Ride = "tooltip_stem_ride",
+        Crash = "tooltip_stem_crash",
     }
     local stemLabels = {}
-    for _, st in ipairs(STEMS) do
-        if not st.sixStemOnly or is6Stem then
-            local k = tostring(st.name or ""):lower()
-            local dn = T(k) or st.name
+    for _, st in ipairs(activeStems) do
+        if not st.sixStemOnly or is6Stem or drumKitMode then
+            local dn = st.name
+            if not drumKitMode then
+                local k = tostring(st.name or ""):lower()
+                dn = T(k) or st.name
+            end
             stemLabels[#stemLabels + 1] = tostring(dn) .. " (" .. st.key .. ")"
         end
     end
     local stemsBtnFontSize = _ubfs
 
-    for i, stem in ipairs(STEMS) do
-        if not stem.sixStemOnly or is6Stem then
-            local k = tostring(stem.name or ""):lower()
-            local displayName = T(k) or stem.name
+    for i, stem in ipairs(activeStems) do
+        if not stem.sixStemOnly or is6Stem or drumKitMode then
+            local displayName = stem.name
+            if not drumKitMode then
+                local k = tostring(stem.name or ""):lower()
+                displayName = T(k) or stem.name
+            end
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
             local clicked
             if utilityMode then
@@ -11361,15 +12136,18 @@ function renderMainColumns(ctx)
                 clicked = drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize)
             end
             if clicked then toggleStemSelection(i) end
-            local tooltipKey = stemTooltipKeys[stem.name] or "tooltip_stem_other"
-            setTooltipWithShortcut(col2X, stemY, colW, btnH, T(tooltipKey), stem.key, stem.color)
+            local tooltipText = stemTooltipKeys[stem.name] and T(stemTooltipKeys[stem.name]) or ("Import " .. tostring(displayName) .. " output stem.")
+            setTooltipWithShortcut(col2X, stemY, colW, btnH, tooltipText, stem.key, stem.color)
             stemY = stemY + S(22)
         end
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("model"), col3X, modelColW, mainHeaderFont, contentTop)
-    setTooltip(col3X, contentTop, modelColW, S(16), T("tooltip_section_model") or "Choose speed/quality and stem model.")
+    local modelHeaderTip = drumKitMode
+        and (T("tooltip_model_drumkit_section") or "Fast, Quality and Expanded change the parent drum isolation model before Drum Kit Split.")
+        or (T("tooltip_section_model") or "Choose speed/quality and stem model.")
+    setTooltip(col3X, contentTop, modelColW, S(16), modelHeaderTip)
     gfx.setfont(1, "Arial", S(13))
 
     local modelBoxW = modelColW
@@ -11382,11 +12160,6 @@ function renderMainColumns(ctx)
     local modelBtnFontSize = _ubfs
 
     local modelY = contentTop + S(20)
-    local modelDescKeys = {
-        htdemucs = "model_fast_desc",
-        htdemucs_ft = "model_quality_desc",
-        htdemucs_6s = "model_6stem_desc",
-    }
     local modelShortcutKeys = {
         htdemucs = "F",
         htdemucs_ft = "Q",
@@ -11395,16 +12168,25 @@ function renderMainColumns(ctx)
     for _, model in ipairs(MODELS) do
         local modelAvailable = isModelAvailableInCurrentMode(model.id)
         local modelColor = modelAvailable and nil or {120, 120, 120}
-        local modelDisplayName = model.name
+        local modelDisplayName = drumKitMode and getModelLabelForWorkflow(model.id, true) or model.name
         if utilityMode then
             local mk = modelShortcutKeys[model.id]
-            if mk then modelDisplayName = model.name .. " (" .. mk .. ")" end
+            if mk then modelDisplayName = modelDisplayName .. " (" .. mk .. ")" end
         end
         if drawRadio(col3X, modelY, SETTINGS.model == model.id, modelDisplayName, nil, modelBoxW, nil, nil, modelBtnFontSize) and modelAvailable then
             setModelPreservingStemIntent(model.id)
         end
-        local descKey = modelDescKeys[model.id] or "model_fast_desc"
+        local descKey = model.i18n_desc_key or "model_fast_desc"
         local tip = T(descKey)
+        if drumKitMode then
+            if model.id == "htdemucs" then
+                tip = T("tooltip_model_drumkit_fast") or "Faster."
+            elseif model.id == "htdemucs_ft" then
+                tip = T("tooltip_model_drumkit_quality") or "Higher quality."
+            elseif model.id == "htdemucs_6s" then
+                tip = T("tooltip_model_drumkit_expanded") or "Expanded parent separation."
+            end
+        end
         if not modelAvailable then
             tip = tostring(tip or "") .. "\n\n" .. unavailableModelTooltipSuffix()
         end
@@ -11431,10 +12213,14 @@ function renderMainColumns(ctx)
     gfx.setfont(1, "Arial", S(13))
 
     local outBoxW = outputColW
+    local forceNewTracksForDrumKit = drumKitMode
+    if forceNewTracksForDrumKit then
+        syncDrumKitWorkflowState()
+    end
 
     local stemCount = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and ((not stem.sixStemOnly) or is6Stem or drumKitMode) then
             stemCount = stemCount + 1
         end
     end
@@ -11450,12 +12236,33 @@ function renderMainColumns(ctx)
         SETTINGS.createNewTracks = true
         SETTINGS.postProcessTakes = "none"
     end
-    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
-    outY = outY + S(22)
-    if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW, nil, nil, outputBtnFontSize) then
-        SETTINGS.createNewTracks = false
+    if forceNewTracksForDrumKit then
+        setTooltip(col5X, outY, outBoxW, btnH, "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.")
+    else
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
     end
-    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
+    outY = outY + S(22)
+    local inPlaceDisabled = forceNewTracksForDrumKit
+    local inPlaceColor = inPlaceDisabled and {130, 130, 130} or nil
+    if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, inPlaceColor, outBoxW, nil, nil, outputBtnFontSize) then
+        if inPlaceDisabled then
+            openDialogWarning(
+                "Drum Kit Split Output",
+                "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.\n\nIn-place output is disabled for Drum Kit Split."
+            )
+        else
+            SETTINGS.createNewTracks = false
+        end
+    end
+    if inPlaceDisabled then
+        setTooltip(col5X, outY, outBoxW, btnH, "Drum Kit Split mode forces New tracks output.")
+    else
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
+    end
+
+    if inPlaceDisabled then
+        SETTINGS.createNewTracks = true
+    end
 
     outY = outY + S(28)
     local groupingEnabled = SETTINGS.createNewTracks == true
@@ -11924,6 +12731,12 @@ openCustomFolderDialog = function()
 end
 
 canStartProcessingFromDialog = function()
+    if isDrumKitWorkflowActive() then
+        syncDrumKitWorkflowState()
+        -- Developer-preview bridge: allow Start from main UI and route to workflow runner.
+        return true
+    end
+
     if OS == "Windows" and GUI and GUI.windowsStartupMonitor and not hasAnySelection() then
         local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
         openDialogWarning(promptTitle, promptMessage)
@@ -11940,8 +12753,9 @@ canStartProcessingFromDialog = function()
     end
 
     local is6Stem = isEffectiveRun6Stem()
+    local activeStems = getActiveStemListForCurrentWorkflow()
     local validSelected = false
-    for _, stem in ipairs(STEMS) do
+    for _, stem in ipairs(activeStems) do
         if stem.selected and ((not stem.sixStemOnly) or is6Stem) then
             validSelected = true
             break
@@ -11972,6 +12786,225 @@ canStartProcessingFromDialog = function()
     return true
 end
 
+local function drumKitPrototypeModeFromSettings()
+    local model = tostring(SETTINGS and SETTINGS.model or "htdemucs")
+    if model == "htdemucs_ft" then return "clean_quality" end
+    if model == "htdemucs_6s" then return "clean_6stem" end
+    return "clean_fast"
+end
+
+function drumKitImportedStemTotal(result)
+    local total = 0
+    if result and type(result.per_source_results) == "table" then
+        for _, src in ipairs(result.per_source_results) do
+            if type(src) == "table" and type(src.imported_stems) == "table" then
+                total = total + #src.imported_stems
+            end
+        end
+    end
+    if total > 0 then return total end
+    return (result and type(result.imported_stems) == "table") and #result.imported_stems or 0
+end
+
+local function runDrumKitSplitPrototypeFromMain()
+    -- Developer-preview only: force async Drum Kit runner for smoke testing.
+    local DRUM_KIT_RND_ASYNC_ENABLED = true
+    local suppressDrumKitResultModal =
+        (reaper.GetExtState("STEMwerk-dev", "suppress_modal_result") == "1")
+        or (reaper.GetExtState("STEMwerk_benchmark", "suppress_modal_result") == "1")
+    syncDrumKitWorkflowState()
+    local mode = drumKitPrototypeModeFromSettings()
+    local scriptPath = script_path .. "STEMwerk_DrumSep_Workflow_Prototype.lua"
+
+    debugLog("=== Drum Kit Split developer-preview bridge ===")
+    debugLog("drumkit_bridge_mode=" .. tostring(mode))
+    debugLog("drumkit_async_enabled=" .. (DRUM_KIT_RND_ASYNC_ENABLED and "1" or "0"))
+    debugLog("drumkit_bridge_script=" .. tostring(scriptPath))
+    debugLog("drumkit_bridge_note=developer_preview_workflow_path")
+    debugLog("drumkit_bridge_note_stems=workflow_imports_available_drum_stems;ui_subset_not_wired_yet")
+
+    local prevNoAuto = rawget(_G, "STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN")
+    _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = true
+    local okLoad, apiOrErr = pcall(dofile, scriptPath)
+    _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = prevNoAuto
+    if not okLoad then
+        showMessage(
+            "Drum Kit Split",
+            "Failed to load Drum Kit Split workflow.\n\n" .. tostring(apiOrErr),
+            "error"
+        )
+        return
+    end
+
+    local api = apiOrErr
+    if type(api) ~= "table" or type(api.runDrumSepWorkflowPrototype) ~= "function" then
+        showMessage(
+            "Drum Kit Split",
+            "Drum Kit Split workflow API is unavailable.",
+            "error"
+        )
+        return
+    end
+    if type(api.cancelCurrentDrumKitAsyncRun) == "function" then
+        _G.STEMWERK_DRUMKIT_CANCEL_CURRENT_ASYNC_RUN = api.cancelCurrentDrumKitAsyncRun
+    end
+
+    if type(openDrumKitPrototypeProgressWindow) == "function" then
+        openDrumKitPrototypeProgressWindow(mode, {
+            async_enabled = DRUM_KIT_RND_ASYNC_ENABLED,
+        })
+    end
+
+    local finalHandled = false
+    local function handlePrototypeFinalResult(result)
+        if finalHandled then return end
+        finalHandled = true
+
+        if type(closeDrumKitPrototypeProgressWindow) == "function" then
+            closeDrumKitPrototypeProgressWindow(result)
+        end
+
+        if result and tostring(result.status or "") == "cancelled" then
+            debugLog("drumkit_bridge_result=CANCELLED")
+            if suppressDrumKitResultModal then return end
+            showMessage(
+                "Drum Kit Split",
+                { kind = "drumkit_cancelled" },
+                "info",
+                false,
+                function() showStemSelectionDialog() end
+            )
+            return
+        end
+
+        if not (result and result.ok) then
+            debugLog("drumkit_bridge_result=FAIL")
+            debugLog("drumkit_bridge_error_stage=" .. tostring(result and result.error_stage or ""))
+            debugLog("drumkit_bridge_error_message=" .. tostring(result and result.error_message or result and result.error or ""))
+            if suppressDrumKitResultModal then return end
+            showMessage(
+                "Drum Kit Split",
+                "Drum Kit Split failed.\n\n" ..
+                tostring(result and (result.error_message or result.error) or "Unknown error.") ..
+                ((result and result.log_path and result.log_path ~= "") and ("\n\nLog:\n" .. tostring(result.log_path)) or ""),
+                "error",
+                false,
+                function() showStemSelectionDialog() end
+            )
+            return
+        end
+
+        debugLog("drumkit_bridge_result=PASS")
+        debugLog("drumkit_bridge_resolved_sources=" .. tostring(result and (result.resolved_source_count or result.resolved_sources) or ""))
+        if suppressDrumKitResultModal then return end
+        local resultModeLabel = tostring(result.mode_label or drumKitProgressModeLabel(result.mode or mode))
+        local resultSources = tonumber(result.resolved_source_count or result.resolved_sources) or 0
+        local resultImported = drumKitImportedStemTotal(result)
+        if resultImported <= 0 then resultImported = tonumber(result.total_imported_stems) or 0 end
+        showMessage(
+            "Drum Kit Split",
+            {
+                kind = "drumkit_result",
+                modeLabel = resultModeLabel,
+                sources = resultSources,
+                imported = resultImported,
+                outputFolders = tonumber(result.output_folders or 0) or 0,
+                outputTracks = tonumber(result.output_tracks or resultImported or 0) or 0,
+                elapsedSeconds = tonumber(result.elapsed_seconds or 0) or 0,
+                speedRealtime = tonumber(result.speed_realtime or 0) or 0,
+            },
+            "info",
+            false,
+            function() showStemSelectionDialog() end
+        )
+    end
+
+    local function runPrototypeAfterProgressPaint()
+        local cancelCallbackLogged = false
+        local requestedDevice = type(effectiveRunDevice) == "function" and effectiveRunDevice() or tostring(SETTINGS and SETTINGS.device or "auto")
+        local effectiveDevice = requestedDevice
+        if type(normalizeRequestedDeviceForRuntime) == "function" then
+            effectiveDevice = normalizeRequestedDeviceForRuntime(requestedDevice)
+        end
+        local function drumKitConcurrencyBackend(deviceId)
+            local id = tostring(deviceId or ""):lower()
+            local backend = canonicalBackendLabel(id)
+            if backend ~= "unknown" then return backend end
+            if id == "auto" then
+                local list = RUNTIME_DEVICES or {}
+                for _, d in ipairs(list) do
+                    local did = tostring(d.id or ""):lower()
+                    local typ = tostring(d.type or ""):lower()
+                    local runtimeBackend = canonicalBackendLabel(did ~= "" and did or typ)
+                    if runtimeBackend ~= "unknown" and runtimeBackend ~= "cpu" then
+                        return runtimeBackend
+                    end
+                end
+            end
+            return "unknown"
+        end
+        local effectiveBackend = drumKitConcurrencyBackend(effectiveDevice)
+        local result = api.runDrumSepWorkflowPrototype(mode, {
+            suppressSuccessMessage = true,
+            suppressFailureMessage = true,
+            benchmark_no_modal = suppressDrumKitResultModal,
+            async_enabled = DRUM_KIT_RND_ASYNC_ENABLED,
+            requested_device = requestedDevice,
+            requested_device_id = requestedDevice,
+            requested_device_class = canonicalRequestedDeviceClass(requestedDevice),
+            worker_requested_device = effectiveDevice,
+            effective_device = effectiveDevice,
+            effective_backend = effectiveBackend,
+            onEvent = function(event)
+                if type(updateDrumKitPrototypeProgressFromEvent) == "function" then
+                    updateDrumKitPrototypeProgressFromEvent(event)
+                end
+            end,
+            isCancelRequested = function()
+                local isCancel = progressState and progressState.cancelRequested == true
+                if isCancel and not cancelCallbackLogged then
+                    cancelCallbackLogged = true
+                    debugLog("drumkit cancel observed by runner callback: " .. tostring(progressState.cancelReason or ""))
+                end
+                return isCancel
+            end,
+            onComplete = function(asyncResult)
+                handlePrototypeFinalResult(asyncResult)
+            end,
+        })
+
+        if result and result.async == true then
+            debugLog("drumkit_bridge_async_stub=1")
+            debugLog("drumkit_bridge_async_status=" .. tostring(result.status or ""))
+            debugLog("drumkit_bridge_temp_root=" .. tostring(result.temp_root or ""))
+            return
+        end
+
+        handlePrototypeFinalResult(result)
+    end
+
+    -- Give REAPER one UI tick to display the workflow status window before the
+    -- developer-preview workflow enters blocking os.execute() stages.
+    reaper.defer(function()
+        local okRun, errRun = xpcall(runPrototypeAfterProgressPaint, function(e)
+            return tostring(e) .. "\n" .. debug.traceback("", 2)
+        end)
+        if not okRun then
+            if type(closeDrumKitPrototypeProgressWindow) == "function" then
+                closeDrumKitPrototypeProgressWindow(nil)
+            end
+            debugLog("ERROR: Drum Kit Split workflow runner crashed:\n" .. tostring(errRun))
+            showMessage(
+                "Drum Kit Split",
+                "Drum Kit Split crashed.\n\n" .. tostring(errRun),
+                "error",
+                false,
+                function() showStemSelectionDialog() end
+            )
+        end
+    end)
+end
+
 function handleDialogKeyboard(ctx)
     local char = gfx.getchar()
     ctx.char = char
@@ -11988,17 +13021,21 @@ function handleDialogKeyboard(ctx)
     elseif char == 50 then toggleStemSelection(2)
     elseif char == 51 then toggleStemSelection(3)
     elseif char == 52 then toggleStemSelection(4)
-    elseif char == 53 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(5)
-    elseif char == 54 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(6)
-    elseif char == 118 or char == 86 then applyPresetVocalsOnly()
-    elseif char == 100 or char == 68 then applyPresetDrumsOnly()
-    elseif char == 98 or char == 66 then applyPresetBassOnly()
-    elseif char == 111 or char == 79 then applyPresetOtherOnly()
-    elseif char == 112 or char == 80 then applyPresetPianoOnly()
-    elseif char == 103 or char == 71 then applyPresetGuitarOnly()
-    elseif char == 107 or char == 75 then applyPresetKaraoke()
-    elseif char == 105 or char == 73 then applyPresetKaraoke()
-    elseif char == 97 or char == 65 then applyPresetAll()
+    elseif char == 53 and (isSixStemModel(SETTINGS.model) or isDrumKitWorkflowActive()) then toggleStemSelection(5)
+    elseif char == 54 and (isSixStemModel(SETTINGS.model) or isDrumKitWorkflowActive()) then toggleStemSelection(6)
+    elseif char == 118 or char == 86 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetVocalsOnly()
+    elseif char == 100 or char == 68 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetDrumsOnly()
+    elseif char == 98 or char == 66 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetBassOnly()
+    elseif char == 111 or char == 79 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetOtherOnly()
+    elseif char == 112 or char == 80 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetPianoOnly()
+    elseif char == 103 or char == 71 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetGuitarOnly()
+    elseif char == 107 or char == 75 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetKaraoke()
+    elseif char == 105 or char == 73 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetKaraoke()
+    elseif char == 97 or char == 65 then setWorkflowMode(WORKFLOW_MODE_STANDARD); applyPresetAll()
+    elseif char == 106 or char == 74 then
+        setWorkflowMode(WORKFLOW_MODE_DRUM_KIT)
+    elseif char == 120 or char == 88 then
+        setWorkflowMode(WORKFLOW_MODE_DRUM_KIT)
     elseif char == 102 or char == 70 then
         if isModelAvailableInCurrentMode("htdemucs") then
             setModelPreservingStemIntent("htdemucs")
@@ -12090,11 +13127,15 @@ function finalizeDialogLoop(ctx)
         reaper.defer(function() showArtGallery() end)
     elseif GUI.result then
         reaper.defer(function()
-            local ok, err = xpcall(runSeparationWorkflow, function(e)
+            local entrypoint = runSeparationWorkflow
+            if isDrumKitWorkflowActive() then
+                entrypoint = runDrumKitSplitPrototypeFromMain
+            end
+            local ok, err = xpcall(entrypoint, function(e)
                 return tostring(e) .. "\n" .. debug.traceback("", 2)
             end)
             if not ok then
-                debugLog("ERROR: runSeparationWorkflow crashed:\n" .. tostring(err))
+                debugLog("ERROR: processing entrypoint crashed:\n" .. tostring(err))
                 if SW_LOG and SW_LOG.logExecResult then
                     SW_LOG.logExecResult("workflow_crash", -1, tostring(err))
                 end
@@ -12176,7 +13217,7 @@ function dialogLoop()
         mouseWheel = gfx.mouse_wheel,
         time = loopNow,
     }
-    ctx.is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+    ctx.is6Stem = isSixStemModel(SETTINGS.model)
 
     handleDialogKeyboard(ctx)
 
@@ -13250,6 +14291,7 @@ local function drawProgressWindow()
     local formatProgressLine     = UI_PROGRESS.formatProgressLine
     local progressUiLabel        = UI_PROGRESS.progressUiLabel
     local w, h = gfx.w, gfx.h
+    if GUI then GUI.uiClickedThisFrame = false end
 
     -- Calculate scale based on window size
     local scaleW = w / PROGRESS_BASE_W
@@ -13260,6 +14302,7 @@ local function drawProgressWindow()
     -- Scaling helper
     local function PS(val) return math.floor(val * scale + 0.5) end
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    refreshDrumKitProgressStageLabel()
 
     -- Try to make window resizable
     makeProgressWindowResizable()
@@ -13300,6 +14343,8 @@ local function drawProgressWindow()
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
     local cancelClicked = false
+    local uiConsumedClick = false
+    local drumKitBlockingPrototype = progressState.drumKitPrototype == true and progressState.cancelUnavailable == true
 
     -- Best-effort: parse actual selected device id/name from the separation log (so UI never lies).
     -- We update at most ~2x/sec to keep it cheap.
@@ -13451,9 +14496,11 @@ local function drawProgressWindow()
     -- Get selected stems for colors
     local selectedStems = {}
     local runModel = effectiveRunModel()
-    local runIs6Stem = (runModel == "htdemucs_6s")
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
+    local runIs6Stem = isSixStemModel(runModel)
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    local drumKitMode = isDrumKitWorkflowActive()
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and (drumKitMode or not stem.sixStemOnly or runIs6Stem) then
             table.insert(selectedStems, stem)
         end
     end
@@ -13520,8 +14567,8 @@ local function drawProgressWindow()
     local stemY = PS(63)
     local stemBoxSize = PS(14)
     gfx.setfont(1, "Arial", PS(11))
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and (drumKitMode or not stem.sixStemOnly or runIs6Stem) then
             -- Stem marker box. REAPER Native keeps processing windows neutral.
             if utilityMode then
                 local ur, ug, ub = utilityProgressMutedColor()
@@ -13597,7 +14644,7 @@ local function drawProgressWindow()
 
     -- Progress percentage in center of bar
     gfx.setfont(1, "Arial", PS(14), string.byte('b'))
-    local percentText = string.format("%d%%", progressState.percent)
+    local percentText = string.format("%d%%", math.floor((tonumber(progressState.percent) or 0) + 0.5))
     local tw = gfx.measurestr(percentText)
     local px = barX + (barW - tw) / 2
     local py = barY + (barH - PS(14)) / 2
@@ -13642,7 +14689,7 @@ local function drawProgressWindow()
     end
     if inlineStageText ~= "" then
         gfx.setfont(1, "Arial", PS(11))
-        local stageTextW = math.max(PS(110), barW - PS(170))
+        local stageTextW = math.max(PS(96), barW - PS(230))
         local fittedStageText = fitTextToBox(inlineStageText, stageTextW, PS(11), PS(11))
         drawProgressText(fittedStageText, barX + PS(10), barY + PS(4), 0.95)
     end
@@ -13668,7 +14715,7 @@ local function drawProgressWindow()
     gfx.drawstr(">_")
 
     -- Handle nerd button click and tooltip
-    if nerdHover then
+    if nerdHover and not drumKitBlockingPrototype then
         GUI.uiClickedThisFrame = true
         if utilityMode then
             tooltipText = progressState.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
@@ -13910,12 +14957,12 @@ local function drawProgressWindow()
         else
             -- === ART INFO VIEW ===
             local artHover = mx >= displayX and mx <= displayX + displayW and my >= displayY and my <= displayY + displayH
-            if artHover and not utilityMode then
+            if artHover and not utilityMode and progressState.drumKitPrototype ~= true then
                 tooltipText = T("click_new_art")
                 tooltipX, tooltipY = mx + PS(10), my + PS(15)
-                if mouseDown and not progressState.wasMouseDown then
-                    generateNewArt()
-                end
+            elseif artHover and not utilityMode then
+                tooltipText = T("click_new_art")
+                tooltipX, tooltipY = mx + PS(10), my + PS(15)
             end
         end
     else
@@ -13944,19 +14991,21 @@ local function drawProgressWindow()
         etaText = " | " .. tostring(etaLabel) .. " " .. tostring(bottomEta)
     end
 
-    local segValue = "30"
     local footerModel = effectiveRunModel()
-    local modelDisplay = (footerModel == "htdemucs_ft")
-        and (T("model_label_quality") or "Quality")
-        or ((footerModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+    local modelDisplay = getModelLabelForWorkflow(footerModel, isDrumKitWorkflowActive())
     local mtTime = T("mt_time") or "Time"
-    local mtSeg = T("mt_seg") or "Seg"
-    local mtCancel = T("mt_cancel") or "ESC=cancel"
-    local cancelBtnText = progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
+    local cancelUnavailable = progressState.cancelUnavailable == true
+    if progressState.drumKitPrototype == true and progressState.drumKitAsyncMode == true and progressState.running == true then
+        cancelUnavailable = false
+        progressState.cancelUnavailable = false
+    end
+    local mtCancel = cancelUnavailable and "Cancel unavailable" or (T("mt_cancel") or "ESC=cancel")
+    local cancelBtnText = cancelUnavailable and "Please wait" or progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
 
     local contextItem = timeSelectionSourceItem or selectedItem
-    local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
-    local currentLabel = sourceTrackName or sourceItemName or "Selection"
+    local selLabel = T("rich_selection_label") or "Selection"
+    local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, selLabel, selLabel)
+    local currentLabel = sourceTrackName or sourceItemName or selLabel
     if sourceItemName and sourceItemName ~= "" and sourceItemName ~= currentLabel then
         currentLabel = tostring(currentLabel) .. " - " .. tostring(sourceItemName)
     end
@@ -13967,7 +15016,6 @@ local function drawProgressWindow()
 
     local leftParts = {
         string.format("%s: %d:%02d%s", mtTime, elapsedMins, elapsedSecs, etaText),
-        string.format("%s: %s", mtSeg, segValue),
         modelDisplay,
     }
     local rightParts = {}
@@ -14020,21 +15068,34 @@ local function drawProgressWindow()
     local cancelBtnX = w - PS(12) - cancelBtnW
     local cancelBtnY = statusBlockY - cancelBtnH - PS(10)
     local cancelHover = mx >= cancelBtnX and mx <= cancelBtnX + cancelBtnW and my >= cancelBtnY and my <= cancelBtnY + cancelBtnH
-    local cancelFill = cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20}
+    progressState.drumKitCancelRect = {
+        x = cancelBtnX,
+        y = cancelBtnY,
+        w = cancelBtnW,
+        h = cancelBtnH,
+        disabled = cancelUnavailable and true or false,
+    }
+    progressState.drumKitCancelHover = cancelHover and true or false
+    progressState.drumKitCancelDisabled = cancelUnavailable and true or false
+    local cancelFill = cancelUnavailable
+        and (cancelHover and {0.35, 0.35, 0.35} or {0.28, 0.28, 0.28})
+        or (cancelHover and {0.85, 0.24, 0.24} or {0.72, 0.20, 0.20})
     drawThemeSurfaceBox(cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, cancelFill, THEME.border, 1, 0.98, getThemeRadius(PS, math.floor(cancelBtnH / 2), math.floor(cancelBtnH / 2)), getThemeBorderWeight(PS, 1), 0.35, "button")
-    gfx.set(1, 1, 1, 1)
+    if cancelUnavailable then gfx.set(0.72, 0.72, 0.72, 1) else gfx.set(1, 1, 1, 1) end
     gfx.setfont(1, "Arial", PS(12), string.byte('b'))
     local cancelTextW = gfx.measurestr(cancelBtnText)
     gfx.x = cancelBtnX + (cancelBtnW - cancelTextW) / 2
     gfx.y = cancelBtnY + math.floor((cancelBtnH - gfx.texth) / 2)
     gfx.drawstr(cancelBtnText)
-    if cancelHover then
+    if cancelHover and not drumKitBlockingPrototype then
         GUI.uiClickedThisFrame = true
-        tooltipText = progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
+        uiConsumedClick = true
+        tooltipText = cancelUnavailable
+            and "Cancel is unavailable while Drum Kit Split runs blocking stages."
+            or progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
-        if mouseDown and not progressState.wasMouseDown then
+        if mouseDown and not progressState.wasMouseDown and not cancelUnavailable then
             cancelClicked = true
-            progressState.cancelRequested = true
         end
     end
 
@@ -14098,7 +15159,7 @@ local function drawProgressWindow()
     end
 
     -- === DRAW TOOLTIP (always on top, with STEM colors) ===
-    if tooltipText then
+    if tooltipText and not drumKitBlockingPrototype then
         gfx.setfont(1, "Arial", PS(11))
         local padding = PS(8)
         local lineH = PS(14)
@@ -14110,7 +15171,539 @@ local function drawProgressWindow()
     progressState.wasMouseDown = mouseDown
     progressState.wasRightMouseDown = rightMouseDown
     gfx.update()
-    return cancelClicked
+    return cancelClicked, uiConsumedClick == true or (GUI and GUI.uiClickedThisFrame == true), cancelHover, cancelUnavailable, cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH
+end
+
+DRUM_KIT_PROGRESS_PERCENT_BY_EVENT = {
+    run_start = 2,
+    source_start = 5,
+    stage0_extract_start = 12,
+    stage0_extract_done = 15,
+    stage1_parent_start = 54,
+    stage1_parent_done = 55,
+    stage2_drumsep_start = 87,
+    stage2_drumsep_done = 88,
+    import_start = 97,
+    import_done = 98,
+    run_done = 100,
+}
+DRUM_KIT_ASYNC_UI_FRAME_INTERVAL = 1 / 30
+DRUM_KIT_ASYNC_PROGRESS_POLL_INTERVAL = 0.25
+
+drumKitPrototypeProgressLoopActive = false
+
+function requestDrumKitPrototypeCancel(reason)
+    if not progressState or not progressState.drumKitPrototype then return end
+    local function dispatchRunnerCancel()
+        local runnerCancel = rawget(_G, "STEMWERK_DRUMKIT_CANCEL_CURRENT_ASYNC_RUN")
+        if type(runnerCancel) == "function" then
+            local ok, err = pcall(runnerCancel, tostring(reason or "cancelled"))
+            if not ok then
+                debugLog("drumkit cancel runner hook failed: " .. tostring(err))
+            end
+        end
+    end
+    if progressState.cancelRequested then
+        dispatchRunnerCancel()
+        return
+    end
+    progressState.cancelRequested = true
+    progressState.cancelUnavailable = false
+    progressState.cancelReason = tostring(reason or "cancelled")
+    progressState.stage = T("drumkit_progress_cancelling") or "Cancelling..."
+    progressState.lastActivityAt = os.time()
+    progressState.lastActivityReason = "cancel_requested"
+    dispatchRunnerCancel()
+    debugLog("drumkit cancel requested: " .. tostring(reason or "cancelled"))
+end
+
+function drumKitReadLastStageProgressPercent(stdoutPath)
+    if not stdoutPath or stdoutPath == "" then return nil end
+    local f = io.open(stdoutPath, "r")
+    if not f then return nil end
+    local lastPct = nil
+    for line in f:lines() do
+        local p = line:match("PROGRESS:(%d+):")
+        if p then
+            local n = tonumber(p)
+            if n then lastPct = n end
+        end
+    end
+    f:close()
+    if not lastPct then return nil end
+    if lastPct < 0 then lastPct = 0 end
+    if lastPct > 100 then lastPct = 100 end
+    return lastPct
+end
+
+function drumKitUpdateSyntheticProgressFromStageStdout()
+    if not progressState or progressState.drumKitAsyncMode ~= true then return end
+    local stage = tostring(progressState.drumKitActiveStage or "")
+    if stage ~= "stage1_parent" and stage ~= "stage2_drumsep" then return end
+    local stdoutPath = tostring(progressState.stdoutFile or "")
+    if stdoutPath == "" then return end
+    local pct = drumKitReadLastStageProgressPercent(stdoutPath)
+    if pct == nil then return end
+
+    local rangeStart = tonumber(progressState.drumKitStageRangeStartPercent or 0) or 0
+    local rangeEnd = tonumber(progressState.drumKitStageRangeEndPercent or rangeStart) or rangeStart
+    if rangeEnd <= rangeStart then return end
+    local mapped = rangeStart + ((rangeEnd - rangeStart) * (pct / 100))
+    local currentTarget = tonumber(progressState.drumKitTargetPercent or 0) or 0
+    if mapped > currentTarget then
+        progressState.drumKitTargetPercent = math.min(mapped, rangeEnd)
+    end
+end
+
+function drumKitPrototypeProgressLoop()
+    if not drumKitPrototypeProgressLoopActive then return end
+    if not (progressState and progressState.drumKitPrototype) then
+        drumKitPrototypeProgressLoopActive = false
+        return
+    end
+
+    local loopNow = uiNow()
+    local char = gfx.getchar()
+    local preMouseDown = (gfx.mouse_cap & 1) == 1
+    local prevCancelMouseDown = progressState.cancelButtonWasMouseDown == true
+    local preMouseDownEdge = preMouseDown and not prevCancelMouseDown
+    local preMouseUpEdge = (not preMouseDown) and prevCancelMouseDown
+    progressState.cancelButtonWasMouseDown = preMouseDown and true or false
+    local cancelClicked = false
+    local uiConsumedClick = false
+    local cancelRect = progressState.drumKitCancelRect
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local inside = false
+    local bx, by, bw, bh = 0, 0, 0, 0
+    local cancelDisabled = progressState.cancelUnavailable == true
+    if cancelRect then
+        bx = tonumber(cancelRect.x or 0) or 0
+        by = tonumber(cancelRect.y or 0) or 0
+        bw = tonumber(cancelRect.w or 0) or 0
+        bh = tonumber(cancelRect.h or 0) or 0
+        cancelDisabled = cancelRect.disabled == true
+        inside = (mx >= bx and mx <= bx + bw and my >= by and my <= by + bh)
+    end
+    if progressState.drumKitPrototype == true and progressState.drumKitAsyncMode == true and progressState.running == true then
+        cancelDisabled = false
+        progressState.cancelUnavailable = false
+        if cancelRect then cancelRect.disabled = false end
+    end
+    if char == -1 and progressState.drumKitAsyncMode == true and progressState.running == true then
+        requestDrumKitPrototypeCancel("window_close")
+        uiConsumedClick = true
+    elseif char == 27 then
+        requestDrumKitPrototypeCancel("esc")
+        uiConsumedClick = true
+    end
+
+    if preMouseDownEdge and progressState.windowOpen then
+        if inside and not cancelDisabled then
+            progressState.cancelButtonMouseArmed = true
+            uiConsumedClick = true
+            cancelClicked = true
+        else
+            progressState.cancelButtonMouseArmed = false
+        end
+    end
+
+    if preMouseUpEdge and progressState.windowOpen and progressState.cancelButtonMouseArmed == true and inside and not cancelDisabled then
+        uiConsumedClick = true
+        cancelClicked = true
+    end
+    if preMouseUpEdge then
+        progressState.cancelButtonMouseArmed = false
+    end
+
+    if preMouseDown and inside then
+        uiConsumedClick = true
+    end
+
+    if cancelClicked then
+        requestDrumKitPrototypeCancel("button")
+        uiConsumedClick = true
+        if progressState and progressState.drumKitPrototype then
+            progressState.stage = T("drumkit_progress_cancelling") or "Cancelling..."
+        end
+    end
+
+    local mouseDown = preMouseDown
+
+    local isAsync = progressState.drumKitAsyncMode == true
+    local frameInterval = isAsync and DRUM_KIT_ASYNC_UI_FRAME_INTERVAL or pacingFrameInterval("progressFrameInterval", "progressFrameIntervalFx")
+    if isAsync then
+        if loopNow >= (progressState.drumKitNextProgressPollAt or 0) then
+            progressState.drumKitNextProgressPollAt = loopNow + DRUM_KIT_ASYNC_PROGRESS_POLL_INTERVAL
+            drumKitUpdateSyntheticProgressFromStageStdout()
+        end
+        local current = tonumber(progressState.percent or 0) or 0
+        local target = tonumber(progressState.drumKitTargetPercent or current) or current
+        if target > current then
+            local step = math.max(0.25, (target - current) * 0.08)
+            progressState.percent = math.min(target, current + step)
+        elseif target < current then
+            progressState.percent = target
+        end
+    end
+
+    local drewFrame = false
+    if progressState.windowOpen and loopNow >= (progressState.nextFrameAt or 0) then
+        progressState.nextFrameAt = loopNow + frameInterval
+        local drawClicked, drawConsumed = drawProgressWindow()
+        uiConsumedClick = uiConsumedClick or drawConsumed == true
+        if drawClicked and not cancelClicked then
+            cancelClicked = true
+            requestDrumKitPrototypeCancel("button")
+            uiConsumedClick = true
+        end
+        drewFrame = true
+    end
+
+    if drewFrame and uiConsumedClick == false then
+        UI_Window.handleArtAdvance(progressState, mouseDown, char)
+    end
+
+    if progressState and progressState.cancelRequested and progressState.drumKitPrototype then
+        progressState.stage = T("drumkit_progress_cancelling") or "Cancelling..."
+    end
+
+    if drumKitPrototypeProgressLoopActive and progressState and progressState.drumKitPrototype then
+        reaper.defer(drumKitPrototypeProgressLoop)
+    else
+        drumKitPrototypeProgressLoopActive = false
+    end
+end
+
+function startDrumKitPrototypeProgressLoop()
+    if drumKitPrototypeProgressLoopActive then return end
+    drumKitPrototypeProgressLoopActive = true
+    reaper.defer(drumKitPrototypeProgressLoop)
+end
+
+function drumKitProgressModeLabel(mode)
+    if mode == "clean_quality" then return "Quality" end
+    if mode == "clean_6stem" then return "Expanded" end
+    if mode == "direct_creative" then return "Direct/Experimental" end
+    return "Fast"
+end
+
+function drumKitShortStageLabel(stageKey)
+    local lang = tostring((SETTINGS and SETTINGS.language) or "en")
+    if stageKey == "drums" then
+        return "Drums"
+    elseif stageKey == "drumkit" then
+        if lang == "de" then return "Drum-Kit" end
+        if lang == "nl" then return "Drumkit" end
+        return "Drum Kit"
+    elseif stageKey == "import" then
+        return "Import"
+    end
+    return ""
+end
+
+function drumKitShortProgressLine(sourceIndex, sourceCount, stepIndex, stepCount, stageKey)
+    local lang = tostring((SETTINGS and SETTINGS.language) or "en")
+    local srcWord = (lang == "nl" and "Bron") or (lang == "de" and "Quelle") or "Source"
+    local stepWord = (lang == "nl" and "Stap") or (lang == "de" and "Schritt") or "Step"
+    local stageLabel = drumKitShortStageLabel(stageKey)
+    local si = tonumber(sourceIndex or 0) or 0
+    local sc = tonumber(sourceCount or 0) or 0
+    local ti = tonumber(stepIndex or 0) or 0
+    local tc = tonumber(stepCount or 2) or 2
+
+    if si > 0 and sc > 0 and ti > 0 and tc > 0 and stageLabel ~= "" then
+        return string.format("%s %d/%d · %s %d/%d · %s", srcWord, si, sc, stepWord, ti, tc, stageLabel)
+    end
+    if si > 0 and sc > 0 and stageLabel ~= "" then
+        return string.format("%s %d/%d · %s", srcWord, si, sc, stageLabel)
+    end
+    if stageLabel ~= "" then
+        return stageLabel
+    end
+    return ""
+end
+
+function refreshDrumKitProgressStageLabel()
+    if not (progressState and progressState.drumKitPrototype and progressState.drumKitAsyncMode == true) then return end
+    local stageKey = progressState.drumKitStageLabelKey
+    local sourceIndex = progressState.drumKitSourceIndex
+    local sourceCount = progressState.drumKitSourceCount
+    if stageKey == "drums" then
+        progressState.stage = drumKitShortProgressLine(sourceIndex, sourceCount, 1, 2, "drums")
+    elseif stageKey == "drumkit" then
+        progressState.stage = drumKitShortProgressLine(sourceIndex, sourceCount, 2, 2, "drumkit")
+    elseif stageKey == "import" then
+        progressState.stage = drumKitShortProgressLine(sourceIndex, sourceCount, nil, nil, "import")
+    elseif stageKey == "preparing" then
+        progressState.stage = "Drum Kit Split: preparing"
+    elseif stageKey == "complete" then
+        progressState.stage = T("drumkit_progress_complete") or "Complete"
+    end
+end
+
+function drumKitProgressPercent(event)
+    local eventName = tostring(event and event.event or "")
+    if eventName == "failure" then
+        return tonumber(progressState.percent or 0) or 0
+    end
+    local base = DRUM_KIT_PROGRESS_PERCENT_BY_EVENT[eventName]
+    if not base then return tonumber(progressState.percent or 0) or 0 end
+    return base
+end
+
+function drumKitOverallStageRange(sourceIndex, sourceCount, stageName)
+    local idx = tonumber(sourceIndex or 1) or 1
+    local cnt = tonumber(sourceCount or 1) or 1
+    if idx < 1 then idx = 1 end
+    if cnt < 1 then cnt = 1 end
+    if idx > cnt then idx = cnt end
+    local totalUnits = cnt * 2
+    local unitStart
+    if stageName == "stage2_drumsep" then
+        unitStart = ((idx - 1) * 2) + 1
+    else
+        unitStart = ((idx - 1) * 2)
+    end
+    local runStart = 2
+    local runEnd = 96
+    local span = runEnd - runStart
+    local startPct = runStart + (unitStart / totalUnits) * span
+    local endPct = runStart + ((unitStart + 1) / totalUnits) * span
+    return startPct, endPct
+end
+
+function formatDrumKitProgressStage(event)
+    event = event or {}
+    local eventName = tostring(event.event or "")
+    local sourceIndex = tonumber(event.source_index or 0) or 0
+    local sourceCount = tonumber(event.source_count or 0) or 0
+    local sourceSuffix = ""
+    if sourceIndex > 0 and sourceCount > 0 then
+        sourceSuffix = string.format(" source %d/%d", sourceIndex, sourceCount)
+    end
+    local trackLabel = tostring(event.track_label or "")
+    local sourceLabel = tostring(event.source_label or "")
+    local sourceContext = trackLabel
+    if sourceLabel ~= "" then
+        sourceContext = sourceContext ~= "" and (sourceContext .. " - " .. sourceLabel) or sourceLabel
+    end
+    if sourceContext ~= "" then sourceContext = " - " .. sourceContext end
+
+    local asyncMode = progressState and progressState.drumKitAsyncMode == true
+    if eventName == "run_start" then
+        if asyncMode then
+            return "Drum Kit Split: preparing"
+        end
+        return "Drum Kit Split status: starting " .. tostring(event.mode_label or "Fast") .. " (please wait)"
+    elseif eventName == "source_start" then
+        if asyncMode then
+            return string.format(T("drumkit_progress_preparing") or "Drum Kit Split: source %d/%d — preparing", sourceIndex, sourceCount)
+        end
+        return "Drum Kit Split status:" .. sourceSuffix .. sourceContext
+    elseif eventName == "source_queue_status" then
+        local running = tonumber(event.running_sources or 0) or 0
+        local completed = tonumber(event.completed_sources or 0) or 0
+        local total = tonumber(event.source_count or sourceCount or 0) or 0
+        local active = tostring(event.active_source_indices or "")
+        if active ~= "" then
+            return string.format("Drum Kit Split: running %d (%s) · completed %d/%d", running, active, completed, total)
+        end
+        return string.format("Drum Kit Split: running %d · completed %d/%d", running, completed, total)
+    elseif eventName == "stage0_extract_start" then
+        if asyncMode then
+            return string.format(T("drumkit_progress_extracting") or "Drum Kit Split: source %d/%d — extracting", sourceIndex, sourceCount)
+        end
+        return "Drum Kit Split status: extracting" .. sourceSuffix
+    elseif eventName == "stage0_extract_done" then
+        return "Drum Kit Split status: extract complete" .. sourceSuffix
+    elseif eventName == "stage1_parent_start" then
+        if asyncMode then
+            return drumKitShortProgressLine(sourceIndex, sourceCount, 1, 2, "drums")
+        end
+        return "Drum Kit Split status: parent separation " .. tostring(event.parent_model or "") .. sourceSuffix .. " (please wait)"
+    elseif eventName == "stage1_parent_done" then
+        return "Drum Kit Split status: parent separation complete" .. sourceSuffix
+    elseif eventName == "stage2_drumsep_start" then
+        if asyncMode then
+            return drumKitShortProgressLine(sourceIndex, sourceCount, 2, 2, "drumkit")
+        end
+        return "Drum Kit Split status: splitting drum kit" .. sourceSuffix .. " (please wait)"
+    elseif eventName == "stage2_drumsep_done" then
+        return "Drum Kit Split status: drum kit split complete" .. sourceSuffix
+    elseif eventName == "import_start" then
+        if asyncMode then
+            return T("drumkit_progress_importing") or "Drum Kit Split: importing"
+        end
+        return "Drum Kit Split status: importing stems" .. sourceSuffix
+    elseif eventName == "import_done" then
+        return "Drum Kit Split status: import complete" .. sourceSuffix
+    elseif eventName == "source_done" then
+        return "Drum Kit Split status: source complete" .. sourceSuffix
+    elseif eventName == "run_done" then
+        if asyncMode then
+            return T("drumkit_progress_complete") or "Drum Kit Split: complete"
+        end
+        return "Drum Kit Split status: complete"
+    elseif eventName == "run_cancelled" then
+        return T("drumkit_cancelled_message") or "Drum Kit Split cancelled."
+    elseif eventName == "failure" then
+        return "Drum Kit Split status: failed during " .. tostring(event.stage or "processing")
+    end
+    return "Drum Kit Split status: running (please wait)"
+end
+
+openDrumKitPrototypeProgressWindow = function(mode, opts)
+    opts = opts or {}
+    local asyncEnabled = opts.async_enabled == true
+    updateTheme()
+    progressState.drumKitPrototype = true
+    progressState.drumKitAsyncMode = asyncEnabled
+    progressState.cancelUnavailable = not asyncEnabled
+    progressState.running = true
+    progressState.percent = 0
+    progressState.drumKitTargetPercent = 0
+    progressState.drumKitDisplayPercent = 0
+    progressState.drumKitLastFrameAt = 0
+    progressState.drumKitActiveStage = nil
+    progressState.drumKitStageRangeStartPercent = nil
+    progressState.drumKitStageRangeEndPercent = nil
+    progressState.drumKitSourceIndex = 0
+    progressState.drumKitSourceCount = 0
+    progressState.drumKitStageLabelKey = "preparing"
+    progressState.drumKitNextProgressPollAt = 0
+    if asyncEnabled then
+        progressState.stage = "Drum Kit Split status: starting " .. drumKitProgressModeLabel(mode)
+    else
+        progressState.stage = "Drum Kit Split status: starting " .. drumKitProgressModeLabel(mode) .. " (please wait)"
+    end
+    progressState.outputDir = nil
+    progressState.stdoutFile = nil
+    progressState.logFile = nil
+    progressState.pidFile = nil
+    progressState.exitCodeFile = nil
+    progressState.lastCmd = nil
+    progressState.execLogPath = SW_LOG and SW_LOG.getLogPath and SW_LOG.getLogPath() or nil
+    progressState.startTime = os.time()
+    progressState.lastActivityAt = progressState.startTime
+    progressState.lastActivityReason = "drumkit_prototype_start"
+    progressState.cancelRequested = false
+    progressState.cancelReason = nil
+    progressState.showTerminal = false
+    progressState.terminalLines = {}
+    progressState.terminalScrollPos = 0
+    progressState.lastTerminalUpdate = 0
+    progressState.nextFrameAt = 0
+    progressState.nextPollAt = 0
+    progressState.doneDetected = false
+    captureWindowGeometry(SCRIPT_NAME)
+    if GUI and GUI.snapshotMainGeometry then GUI.snapshotMainGeometry() end
+    ensureProcessingWindowOpen()
+    drawProgressWindow()
+    if asyncEnabled then
+        startDrumKitPrototypeProgressLoop()
+    end
+end
+
+updateDrumKitPrototypeProgressFromEvent = function(event)
+    if not (progressState and progressState.drumKitPrototype) then return end
+    event = event or {}
+    local eventName = tostring(event.event or "")
+    local srcIdx = tonumber(event.source_index or progressState.drumKitSourceIndex or 1) or 1
+    local srcCnt = tonumber(event.source_count or progressState.drumKitSourceCount or 1) or 1
+    progressState.drumKitSourceIndex = srcIdx
+    progressState.drumKitSourceCount = srcCnt
+
+    local targetPercent = drumKitProgressPercent(event)
+    progressState.drumKitTargetPercent = targetPercent
+    if eventName == "stage1_parent_start" then
+        progressState.drumKitStageLabelKey = "drums"
+        progressState.drumKitActiveStage = "stage1_parent"
+        progressState.drumKitStageRangeStartPercent, progressState.drumKitStageRangeEndPercent = drumKitOverallStageRange(srcIdx, srcCnt, "stage1_parent")
+        progressState.drumKitTargetPercent = progressState.drumKitStageRangeStartPercent
+        if event.stage_dir and event.stage_dir ~= "" then
+            progressState.stdoutFile = tostring(event.stage_dir) .. PATH_SEP .. "stdout.txt"
+        elseif event.stdout_path and event.stdout_path ~= "" then
+            local stageDir = tostring(event.stdout_path):match("^(.*)[/\\][^/\\]+$")
+            if stageDir and stageDir ~= "" then
+                progressState.stdoutFile = stageDir .. PATH_SEP .. "stdout.txt"
+            end
+        end
+    elseif eventName == "stage2_drumsep_start" then
+        progressState.drumKitStageLabelKey = "drumkit"
+        progressState.drumKitActiveStage = "stage2_drumsep"
+        progressState.drumKitStageRangeStartPercent, progressState.drumKitStageRangeEndPercent = drumKitOverallStageRange(srcIdx, srcCnt, "stage2_drumsep")
+        progressState.drumKitTargetPercent = progressState.drumKitStageRangeStartPercent
+        if event.stage_dir and event.stage_dir ~= "" then
+            progressState.stdoutFile = tostring(event.stage_dir) .. PATH_SEP .. "stdout.txt"
+        elseif event.stdout_path and event.stdout_path ~= "" then
+            local stageDir = tostring(event.stdout_path):match("^(.*)[/\\][^/\\]+$")
+            if stageDir and stageDir ~= "" then
+                progressState.stdoutFile = stageDir .. PATH_SEP .. "stdout.txt"
+            end
+        end
+    elseif eventName == "import_start" then
+        progressState.drumKitStageLabelKey = "import"
+        progressState.drumKitActiveStage = "import"
+        progressState.drumKitStageRangeStartPercent = 88
+        progressState.drumKitStageRangeEndPercent = 97
+        progressState.drumKitTargetPercent = 97
+    elseif eventName == "stage1_parent_done" or eventName == "stage2_drumsep_done" then
+        if progressState.drumKitStageRangeEndPercent then
+            progressState.drumKitTargetPercent = progressState.drumKitStageRangeEndPercent
+        end
+    elseif eventName == "run_done" or eventName == "failure" then
+        if eventName == "run_done" then
+            progressState.drumKitStageLabelKey = "complete"
+        end
+        progressState.drumKitActiveStage = nil
+        progressState.drumKitStageRangeStartPercent = nil
+        progressState.drumKitStageRangeEndPercent = nil
+    end
+
+    if eventName == "run_done" then
+        progressState.percent = 100
+    elseif eventName == "failure" then
+        progressState.percent = math.min(99, tonumber(progressState.percent or targetPercent) or targetPercent)
+    end
+    progressState.stage = formatDrumKitProgressStage(event)
+    progressState.outputDir = tostring(event.temp_root or progressState.outputDir or "")
+    if event.stdout_path and event.stdout_path ~= "" and (progressState.stdoutFile == nil or progressState.stdoutFile == "") then
+        progressState.stdoutFile = tostring(event.stdout_path)
+    end
+    if event.log_path and event.log_path ~= "" then
+        progressState.logFile = tostring(event.log_path)
+    end
+    if event.command and event.command ~= "" then
+        progressState.lastCmd = tostring(event.command)
+    end
+    progressState.lastActivityAt = os.time()
+    progressState.lastActivityReason = "drumkit_" .. tostring(event.event or "event")
+    if progressState.windowOpen and (eventName == "run_start" or eventName == "run_done" or eventName == "failure") then
+        drawProgressWindow()
+    end
+end
+
+closeDrumKitPrototypeProgressWindow = function(_result)
+    drumKitPrototypeProgressLoopActive = false
+    progressState.cancelUnavailable = false
+    progressState.drumKitPrototype = false
+    progressState.drumKitAsyncMode = false
+    progressState.drumKitTargetPercent = nil
+    progressState.drumKitDisplayPercent = nil
+    progressState.drumKitLastFrameAt = nil
+    progressState.drumKitActiveStage = nil
+    progressState.drumKitStageRangeStartPercent = nil
+    progressState.drumKitStageRangeEndPercent = nil
+    progressState.drumKitSourceIndex = nil
+    progressState.drumKitSourceCount = nil
+    progressState.drumKitStageLabelKey = nil
+    progressState.drumKitNextProgressPollAt = nil
+    progressState.cancelRequested = false
+    if progressState.windowOpen then
+        closeProcessingWindow()
+    else
+        progressState.running = false
+    end
 end
 
 -- Refactor flow helpers into module-like namespaces to reduce top-level locals.
@@ -15217,10 +16810,11 @@ function processStemsResult(stems)
     local resultData = nil
     local noAudibleOverlapMsg = HELPERS.getNoAudibleTargetsMessage()
     local contextItem = timeSelectionSourceItem or selectedItem
-    local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
+    local selLabel = T("rich_selection_label") or "Selection"
+    local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, selLabel, selLabel)
     if not contextItem and timeSelectionMode then
-        sourceTrackName = sourceTrackName or "Selection"
-        sourceItemName = sourceItemName or "Selection"
+        sourceTrackName = sourceTrackName or selLabel
+        sourceItemName = sourceItemName or selLabel
     end
     stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
 
@@ -15551,6 +17145,13 @@ function drawResultWindow()
     -- Tooltip (simple, single-line like progress window)
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
+    GUI.suppressMainTooltips = true
+    GUI.tooltip = nil
+    GUI.tooltipX = 0
+    GUI.tooltipY = 0
+    GUI.richTooltip = nil
+    GUI.shortcutTooltip = nil
+    GUI.uiClickedThisFrame = false
 
     local mx, my = gfx.mouse_x, gfx.mouse_y
     local mouseDown = gfx.mouse_cap & 1 == 1
@@ -15597,7 +17198,7 @@ function drawResultWindow()
     renderResultTitleArea({ w = w, PS = PS })
     renderResultMessageBox({ w = w, h = h, PS = PS })
 
-    -- OK button (rounded pill style like main app)
+    -- Back button (rounded pill style like main app)
     local btnW = PS(button.width or 70)
     local btnH = PS(button.height or 20)
     local btnX = (w - btnW) / 2
@@ -15614,7 +17215,7 @@ function drawResultWindow()
 
     -- Button text
     gfx.setfont(1, "Arial", PS(fonts.okButton or 13), string.byte('b'))
-    local okText = T("ok") or "OK"
+    local okText = T("back") or "Back"
     local okW = gfx.measurestr(okText)
     local okX = btnX + (btnW - okW) / 2
     local okY = btnY + (btnH - gfx.texth) / 2
@@ -15665,13 +17266,14 @@ function drawResultWindow()
 
     gfx.update()
 
-    -- Check for click on OK button
-    if hover and mouseDown and not resultWindowState.wasMouseDown then
-        return true  -- Close
-    end
+    -- Check for click on Back button
     if hover then
-        tooltipText = T("complete_ok_tooltip") or "Close (Enter / ESC)"
+        GUI.uiClickedThisFrame = true
+        tooltipText = T("result_back_tooltip") or "Back to STEMwerk"
         tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
+        if mouseDown and not resultWindowState.wasMouseDown then
+            return true
+        end
     end
 
     resultWindowState.wasMouseDown = mouseDown
@@ -15682,7 +17284,7 @@ function drawResultWindow()
         UI_Window.handleArtAdvance(resultWindowState, mouseDown, char)
     end
     if char == -1 or char == 27 or char == 13 then  -- Window closed, ESC, Enter
-        return true  -- Close
+        return true
     end
 
     -- Tooltip draw (match main style: stem-color bar + wrapping)
@@ -15721,6 +17323,7 @@ function resultWindowLoop()
     end
 
     if drawResultWindow() then
+        GUI.suppressMainTooltips = false
         -- Remember any size/position changes made in the complete window
         captureWindowGeometry(resultWindowState.windowTitle or getCompleteWindowTitle())
         saveSettings()
@@ -15756,6 +17359,14 @@ function showResultWindow(selectedStems, message)
         resultWindowState.message = message
     end
     resultWindowState.wasMouseDown = false
+
+    -- Prevent stale main-dialog tooltip state from leaking into the result window.
+    GUI.suppressMainTooltips = true
+    GUI.tooltip = nil
+    GUI.tooltipX = 0
+    GUI.tooltipY = 0
+    GUI.richTooltip = nil
+    GUI.shortcutTooltip = nil
 
     -- Initialize celebration effects
     initCelebration()
@@ -17099,8 +18710,10 @@ function drawMultiTrackProgressWindow()
     -- Stem indicators (simple colored boxes, like single-track)
     local selectedStems = {}
     local runIs6Stem = isEffectiveRun6Stem()
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
+    local activeStems = getActiveStemListForCurrentWorkflow()
+    local drumKitMode = isDrumKitWorkflowActive()
+    for _, stem in ipairs(activeStems) do
+        if stem.selected and (drumKitMode or not stem.sixStemOnly or runIs6Stem) then
             table.insert(selectedStems, stem)
         end
     end
@@ -17220,7 +18833,7 @@ function drawMultiTrackProgressWindow()
 
     -- Progress text
     gfx.setfont(1, "Arial", PS(11))
-    local progText = string.format("%d%%", overallProgress)
+    local progText = string.format("%d%%", math.floor((tonumber(overallProgress) or 0) + 0.5))
     local progW = gfx.measurestr(progText)
     local progX = barX + (barW - progW) / 2
     local progY = barY + PS(3)
@@ -17736,7 +19349,7 @@ function drawMultiTrackProgressWindow()
                 gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
                 gfx.x = tBarX + tBarW + PS(8)
                 gfx.y = yPos + PS(2)
-                gfx.drawstr(string.format("%d%%", job.percent or 0))
+                gfx.drawstr(string.format("%d%%", math.floor((tonumber(job.percent) or 0) + 0.5)))
             end
         end
 
@@ -17911,9 +19524,7 @@ function drawMultiTrackProgressWindow()
     end
 
     local runModel = effectiveRunModel()
-    local modelDisplay = (runModel == "htdemucs_ft")
-        and (T("model_label_quality") or "Quality")
-        or ((runModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+    local modelDisplay = getModelLabelForWorkflow(runModel, isDrumKitWorkflowActive())
     local modeDisplay = multiTrackQueue.sequentialMode and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
     if (not multiTrackQueue.sequentialMode) and multiTrackQueue.parallelJobLimit then
         local capLabel = T("mt_parallel_cap") or "Parallel cap %d"
