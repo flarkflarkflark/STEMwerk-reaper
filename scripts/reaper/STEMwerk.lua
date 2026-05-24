@@ -12817,6 +12817,7 @@ end
 STEMWERK_BENCHMARK_SECTION = "STEMwerk_benchmark"
 drumKitBenchmarkRequestId = nil
 drumKitBenchmarkPreviousWorkflowMode = nil
+local runDrumKitSplitPrototypeFromMain
 
 function setDrumKitBenchmarkField(key, value)
     if not reaper or not reaper.SetExtState then return end
@@ -12826,6 +12827,57 @@ function setDrumKitBenchmarkField(key, value)
     else
         reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, key, v, false)
     end
+end
+
+function getDrumKitBenchmarkTracePath(requestId)
+    local id = tostring(requestId or "")
+    id = id:gsub("[^%w%._%-]", "_")
+    id = id:gsub("_+", "_")
+    id = id:gsub("^_+", ""):gsub("_+$", "")
+    if id ~= "" then
+        return "/tmp/stemwerk_benchmark_hook_" .. id .. ".jsonl"
+    end
+    return "/tmp/stemwerk_benchmark_hook_latest.jsonl"
+end
+
+function writeDrumKitBenchmarkTrace(eventName, fields)
+    pcall(function()
+        local payload = {}
+        local function ext(section, key)
+            if reaper and reaper.GetExtState then
+                return tostring(reaper.GetExtState(section, key) or "")
+            end
+            return ""
+        end
+        local requestId = drumKitBenchmarkRequestId or ext(STEMWERK_BENCHMARK_SECTION, "request_id")
+        payload.timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        payload.event = tostring(eventName or "")
+        payload.request_id = tostring(requestId or "")
+        payload.phase = ext(STEMWERK_BENCHMARK_SECTION, "phase")
+        payload.status = ext(STEMWERK_BENCHMARK_SECTION, "status")
+        payload.last_error = ext(STEMWERK_BENCHMARK_SECTION, "last_error")
+        payload.selection_count = ext(STEMWERK_BENCHMARK_SECTION, "selection_count")
+        payload.workflow_mode = ext(STEMWERK_BENCHMARK_SECTION, "workflow_mode")
+        payload.can_start_result = ext(STEMWERK_BENCHMARK_SECTION, "can_start_result")
+        payload.device = ext(EXT_SECTION, "device")
+        payload.parallelProcessing = ext(EXT_SECTION, "parallelProcessing")
+        payload.suppress_result = ext(STEMWERK_BENCHMARK_SECTION, "suppress_result")
+        payload.suppress_modal_result = ext("STEMwerk-dev", "suppress_modal_result")
+        payload.allow_drumkit_prototype_actions = ext("STEMwerk-dev", "allow_drumkit_prototype_actions")
+        payload.main_route_exists = type(runDrumKitSplitPrototypeFromMain) == "function"
+        payload.last_run_dir = ext(STEMWERK_BENCHMARK_SECTION, "last_run_dir")
+        if fields then
+            for k, v in pairs(fields) do
+                payload[k] = v
+            end
+        end
+        local path = getDrumKitBenchmarkTracePath(requestId)
+        local f = io.open(path, "a")
+        if f then
+            f:write(jsonEncodeRunConfig(payload) .. "\n")
+            f:close()
+        end
+    end)
 end
 
 function setDrumKitBenchmarkState(status, errText, runDir)
@@ -12850,16 +12902,23 @@ function setDrumKitBenchmarkState(status, errText, runDir)
 end
 
 function finalizeDrumKitBenchmarkState(status, errText, runDir)
+    local statusText = tostring(status or "")
+    local err = tostring(errText or "")
+    if statusText == "error" and err == "" then
+        err = "unknown_error"
+    end
     if tostring(status or "") == "success" then
         setDrumKitBenchmarkField("phase", "finalized_success")
+        writeDrumKitBenchmarkTrace("finalized_success", { status = "success", last_error = "", last_run_dir = tostring(runDir or "") })
     elseif tostring(status or "") == "error" then
         setDrumKitBenchmarkField("phase", "finalized_error")
+        writeDrumKitBenchmarkTrace("finalized_error", { status = "error", last_error = err, last_run_dir = tostring(runDir or "") })
     end
     if drumKitBenchmarkPreviousWorkflowMode ~= nil and setWorkflowMode then
         setWorkflowMode(drumKitBenchmarkPreviousWorkflowMode, { persist = true })
     end
     drumKitBenchmarkPreviousWorkflowMode = nil
-    setDrumKitBenchmarkState(status, errText, runDir)
+    setDrumKitBenchmarkState(status, err, runDir)
     drumKitBenchmarkRequestId = nil
 end
 
@@ -12876,11 +12935,14 @@ function checkDrumKitBenchmarkTrigger()
     end
     setDrumKitBenchmarkField("phase", "trigger_seen")
     setDrumKitBenchmarkState("trigger_seen", "", "")
+    writeDrumKitBenchmarkTrace("trigger_seen")
     reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, "run_drumkit_main_once", false)
     setDrumKitBenchmarkField("phase", "consumed_trigger")
+    writeDrumKitBenchmarkTrace("consumed_trigger")
     setDrumKitBenchmarkState("validating", "", "")
     setDrumKitBenchmarkField("phase", "validating_selection")
     setDrumKitBenchmarkField("selection_count", tostring(tonumber(reaper.CountSelectedMediaItems and reaper.CountSelectedMediaItems(0) or 0) or 0))
+    writeDrumKitBenchmarkTrace("validating_selection")
     if tostring(reaper.GetExtState(EXT_SECTION, "workflowMode") or "") ~= "" then
         setDrumKitBenchmarkField("workflow_mode", tostring(reaper.GetExtState(EXT_SECTION, "workflowMode") or ""))
     else
@@ -12906,26 +12968,57 @@ function checkDrumKitBenchmarkTrigger()
     syncDrumKitWorkflowState()
 
     setDrumKitBenchmarkField("phase", "can_start_check")
+    writeDrumKitBenchmarkTrace("can_start_check")
     if not canStartProcessingFromDialog() then
         setDrumKitBenchmarkField("can_start_result", "false")
+        writeDrumKitBenchmarkTrace("can_start_result", { can_start_result = "false", last_error = "can_start_failed:no_valid_selection" })
         finalizeDrumKitBenchmarkState("error", "can_start_failed:no_valid_selection", "")
         return true
     end
     setDrumKitBenchmarkField("can_start_result", "true")
+    writeDrumKitBenchmarkTrace("can_start_result", { can_start_result = "true" })
 
     setDrumKitBenchmarkField("phase", "calling_main_route")
     setDrumKitBenchmarkState("starting", "", "")
+    writeDrumKitBenchmarkTrace("before_main_route_call")
     setDrumKitBenchmarkField("phase", "waiting_async")
     setDrumKitBenchmarkState("running", "", "")
+    writeDrumKitBenchmarkTrace("waiting_async")
     reaper.defer(function()
-        local ok, err = xpcall(runDrumKitSplitPrototypeFromMain, function(e)
+        if type(runDrumKitSplitPrototypeFromMain) ~= "function" then
+            writeDrumKitBenchmarkTrace("main_route_function_missing", { last_error = "main_route_function_missing" })
+            finalizeDrumKitBenchmarkState("error", "main_route_function_missing", "")
+            return
+        end
+        local ok, returned = xpcall(runDrumKitSplitPrototypeFromMain, function(e)
             return tostring(e) .. "\n" .. debug.traceback("", 2)
         end)
         if not ok then
-            debugLog("ERROR: benchmark drumkit main-route crashed:\n" .. tostring(err))
-            local msg = tostring(err or "")
-            if msg == "" then msg = "pcall_failed_no_message" end
+            debugLog("ERROR: benchmark drumkit main-route crashed:\n" .. tostring(returned))
+            local msg = tostring(returned or "")
+            if msg == "" then msg = "main_route_threw:pcall_failed_no_message" end
+            if not msg:match("^main_route_threw:") then
+                msg = "main_route_threw:" .. msg
+            end
+            writeDrumKitBenchmarkTrace("main_route_threw", {
+                main_route_pcall_ok = false,
+                traceback = msg,
+                last_error = msg,
+            })
             finalizeDrumKitBenchmarkState("error", msg, "")
+            return
+        end
+        local rtype = type(returned)
+        local simple = (rtype == "nil" or rtype == "boolean" or rtype == "number" or rtype == "string")
+        writeDrumKitBenchmarkTrace("main_route_returned", {
+            main_route_pcall_ok = true,
+            main_route_return_type = rtype,
+            main_route_return_value = simple and tostring(returned) or rtype,
+        })
+        if returned == false then
+            writeDrumKitBenchmarkTrace("main_route_returned_false", { last_error = "main_route_returned_false" })
+        elseif returned == nil then
+            writeDrumKitBenchmarkTrace("main_route_returned_nil", { last_error = "main_route_returned_nil" })
         end
     end)
     return true
@@ -12944,7 +13037,7 @@ function drumKitImportedStemTotal(result)
     return (result and type(result.imported_stems) == "table") and #result.imported_stems or 0
 end
 
-local function runDrumKitSplitPrototypeFromMain()
+function runDrumKitSplitPrototypeFromMain()
     -- Developer-preview only: force async Drum Kit runner for smoke testing.
     local DRUM_KIT_RND_ASYNC_ENABLED = true
     local suppressDrumKitResultModal =
@@ -12964,10 +13057,21 @@ local function runDrumKitSplitPrototypeFromMain()
 
     local prevNoAuto = rawget(_G, "STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN")
     _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = true
+    writeDrumKitBenchmarkTrace("before_workflow_api_load", { workflow_api_script = tostring(scriptPath or "") })
     local okLoad, apiOrErr = pcall(dofile, scriptPath)
     _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = prevNoAuto
+    writeDrumKitBenchmarkTrace("after_workflow_api_load", {
+        workflow_api_load_ok = okLoad == true,
+        workflow_api_type = type(apiOrErr),
+    })
     if not okLoad then
-        finalizeDrumKitBenchmarkState("error", "failed to load workflow api", "")
+        local msg = "workflow_api_load_failed:" .. tostring(apiOrErr or "")
+        writeDrumKitBenchmarkTrace("workflow_api_load_failed", {
+            workflow_api_load_ok = false,
+            traceback = tostring(apiOrErr or ""),
+            last_error = msg,
+        })
+        finalizeDrumKitBenchmarkState("error", msg, "")
         showMessage(
             "Drum Kit Split",
             "Failed to load Drum Kit Split workflow.\n\n" .. tostring(apiOrErr),
@@ -12977,8 +13081,22 @@ local function runDrumKitSplitPrototypeFromMain()
     end
 
     local api = apiOrErr
+    local apiKeys = {}
+    if type(api) == "table" then
+        for k, _ in pairs(api) do
+            apiKeys[#apiKeys + 1] = tostring(k)
+        end
+        table.sort(apiKeys)
+    end
+    writeDrumKitBenchmarkTrace("workflow_api_shape", {
+        workflow_api_type = type(api),
+        workflow_api_keys = apiKeys,
+        workflow_api_has_run = type(api) == "table" and type(api.runDrumSepWorkflowPrototype) == "function",
+        workflow_api_has_cancel = type(api) == "table" and type(api.cancelCurrentDrumKitAsyncRun) == "function",
+    })
     if type(api) ~= "table" or type(api.runDrumSepWorkflowPrototype) ~= "function" then
-        finalizeDrumKitBenchmarkState("error", "workflow api unavailable", "")
+        writeDrumKitBenchmarkTrace("main_route_function_missing", { last_error = "workflow_api_shape_invalid" })
+        finalizeDrumKitBenchmarkState("error", "workflow_api_shape_invalid", "")
         showMessage(
             "Drum Kit Split",
             "Drum Kit Split workflow API is unavailable.",
@@ -13023,9 +13141,20 @@ local function runDrumKitSplitPrototypeFromMain()
             debugLog("drumkit_bridge_result=FAIL")
             debugLog("drumkit_bridge_error_stage=" .. tostring(result and result.error_stage or ""))
             debugLog("drumkit_bridge_error_message=" .. tostring(result and result.error_message or result and result.error or ""))
+            local errText
+            if result == nil then
+                errText = "main_route_returned_nil"
+                writeDrumKitBenchmarkTrace("main_route_returned_nil", { last_error = errText })
+            elseif result == false then
+                errText = "main_route_returned_false"
+                writeDrumKitBenchmarkTrace("main_route_returned_false", { last_error = errText })
+            else
+                errText = tostring(result and (result.error_message or result.error or result.status) or "unknown_error")
+                if errText == "" then errText = "unknown_error" end
+            end
             finalizeDrumKitBenchmarkState(
                 "error",
-                tostring(result and (result.error_message or result.error or result.status) or "unknown"),
+                errText,
                 tostring(result and result.temp_root or "")
             )
             if suppressDrumKitResultModal then return end
@@ -13125,6 +13254,12 @@ local function runDrumKitSplitPrototypeFromMain()
             debugLog("drumkit_bridge_async_stub=1")
             debugLog("drumkit_bridge_async_status=" .. tostring(result.status or ""))
             debugLog("drumkit_bridge_temp_root=" .. tostring(result.temp_root or ""))
+            writeDrumKitBenchmarkTrace("main_route_returned", {
+                main_route_return_type = "table",
+                async = true,
+                status = tostring(result.status or ""),
+                last_run_dir = tostring(result.temp_root or ""),
+            })
             return
         end
 
@@ -13142,6 +13277,13 @@ local function runDrumKitSplitPrototypeFromMain()
                 closeDrumKitPrototypeProgressWindow(nil)
             end
             debugLog("ERROR: Drum Kit Split workflow runner crashed:\n" .. tostring(errRun))
+            local msg = "main_route_threw:" .. tostring(errRun or "unknown_error")
+            writeDrumKitBenchmarkTrace("main_route_threw", {
+                main_route_pcall_ok = false,
+                traceback = tostring(errRun or ""),
+                last_error = msg,
+            })
+            finalizeDrumKitBenchmarkState("error", msg, "")
             showMessage(
                 "Drum Kit Split",
                 "Drum Kit Split crashed.\n\n" .. tostring(errRun),
