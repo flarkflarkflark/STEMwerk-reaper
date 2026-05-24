@@ -14279,6 +14279,19 @@ local INTERNAL_PARALLEL_JOB_LIMIT = nil
 -- local INTERNAL_PARALLEL_JOB_LIMIT = 3
 -- local INTERNAL_PARALLEL_JOB_LIMIT = 4
 
+function getNormalParallelGpuCapOverride()
+    if not (reaper and reaper.GetExtState) then return nil end
+    local raw = tostring(reaper.GetExtState("STEMwerk-dev", "normal_parallel_gpu_cap") or "")
+    if raw == "" then return nil end
+    local n = tonumber(raw)
+    if not n then return nil end
+    n = math.floor(n)
+    if n ~= 1 and n ~= 2 and n ~= 4 and n ~= 8 then
+        return nil
+    end
+    return n
+end
+
 -- Forward declarations for multi-track processing
 local _sep = {}  -- separation forward-declaration namespace
 
@@ -18223,6 +18236,11 @@ _sep.runSingleTrackSeparation = function(trackList)
     if not multiTrackQueue.sequentialMode then
         -- Bounded default for normal workflow on GPU/auto-with-GPU.
         local computedParallelLimit = 2
+        local devCapOverride = getNormalParallelGpuCapOverride()
+        if devCapOverride then
+            computedParallelLimit = devCapOverride
+            debugLog("Applying dev normal parallel GPU cap override: " .. tostring(computedParallelLimit))
+        end
         if type(INTERNAL_PARALLEL_JOB_LIMIT) == "number" and INTERNAL_PARALLEL_JOB_LIMIT > 0 then
             computedParallelLimit = math.min(computedParallelLimit, math.max(1, math.floor(INTERNAL_PARALLEL_JOB_LIMIT)))
         end
@@ -19645,7 +19663,9 @@ function drawMultiTrackProgressWindow()
 
         local summaryDoneCount = anyPerItem and processedItemTotal or numJobs
         local summaryUnit = anyPerItem and itemUnit or trackUnit
-        local tpl = trSafeProgress("mt_footer_summary_concurrency", "%d/%d %s | Active %d | Waiting %d | Audio %.1fs/%.1fs | %d %s")
+        local capDisplay = multiTrackQueue.sequentialMode and 1 or tonumber(multiTrackQueue.parallelJobLimit or activeJobs or 0) or 0
+        if capDisplay < 1 then capDisplay = 1 end
+        local tpl = trSafeProgress("mt_footer_summary_concurrency", "%d/%d %s | Active %d | Waiting %d | Cap %d | Audio %.1fs/%.1fs | %d %s")
         summaryLine1 = string.format(
             tpl,
             completedJobs,
@@ -19653,6 +19673,7 @@ function drawMultiTrackProgressWindow()
             summaryUnit,
             activeJobs,
             waitingJobs,
+            capDisplay,
             displayProcessedAudio,
             displayTotalDur,
             expectedStems,
