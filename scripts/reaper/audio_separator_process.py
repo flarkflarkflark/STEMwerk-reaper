@@ -32,6 +32,8 @@ _core_loaded = False
 
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
+DRUMSEP_MODEL_FILENAME = "mdx23c-drumsep-aufr33-jarredou.ckpt"
+DRUMSEP_CANONICAL_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
 
 def _is_darwin_arm64() -> bool:
@@ -128,6 +130,92 @@ def _resolve_stem_path(output_dir: Path, stem_path: Path | str) -> Path:
     if path.is_absolute():
         return path
     return output_dir / path
+
+
+def _is_drumsep_model(model_name: Optional[str]) -> bool:
+    return Path(str(model_name or "")).name.lower() == DRUMSEP_MODEL_FILENAME
+
+
+def _normalize_drumsep_alias(token: str) -> Optional[str]:
+    normalized = re.sub(r"[^a-z0-9]+", "_", token.strip().lower()).strip("_")
+    alias_map = {
+        "kick": "kick",
+        "snare": "snare",
+        "tom": "toms",
+        "toms": "toms",
+        "hihat": "hihat",
+        "hi_hat": "hihat",
+        "hh": "hihat",
+        "ride": "ride",
+        "crash": "crash",
+    }
+    return alias_map.get(normalized)
+
+
+def _classify_drumsep_stem(path: Path) -> Optional[str]:
+    name = path.stem.lower()
+
+    parenthesized_tokens = re.findall(r"\(([^)]+)\)", name)
+    for token in parenthesized_tokens:
+        canonical = _normalize_drumsep_alias(token)
+        if canonical:
+            return canonical
+
+    tokens = [t for t in re.split(r"[^a-z0-9]+", name) if t]
+    for token in tokens:
+        canonical = _normalize_drumsep_alias(token)
+        if canonical:
+            return canonical
+    return None
+
+
+def _collect_drumsep_candidates(output_root: Path, result_stems: Dict[str, Path | str]) -> Dict[str, Path]:
+    candidates: List[Path] = []
+    for stem_path in result_stems.values():
+        abs_path = _resolve_stem_path(output_root, stem_path)
+        if abs_path.exists():
+            candidates.append(abs_path)
+    for wav_path in sorted(output_root.glob("*.wav")):
+        candidates.append(wav_path)
+
+    resolved: Dict[str, Path] = {}
+    for candidate in candidates:
+        stem_name = _classify_drumsep_stem(candidate)
+        if not stem_name:
+            continue
+        resolved[stem_name] = candidate.resolve()
+    return resolved
+
+
+def _finalize_drumsep_outputs(output_root: Path, result_stems: Dict[str, Path | str]) -> Dict[str, str]:
+    discovered = _collect_drumsep_candidates(output_root, result_stems)
+    reaper_stems: Dict[str, str] = {}
+    missing: List[str] = []
+
+    for stem_name in DRUMSEP_CANONICAL_STEMS:
+        source = discovered.get(stem_name)
+        if not source or not source.exists():
+            missing.append(stem_name)
+            print(f"STEMWERK_WARN missing_drumsep_stem={stem_name}", file=sys.stderr)
+            continue
+
+        target = output_root / f"{stem_name}.wav"
+        if source.resolve() != target.resolve():
+            if target.exists():
+                os.remove(target)
+            shutil.move(str(source), str(target))
+        reaper_stems[stem_name] = str(target)
+        print(f"  {stem_name}:  {target}", file=sys.stderr)
+
+    if not reaper_stems:
+        raise RuntimeError("DrumSep model produced no mappable drum stems")
+
+    status = "complete" if not missing else "partial"
+    print(f"STEMWERK_DRUMSEP_CONTRACT_STATUS={status}", file=sys.stderr)
+    print(f"STEMWERK_DRUMSEP_FOUND={','.join(sorted(reaper_stems.keys()))}", file=sys.stderr)
+    if missing:
+        print(f"STEMWERK_DRUMSEP_MISSING={','.join(missing)}", file=sys.stderr)
+    return reaper_stems
 
 
 def _setup_reaper_io(output_dir: Optional[str]):
@@ -521,6 +609,22 @@ def _build_env_json() -> Dict[str, object]:
 def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, object]:
     env = _build_env_json()
     env["selected_device"] = selected_device
+    selected = str(selected_device or "")
+    if selected == "cpu":
+        actual_backend = "cpu"
+    elif selected.startswith("cuda:") or selected == "cuda":
+        actual_backend = "cuda"
+    elif selected.startswith(("rocm", "hip", "privateuseone")):
+        actual_backend = "rocm"
+    elif selected.startswith("directml"):
+        actual_backend = "directml"
+    elif selected == "mps":
+        actual_backend = "mps"
+    else:
+        actual_backend = "unknown"
+    env["actual_runtime_backend"] = actual_backend
+    env["actual_torch_device"] = selected or "unknown"
+    env["actual_acceleration_available"] = actual_backend in {"cuda", "rocm", "directml", "mps"}
     print(f"STEMWERK_DIAG python_executable={env.get('python_executable')}", file=sys.stderr)
     print(f"STEMWERK_DIAG python_version={env.get('python_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG platform={env.get('platform')} machine={env.get('platform_machine')}", file=sys.stderr)
@@ -531,6 +635,9 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
     print(f"STEMWERK_DIAG selected_device={selected_device}", file=sys.stderr)
+    print(f"STEMWERK_DIAG actual_runtime_backend={actual_backend}", file=sys.stderr)
+    print(f"STEMWERK_DIAG actual_torch_device={env['actual_torch_device']}", file=sys.stderr)
+    print(f"STEMWERK_DIAG actual_acceleration_available={env['actual_acceleration_available']}", file=sys.stderr)
     return env
 
 
@@ -885,6 +992,15 @@ def main():
         _enable_mps_runtime_fallback(device_preference, resolved_device)
         resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, args.model)
         runtime_env = _emit_runtime_diagnostics(resolved_device)
+        runtime_env["requested_device"] = device_preference
+        runtime_env["worker_requested_device"] = resolved_device
+        try:
+            (output_root / "runtime_device.json").write_text(
+                json.dumps(runtime_env, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            print(f"STEMWERK_WARN runtime_device_json_write_failed={exc}", file=sys.stderr)
 
         emit_phase("model_setup_start")
         sep = StemSeparator(model=args.model, device=resolved_device)
@@ -903,40 +1019,44 @@ def main():
         # audio-separator writes model outputs inside sep.separate(); this phase
         # brackets the REAPER-facing output mapping and final stem renames.
         emit_phase("stem_write_start")
-        # Mapping logica voor REAPER compatibiliteit
-        stem_mapping = {
-            'vocals': ['vocals', 'vocal', 'Vocals'],
-            'drums':  ['drums', 'drum', 'Drums'],
-            'bass': ['bass', 'Bass'],
-            'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental'],
-            'guitar': ['guitar', 'Guitar'],
-            'piano': ['piano', 'Piano', 'keys', 'Keys']
-        }
+        # Private R&D prototype path: keep DrumSep output contract isolated to this model.
+        if _is_drumsep_model(args.model):
+            reaper_stems = _finalize_drumsep_outputs(output_root, result.stems)
+        else:
+            # Mapping logica voor REAPER compatibiliteit
+            stem_mapping = {
+                'vocals': ['vocals', 'vocal', 'Vocals'],
+                'drums':  ['drums', 'drum', 'Drums'],
+                'bass': ['bass', 'Bass'],
+                'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental'],
+                'guitar': ['guitar', 'Guitar'],
+                'piano': ['piano', 'Piano', 'keys', 'Keys']
+            }
 
-        reaper_stems = {}
-        for stem_name, stem_path in result.stems.items():
-            abs_path = _resolve_stem_path(output_root, stem_path)
-            if not abs_path.exists():
-                raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
-            
-            # Zoek naar de juiste REAPER naam
-            filename = abs_path.stem.lower()
-            target_name = stem_name  # fallback
-            
-            for map_name, patterns in stem_mapping.items():
-                if any(p.lower() in filename for p in patterns):
-                    target_name = map_name
-                    break
-            
-            # Hernoem bestand naar simpele naam (bijv. vocals.wav)
-            new_path = abs_path.parent / f"{target_name}.wav"
-            if abs_path != new_path:
-                if new_path.exists():
-                    os.remove(new_path)
-                shutil.move(str(abs_path), str(new_path))
-            
-            reaper_stems[target_name] = str(new_path)
-            print(f"  {target_name}:  {new_path}", file=sys.stderr)
+            reaper_stems = {}
+            for stem_name, stem_path in result.stems.items():
+                abs_path = _resolve_stem_path(output_root, stem_path)
+                if not abs_path.exists():
+                    raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
+
+                # Zoek naar de juiste REAPER naam
+                filename = abs_path.stem.lower()
+                target_name = stem_name  # fallback
+
+                for map_name, patterns in stem_mapping.items():
+                    if any(p.lower() in filename for p in patterns):
+                        target_name = map_name
+                        break
+
+                # Hernoem bestand naar simpele naam (bijv. vocals.wav)
+                new_path = abs_path.parent / f"{target_name}.wav"
+                if abs_path != new_path:
+                    if new_path.exists():
+                        os.remove(new_path)
+                    shutil.move(str(abs_path), str(new_path))
+
+                reaper_stems[target_name] = str(new_path)
+                print(f"  {target_name}:  {new_path}", file=sys.stderr)
 
         emit_phase("stem_write_end")
 
