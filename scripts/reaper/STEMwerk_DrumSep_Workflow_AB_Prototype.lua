@@ -34,6 +34,14 @@ local function stemList(result)
     return table.concat(result.imported_stems, ",")
 end
 
+local function isPrototypeActionAllowed()
+    if not (reaper and reaper.GetExtState) then
+        return false
+    end
+    local v = tostring(reaper.GetExtState("STEMwerk-dev", "allow_drumkit_prototype_actions") or ""):lower()
+    return v == "1" or v == "true" or v == "yes" or v == "on"
+end
+
 local function logLine(msg)
     reaper.ShowConsoleMsg("[DrumSep AB Prototype] " .. tostring(msg) .. "\n")
 end
@@ -145,6 +153,15 @@ local function runAB()
         "elapsed_seconds: " .. string.format("%.3f", elapsed),
     }
     reaper.ShowMessageBox(table.concat(lines, "\n"), "STEMwerk DrumSep AB Prototype", 0)
+end
+
+if not isPrototypeActionAllowed() then
+    reaper.ShowMessageBox(
+        "This Drum Kit Split prototype action is disabled outside development builds.\n\nSet STEMwerk-dev/allow_drumkit_prototype_actions=1 to enable.",
+        "STEMwerk Drum Kit Split",
+        0
+    )
+    return
 end
 
 runAB()

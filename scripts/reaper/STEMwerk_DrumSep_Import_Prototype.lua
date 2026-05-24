@@ -7,7 +7,6 @@ Prototype action:
 - Does not run backend processing; import/layout proof only
 ]]
 
-local DRUMSEP_PROOF_DIR = "/tmp/stemwerk-drum-split-contract-hardening-20260520-122245/cascade_drumsep"
 local DEFAULT_SOURCE_LABEL = "DrumSep Proof"
 
 local STEMS = {
@@ -33,6 +32,23 @@ local function pathJoin(a, b)
         return a .. b
     end
     return a .. "/" .. b
+end
+
+local function isPrototypeActionAllowed()
+    if not (reaper and reaper.GetExtState) then
+        return false
+    end
+    local v = tostring(reaper.GetExtState("STEMwerk-dev", "allow_drumkit_prototype_actions") or ""):lower()
+    return v == "1" or v == "true" or v == "yes" or v == "on"
+end
+
+local function defaultProofDir()
+    local fromEnv = os.getenv("STEMWERK_DRUMSEP_PROOF_DIR")
+    if fromEnv and fromEnv ~= "" then
+        return fromEnv
+    end
+    local tempBase = os.getenv("STEMWERK_TEMP_DIR") or os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+    return pathJoin(tempBase, "stemwerk-drumsep-proof")
 end
 
 local function rgbToReaperColor(r, g, b)
@@ -180,4 +196,13 @@ function importDrumKitSplitPrototype(outputDir, sourceNameOrLabel)
     return imported > 0
 end
 
-importDrumKitSplitPrototype(DRUMSEP_PROOF_DIR, "Cascade")
+if not isPrototypeActionAllowed() then
+    reaper.ShowMessageBox(
+        "This Drum Kit Split prototype action is disabled outside development builds.\n\nSet STEMwerk-dev/allow_drumkit_prototype_actions=1 to enable.",
+        "STEMwerk Drum Kit Split",
+        0
+    )
+    return
+end
+
+importDrumKitSplitPrototype(defaultProofDir(), "DrumSep Proof")

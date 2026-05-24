@@ -55,10 +55,7 @@ function clearDebugLog() end
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
 local APP_VERSION = "2.2.2.2.2"
--- Private/R&D local branch marker for UI display only.
--- Do not use this for public release/versioning metadata.
-local DISPLAY_VERSION_SUFFIX = "r_n_d-model-registry"
-local APP_DISPLAY_VERSION = APP_VERSION .. "-" .. DISPLAY_VERSION_SUFFIX
+local APP_DISPLAY_VERSION = APP_VERSION
 SCRIPT_NAME = "STEMwerk (v" .. APP_DISPLAY_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_DISPLAY_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_DISPLAY_VERSION .. ")"
@@ -1114,6 +1111,14 @@ function setAllStemSelections(stems, value)
     for _, st in ipairs(stems or {}) do
         st.selected = value and true or false
     end
+end
+
+local function isDrumKitPrototypeActionsAllowed()
+    if not (reaper and reaper.GetExtState) then
+        return false
+    end
+    local v = tostring(reaper.GetExtState("STEMwerk-dev", "allow_drumkit_prototype_actions") or ""):lower()
+    return v == "1" or v == "true" or v == "yes" or v == "on"
 end
 
 function captureStemSelections(stems)
@@ -12824,7 +12829,7 @@ local function runDrumKitSplitPrototypeFromMain()
     _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = prevNoAuto
     if not okLoad then
         showMessage(
-            "Drum Kit Split (Private R&D)",
+            "Drum Kit Split",
             "Failed to load Drum Kit Split workflow.\n\n" .. tostring(apiOrErr),
             "error"
         )
@@ -12834,7 +12839,7 @@ local function runDrumKitSplitPrototypeFromMain()
     local api = apiOrErr
     if type(api) ~= "table" or type(api.runDrumSepWorkflowPrototype) ~= "function" then
         showMessage(
-            "Drum Kit Split (Private R&D)",
+            "Drum Kit Split",
             "Drum Kit Split workflow API is unavailable.",
             "error"
         )
@@ -12878,7 +12883,7 @@ local function runDrumKitSplitPrototypeFromMain()
             debugLog("drumkit_bridge_error_message=" .. tostring(result and result.error_message or result and result.error or ""))
             if suppressDrumKitResultModal then return end
             showMessage(
-                "Drum Kit Split (Private R&D)",
+                "Drum Kit Split",
                 "Drum Kit Split failed.\n\n" ..
                 tostring(result and (result.error_message or result.error) or "Unknown error.") ..
                 ((result and result.log_path and result.log_path ~= "") and ("\n\nLog:\n" .. tostring(result.log_path)) or ""),
@@ -12897,7 +12902,7 @@ local function runDrumKitSplitPrototypeFromMain()
         local resultImported = drumKitImportedStemTotal(result)
         if resultImported <= 0 then resultImported = tonumber(result.total_imported_stems) or 0 end
         showMessage(
-            "Drum Kit Split (Private R&D)",
+            "Drum Kit Split",
             {
                 kind = "drumkit_result",
                 modeLabel = resultModeLabel,
@@ -12990,7 +12995,7 @@ local function runDrumKitSplitPrototypeFromMain()
             end
             debugLog("ERROR: Drum Kit prototype runner crashed:\n" .. tostring(errRun))
             showMessage(
-                "Drum Kit Split (Private R&D)",
+                "Drum Kit Split",
                 "Drum Kit Split crashed.\n\n" .. tostring(errRun),
                 "error",
                 false,

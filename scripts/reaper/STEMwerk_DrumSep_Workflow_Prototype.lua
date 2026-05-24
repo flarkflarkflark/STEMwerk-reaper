@@ -56,6 +56,14 @@ if LOADED_CHUNK_SOURCE:sub(1, 1) == "@" then
 end
 local LOADED_SCRIPT_DIR = LOADED_CHUNK_SOURCE:match("^(.*[/\\])")
 
+local function isPrototypeActionAllowed()
+    if not (reaper and reaper.GetExtState) then
+        return false
+    end
+    local v = tostring(reaper.GetExtState("STEMwerk-dev", "allow_drumkit_prototype_actions") or ""):lower()
+    return v == "1" or v == "true" or v == "yes" or v == "on"
+end
+
 local STEMS = {
     { key = "kick", file = "kick.wav", name = "Kick", color = {255, 174, 66} },
     { key = "snare", file = "snare.wav", name = "Snare", color = {237, 91, 121} },
@@ -3768,7 +3776,15 @@ local API = {
 }
 
 if not rawget(_G, "STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN") then
-    main()
+    if isPrototypeActionAllowed() then
+        main()
+    else
+        reaper.ShowMessageBox(
+            "This Drum Kit Split prototype action is disabled outside development builds.\n\nSet STEMwerk-dev/allow_drumkit_prototype_actions=1 to enable.",
+            "STEMwerk Drum Kit Split",
+            0
+        )
+    end
 end
 
 return API
