@@ -1233,16 +1233,22 @@ local MODEL_FALLBACKS = {
 LEGACY_SIX_STEM_MODEL_ID = "htdemucs_6s"
 
 local function getModelLabelForWorkflow(modelId, drumKitMode)
+    local function trModel(key, fallback)
+        local v = T(key)
+        if not v or v == "" then return fallback end
+        if v == key or v == key:gsub("_", " ") then return fallback end
+        return v
+    end
     if tostring(modelId or "") == "htdemucs_ft" then
-        return T("model_label_quality") or MODEL_LABEL_FALLBACKS.model_label_quality
+        return trModel("model_label_quality", MODEL_LABEL_FALLBACKS.model_label_quality)
     end
     if isSixStemModel(modelId) then
         if drumKitMode then
-            return T("model_label_expanded") or MODEL_LABEL_FALLBACKS.model_label_expanded
+            return trModel("model_label_expanded", MODEL_LABEL_FALLBACKS.model_label_expanded)
         end
-        return T("model_label_6stem") or MODEL_LABEL_FALLBACKS.model_label_6stem
+        return trModel("model_label_6stem", MODEL_LABEL_FALLBACKS.model_label_6stem)
     end
-    return T("model_label_fast") or MODEL_LABEL_FALLBACKS.model_label_fast
+    return trModel("model_label_fast", MODEL_LABEL_FALLBACKS.model_label_fast)
 end
 
 local function isExistingModelList(metadata)
