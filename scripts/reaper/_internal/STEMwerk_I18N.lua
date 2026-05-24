@@ -86,6 +86,9 @@ local function setLanguage(lang_code)
 end
 
 local function T(key)
+    if not LANGUAGES then
+        loadLanguages()
+    end
     if LANG and LANG[key] then
         return LANG[key]
     end
