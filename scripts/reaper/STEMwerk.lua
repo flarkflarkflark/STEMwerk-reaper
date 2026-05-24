@@ -15091,7 +15091,7 @@ local function drawProgressWindow()
         GUI.uiClickedThisFrame = true
         uiConsumedClick = true
         tooltipText = cancelUnavailable
-            and "Cancel is unavailable while this private Drum Kit prototype runs blocking stages."
+            and "Cancel is unavailable while Drum Kit Split runs blocking stages."
             or progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not progressState.wasMouseDown and not cancelUnavailable then
