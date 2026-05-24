@@ -12818,11 +12818,26 @@ STEMWERK_BENCHMARK_SECTION = "STEMwerk_benchmark"
 drumKitBenchmarkRequestId = nil
 drumKitBenchmarkPreviousWorkflowMode = nil
 
+local function setDrumKitBenchmarkField(key, value)
+    if not reaper or not reaper.SetExtState then return end
+    local v = tostring(value or "")
+    if v == "" then
+        reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, key, false)
+    else
+        reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, key, v, false)
+    end
+end
+
 function setDrumKitBenchmarkState(status, errText, runDir)
     if not reaper or not reaper.SetExtState then return end
-    reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "status", tostring(status or ""), false)
-    if errText and errText ~= "" then
-        reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "last_error", tostring(errText), false)
+    local statusText = tostring(status or "")
+    local err = tostring(errText or "")
+    if statusText == "error" and err == "" then
+        err = "unknown_error"
+    end
+    reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "status", statusText, false)
+    if err ~= "" then
+        reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "last_error", err, false)
     else
         reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, "last_error", false)
     end
@@ -12835,6 +12850,11 @@ function setDrumKitBenchmarkState(status, errText, runDir)
 end
 
 function finalizeDrumKitBenchmarkState(status, errText, runDir)
+    if tostring(status or "") == "success" then
+        setDrumKitBenchmarkField("phase", "finalized_success")
+    elseif tostring(status or "") == "error" then
+        setDrumKitBenchmarkField("phase", "finalized_error")
+    end
     if drumKitBenchmarkPreviousWorkflowMode ~= nil and setWorkflowMode then
         setWorkflowMode(drumKitBenchmarkPreviousWorkflowMode, { persist = true })
     end
@@ -12854,9 +12874,16 @@ function checkDrumKitBenchmarkTrigger()
     if drumKitBenchmarkRequestId == "" then
         drumKitBenchmarkRequestId = tostring(os.time())
     end
+    setDrumKitBenchmarkField("phase", "trigger_seen")
     setDrumKitBenchmarkState("trigger_seen", "", "")
     reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, "run_drumkit_main_once", false)
+    setDrumKitBenchmarkField("phase", "consumed_trigger")
     setDrumKitBenchmarkState("validating", "", "")
+    setDrumKitBenchmarkField("phase", "validating_selection")
+    local selectedCount = tonumber(reaper.CountSelectedMediaItems and reaper.CountSelectedMediaItems(0) or 0) or 0
+    setDrumKitBenchmarkField("selection_count", tostring(selectedCount))
+    local benchmarkWorkflowMode = tostring(reaper.GetExtState(EXT_SECTION, "workflowMode") or "")
+    setDrumKitBenchmarkField("workflow_mode", benchmarkWorkflowMode ~= "" and benchmarkWorkflowMode or "unset")
 
     if isProcessingActive then
         finalizeDrumKitBenchmarkState("error", "already_running", "")
@@ -12871,15 +12898,22 @@ function checkDrumKitBenchmarkTrigger()
         finalizeDrumKitBenchmarkState("error", "main_route_unavailable", "")
         return true
     end
+    setDrumKitBenchmarkField("phase", "setting_workflow_mode")
     setWorkflowMode("drum_kit_split", { persist = true })
+    setDrumKitBenchmarkField("workflow_mode", "drum_kit_split")
     syncDrumKitWorkflowState()
 
+    setDrumKitBenchmarkField("phase", "can_start_check")
     if not canStartProcessingFromDialog() then
-        finalizeDrumKitBenchmarkState("error", "no_valid_selection", "")
+        setDrumKitBenchmarkField("can_start_result", "false")
+        finalizeDrumKitBenchmarkState("error", "can_start_failed:no_valid_selection", "")
         return true
     end
+    setDrumKitBenchmarkField("can_start_result", "true")
 
+    setDrumKitBenchmarkField("phase", "calling_main_route")
     setDrumKitBenchmarkState("starting", "", "")
+    setDrumKitBenchmarkField("phase", "waiting_async")
     setDrumKitBenchmarkState("running", "", "")
     reaper.defer(function()
         local ok, err = xpcall(runDrumKitSplitPrototypeFromMain, function(e)
@@ -12887,7 +12921,9 @@ function checkDrumKitBenchmarkTrigger()
         end)
         if not ok then
             debugLog("ERROR: benchmark drumkit main-route crashed:\n" .. tostring(err))
-            finalizeDrumKitBenchmarkState("error", tostring(err), "")
+            local msg = tostring(err or "")
+            if msg == "" then msg = "pcall_failed_no_message" end
+            finalizeDrumKitBenchmarkState("error", msg, "")
         end
     end)
     return true
