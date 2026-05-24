@@ -12811,6 +12811,76 @@ local function drumKitPrototypeModeFromSettings()
     return "clean_fast"
 end
 
+STEMWERK_BENCHMARK_SECTION = "STEMwerk_benchmark"
+drumKitBenchmarkRequestId = nil
+drumKitBenchmarkPreviousWorkflowMode = nil
+
+function setDrumKitBenchmarkState(status, errText, runDir)
+    if not reaper or not reaper.SetExtState then return end
+    reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "status", tostring(status or ""), false)
+    if errText and errText ~= "" then
+        reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "last_error", tostring(errText), false)
+    else
+        reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, "last_error", false)
+    end
+    if runDir and runDir ~= "" then
+        reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "last_run_dir", tostring(runDir), false)
+    end
+    if drumKitBenchmarkRequestId and drumKitBenchmarkRequestId ~= "" then
+        reaper.SetExtState(STEMWERK_BENCHMARK_SECTION, "last_request_id", tostring(drumKitBenchmarkRequestId), false)
+    end
+end
+
+function finalizeDrumKitBenchmarkState(status, errText, runDir)
+    if drumKitBenchmarkPreviousWorkflowMode ~= nil and setWorkflowMode then
+        setWorkflowMode(drumKitBenchmarkPreviousWorkflowMode, { persist = true })
+    end
+    drumKitBenchmarkPreviousWorkflowMode = nil
+    setDrumKitBenchmarkState(status, errText, runDir)
+    drumKitBenchmarkRequestId = nil
+end
+
+function checkDrumKitBenchmarkTrigger()
+    if not reaper or not reaper.GetExtState then return false end
+    local trigger = tostring(reaper.GetExtState(STEMWERK_BENCHMARK_SECTION, "run_drumkit_main_once") or "")
+    if trigger ~= "1" then
+        return false
+    end
+
+    reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, "run_drumkit_main_once", false)
+
+    if isProcessingActive then
+        setDrumKitBenchmarkState("error", "processing already active", "")
+        return true
+    end
+
+    drumKitBenchmarkRequestId = tostring(reaper.GetExtState(STEMWERK_BENCHMARK_SECTION, "request_id") or "")
+    if drumKitBenchmarkRequestId == "" then
+        drumKitBenchmarkRequestId = tostring(os.time())
+    end
+
+    drumKitBenchmarkPreviousWorkflowMode = normalizeWorkflowMode(rawWorkflowMode())
+    setWorkflowMode("drum_kit_split", { persist = true })
+    syncDrumKitWorkflowState()
+
+    if not canStartProcessingFromDialog() then
+        finalizeDrumKitBenchmarkState("error", "selection/config validation failed", "")
+        return true
+    end
+
+    setDrumKitBenchmarkState("running", "", "")
+    reaper.defer(function()
+        local ok, err = xpcall(runDrumKitSplitPrototypeFromMain, function(e)
+            return tostring(e) .. "\n" .. debug.traceback("", 2)
+        end)
+        if not ok then
+            debugLog("ERROR: benchmark drumkit main-route crashed:\n" .. tostring(err))
+            finalizeDrumKitBenchmarkState("error", tostring(err), "")
+        end
+    end)
+    return true
+end
+
 function drumKitImportedStemTotal(result)
     local total = 0
     if result and type(result.per_source_results) == "table" then
@@ -12830,6 +12900,7 @@ local function runDrumKitSplitPrototypeFromMain()
     local suppressDrumKitResultModal =
         (reaper.GetExtState("STEMwerk-dev", "suppress_modal_result") == "1")
         or (reaper.GetExtState("STEMwerk_benchmark", "suppress_modal_result") == "1")
+        or (reaper.GetExtState("STEMwerk_benchmark", "suppress_result") == "1")
     syncDrumKitWorkflowState()
     local mode = drumKitPrototypeModeFromSettings()
     local scriptPath = script_path .. "STEMwerk_DrumSep_Workflow_Prototype.lua"
@@ -12846,6 +12917,7 @@ local function runDrumKitSplitPrototypeFromMain()
     local okLoad, apiOrErr = pcall(dofile, scriptPath)
     _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = prevNoAuto
     if not okLoad then
+        finalizeDrumKitBenchmarkState("error", "failed to load workflow api", "")
         showMessage(
             "Drum Kit Split",
             "Failed to load Drum Kit Split workflow.\n\n" .. tostring(apiOrErr),
@@ -12856,6 +12928,7 @@ local function runDrumKitSplitPrototypeFromMain()
 
     local api = apiOrErr
     if type(api) ~= "table" or type(api.runDrumSepWorkflowPrototype) ~= "function" then
+        finalizeDrumKitBenchmarkState("error", "workflow api unavailable", "")
         showMessage(
             "Drum Kit Split",
             "Drum Kit Split workflow API is unavailable.",
@@ -12884,6 +12957,7 @@ local function runDrumKitSplitPrototypeFromMain()
 
         if result and tostring(result.status or "") == "cancelled" then
             debugLog("drumkit_bridge_result=CANCELLED")
+            finalizeDrumKitBenchmarkState("error", "cancelled", tostring(result and result.temp_root or ""))
             if suppressDrumKitResultModal then return end
             showMessage(
                 "Drum Kit Split",
@@ -12899,6 +12973,11 @@ local function runDrumKitSplitPrototypeFromMain()
             debugLog("drumkit_bridge_result=FAIL")
             debugLog("drumkit_bridge_error_stage=" .. tostring(result and result.error_stage or ""))
             debugLog("drumkit_bridge_error_message=" .. tostring(result and result.error_message or result and result.error or ""))
+            finalizeDrumKitBenchmarkState(
+                "error",
+                tostring(result and (result.error_message or result.error or result.status) or "unknown"),
+                tostring(result and result.temp_root or "")
+            )
             if suppressDrumKitResultModal then return end
             showMessage(
                 "Drum Kit Split",
@@ -12914,6 +12993,7 @@ local function runDrumKitSplitPrototypeFromMain()
 
         debugLog("drumkit_bridge_result=PASS")
         debugLog("drumkit_bridge_resolved_sources=" .. tostring(result and (result.resolved_source_count or result.resolved_sources) or ""))
+        finalizeDrumKitBenchmarkState("success", "", tostring(result and result.temp_root or ""))
         if suppressDrumKitResultModal then return end
         local resultModeLabel = tostring(result.mode_label or drumKitProgressModeLabel(result.mode or mode))
         local resultSources = tonumber(result.resolved_source_count or result.resolved_sources) or 0
@@ -21567,6 +21647,10 @@ main = function()
                 showMessage("Error", "STEMwerk crashed while starting processing.\n\nSee log:\n" .. tostring(getCrashLogPath()), "error")
             end
         end)
+    elseif checkDrumKitBenchmarkTrigger() then
+        -- Dev-only benchmark trigger: run Drum Kit through the same main route
+        -- without opening the interactive dialog.
+        return
     else
         -- Normal mode: show dialog
         GUI.windowsStartupMonitor = false
