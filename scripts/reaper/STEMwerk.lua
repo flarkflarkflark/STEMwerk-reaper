@@ -2514,6 +2514,7 @@ local function drawWavingStemwerkLogo(opts)
     gfx.setfont(1, fontName, fontSize, flags)
 
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local drumKitProgressUI = progressState.drumKitPrototype == true
 
     if utilityMode then
         local fullText = "STEMwerk"
@@ -14568,6 +14569,11 @@ local function drawProgressWindow()
         gfx.y = titleY
         local trackPrefix = T("track_prefix") or "Track"
         gfx.drawstr(tostring(trackPrefix) .. " " .. multiTrackQueue.currentIndex .. "/" .. multiTrackQueue.totalTracks .. ": " .. (multiTrackQueue.currentTrackName or ""))
+    elseif drumKitProgressUI then
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = titleX
+        gfx.y = titleY
+        gfx.drawstr(trSafe("drumkit_window_title_processing", "Drum Kit Split Processing"))
     else
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
         gfx.x = titleX
@@ -14614,6 +14620,33 @@ local function drawProgressWindow()
             local stemLabel = getStemDisplayName(stem)
             gfx.drawstr(stemLabel)
             stemX = stemX + stemBoxSize + gfx.measurestr(stemLabel) + PS(20)
+        end
+    end
+
+    if drumKitProgressUI then
+        local dkRunning = tonumber(progressState.drumKitRunningSources or 0) or 0
+        local dkCompleted = tonumber(progressState.drumKitCompletedSources or 0) or 0
+        local dkTotal = tonumber(progressState.drumKitSourceCount or 0) or 0
+        local dkActive = tostring(progressState.drumKitActiveSourceIndices or "")
+        local metaY = stemY + PS(20)
+        gfx.setfont(1, "Arial", PS(10))
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        if dkRunning > 1 then
+            gfx.x = PS(25)
+            gfx.y = metaY
+            gfx.drawstr(string.format(trSafe("drumkit_progress_parallel_jobs", "Parallel jobs: %d"), dkRunning))
+            metaY = metaY + PS(13)
+        end
+        if dkTotal > 0 then
+            gfx.x = PS(25)
+            gfx.y = metaY
+            gfx.drawstr(string.format(trSafe("drumkit_progress_completed", "Completed: %d / %d"), dkCompleted, dkTotal))
+            metaY = metaY + PS(13)
+        end
+        if dkActive ~= "" then
+            gfx.x = PS(25)
+            gfx.y = metaY
+            gfx.drawstr(string.format(trSafe("drumkit_progress_active_sources", "Active sources: %s"), dkActive))
         end
     end
 
@@ -15618,6 +15651,9 @@ openDrumKitPrototypeProgressWindow = function(mode, opts)
     progressState.drumKitStageRangeEndPercent = nil
     progressState.drumKitSourceIndex = 0
     progressState.drumKitSourceCount = 0
+    progressState.drumKitRunningSources = 0
+    progressState.drumKitCompletedSources = 0
+    progressState.drumKitActiveSourceIndices = ""
     progressState.drumKitStageLabelKey = "preparing"
     progressState.drumKitNextProgressPollAt = 0
     if asyncEnabled then
@@ -15661,6 +15697,20 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
     local srcCnt = tonumber(event.source_count or progressState.drumKitSourceCount or 1) or 1
     progressState.drumKitSourceIndex = srcIdx
     progressState.drumKitSourceCount = srcCnt
+    if eventName == "source_queue_status" then
+        progressState.drumKitRunningSources = tonumber(event.running_sources or 0) or 0
+        progressState.drumKitCompletedSources = tonumber(event.completed_sources or 0) or 0
+        progressState.drumKitActiveSourceIndices = tostring(event.active_source_indices or "")
+    elseif eventName == "source_start" then
+        progressState.drumKitRunningSources = tonumber(event.running_sources or progressState.drumKitRunningSources or 0) or 0
+        progressState.drumKitCompletedSources = tonumber(event.completed_sources or progressState.drumKitCompletedSources or 0) or 0
+    elseif eventName == "source_done" then
+        progressState.drumKitCompletedSources = tonumber(event.completed_sources or progressState.drumKitCompletedSources or 0) or 0
+    elseif eventName == "run_done" then
+        progressState.drumKitRunningSources = 0
+        progressState.drumKitCompletedSources = srcCnt
+        progressState.drumKitActiveSourceIndices = ""
+    end
 
     local targetPercent = drumKitProgressPercent(event)
     progressState.drumKitTargetPercent = targetPercent
@@ -15745,6 +15795,9 @@ closeDrumKitPrototypeProgressWindow = function(_result)
     progressState.drumKitStageRangeEndPercent = nil
     progressState.drumKitSourceIndex = nil
     progressState.drumKitSourceCount = nil
+    progressState.drumKitRunningSources = nil
+    progressState.drumKitCompletedSources = nil
+    progressState.drumKitActiveSourceIndices = nil
     progressState.drumKitStageLabelKey = nil
     progressState.drumKitNextProgressPollAt = nil
     progressState.cancelRequested = false
