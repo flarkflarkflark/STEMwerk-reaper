@@ -12818,7 +12818,7 @@ STEMWERK_BENCHMARK_SECTION = "STEMwerk_benchmark"
 drumKitBenchmarkRequestId = nil
 drumKitBenchmarkPreviousWorkflowMode = nil
 
-local function setDrumKitBenchmarkField(key, value)
+function setDrumKitBenchmarkField(key, value)
     if not reaper or not reaper.SetExtState then return end
     local v = tostring(value or "")
     if v == "" then
@@ -12880,10 +12880,12 @@ function checkDrumKitBenchmarkTrigger()
     setDrumKitBenchmarkField("phase", "consumed_trigger")
     setDrumKitBenchmarkState("validating", "", "")
     setDrumKitBenchmarkField("phase", "validating_selection")
-    local selectedCount = tonumber(reaper.CountSelectedMediaItems and reaper.CountSelectedMediaItems(0) or 0) or 0
-    setDrumKitBenchmarkField("selection_count", tostring(selectedCount))
-    local benchmarkWorkflowMode = tostring(reaper.GetExtState(EXT_SECTION, "workflowMode") or "")
-    setDrumKitBenchmarkField("workflow_mode", benchmarkWorkflowMode ~= "" and benchmarkWorkflowMode or "unset")
+    setDrumKitBenchmarkField("selection_count", tostring(tonumber(reaper.CountSelectedMediaItems and reaper.CountSelectedMediaItems(0) or 0) or 0))
+    if tostring(reaper.GetExtState(EXT_SECTION, "workflowMode") or "") ~= "" then
+        setDrumKitBenchmarkField("workflow_mode", tostring(reaper.GetExtState(EXT_SECTION, "workflowMode") or ""))
+    else
+        setDrumKitBenchmarkField("workflow_mode", "unset")
+    end
 
     if isProcessingActive then
         finalizeDrumKitBenchmarkState("error", "already_running", "")
