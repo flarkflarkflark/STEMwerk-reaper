@@ -14525,7 +14525,7 @@ local function drawProgressWindow()
 
     -- Single-track progress layout
     local barX = PS(38)
-    local barY = PS(102)
+    local barY = drumKitProgressUI and PS(140) or PS(102)
     local barW = w - (barX * 2)
     local barH = PS(24)
 
@@ -14615,25 +14615,106 @@ local function drawProgressWindow()
         local dkCompleted = tonumber(progressState.drumKitCompletedSources or 0) or 0
         local dkTotal = tonumber(progressState.drumKitSourceCount or 0) or 0
         local dkActive = tostring(progressState.drumKitActiveSourceIndices or "")
+        local dkMaxParallel = tonumber(progressState.drumKitMaxParallelJobs or 0) or 0
+        if dkMaxParallel < 1 then dkMaxParallel = math.max(1, dkRunning) end
+        local dkActiveCount = dkRunning
+        local dkQueued = math.max(0, dkTotal - dkCompleted - dkRunning)
+        local dkModeLabel = tostring(progressState.drumKitModeLabel or "")
+        local dkBackend = tostring(progressState.drumKitBackendLabel or "")
+        if dkBackend == "" then dkBackend = "unknown" end
+        local stageLabel = ""
+        local stageKey = tostring(progressState.drumKitActiveStage or "")
+        if stageKey == "stage1_parent" then
+            stageLabel = T("drumkit_stage_separating") or "separating drums"
+        elseif stageKey == "stage2_drumsep" then
+            stageLabel = T("drumkit_stage_splitting") or "splitting drum kit"
+        elseif stageKey == "import" then
+            stageLabel = T("drumkit_progress_importing") or "importing"
+        else
+            stageLabel = T("progress_stage_processing") or "processing"
+        end
+        local activeIndices = {}
+        for token in dkActive:gmatch("([^,]+)") do
+            local n = tonumber((token:gsub("%s+", "")))
+            if n then activeIndices[#activeIndices + 1] = n end
+        end
+        if #activeIndices == 0 and dkRunning > 0 and progressState.drumKitSourceIndex then
+            activeIndices[1] = tonumber(progressState.drumKitSourceIndex) or 1
+        end
+
         local metaY = stemY + PS(20)
         gfx.setfont(1, "Arial", PS(10))
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        if dkRunning > 1 then
-            gfx.x = PS(25)
-            gfx.y = metaY
-            gfx.drawstr(string.format(trSafe("drumkit_progress_parallel_jobs", "Parallel jobs: %d"), dkRunning))
-            metaY = metaY + PS(13)
+        local summaryLine
+        if dkMaxParallel > 1 then
+            summaryLine = string.format(
+                trSafe("drumkit_processing_summary_parallel", "Parallel jobs: %d · Completed: %d/%d · Active: %d"),
+                dkMaxParallel,
+                dkCompleted,
+                dkTotal,
+                dkActiveCount
+            )
+        else
+            summaryLine = string.format(
+                trSafe("drumkit_processing_summary_sequential", "Sequential · Completed: %d/%d · Active: %d"),
+                dkCompleted,
+                dkTotal,
+                dkActiveCount
+            )
         end
-        if dkTotal > 0 then
-            gfx.x = PS(25)
+        gfx.x = PS(25)
+        gfx.y = metaY
+        gfx.drawstr(summaryLine)
+        metaY = metaY + PS(12)
+
+        local rowCount = math.min(math.max(#activeIndices, 1), math.max(1, dkMaxParallel))
+        local laneX = PS(25)
+        local laneW = w - PS(50)
+        local laneH = PS(10)
+        local laneGap = PS(2)
+        local laneAnim = (os.clock() * 0.9) % 1.0
+        for i = 1, rowCount do
+            local srcIdx = activeIndices[i] or tonumber(progressState.drumKitSourceIndex or 0) or 0
+            if srcIdx < 1 then srcIdx = i end
+            local label
+            if stageKey == "stage1_parent" or stageKey == "stage2_drumsep" then
+                local step = (stageKey == "stage1_parent") and 1 or 2
+                label = string.format(
+                    trSafe("drumkit_processing_source_row", "Source %d/%d · Step %d/2 · %s"),
+                    srcIdx, math.max(1, dkTotal), step, stageLabel
+                )
+            else
+                label = string.format(
+                    trSafe("drumkit_processing_source_row_simple", "Source %d/%d · %s"),
+                    srcIdx, math.max(1, dkTotal), stageLabel
+                )
+            end
+            gfx.x = laneX
             gfx.y = metaY
-            gfx.drawstr(string.format(trSafe("drumkit_progress_completed", "Completed: %d / %d"), dkCompleted, dkTotal))
-            metaY = metaY + PS(13)
+            gfx.drawstr(label)
+            local laneY = metaY + PS(9)
+            gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
+            gfx.rect(laneX, laneY, laneW, laneH, 1)
+            gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+            gfx.rect(laneX, laneY, laneW, laneH, 0)
+            local pulseW = math.max(PS(40), math.floor(laneW * 0.26))
+            local pulseX = laneX + math.floor((laneW - pulseW) * laneAnim)
+            gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.9)
+            gfx.rect(pulseX, laneY + 1, pulseW, math.max(1, laneH - 2), 1)
+            metaY = laneY + laneH + laneGap
         end
-        if dkActive ~= "" then
+
+        local queueLine = string.format(
+            trSafe("drumkit_processing_queue_line", "Queued: %d · Backend: %s · Mode: %s"),
+            dkQueued,
+            string.upper(dkBackend),
+            (dkModeLabel ~= "" and dkModeLabel or "?")
+        )
+        if metaY < (barY - PS(2)) then
             gfx.x = PS(25)
             gfx.y = metaY
-            gfx.drawstr(string.format(trSafe("drumkit_progress_active_sources", "Active sources: %s"), dkActive))
+            gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+            gfx.drawstr(queueLine)
         end
     end
 
@@ -15641,6 +15722,9 @@ openDrumKitPrototypeProgressWindow = function(mode, opts)
     progressState.drumKitRunningSources = 0
     progressState.drumKitCompletedSources = 0
     progressState.drumKitActiveSourceIndices = ""
+    progressState.drumKitMaxParallelJobs = 0
+    progressState.drumKitModeLabel = tostring(mode or "")
+    progressState.drumKitBackendLabel = ""
     progressState.drumKitStageLabelKey = "preparing"
     progressState.drumKitNextProgressPollAt = 0
     if asyncEnabled then
@@ -15688,6 +15772,7 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
         progressState.drumKitRunningSources = tonumber(event.running_sources or 0) or 0
         progressState.drumKitCompletedSources = tonumber(event.completed_sources or 0) or 0
         progressState.drumKitActiveSourceIndices = tostring(event.active_source_indices or "")
+        progressState.drumKitMaxParallelJobs = tonumber(event.max_parallel_jobs or progressState.drumKitMaxParallelJobs or 0) or 0
     elseif eventName == "source_start" then
         progressState.drumKitRunningSources = tonumber(event.running_sources or progressState.drumKitRunningSources or 0) or 0
         progressState.drumKitCompletedSources = tonumber(event.completed_sources or progressState.drumKitCompletedSources or 0) or 0
@@ -15697,6 +15782,14 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
         progressState.drumKitRunningSources = 0
         progressState.drumKitCompletedSources = srcCnt
         progressState.drumKitActiveSourceIndices = ""
+    end
+    if eventName == "run_start" then
+        progressState.drumKitMaxParallelJobs = tonumber(event.max_parallel_jobs or event.max_parallel or progressState.drumKitMaxParallelJobs or 0) or 0
+        progressState.drumKitModeLabel = tostring(event.mode_label or progressState.drumKitModeLabel or "")
+        progressState.drumKitBackendLabel = tostring(event.effective_backend or event.actual_runtime_backend or progressState.drumKitBackendLabel or "")
+    end
+    if eventName == "stage1_parent_device" or eventName == "stage2_drumsep_device" then
+        progressState.drumKitBackendLabel = tostring(event.actual_runtime_backend or progressState.drumKitBackendLabel or "")
     end
 
     local targetPercent = drumKitProgressPercent(event)
@@ -15785,6 +15878,9 @@ closeDrumKitPrototypeProgressWindow = function(_result)
     progressState.drumKitRunningSources = nil
     progressState.drumKitCompletedSources = nil
     progressState.drumKitActiveSourceIndices = nil
+    progressState.drumKitMaxParallelJobs = nil
+    progressState.drumKitModeLabel = nil
+    progressState.drumKitBackendLabel = nil
     progressState.drumKitStageLabelKey = nil
     progressState.drumKitNextProgressPollAt = nil
     progressState.cancelRequested = false
