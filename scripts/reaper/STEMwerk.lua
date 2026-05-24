@@ -12850,30 +12850,36 @@ function checkDrumKitBenchmarkTrigger()
         return false
     end
 
-    reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, "run_drumkit_main_once", false)
-
-    if isProcessingActive then
-        setDrumKitBenchmarkState("error", "processing already active", "")
-        return true
-    end
-
     drumKitBenchmarkRequestId = tostring(reaper.GetExtState(STEMWERK_BENCHMARK_SECTION, "request_id") or "")
     if drumKitBenchmarkRequestId == "" then
         drumKitBenchmarkRequestId = tostring(os.time())
+    end
+    setDrumKitBenchmarkState("trigger_seen", "", "")
+    reaper.DeleteExtState(STEMWERK_BENCHMARK_SECTION, "run_drumkit_main_once", false)
+    setDrumKitBenchmarkState("validating", "", "")
+
+    if isProcessingActive then
+        finalizeDrumKitBenchmarkState("error", "already_running", "")
+        return true
     end
 
     drumKitBenchmarkPreviousWorkflowMode = tostring(reaper.GetExtState(EXT_SECTION, "workflowMode") or "")
     if drumKitBenchmarkPreviousWorkflowMode == "" then
         drumKitBenchmarkPreviousWorkflowMode = nil
     end
+    if type(setWorkflowMode) ~= "function" then
+        finalizeDrumKitBenchmarkState("error", "main_route_unavailable", "")
+        return true
+    end
     setWorkflowMode("drum_kit_split", { persist = true })
     syncDrumKitWorkflowState()
 
     if not canStartProcessingFromDialog() then
-        finalizeDrumKitBenchmarkState("error", "selection/config validation failed", "")
+        finalizeDrumKitBenchmarkState("error", "no_valid_selection", "")
         return true
     end
 
+    setDrumKitBenchmarkState("starting", "", "")
     setDrumKitBenchmarkState("running", "", "")
     reaper.defer(function()
         local ok, err = xpcall(runDrumKitSplitPrototypeFromMain, function(e)
@@ -21546,7 +21552,8 @@ main = function()
     -- If a toolbar preset requested an immediate run, bypass the focus-only guard.
     local quickRunRequested = (reaper and reaper.GetExtState and (
         reaper.GetExtState(EXT_SECTION, "quick_run") == "1" or
-        reaper.GetExtState(EXT_SECTION, "quick_command") ~= ""
+        reaper.GetExtState(EXT_SECTION, "quick_command") ~= "" or
+        reaper.GetExtState(STEMWERK_BENCHMARK_SECTION, "run_drumkit_main_once") == "1"
     ))
 
     -- Check if STEMwerk window is already open - if so, just bring it to focus
