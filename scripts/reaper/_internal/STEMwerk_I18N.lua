@@ -99,10 +99,18 @@ local function T(key)
 end
 
 local function trPlural(count, singularKey, pluralKey, singularFallback, pluralFallback)
-    if (count or 0) == 1 then
-        return T(singularKey) or singularFallback or singularKey
+    local function safeTranslate(key, fallback)
+        local translated = T(key)
+        if not translated or translated == "" then return fallback or key end
+        if translated == key or translated == key:gsub("_", " ") then
+            return fallback or key
+        end
+        return translated
     end
-    return T(pluralKey) or pluralFallback or pluralKey
+    if (count or 0) == 1 then
+        return safeTranslate(singularKey, singularFallback)
+    end
+    return safeTranslate(pluralKey, pluralFallback)
 end
 
 local function getAvailableLanguages()

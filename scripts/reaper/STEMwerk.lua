@@ -1474,8 +1474,20 @@ T = I18N.T
 local trPlural = I18N.trPlural
 local getAvailableLanguages = I18N.getAvailableLanguages
 
+function trSafe(key, fallback)
+    local value = (type(T) == "function") and T(key) or nil
+    if not value or value == "" then return fallback end
+    if value == key or value == key:gsub("_", " ") then return fallback end
+    return value
+end
+
 local function getProcessingWindowTitle()
-    local label = (type(T) == "function" and T("window_title_processing")) or "Processing.."
+    local label
+    if progressState and progressState.drumKitPrototype then
+        label = trSafe("drumkit_window_title_processing", "Drum Kit Split Processing")
+    else
+        label = trSafe("window_title_processing", "Processing...")
+    end
     return "STEMwerk - " .. tostring(label) .. " (v" .. APP_DISPLAY_VERSION .. ")"
 end
 
@@ -7487,7 +7499,7 @@ local function drawArtGallery()
         gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 0.28)
         gfx.rect(rightX - PS(16), rightY + PS(4), 1, PS(150), 1)
 
-        local title = T("help_drumkit_title") or "Drum Kit Split"
+        local title = trSafe("help_drumkit_title", "Drum Kit Split")
         local parts = T("help_drumkit_parts") or "Kick · Snare · Toms · Hi-Hat · Ride · Crash"
         local line1 = T("help_drumkit_line1") or "First isolate the drum stem."
         local line2 = T("help_drumkit_line2") or "Then split it into drum kit parts."
@@ -8769,7 +8781,7 @@ local function drawMessageWindow()
     gfx.drawstr(helpText)
 
     if helpHover and not tooltipText then
-        tooltipText = T("help_tooltip")
+        tooltipText = trSafe("help_tooltip", "Open Help")
         tooltipX = mx + PS(10)
         tooltipY = my + PS(15)
     end
@@ -8807,7 +8819,7 @@ local function drawMessageWindow()
 
     if hover and not tooltipText then
         if resultContext then
-            tooltipText = T("result_back_tooltip") or "Back to STEMwerk"
+            tooltipText = trSafe("result_back_tooltip", "Back to STEMwerk")
         else
             tooltipText = T("exit_tooltip")
         end
@@ -15523,6 +15535,25 @@ function formatDrumKitProgressStage(event)
         local completed = tonumber(event.completed_sources or 0) or 0
         local total = tonumber(event.source_count or sourceCount or 0) or 0
         local active = tostring(event.active_source_indices or "")
+        if asyncMode then
+            local jobsLine = string.format(
+                trSafe("drumkit_progress_parallel_jobs", "Parallel jobs: %d"),
+                running
+            )
+            local completedLine = string.format(
+                trSafe("drumkit_progress_completed", "Completed: %d / %d"),
+                completed,
+                total
+            )
+            if active ~= "" then
+                local activeLine = string.format(
+                    trSafe("drumkit_progress_active_sources", "Active sources: %s"),
+                    active
+                )
+                return jobsLine .. "\n" .. completedLine .. "\n" .. activeLine
+            end
+            return jobsLine .. "\n" .. completedLine
+        end
         if active ~= "" then
             return string.format("Drum Kit Split: running %d (%s) · completed %d/%d", running, active, completed, total)
         end
@@ -17287,7 +17318,7 @@ function drawResultWindow()
     -- Check for click on Back button
     if hover then
         GUI.uiClickedThisFrame = true
-        tooltipText = T("result_back_tooltip") or "Back to STEMwerk"
+        tooltipText = trSafe("result_back_tooltip", "Back to STEMwerk")
         tooltipX, tooltipY = mx + PS(spacing.tooltipOffsetX or 10), my + PS(spacing.tooltipOffsetY or 15)
         if mouseDown and not resultWindowState.wasMouseDown then
             return true
