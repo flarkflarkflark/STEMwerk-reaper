@@ -2494,6 +2494,9 @@ local function measureStemwerkLogo(fontSize, fontName, bold)
     return totalW
 end
 
+-- Forward declare: used by UI helpers defined before progress block initialization.
+local progressState
+
 -- Draw the waving "STEMwerk" logo. Returns (x, y, w, h) bounds.
 local function drawWavingStemwerkLogo(opts)
     opts = opts or {}
@@ -14191,7 +14194,7 @@ function renderSingleItemToWav(item, outputPath)
 end
 
 -- Progress window state
-local progressState = {
+progressState = {
     running = false,
     windowOpen = false,
     outputDir = nil,
