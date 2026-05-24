@@ -1566,7 +1566,7 @@ local function collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)
         end
     end
     if #runNames == 0 then
-        appendLine(lines, "- no Drum Kit Split prototype temp runs found")
+        appendLine(lines, "- no Drum Kit Split temp runs found")
         appendKey(lines, "Drum Kit runs source", tempBase)
         return lines
     end
@@ -1658,10 +1658,10 @@ local function collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)
     end
 
     local skipped = math.max(0, #entries - #selected)
-    appendLine(lines, string.format("- Drum Kit prototype runs available: %d", #entries))
-    appendLine(lines, string.format("- Drum Kit prototype runs included: %d (max %d)", #selected, maxRunsToInclude))
-    appendLine(lines, string.format("- Drum Kit prototype runs skipped: %d", skipped))
-    appendLine(lines, string.format("- Drum Kit prototype diagnostic files copied: %d", copiedCount))
+    appendLine(lines, string.format("- Drum Kit Split runs available: %d", #entries))
+    appendLine(lines, string.format("- Drum Kit Split runs included: %d (max %d)", #selected, maxRunsToInclude))
+    appendLine(lines, string.format("- Drum Kit Split runs skipped: %d", skipped))
+    appendLine(lines, string.format("- Drum Kit Split diagnostics files copied: %d", copiedCount))
     if #includedRunNames > 0 then
         appendLine(lines, "- included run_ids: " .. table.concat(includedRunNames, ", "))
     end
@@ -2912,7 +2912,7 @@ local function performBundleCollection()
     appendLine(diagnostics, "")
 
     local drumKitRunsStartedAt = phaseStart("collect_drumkit_runs")
-    appendLine(diagnostics, "Drum Kit Split Prototype Diagnostics")
+    appendLine(diagnostics, "Drum Kit Split Developer-Preview Diagnostics")
     for _, line in ipairs(collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)) do
         appendLine(diagnostics, line)
     end

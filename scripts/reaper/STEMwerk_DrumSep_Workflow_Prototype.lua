@@ -3780,7 +3780,7 @@ if not rawget(_G, "STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN") then
         main()
     else
         reaper.ShowMessageBox(
-            "This Drum Kit Split prototype action is disabled outside development builds.\n\nSet STEMwerk-dev/allow_drumkit_prototype_actions=1 to enable.",
+            "This Drum Kit Split development action is disabled outside development builds.\n\nSet STEMwerk-dev/allow_drumkit_prototype_actions=1 to enable.",
             "STEMwerk Drum Kit Split",
             0
         )

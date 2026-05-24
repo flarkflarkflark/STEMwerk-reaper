@@ -12733,7 +12733,7 @@ end
 canStartProcessingFromDialog = function()
     if isDrumKitWorkflowActive() then
         syncDrumKitWorkflowState()
-        -- Private R&D bridge: allow Start from main UI and route to prototype runner.
+        -- Developer-preview bridge: allow Start from main UI and route to workflow runner.
         return true
     end
 
@@ -12807,7 +12807,7 @@ function drumKitImportedStemTotal(result)
 end
 
 local function runDrumKitSplitPrototypeFromMain()
-    -- Private R&D only: force async Drum Kit runner for smoke testing.
+    -- Developer-preview only: force async Drum Kit runner for smoke testing.
     local DRUM_KIT_RND_ASYNC_ENABLED = true
     local suppressDrumKitResultModal =
         (reaper.GetExtState("STEMwerk-dev", "suppress_modal_result") == "1")
@@ -12816,12 +12816,12 @@ local function runDrumKitSplitPrototypeFromMain()
     local mode = drumKitPrototypeModeFromSettings()
     local scriptPath = script_path .. "STEMwerk_DrumSep_Workflow_Prototype.lua"
 
-    debugLog("=== Drum Kit Split private R&D bridge ===")
+    debugLog("=== Drum Kit Split developer-preview bridge ===")
     debugLog("drumkit_bridge_mode=" .. tostring(mode))
     debugLog("drumkit_async_enabled=" .. (DRUM_KIT_RND_ASYNC_ENABLED and "1" or "0"))
     debugLog("drumkit_bridge_script=" .. tostring(scriptPath))
-    debugLog("drumkit_bridge_note=private_rnd_prototype_path")
-    debugLog("drumkit_bridge_note_stems=prototype_imports_available_drum_stems;ui_subset_not_wired_yet")
+    debugLog("drumkit_bridge_note=developer_preview_workflow_path")
+    debugLog("drumkit_bridge_note_stems=workflow_imports_available_drum_stems;ui_subset_not_wired_yet")
 
     local prevNoAuto = rawget(_G, "STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN")
     _G.STEMWERK_DRUMSEP_WORKFLOW_NO_AUTORUN = true
@@ -12983,8 +12983,8 @@ local function runDrumKitSplitPrototypeFromMain()
         handlePrototypeFinalResult(result)
     end
 
-    -- Give REAPER one UI tick to display the prototype status window before the
-    -- private prototype enters blocking os.execute() stages.
+    -- Give REAPER one UI tick to display the workflow status window before the
+    -- developer-preview workflow enters blocking os.execute() stages.
     reaper.defer(function()
         local okRun, errRun = xpcall(runPrototypeAfterProgressPaint, function(e)
             return tostring(e) .. "\n" .. debug.traceback("", 2)
@@ -12993,7 +12993,7 @@ local function runDrumKitSplitPrototypeFromMain()
             if type(closeDrumKitPrototypeProgressWindow) == "function" then
                 closeDrumKitPrototypeProgressWindow(nil)
             end
-            debugLog("ERROR: Drum Kit prototype runner crashed:\n" .. tostring(errRun))
+            debugLog("ERROR: Drum Kit Split workflow runner crashed:\n" .. tostring(errRun))
             showMessage(
                 "Drum Kit Split",
                 "Drum Kit Split crashed.\n\n" .. tostring(errRun),
