@@ -63,6 +63,17 @@ local function detectSystemLanguage()
     return "en"
 end
 
+local function normalizeWorkflowModeValue(value)
+    local v = tostring(value or ""):lower()
+    if v == "drumkit" or v == "drum_kit_split" then
+        return "drum_kit_split"
+    end
+    if v == "normal" or v == "standard" then
+        return "standard"
+    end
+    return ""
+end
+
 function SETTINGS_MOD.normalizeColorMode(mode)
     mode = tostring(mode or "")
     if mode == "no_track" or mode == "no_media" or mode == "off" then
@@ -237,6 +248,21 @@ function SETTINGS_MOD.load()
         end
     end
 
+    local workflowMode = C.reaper.GetExtState(C.EXT_SECTION, "workflowMode")
+    if workflowMode ~= "" and C.setWorkflowMode then
+        C.setWorkflowMode(workflowMode, { persist = false })
+    end
+
+    if C.getDrumKitStems then
+        local drumStems = C.getDrumKitStems() or {}
+        for i, stem in ipairs(drumStems) do
+            local sel = C.reaper.GetExtState(C.EXT_SECTION, "stem_drumkit_" .. stem.name)
+            if sel ~= "" then
+                drumStems[i].selected = (sel == "1")
+            end
+        end
+    end
+
     -- Keep the saved model selection intact here; run/start validation handles availability.
 end
 
@@ -289,9 +315,21 @@ function SETTINGS_MOD.save()
         C.SETTINGS.device = "cpu"
     end
     C.reaper.SetExtState(C.EXT_SECTION, "device", C.SETTINGS.device, true)
+    do
+        local persistedMode = normalizeWorkflowModeValue(C.reaper.GetExtState(C.EXT_SECTION, "workflowMode"))
+        local computedMode = normalizeWorkflowModeValue(C.getWorkflowMode and C.getWorkflowMode() or "standard")
+        local modeToStore = (persistedMode ~= "" and persistedMode) or (computedMode ~= "" and computedMode) or "standard"
+        C.reaper.SetExtState(C.EXT_SECTION, "workflowMode", modeToStore, true)
+    end
 
     for _, stem in ipairs(C.STEMS) do
         C.reaper.SetExtState(C.EXT_SECTION, "stem_" .. stem.name, stem.selected and "1" or "0", true)
+    end
+    if C.getDrumKitStems then
+        local drumStems = C.getDrumKitStems() or {}
+        for _, stem in ipairs(drumStems) do
+            C.reaper.SetExtState(C.EXT_SECTION, "stem_drumkit_" .. stem.name, stem.selected and "1" or "0", true)
+        end
     end
 
     SETTINGS_MOD.persistWindowPos()

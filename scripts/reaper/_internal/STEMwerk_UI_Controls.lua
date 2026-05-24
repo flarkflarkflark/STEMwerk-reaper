@@ -90,6 +90,7 @@ local function drawUtilityControlsCore(ctx)
     local rightMouseDown = ctx.rightMouseDown or (gfx.mouse_cap & 2 == 2)
     local state = ctx.state or {}
     local tooltipsOn = not (SETTINGS and SETTINGS.tooltips == false)
+    local allowGlobalTooltipWrite = (ctx.allowGlobalTooltipWrite ~= false)
 
     local iconScale = ctx.iconScale or 0.66
     local themeSize = ctx.themeSize or math.max(S(12), math.floor(S(20) * iconScale + 0.5))
@@ -111,9 +112,11 @@ local function drawUtilityControlsCore(ctx)
         ctx.tooltipText = T("tooltip_theme") or (T("tooltip_theme") or "Toggle dark / light.")
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
-        GUI.tooltip  = ctx.tooltipText
-        GUI.tooltipX = ctx.tooltipX
-        GUI.tooltipY = ctx.tooltipY
+        if allowGlobalTooltipWrite then
+            GUI.tooltip  = ctx.tooltipText
+            GUI.tooltipX = ctx.tooltipX
+            GUI.tooltipY = ctx.tooltipY
+        end
     end
 
     -- Language box (left of D/L box, identical visual style)
@@ -157,9 +160,11 @@ local function drawUtilityControlsCore(ctx)
         ctx.tooltipText = T("tooltip_lang") or (T("tooltip_lang") or "Change language. Right-click: toggle tooltips.")
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
-        GUI.tooltip  = ctx.tooltipText
-        GUI.tooltipX = ctx.tooltipX
-        GUI.tooltipY = ctx.tooltipY
+        if allowGlobalTooltipWrite then
+            GUI.tooltip  = ctx.tooltipText
+            GUI.tooltipX = ctx.tooltipX
+            GUI.tooltipY = ctx.tooltipY
+        end
     end
 
     -- [UI] mode box (rightmost, layout: [EN] [D] [UI])
@@ -188,9 +193,11 @@ local function drawUtilityControlsCore(ctx)
         ctx.tooltipText = T("tooltip_ui_mode") or (T("tooltip_ui_mode") or "Switch UI mode.")
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
-        GUI.tooltip  = ctx.tooltipText
-        GUI.tooltipX = ctx.tooltipX
-        GUI.tooltipY = ctx.tooltipY
+        if allowGlobalTooltipWrite then
+            GUI.tooltip  = ctx.tooltipText
+            GUI.tooltipX = ctx.tooltipX
+            GUI.tooltipY = ctx.tooltipY
+        end
     end
 end
 

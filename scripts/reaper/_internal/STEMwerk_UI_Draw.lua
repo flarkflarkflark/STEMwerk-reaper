@@ -189,6 +189,11 @@ function M.drawTooltip()
     if GUI.richTooltip then
         gfx.setfont(1, "Arial", S(10))
         local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
+        local isDrumKitWorkflowActiveFn = optionalDep("isDrumKitWorkflowActive")
+        local getActiveStemListFn = optionalDep("getActiveStemListForCurrentWorkflow")
+        local stemFallbackList = optionalDep("STEMS") or STEMS
+        local drumKitMode = (type(isDrumKitWorkflowActiveFn) == "function") and isDrumKitWorkflowActiveFn() or false
+        local activeStemSource = (type(getActiveStemListFn) == "function") and getActiveStemListFn() or stemFallbackList
         local padding = S(8)
         local lineH = S(14)
         local stemNameKeyById = {
@@ -221,8 +226,8 @@ function M.drawTooltip()
         local titleColors = STEM_BORDER_COLORS
 
         local selectedStems = {}
-        for _, stem in ipairs(STEMS) do
-            if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
+        for _, stem in ipairs(activeStemSource) do
+            if stem.selected and (drumKitMode or not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
                 table.insert(selectedStems, { name = stemDisplayName(stem), color = stem.color })
             end
         end
@@ -368,11 +373,13 @@ function M.drawTooltip()
         gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
         gfx.x = labelX
         gfx.y = currentY
-        gfx.drawstr(T("rich_stems_label") or "Stems")
+        local richStemsLabel = drumKitMode and (T("drum_stems_label") or "Drum Stems:") or (T("rich_stems_label") or "Stems")
+        richStemsLabel = tostring(richStemsLabel):gsub(":%s*$", "")
+        gfx.drawstr(richStemsLabel)
 
         local activeStems = {}
-        for _, stem in ipairs(STEMS) do
-            if stem.selected and (not stem.sixStemOnly or is6Stem) then
+        for _, stem in ipairs(activeStemSource) do
+            if stem.selected and (drumKitMode or not stem.sixStemOnly or is6Stem) then
                 table.insert(activeStems, stem)
             end
         end
