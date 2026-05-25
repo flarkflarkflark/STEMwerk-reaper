@@ -2034,8 +2034,15 @@ end
 
 local function verifyRuntimePaths(state)
     state = state or {}
+    local pythonCandidate = state.PYTHON_PATH or ""
+    if OS == "macOS" then
+        local venvCandidate = trim(state.VENV_PYTHON_PATH or state.VENV_PYTHON or "")
+        if venvCandidate ~= "" then
+            pythonCandidate = venvCandidate
+        end
+    end
     local resolved = {
-        pythonPath = resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or ""),
+        pythonPath = resolvePath(pythonCandidate ~= "" and pythonCandidate or state.VENV_PYTHON or ""),
         ffmpegPath = resolvePath(state.FFMPEG_PATH or ""),
     }
     local errors = {}
@@ -2401,6 +2408,10 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
 
     if (effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) then
         finalMessage[#finalMessage + 1] = "Setup complete — run STEMwerk.lua from the REAPER Action List"
+        if OS == "macOS" and MAC_ARCH == "x86_64" and profile == "mac-cpu" and backend == "cpu" then
+            finalMessage[#finalMessage + 1] = "Setup completed using Intel macOS CPU fallback."
+            finalMessage[#finalMessage + 1] = "MPS is unavailable on Intel Macs; CPU processing is expected."
+        end
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)
         finalMessage[#finalMessage + 1] = "FFmpeg path: " .. tostring(verification.ffmpegPath)

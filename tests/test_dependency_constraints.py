@@ -367,6 +367,28 @@ def test_macos_bootstrap_reports_unsupported_python_without_python_missing_ambig
     assert "SUPPORTED_PYTHON_RANGE=3.10-3.12" in script
 
 
+def test_setup_internal_prefers_macos_venv_python_for_runtime_verification():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'local pythonCandidate = state.PYTHON_PATH or ""' in script
+    assert 'if OS == "macOS" then' in script
+    assert 'local venvCandidate = trim(state.VENV_PYTHON_PATH or state.VENV_PYTHON or "")' in script
+    assert "pythonCandidate = venvCandidate" in script
+    assert 'pythonPath = resolvePath(pythonCandidate ~= "" and pythonCandidate or state.VENV_PYTHON or "")' in script
+
+
+def test_setup_internal_marks_intel_macos_cpu_fallback_success_as_expected():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'if OS == "macOS" and MAC_ARCH == "x86_64" and profile == "mac-cpu" and backend == "cpu" then' in script
+    assert "Setup completed using Intel macOS CPU fallback." in script
+    assert "MPS is unavailable on Intel Macs; CPU processing is expected." in script
+
+
 def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
     from pathlib import Path
 
