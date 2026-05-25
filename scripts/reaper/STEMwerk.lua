@@ -1085,7 +1085,7 @@ WORKFLOW_MODE_DRUM_KIT = "drum_kit_split"
 DRUM_KIT_WORKFLOW_MODE = WORKFLOW_MODE_STANDARD
 DRUM_KIT_NORMAL_STEM_SELECTIONS = nil
 
--- PRIVATE R&D ONLY: Drum Kit Split workflow stems.
+-- Drum Kit Split workflow stems.
 -- Stems always represent the outputs this workflow will import.
 DRUM_KIT_STEMS = {
     { name = "Kick",   color = {255, 170, 120}, file = "kick.wav",  selected = true, key = "1", sixStemOnly = false },
@@ -5487,9 +5487,10 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  htdemucs_6s  6-Stem")
                     addLine(l, "")
                     addHead(l, tr("help_native_drumkit_split", "Drum Kit Split"))
-                    addLine(l, "  " .. tr("help_native_drumkit_step_1", "1) Isolates the drum stem from selected audio"))
-                    addLine(l, "  " .. tr("help_native_drumkit_step_2", "2) Splits that drum stem into Kick, Snare, Toms, Hi-Hat, Ride, Crash"))
-                    addLine(l, "  " .. tr("help_native_drumkit_model_note", "Fast / Quality / Expanded affect only the first isolation step."))
+                    addLine(l, "  " .. tr("help_native_drumkit_step_1", "Split an existing drum track into kit pieces."))
+                    addLine(l, "  " .. tr("help_native_drumkit_step_2", "Outputs: Kick, Snare, Toms, Hi-Hat, Ride, Crash."))
+                    addLine(l, "  " .. tr("help_native_drumkit_model_note", "Best for already-isolated drums, drum stems, drum buses, or loops."))
+                    addLine(l, "  " .. tr("help_native_drumkit_guidance", "For full songs, run All Stems first and then split the drum stem."))
                     addLine(l, "")
                     addHead(l, tr("help_native_output", "Output"))
                     addLine(l, "  " .. tr("new_tracks", "New tracks"))
@@ -7505,8 +7506,8 @@ local function drawArtGallery()
 
         local title = trSafe("help_drumkit_title", "Drum Kit Split")
         local parts = T("help_drumkit_parts") or "Kick · Snare · Toms · Hi-Hat · Ride · Crash"
-        local line1 = T("help_drumkit_line1") or "First isolate the drum stem."
-        local line2 = T("help_drumkit_line2") or "Then split it into drum kit parts."
+        local line1 = T("help_drumkit_line1") or "Split an existing drum track."
+        local line2 = T("help_drumkit_line2") or "Use drum stems, buses, loops, or selected drum items."
         local shortcut = T("help_drumkit_line3") or "Shortcut: X"
 
         -- Title — uses Drums stem accent (blue) so it visually ties to the drum row at left
@@ -12002,7 +12003,7 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
-    local presetLabelDrumKit = "Drum Kit (X)"
+    local presetLabelDrumKit = (T("workflow_drumkit_label") or "Drum Kit Split") .. " (X)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
@@ -12076,7 +12077,7 @@ function renderMainColumns(ctx)
         presetY,
         colW,
         btnH,
-        T("tooltip_preset_drumkit") or "Split drums into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
+        T("tooltip_preset_drumkit") or "Split an existing drum track into Kick, Snare, Toms, Hi-Hat, Ride, and Crash.",
         "X",
         {140, 110, 230}
     )
@@ -12166,7 +12167,7 @@ function renderMainColumns(ctx)
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     drawColumnHeader(T("model"), col3X, modelColW, mainHeaderFont, contentTop)
     local modelHeaderTip = drumKitMode
-        and (T("tooltip_model_drumkit_section") or "Fast, Quality and Expanded change the parent drum isolation model before Drum Kit Split.")
+        and (T("tooltip_model_drumkit_section") or "Choose the processing model used before Drum Kit Split imports kit pieces.")
         or (T("tooltip_section_model") or "Choose speed/quality and stem model.")
     setTooltip(col3X, contentTop, modelColW, S(16), modelHeaderTip)
     gfx.setfont(1, "Arial", S(13))
@@ -12258,7 +12259,7 @@ function renderMainColumns(ctx)
         SETTINGS.postProcessTakes = "none"
     end
     if forceNewTracksForDrumKit then
-        setTooltip(col5X, outY, outBoxW, btnH, "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.")
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_drumkit_new_tracks") or "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.")
     else
         setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
     end
@@ -12268,15 +12269,15 @@ function renderMainColumns(ctx)
     if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, inPlaceColor, outBoxW, nil, nil, outputBtnFontSize) then
         if inPlaceDisabled then
             openDialogWarning(
-                "Drum Kit Split Output",
-                "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.\n\nIn-place output is disabled for Drum Kit Split."
+                T("drumkit_output_title") or "Drum Kit Split Output",
+                T("drumkit_output_in_place_disabled") or "Drum Kit Split creates multiple drum-kit stems and imports them as new tracks.\n\nIn-place output is disabled for Drum Kit Split."
             )
         else
             SETTINGS.createNewTracks = false
         end
     end
     if inPlaceDisabled then
-        setTooltip(col5X, outY, outBoxW, btnH, "Drum Kit Split mode forces New tracks output.")
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_drumkit_forces_new_tracks") or "Drum Kit Split mode forces New tracks output.")
     else
         setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
     end
@@ -12754,7 +12755,7 @@ end
 canStartProcessingFromDialog = function()
     if isDrumKitWorkflowActive() then
         syncDrumKitWorkflowState()
-        -- Developer-preview bridge: allow Start from main UI and route to workflow runner.
+        -- Main UI route: Start from the dialog and route to the Drum Kit workflow runner.
         return true
     end
 
