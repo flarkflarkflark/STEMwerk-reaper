@@ -595,6 +595,8 @@ local function prettySetupReason(reason)
             part = "STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
         elseif lower == "venv_create_failed" then
             part = "Could not create Python virtual environment"
+        elseif lower == "venv_create_failed_missing_ensurepip" or lower == "python_venv_module_missing" then
+            part = "Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
         elseif lower == "pip_upgrade_failed" then
             part = "Could not upgrade pip/setuptools/wheel"
         elseif lower == "ffmpeg_install_failed" then
@@ -611,6 +613,10 @@ local function prettySetupReason(reason)
             part = "stemwerk-core is missing after setup"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "missing_diffq_or_build_tools" then
+            part = "Backend dependency build failed because no C compiler was found. Install clang/gcc/build tools, then run Repair/Rebuild again."
+        elseif lower == "audio_separator_deps_missing" then
+            part = "audio-separator runtime dependencies are missing"
         elseif lower == "audio_separator_torch_unavailable" then
             part = "audio-separator install failed: PyTorch is unavailable for this macOS/Python/architecture combination"
         elseif lower == "audio_separator_torch_unavailable_macos_intel" then
@@ -738,6 +744,10 @@ local function prettyBackendReason(reason)
             part = "Unsupported Python version (need 3.10-3.12)"
         elseif lower == "python_not_found" then
             part = "No supported Python found (need 3.10-3.12)"
+        elseif lower == "audio_separator_install_failed" then
+            part = "audio-separator install failed"
+        elseif lower == "audio_separator_missing" or lower == "audio_separator_missing_after_setup" then
+            part = "audio-separator runtime is missing"
         elseif lower == "bootstrap_cuda_confirmed" then
             part = "CUDA runtime confirmed by installer"
         elseif lower == "bootstrap_directml_confirmed" then
@@ -752,6 +762,11 @@ local function prettyBackendReason(reason)
         end
     end
     return table.concat(parts, "; ")
+end
+
+local function stalePythonBackendReason(reason)
+    local lower = trim(reason):lower()
+    return lower == "python_missing" or lower == "python_not_found" or lower == "python_unsupported" or lower == "unsupported_python_version"
 end
 
 local function prettyBackendNote(note)
@@ -1366,6 +1381,21 @@ local function writeCapabilities(path, data, deviceOut)
     f:write("SUPPORTED_PYTHON_FOUND=" .. tostring(data.supportedPythonFound or "") .. "\n")
     f:write("DETECTED_PYTHON_VERSION=" .. tostring(data.detectedPythonVersion or "") .. "\n")
     f:write("SUPPORTED_PYTHON_RANGE=" .. tostring(data.supportedPythonRange or "") .. "\n")
+    f:write("MANAGED_PYTHON_ENABLED=" .. tostring(data.managedPythonEnabled or "") .. "\n")
+    f:write("MANAGED_PYTHON_STATUS=" .. tostring(data.managedPythonStatus or "") .. "\n")
+    f:write("MANAGED_PYTHON_VERSION=" .. tostring(data.managedPythonVersion or "") .. "\n")
+    f:write("MANAGED_PYTHON_RELEASE=" .. tostring(data.managedPythonRelease or "") .. "\n")
+    f:write("MANAGED_PYTHON_PLATFORM=" .. tostring(data.managedPythonPlatform or "") .. "\n")
+    f:write("MANAGED_PYTHON_ARCH=" .. tostring(data.managedPythonArch or "") .. "\n")
+    f:write("MANAGED_PYTHON_URL=" .. tostring(data.managedPythonUrl or "") .. "\n")
+    f:write("MANAGED_PYTHON_SHA256_OK=" .. tostring(data.managedPythonSha256Ok or "") .. "\n")
+    f:write("MANAGED_PYTHON_PATH=" .. tostring(data.managedPythonPath or "") .. "\n")
+    f:write("MANAGED_PYTHON_REPLACED=" .. tostring(data.managedPythonReplaced or "") .. "\n")
+    f:write("MANAGED_PYTHON_ROLLBACK=" .. tostring(data.managedPythonRollback or "") .. "\n")
+    f:write("SYSTEM_PYTHON_PATH=" .. tostring(data.systemPythonPath or "") .. "\n")
+    f:write("SYSTEM_PYTHON_VERSION=" .. tostring(data.systemPythonVersion or "") .. "\n")
+    f:write("SYSTEM_PYTHON_USED=" .. tostring(data.systemPythonUsed or "") .. "\n")
+    f:write("VENV_PYTHON_PATH=" .. tostring(data.venvPythonPath or "") .. "\n")
     f:write("PYTHON_PATH=" .. tostring(data.pythonPath or "") .. "\n")
     f:write("FFMPEG_PATH=" .. tostring(data.ffmpegPath or "") .. "\n")
     f:write("RUNTIME_BASE=" .. tostring(data.runtimeBase or "") .. "\n")
@@ -1373,6 +1403,11 @@ local function writeCapabilities(path, data, deviceOut)
     f:write("BOOTSTRAP_REASON=" .. tostring(data.bootstrapReason or "") .. "\n")
     f:write("VERIFICATION=" .. tostring(data.verification or "") .. "\n")
     f:write("AUDIO_SEPARATOR=" .. tostring(data.audioSeparator or "") .. "\n")
+    f:write("AUDIO_SEPARATOR_IMPORT=" .. tostring(data.audioSeparatorImport or "") .. "\n")
+    f:write("AUDIO_SEPARATOR_DEPS_COMPLETE=" .. tostring(data.audioSeparatorDepsComplete or "") .. "\n")
+    f:write("BACKEND_DEPS_COMPLETE=" .. tostring(data.backendDepsComplete or "") .. "\n")
+    f:write("BACKEND_DEPS_REASON=" .. tostring(data.backendDepsReason or "") .. "\n")
+    f:write("BUILD_TOOLS_MISSING=" .. tostring(data.buildToolsMissing or "") .. "\n")
     f:write("STEMWERK_CORE=" .. tostring(data.stemwerkCore or "") .. "\n")
     f:write("TORCH_VERSION=" .. tostring(data.torchVersion or "") .. "\n")
     f:write("TORCHAUDIO_VERSION=" .. tostring(data.torchaudioVersion or "") .. "\n")
@@ -2162,6 +2197,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
     local backend, backendReason = detectBackendFromProbe(deviceOut, envJson)
+    local function hasError(key)
+        for _, e in ipairs(errors or {}) do
+            if e == key then return true end
+        end
+        return false
+    end
     if probeErr and probeErr ~= "" then
         backendReason = probeErr
     end
@@ -2196,10 +2237,19 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             backendReason = "bootstrap_directml_confirmed"
         end
     end
+    if hasError("audio_separator_missing") and trim(state.STATUS_REASON or "") == "audio_separator_install_failed" then
+        backendReason = "audio_separator_install_failed"
+    elseif hasError("audio_separator_missing") and stalePythonBackendReason(backendReason) and verification.pythonOk then
+        backendReason = "audio_separator_missing"
+    elseif stalePythonBackendReason(backendReason) and verification.pythonOk then
+        backendReason = ""
+    end
     if state.BACKEND_REASON and state.BACKEND_REASON ~= "" then
         local priorBackend = trim(state.BACKEND or "")
         local sameBackend = (priorBackend == "") or (priorBackend == backend)
-        if backend == "cpu" or sameBackend then
+        if stalePythonBackendReason(state.BACKEND_REASON) and verification.pythonOk then
+            -- Ignore stale Python discovery failures once managed/venv Python verifies.
+        elseif backend == "cpu" or sameBackend then
             if backendReason ~= "" then
                 backendReason = backendReason .. "; " .. state.BACKEND_REASON
             else
@@ -2212,12 +2262,6 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local backendNoteLabel = prettyBackendNote(backendNote)
     local profile = profileForBackend(backend)
 
-    local function hasError(key)
-        for _, e in ipairs(errors or {}) do
-            if e == key then return true end
-        end
-        return false
-    end
     local venvExists = runtime and runtime.venvPython and fileExists(runtime.venvPython)
     local audioStatus = "ok"
     local coreStatus = "ok"
@@ -2240,6 +2284,26 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         supportedPythonFound = verification.supportedPythonFound,
         detectedPythonVersion = verification.detectedPythonVersion,
         supportedPythonRange = verification.supportedPythonRange,
+        managedPythonEnabled = state.MANAGED_PYTHON_ENABLED or "",
+        managedPythonStatus = state.MANAGED_PYTHON_STATUS or "",
+        managedPythonVersion = state.MANAGED_PYTHON_VERSION or "",
+        managedPythonRelease = state.MANAGED_PYTHON_RELEASE or "",
+        managedPythonPlatform = state.MANAGED_PYTHON_PLATFORM or "",
+        managedPythonArch = state.MANAGED_PYTHON_ARCH or "",
+        managedPythonUrl = state.MANAGED_PYTHON_URL or "",
+        managedPythonSha256Ok = state.MANAGED_PYTHON_SHA256_OK or "",
+        managedPythonPath = state.MANAGED_PYTHON_PATH or "",
+        managedPythonReplaced = state.MANAGED_PYTHON_REPLACED or "",
+        managedPythonRollback = state.MANAGED_PYTHON_ROLLBACK or "",
+        audioSeparatorImport = state.AUDIO_SEPARATOR_IMPORT or "",
+        audioSeparatorDepsComplete = state.AUDIO_SEPARATOR_DEPS_COMPLETE or "",
+        backendDepsComplete = state.BACKEND_DEPS_COMPLETE or "",
+        backendDepsReason = state.BACKEND_DEPS_REASON or "",
+        buildToolsMissing = state.BUILD_TOOLS_MISSING or "",
+        systemPythonPath = state.SYSTEM_PYTHON_PATH or "",
+        systemPythonVersion = state.SYSTEM_PYTHON_VERSION or "",
+        systemPythonUsed = state.SYSTEM_PYTHON_USED or "",
+        venvPythonPath = state.VENV_PYTHON_PATH or state.VENV_PYTHON or "",
         torchVersion = verification.torchVersion,
         torchaudioVersion = verification.torchaudioVersion,
         torchSupported = verification.torchSupported,

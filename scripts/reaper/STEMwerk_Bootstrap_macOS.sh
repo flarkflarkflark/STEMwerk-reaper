@@ -104,6 +104,68 @@ accept_python_version() {
   return 1
 }
 
+verify_audio_separator_runtime_deps() {
+  if [ -z "${VENV_PY}" ] || [ ! -x "${VENV_PY}" ]; then
+    AUDIO_SEPARATOR_IMPORT="failed"
+    AUDIO_SEPARATOR_DEPS_COMPLETE="no"
+    BACKEND_DEPS_COMPLETE="no"
+    BACKEND_DEPS_REASON="${BACKEND_DEPS_REASON:-missing_venv_python}"
+    return 1
+  fi
+  _probe="$("${VENV_PY}" - <<'PY' 2>/dev/null || true
+import importlib
+errors = []
+try:
+    import audio_separator  # noqa: F401
+except Exception as exc:
+    errors.append("audio_separator:" + str(exc))
+for name in (
+    "beartype",
+    "diffq",
+    "einops",
+    "julius",
+    "librosa",
+    "llvmlite",
+    "ml_collections",
+    "onnx",
+    "onnx2torch",
+    "pydub",
+    "requests",
+    "resampy",
+    "rotary_embedding_torch",
+    "samplerate",
+    "scipy",
+    "six",
+    "tqdm",
+    "yaml",
+):
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        errors.append(name + ":" + str(exc))
+if errors:
+    print("missing|" + ";".join(errors))
+else:
+    print("ok")
+PY
+)"
+  case "${_probe}" in
+    ok)
+      AUDIO_SEPARATOR_IMPORT="ok"
+      AUDIO_SEPARATOR_DEPS_COMPLETE="yes"
+      BACKEND_DEPS_COMPLETE="yes"
+      BACKEND_DEPS_REASON=""
+      return 0
+      ;;
+  esac
+  AUDIO_SEPARATOR_IMPORT="failed"
+  AUDIO_SEPARATOR_DEPS_COMPLETE="no"
+  BACKEND_DEPS_COMPLETE="no"
+  BACKEND_DEPS_REASON="${BACKEND_DEPS_REASON:-audio_separator_deps_missing}"
+  log "audio-separator dependency verification failed: ${_probe}"
+  return 1
+}
+
 log_python_candidate() {
   _candidate_path="$1"
   _candidate_version="$2"
@@ -385,6 +447,8 @@ evaluate_python_candidate() {
   if [ -z "${FIRST_UNSUPPORTED_PYTHON_PATH}" ]; then
     FIRST_UNSUPPORTED_PYTHON_PATH="${_resolved_path}"
     FIRST_UNSUPPORTED_PYTHON_VERSION="${_version_text}"
+    SYSTEM_PYTHON_PATH="${_resolved_path}"
+    SYSTEM_PYTHON_VERSION="${_version_text}"
   fi
   return 1
 }
@@ -454,6 +518,10 @@ install_managed_python_runtime() {
   return 1
 }
 
+if [ -f "${SCRIPT_DIR}/_internal/STEMwerk_Managed_Python.sh" ]; then
+  . "${SCRIPT_DIR}/_internal/STEMwerk_Managed_Python.sh"
+fi
+
 write_state() {
   if [ -n "${STATE_FILE}" ]; then
     {
@@ -465,6 +533,11 @@ write_state() {
       [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
       [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
       [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
+      echo "AUDIO_SEPARATOR_IMPORT=${AUDIO_SEPARATOR_IMPORT}"
+      echo "AUDIO_SEPARATOR_DEPS_COMPLETE=${AUDIO_SEPARATOR_DEPS_COMPLETE}"
+      echo "BACKEND_DEPS_COMPLETE=${BACKEND_DEPS_COMPLETE}"
+      [ -n "${BACKEND_DEPS_REASON}" ] && echo "BACKEND_DEPS_REASON=${BACKEND_DEPS_REASON}"
+      echo "BUILD_TOOLS_MISSING=${BUILD_TOOLS_MISSING}"
       if [ -n "${PYTHON}" ]; then
         echo "SUPPORTED_PYTHON_FOUND=yes"
         [ -n "${SELECTED_PYTHON_VERSION}" ] && echo "DETECTED_PYTHON_VERSION=${SELECTED_PYTHON_VERSION}"
@@ -475,8 +548,24 @@ write_state() {
         [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && echo "DETECTED_PYTHON_PATH=${FIRST_UNSUPPORTED_PYTHON_PATH}"
       fi
       echo "SUPPORTED_PYTHON_RANGE=3.10-3.12"
+      echo "MANAGED_PYTHON_ENABLED=${MANAGED_PYTHON_ENABLED}"
+      echo "MANAGED_PYTHON_STATUS=${MANAGED_PYTHON_STATUS}"
+      echo "MANAGED_PYTHON_VERSION=${MANAGED_PYTHON_VERSION}"
+      echo "MANAGED_PYTHON_RELEASE=${MANAGED_PYTHON_RELEASE}"
+      echo "MANAGED_PYTHON_PLATFORM=${MANAGED_PYTHON_PLATFORM}"
+      echo "MANAGED_PYTHON_ARCH=${MANAGED_PYTHON_ARCH}"
+      echo "MANAGED_PYTHON_URL=${MANAGED_PYTHON_URL}"
+      echo "MANAGED_PYTHON_SHA256_OK=${MANAGED_PYTHON_SHA256_OK}"
+      echo "MANAGED_PYTHON_PATH=${MANAGED_PYTHON_PATH}"
+      echo "MANAGED_PYTHON_REPLACED=${MANAGED_PYTHON_REPLACED}"
+      echo "MANAGED_PYTHON_ROLLBACK=${MANAGED_PYTHON_ROLLBACK}"
+      [ -n "${MANAGED_PYTHON_ERROR}" ] && echo "MANAGED_PYTHON_ERROR=${MANAGED_PYTHON_ERROR}"
+      echo "SYSTEM_PYTHON_PATH=${SYSTEM_PYTHON_PATH}"
+      echo "SYSTEM_PYTHON_VERSION=${SYSTEM_PYTHON_VERSION}"
+      echo "SYSTEM_PYTHON_USED=${SYSTEM_PYTHON_USED}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
+      [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
       [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
@@ -595,6 +684,30 @@ SELECTED_PYTHON_VERSION=""
 FIRST_UNSUPPORTED_PYTHON_PATH=""
 FIRST_UNSUPPORTED_PYTHON_VERSION=""
 SEEN_PYTHON_PATHS="|"
+MANAGED_PYTHON_ENABLED="yes"
+MANAGED_PYTHON_STATUS="missing"
+MANAGED_PYTHON_VERSION=""
+MANAGED_PYTHON_RELEASE=""
+MANAGED_PYTHON_PLATFORM=""
+MANAGED_PYTHON_ARCH=""
+MANAGED_PYTHON_URL=""
+MANAGED_PYTHON_SHA256_OK="no"
+MANAGED_PYTHON_PATH=""
+MANAGED_PYTHON_ERROR=""
+MANAGED_PYTHON_REPLACED="no"
+MANAGED_PYTHON_ROLLBACK="no"
+BACKEND_DEPS_COMPLETE="unknown"
+BACKEND_DEPS_REASON=""
+BUILD_TOOLS_MISSING="no"
+AUDIO_SEPARATOR_IMPORT="unknown"
+AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
+SYSTEM_PYTHON_PATH=""
+SYSTEM_PYTHON_VERSION=""
+SYSTEM_PYTHON_USED="no"
+
+if command -v managed_python_init_state >/dev/null 2>&1; then
+  managed_python_init_state
+fi
 
 set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 
@@ -612,7 +725,15 @@ if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
 fi
 
 if [ -z "${PYTHON}" ] && find_managed_python; then
+  MANAGED_PYTHON_STATUS="existing"
+  MANAGED_PYTHON_PATH="${PYTHON}"
   log "Selected STEMwerk-managed Python interpreter: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
+fi
+
+if [ -z "${PYTHON}" ]; then
+  if install_managed_python_runtime && find_managed_python; then
+    log "Selected STEMwerk-managed Python interpreter after acquisition: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
+  fi
 fi
 
 if [ -z "${PYTHON}" ]; then
@@ -650,34 +771,38 @@ if [ -z "${PYTHON}" ]; then
   done
 fi
 
-BREW=""
-if [ -x "/opt/homebrew/bin/brew" ]; then
-  BREW="/opt/homebrew/bin/brew"
-elif [ -x "/usr/local/bin/brew" ]; then
-  BREW="/usr/local/bin/brew"
-else
-  BREW="$(command_path brew || true)"
-fi
-
 set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
 
 if [ -z "${PYTHON}" ]; then
   if [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
     log "System Python ${FIRST_UNSUPPORTED_PYTHON_VERSION} is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
   fi
-  if install_managed_python_runtime && find_managed_python; then
-    log "Selected STEMwerk-managed Python interpreter after acquisition: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
-  fi
 fi
 
 if [ -z "${PYTHON}" ]; then
   if [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
-    PYTHON_MESSAGE="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
+    if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
+      PYTHON_MESSAGE="STEMwerk managed Python is not available for this platform yet."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "sha256_mismatch" ]; then
+      PYTHON_MESSAGE="Managed Python download failed verification and was not installed."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "download_failed" ] || [ "${MANAGED_PYTHON_ERROR}" = "download_tool_missing" ]; then
+      PYTHON_MESSAGE="STEMwerk could not download its managed Python runtime. Check your internet connection or use a bundled/offline installer."
+    else
+      PYTHON_MESSAGE="STEMwerk could not install its managed Python runtime: ${MANAGED_PYTHON_ERROR:-managed_python_unavailable}."
+    fi
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
     set_status "missing_python" "managed_python_unavailable"
   else
-    PYTHON_MESSAGE="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
+    if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
+      PYTHON_MESSAGE="STEMwerk managed Python is not available for this platform yet."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "sha256_mismatch" ]; then
+      PYTHON_MESSAGE="Managed Python download failed verification and was not installed."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "download_failed" ] || [ "${MANAGED_PYTHON_ERROR}" = "download_tool_missing" ]; then
+      PYTHON_MESSAGE="STEMwerk could not download its managed Python runtime. Check your internet connection or use a bundled/offline installer."
+    else
+      PYTHON_MESSAGE="STEMwerk could not install its managed Python runtime: ${MANAGED_PYTHON_ERROR:-managed_python_unavailable}."
+    fi
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
     set_status "missing_python" "managed_python_unavailable"
@@ -685,14 +810,26 @@ if [ -z "${PYTHON}" ]; then
   write_state
   exit 1
 else
+  case "${PYTHON}" in
+    "${RUNTIME_BASE}/python"/*)
+      MANAGED_PYTHON_PATH="${PYTHON}"
+      ;;
+    *)
+      SYSTEM_PYTHON_USED="yes"
+      SYSTEM_PYTHON_PATH="${PYTHON}"
+      SYSTEM_PYTHON_VERSION="${SELECTED_PYTHON_VERSION}"
+      ;;
+  esac
   log_macos_diagnostics
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    log "Creating STEMwerk virtual environment..."
     log "Creating venv with ${PYTHON}"
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
   fi
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     "${VENV_PY}" -m pip install --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
+    log "Installing pinned STEMwerk backend packages..."
     "${VENV_PY}" -m pip install "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
     if ! install_pinned_torch_stack; then
       if [ "${MAC_ARCH}" = "x86_64" ]; then
@@ -796,22 +933,6 @@ do
   fi
 done
 
-if [ -z "${FFMPEG}" ] && [ -n "${BREW}" ]; then
-  log "Installing ffmpeg via brew"
-  "${BREW}" install ffmpeg >> "${LOG_FILE}" 2>&1 || true
-  if [ -x "/opt/homebrew/bin/ffmpeg" ]; then
-    FFMPEG="/opt/homebrew/bin/ffmpeg"
-  elif [ -x "/usr/local/bin/ffmpeg" ]; then
-    FFMPEG="/usr/local/bin/ffmpeg"
-  elif [ -x "/opt/local/bin/ffmpeg" ]; then
-    FFMPEG="/opt/local/bin/ffmpeg"
-  elif [ -x "/opt/homebrew/opt/ffmpeg/bin/ffmpeg" ]; then
-    FFMPEG="/opt/homebrew/opt/ffmpeg/bin/ffmpeg"
-  elif [ -x "/usr/local/opt/ffmpeg/bin/ffmpeg" ]; then
-    FFMPEG="/usr/local/opt/ffmpeg/bin/ffmpeg"
-  fi
-fi
-
 if [ -z "${FFMPEG}" ]; then
   set_status "missing_ffmpeg" "ffmpeg_not_found"
 fi
@@ -822,6 +943,7 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   "${VENV_PY}" -c "import numba" >/dev/null 2>&1 || set_status "deps_failed" "numba_missing_after_setup"
   log_final_dependency_versions "${VENV_PY}"
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
+  verify_audio_separator_runtime_deps || set_status "deps_failed" "audio_separator_install_failed"
   "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
   "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 || set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
   if ! assert_pinned_torch_stack "${VENV_PY}"; then
@@ -836,4 +958,5 @@ fi
 if [ "${STATUS}" != "ok" ]; then
   exit 1
 fi
+log "Runtime verification passed."
 exit 0

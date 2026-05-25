@@ -6,6 +6,9 @@ BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 PINNED_TORCH_VERSION="2.5.1"
 PINNED_TORCHAUDIO_VERSION="2.5.1"
 PINNED_TORCHVISION_VERSION="0.20.1"
+PINNED_NUMPY_VERSION="1.26.4"
+PINNED_NUMBA_VERSION="0.59.1"
+PINNED_LLVM_VERSION="0.42.0"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -68,12 +71,33 @@ write_state() {
       [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
       [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
       [ -n "${BACKEND_NOTE}" ] && echo "BACKEND_NOTE=${BACKEND_NOTE}"
+      echo "AUDIO_SEPARATOR_IMPORT=${AUDIO_SEPARATOR_IMPORT}"
+      echo "AUDIO_SEPARATOR_DEPS_COMPLETE=${AUDIO_SEPARATOR_DEPS_COMPLETE}"
+      echo "BACKEND_DEPS_COMPLETE=${BACKEND_DEPS_COMPLETE}"
+      [ -n "${BACKEND_DEPS_REASON}" ] && echo "BACKEND_DEPS_REASON=${BACKEND_DEPS_REASON}"
+      echo "BUILD_TOOLS_MISSING=${BUILD_TOOLS_MISSING}"
       [ -n "${SUPPORTED_PYTHON_FOUND}" ] && echo "SUPPORTED_PYTHON_FOUND=${SUPPORTED_PYTHON_FOUND}"
       [ -n "${DETECTED_PYTHON_VERSION}" ] && echo "DETECTED_PYTHON_VERSION=${DETECTED_PYTHON_VERSION}"
       [ -n "${DETECTED_PYTHON_PATH}" ] && echo "DETECTED_PYTHON_PATH=${DETECTED_PYTHON_PATH}"
       echo "SUPPORTED_PYTHON_RANGE=3.10-3.12"
+      echo "MANAGED_PYTHON_ENABLED=${MANAGED_PYTHON_ENABLED}"
+      echo "MANAGED_PYTHON_STATUS=${MANAGED_PYTHON_STATUS}"
+      echo "MANAGED_PYTHON_VERSION=${MANAGED_PYTHON_VERSION}"
+      echo "MANAGED_PYTHON_RELEASE=${MANAGED_PYTHON_RELEASE}"
+      echo "MANAGED_PYTHON_PLATFORM=${MANAGED_PYTHON_PLATFORM}"
+      echo "MANAGED_PYTHON_ARCH=${MANAGED_PYTHON_ARCH}"
+      echo "MANAGED_PYTHON_URL=${MANAGED_PYTHON_URL}"
+      echo "MANAGED_PYTHON_SHA256_OK=${MANAGED_PYTHON_SHA256_OK}"
+      echo "MANAGED_PYTHON_PATH=${MANAGED_PYTHON_PATH}"
+      echo "MANAGED_PYTHON_REPLACED=${MANAGED_PYTHON_REPLACED}"
+      echo "MANAGED_PYTHON_ROLLBACK=${MANAGED_PYTHON_ROLLBACK}"
+      [ -n "${MANAGED_PYTHON_ERROR}" ] && echo "MANAGED_PYTHON_ERROR=${MANAGED_PYTHON_ERROR}"
+      echo "SYSTEM_PYTHON_PATH=${SYSTEM_PYTHON_PATH}"
+      echo "SYSTEM_PYTHON_VERSION=${SYSTEM_PYTHON_VERSION}"
+      echo "SYSTEM_PYTHON_USED=${SYSTEM_PYTHON_USED}"
       echo "PYTHON_PATH=${PYTHON_PATH}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
+      [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
       [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
@@ -88,6 +112,137 @@ set_status() {
     log "STATUS=${STATUS} REASON=${STATUS_REASON}"
     write_state
   fi
+}
+
+detect_build_tools_missing_log() {
+  _log="$1"
+  [ -f "${_log}" ] || return 1
+  grep -Eiq "command 'clang' failed: No such file or directory|command 'gcc' failed: No such file or directory|command 'cc' failed: No such file or directory|error: command 'clang' failed|error: command 'gcc' failed|error: command 'cc' failed" "${_log}"
+}
+
+mark_build_tools_missing() {
+  BUILD_TOOLS_MISSING="yes"
+  BACKEND_DEPS_COMPLETE="no"
+  BACKEND_DEPS_REASON="missing_diffq_or_build_tools"
+  BACKEND_REASON="audio_separator_install_failed"
+  log_step "Backend dependency build failed because no C compiler was found. Install clang/gcc/build tools, then run Repair/Rebuild again."
+}
+
+clear_stale_python_backend_reason() {
+  case "${BACKEND_REASON:-}" in
+    python_missing|python_not_found|python_unsupported)
+      if [ -n "${VENV_PY:-}" ] && [ -x "${VENV_PY}" ]; then
+        log_step "Clearing stale backend reason after valid venv Python: ${BACKEND_REASON}"
+        BACKEND_REASON=""
+      fi
+      ;;
+  esac
+}
+
+verify_audio_separator_runtime_deps() {
+  if [ -z "${VENV_PY}" ] || [ ! -x "${VENV_PY}" ]; then
+    AUDIO_SEPARATOR_IMPORT="failed"
+    AUDIO_SEPARATOR_DEPS_COMPLETE="no"
+    BACKEND_DEPS_COMPLETE="no"
+    BACKEND_DEPS_REASON="${BACKEND_DEPS_REASON:-missing_venv_python}"
+    return 1
+  fi
+  _probe="$("${VENV_PY}" - <<'PY' 2>/dev/null || true
+import importlib
+errors = []
+try:
+    import audio_separator  # noqa: F401
+except Exception as exc:
+    errors.append("audio_separator:" + str(exc))
+for name in (
+    "beartype",
+    "diffq",
+    "einops",
+    "julius",
+    "librosa",
+    "ml_collections",
+    "onnx",
+    "onnx2torch",
+    "pydub",
+    "requests",
+    "resampy",
+    "rotary_embedding_torch",
+    "samplerate",
+    "scipy",
+    "six",
+    "tqdm",
+    "yaml",
+):
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        errors.append(name + ":" + str(exc))
+if errors:
+    print("missing|" + ";".join(errors))
+else:
+    print("ok")
+PY
+)"
+  case "${_probe}" in
+    ok)
+      AUDIO_SEPARATOR_IMPORT="ok"
+      AUDIO_SEPARATOR_DEPS_COMPLETE="yes"
+      BACKEND_DEPS_COMPLETE="yes"
+      BACKEND_DEPS_REASON=""
+      return 0
+      ;;
+  esac
+  AUDIO_SEPARATOR_IMPORT="failed"
+  AUDIO_SEPARATOR_DEPS_COMPLETE="no"
+  BACKEND_DEPS_COMPLETE="no"
+  BACKEND_DEPS_REASON="${BACKEND_DEPS_REASON:-audio_separator_deps_missing}"
+  log_step "audio-separator dependency verification failed: ${_probe}"
+  return 1
+}
+
+classify_venv_failure() {
+  _log="$1"
+  if [ -f "${_log}" ] && grep -Eiq "ensurepip is not available|No module named ensurepip|python[0-9.]*-venv|install python[0-9.]*-venv" "${_log}"; then
+    printf "venv_create_failed_missing_ensurepip"
+  else
+    printf "venv_create_failed"
+  fi
+}
+
+create_venv_with_selected_python() {
+  rm -rf "${RUNTIME_BASE}/.venv"
+  _venv_log="${RUNTIME_BASE}/logs/venv_create.log"
+  : > "${_venv_log}" || true
+  log_step "Creating venv at ${RUNTIME_BASE}/.venv"
+  if "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${_venv_log}" 2>&1; then
+    cat "${_venv_log}" >> "${LOG_FILE}" 2>/dev/null || true
+    return 0
+  fi
+  cat "${_venv_log}" >> "${LOG_FILE}" 2>/dev/null || true
+  VENV_CREATE_REASON="$(classify_venv_failure "${_venv_log}")"
+  log_step "Venv creation failed with ${PYTHON}: ${VENV_CREATE_REASON}"
+  rm -rf "${RUNTIME_BASE}/.venv"
+  return 1
+}
+
+selected_python_is_managed() {
+  case "${PYTHON}" in
+    "${RUNTIME_BASE}/python"/*) return 0 ;;
+  esac
+  return 1
+}
+
+try_managed_python_after_venv_failure() {
+  selected_python_is_managed && return 1
+  log_step "System Python could not create a venv; trying STEMwerk-managed Python fallback."
+  if install_managed_python_runtime && find_managed_python; then
+    MANAGED_PYTHON_PATH="${PYTHON}"
+    SYSTEM_PYTHON_USED="no"
+    log_step "Using managed Python after system venv failure: ${PYTHON}"
+    create_venv_with_selected_python
+    return $?
+  fi
+  return 1
 }
 
 set_progress() {
@@ -198,7 +353,7 @@ install_linux_torch_stack() {
       return 1
       ;;
   esac
-  enforce_numpy_runtime_range || set_status "deps_failed" "numpy_range_enforce_failed"
+	  enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
 }
 
 assert_pinned_torch_stack() {
@@ -237,12 +392,15 @@ PY
   return 1
 }
 
-enforce_numpy_runtime_range() {
+enforce_runtime_python_pins() {
   if [ -z "${VENV_PY}" ] || [ ! -x "${VENV_PY}" ]; then
     return 1
   fi
-  log_step "Enforcing runtime numpy range: >=1.26,<2"
-  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir "numpy>=1.26,<2" >> "${LOG_FILE}" 2>&1
+  log_step "Enforcing runtime Python deps: numpy==${PINNED_NUMPY_VERSION} numba==${PINNED_NUMBA_VERSION} llvmlite==${PINNED_LLVM_VERSION}"
+  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+    "numpy==${PINNED_NUMPY_VERSION}" \
+    "llvmlite==${PINNED_LLVM_VERSION}" \
+    "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -292,11 +450,37 @@ PROFILE="linux-cpu"
 BACKEND="cpu"
 BACKEND_REASON=""
 BACKEND_NOTE=""
+BACKEND_DEPS_COMPLETE="unknown"
+BACKEND_DEPS_REASON=""
+BUILD_TOOLS_MISSING="no"
+AUDIO_SEPARATOR_IMPORT="unknown"
+AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
 CONSTRAINTS_FILE=""
 SELECTED_TORCH_INDEX=""
 STEP_INDEX=""
 STEP_TOTAL="4"
 STEP_LABEL=""
+VENV_CREATE_REASON=""
+MANAGED_PYTHON_ENABLED="yes"
+MANAGED_PYTHON_STATUS="missing"
+MANAGED_PYTHON_VERSION=""
+MANAGED_PYTHON_RELEASE=""
+MANAGED_PYTHON_PLATFORM=""
+MANAGED_PYTHON_ARCH=""
+MANAGED_PYTHON_URL=""
+MANAGED_PYTHON_SHA256_OK="no"
+MANAGED_PYTHON_PATH=""
+MANAGED_PYTHON_ERROR=""
+MANAGED_PYTHON_REPLACED="no"
+MANAGED_PYTHON_ROLLBACK="no"
+SYSTEM_PYTHON_PATH=""
+SYSTEM_PYTHON_VERSION=""
+SYSTEM_PYTHON_USED="no"
+
+if [ -f "${SCRIPT_DIR}/_internal/STEMwerk_Managed_Python.sh" ]; then
+  . "${SCRIPT_DIR}/_internal/STEMwerk_Managed_Python.sh"
+  managed_python_init_state
+fi
 
 set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 
@@ -410,6 +594,10 @@ is_supported_python() {
   if [ -n "${mm}" ]; then
     local full
     full="$(python_full_version "$py" || printf "%s" "${mm}")"
+    if [ -z "${SYSTEM_PYTHON_PATH}" ]; then
+      SYSTEM_PYTHON_PATH="${py}"
+      SYSTEM_PYTHON_VERSION="${full}"
+    fi
     log_step "Ignoring unsupported Python ${full} at ${py} (need 3.10-3.12)"
     UNSUPPORTED_PYTHON_VERSION="${full}"
     UNSUPPORTED_PYTHON_PATH="${py}"
@@ -505,8 +693,21 @@ find_managed_python_from_dir() {
   return 1
 }
 
+if [ -f "${SCRIPT_DIR}/_internal/STEMwerk_Managed_Python.sh" ]; then
+  . "${SCRIPT_DIR}/_internal/STEMwerk_Managed_Python.sh"
+  managed_python_init_state
+fi
+
 if find_managed_python; then
+  MANAGED_PYTHON_STATUS="existing"
+  MANAGED_PYTHON_PATH="${PYTHON}"
   log_step "Using managed Python: ${PYTHON}"
+fi
+
+if [ -z "${PYTHON}" ]; then
+  if install_managed_python_runtime && find_managed_python; then
+    log_step "Using managed Python after acquisition: ${PYTHON}"
+  fi
 fi
 
 if [ -z "${PYTHON}" ] && ! find_pyenv_real; then
@@ -555,49 +756,92 @@ if [ -z "${PYTHON}" ]; then
   if [ -n "${UNSUPPORTED_PYTHON_VERSION}" ]; then
     log_step "System Python ${UNSUPPORTED_PYTHON_VERSION} is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
   fi
-  if install_managed_python_runtime && find_managed_python; then
-    log_step "Using managed Python after acquisition: ${PYTHON}"
-  fi
 fi
 
 if [ -n "${PYTHON}" ]; then
+  case "${PYTHON}" in
+    "${RUNTIME_BASE}/python"/*)
+      MANAGED_PYTHON_PATH="${PYTHON}"
+      ;;
+    *)
+      SYSTEM_PYTHON_USED="yes"
+      SYSTEM_PYTHON_PATH="${PYTHON}"
+      SYSTEM_PYTHON_VERSION="$(python_full_version "${PYTHON}" || true)"
+      ;;
+  esac
   log_step "Using Python: ${PYTHON}"
-fi
-
-PKEXEC=""
-if [ -x "/usr/bin/pkexec" ]; then
-  PKEXEC="/usr/bin/pkexec"
 fi
 
 if [ -z "${PYTHON}" ]; then
   if [ -n "${UNSUPPORTED_PYTHON_VERSION}" ]; then
     BACKEND_REASON="python_unsupported"
-    msg="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
+    if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
+      msg="STEMwerk managed Python is not available for this platform yet."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "sha256_mismatch" ]; then
+      msg="Managed Python download failed verification and was not installed."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "download_failed" ] || [ "${MANAGED_PYTHON_ERROR}" = "download_tool_missing" ]; then
+      msg="STEMwerk could not download its managed Python runtime. Check your internet connection or use a bundled/offline installer."
+    else
+      msg="STEMwerk could not install its managed Python runtime: ${MANAGED_PYTHON_ERROR:-managed_python_unavailable}."
+    fi
     log_step "${msg}"
     printf "%s\n" "${msg}" >&2
     set_status "missing_python" "managed_python_unavailable"
   else
     BACKEND_REASON="python_not_found"
-    msg="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
+    if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
+      msg="STEMwerk managed Python is not available for this platform yet."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "sha256_mismatch" ]; then
+      msg="Managed Python download failed verification and was not installed."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "download_failed" ] || [ "${MANAGED_PYTHON_ERROR}" = "download_tool_missing" ]; then
+      msg="STEMwerk could not download its managed Python runtime. Check your internet connection or use a bundled/offline installer."
+    else
+      msg="STEMwerk could not install its managed Python runtime: ${MANAGED_PYTHON_ERROR:-managed_python_unavailable}."
+    fi
     log_step "${msg}"
     printf "%s\n" "${msg}" >&2
     set_status "missing_python" "managed_python_unavailable"
   fi
 else
   log_stage "Creating venv"
+  log_step "Creating STEMwerk virtual environment..."
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
     log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
     rm -rf "${RUNTIME_BASE}/.venv"
   fi
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    log_step "Creating venv at ${RUNTIME_BASE}/.venv"
-    "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
+    if ! create_venv_with_selected_python; then
+      if ! try_managed_python_after_venv_failure; then
+        if [ "${VENV_CREATE_REASON}" = "venv_create_failed_missing_ensurepip" ]; then
+          msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
+          log_step "${msg}"
+          printf "%s\n" "${msg}" >&2
+        fi
+        set_status "venv_failed" "${VENV_CREATE_REASON:-venv_create_failed}"
+      fi
+    fi
   fi
-  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+  if [ "${STATUS}" != "ok" ]; then
+    log_step "Stopping setup after venv creation failure; dependency installation will not run."
+  elif [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    if ! "${RUNTIME_BASE}/.venv/bin/python" -m pip --version >/dev/null 2>&1; then
+      if [ -z "${VENV_CREATE_REASON}" ]; then
+        VENV_CREATE_REASON="venv_create_failed_missing_ensurepip"
+      fi
+      msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
+      log_step "${msg}"
+      printf "%s\n" "${msg}" >&2
+      rm -rf "${RUNTIME_BASE}/.venv"
+      set_status "venv_failed" "${VENV_CREATE_REASON}"
+    fi
+  fi
+  if [ "${STATUS}" = "ok" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
+    clear_stale_python_backend_reason
     log_step "Upgrading pip/setuptools/wheel"
     "${VENV_PY}" -m pip install --upgrade pip setuptools wheel >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     log_step "Selected profile=${PROFILE} backend=${BACKEND}"
+    log_step "Installing pinned STEMwerk backend packages..."
 
     if [ "${BACKEND}" = "cpu" ]; then
       log_stage "Installing CPU torch"
@@ -781,13 +1025,15 @@ PY
       mkdir -p "${RUNTIME_BASE}/state"
       log_step "Pinned torch version for downstream installs: ${TORCH_VER}"
       {
-        echo "torch==${TORCH_VER}"
+        echo "numpy==${PINNED_NUMPY_VERSION}"
+        echo "llvmlite==${PINNED_LLVM_VERSION}"
+        echo "numba==${PINNED_NUMBA_VERSION}"
         "${VENV_PY}" - <<'PY' 2>/dev/null
 import importlib
-for name in ("torchvision","torchaudio"):
+for name in ("torch","torchvision","torchaudio"):
     try:
         m = importlib.import_module(name)
-        ver = getattr(m, "__version__", "")
+        ver = str(getattr(m, "__version__", "")).split("+", 1)[0]
         if ver:
             print(f"{name}=={ver}")
     except Exception:
@@ -797,8 +1043,7 @@ PY
       log_step "CUDA/NVIDIA package overrides blocked via constraints"
     fi
 
-    log_step "Installing numpy>=1.26,<2"
-    "${VENV_PY}" -m pip install "numpy>=1.26,<2" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+    enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
 
     log_stage "Installing STEMwerk-core"
     core_install_rc=0
@@ -844,23 +1089,48 @@ PY
 
     log_stage "Checking/installing audio_separator"
     audio_install_rc=0
+    audio_install_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
+    : > "${audio_install_log}" || true
     if ! "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; then
       if [ -n "${CONSTRAINTS_FILE}" ]; then
         log_step "Installing audio-separator 0.23.0 with constraints (torch pinned)"
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
+        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
       else
-        "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
+        "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
       fi
+      cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
     if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator==0.23.0" ]; then
+      if detect_build_tools_missing_log "${audio_install_log}"; then
+        mark_build_tools_missing
+      fi
       log_step "GPU audio-separator install failed; falling back to CPU package"
       PACKAGE="audio-separator==0.23.0"
       PROFILE="linux-cpu"
       BACKEND="cpu"
       BACKEND_REASON="${BACKEND_REASON:-backend_install_failed}"
-      "${VENV_PY}" -m pip install "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
+      audio_install_rc=0
+      : > "${audio_install_log}" || true
+      if [ -n "${CONSTRAINTS_FILE}" ]; then
+        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+      else
+        "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+      fi
+      cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
     if [ "${audio_install_rc}" -ne 0 ]; then
+      if detect_build_tools_missing_log "${audio_install_log}"; then
+        mark_build_tools_missing
+      fi
+      log_step "audio-separator dependency install failed; retrying package install without dependency resolution"
+      audio_install_rc=0
+      "${VENV_PY}" -m pip install --no-deps "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
+    fi
+    if [ "${audio_install_rc}" -eq 0 ]; then
+      verify_audio_separator_runtime_deps || audio_install_rc=1
+    fi
+    if [ "${audio_install_rc}" -ne 0 ]; then
+      BACKEND_REASON="${BACKEND_REASON:-audio_separator_install_failed}"
       set_status "deps_failed" "audio_separator_install_failed"
     fi
     log_stage "Re-applying pinned torch stack"
@@ -882,6 +1152,7 @@ PY
     if ! assert_pinned_torch_stack "${VENV_PY}"; then
       set_status "deps_failed" "torch_pin_assert_failed"
     fi
+    enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
 
     log_stage "Checking/installing ONNX Runtime"
     onnx_install_rc=0
@@ -929,6 +1200,9 @@ RUNTIME_STRICT_OK=1
 
 if [ -n "${PYTHON}" ] && [ -n "${VENV_PY}" ]; then
   log_step "Final verification"
+  if ! verify_audio_separator_runtime_deps; then
+    set_status "deps_failed" "audio_separator_install_failed"
+  fi
   RUNTIME_VERIFY_PROBE=$(STEMWERK_BACKEND="${BACKEND}" "${VENV_PY}" - <<'PY'
 import os
 import sys
@@ -948,6 +1222,30 @@ try:
     import audio_separator  # noqa: F401
 except Exception as exc:
     errors.append("audio_separator_import_failed:" + str(exc))
+for mod_name in (
+    "beartype",
+    "diffq",
+    "einops",
+    "julius",
+    "librosa",
+    "llvmlite",
+    "ml_collections",
+    "onnx",
+    "onnx2torch",
+    "pydub",
+    "requests",
+    "resampy",
+    "rotary_embedding_torch",
+    "samplerate",
+    "scipy",
+    "six",
+    "tqdm",
+    "yaml",
+):
+    try:
+        __import__(mod_name)
+    except Exception as exc:
+        errors.append("audio_separator_dep_import_failed:" + mod_name + ":" + str(exc))
 for mod_name in ("onnxruntime", "stemwerk_core"):
     try:
         __import__(mod_name)
@@ -1077,6 +1375,7 @@ fi
 if [ "${FINAL_OK}" -eq 1 ] && [ "${RUNTIME_STRICT_OK}" -eq 1 ] && { [ "${STATUS}" = "ok" ] || [ "${STATUS}" = "deps_failed" ]; }; then
   STATUS="ok"
   STATUS_REASON=""
+  log_step "Runtime verification passed."
 fi
 
 if [ -n "${STATE_FILE}" ]; then
