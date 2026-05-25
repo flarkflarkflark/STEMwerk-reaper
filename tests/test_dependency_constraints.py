@@ -793,6 +793,11 @@ def test_linux_no_deps_audio_separator_fallback_requires_runtime_deps():
 
     assert '"${VENV_PY}" -m pip install --no-deps "${PACKAGE}"' in script
     assert "verify_audio_separator_runtime_deps || audio_install_rc=1" in script
+    assert 'log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"' in script
+    assert 'audio_repair_attempted=1' in script
+    assert 'PACKAGE="audio-separator==0.23.0"' in script
+    assert 'if [ "${audio_repair_rc}" -eq 0 ]; then' in script
+    assert "verify_audio_separator_runtime_deps || audio_repair_rc=1" in script
     assert "AUDIO_SEPARATOR_DEPS_COMPLETE=\"no\"" in script
     assert "BACKEND_DEPS_COMPLETE=\"no\"" in script
     assert "audio_separator_dep_import_failed:" in script
@@ -842,6 +847,33 @@ def test_linux_failure_status_prevents_python_path_writeout():
     assert 'py_path_out="${PYTHON_PATH}"' in script
     assert 'deps_failed:*|venv_failed:*|*:audio_separator_install_failed)' in script
     assert 'echo "PYTHON_PATH=${py_path_out}"' in script
+
+
+def test_linux_half_installed_audio_separator_triggers_full_dependency_repair_attempt():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert '"${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || audio_import_rc=$?' in script
+    assert 'if [ "${audio_import_rc}" -ne 0 ]; then' in script
+    assert 'if [ "${audio_install_rc}" -ne 0 ]; then' in script
+    assert 'log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"' in script
+    assert 'audio_repair_attempted=1' in script
+
+
+def test_linux_audio_separator_repair_failure_stays_deps_failed_and_blocks_python_path():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'BACKEND_REASON="${BACKEND_REASON:-audio_separator_install_failed}"' in script
+    assert 'set_status "deps_failed" "audio_separator_install_failed"' in script
+    assert 'py_path_out="${PYTHON_PATH}"' in script
+    assert 'deps_failed:*|venv_failed:*|*:audio_separator_install_failed)' in script
+
+
+def test_linux_audio_separator_repair_success_keeps_runtime_verification_path():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'if [ "${audio_repair_rc}" -eq 0 ]; then' in script
+    assert "verify_audio_separator_runtime_deps || audio_repair_rc=1" in script
+    assert 'log_step "Venv runtime verified; PYTHON_PATH set to venv"' in script
 
 
 def test_linux_missing_compiler_for_diffq_reports_build_tools_message():

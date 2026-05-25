@@ -1095,9 +1095,13 @@ PY
 
     log_stage "Checking/installing audio_separator"
     audio_install_rc=0
+    audio_repair_rc=0
+    audio_import_rc=0
+    audio_repair_attempted=0
     audio_install_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
     : > "${audio_install_log}" || true
-    if ! "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; then
+    "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || audio_import_rc=$?
+    if [ "${audio_import_rc}" -ne 0 ]; then
       if [ -n "${CONSTRAINTS_FILE}" ]; then
         log_step "Installing audio-separator 0.23.0 with constraints (torch pinned)"
         "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
@@ -1136,6 +1140,26 @@ PY
       verify_audio_separator_runtime_deps || audio_install_rc=1
     fi
     if [ "${audio_install_rc}" -ne 0 ]; then
+      log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"
+      audio_repair_attempted=1
+      PACKAGE="audio-separator==0.23.0"
+      audio_repair_rc=0
+      : > "${audio_install_log}" || true
+      if [ -n "${CONSTRAINTS_FILE}" ]; then
+        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+      else
+        "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+      fi
+      cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
+      if [ "${audio_repair_rc}" -eq 0 ]; then
+        verify_audio_separator_runtime_deps || audio_repair_rc=1
+      fi
+      audio_install_rc="${audio_repair_rc}"
+    fi
+    if [ "${audio_install_rc}" -ne 0 ]; then
+      if [ "${audio_repair_attempted}" -eq 1 ] && detect_build_tools_missing_log "${audio_install_log}"; then
+        mark_build_tools_missing
+      fi
       BACKEND_REASON="${BACKEND_REASON:-audio_separator_install_failed}"
       set_status "deps_failed" "audio_separator_install_failed"
     fi
