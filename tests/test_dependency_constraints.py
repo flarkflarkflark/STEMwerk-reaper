@@ -1003,6 +1003,7 @@ def test_linux_managed_diffq_wheelhouse_flow_is_enforced_for_managed_py312():
     assert "find_managed_diffq_wheel" in script
     assert "install_managed_diffq_wheel" in script
     assert "vendor/wheels/linux-x86_64-cp312" in script
+    assert "../../installer/linux/payload/wheels/linux-x86_64-cp312" in script
     assert '"${RUNTIME_BASE}/wheels/linux-x86_64-cp312"' in script
     assert '"${RUNTIME_BASE}/cache/wheels"' in script
     assert "--only-binary=diffq" in script
@@ -1031,6 +1032,14 @@ def test_linux_managed_wheel_lookup_is_nounset_safe_for_platform_vars():
     assert '[ "${_arch}" = "x86_64" ] || return 1' in script
     assert '${OS_NAME:-}' in script
     assert '${ARCH:-}' in script
+
+
+def test_linux_managed_diffq_wheel_payload_is_present_and_resolvable():
+    wheel_dir = Path("installer/linux/payload/wheels/linux-x86_64-cp312")
+    wheels = sorted(wheel_dir.glob("diffq-*-cp312-cp312-linux_x86_64.whl"))
+
+    assert wheel_dir.is_dir(), f"missing managed wheel directory: {wheel_dir}"
+    assert wheels, "missing managed diffq cp312 linux_x86_64 wheel payload"
 
 
 def test_audio_separator_dependency_status_fields_are_reported():

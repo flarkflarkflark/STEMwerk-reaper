@@ -158,6 +158,7 @@ is_managed_python_312_linux_x86_64() {
 find_managed_diffq_wheel() {
   for wheel_dir in \
     "${SCRIPT_DIR}/vendor/wheels/linux-x86_64-cp312" \
+    "${SCRIPT_DIR}/../../installer/linux/payload/wheels/linux-x86_64-cp312" \
     "${RUNTIME_BASE}/wheels/linux-x86_64-cp312" \
     "${RUNTIME_BASE}/cache/wheels"
   do
