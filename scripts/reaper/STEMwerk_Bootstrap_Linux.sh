@@ -184,7 +184,7 @@ install_managed_diffq_wheel() {
     return 1
   fi
   log_step "Installing managed diffq wheel: ${diffq_wheel}"
-  "${VENV_PY}" -m pip install --no-index --find-links "$(dirname "${diffq_wheel}")" --only-binary=:all: "${diffq_wheel}" >> "${LOG_FILE}" 2>&1
+  "${VENV_PY}" -m pip install --no-deps "${diffq_wheel}" >> "${LOG_FILE}" 2>&1
 }
 
 clear_stale_python_backend_reason() {

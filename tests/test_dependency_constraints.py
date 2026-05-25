@@ -1006,7 +1006,7 @@ def test_linux_managed_diffq_wheelhouse_flow_is_enforced_for_managed_py312():
     assert "../../installer/linux/payload/wheels/linux-x86_64-cp312" in script
     assert '"${RUNTIME_BASE}/wheels/linux-x86_64-cp312"' in script
     assert '"${RUNTIME_BASE}/cache/wheels"' in script
-    assert "--only-binary=diffq" in script
+    assert '"${VENV_PY}" -m pip install --no-deps "${diffq_wheel}"' in script
     assert 'log_step "Managed dependency wheel missing for diffq on Linux Python 3.12. Repair/Rebuild could not complete."' in script
     assert 'BACKEND_DEPS_REASON="managed_diffq_wheel_missing"' in script
     assert 'BACKEND_REASON="managed_diffq_wheel_missing"' in script
@@ -1032,6 +1032,14 @@ def test_linux_managed_wheel_lookup_is_nounset_safe_for_platform_vars():
     assert '[ "${_arch}" = "x86_64" ] || return 1' in script
     assert '${OS_NAME:-}' in script
     assert '${ARCH:-}' in script
+
+
+def test_linux_managed_diffq_install_does_not_resolve_cython_or_build_deps():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert '"${VENV_PY}" -m pip install --no-deps "${diffq_wheel}"' in script
+    assert "--find-links" not in script.split("install_managed_diffq_wheel()", 1)[1].split("clear_stale_python_backend_reason()", 1)[0]
+    assert "--only-binary=:all:" not in script.split("install_managed_diffq_wheel()", 1)[1].split("clear_stale_python_backend_reason()", 1)[0]
 
 
 def test_linux_managed_diffq_wheel_payload_is_present_and_resolvable():
