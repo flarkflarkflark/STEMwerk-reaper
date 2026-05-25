@@ -9,6 +9,7 @@ PINNED_TORCHVISION_VERSION="0.20.1"
 PINNED_NUMPY_VERSION="1.26.4"
 PINNED_NUMBA_VERSION="0.59.1"
 PINNED_LLVM_VERSION="0.42.0"
+PINNED_IMAGEIO_FFMPEG_VERSION="0.6.0"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -185,6 +186,35 @@ install_managed_diffq_wheel() {
   fi
   log_step "Installing managed diffq wheel: ${diffq_wheel}"
   "${VENV_PY}" -m pip install --no-deps "${diffq_wheel}" >> "${LOG_FILE}" 2>&1
+}
+
+resolve_managed_ffmpeg_from_venv() {
+  [ -n "${VENV_PY:-}" ] || return 1
+  [ -x "${VENV_PY}" ] || return 1
+  "${VENV_PY}" - <<'PY' 2>/dev/null
+import os
+try:
+    import imageio_ffmpeg
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    raise SystemExit(1)
+if exe and os.path.isfile(exe) and os.access(exe, os.X_OK):
+    print(exe)
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+install_managed_ffmpeg() {
+  [ -n "${VENV_PY:-}" ] || return 1
+  [ -x "${VENV_PY}" ] || return 1
+  log_step "System FFmpeg missing; installing managed FFmpeg runtime (imageio-ffmpeg==${PINNED_IMAGEIO_FFMPEG_VERSION})"
+  if [ -n "${CONSTRAINTS_FILE:-}" ]; then
+    "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "imageio-ffmpeg==${PINNED_IMAGEIO_FFMPEG_VERSION}" >> "${LOG_FILE}" 2>&1 || return 1
+  else
+    "${VENV_PY}" -m pip install "imageio-ffmpeg==${PINNED_IMAGEIO_FFMPEG_VERSION}" >> "${LOG_FILE}" 2>&1 || return 1
+  fi
+  return 0
 }
 
 clear_stale_python_backend_reason() {
@@ -1313,7 +1343,16 @@ do
 done
 
 if [ -z "${FFMPEG}" ]; then
-  set_status "missing_ffmpeg" "ffmpeg_not_found"
+  managed_ffmpeg=""
+  if install_managed_ffmpeg; then
+    managed_ffmpeg="$(resolve_managed_ffmpeg_from_venv || true)"
+  fi
+  if [ -n "${managed_ffmpeg}" ] && [ -x "${managed_ffmpeg}" ]; then
+    FFMPEG="${managed_ffmpeg}"
+    log_step "Using managed FFmpeg from Python runtime: ${FFMPEG}"
+  else
+    set_status "missing_ffmpeg" "ffmpeg_not_found"
+  fi
 elif ! "${FFMPEG}" -version >/dev/null 2>&1; then
   set_status "ffmpeg_unusable" "ffmpeg_version_check_failed"
 fi

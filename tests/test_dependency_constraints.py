@@ -1042,6 +1042,25 @@ def test_linux_managed_diffq_install_does_not_resolve_cython_or_build_deps():
     assert "--only-binary=:all:" not in script.split("install_managed_diffq_wheel()", 1)[1].split("clear_stale_python_backend_reason()", 1)[0]
 
 
+def test_linux_managed_ffmpeg_fallback_installs_when_system_ffmpeg_missing():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'PINNED_IMAGEIO_FFMPEG_VERSION="0.6.0"' in script
+    assert "install_managed_ffmpeg()" in script
+    assert "resolve_managed_ffmpeg_from_venv()" in script
+    assert 'imageio-ffmpeg==${PINNED_IMAGEIO_FFMPEG_VERSION}' in script
+    assert 'log_step "System FFmpeg missing; installing managed FFmpeg runtime (imageio-ffmpeg==${PINNED_IMAGEIO_FFMPEG_VERSION})"' in script
+    assert 'log_step "Using managed FFmpeg from Python runtime: ${FFMPEG}"' in script
+
+
+def test_linux_managed_ffmpeg_missing_path_still_fails_safely():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'managed_ffmpeg="$(resolve_managed_ffmpeg_from_venv || true)"' in script
+    assert 'if [ -n "${managed_ffmpeg}" ] && [ -x "${managed_ffmpeg}" ]; then' in script
+    assert 'set_status "missing_ffmpeg" "ffmpeg_not_found"' in script
+
+
 def test_linux_managed_diffq_wheel_payload_is_present_and_resolvable():
     scripts_wheel_dir = Path("scripts/reaper/vendor/wheels/linux-x86_64-cp312")
     scripts_wheels = sorted(scripts_wheel_dir.glob("diffq-*-cp312-cp312-linux_x86_64.whl"))
