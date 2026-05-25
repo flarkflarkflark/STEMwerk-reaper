@@ -38,6 +38,7 @@
         <source file="../_internal/STEMwerk_Linux_Setup_Guide.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Linux_Setup_Guide.txt</source>
         <source file="../_internal/STEMwerk_Log.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Log.lua</source>
         <source file="../_internal/STEMwerk_Messages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Messages.lua</source>
+        <source file="../_internal/STEMwerk_Models.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Models.lua</source>
         <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
         <source file="../_internal/STEMwerk_Platform.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Platform.lua</source>
         <source file="../_internal/STEMwerk_Progress_Render.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Progress_Render.lua</source>
@@ -73,7 +74,7 @@
         <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
 
-        <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/languages.lua</source>
+        <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/stemwerk_language_wrapper.lua</source>
         <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>
         <source file="../i18n/language_checks.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/language_checks.py</source>
