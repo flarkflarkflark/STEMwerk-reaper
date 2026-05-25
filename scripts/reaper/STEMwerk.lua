@@ -5487,10 +5487,9 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  htdemucs_6s  6-Stem")
                     addLine(l, "")
                     addHead(l, tr("help_native_drumkit_split", "Drum Kit Split"))
-                    addLine(l, "  " .. tr("help_native_drumkit_step_1", "Split an existing drum track into kit pieces."))
-                    addLine(l, "  " .. tr("help_native_drumkit_step_2", "Outputs: Kick, Snare, Toms, Hi-Hat, Ride, Crash."))
-                    addLine(l, "  " .. tr("help_native_drumkit_model_note", "Best for already-isolated drums, drum stems, drum buses, or loops."))
-                    addLine(l, "  " .. tr("help_native_drumkit_guidance", "For full songs, run All Stems first and then split the drum stem."))
+                    addLine(l, "  " .. tr("help_native_drumkit_step_1", "Split existing drum audio into Kick, Snare, Toms, Hi-Hat, Ride, and Crash."))
+                    addLine(l, "  " .. tr("help_native_drumkit_model_note", "Best for drum stems, drum buses, loops, or already-isolated drums."))
+                    addLine(l, "  " .. tr("help_native_drumkit_guidance", "For full songs or mixed audio, use All Stems first to extract the drum stem, then run Drum Kit Split on that drum stem."))
                     addLine(l, "")
                     addHead(l, tr("help_native_output", "Output"))
                     addLine(l, "  " .. tr("new_tracks", "New tracks"))
@@ -5571,7 +5570,7 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  " .. tr("help_native_about_4stem", "4-stem: Vocals, Drums, Bass, Other"))
                     addLine(l, "  " .. tr("help_native_about_6stem", "6-stem: adds Guitar, Piano"))
                     addLine(l, "  " .. tr("help_native_about_models", "Fast / Quality / 6-Stem models"))
-                    addLine(l, "  " .. tr("help_native_about_drumkit", "Drum Kit Split: isolate drums, then split into Kick/Snare/Toms/Hi-Hat/Ride/Crash"))
+                    addLine(l, "  " .. tr("help_native_about_drumkit", "Drum Kit Split: split existing drum audio into Kick/Snare/Toms/Hi-Hat/Ride/Crash"))
                     addLine(l, "  " .. tr("help_native_about_output", "New tracks or in-place output"))
                     return l
                 end,
@@ -7506,8 +7505,8 @@ local function drawArtGallery()
 
         local title = trSafe("help_drumkit_title", "Drum Kit Split")
         local parts = T("help_drumkit_parts") or "Kick · Snare · Toms · Hi-Hat · Ride · Crash"
-        local line1 = T("help_drumkit_line1") or "Split an existing drum track."
-        local line2 = T("help_drumkit_line2") or "Use drum stems, buses, loops, or selected drum items."
+        local line1 = T("help_drumkit_line1") or "Split existing drum audio."
+        local line2 = T("help_drumkit_line2") or "Best for drum stems, buses, loops, or isolated drums."
         local shortcut = T("help_drumkit_line3") or "Shortcut: X"
 
         -- Title — uses Drums stem accent (blue) so it visually ties to the drum row at left
@@ -12077,7 +12076,7 @@ function renderMainColumns(ctx)
         presetY,
         colW,
         btnH,
-        T("tooltip_preset_drumkit") or "Split an existing drum track into Kick, Snare, Toms, Hi-Hat, Ride, and Crash.",
+        T("tooltip_preset_drumkit") or "Split existing drum audio into Kick, Snare, Toms, Hi-Hat, Ride, and Crash.",
         "X",
         {140, 110, 230}
     )
@@ -12206,7 +12205,7 @@ function renderMainColumns(ctx)
             elseif model.id == "htdemucs_ft" then
                 tip = T("tooltip_model_drumkit_quality") or "Higher quality."
             elseif model.id == "htdemucs_6s" then
-                tip = T("tooltip_model_drumkit_expanded") or "Expanded parent separation."
+                tip = T("tooltip_model_drumkit_expanded") or "Expanded processing."
             end
         end
         if not modelAvailable then
@@ -15959,18 +15958,18 @@ function formatDrumKitProgressStage(event)
         return string.format("Drum Kit Split: running %d · completed %d/%d", running, completed, total)
     elseif eventName == "stage0_extract_start" then
         if asyncMode then
-            return string.format(T("drumkit_progress_extracting") or "Drum Kit Split: source %d/%d — extracting", sourceIndex, sourceCount)
+            return string.format(T("drumkit_progress_extracting") or "Drum Kit Split: source %d/%d — processing drum audio", sourceIndex, sourceCount)
         end
-        return "Drum Kit Split status: extracting" .. sourceSuffix
+        return "Drum Kit Split status: processing drum audio" .. sourceSuffix
     elseif eventName == "stage0_extract_done" then
-        return "Drum Kit Split status: extract complete" .. sourceSuffix
+        return "Drum Kit Split status: drum audio ready" .. sourceSuffix
     elseif eventName == "stage1_parent_start" then
         if asyncMode then
             return drumKitShortProgressLine(sourceIndex, sourceCount, 1, 2, "drums")
         end
-        return "Drum Kit Split status: parent separation " .. tostring(event.parent_model or "") .. sourceSuffix .. " (please wait)"
+        return "Drum Kit Split status: processing drum audio " .. tostring(event.parent_model or "") .. sourceSuffix .. " (please wait)"
     elseif eventName == "stage1_parent_done" then
-        return "Drum Kit Split status: parent separation complete" .. sourceSuffix
+        return "Drum Kit Split status: drum audio processing complete" .. sourceSuffix
     elseif eventName == "stage2_drumsep_start" then
         if asyncMode then
             return drumKitShortProgressLine(sourceIndex, sourceCount, 2, 2, "drumkit")
