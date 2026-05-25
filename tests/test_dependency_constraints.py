@@ -788,6 +788,34 @@ def test_audio_separator_missing_maps_to_dependency_failure_not_python_missing()
     assert 'backendReason = "audio_separator_missing"' in script
 
 
+def test_linux_deps_failed_with_python_diagnostics_does_not_map_to_python_missing():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "knownRuntimeFailureState" in script
+    assert "hasPythonDiagnosticPath" in script
+    assert 'errors[#errors + 1] = "runtime_incomplete"' in script
+    assert 'errors[#errors + 1] = "python_missing"' in script
+    assert "if knownRuntimeFailureState(state) and hasPythonDiagnosticPath(state) then" in script
+    assert 'backendReason = "runtime_incomplete"' in script
+
+
+def test_linux_runtime_failure_backend_reason_strips_stale_python_missing_tokens():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'if knownRuntimeFailureState(state) and hasPythonDiagnosticPath(state) then' in script
+    assert 'for raw in tostring(backendReason or ""):gmatch("[^;]+") do' in script
+    assert "not stalePythonBackendReason(part)" in script
+    assert "local statusReason = trim(state.STATUS_REASON or \"\")" in script
+    assert "local savedReason = trim(state.BACKEND_REASON or \"\")" in script
+
+
+def test_linux_genuine_no_python_case_still_uses_python_missing():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "elseif knownRuntimeFailureState(state) and hasPythonDiagnosticPath(state) then" in script
+    assert 'errors[#errors + 1] = "python_missing"' in script
+
+
 def test_linux_no_deps_audio_separator_fallback_requires_runtime_deps():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 

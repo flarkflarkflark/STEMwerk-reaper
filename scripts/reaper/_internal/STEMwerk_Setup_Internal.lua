@@ -683,6 +683,7 @@ local function prettyCheckError(err)
     if lower == "python_unusable" then return "Python executable is unusable" end
     if lower == "ffmpeg_missing" then return "FFmpeg path is missing" end
     if lower == "ffmpeg_unusable" then return "FFmpeg executable is unusable" end
+    if lower == "runtime_incomplete" then return "Runtime is incomplete (Python path intentionally withheld until verification passes)" end
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
     if lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
@@ -767,6 +768,29 @@ end
 local function stalePythonBackendReason(reason)
     local lower = trim(reason):lower()
     return lower == "python_missing" or lower == "python_not_found" or lower == "python_unsupported" or lower == "unsupported_python_version"
+end
+
+local function knownRuntimeFailureState(state)
+    state = state or {}
+    local status = trim(state.STATUS or ""):lower()
+    local reason = trim(state.STATUS_REASON or ""):lower()
+    if status == "deps_failed" or status == "venv_failed" then
+        return true
+    end
+    return reason == "audio_separator_install_failed"
+        or reason == "runtime_verify_failed"
+        or reason == "runtime_python_split_brain"
+        or reason == "onnxruntime_install_failed"
+        or reason == "torch_pin_assert_failed"
+        or reason == "torch_pin_repair_failed"
+end
+
+local function hasPythonDiagnosticPath(state)
+    state = state or {}
+    return trim(state.MANAGED_PYTHON_PATH or "") ~= ""
+        or trim(state.VENV_PYTHON_PATH or "") ~= ""
+        or trim(state.VENV_PYTHON or "") ~= ""
+        or trim(state.DETECTED_PYTHON_PATH or "") ~= ""
 end
 
 local function prettyBackendNote(note)
@@ -2033,6 +2057,8 @@ local function verifyRuntimePaths(state)
     if resolved.pythonPath == "" then
         if trim(state.STATUS_REASON or "") == "python_unsupported" then
             errors[#errors + 1] = "python_unsupported"
+        elseif knownRuntimeFailureState(state) and hasPythonDiagnosticPath(state) then
+            errors[#errors + 1] = "runtime_incomplete"
         else
             errors[#errors + 1] = "python_missing"
         end
@@ -2254,6 +2280,27 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
                 backendReason = backendReason .. "; " .. state.BACKEND_REASON
             else
                 backendReason = state.BACKEND_REASON
+            end
+        end
+    end
+    if knownRuntimeFailureState(state) and hasPythonDiagnosticPath(state) then
+        local cleaned = {}
+        for raw in tostring(backendReason or ""):gmatch("[^;]+") do
+            local part = trim(raw)
+            if part ~= "" and not stalePythonBackendReason(part) then
+                cleaned[#cleaned + 1] = part
+            end
+        end
+        backendReason = table.concat(cleaned, "; ")
+        if backendReason == "" then
+            local statusReason = trim(state.STATUS_REASON or "")
+            local savedReason = trim(state.BACKEND_REASON or "")
+            if statusReason ~= "" and not stalePythonBackendReason(statusReason) then
+                backendReason = statusReason
+            elseif savedReason ~= "" and not stalePythonBackendReason(savedReason) then
+                backendReason = savedReason
+            else
+                backendReason = "runtime_incomplete"
             end
         end
     end
