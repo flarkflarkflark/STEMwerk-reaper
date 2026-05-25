@@ -135,8 +135,16 @@ mark_build_tools_missing() {
 }
 
 is_managed_python_312_linux_x86_64() {
-  [ "${OS_NAME}" = "linux" ] || return 1
-  [ "${ARCH}" = "x86_64" ] || return 1
+  _os_name="${OS_NAME:-}"
+  if [ -z "${_os_name}" ]; then
+    _os_name="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  fi
+  _arch="${ARCH:-}"
+  if [ -z "${_arch}" ]; then
+    _arch="$(uname -m 2>/dev/null)"
+  fi
+  [ "${_os_name}" = "linux" ] || return 1
+  [ "${_arch}" = "x86_64" ] || return 1
   [ -n "${MANAGED_PYTHON_PATH:-}" ] || return 1
   [ -n "${PYTHON:-}" ] || return 1
   [ "${PYTHON}" = "${MANAGED_PYTHON_PATH}" ] || return 1

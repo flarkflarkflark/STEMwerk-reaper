@@ -1005,6 +1005,10 @@ def test_linux_managed_diffq_wheelhouse_flow_is_enforced_for_managed_py312():
     assert 'BACKEND_DEPS_REASON="managed_diffq_wheel_missing"' in script
     assert 'BACKEND_REASON="managed_diffq_wheel_missing"' in script
     assert "Managed dependency wheel missing for diffq on Linux Python 3.12" in setup_internal
+    assert '_os_name="${OS_NAME:-}"' in script
+    assert '_arch="${ARCH:-}"' in script
+    assert '_os_name="$(uname -s 2>/dev/null | tr \'[:upper:]\' \'[:lower:]\')"' in script
+    assert '_arch="$(uname -m 2>/dev/null)"' in script
 
 
 def test_linux_managed_wheel_missing_skips_no_deps_fallback_and_fails_clear():
@@ -1013,6 +1017,15 @@ def test_linux_managed_wheel_missing_skips_no_deps_fallback_and_fails_clear():
     assert 'if [ "${audio_install_rc}" -ne 0 ] && [ "${managed_diffq_required}" -eq 0 ]; then' in script
     assert 'log_step "Managed wheel path required for Linux managed Python 3.12; skipping no-deps fallback"' in script
     assert 'log_step "Managed wheel path required for Linux managed Python 3.12; full dependency repair cannot continue without diffq wheel"' in script
+
+
+def test_linux_managed_wheel_lookup_is_nounset_safe_for_platform_vars():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert '[ "${_os_name}" = "linux" ] || return 1' in script
+    assert '[ "${_arch}" = "x86_64" ] || return 1' in script
+    assert '${OS_NAME:-}' in script
+    assert '${ARCH:-}' in script
 
 
 def test_audio_separator_dependency_status_fields_are_reported():
