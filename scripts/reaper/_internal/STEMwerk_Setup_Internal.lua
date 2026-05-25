@@ -628,7 +628,11 @@ local function prettySetupReason(reason)
         elseif lower == "torch_pin_repair_failed" then
             part = "macOS Torch pin repair failed; run Rebuild venv/Repair to install the pinned torch stack"
         elseif lower == "torch_pin_assert_failed" then
-            part = "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack"
+            part = "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+        elseif lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
+            part = "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+        elseif lower == "torchaudio_missing_for_demucs" then
+            part = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "backend_runtime_install_failed" then
             part = "GPU backend runtime install failed; CPU fallback used"
         elseif lower == "backend_runtime_verify_failed" then
@@ -673,8 +677,11 @@ local function prettyCheckError(err)
     if lower == "ffmpeg_unusable" then return "FFmpeg executable is unusable" end
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
-    if lower == "torch_too_new_for_demucs" then
-        return "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack"
+    if lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
+        return "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+    end
+    if lower == "torchaudio_missing_for_demucs" then
+        return "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
     end
     if lower == "numpy_too_new_for_demucs" then return "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv/Repair" end
     if lower == "macos_demucs_runtime_incompatible" then return "macOS Demucs/audio-separator runtime check failed; run Rebuild venv/Repair" end
@@ -876,6 +883,106 @@ local function pythonVersionText(path)
     local rc, out = execProcess(cmd, 12000)
     if tonumber(rc) ~= 0 then return "" end
     return trim((out or ""):match("([0-9]+%.[0-9]+%.[0-9]+)") or (out or ""):match("([0-9]+%.[0-9]+)") or "")
+end
+
+local function checkPinnedTorchRuntime(path)
+    path = resolvePath(path)
+    local result = {
+        ok = false,
+        torchVersion = "",
+        torchaudioVersion = "",
+        torchSupported = "no",
+        torchaudioPresent = "no",
+        driftDetected = "yes",
+        driftReason = "torch_runtime_probe_failed",
+        error = "torch_runtime_unsupported",
+    }
+    if path == "" or not fileExists(path) then
+        result.driftReason = "python_missing"
+        return result
+    end
+    local script = [=[
+import sys
+
+def core(ver):
+    return str(ver).split("+", 1)[0]
+
+def parse_major_minor(ver):
+    try:
+        parts = core(ver).split(".")
+        return int(parts[0]), int(parts[1])
+    except Exception:
+        return 999, 999
+
+try:
+    import torch
+    torch_ver = core(getattr(torch, "__version__", ""))
+except Exception as exc:
+    print("TORCH_VERSION=")
+    print("TORCHAUDIO_VERSION=")
+    print("TORCH_SUPPORTED=no")
+    print("TORCHAUDIO_PRESENT=no")
+    print("RUNTIME_DRIFT_DETECTED=yes")
+    print("RUNTIME_DRIFT_REASON=torch_import_failed")
+    sys.exit(1)
+
+try:
+    import torchaudio
+    torchaudio_ver = core(getattr(torchaudio, "__version__", ""))
+    torchaudio_present = "yes"
+except Exception:
+    torchaudio_ver = "missing"
+    torchaudio_present = "no"
+
+try:
+    import numpy
+    numpy_ver = core(getattr(numpy, "__version__", "0.0.0"))
+    numpy_major = int(numpy_ver.split(".", 1)[0])
+except Exception:
+    numpy_major = 0
+
+major, minor = parse_major_minor(torch_ver)
+torch_supported = (major, minor) < (2, 6)
+reason = ""
+if not torch_supported:
+    reason = "torch_too_new_for_demucs"
+elif torchaudio_present != "yes":
+    reason = "torchaudio_missing_for_demucs"
+elif numpy_major >= 2:
+    reason = "numpy_too_new_for_demucs"
+
+print("TORCH_VERSION=" + str(torch_ver))
+print("TORCHAUDIO_VERSION=" + str(torchaudio_ver))
+print("TORCH_SUPPORTED=" + ("yes" if torch_supported else "no"))
+print("TORCHAUDIO_PRESENT=" + torchaudio_present)
+print("RUNTIME_DRIFT_DETECTED=" + ("yes" if reason else "no"))
+print("RUNTIME_DRIFT_REASON=" + reason)
+sys.exit(0 if not reason else 1)
+]=]
+    local cmd = quoteArg(path) .. " -c " .. quoteArg(script)
+    local rc, out = execProcess(cmd, 15000)
+    local text = tostring(out or "")
+    for line in text:gmatch("[^\r\n]+") do
+        local k, v = line:match("^([A-Z0-9_]+)=(.*)$")
+        if k == "TORCH_VERSION" then result.torchVersion = trim(v)
+        elseif k == "TORCHAUDIO_VERSION" then result.torchaudioVersion = trim(v)
+        elseif k == "TORCH_SUPPORTED" then result.torchSupported = trim(v)
+        elseif k == "TORCHAUDIO_PRESENT" then result.torchaudioPresent = trim(v)
+        elseif k == "RUNTIME_DRIFT_DETECTED" then result.driftDetected = trim(v)
+        elseif k == "RUNTIME_DRIFT_REASON" then result.driftReason = trim(v)
+        end
+    end
+    result.ok = tonumber(rc) == 0 and result.driftDetected == "no"
+    if result.driftReason == "torchaudio_missing_for_demucs" then
+        result.error = "torchaudio_missing_for_demucs"
+    elseif result.driftReason == "torch_too_new_for_demucs" then
+        result.error = "torch_too_new_for_demucs"
+    elseif result.driftReason == "numpy_too_new_for_demucs" then
+        result.error = "numpy_too_new_for_demucs"
+    elseif result.ok then
+        result.error = nil
+    end
+    return result
 end
 
 local function resolveUnixFfmpegFallback()
@@ -1265,6 +1372,12 @@ local function writeCapabilities(path, data, deviceOut)
     f:write("VERIFICATION=" .. tostring(data.verification or "") .. "\n")
     f:write("AUDIO_SEPARATOR=" .. tostring(data.audioSeparator or "") .. "\n")
     f:write("STEMWERK_CORE=" .. tostring(data.stemwerkCore or "") .. "\n")
+    f:write("TORCH_VERSION=" .. tostring(data.torchVersion or "") .. "\n")
+    f:write("TORCHAUDIO_VERSION=" .. tostring(data.torchaudioVersion or "") .. "\n")
+    f:write("TORCH_SUPPORTED=" .. tostring(data.torchSupported or "") .. "\n")
+    f:write("TORCHAUDIO_PRESENT=" .. tostring(data.torchaudioPresent or "") .. "\n")
+    f:write("RUNTIME_DRIFT_DETECTED=" .. tostring(data.runtimeDriftDetected or "") .. "\n")
+    f:write("RUNTIME_DRIFT_REASON=" .. tostring(data.runtimeDriftReason or "") .. "\n")
     f:write("DEVICE_NAMES=" .. tostring(data.deviceNames or "") .. "\n")
     if data.envJson and data.envJson ~= "" then
         f:write("ENV_JSON=" .. tostring(data.envJson) .. "\n")
@@ -1864,6 +1977,15 @@ local function verifyRuntimePaths(state)
     local pythonOk = false
     local ffmpegOk = false
     local audioOk = false
+    local torchRuntime = {
+        ok = false,
+        torchVersion = "",
+        torchaudioVersion = "",
+        torchSupported = "unknown",
+        torchaudioPresent = "unknown",
+        driftDetected = "unknown",
+        driftReason = "",
+    }
     local detectedPythonVersion = trim(state.DETECTED_PYTHON_VERSION or "")
     local supportedPythonFound = trim(state.SUPPORTED_PYTHON_FOUND or "")
     local supportedPythonRange = trim(state.SUPPORTED_PYTHON_RANGE or "")
@@ -1917,50 +2039,10 @@ local function verifyRuntimePaths(state)
     if pythonOk and ffmpegOk and not canImportStemwerkCore(resolved.pythonPath) then
         errors[#errors + 1] = "stemwerk_core_missing"
     end
-    if pythonOk and OS == "macOS" then
-        local script = [=[
-import sys
-def core(v):
-    return str(v).split("+", 1)[0]
-try:
-    import torch
-except Exception as exc:
-    print("torch_import_failed:" + str(exc))
-    sys.exit(1)
-try:
-    import numpy
-except Exception as exc:
-    print("numpy_import_failed:" + str(exc))
-    sys.exit(1)
-t = core(getattr(torch, "__version__", "0.0.0"))
-n = core(getattr(numpy, "__version__", "0.0.0"))
-try:
-    tmj, tmn = [int(x) for x in t.split(".")[:2]]
-except Exception:
-    tmj, tmn = 0, 0
-try:
-    nmj = int(n.split(".", 1)[0])
-except Exception:
-    nmj = 0
-if tmj > 2 or (tmj == 2 and tmn >= 6):
-    print("torch_too_new:" + t)
-    sys.exit(2)
-if nmj >= 2:
-    print("numpy_too_new:" + n)
-    sys.exit(3)
-print("ok")
-]=]
-        local cmd = quoteArg(resolved.pythonPath) .. " -c " .. quoteArg(script)
-        local rc, out = execProcess(cmd, 15000)
-        local text = trim(out or "")
-        if tonumber(rc) ~= 0 then
-            if text:find("torch_too_new:", 1, true) then
-                errors[#errors + 1] = "torch_too_new_for_demucs"
-            elseif text:find("numpy_too_new:", 1, true) then
-                errors[#errors + 1] = "numpy_too_new_for_demucs"
-            else
-                errors[#errors + 1] = "macos_demucs_runtime_incompatible"
-            end
+    if pythonOk then
+        torchRuntime = checkPinnedTorchRuntime(resolved.pythonPath)
+        if not torchRuntime.ok and torchRuntime.error then
+            errors[#errors + 1] = torchRuntime.error
         end
     end
 
@@ -1973,6 +2055,12 @@ print("ok")
         detectedPythonVersion = detectedPythonVersion,
         supportedPythonFound = supportedPythonFound,
         supportedPythonRange = supportedPythonRange,
+        torchVersion = torchRuntime.torchVersion,
+        torchaudioVersion = torchRuntime.torchaudioVersion,
+        torchSupported = torchRuntime.torchSupported,
+        torchaudioPresent = torchRuntime.torchaudioPresent,
+        runtimeDriftDetected = torchRuntime.driftDetected,
+        runtimeDriftReason = torchRuntime.driftReason,
         errors = errors,
     }
 end
@@ -2150,6 +2238,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         supportedPythonFound = verification.supportedPythonFound,
         detectedPythonVersion = verification.detectedPythonVersion,
         supportedPythonRange = verification.supportedPythonRange,
+        torchVersion = verification.torchVersion,
+        torchaudioVersion = verification.torchaudioVersion,
+        torchSupported = verification.torchSupported,
+        torchaudioPresent = verification.torchaudioPresent,
+        runtimeDriftDetected = verification.runtimeDriftDetected,
+        runtimeDriftReason = verification.runtimeDriftReason,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
@@ -2232,6 +2326,17 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         else
             finalMessage[#finalMessage + 1] = "Unsupported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
         end
+    end
+    if hasError("torch_too_new_for_demucs") or hasError("torch_runtime_unsupported") then
+        local torchVersion = trim(verification.torchVersion or "")
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Unsupported Torch runtime detected: torch "
+            .. (torchVersion ~= "" and torchVersion or "unknown")
+            .. ". STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+    end
+    if hasError("torchaudio_missing_for_demucs") then
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
     end
     if hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg" then
         finalMessage[#finalMessage + 1] = ""

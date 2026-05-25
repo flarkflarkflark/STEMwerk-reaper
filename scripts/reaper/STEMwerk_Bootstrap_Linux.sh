@@ -883,6 +883,13 @@ for mod_name in ("onnxruntime", "stemwerk_core"):
         errors.append(mod_name + "_import_failed:" + str(exc))
 try:
     import torch
+    ver = str(getattr(torch, "__version__", "0.0.0")).split("+", 1)[0]
+    try:
+        major, minor = [int(x) for x in ver.split(".")[:2]]
+    except Exception:
+        major, minor = 999, 999
+    if major > 2 or (major == 2 and minor >= 6):
+        errors.append("torch_too_new_for_demucs:" + ver)
     if backend == "rocm":
         hip = getattr(getattr(torch, "version", None), "hip", None)
         if not (hip is not None and torch.cuda.is_available() and int(torch.cuda.device_count()) > 0):
@@ -892,6 +899,10 @@ try:
             errors.append("cuda_runtime_probe_failed")
 except Exception as exc:
     errors.append("torch_import_failed:" + str(exc))
+try:
+    import torchaudio  # noqa: F401
+except Exception as exc:
+    errors.append("torchaudio_missing_for_demucs:" + str(exc))
 if errors:
     print(";".join(errors))
     sys.exit(1)
@@ -931,17 +942,26 @@ backend = os.environ.get("STEMWERK_BACKEND", "cpu")
 try:
     import torch
     ver = getattr(torch, "__version__", "unknown")
+    core = str(ver).split("+", 1)[0]
+    try:
+        major, minor = [int(x) for x in core.split(".")[:2]]
+    except Exception:
+        major, minor = 999, 999
     hip = getattr(getattr(torch, "version", None), "hip", None)
     cuda_avail = torch.cuda.is_available()
     cuda_cnt = torch.cuda.device_count()
-    ok = True
+    ok = (major, minor) < (2, 6)
+    try:
+        import torchaudio  # noqa: F401
+        torchaudio_present = True
+    except Exception:
+        torchaudio_present = False
+    ok = ok and torchaudio_present
     if backend == "rocm":
-        ok = (hip is not None) and cuda_avail and cuda_cnt > 0
+        ok = ok and (hip is not None) and cuda_avail and cuda_cnt > 0
     elif backend == "cuda":
-        ok = cuda_avail and cuda_cnt > 0
-    else:
-        ok = True
-    print("ok=%s|ver=%s|hip=%s|cuda=%s|cnt=%s" % (ok, ver, hip, cuda_avail, cuda_cnt))
+        ok = ok and cuda_avail and cuda_cnt > 0
+    print("ok=%s|ver=%s|torchaudio=%s|hip=%s|cuda=%s|cnt=%s" % (ok, ver, torchaudio_present, hip, cuda_avail, cuda_cnt))
 except Exception as e:
     print("ok=False|err=%s" % e)
 PY

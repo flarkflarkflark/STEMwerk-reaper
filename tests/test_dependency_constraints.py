@@ -14,6 +14,34 @@ EXPECTED_TORCHAUDIO = "2.5.1"
 EXPECTED_AUDIO_SEPARATOR = "0.23.0"
 
 
+def _service_line_torch_runtime_status(torch_version, torchaudio_version="2.5.1"):
+    core = str(torch_version).split("+", 1)[0]
+    major, minor = [int(x) for x in core.split(".")[:2]]
+    if major > 2 or (major == 2 and minor >= 6):
+        return {
+            "ok": False,
+            "torch_supported": "no",
+            "torchaudio_present": "yes" if torchaudio_version else "no",
+            "drift_detected": "yes",
+            "reason": "torch_too_new_for_demucs",
+        }
+    if not torchaudio_version:
+        return {
+            "ok": False,
+            "torch_supported": "yes",
+            "torchaudio_present": "no",
+            "drift_detected": "yes",
+            "reason": "torchaudio_missing_for_demucs",
+        }
+    return {
+        "ok": True,
+        "torch_supported": "yes",
+        "torchaudio_present": "yes",
+        "drift_detected": "no",
+        "reason": "",
+    }
+
+
 def _core_version(ver):
     return ver.split("+", 1)[0]
 
@@ -233,8 +261,8 @@ def test_macos_runtime_verification_rejects_torch_26_plus():
     assert "torch_too_new_for_demucs" in setup_internal
     assert "numpy_too_new_for_demucs" in runtime_setup
     assert "numpy_too_new_for_demucs" in setup_internal
-    assert "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack." in runtime_setup
-    assert "macOS Torch version is too new for the bundled Demucs/audio-separator path" in setup_internal
+    assert "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in runtime_setup
+    assert "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in setup_internal
 
 
 def test_macos_setup_internal_append_log_helper_is_guarded():
@@ -254,7 +282,7 @@ def test_macos_setup_internal_reports_torch_drift_repair_guidance():
 
     assert "torch_too_new_for_demucs" in script
     assert "torch_pin_repair_failed" in script
-    assert "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack" in script
+    assert "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in script
 
 
 def test_setup_internal_postbootstrap_helpers_are_locally_bound():
@@ -357,3 +385,51 @@ def test_support_bundle_surfaces_python_support_and_unknown_import_status():
     assert 'appendKey(diagnostics, "supported_python_range"' in script
     assert 'appendKey(diagnostics, "Capability audio_separator"' in script
     assert 'appendKey(diagnostics, "Capability stemwerk_core"' in script
+
+
+def test_service_line_torch_runtime_policy_rejects_unsupported_versions():
+    assert _service_line_torch_runtime_status("2.5.1") == {
+        "ok": True,
+        "torch_supported": "yes",
+        "torchaudio_present": "yes",
+        "drift_detected": "no",
+        "reason": "",
+    }
+    assert _service_line_torch_runtime_status("2.6.0")["reason"] == "torch_too_new_for_demucs"
+    assert _service_line_torch_runtime_status("2.6.0")["ok"] is False
+    assert _service_line_torch_runtime_status("2.11.0")["reason"] == "torch_too_new_for_demucs"
+    assert _service_line_torch_runtime_status("2.11.0")["ok"] is False
+
+
+def test_service_line_torch_runtime_policy_rejects_missing_torchaudio():
+    status = _service_line_torch_runtime_status("2.5.1", torchaudio_version="")
+
+    assert status["ok"] is False
+    assert status["torch_supported"] == "yes"
+    assert status["torchaudio_present"] == "no"
+    assert status["drift_detected"] == "yes"
+    assert status["reason"] == "torchaudio_missing_for_demucs"
+
+
+def test_setup_runtime_drift_capabilities_cannot_report_ok():
+    from pathlib import Path
+
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+    runtime_setup = Path("scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua").read_text()
+    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    support_bundle = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'f:write("TORCH_VERSION="' in setup_internal
+    assert 'f:write("TORCHAUDIO_VERSION="' in setup_internal
+    assert 'f:write("TORCH_SUPPORTED="' in setup_internal
+    assert 'f:write("TORCHAUDIO_PRESENT="' in setup_internal
+    assert 'f:write("RUNTIME_DRIFT_DETECTED="' in setup_internal
+    assert 'f:write("RUNTIME_DRIFT_REASON="' in setup_internal
+    assert 'verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0' in setup_internal
+    assert 'errors[#errors + 1] = torchRuntime.error' in setup_internal
+    assert 'pythonOk and ffmpegOk and audioOk and runtimeOk' in runtime_setup
+    assert 'torchaudio_missing_for_demucs' in runtime_setup
+    assert 'major > 2 or (major == 2 and minor >= 6)' in linux_bootstrap
+    assert 'import torchaudio  # noqa: F401' in linux_bootstrap
+    assert 'appendKey(diagnostics, "TORCH_VERSION"' in support_bundle
+    assert 'appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED"' in support_bundle

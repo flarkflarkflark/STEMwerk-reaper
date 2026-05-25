@@ -2687,6 +2687,31 @@ local function performBundleCollection()
     local pythonVersion = pythonProbe.data.python_version or getPythonVersion(detectedPythonPath)
     local ffmpegVersion = getFfmpegVersion(detectedFfmpegPath)
     phaseDone("collect_probes", probesStartedAt)
+    local probeTorchVersion = trim(pythonProbe.data.torch or "")
+    local probeTorchaudioVersion = trim(pythonProbe.data.torchaudio or "")
+    local probeTorchSupported = "unknown"
+    local probeTorchaudioPresent = "unknown"
+    local probeRuntimeDriftDetected = "unknown"
+    local probeRuntimeDriftReason = "unknown"
+    do
+        local coreTorch = probeTorchVersion:match("([0-9]+%.[0-9]+%.[0-9]+)") or probeTorchVersion:match("([0-9]+%.[0-9]+)")
+        local major, minor = coreTorch and coreTorch:match("^(%d+)%.(%d+)")
+        if major and minor then
+            local torchTooNew = (tonumber(major) or 999) > 2 or ((tonumber(major) or 999) == 2 and (tonumber(minor) or 999) >= 6)
+            probeTorchSupported = torchTooNew and "no" or "yes"
+            probeTorchaudioPresent = (probeTorchaudioVersion ~= "" and not probeTorchaudioVersion:find("missing", 1, true) and not probeTorchaudioVersion:find("import_error", 1, true)) and "yes" or "no"
+            if torchTooNew then
+                probeRuntimeDriftDetected = "yes"
+                probeRuntimeDriftReason = "torch_too_new_for_demucs"
+            elseif probeTorchaudioPresent ~= "yes" then
+                probeRuntimeDriftDetected = "yes"
+                probeRuntimeDriftReason = "torchaudio_missing_for_demucs"
+            else
+                probeRuntimeDriftDetected = "no"
+                probeRuntimeDriftReason = ""
+            end
+        end
+    end
 
     local diagnostics = {}
     appendLine(diagnostics, "=== COPY/PASTE VERSION AND PLATFORM SUMMARY ===")
@@ -2705,6 +2730,12 @@ local function performBundleCollection()
     appendKey(diagnostics, "supported_python_found", trim(capabilityState.SUPPORTED_PYTHON_FOUND) ~= "" and trim(capabilityState.SUPPORTED_PYTHON_FOUND) or trim(runtimeState.SUPPORTED_PYTHON_FOUND) ~= "" and trim(runtimeState.SUPPORTED_PYTHON_FOUND) or "unknown")
     appendKey(diagnostics, "detected_python_version", trim(capabilityState.DETECTED_PYTHON_VERSION) ~= "" and trim(capabilityState.DETECTED_PYTHON_VERSION) or trim(runtimeState.DETECTED_PYTHON_VERSION) ~= "" and trim(runtimeState.DETECTED_PYTHON_VERSION) or pythonVersion)
     appendKey(diagnostics, "supported_python_range", trim(capabilityState.SUPPORTED_PYTHON_RANGE) ~= "" and trim(capabilityState.SUPPORTED_PYTHON_RANGE) or trim(runtimeState.SUPPORTED_PYTHON_RANGE) ~= "" and trim(runtimeState.SUPPORTED_PYTHON_RANGE) or (OS ~= "Windows" and "3.10-3.12" or "3.11-3.12"))
+    appendKey(diagnostics, "TORCH_VERSION", trim(capabilityState.TORCH_VERSION) ~= "" and trim(capabilityState.TORCH_VERSION) or probeTorchVersion ~= "" and probeTorchVersion or "unknown")
+    appendKey(diagnostics, "TORCHAUDIO_VERSION", trim(capabilityState.TORCHAUDIO_VERSION) ~= "" and trim(capabilityState.TORCHAUDIO_VERSION) or probeTorchaudioVersion ~= "" and probeTorchaudioVersion or "unknown")
+    appendKey(diagnostics, "TORCH_SUPPORTED", trim(capabilityState.TORCH_SUPPORTED) ~= "" and trim(capabilityState.TORCH_SUPPORTED) or probeTorchSupported)
+    appendKey(diagnostics, "TORCHAUDIO_PRESENT", trim(capabilityState.TORCHAUDIO_PRESENT) ~= "" and trim(capabilityState.TORCHAUDIO_PRESENT) or probeTorchaudioPresent)
+    appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED", trim(capabilityState.RUNTIME_DRIFT_DETECTED) ~= "" and trim(capabilityState.RUNTIME_DRIFT_DETECTED) or probeRuntimeDriftDetected)
+    appendKey(diagnostics, "RUNTIME_DRIFT_REASON", trim(capabilityState.RUNTIME_DRIFT_REASON) ~= "" and trim(capabilityState.RUNTIME_DRIFT_REASON) or probeRuntimeDriftReason)
     appendKey(diagnostics, "FFmpeg path", sanitizePathValue(detectedFfmpegPath))
     appendKey(diagnostics, "FFmpeg version", ffmpegVersion)
     appendKey(diagnostics, "Bundle created", bundleTimestamp)
@@ -2804,6 +2835,8 @@ local function performBundleCollection()
     appendKey(diagnostics, "Capability verification", trim(capabilityState.VERIFICATION) ~= "" and trim(capabilityState.VERIFICATION) or "missing")
     appendKey(diagnostics, "Capability audio_separator", trim(capabilityState.AUDIO_SEPARATOR) ~= "" and trim(capabilityState.AUDIO_SEPARATOR) or "unknown")
     appendKey(diagnostics, "Capability stemwerk_core", trim(capabilityState.STEMWERK_CORE) ~= "" and trim(capabilityState.STEMWERK_CORE) or "unknown")
+    appendKey(diagnostics, "Capability runtime drift", trim(capabilityState.RUNTIME_DRIFT_DETECTED) ~= "" and trim(capabilityState.RUNTIME_DRIFT_DETECTED) or "unknown")
+    appendKey(diagnostics, "Capability runtime drift reason", trim(capabilityState.RUNTIME_DRIFT_REASON) ~= "" and trim(capabilityState.RUNTIME_DRIFT_REASON) or "unknown")
     appendKey(diagnostics, "Bootstrap status", trim(capabilityState.BOOTSTRAP_STATUS) ~= "" and trim(capabilityState.BOOTSTRAP_STATUS) or trim(runtimeState.STATUS) ~= "" and trim(runtimeState.STATUS) or "missing")
     appendKey(diagnostics, "Quality/model mode", selectedModel .. " (" .. modelModeLabel(selectedModel) .. ")")
     appendKey(diagnostics, "Output track mode", extBool("createNewTracks") and "new tracks" or "in place / takes")
