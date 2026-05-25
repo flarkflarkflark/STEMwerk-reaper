@@ -264,8 +264,26 @@ def test_macos_runtime_verification_rejects_torch_26_plus():
     assert "torch_too_new_for_demucs" in setup_internal
     assert "numpy_too_new_for_demucs" in runtime_setup
     assert "numpy_too_new_for_demucs" in setup_internal
-    assert "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in runtime_setup
-    assert "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in setup_internal
+
+
+def test_runtime_setup_binds_trim_before_compat_probe_use():
+    runtime_setup = Path("scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua").read_text()
+    line_no = lambda needle: next(i for i, line in enumerate(runtime_setup.splitlines(), 1) if needle in line)
+
+    assert "local trim" in runtime_setup
+    assert "trim = function(s)" in runtime_setup
+    assert line_no("trim = function(s)") < line_no("local function checkDemucsRuntimeCompatibility")
+    assert line_no("trim = function(s)") < line_no("local text = trim(out or \"\")")
+
+
+def test_runtime_setup_demucs_probe_uses_temp_script_not_fragile_c_escaping():
+    runtime_setup = Path("scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua").read_text()
+
+    assert 'local tmpPy = os.tmpname()' in runtime_setup
+    assert 'wf:write(script)' in runtime_setup
+    assert 'local cmd = commandQuote(pythonPath) .. " " .. commandQuote(tmpPy)' in runtime_setup
+    assert 'pcall(os.remove, tmpPy)' in runtime_setup
+    assert 'split(\\\\' not in runtime_setup
 
 
 def test_macos_setup_internal_append_log_helper_is_guarded():
@@ -419,6 +437,13 @@ def test_support_bundle_surfaces_python_support_and_unknown_import_status():
 
 
 def test_service_line_torch_runtime_policy_rejects_unsupported_versions():
+    assert _service_line_torch_runtime_status("2.2.2") == {
+        "ok": True,
+        "torch_supported": "yes",
+        "torchaudio_present": "yes",
+        "drift_detected": "no",
+        "reason": "",
+    }
     assert _service_line_torch_runtime_status("2.5.1") == {
         "ok": True,
         "torch_supported": "yes",

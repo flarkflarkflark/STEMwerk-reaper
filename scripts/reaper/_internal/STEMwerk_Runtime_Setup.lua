@@ -3,6 +3,7 @@ local M = {}
 local C = {}
 local PATH_HELPER = nil
 local INSTALL_CACHE = nil
+local trim
 
 local function getPathHelper()
     if PATH_HELPER then return PATH_HELPER end
@@ -66,6 +67,10 @@ local function debugLog(msg)
     if type(C.debugLog) == "function" then
         C.debugLog(msg)
     end
+end
+
+trim = function(s)
+    return tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 local function logExec(cmd, rc, out)
@@ -636,8 +641,22 @@ if nmj >= 2:
     sys.exit(3)
 print("ok")
 ]=]
-    local cmd = commandQuote(pythonPath) .. " -c " .. commandQuote(script)
+    local tmpPy = os.tmpname()
+    if not tmpPy or tmpPy == "" then
+        return false, "demucs_runtime_incompatible"
+    end
+    if (C.OS or "") == "Windows" and not tmpPy:lower():match("%.py$") then
+        tmpPy = tmpPy .. ".py"
+    end
+    local wf = io.open(tmpPy, "w")
+    if not wf then
+        return false, "demucs_runtime_incompatible"
+    end
+    wf:write(script)
+    wf:close()
+    local cmd = commandQuote(pythonPath) .. " " .. commandQuote(tmpPy)
     local rc, out = execCommandWithOutput(cmd, 15000)
+    pcall(os.remove, tmpPy)
     local text = trim(out or "")
     if tonumber(rc) == 0 then return true, nil end
     logExec("demucs_runtime_compat_failed", rc or -1, text)
