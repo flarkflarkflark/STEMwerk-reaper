@@ -6,7 +6,7 @@ This is the new cross-platform STEMwerk installer for Linux and macOS. It provid
 - One-click, fully automatic setup (no manual steps required)
 - Stepwise progress bar (Runtime, Python + venv, FFmpeg, Core packages, REAPER integration)
 - Live log output for troubleshooting
-- Detects and installs the correct Python, venv, dependencies, and GPU backend (ROCm/NVIDIA/MPS/CPU)
+- Downloads a pinned STEMwerk-managed Python runtime on supported Linux/macOS platforms, then creates the venv, dependencies, and GPU backend (ROCm/NVIDIA/MPS/CPU)
 - Copies all STEMwerk scripts to the correct REAPER Scripts folder
 - No changes to existing STEMwerk files or legacy installers
 
@@ -19,9 +19,11 @@ This is the new cross-platform STEMwerk installer for Linux and macOS. It provid
 3. When finished, open REAPER and run STEMwerk.lua — everything is ready!
 
 ## Requirements
-- Python 3.11 or 3.12 (system Python)
+- Internet access for first-time managed Python/runtime setup
 - PySimpleGUI (will be installed automatically in the venv)
 - ffmpeg (recommended, for full functionality)
+
+Supported managed Python downloads currently cover Linux x86_64 glibc, macOS x86_64, and macOS arm64. Other Linux/macOS platforms need a bundled/offline installer or a supported Python 3.10-3.12 runtime installed manually.
 
 ## Troubleshooting
 - All output is shown live in the log window
