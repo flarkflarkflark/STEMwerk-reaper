@@ -438,7 +438,7 @@ local function canRunPython(pythonCmd)
         return false
     end
 
-    if OS ~= "macOS" then
+    if OS ~= "macOS" and OS ~= "Linux" then
         return true
     end
 
@@ -459,7 +459,7 @@ local function canRunPython(pythonCmd)
     end
     local versionText = tostring(versionOut or ""):match("(%d+%.%d+%.%d+)") or tostring(versionOut or ""):match("(%d+%.%d+)")
     if versionRc ~= 0 or not major or not minor then
-        debugLog("canRunPython macOS: version probe failed for " .. tostring(pythonCmd) .. " output=" .. tostring(versionOut))
+        debugLog("canRunPython " .. tostring(OS) .. ": version probe failed for " .. tostring(pythonCmd) .. " output=" .. tostring(versionOut))
         return false
     end
     major = tonumber(major) or 0
@@ -467,7 +467,7 @@ local function canRunPython(pythonCmd)
     if major == 3 and minor >= 10 and minor <= 12 then
         return true
     end
-    debugLog("Rejecting unsupported macOS Python: " .. tostring(pythonCmd) .. " version=" .. tostring(versionText or (major .. "." .. minor)))
+    debugLog("Rejecting unsupported " .. tostring(OS) .. " Python: " .. tostring(pythonCmd) .. " version=" .. tostring(versionText or (major .. "." .. minor)))
     return false
 end
 

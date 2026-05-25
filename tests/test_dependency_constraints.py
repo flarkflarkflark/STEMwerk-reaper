@@ -294,3 +294,66 @@ def test_stemwerk_setup_runtime_helpers_use_local_bindings():
     assert "local quoteArg = SYSTEM.quoteArg" in script
     assert "local execProcess = SYSTEM.execProcess" in script
     assert "\nfileExists = SYSTEM.fileExists" not in script
+
+
+def test_linux_bootstrap_rejects_python_314_with_clear_repair_guidance():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert "3.10|3.11|3.12)" in script
+    assert "3.14" not in script
+    assert 'set_status "missing_python" "python_unsupported"' in script
+    assert "Unsupported Python found: ${UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild." in script
+    assert 'SUPPORTED_PYTHON_FOUND="no"' in script
+    assert "SUPPORTED_PYTHON_RANGE=3.10-3.12" in script
+
+
+def test_linux_bootstrap_prefers_supported_explicit_minor_before_python3():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert script.index('"/usr/local/bin/python3.12"') < script.index('"/usr/local/bin/python3"')
+    assert script.index('"/usr/bin/python3.12"') < script.index('"/usr/bin/python3"')
+    assert script.index("for cmd in python3.12 python3.11 python3.10 python3; do") < script.index('candidate="$(command -v python3)"')
+
+
+def test_macos_bootstrap_reports_unsupported_python_without_python_missing_ambiguity():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert '"python3.12"' in script
+    assert '"python3.11"' in script
+    assert '"python3.10"' in script
+    assert script.index('"python3.12"') < script.index('"python3"')
+    assert 'set_status "missing_python" "python_unsupported"' in script
+    assert "Unsupported Python found: ${FIRST_UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild." in script
+    assert "SUPPORTED_PYTHON_FOUND=no" in script
+    assert "SUPPORTED_PYTHON_RANGE=3.10-3.12" in script
+
+
+def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'f:write("SUPPORTED_PYTHON_FOUND="' in script
+    assert 'f:write("DETECTED_PYTHON_VERSION="' in script
+    assert 'f:write("SUPPORTED_PYTHON_RANGE="' in script
+    assert 'audioStatus = venvExists and "not_checked" or "no_runtime"' in script
+    assert 'coreStatus = venvExists and "not_checked" or "no_runtime"' in script
+    assert '"Unsupported Python found: " .. detected .. ". Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."' in script
+
+
+def test_support_bundle_surfaces_python_support_and_unknown_import_status():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'appendKey(diagnostics, "supported_python_found"' in script
+    assert 'appendKey(diagnostics, "detected_python_version"' in script
+    assert 'appendKey(diagnostics, "supported_python_range"' in script
+    assert 'appendKey(diagnostics, "Capability audio_separator"' in script
+    assert 'appendKey(diagnostics, "Capability stemwerk_core"' in script

@@ -590,7 +590,7 @@ local function prettySetupReason(reason)
         elseif lower == "python_not_found" then
             part = "No supported Python found"
         elseif lower == "python_unsupported" or lower == "unsupported_python_version" then
-            part = "Python version is unsupported (need 3.10-3.12 on macOS/Linux or 3.11-3.12 on Windows)"
+            part = "Unsupported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
         elseif lower == "venv_create_failed" then
             part = "Could not create Python virtual environment"
         elseif lower == "pip_upgrade_failed" then
@@ -667,7 +667,7 @@ local function prettyCheckError(err)
     local lower = trim(err):lower()
     if lower == "" then return "" end
     if lower == "python_missing" then return "Python path is missing" end
-    if lower == "python_unsupported" then return "Python version is unsupported" end
+    if lower == "python_unsupported" then return "Unsupported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild." end
     if lower == "python_unusable" then return "Python executable is unusable" end
     if lower == "ffmpeg_missing" then return "FFmpeg path is missing" end
     if lower == "ffmpeg_unusable" then return "FFmpeg executable is unusable" end
@@ -847,12 +847,35 @@ end
 
 local function canRunPython(path)
     path = resolvePath(path)
-    return runCommandWithProbe(path, " --version", "Python", 15000)
+    if not runCommandWithProbe(path, " --version", "Python", 15000) then
+        return false
+    end
+    if OS == "Linux" or OS == "macOS" then
+        local cmd = quoteArg(path) .. " -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
+        local rc, out = execProcess(cmd, 12000)
+        local major, minor = tostring(out or ""):match("(%d+)%.(%d+)")
+        if tonumber(rc) ~= 0 or not major or not minor then
+            return false
+        end
+        major = tonumber(major) or 0
+        minor = tonumber(minor) or 0
+        return major == 3 and minor >= 10 and minor <= 12
+    end
+    return true
 end
 
 local function canRunFfmpeg(path)
     path = resolvePath(path)
     return runCommandWithProbe(path, " -version", "ffmpeg version", 8000)
+end
+
+local function pythonVersionText(path)
+    path = resolvePath(path)
+    if path == "" or not fileExists(path) then return "" end
+    local cmd = quoteArg(path) .. " -c " .. quoteArg("import platform; print(platform.python_version())")
+    local rc, out = execProcess(cmd, 12000)
+    if tonumber(rc) ~= 0 then return "" end
+    return trim((out or ""):match("([0-9]+%.[0-9]+%.[0-9]+)") or (out or ""):match("([0-9]+%.[0-9]+)") or "")
 end
 
 local function resolveUnixFfmpegFallback()
@@ -1231,6 +1254,9 @@ local function writeCapabilities(path, data, deviceOut)
     if data.backendNote and data.backendNote ~= "" then
         f:write("BACKEND_NOTE=" .. tostring(data.backendNote) .. "\n")
     end
+    f:write("SUPPORTED_PYTHON_FOUND=" .. tostring(data.supportedPythonFound or "") .. "\n")
+    f:write("DETECTED_PYTHON_VERSION=" .. tostring(data.detectedPythonVersion or "") .. "\n")
+    f:write("SUPPORTED_PYTHON_RANGE=" .. tostring(data.supportedPythonRange or "") .. "\n")
     f:write("PYTHON_PATH=" .. tostring(data.pythonPath or "") .. "\n")
     f:write("FFMPEG_PATH=" .. tostring(data.ffmpegPath or "") .. "\n")
     f:write("RUNTIME_BASE=" .. tostring(data.runtimeBase or "") .. "\n")
@@ -1838,6 +1864,12 @@ local function verifyRuntimePaths(state)
     local pythonOk = false
     local ffmpegOk = false
     local audioOk = false
+    local detectedPythonVersion = trim(state.DETECTED_PYTHON_VERSION or "")
+    local supportedPythonFound = trim(state.SUPPORTED_PYTHON_FOUND or "")
+    local supportedPythonRange = trim(state.SUPPORTED_PYTHON_RANGE or "")
+    if supportedPythonRange == "" and (OS == "Linux" or OS == "macOS") then
+        supportedPythonRange = "3.10-3.12"
+    end
 
     if resolved.pythonPath == "" then
         if trim(state.STATUS_REASON or "") == "python_unsupported" then
@@ -1846,12 +1878,22 @@ local function verifyRuntimePaths(state)
             errors[#errors + 1] = "python_missing"
         end
     else
+        detectedPythonVersion = detectedPythonVersion ~= "" and detectedPythonVersion or pythonVersionText(resolved.pythonPath)
         if canRunPython(resolved.pythonPath) then
             pythonOk = true
+            supportedPythonFound = supportedPythonFound ~= "" and supportedPythonFound or "yes"
             setExt("pythonPath", resolved.pythonPath)
         else
-            errors[#errors + 1] = "python_unusable"
+            if (OS == "Linux" or OS == "macOS") and detectedPythonVersion ~= "" then
+                errors[#errors + 1] = "python_unsupported"
+                supportedPythonFound = "no"
+            else
+                errors[#errors + 1] = "python_unusable"
+            end
         end
+    end
+    if supportedPythonFound == "" then
+        supportedPythonFound = pythonOk and "yes" or "no"
     end
 
     if resolved.ffmpegPath == "" then
@@ -1928,6 +1970,9 @@ print("ok")
         pythonOk = pythonOk,
         ffmpegOk = ffmpegOk,
         audioOk = audioOk,
+        detectedPythonVersion = detectedPythonVersion,
+        supportedPythonFound = supportedPythonFound,
+        supportedPythonRange = supportedPythonRange,
         errors = errors,
     }
 end
@@ -2083,8 +2128,16 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
         return false
     end
-    local audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
-    local coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
+    local venvExists = runtime and runtime.venvPython and fileExists(runtime.venvPython)
+    local audioStatus = "ok"
+    local coreStatus = "ok"
+    if not verification.pythonOk or not venvExists then
+        audioStatus = venvExists and "not_checked" or "no_runtime"
+        coreStatus = venvExists and "not_checked" or "no_runtime"
+    else
+        audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
+        coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
+    end
     local verificationStatus = (effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) and "ok" or "failed"
 
     ensureDir(runtime.runtimeState)
@@ -2094,6 +2147,9 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         backend = backend,
         backendReason = backendReason,
         backendNote = backendNote,
+        supportedPythonFound = verification.supportedPythonFound,
+        detectedPythonVersion = verification.detectedPythonVersion,
+        supportedPythonRange = verification.supportedPythonRange,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
@@ -2168,6 +2224,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     end
     finalMessage[#finalMessage + 1] = "Failure: " .. failureClass
     finalMessage[#finalMessage + 1] = "Checks: " .. formatCheckErrors(errors)
+    if hasError("python_unsupported") or trim(state.STATUS_REASON or "") == "python_unsupported" then
+        local detected = trim(verification.detectedPythonVersion or state.DETECTED_PYTHON_VERSION or "")
+        finalMessage[#finalMessage + 1] = ""
+        if detected ~= "" then
+            finalMessage[#finalMessage + 1] = "Unsupported Python found: " .. detected .. ". Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+        else
+            finalMessage[#finalMessage + 1] = "Unsupported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+        end
+    end
     if hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg" then
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Missing FFmpeg"

@@ -68,6 +68,10 @@ write_state() {
       [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
       [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
       [ -n "${BACKEND_NOTE}" ] && echo "BACKEND_NOTE=${BACKEND_NOTE}"
+      [ -n "${SUPPORTED_PYTHON_FOUND}" ] && echo "SUPPORTED_PYTHON_FOUND=${SUPPORTED_PYTHON_FOUND}"
+      [ -n "${DETECTED_PYTHON_VERSION}" ] && echo "DETECTED_PYTHON_VERSION=${DETECTED_PYTHON_VERSION}"
+      [ -n "${DETECTED_PYTHON_PATH}" ] && echo "DETECTED_PYTHON_PATH=${DETECTED_PYTHON_PATH}"
+      echo "SUPPORTED_PYTHON_RANGE=3.10-3.12"
       echo "PYTHON_PATH=${PYTHON_PATH}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
@@ -277,6 +281,9 @@ PYTHON=""
 FFMPEG=""
 VENV_PY=""
 PYTHON_PATH=""
+SUPPORTED_PYTHON_FOUND="no"
+DETECTED_PYTHON_VERSION=""
+DETECTED_PYTHON_PATH=""
 # Conservative default on Linux to avoid extra GPU deps unless explicitly needed.
 PACKAGE="audio-separator==0.23.0"
 ONNX_PACKAGE="onnxruntime"
@@ -360,19 +367,42 @@ python_major_minor() {
   return 0
 }
 
+python_full_version() {
+  local py="$1"
+  if [ ! -x "$py" ]; then
+    return 1
+  fi
+  local out
+  out="$("$py" -c 'import platform; print(platform.python_version())' 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    return 1
+  fi
+  printf "%s" "${out}"
+  return 0
+}
+
 is_supported_python() {
   local py="$1"
   local mm
   mm="$(python_major_minor "$py" || true)"
   case "${mm}" in
     3.10|3.11|3.12)
+      SUPPORTED_PYTHON_FOUND="yes"
+      DETECTED_PYTHON_VERSION="$(python_full_version "$py" || printf "%s" "${mm}")"
+      DETECTED_PYTHON_PATH="${py}"
       return 0
       ;;
   esac
   if [ -n "${mm}" ]; then
-    log_step "Ignoring unsupported Python ${mm} at ${py} (need 3.10-3.12)"
-    UNSUPPORTED_PYTHON_VERSION="${mm}"
+    local full
+    full="$(python_full_version "$py" || printf "%s" "${mm}")"
+    log_step "Ignoring unsupported Python ${full} at ${py} (need 3.10-3.12)"
+    UNSUPPORTED_PYTHON_VERSION="${full}"
     UNSUPPORTED_PYTHON_PATH="${py}"
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then
+      DETECTED_PYTHON_VERSION="${full}"
+      DETECTED_PYTHON_PATH="${py}"
+    fi
   fi
   return 1
 }
@@ -470,9 +500,15 @@ fi
 if [ -z "${PYTHON}" ]; then
   if [ -n "${UNSUPPORTED_PYTHON_VERSION}" ]; then
     BACKEND_REASON="python_unsupported"
+    msg="Unsupported Python found: ${UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+    log_step "${msg}"
+    printf "%s\n" "${msg}" >&2
     set_status "missing_python" "python_unsupported"
   else
     BACKEND_REASON="python_not_found"
+    msg="No supported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+    log_step "${msg}"
+    printf "%s\n" "${msg}" >&2
     set_status "missing_python" "python_not_found"
   fi
 else

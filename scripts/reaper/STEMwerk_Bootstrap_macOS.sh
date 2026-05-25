@@ -386,6 +386,16 @@ write_state() {
       [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
       [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
       [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
+      if [ -n "${PYTHON}" ]; then
+        echo "SUPPORTED_PYTHON_FOUND=yes"
+        [ -n "${SELECTED_PYTHON_VERSION}" ] && echo "DETECTED_PYTHON_VERSION=${SELECTED_PYTHON_VERSION}"
+        echo "DETECTED_PYTHON_PATH=${PYTHON}"
+      else
+        echo "SUPPORTED_PYTHON_FOUND=no"
+        [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ] && echo "DETECTED_PYTHON_VERSION=${FIRST_UNSUPPORTED_PYTHON_VERSION}"
+        [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && echo "DETECTED_PYTHON_PATH=${FIRST_UNSUPPORTED_PYTHON_PATH}"
+      fi
+      echo "SUPPORTED_PYTHON_RANGE=3.10-3.12"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
@@ -570,12 +580,12 @@ set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
 
 if [ -z "${PYTHON}" ]; then
   if [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
-    PYTHON_MESSAGE="Detected Python ${FIRST_UNSUPPORTED_PYTHON_VERSION} at ${FIRST_UNSUPPORTED_PYTHON_PATH}, but STEMwerk currently supports Python 3.10-3.12 on macOS. Please install Python 3.11 or 3.12, or let STEMwerk use one if already present."
+    PYTHON_MESSAGE="Unsupported Python found: ${FIRST_UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
     set_status "missing_python" "python_unsupported"
   else
-    PYTHON_MESSAGE="No supported Python 3.10-3.12 interpreter found on macOS. Please install Python 3.11 or 3.12, or let STEMwerk use one if already present."
+    PYTHON_MESSAGE="No supported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
     set_status "missing_python" "python_not_found"
