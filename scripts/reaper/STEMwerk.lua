@@ -5458,6 +5458,7 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  V D B   Vocals / Drums / Bass")
                     addLine(l, "  F Q S   Fast / Quality / 6-Stem")
                     addLine(l, "  X       " .. tr("help_native_key_drumkit", "Drum Kit Split"))
+                    addLine(l, "  E       " .. tr("help_native_key_edks", "Extract + Drum Kit Split (planned)"))
                     addLine(l, "  1-4     " .. tr("help_native_key_toggle_stems", "Toggle stems (1-6 in 6-stem)"))
                     return l
                 end
@@ -5490,6 +5491,7 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  " .. tr("help_native_drumkit_step_1", "Split existing drum audio into Kick, Snare, Toms, Hi-Hat, Ride, and Crash."))
                     addLine(l, "  " .. tr("help_native_drumkit_model_note", "Best for drum stems, drum buses, loops, or already-isolated drums."))
                     addLine(l, "  " .. tr("help_native_drumkit_guidance", "For full songs or mixed audio, use All Stems first to extract the drum stem, then run Drum Kit Split on that drum stem."))
+                    addLine(l, "  " .. tr("help_native_edks_planned", "Extract + Drum Kit Split for full songs is planned."))
                     addLine(l, "")
                     addHead(l, tr("help_native_output", "Output"))
                     addLine(l, "  " .. tr("new_tracks", "New tracks"))
@@ -7508,6 +7510,7 @@ local function drawArtGallery()
         local line1 = T("help_drumkit_line1") or "Split existing drum audio."
         local line2 = T("help_drumkit_line2") or "Best for drum stems, buses, loops, or isolated drums."
         local shortcut = T("help_drumkit_line3") or "Shortcut: X"
+        local planned = T("help_drumkit_edks_planned") or "Extract + Kit for full songs: planned."
 
         -- Title — uses Drums stem accent (blue) so it visually ties to the drum row at left
         gfx.setfont(1, "Arial", PS(17), string.byte('b'))
@@ -7542,6 +7545,12 @@ local function drawArtGallery()
         gfx.x = rightX
         gfx.y = rightY + PS(108)
         gfx.drawstr(shortcut)
+
+        gfx.setfont(1, "Arial", PS(10))
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.82)
+        gfx.x = rightX
+        gfx.y = rightY + PS(130)
+        gfx.drawstr(planned)
 
         -- 6-stem model note (translated, better styled)
         if contentH > PS(400) then
@@ -9839,6 +9848,46 @@ local function drawToggleButton(x, y, w, h, label, selected, color, fontSizeOver
     return UI_DRAW.drawToggleButton(x, y, w, h, label, selected, color, fontSizeOverride)
 end
 
+function showExtractDrumKitPlannedNotice()
+    local title = trSafe("edks_planned_title", "Extract + Drum Kit Split")
+    local message = trSafe(
+        "edks_planned_message",
+        "Extract + Drum Kit Split is planned. For now, run All Stems first, then Drum Kit Split on the drum stem."
+    )
+    if type(openDialogWarning) == "function" then
+        openDialogWarning(title, message)
+    elseif type(showMessage) == "function" then
+        showMessage(title, message, "info", false)
+    end
+end
+
+function drawDisabledPresetButton(x, y, w, h, label, fontSizeOverride)
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+    local hover = mx >= x and mx <= x + w and my >= y and my <= y + h
+    if hover then GUI.uiClickedThisFrame = true end
+
+    local brightness = hover and 0.30 or 0.24
+    local alpha = hover and 0.96 or 0.88
+    local radius = getThemeRadius(S, 0, math.floor(math.min(w, h) / 2))
+    local borderWeight = getThemeBorderWeight(S, 1)
+    drawThemeSurfaceBox(x, y, w, h, {brightness, brightness, brightness}, THEME.border, alpha, 0.86, radius, borderWeight, 0.35, "button")
+
+    gfx.setfont(1, "Arial", fontSizeOverride or S(13))
+    local text = tostring(label or "")
+    local labelText, tw, usedFontSize = fitTextToBox(text, w - S(8), fontSizeOverride or S(13), S(8))
+    local textX = x + (w - tw) / 2
+    local textY = y + (h - gfx.texth) / 2
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], hover and 0.90 or 0.76)
+    gfx.x, gfx.y = textX, textY
+    gfx.drawstr(labelText)
+    if usedFontSize ~= (fontSizeOverride or S(13)) then
+        gfx.setfont(1, "Arial", fontSizeOverride or S(13))
+    end
+
+    return hover and mouseDown and not GUI.wasMouseDown
+end
+
 -- Draw a small button and return if it was clicked (scaled)
 -- Optional fontSizeOverride: when provided, a group of buttons can share the same text size.
 local function drawButton(x, y, w, h, label, isDefault, color, fontSizeOverride)
@@ -12005,13 +12054,14 @@ function renderMainColumns(ctx)
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
     local presetLabelDrumKit = (T("workflow_drumkit_label") or "Drum Kit Split") .. " (X)"
+    local presetLabelEdks    = (T("workflow_edks_label") or "Extract + Kit") .. " (E)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
     local presetLabelOther   = (T("other") or "Other")      .. " (O)"
     local presetLabelPiano   = (T("piano") or "Piano")      .. " (P)"
     local presetLabelGuitar  = (T("guitar") or "Guitar")    .. " (G)"
-    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelDrumKit, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
+    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelDrumKit, presetLabelEdks, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
     if is6Stem and not drumKitMode then
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
@@ -12081,6 +12131,20 @@ function renderMainColumns(ctx)
         T("tooltip_preset_drumkit") or "Split existing drum audio into Kick, Snare, Toms, Hi-Hat, Ride, and Crash.",
         "X",
         {140, 110, 230}
+    )
+
+    presetY = presetY + S(22)
+    if drawDisabledPresetButton(col1X, presetY, colW, btnH, presetLabelEdks, presetsBtnFontSize) then
+        showExtractDrumKitPlannedNotice()
+    end
+    setTooltipWithShortcut(
+        col1X,
+        presetY,
+        colW,
+        btnH,
+        T("tooltip_preset_edks") or "For full songs or mixed audio. Extracts the drum stem first, then splits it into kit pieces. Planned.",
+        "E",
+        {160, 160, 160}
     )
 
     presetY = presetY + S(28)
@@ -13328,6 +13392,8 @@ function handleDialogKeyboard(ctx)
         setWorkflowMode(WORKFLOW_MODE_DRUM_KIT)
     elseif char == 120 or char == 88 then
         setWorkflowMode(WORKFLOW_MODE_DRUM_KIT)
+    elseif char == 101 or char == 69 then
+        showExtractDrumKitPlannedNotice()
     elseif char == 102 or char == 70 then
         if isModelAvailableInCurrentMode("htdemucs") then
             setModelPreservingStemIntent("htdemucs")
