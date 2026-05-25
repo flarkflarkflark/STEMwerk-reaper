@@ -405,6 +405,30 @@ def test_setup_internal_marks_intel_macos_cpu_fallback_success_as_expected():
     assert 'if OS == "macOS" and MAC_ARCH == "x86_64" and profile == "mac-cpu" and backend == "cpu" then' in script
     assert "Setup completed using Intel macOS CPU fallback." in script
     assert "MPS is unavailable on Intel Macs; CPU processing is expected." in script
+    assert "CPU fallback: MPS unavailable" in script
+    assert 'and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable")' in script
+
+
+def test_setup_internal_treats_macos_cpu_mps_unavailable_as_info_not_failure():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'and profile == "mac-cpu"' in script
+    assert 'and backend == "cpu"' in script
+    assert 'and trim(state.STATUS or "") == "ok"' in script
+    assert 'and verification.pythonOk' in script
+    assert 'and verification.ffmpegOk' in script
+    assert 'and #errors == 0' in script
+    assert 'and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable")' in script
+
+
+def test_setup_internal_still_flags_real_failures_and_linux_deps_failed():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'and trim(state.STATUS or "") == "ok"' in script
+    assert "and verification.pythonOk" in script
+    assert "and verification.ffmpegOk" in script
+    assert "and #errors == 0" in script
+    assert "Setup was not completely successful." in script
 
 
 def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():

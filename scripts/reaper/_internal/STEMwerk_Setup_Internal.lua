@@ -758,7 +758,7 @@ local function prettyBackendReason(reason)
         elseif lower == "bootstrap_directml_confirmed" then
             part = "DirectML runtime confirmed by installer"
         elseif lower == "mps_unavailable" then
-            part = "MPS unavailable; using CPU"
+            part = "CPU fallback: MPS unavailable"
         end
         local key = part:lower()
         if key ~= "" and not seen[key] then
@@ -2330,7 +2330,16 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
         coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
     end
-    local verificationStatus = (effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) and "ok" or "failed"
+    local verificationStatus = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
+        or (OS == "macOS"
+            and MAC_ARCH == "x86_64"
+            and profile == "mac-cpu"
+            and backend == "cpu"
+            and trim(state.STATUS or "") == "ok"
+            and verification.pythonOk
+            and verification.ffmpegOk
+            and #errors == 0
+            and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable"))) and "ok" or "failed"
 
     ensureDir(runtime.runtimeState)
     local capPath = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
@@ -2406,7 +2415,16 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if (effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0) then
+    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
+        or (OS == "macOS"
+            and MAC_ARCH == "x86_64"
+            and profile == "mac-cpu"
+            and backend == "cpu"
+            and trim(state.STATUS or "") == "ok"
+            and verification.pythonOk
+            and verification.ffmpegOk
+            and #errors == 0
+            and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable"))) then
         finalMessage[#finalMessage + 1] = "Setup complete — run STEMwerk.lua from the REAPER Action List"
         if OS == "macOS" and MAC_ARCH == "x86_64" and profile == "mac-cpu" and backend == "cpu" then
             finalMessage[#finalMessage + 1] = "Setup completed using Intel macOS CPU fallback."
