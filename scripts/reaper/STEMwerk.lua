@@ -14919,28 +14919,47 @@ local function drawProgressWindow()
 
         gfx.setfont(1, "Arial", PS(10))
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        local summaryLine = (dkMaxParallel > 1)
-            and string.format(trSafe("drumkit_processing_summary_parallel", "Parallel jobs: %d · Completed: %d/%d · Active: %d"), dkMaxParallel, dkCompleted, dkTotal, dkActiveCount)
-            or string.format(trSafe("drumkit_processing_summary_sequential", "Sequential · Completed: %d/%d · Active: %d"), dkCompleted, dkTotal, dkActiveCount)
+        local summaryLine = string.format(
+            trSafe("drumkit_processing_summary_rows", "Parallel jobs: %d · Active: %d · Waiting: %d · Done: %d / %d"),
+            dkMaxParallel, dkActiveCount, dkQueued, dkCompleted, math.max(1, dkTotal)
+        )
         gfx.x = rowX
         gfx.y = rowY
         gfx.drawstr(summaryLine)
         rowY = rowY + PS(12)
 
         local q = T("progress_queued") or "Queued"
+        local prep = T("drumkit_progress_preparing") or "Preparing"
+        local sep = T("drumkit_stage_separating") or "Separating"
         local p = T("progress_stage_processing") or "Processing"
-        local c = T("progress_stage_complete") or "Complete"
+        local imp = T("drumkit_progress_importing") or "Importing"
+        local d = T("progress_waiting_done") or "Done"
         local f = T("status_error") or "Failed"
         for i = 1, drawTotal do
             local row = rows[i] or {}
             local state = tostring(row.state or "queued")
-            local stateLabel = (state == "complete" and c) or (state == "processing" and p) or (state == "failed" and f) or q
+            local stateLabel = q
+            if state == "preparing" then
+                stateLabel = prep
+            elseif state == "separating" then
+                stateLabel = sep
+            elseif state == "processing" then
+                stateLabel = p
+            elseif state == "importing" then
+                stateLabel = imp
+            elseif state == "complete" then
+                stateLabel = d
+            elseif state == "failed" then
+                stateLabel = f
+            end
             local stageLabel = tostring(row.stage or "")
+            local rowPct = tonumber(row.percent)
+            local rowPctKnown = row.percentKnown == true and rowPct ~= nil
             local label = string.format(
                 trSafe("drumkit_processing_source_row_state", "Source %d/%d · %s"),
                 i, math.max(1, drawTotal), stateLabel
             )
-            if stageLabel ~= "" and state == "processing" then
+            if stageLabel ~= "" and (state == "preparing" or state == "separating" or state == "processing" or state == "importing") then
                 label = label .. " · " .. stageLabel
             end
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
@@ -14956,17 +14975,31 @@ local function drawProgressWindow()
             if state == "complete" then
                 gfx.set(0.34, 0.72, 0.42, 0.95)
                 gfx.rect(rowX + 1, barYLocal + 1, math.max(1, rowW - 2), math.max(1, rowBarH - 2), 1)
-            elseif state == "processing" then
-                local pulseW = math.max(PS(36), math.floor(rowW * 0.22))
-                local pulseX = rowX + math.floor((rowW - pulseW) * pulseT)
-                gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.95)
-                gfx.rect(pulseX, barYLocal + 1, pulseW, math.max(1, rowBarH - 2), 1)
+            elseif state == "preparing" or state == "separating" or state == "processing" or state == "importing" then
+                if rowPctKnown then
+                    local pctFill = math.floor(math.max(0, math.min(100, rowPct)) * rowW / 100)
+                    gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.95)
+                    gfx.rect(rowX + 1, barYLocal + 1, math.max(1, pctFill - 2), math.max(1, rowBarH - 2), 1)
+                else
+                    local pulseW = math.max(PS(36), math.floor(rowW * 0.22))
+                    local pulseX = rowX + math.floor((rowW - pulseW) * pulseT)
+                    gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.95)
+                    gfx.rect(pulseX, barYLocal + 1, pulseW, math.max(1, rowBarH - 2), 1)
+                end
             elseif state == "failed" then
                 gfx.set(0.8, 0.25, 0.25, 0.95)
                 gfx.rect(rowX + 1, barYLocal + 1, math.max(1, rowW - 2), math.max(1, rowBarH - 2), 1)
             else
                 gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 0.35)
                 gfx.rect(rowX + 1, barYLocal + 1, math.max(1, rowW - 2), math.max(1, rowBarH - 2), 1)
+            end
+            if rowPctKnown then
+                local pctText = string.format("%d%%", math.floor(math.max(0, math.min(100, rowPct)) + 0.5))
+                gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+                local pw = gfx.measurestr(pctText)
+                gfx.x = rowX + rowW - pw
+                gfx.y = rowY
+                gfx.drawstr(pctText)
             end
             rowY = barYLocal + rowBarH + rowGap
         end
@@ -16031,6 +16064,10 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
     local eventName = tostring(event.event or "")
     local srcIdx = tonumber(event.source_index or progressState.drumKitSourceIndex or 1) or 1
     local srcCnt = tonumber(event.source_count or progressState.drumKitSourceCount or 1) or 1
+    local eventPct = tonumber(event.progress_pct or event.progress or event.percent)
+    if eventPct ~= nil then
+        eventPct = math.max(0, math.min(100, eventPct))
+    end
     progressState.drumKitSourceIndex = srcIdx
     progressState.drumKitSourceCount = srcCnt
     if eventName == "source_queue_status" then
@@ -16049,9 +16086,13 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
             local row = progressState.drumKitSourceRows[i]
             if row.state ~= "complete" and row.state ~= "failed" then
                 if activeMap[i] then
-                    row.state = "processing"
+                    if row.state == "queued" then
+                        row.state = "preparing"
+                    end
                 else
                     row.state = "queued"
+                    row.percent = nil
+                    row.percentKnown = false
                 end
             end
         end
@@ -16059,11 +16100,17 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
         progressState.drumKitRunningSources = tonumber(event.running_sources or progressState.drumKitRunningSources or 0) or 0
         progressState.drumKitCompletedSources = tonumber(event.completed_sources or progressState.drumKitCompletedSources or 0) or 0
         progressState.drumKitSourceRows[srcIdx] = progressState.drumKitSourceRows[srcIdx] or { state = "queued", stage = "" }
-        progressState.drumKitSourceRows[srcIdx].state = "processing"
+        progressState.drumKitSourceRows[srcIdx].state = "preparing"
+        progressState.drumKitSourceRows[srcIdx].stage = T("drumkit_progress_preparing") or "preparing"
+        progressState.drumKitSourceRows[srcIdx].percent = nil
+        progressState.drumKitSourceRows[srcIdx].percentKnown = false
     elseif eventName == "source_done" then
         progressState.drumKitCompletedSources = tonumber(event.completed_sources or progressState.drumKitCompletedSources or 0) or 0
         progressState.drumKitSourceRows[srcIdx] = progressState.drumKitSourceRows[srcIdx] or { state = "queued", stage = "" }
         progressState.drumKitSourceRows[srcIdx].state = "complete"
+        progressState.drumKitSourceRows[srcIdx].stage = T("progress_waiting_done") or "Done"
+        progressState.drumKitSourceRows[srcIdx].percent = 100
+        progressState.drumKitSourceRows[srcIdx].percentKnown = true
     elseif eventName == "run_done" then
         progressState.drumKitRunningSources = 0
         progressState.drumKitCompletedSources = srcCnt
@@ -16106,8 +16153,10 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
             end
         end
         progressState.drumKitSourceRows[srcIdx] = progressState.drumKitSourceRows[srcIdx] or { state = "processing", stage = "" }
-        progressState.drumKitSourceRows[srcIdx].state = "processing"
+        progressState.drumKitSourceRows[srcIdx].state = "separating"
         progressState.drumKitSourceRows[srcIdx].stage = T("drumkit_stage_separating") or "separating drums"
+        progressState.drumKitSourceRows[srcIdx].percent = eventPct
+        progressState.drumKitSourceRows[srcIdx].percentKnown = eventPct ~= nil
     elseif eventName == "stage2_drumsep_start" then
         progressState.drumKitStageLabelKey = "drumkit"
         progressState.drumKitActiveStage = "stage2_drumsep"
@@ -16124,6 +16173,8 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
         progressState.drumKitSourceRows[srcIdx] = progressState.drumKitSourceRows[srcIdx] or { state = "processing", stage = "" }
         progressState.drumKitSourceRows[srcIdx].state = "processing"
         progressState.drumKitSourceRows[srcIdx].stage = T("drumkit_stage_splitting") or "splitting drum kit"
+        progressState.drumKitSourceRows[srcIdx].percent = eventPct
+        progressState.drumKitSourceRows[srcIdx].percentKnown = eventPct ~= nil
     elseif eventName == "import_start" then
         progressState.drumKitStageLabelKey = "import"
         progressState.drumKitActiveStage = "import"
@@ -16132,8 +16183,11 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
         progressState.drumKitTargetPercent = 97
         for i = 1, #(progressState.drumKitSourceRows or {}) do
             local row = progressState.drumKitSourceRows[i]
-            if row and row.state == "processing" then
+            if row and (row.state == "preparing" or row.state == "separating" or row.state == "processing") then
+                row.state = "importing"
                 row.stage = T("drumkit_progress_importing") or "importing"
+                row.percent = nil
+                row.percentKnown = false
             end
         end
     elseif eventName == "stage1_parent_done" or eventName == "stage2_drumsep_done" then
@@ -16152,6 +16206,8 @@ updateDrumKitPrototypeProgressFromEvent = function(event)
                 local row = progressState.drumKitSourceRows[i]
                 if row and row.state ~= "complete" then
                     row.state = "failed"
+                    row.stage = tostring(event.error_message or event.error or event.stage or (T("status_error") or "Failed"))
+                    row.percentKnown = false
                 end
             end
         end
