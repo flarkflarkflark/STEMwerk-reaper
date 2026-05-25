@@ -1397,7 +1397,8 @@ local function profileForBackend(backend)
 end
 
 local function writeCapabilities(path, data, deviceOut)
-    local f = io.open(path, "w")
+    local tmpPath = tostring(path) .. ".tmp"
+    local f = io.open(tmpPath, "w")
     if not f then return false end
     f:write("CAP_VERSION=1\n")
     f:write("PROFILE=" .. tostring(data.profile or "") .. "\n")
@@ -1456,6 +1457,11 @@ local function writeCapabilities(path, data, deviceOut)
         f:write("DEVICES_OUTPUT_END\n")
     end
     f:close()
+    local ok, renameErr = os.rename(tmpPath, path)
+    if not ok then
+        pcall(os.remove, tmpPath)
+        return false, renameErr
+    end
     return true
 end
 
@@ -2330,7 +2336,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
         coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
     end
-    local verificationStatus = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
+    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -2364,7 +2370,18 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             and trim(state.BACKEND_DEPS_COMPLETE or "") ~= "no"
             and trim(verification.pythonPath or "") ~= ""
             and trim(verification.ffmpegPath or "") ~= ""
-            and (trim(backendReason or "") == "" or trim(backendReason or "") == "no_gpu_detected"))) and "ok" or "failed"
+            and (trim(backendReason or "") == "" or trim(backendReason or "") == "no_gpu_detected")))
+    local verificationStatus = verificationSuccess and "ok" or "failed"
+    local runtimeDriftDetected = verification.runtimeDriftDetected
+    local runtimeDriftReason = verification.runtimeDriftReason
+    if verificationSuccess then
+        runtimeDriftDetected = "no"
+        runtimeDriftReason = ""
+    end
+    local backendDepsReason = state.BACKEND_DEPS_REASON or ""
+    if verificationSuccess and trim(state.BACKEND_DEPS_COMPLETE or "") == "yes" then
+        backendDepsReason = ""
+    end
 
     ensureDir(runtime.runtimeState)
     local capPath = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
@@ -2390,7 +2407,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         audioSeparatorImport = state.AUDIO_SEPARATOR_IMPORT or "",
         audioSeparatorDepsComplete = state.AUDIO_SEPARATOR_DEPS_COMPLETE or "",
         backendDepsComplete = state.BACKEND_DEPS_COMPLETE or "",
-        backendDepsReason = state.BACKEND_DEPS_REASON or "",
+        backendDepsReason = backendDepsReason,
         buildToolsMissing = state.BUILD_TOOLS_MISSING or "",
         systemPythonPath = state.SYSTEM_PYTHON_PATH or "",
         systemPythonVersion = state.SYSTEM_PYTHON_VERSION or "",
@@ -2400,8 +2417,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         torchaudioVersion = verification.torchaudioVersion,
         torchSupported = verification.torchSupported,
         torchaudioPresent = verification.torchaudioPresent,
-        runtimeDriftDetected = verification.runtimeDriftDetected,
-        runtimeDriftReason = verification.runtimeDriftReason,
+        runtimeDriftDetected = runtimeDriftDetected,
+        runtimeDriftReason = runtimeDriftReason,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,

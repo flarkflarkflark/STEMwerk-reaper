@@ -526,6 +526,11 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
     assert 'f:write("TORCHAUDIO_PRESENT="' in setup_internal
     assert 'f:write("RUNTIME_DRIFT_DETECTED="' in setup_internal
     assert 'f:write("RUNTIME_DRIFT_REASON="' in setup_internal
+    assert 'local tmpPath = tostring(path) .. ".tmp"' in setup_internal
+    assert "os.rename(tmpPath, path)" in setup_internal
+    assert "runtimeDriftDetected = \"no\"" in setup_internal
+    assert "runtimeDriftReason = \"\"" in setup_internal
+    assert 'if verificationSuccess and trim(state.BACKEND_DEPS_COMPLETE or "") == "yes" then' in setup_internal
     assert 'verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0' in setup_internal
     assert 'errors[#errors + 1] = torchRuntime.error' in setup_internal
     assert 'pythonOk and ffmpegOk and audioOk and runtimeOk' in runtime_setup
@@ -534,6 +539,16 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
     assert 'import torchaudio  # noqa: F401' in linux_bootstrap
     assert 'appendKey(diagnostics, "TORCH_VERSION"' in support_bundle
     assert 'appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED"' in support_bundle
+
+
+def test_support_bundle_ignores_stale_capabilities_failed_verification_when_bootstrap_ok():
+    support_bundle = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert "local capabilityStaleFailedVerification = (" in support_bundle
+    assert 'and capabilityVerification == "failed"' in support_bundle
+    assert "local function resolvedCapabilityValue(key, fallback)" in support_bundle
+    assert 'if capabilityStaleFailedVerification and (key == "VERIFICATION" or key == "RUNTIME_DRIFT_DETECTED" or key == "RUNTIME_DRIFT_REASON") then' in support_bundle
+    assert 'appendKey(diagnostics, "Capability verification", resolvedCapabilityValue("VERIFICATION", "missing")' in support_bundle
 
 
 def test_linux_bootstrap_uses_managed_python_before_unsupported_system_python():

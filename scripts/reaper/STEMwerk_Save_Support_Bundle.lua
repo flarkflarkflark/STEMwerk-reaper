@@ -887,6 +887,25 @@ local bootstrapPidPath = joinPath(runtimePaths.runtimeState, "bootstrap.pid")
 local bootstrapGuardPath = joinPath(runtimePaths.runtimeState, "bootstrap.guard")
 local runtimeState = readEnvFile(bootstrapEnvPath)
 local capabilityState = readEnvFile(capabilitiesEnvPath)
+local capabilityBootstrapStatus = trim(capabilityState.BOOTSTRAP_STATUS or "")
+local runtimeBootstrapStatus = trim(runtimeState.STATUS or "")
+local capabilityVerification = trim(capabilityState.VERIFICATION or "")
+local capabilityStaleFailedVerification = (
+    runtimeBootstrapStatus == "ok"
+    and (capabilityBootstrapStatus == "" or capabilityBootstrapStatus == "ok")
+    and capabilityVerification == "failed"
+)
+
+local function resolvedCapabilityValue(key, fallback)
+    local value = trim(capabilityState[key] or "")
+    if capabilityStaleFailedVerification and (key == "VERIFICATION" or key == "RUNTIME_DRIFT_DETECTED" or key == "RUNTIME_DRIFT_REASON") then
+        value = ""
+    end
+    if value ~= "" then
+        return value
+    end
+    return trim(fallback or "")
+end
 
 local pythonPathCandidates = {
     capabilityState.PYTHON_PATH,
@@ -2762,8 +2781,8 @@ local function performBundleCollection()
     appendKey(diagnostics, "TORCHAUDIO_VERSION", trim(capabilityState.TORCHAUDIO_VERSION) ~= "" and trim(capabilityState.TORCHAUDIO_VERSION) or probeTorchaudioVersion ~= "" and probeTorchaudioVersion or "unknown")
     appendKey(diagnostics, "TORCH_SUPPORTED", trim(capabilityState.TORCH_SUPPORTED) ~= "" and trim(capabilityState.TORCH_SUPPORTED) or probeTorchSupported)
     appendKey(diagnostics, "TORCHAUDIO_PRESENT", trim(capabilityState.TORCHAUDIO_PRESENT) ~= "" and trim(capabilityState.TORCHAUDIO_PRESENT) or probeTorchaudioPresent)
-    appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED", trim(capabilityState.RUNTIME_DRIFT_DETECTED) ~= "" and trim(capabilityState.RUNTIME_DRIFT_DETECTED) or probeRuntimeDriftDetected)
-    appendKey(diagnostics, "RUNTIME_DRIFT_REASON", trim(capabilityState.RUNTIME_DRIFT_REASON) ~= "" and trim(capabilityState.RUNTIME_DRIFT_REASON) or probeRuntimeDriftReason)
+    appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED", resolvedCapabilityValue("RUNTIME_DRIFT_DETECTED", probeRuntimeDriftDetected))
+    appendKey(diagnostics, "RUNTIME_DRIFT_REASON", resolvedCapabilityValue("RUNTIME_DRIFT_REASON", probeRuntimeDriftReason))
     appendKey(diagnostics, "FFmpeg path", sanitizePathValue(detectedFfmpegPath))
     appendKey(diagnostics, "FFmpeg version", ffmpegVersion)
     appendKey(diagnostics, "Bundle created", bundleTimestamp)
@@ -2860,13 +2879,13 @@ local function performBundleCollection()
     appendKey(diagnostics, "Backend/device mode", trim(extStateValue("device")) ~= "" and trim(extStateValue("device")) or "auto")
     appendKey(diagnostics, "Capability profile", trim(capabilityState.PROFILE) ~= "" and trim(capabilityState.PROFILE) or "missing")
     appendKey(diagnostics, "Capability backend", trim(capabilityState.BACKEND) ~= "" and trim(capabilityState.BACKEND) or "missing")
-    appendKey(diagnostics, "Capability verification", trim(capabilityState.VERIFICATION) ~= "" and trim(capabilityState.VERIFICATION) or "missing")
+    appendKey(diagnostics, "Capability verification", resolvedCapabilityValue("VERIFICATION", "missing") ~= "" and resolvedCapabilityValue("VERIFICATION", "missing") or "missing")
     appendKey(diagnostics, "Capability audio_separator", trim(capabilityState.AUDIO_SEPARATOR) ~= "" and trim(capabilityState.AUDIO_SEPARATOR) or "unknown")
     appendKey(diagnostics, "Capability audio_separator_import", trim(capabilityState.AUDIO_SEPARATOR_IMPORT) ~= "" and trim(capabilityState.AUDIO_SEPARATOR_IMPORT) or "unknown")
     appendKey(diagnostics, "Capability audio_separator_deps_complete", trim(capabilityState.AUDIO_SEPARATOR_DEPS_COMPLETE) ~= "" and trim(capabilityState.AUDIO_SEPARATOR_DEPS_COMPLETE) or "unknown")
     appendKey(diagnostics, "Capability stemwerk_core", trim(capabilityState.STEMWERK_CORE) ~= "" and trim(capabilityState.STEMWERK_CORE) or "unknown")
-    appendKey(diagnostics, "Capability runtime drift", trim(capabilityState.RUNTIME_DRIFT_DETECTED) ~= "" and trim(capabilityState.RUNTIME_DRIFT_DETECTED) or "unknown")
-    appendKey(diagnostics, "Capability runtime drift reason", trim(capabilityState.RUNTIME_DRIFT_REASON) ~= "" and trim(capabilityState.RUNTIME_DRIFT_REASON) or "unknown")
+    appendKey(diagnostics, "Capability runtime drift", resolvedCapabilityValue("RUNTIME_DRIFT_DETECTED", "unknown") ~= "" and resolvedCapabilityValue("RUNTIME_DRIFT_DETECTED", "unknown") or "unknown")
+    appendKey(diagnostics, "Capability runtime drift reason", resolvedCapabilityValue("RUNTIME_DRIFT_REASON", "unknown") ~= "" and resolvedCapabilityValue("RUNTIME_DRIFT_REASON", "unknown") or "unknown")
     appendKey(diagnostics, "Bootstrap status", trim(capabilityState.BOOTSTRAP_STATUS) ~= "" and trim(capabilityState.BOOTSTRAP_STATUS) or trim(runtimeState.STATUS) ~= "" and trim(runtimeState.STATUS) or "missing")
     appendKey(diagnostics, "Quality/model mode", selectedModel .. " (" .. modelModeLabel(selectedModel) .. ")")
     appendKey(diagnostics, "Output track mode", extBool("createNewTracks") and "new tracks" or "in place / takes")
