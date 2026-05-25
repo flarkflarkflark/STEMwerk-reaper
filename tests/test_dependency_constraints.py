@@ -797,6 +797,9 @@ def test_linux_no_deps_audio_separator_fallback_requires_runtime_deps():
     assert "BACKEND_DEPS_COMPLETE=\"no\"" in script
     assert "audio_separator_dep_import_failed:" in script
     assert script.index('"${VENV_PY}" -m pip install --no-deps "${PACKAGE}"') < script.index("verify_audio_separator_runtime_deps || audio_install_rc=1")
+    assert "Skipping torch pin repair and ONNX install after audio-separator dependency failure" in script
+    assert 'if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then' in script
+    assert script.index('set_status "deps_failed" "audio_separator_install_failed"') < script.index('if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then')
 
 
 def test_linux_final_verification_requires_audio_separator_dependency_imports():
@@ -827,6 +830,18 @@ def test_linux_final_verification_requires_audio_separator_dependency_imports():
     assert "if ! verify_audio_separator_runtime_deps; then" in linux_script
     assert 'set_status "deps_failed" "audio_separator_install_failed"' in linux_script
     assert 'verify_audio_separator_runtime_deps || set_status "deps_failed" "audio_separator_install_failed"' in mac_script
+    assert '[ "${AUDIO_SEPARATOR_DEPS_COMPLETE}" = "yes" ]' in linux_script
+    assert 'log_step "Venv runtime incomplete; refusing to set PYTHON_PATH"' in linux_script
+    assert 'log_step "Venv runtime verified; PYTHON_PATH set to venv"' in linux_script
+    assert linux_script.index('[ "${AUDIO_SEPARATOR_DEPS_COMPLETE}" = "yes" ]') < linux_script.index('log_step "Venv runtime verified; PYTHON_PATH set to venv"')
+
+
+def test_linux_failure_status_prevents_python_path_writeout():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'py_path_out="${PYTHON_PATH}"' in script
+    assert 'deps_failed:*|venv_failed:*|*:audio_separator_install_failed)' in script
+    assert 'echo "PYTHON_PATH=${py_path_out}"' in script
 
 
 def test_linux_missing_compiler_for_diffq_reports_build_tools_message():

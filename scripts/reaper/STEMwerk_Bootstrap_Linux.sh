@@ -61,6 +61,12 @@ model_cache_dir() {
 
 write_state() {
   if [ -n "${STATE_FILE}" ]; then
+    py_path_out="${PYTHON_PATH}"
+    case "${STATUS}:${STATUS_REASON}" in
+      deps_failed:*|venv_failed:*|*:audio_separator_install_failed)
+        py_path_out=""
+        ;;
+    esac
     {
       echo "STATUS=${STATUS}"
       [ -n "${STATUS_REASON}" ] && echo "STATUS_REASON=${STATUS_REASON}"
@@ -95,7 +101,7 @@ write_state() {
       echo "SYSTEM_PYTHON_PATH=${SYSTEM_PYTHON_PATH}"
       echo "SYSTEM_PYTHON_VERSION=${SYSTEM_PYTHON_VERSION}"
       echo "SYSTEM_PYTHON_USED=${SYSTEM_PYTHON_USED}"
-      echo "PYTHON_PATH=${PYTHON_PATH}"
+      echo "PYTHON_PATH=${py_path_out}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
@@ -1133,39 +1139,43 @@ PY
       BACKEND_REASON="${BACKEND_REASON:-audio_separator_install_failed}"
       set_status "deps_failed" "audio_separator_install_failed"
     fi
-    log_stage "Re-applying pinned torch stack"
-    case "${BACKEND}" in
-      rocm)
-        if [ -n "${SELECTED_TORCH_INDEX}" ]; then
-          install_linux_torch_stack "rocm" "${SELECTED_TORCH_INDEX}" || set_status "deps_failed" "torch_pin_repair_failed"
-        else
+    if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then
+      log_stage "Re-applying pinned torch stack"
+      case "${BACKEND}" in
+        rocm)
+          if [ -n "${SELECTED_TORCH_INDEX}" ]; then
+            install_linux_torch_stack "rocm" "${SELECTED_TORCH_INDEX}" || set_status "deps_failed" "torch_pin_repair_failed"
+          else
+            install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
+          fi
+          ;;
+        cuda)
+          install_linux_torch_stack "cuda" || set_status "deps_failed" "torch_pin_repair_failed"
+          ;;
+        *)
           install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
-        fi
-        ;;
-      cuda)
-        install_linux_torch_stack "cuda" || set_status "deps_failed" "torch_pin_repair_failed"
-        ;;
-      *)
-        install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
-        ;;
-    esac
-    if ! assert_pinned_torch_stack "${VENV_PY}"; then
-      set_status "deps_failed" "torch_pin_assert_failed"
-    fi
-    enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
-
-    log_stage "Checking/installing ONNX Runtime"
-    onnx_install_rc=0
-    if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
-      log_step "Installing ${ONNX_PACKAGE}"
-      if [ -n "${CONSTRAINTS_FILE}" ]; then
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
-      else
-        "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
+          ;;
+      esac
+      if ! assert_pinned_torch_stack "${VENV_PY}"; then
+        set_status "deps_failed" "torch_pin_assert_failed"
       fi
-    fi
-    if [ "${onnx_install_rc}" -ne 0 ]; then
-      set_status "deps_failed" "onnxruntime_install_failed"
+      enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
+
+      log_stage "Checking/installing ONNX Runtime"
+      onnx_install_rc=0
+      if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
+        log_step "Installing ${ONNX_PACKAGE}"
+        if [ -n "${CONSTRAINTS_FILE}" ]; then
+          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
+        else
+          "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
+        fi
+      fi
+      if [ "${onnx_install_rc}" -ne 0 ]; then
+        set_status "deps_failed" "onnxruntime_install_failed"
+      fi
+    else
+      log_step "Skipping torch pin repair and ONNX install after audio-separator dependency failure"
     fi
   fi
 fi
@@ -1342,7 +1352,10 @@ PY
 fi
 log_step "Venv torch probe: ${VENV_TORCH_PROBE}"
 
-if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ] && \
+if [ "${STATUS}" = "ok" ] && \
+   [ "${RUNTIME_STRICT_OK}" -eq 1 ] && \
+   [ "${AUDIO_SEPARATOR_DEPS_COMPLETE}" = "yes" ] && \
+   [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ] && \
    "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 && \
    "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 && \
    "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 && \
