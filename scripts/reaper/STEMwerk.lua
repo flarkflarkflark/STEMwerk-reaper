@@ -1481,6 +1481,9 @@ function trSafe(key, fallback)
     return value
 end
 
+-- Forward declare: used by UI helpers defined before progress block initialization.
+local progressState
+
 local function getProcessingWindowTitle()
     local label
     if progressState and progressState.drumKitPrototype then
@@ -2493,9 +2496,6 @@ local function measureStemwerkLogo(fontSize, fontName, bold)
     end
     return totalW
 end
-
--- Forward declare: used by UI helpers defined before progress block initialization.
-local progressState
 
 -- Draw the waving "STEMwerk" logo. Returns (x, y, w, h) bounds.
 local function drawWavingStemwerkLogo(opts)
@@ -8473,7 +8473,9 @@ local function drawMessageWindow()
     -- === Tagline (ABOVE waveform) ===
     gfx.setfont(1, "Arial", PS(11))
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    local tagline = "STEM Separation"
+    local resultMessageData = resultContext and messageWindowState and messageWindowState.messageData or nil
+    local drumKitResultContext = type(resultMessageData) == "table" and resultMessageData.kind == "drumkit_result"
+    local tagline = drumKitResultContext and trSafe("drumkit_result_subtitle", "Drum Kit Split") or "STEM Separation"
     local tagW = gfx.measurestr(tagline)
     gfx.x = (w - tagW) / 2
     gfx.y = PS(68)
@@ -8526,7 +8528,7 @@ local function drawMessageWindow()
     gfx.set(r, g, b, pulseAlpha)
 
     local msgX, msgTopY, msgBlockW, msgBottomY = 0, 0, 0, 0
-    local drumKitResultData = resultContext and messageWindowState and messageWindowState.messageData or nil
+    local drumKitResultData = drumKitResultContext and resultMessageData or nil
     if type(drumKitResultData) == "table" and drumKitResultData.kind == "drumkit_result" then
         local function trResult(key, fallback)
             local v = T(key)
@@ -14605,6 +14607,7 @@ local function drawProgressWindow()
     -- Scaling helper
     local function PS(val) return math.floor(val * scale + 0.5) end
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local drumKitProgressUI = progressState and progressState.drumKitPrototype == true
     refreshDrumKitProgressStageLabel()
 
     -- Try to make window resizable
