@@ -58,7 +58,7 @@ resolve_python_candidate() {
       resolve_existing_path "$1"
       ;;
     *)
-      _resolved=$(command -v "$1" 2>/dev/null || true)
+      _resolved=$(command_path "$1" || true)
       [ -n "${_resolved}" ] || return 1
       case "${_resolved}" in
         /*) resolve_existing_path "${_resolved}" ;;
@@ -66,6 +66,20 @@ resolve_python_candidate() {
       esac
       ;;
   esac
+}
+
+command_path() {
+  _cmd="$1"
+  command -v "${_cmd}" 2>/dev/null | while IFS= read -r _line; do
+    case "${_line}" in
+      /*)
+        if [ -x "${_line}" ]; then
+          printf "%s\n" "${_line}"
+          exit 0
+        fi
+        ;;
+    esac
+  done
 }
 
 model_cache_dir() {
@@ -375,6 +389,71 @@ evaluate_python_candidate() {
   return 1
 }
 
+find_managed_python() {
+  for p in \
+    "${RUNTIME_BASE}/python/bin/python3.12" \
+    "${RUNTIME_BASE}/python/bin/python3.11" \
+    "${RUNTIME_BASE}/python/bin/python3.10" \
+    "${RUNTIME_BASE}/python/bin/python3" \
+    "${RUNTIME_BASE}/python/python3.12" \
+    "${RUNTIME_BASE}/python/python3.11" \
+    "${RUNTIME_BASE}/python/python3.10" \
+    "${RUNTIME_BASE}/python/python3"
+  do
+    if evaluate_python_candidate "${p}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_managed_python_from_dir() {
+  _base="$1"
+  for p in \
+    "${_base}/bin/python3.12" \
+    "${_base}/bin/python3.11" \
+    "${_base}/bin/python3.10" \
+    "${_base}/bin/python3" \
+    "${_base}/python3.12" \
+    "${_base}/python3.11" \
+    "${_base}/python3.10" \
+    "${_base}/python3"
+  do
+    if evaluate_python_candidate "${p}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_managed_python_runtime() {
+  log "Attempting STEMwerk-managed Python runtime acquisition"
+  for src in \
+    "${STEMWERK_MANAGED_PYTHON_SOURCE:-}" \
+    "${SCRIPT_DIR}/python" \
+    "${SCRIPT_DIR}/runtime/python" \
+    "${SCRIPT_DIR}/_runtime/python" \
+    "${SCRIPT_DIR}/../runtime/python"
+  do
+    if [ -n "${src}" ] && [ -d "${src}" ]; then
+      log "Found local managed Python source: ${src}"
+      rm -rf "${RUNTIME_BASE}/python.tmp"
+      mkdir -p "${RUNTIME_BASE}/python.tmp" || return 1
+      if cp -R "${src}/." "${RUNTIME_BASE}/python.tmp/" >> "${LOG_FILE}" 2>&1; then
+        if find_managed_python_from_dir "${RUNTIME_BASE}/python.tmp"; then
+          rm -rf "${RUNTIME_BASE}/python"
+          mv "${RUNTIME_BASE}/python.tmp" "${RUNTIME_BASE}/python" || return 1
+          log "Installed STEMwerk-managed Python runtime under ${RUNTIME_BASE}/python"
+          return 0
+        fi
+      fi
+      rm -rf "${RUNTIME_BASE}/python.tmp"
+    fi
+  done
+  log "No local STEMwerk-managed Python runtime payload is available"
+  return 1
+}
+
 write_state() {
   if [ -n "${STATE_FILE}" ]; then
     {
@@ -532,6 +611,10 @@ if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
   fi
 fi
 
+if [ -z "${PYTHON}" ] && find_managed_python; then
+  log "Selected STEMwerk-managed Python interpreter: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
+fi
+
 if [ -z "${PYTHON}" ]; then
   for p in \
     "python3.12" \
@@ -572,23 +655,32 @@ if [ -x "/opt/homebrew/bin/brew" ]; then
   BREW="/opt/homebrew/bin/brew"
 elif [ -x "/usr/local/bin/brew" ]; then
   BREW="/usr/local/bin/brew"
-elif command -v brew >/dev/null 2>&1; then
-  BREW="$(command -v brew)"
+else
+  BREW="$(command_path brew || true)"
 fi
 
 set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
 
 if [ -z "${PYTHON}" ]; then
+  if [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
+    log "System Python ${FIRST_UNSUPPORTED_PYTHON_VERSION} is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
+  fi
+  if install_managed_python_runtime && find_managed_python; then
+    log "Selected STEMwerk-managed Python interpreter after acquisition: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
+  fi
+fi
+
+if [ -z "${PYTHON}" ]; then
   if [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
-    PYTHON_MESSAGE="Unsupported Python found: ${FIRST_UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+    PYTHON_MESSAGE="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
-    set_status "missing_python" "python_unsupported"
+    set_status "missing_python" "managed_python_unavailable"
   else
-    PYTHON_MESSAGE="No supported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+    PYTHON_MESSAGE="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
     log "${PYTHON_MESSAGE}"
     printf "%s\n" "${PYTHON_MESSAGE}" >&2
-    set_status "missing_python" "python_not_found"
+    set_status "missing_python" "managed_python_unavailable"
   fi
   write_state
   exit 1

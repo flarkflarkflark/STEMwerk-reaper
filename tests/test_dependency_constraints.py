@@ -331,8 +331,9 @@ def test_linux_bootstrap_rejects_python_314_with_clear_repair_guidance():
 
     assert "3.10|3.11|3.12)" in script
     assert "3.14" not in script
-    assert 'set_status "missing_python" "python_unsupported"' in script
-    assert "Unsupported Python found: ${UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild." in script
+    assert "System Python ${UNSUPPORTED_PYTHON_VERSION} is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild." in script
+    assert 'set_status "missing_python" "managed_python_unavailable"' in script
+    assert "STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild." in script
     assert 'SUPPORTED_PYTHON_FOUND="no"' in script
     assert "SUPPORTED_PYTHON_RANGE=3.10-3.12" in script
 
@@ -344,7 +345,7 @@ def test_linux_bootstrap_prefers_supported_explicit_minor_before_python3():
 
     assert script.index('"/usr/local/bin/python3.12"') < script.index('"/usr/local/bin/python3"')
     assert script.index('"/usr/bin/python3.12"') < script.index('"/usr/bin/python3"')
-    assert script.index("for cmd in python3.12 python3.11 python3.10 python3; do") < script.index('candidate="$(command -v python3)"')
+    assert script.index("for cmd in python3.12 python3.11 python3.10 python3; do") < script.index('candidate="$(command_path python3')
 
 
 def test_macos_bootstrap_reports_unsupported_python_without_python_missing_ambiguity():
@@ -356,8 +357,9 @@ def test_macos_bootstrap_reports_unsupported_python_without_python_missing_ambig
     assert '"python3.11"' in script
     assert '"python3.10"' in script
     assert script.index('"python3.12"') < script.index('"python3"')
-    assert 'set_status "missing_python" "python_unsupported"' in script
-    assert "Unsupported Python found: ${FIRST_UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild." in script
+    assert "System Python ${FIRST_UNSUPPORTED_PYTHON_VERSION} is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild." in script
+    assert 'set_status "missing_python" "managed_python_unavailable"' in script
+    assert "STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild." in script
     assert "SUPPORTED_PYTHON_FOUND=no" in script
     assert "SUPPORTED_PYTHON_RANGE=3.10-3.12" in script
 
@@ -372,7 +374,7 @@ def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
     assert 'f:write("SUPPORTED_PYTHON_RANGE="' in script
     assert 'audioStatus = venvExists and "not_checked" or "no_runtime"' in script
     assert 'coreStatus = venvExists and "not_checked" or "no_runtime"' in script
-    assert '"Unsupported Python found: " .. detected .. ". Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."' in script
+    assert '"System Python " .. detected .. " is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."' in script
 
 
 def test_support_bundle_surfaces_python_support_and_unknown_import_status():
@@ -433,3 +435,66 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
     assert 'import torchaudio  # noqa: F401' in linux_bootstrap
     assert 'appendKey(diagnostics, "TORCH_VERSION"' in support_bundle
     assert 'appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED"' in support_bundle
+
+
+def test_linux_bootstrap_uses_managed_python_before_unsupported_system_python():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert script.index("if find_managed_python; then") < script.index('"/usr/local/bin/python3.12"')
+    assert 'if install_managed_python_runtime && find_managed_python; then' in script
+    assert "Using managed Python after acquisition" in script
+    assert '"${PYTHON}" -m venv "${RUNTIME_BASE}/.venv"' in script
+    assert "python3.14" not in script
+
+
+def test_macos_bootstrap_uses_managed_python_before_unsupported_system_python():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert script.index('find_managed_python; then') < script.index('"/opt/homebrew/bin/python3.12"')
+    assert 'if install_managed_python_runtime && find_managed_python; then' in script
+    assert "Selected STEMwerk-managed Python interpreter after acquisition" in script
+    assert '"${PYTHON}" -m venv "${RUNTIME_BASE}/.venv"' in script
+
+
+def test_managed_python_failure_is_manual_fallback_only():
+    from pathlib import Path
+
+    linux_script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    mac_script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    fallback = "STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
+    assert linux_script.index("Attempting STEMwerk-managed Python runtime acquisition") < linux_script.index(fallback)
+    assert mac_script.index("Attempting STEMwerk-managed Python runtime acquisition") < mac_script.index(fallback)
+    assert "Unsupported Python found: ${UNSUPPORTED_PYTHON_VERSION}. Install Python" not in linux_script
+    assert "Unsupported Python found: ${FIRST_UNSUPPORTED_PYTHON_VERSION}. Install Python" not in mac_script
+
+
+def test_rebuild_venv_safety_allows_missing_target_under_safe_parent():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "allowMissingTarget and not pathExists(targetPath)" in script
+    assert 'validateCanonicalDeleteTarget(runtime.venvDir, expectedVenv, "venv", true)' in script
+    assert 'return false, "target_mismatch", targetCanon, expectedCanon' in script
+
+
+def test_command_path_noise_is_ignored_for_python_resolution():
+    from pathlib import Path
+
+    linux_script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    mac_script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+    runtime_setup = Path("scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua").read_text()
+    support_bundle = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'case "${line}" in' in linux_script
+    assert '/*)' in linux_script
+    assert 'candidate="$(command_path "${cmd}" || true)"' in linux_script
+    assert 'case "${_line}" in' in mac_script
+    assert '_resolved=$(command_path "$1" || true)' in mac_script
+    assert 'candidate:match("^/") and fileExists(candidate)' in runtime_setup
+    assert 'candidate:match("^/") and fileExists(candidate)' in support_bundle

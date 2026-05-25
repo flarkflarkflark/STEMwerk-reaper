@@ -590,7 +590,9 @@ local function prettySetupReason(reason)
         elseif lower == "python_not_found" then
             part = "No supported Python found"
         elseif lower == "python_unsupported" or lower == "unsupported_python_version" then
-            part = "Unsupported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+            part = "System Python is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
+        elseif lower == "managed_python_unavailable" then
+            part = "STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
         elseif lower == "venv_create_failed" then
             part = "Could not create Python virtual environment"
         elseif lower == "pip_upgrade_failed" then
@@ -671,7 +673,7 @@ local function prettyCheckError(err)
     local lower = trim(err):lower()
     if lower == "" then return "" end
     if lower == "python_missing" then return "Python path is missing" end
-    if lower == "python_unsupported" then return "Unsupported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild." end
+    if lower == "python_unsupported" then return "System Python is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild." end
     if lower == "python_unusable" then return "Python executable is unusable" end
     if lower == "ffmpeg_missing" then return "FFmpeg path is missing" end
     if lower == "ffmpeg_unusable" then return "FFmpeg executable is unusable" end
@@ -2322,9 +2324,9 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         local detected = trim(verification.detectedPythonVersion or state.DETECTED_PYTHON_VERSION or "")
         finalMessage[#finalMessage + 1] = ""
         if detected ~= "" then
-            finalMessage[#finalMessage + 1] = "Unsupported Python found: " .. detected .. ". Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+            finalMessage[#finalMessage + 1] = "System Python " .. detected .. " is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
         else
-            finalMessage[#finalMessage + 1] = "Unsupported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+            finalMessage[#finalMessage + 1] = "System Python is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
         end
     end
     if hasError("torch_too_new_for_demucs") or hasError("torch_runtime_unsupported") then
@@ -4164,8 +4166,13 @@ local function getCanonicalScriptsInstallPath()
     return canonicalizeParentAndJoin(canonical)
 end
 
-local function validateCanonicalDeleteTarget(targetPath, expectedPath, label)
-    local targetCanon, targetErr = canonicalizeDir(targetPath)
+local function validateCanonicalDeleteTarget(targetPath, expectedPath, label, allowMissingTarget)
+    local targetCanon, targetErr
+    if allowMissingTarget and not pathExists(targetPath) then
+        targetCanon, targetErr = canonicalizeParentAndJoin(targetPath)
+    else
+        targetCanon, targetErr = canonicalizeDir(targetPath)
+    end
     if not targetCanon then
         return false, targetErr or "target_canonical_failed", nil, nil
     end
@@ -4664,7 +4671,7 @@ startLinuxSetup = function(runtime, separatorScript, mode)
         appendSetupLog(runtime, "Keeping downloaded models: " .. getModelCacheDir(), false)
         appendSetupLog(runtime, "Removing virtual environment: " .. runtime.venvDir, false)
         local expectedVenv = resolvePath((runtime and runtime.base or getRuntimeBase()) .. PATH_SEP .. ".venv")
-        local venvOk, venvReason, venvCanon, expectedVenvCanon = validateCanonicalDeleteTarget(runtime.venvDir, expectedVenv, "venv")
+        local venvOk, venvReason, venvCanon, expectedVenvCanon = validateCanonicalDeleteTarget(runtime.venvDir, expectedVenv, "venv", true)
         if not venvOk then
             appendSetupLog(runtime, "Rebuild-venv blocked: " .. tostring(venvReason), false)
             appendDeleteAudit("Rebuild-venv blocked reason=" .. tostring(venvReason) .. " target=" .. tostring(venvCanon) .. " expected=" .. tostring(expectedVenvCanon))

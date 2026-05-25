@@ -575,14 +575,22 @@ local function resolveCommandOnPath(name)
     if OS == "Windows" then
         local rc, out = execCommand("where.exe", {name}, 5000)
         if rc == 0 and out ~= "" then
-            local first = trim((out:gsub("\r", "")):match("([^\n]+)"))
-            return first or ""
+            for line in (out:gsub("\r", "")):gmatch("[^\n]+") do
+                local candidate = trim(line)
+                if candidate:match("^[A-Za-z]:[\\/]") and fileExists(candidate) then
+                    return candidate
+                end
+            end
         end
     else
         local rc, out = execCommand("which", {name}, 5000)
         if rc == 0 and out ~= "" then
-            local first = trim((out:gsub("\r", "")):match("([^\n]+)"))
-            return first or ""
+            for line in (out:gsub("\r", "")):gmatch("[^\n]+") do
+                local candidate = trim(line)
+                if candidate:match("^/") and fileExists(candidate) then
+                    return candidate
+                end
+            end
         end
     end
     return ""

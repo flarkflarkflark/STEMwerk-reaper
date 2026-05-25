@@ -349,6 +349,20 @@ is_pyenv_shim() {
   esac
 }
 
+command_path() {
+  local cmd="$1"
+  command -v "${cmd}" 2>/dev/null | while IFS= read -r line; do
+    case "${line}" in
+      /*)
+        if [ -x "${line}" ]; then
+          printf "%s\n" "${line}"
+          exit 0
+        fi
+        ;;
+    esac
+  done
+}
+
 UNSUPPORTED_PYTHON_VERSION=""
 UNSUPPORTED_PYTHON_PATH=""
 MANAGED_PYTHON=""
@@ -444,6 +458,53 @@ find_managed_python() {
   return 1
 }
 
+install_managed_python_runtime() {
+  log_step "Attempting STEMwerk-managed Python runtime acquisition"
+  for src in \
+    "${STEMWERK_MANAGED_PYTHON_SOURCE:-}" \
+    "${SCRIPT_DIR}/python" \
+    "${SCRIPT_DIR}/runtime/python" \
+    "${SCRIPT_DIR}/_runtime/python" \
+    "${SCRIPT_DIR}/../runtime/python"
+  do
+    if [ -n "${src}" ] && [ -d "${src}" ]; then
+      log_step "Found local managed Python source: ${src}"
+      rm -rf "${RUNTIME_BASE}/python.tmp"
+      mkdir -p "${RUNTIME_BASE}/python.tmp" || return 1
+      if cp -R "${src}/." "${RUNTIME_BASE}/python.tmp/" >> "${LOG_FILE}" 2>&1; then
+        if find_managed_python_from_dir "${RUNTIME_BASE}/python.tmp"; then
+          rm -rf "${RUNTIME_BASE}/python"
+          mv "${RUNTIME_BASE}/python.tmp" "${RUNTIME_BASE}/python" || return 1
+          log_step "Installed STEMwerk-managed Python runtime under ${RUNTIME_BASE}/python"
+          return 0
+        fi
+      fi
+      rm -rf "${RUNTIME_BASE}/python.tmp"
+    fi
+  done
+  log_step "No local STEMwerk-managed Python runtime payload is available"
+  return 1
+}
+
+find_managed_python_from_dir() {
+  local base="$1"
+  for p in \
+    "${base}/bin/python3.12" \
+    "${base}/bin/python3.11" \
+    "${base}/bin/python3.10" \
+    "${base}/bin/python3" \
+    "${base}/python3.12" \
+    "${base}/python3.11" \
+    "${base}/python3.10" \
+    "${base}/python3"
+  do
+    if [ -x "$p" ] && is_supported_python "$p"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 if find_managed_python; then
   log_step "Using managed Python: ${PYTHON}"
 fi
@@ -469,8 +530,8 @@ fi
 
 if [ -z "${PYTHON}" ]; then
   for cmd in python3.12 python3.11 python3.10 python3; do
-    if command -v "${cmd}" >/dev/null 2>&1; then
-      candidate="$(command -v "${cmd}")"
+    candidate="$(command_path "${cmd}" || true)"
+    if [ -n "${candidate}" ]; then
       if ! is_pyenv_shim "${candidate}"; then
         if is_supported_python "${candidate}"; then
           PYTHON="${candidate}"
@@ -481,10 +542,21 @@ if [ -z "${PYTHON}" ]; then
   done
 fi
 
-if [ -z "${PYTHON}" ] && command -v python3 >/dev/null 2>&1; then
-  candidate="$(command -v python3)"
-  if is_supported_python "${candidate}"; then
-    PYTHON="${candidate}"
+if [ -z "${PYTHON}" ]; then
+  candidate="$(command_path python3 || true)"
+  if [ -n "${candidate}" ]; then
+    if is_supported_python "${candidate}"; then
+      PYTHON="${candidate}"
+    fi
+  fi
+fi
+
+if [ -z "${PYTHON}" ]; then
+  if [ -n "${UNSUPPORTED_PYTHON_VERSION}" ]; then
+    log_step "System Python ${UNSUPPORTED_PYTHON_VERSION} is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
+  fi
+  if install_managed_python_runtime && find_managed_python; then
+    log_step "Using managed Python after acquisition: ${PYTHON}"
   fi
 fi
 
@@ -500,16 +572,16 @@ fi
 if [ -z "${PYTHON}" ]; then
   if [ -n "${UNSUPPORTED_PYTHON_VERSION}" ]; then
     BACKEND_REASON="python_unsupported"
-    msg="Unsupported Python found: ${UNSUPPORTED_PYTHON_VERSION}. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+    msg="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
     log_step "${msg}"
     printf "%s\n" "${msg}" >&2
-    set_status "missing_python" "python_unsupported"
+    set_status "missing_python" "managed_python_unavailable"
   else
     BACKEND_REASON="python_not_found"
-    msg="No supported Python found. Install Python 3.10, 3.11, or 3.12, then run Repair/Rebuild."
+    msg="STEMwerk could not install its managed Python runtime. Install Python 3.10, 3.11, or 3.12 manually, then run Repair/Rebuild."
     log_step "${msg}"
     printf "%s\n" "${msg}" >&2
-    set_status "missing_python" "python_not_found"
+    set_status "missing_python" "managed_python_unavailable"
   fi
 else
   log_stage "Creating venv"

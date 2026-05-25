@@ -538,9 +538,11 @@ function M.resolveCommandPath(cmd)
         if type(execProcess) == "function" then
             local rc, out = execProcess("command -v " .. q, 8000)
             if rc == 0 and out then
-                local path = out:match("([^\r\n]+)")
-                if path and path ~= "" then
-                    return path
+                for line in out:gmatch("[^\r\n]+") do
+                    local candidate = trim(line)
+                    if candidate:match("^/") and fileExists(candidate) then
+                        return candidate
+                    end
                 end
             end
         end
