@@ -2339,6 +2339,19 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             and verification.pythonOk
             and verification.ffmpegOk
             and #errors == 0
+            and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable"))
+        or (OS == "macOS"
+            and MAC_ARCH == "x86_64"
+            and profile == "mac-cpu"
+            and backend == "cpu"
+            and effectiveBootstrapSuccess
+            and trim(state.STATUS or "") == "ok"
+            and trim(state.STATUS_REASON or "") == ""
+            and trim(state.AUDIO_SEPARATOR_IMPORT or "") == "ok"
+            and trim(state.AUDIO_SEPARATOR_DEPS_COMPLETE or "") == "yes"
+            and trim(state.BACKEND_DEPS_COMPLETE or "") ~= "no"
+            and trim(verification.pythonPath or "") ~= ""
+            and trim(verification.ffmpegPath or "") ~= ""
             and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable"))) and "ok" or "failed"
 
     ensureDir(runtime.runtimeState)
@@ -2424,6 +2437,19 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             and verification.pythonOk
             and verification.ffmpegOk
             and #errors == 0
+            and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable"))
+        or (OS == "macOS"
+            and MAC_ARCH == "x86_64"
+            and profile == "mac-cpu"
+            and backend == "cpu"
+            and effectiveBootstrapSuccess
+            and trim(state.STATUS or "") == "ok"
+            and trim(state.STATUS_REASON or "") == ""
+            and trim(state.AUDIO_SEPARATOR_IMPORT or "") == "ok"
+            and trim(state.AUDIO_SEPARATOR_DEPS_COMPLETE or "") == "yes"
+            and trim(state.BACKEND_DEPS_COMPLETE or "") ~= "no"
+            and trim(verification.pythonPath or "") ~= ""
+            and trim(verification.ffmpegPath or "") ~= ""
             and (trim(backendReason or "") == "" or trim(backendReason or "") == "mps_unavailable"))) then
         finalMessage[#finalMessage + 1] = "Setup complete — run STEMwerk.lua from the REAPER Action List"
         if OS == "macOS" and MAC_ARCH == "x86_64" and profile == "mac-cpu" and backend == "cpu" then
