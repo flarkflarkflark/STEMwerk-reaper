@@ -5478,20 +5478,20 @@ local function drawUtilityNativeHelpWindow()
                     addLine(l, "  " .. tr("help_native_6stem_guitar", "Guitar") .. "    " .. tr("help_native_6stem_guitar_desc", "Isolated guitar"))
                     addLine(l, "  " .. tr("help_native_6stem_piano", "Piano") .. "     " .. tr("help_native_6stem_piano_desc", "Isolated piano"))
                     addLine(l, "  " .. tr("help_native_6stem_adds", "Adds to the 4-stem set."))
-                    return l
-                end,
-                right = function()
-                    local l = {}
+                    addLine(l, "")
                     addHead(l, tr("help_native_models", "Models"))
                     addLine(l, "  htdemucs     Fast")
                     addLine(l, "  htdemucs_ft  Quality")
                     addLine(l, "  htdemucs_6s  6-Stem")
-                    addLine(l, "")
+                    return l
+                end,
+                right = function()
+                    local l = {}
                     addHead(l, tr("help_native_drumkit_split", "Drum Kit Split"))
-                    addLine(l, "  " .. tr("help_native_drumkit_step_1", "Split existing drum audio into Kick, Snare, Toms, Hi-Hat, Ride, and Crash."))
+                    addLine(l, "  " .. tr("help_native_drumkit_step_1", "Split existing drum audio into:"))
+                    addLine(l, "  " .. tr("help_native_drumkit_step_2", "Kick, Snare, Toms, Hi-Hat, Ride, Crash."))
                     addLine(l, "  " .. tr("help_native_drumkit_model_note", "Best for drum stems, drum buses, loops, or already-isolated drums."))
-                    addLine(l, "  " .. tr("help_native_drumkit_guidance", "For full songs or mixed audio, use All Stems first to extract the drum stem, then run Drum Kit Split on that drum stem."))
-                    addLine(l, "  " .. tr("help_native_edks_planned", "Extract + Drum Kit Split for full songs is planned."))
+                    addLine(l, "  " .. tr("help_native_drumkit_guidance", "Full song? All Stems first; Extract + Kit is planned."))
                     addLine(l, "")
                     addHead(l, tr("help_native_output", "Output"))
                     addLine(l, "  " .. tr("new_tracks", "New tracks"))
