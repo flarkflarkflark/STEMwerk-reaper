@@ -16,12 +16,13 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 StemSeparator = None
 get_available_devices = None
@@ -174,6 +175,80 @@ def _read_simple_env_file(path: Path) -> Dict[str, str]:
     return values
 
 
+def _runtime_base_candidates() -> List[Path]:
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    def add(path_value: Optional[Path | str]) -> None:
+        if not path_value:
+            return
+        try:
+            path = Path(path_value).expanduser()
+        except Exception:
+            return
+        key = str(path).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    if os.name == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            add(Path(local_appdata) / "STEMwerk")
+    elif sys.platform == "darwin":
+        add(Path.home() / "Library" / "Application Support" / "STEMwerk")
+    else:
+        xdg_data_home = os.environ.get("XDG_DATA_HOME")
+        if xdg_data_home:
+            add(Path(xdg_data_home) / "STEMwerk")
+        add(Path.home() / ".local" / "share" / "STEMwerk")
+
+    return candidates
+
+
+def _prepend_path(path_value: str) -> None:
+    current_path = os.environ.get("PATH", "")
+    path_parts = current_path.split(os.pathsep) if current_path else []
+    normalized = path_value.lower()
+    if normalized not in {part.lower() for part in path_parts if part}:
+        os.environ["PATH"] = path_value + (os.pathsep + current_path if current_path else "")
+
+
+def _ensure_runtime_ffmpeg_wrapper(runtime_base: Path, ffmpeg_path: Path) -> Optional[Path]:
+    if os.name == "nt":
+        return ffmpeg_path
+    if ffmpeg_path.name == "ffmpeg":
+        return ffmpeg_path
+
+    wrapper_dir = runtime_base / "bin"
+    wrapper_path = wrapper_dir / "ffmpeg"
+    try:
+        wrapper_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+
+    target = str(ffmpeg_path)
+    try:
+        if wrapper_path.exists() or wrapper_path.is_symlink():
+            try:
+                if wrapper_path.is_symlink() and os.readlink(wrapper_path) == target:
+                    return wrapper_path
+            except Exception:
+                pass
+            wrapper_path.unlink()
+        os.symlink(target, wrapper_path)
+        return wrapper_path
+    except Exception:
+        script_body = "#!/bin/sh\nexec " + shlex.quote(target) + " \"$@\"\n"
+        try:
+            wrapper_path.write_text(script_body, encoding="utf-8")
+            wrapper_path.chmod(0o755)
+            return wrapper_path
+        except Exception:
+            return None
+
+
 def _candidate_ffmpeg_paths() -> List[Path]:
     candidates: List[Path] = []
     seen: Set[str] = set()
@@ -194,16 +269,21 @@ def _candidate_ffmpeg_paths() -> List[Path]:
     for env_key in ("STEMWERK_FFMPEG_PATH", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
         add(os.environ.get(env_key))
 
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if local_appdata:
-        runtime_base = Path(local_appdata) / "STEMwerk"
+    for runtime_base in _runtime_base_candidates():
         add(runtime_base / "ffmpeg" / "bin" / "ffmpeg.exe")
         add(runtime_base / "ffmpeg" / "ffmpeg.exe")
         add(runtime_base / "bin" / "ffmpeg.exe")
+        add(runtime_base / "ffmpeg" / "bin" / "ffmpeg")
+        add(runtime_base / "ffmpeg" / "ffmpeg")
+        add(runtime_base / "bin" / "ffmpeg")
         bootstrap_values = _read_simple_env_file(runtime_base / "state" / "bootstrap.env")
         add(bootstrap_values.get("FFMPEG_PATH"))
+        add(bootstrap_values.get("FFMPEG"))
+        add(bootstrap_values.get("MANAGED_FFMPEG_PATH"))
         capabilities_values = _read_simple_env_file(runtime_base / "state" / "capabilities.env")
         add(capabilities_values.get("FFMPEG_PATH"))
+        add(capabilities_values.get("FFMPEG"))
+        add(capabilities_values.get("MANAGED_FFMPEG_PATH"))
 
     exe_dir = Path(sys.executable).resolve().parent
     add(exe_dir / "ffmpeg.exe")
@@ -215,7 +295,7 @@ def _candidate_ffmpeg_paths() -> List[Path]:
     return candidates
 
 
-def _configure_ffmpeg_runtime() -> Optional[Path]:
+def _configure_ffmpeg_runtime() -> Tuple[Optional[Path], Optional[Path], Optional[str]]:
     for candidate in _candidate_ffmpeg_paths():
         try:
             if not candidate.exists() or candidate.is_dir():
@@ -223,18 +303,16 @@ def _configure_ffmpeg_runtime() -> Optional[Path]:
         except Exception:
             continue
 
-        candidate_str = str(candidate)
-        candidate_dir = str(candidate.parent)
-        current_path = os.environ.get("PATH", "")
-        path_parts = current_path.split(os.pathsep) if current_path else []
-        normalized_dir = candidate_dir.lower()
-        if normalized_dir not in {part.lower() for part in path_parts if part}:
-            os.environ["PATH"] = candidate_dir + (os.pathsep + current_path if current_path else "")
+        candidate_str = str(candidate.resolve())
+        runtime_base = _runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk"
+        wrapper = _ensure_runtime_ffmpeg_wrapper(runtime_base, Path(candidate_str))
+        path_prefix = str(wrapper.parent if wrapper else Path(candidate_str).parent)
+        _prepend_path(path_prefix)
         os.environ["STEMWERK_FFMPEG_PATH"] = candidate_str
         os.environ["FFMPEG_PATH"] = candidate_str
         os.environ["IMAGEIO_FFMPEG_EXE"] = candidate_str
-        return candidate
-    return None
+        return Path(candidate_str), wrapper, path_prefix
+    return None, None, None
 
 
 def _default_model_cache_dir() -> Path:
@@ -805,12 +883,22 @@ def main():
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
     emit_phase("python_start")
-    ffmpeg_path = _configure_ffmpeg_runtime()
+    ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
     if ffmpeg_path is not None:
         print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)
+        print(
+            f"STEMWERK_DIAG ffmpeg_wrapper={ffmpeg_wrapper if ffmpeg_wrapper is not None else 'none'}",
+            file=sys.stderr,
+        )
+        print(
+            f"STEMWERK_DIAG path_prefix={ffmpeg_path_prefix if ffmpeg_path_prefix else 'none'}",
+            file=sys.stderr,
+        )
     else:
         print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)
+        print("STEMWERK_DIAG ffmpeg_wrapper=none", file=sys.stderr)
+        print("STEMWERK_DIAG path_prefix=none", file=sys.stderr)
     print(f"STEMWERK_DIAG model_cache_dir={model_cache_dir}", file=sys.stderr)
 
     skip_devices = set(_split_list(args.skip_devices))

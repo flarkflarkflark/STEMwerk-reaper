@@ -1107,9 +1107,29 @@ def test_audio_separator_process_consumes_managed_ffmpeg_env_and_reports_it():
     script = Path("scripts/reaper/audio_separator_process.py").read_text()
 
     assert 'for env_key in ("STEMWERK_FFMPEG_PATH", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE")' in script
+    assert "def _runtime_base_candidates() -> List[Path]:" in script
+    assert 'add(Path.home() / ".local" / "share" / "STEMwerk")' in script
+    assert 'bootstrap_values = _read_simple_env_file(runtime_base / "state" / "bootstrap.env")' in script
+    assert 'add(bootstrap_values.get("FFMPEG_PATH"))' in script
+    assert 'add(bootstrap_values.get("FFMPEG"))' in script
+    assert 'add(bootstrap_values.get("MANAGED_FFMPEG_PATH"))' in script
+    assert 'capabilities_values = _read_simple_env_file(runtime_base / "state" / "capabilities.env")' in script
+    assert 'add(capabilities_values.get("FFMPEG_PATH"))' in script
+    assert 'add(capabilities_values.get("FFMPEG"))' in script
+    assert 'add(capabilities_values.get("MANAGED_FFMPEG_PATH"))' in script
+    assert "def _ensure_runtime_ffmpeg_wrapper(runtime_base: Path, ffmpeg_path: Path) -> Optional[Path]:" in script
+    assert "wrapper_path = wrapper_dir / \"ffmpeg\"" in script
+    assert "os.symlink(target, wrapper_path)" in script
+    assert "exec " in script and '\\"$@\\"' in script
+    assert 'os.environ["PATH"] = path_value + (os.pathsep + current_path if current_path else "")' in script
+    assert "ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()" in script
     assert 'os.environ["STEMWERK_FFMPEG_PATH"] = candidate_str' in script
     assert 'os.environ["IMAGEIO_FFMPEG_EXE"] = candidate_str' in script
     assert 'print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)' in script
+    assert "STEMWERK_DIAG ffmpeg_wrapper=" in script
+    assert "ffmpeg_wrapper if ffmpeg_wrapper is not None else 'none'" in script
+    assert "STEMWERK_DIAG path_prefix=" in script
+    assert "ffmpeg_path_prefix if ffmpeg_path_prefix else 'none'" in script
     assert 'print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)' in script
 
 
