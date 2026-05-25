@@ -1035,11 +1035,11 @@ def test_linux_managed_wheel_lookup_is_nounset_safe_for_platform_vars():
 
 
 def test_linux_managed_diffq_wheel_payload_is_present_and_resolvable():
-    wheel_dir = Path("installer/linux/payload/wheels/linux-x86_64-cp312")
-    wheels = sorted(wheel_dir.glob("diffq-*-cp312-cp312-linux_x86_64.whl"))
+    scripts_wheel_dir = Path("scripts/reaper/vendor/wheels/linux-x86_64-cp312")
+    scripts_wheels = sorted(scripts_wheel_dir.glob("diffq-*-cp312-cp312-linux_x86_64.whl"))
 
-    assert wheel_dir.is_dir(), f"missing managed wheel directory: {wheel_dir}"
-    assert wheels, "missing managed diffq cp312 linux_x86_64 wheel payload"
+    assert scripts_wheel_dir.is_dir(), f"missing managed wheel directory: {scripts_wheel_dir}"
+    assert scripts_wheels, "missing managed diffq cp312 linux_x86_64 wheel payload in scripts vendor wheel path"
 
 
 def test_audio_separator_dependency_status_fields_are_reported():
