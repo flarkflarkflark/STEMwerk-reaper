@@ -265,25 +265,63 @@ local function mergeRunDeviceTruth(runCtx, diag)
     end
 end
 
+local function getDrumKitParallelGpuCapOverride()
+    if not (reaper and reaper.GetExtState) then return nil end
+    local raw = tostring(reaper.GetExtState(STEMWERK_DEV_EXT_SECTION, "drumkit_parallel_gpu_cap") or "")
+    if raw == "" then return nil end
+    local n = tonumber(raw)
+    if not n then return nil end
+    n = math.floor(n)
+    if n ~= 1 and n ~= 2 and n ~= 4 and n ~= 8 then return nil end
+    return n
+end
+
 local function getDrumKitMaxParallelJobs(runCtx)
     local device = tostring((runCtx and (runCtx.worker_requested_device or runCtx.effective_device)) or DEFAULT_DRUMKIT_DEVICE)
     local backend = tostring((runCtx and runCtx.effective_backend) or "")
+    local requestedClass = tostring((runCtx and runCtx.requested_device_class) or "")
+    local capOverride = getDrumKitParallelGpuCapOverride()
+    local requestedCap = nil
+    local usedOverride = false
+    local clampApplied = false
+    local reason = "unknown"
+    local maxJobs = 1
     if backend ~= "cpu" and backend ~= "cuda" and backend ~= "rocm" and backend ~= "directml" and backend ~= "mps" and backend ~= "gpu" then
         backend = classifyDrumKitDevice(device)
     end
-    if backend == "cuda" or backend == "rocm" or backend == "directml" or backend == "mps" or backend == "gpu" then
-        return 2, "requested_" .. backend, device
-    end
     if backend == "cpu" then
-        return 1, "cpu", device
+        maxJobs = 1
+        requestedCap = capOverride or 1
+        reason = "cpu"
+        if capOverride and capOverride ~= 1 then clampApplied = true end
+    elseif backend == "cuda" or backend == "rocm" or backend == "directml" or backend == "mps" or backend == "gpu" then
+        requestedCap = capOverride or 2
+        maxJobs = requestedCap
+        usedOverride = capOverride ~= nil
+        reason = usedOverride and ("requested_" .. backend .. "_override") or ("requested_" .. backend)
+    elseif requestedClass == "gpu" then
+        requestedCap = capOverride or 2
+        maxJobs = requestedCap
+        usedOverride = capOverride ~= nil
+        reason = usedOverride and "requested_gpu_pending_worker_truth_override" or "requested_gpu_pending_worker_truth"
+    elseif requestedClass == "auto" and tostring(device):lower() == "auto" then
+        requestedCap = capOverride or 2
+        maxJobs = requestedCap
+        usedOverride = capOverride ~= nil
+        reason = usedOverride and "requested_auto_pending_worker_truth_override" or "requested_auto_pending_worker_truth"
+    else
+        requestedCap = capOverride or 1
+        maxJobs = 1
+        reason = "unknown"
+        if capOverride and capOverride ~= 1 then clampApplied = true end
     end
-    if runCtx and tostring(runCtx.requested_device_class or "") == "gpu" then
-        return 2, "requested_gpu_pending_worker_truth", device
+    if runCtx then
+        runCtx.requested_parallel_jobs = requestedCap
+        runCtx.parallel_cap_override = capOverride
+        runCtx.parallel_cap_override_used = usedOverride
+        runCtx.parallel_cap_clamp_applied = clampApplied
     end
-    if runCtx and tostring(runCtx.requested_device_class or "") == "auto" and tostring(device):lower() == "auto" then
-        return 2, "requested_auto_pending_worker_truth", device
-    end
-    return 1, "unknown", device
+    return maxJobs, reason, device
 end
 
 local function isWindowsHost()
@@ -1007,7 +1045,11 @@ local function createAsyncRunContext(modeOverride, opts)
     }
     local maxJobs, maxReason = getDrumKitMaxParallelJobs(runCtx)
     if opts.parallel_processing == false then
+        local requestedBeforeSequential = tonumber(runCtx.requested_parallel_jobs or maxJobs or 1) or 1
         maxJobs, maxReason = 1, "settings_sequential"
+        runCtx.requested_parallel_jobs = requestedBeforeSequential
+        runCtx.parallel_cap_clamp_applied = requestedBeforeSequential ~= 1
+        runCtx.parallel_cap_override_used = (tonumber(runCtx.parallel_cap_override) or 0) > 0
     end
     runCtx.max_parallel_jobs = maxJobs
     runCtx.max_parallel_reason = maxReason
@@ -1082,6 +1124,10 @@ local function writeAsyncMetadata(runCtx, status)
         drumsep_model = STAGE2_MODEL,
         requested_device_class = tostring(runCtx.requested_device_class or "unknown"),
         requested_device_id = tostring(runCtx.requested_device_id or runCtx.requested_device or "unknown"),
+        requested_parallel_jobs = tonumber(runCtx.requested_parallel_jobs or runCtx.max_parallel_jobs or 1) or 1,
+        parallel_cap_override = tonumber(runCtx.parallel_cap_override or 0) or 0,
+        parallel_cap_override_used = runCtx.parallel_cap_override_used == true,
+        parallel_cap_clamp_applied = runCtx.parallel_cap_clamp_applied == true,
         worker_requested_device = tostring(runCtx.worker_requested_device or ""),
         effective_device = tostring(runCtx.effective_device or ""),
         effective_backend = tostring(runCtx.effective_backend or "unknown"),
@@ -2028,6 +2074,10 @@ local function advanceAsyncRunState(runCtx)
         logKV("effective_backend", tostring(runCtx.effective_backend or ""))
         logKV("actual_runtime_backend", tostring(runCtx.actual_runtime_backend or "unknown"))
         logKV("actual_torch_device", tostring(runCtx.actual_torch_device or "unknown"))
+        logKV("requested_parallel_jobs", tostring(runCtx.requested_parallel_jobs or runCtx.max_parallel_jobs or 1))
+        logKV("parallel_cap_override", tostring(runCtx.parallel_cap_override or ""))
+        logKV("parallel_cap_override_used", tostring(runCtx.parallel_cap_override_used == true))
+        logKV("parallel_cap_clamp_applied", tostring(runCtx.parallel_cap_clamp_applied == true))
         logKV("max_parallel_jobs", tostring(runCtx.max_parallel_jobs or 1))
         logKV("max_parallel_reason", tostring(runCtx.max_parallel_reason or "unknown"))
         appendParallelTrace(
@@ -2042,6 +2092,10 @@ local function advanceAsyncRunState(runCtx)
                 .. " effective_backend=" .. tostring(runCtx.effective_backend or "")
                 .. " actual_runtime_backend=" .. tostring(runCtx.actual_runtime_backend or "unknown")
                 .. " actual_torch_device=" .. tostring(runCtx.actual_torch_device or "unknown")
+                .. " requested_parallel_jobs=" .. tostring(runCtx.requested_parallel_jobs or runCtx.max_parallel_jobs or 1)
+                .. " override=" .. tostring(runCtx.parallel_cap_override or "")
+                .. " override_used=" .. tostring(runCtx.parallel_cap_override_used == true)
+                .. " clamp_applied=" .. tostring(runCtx.parallel_cap_clamp_applied == true)
         )
         logKV("source_resolution_mode", runCtx.source_resolution_mode)
         logKV("selection_precedence", runCtx.selection_precedence)
@@ -2062,6 +2116,10 @@ local function advanceAsyncRunState(runCtx)
             selected_item_count = runCtx.selected_item_count,
             resolved_sources = runCtx.source_count,
             source_count = runCtx.source_count,
+            requested_parallel_jobs = tonumber(runCtx.requested_parallel_jobs or runCtx.max_parallel_jobs or 1) or 1,
+            parallel_cap_override = tonumber(runCtx.parallel_cap_override or 0) or 0,
+            parallel_cap_override_used = runCtx.parallel_cap_override_used == true,
+            parallel_cap_clamp_applied = runCtx.parallel_cap_clamp_applied == true,
             max_parallel_jobs = runCtx.max_parallel_jobs,
             max_parallel_reason = runCtx.max_parallel_reason,
             requested_device = runCtx.requested_device,
