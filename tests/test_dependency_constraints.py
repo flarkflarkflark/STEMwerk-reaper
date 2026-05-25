@@ -881,7 +881,7 @@ def test_linux_half_installed_audio_separator_triggers_full_dependency_repair_at
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
     assert '"${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || audio_import_rc=$?' in script
-    assert 'if [ "${audio_import_rc}" -ne 0 ]; then' in script
+    assert 'if [ "${audio_import_rc}" -ne 0 ] && [ "${audio_install_rc}" -eq 0 ]; then' in script
     assert 'if [ "${audio_install_rc}" -ne 0 ]; then' in script
     assert 'log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"' in script
     assert 'audio_repair_attempted=1' in script
@@ -917,6 +917,31 @@ def test_linux_missing_compiler_for_diffq_reports_build_tools_message():
     assert message in setup_internal
     assert 'BACKEND_DEPS_REASON="missing_diffq_or_build_tools"' in script
     assert 'BUILD_TOOLS_MISSING="yes"' in script
+
+
+def test_linux_managed_diffq_wheelhouse_flow_is_enforced_for_managed_py312():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "is_managed_python_312_linux_x86_64" in script
+    assert "find_managed_diffq_wheel" in script
+    assert "install_managed_diffq_wheel" in script
+    assert "vendor/wheels/linux-x86_64-cp312" in script
+    assert '"${RUNTIME_BASE}/wheels/linux-x86_64-cp312"' in script
+    assert '"${RUNTIME_BASE}/cache/wheels"' in script
+    assert "--only-binary=diffq" in script
+    assert 'log_step "Managed dependency wheel missing for diffq on Linux Python 3.12. Repair/Rebuild could not complete."' in script
+    assert 'BACKEND_DEPS_REASON="managed_diffq_wheel_missing"' in script
+    assert 'BACKEND_REASON="managed_diffq_wheel_missing"' in script
+    assert "Managed dependency wheel missing for diffq on Linux Python 3.12" in setup_internal
+
+
+def test_linux_managed_wheel_missing_skips_no_deps_fallback_and_fails_clear():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'if [ "${audio_install_rc}" -ne 0 ] && [ "${managed_diffq_required}" -eq 0 ]; then' in script
+    assert 'log_step "Managed wheel path required for Linux managed Python 3.12; skipping no-deps fallback"' in script
+    assert 'log_step "Managed wheel path required for Linux managed Python 3.12; full dependency repair cannot continue without diffq wheel"' in script
 
 
 def test_audio_separator_dependency_status_fields_are_reported():

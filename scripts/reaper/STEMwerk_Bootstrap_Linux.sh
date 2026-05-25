@@ -134,6 +134,50 @@ mark_build_tools_missing() {
   log_step "Backend dependency build failed because no C compiler was found. Install clang/gcc/build tools, then run Repair/Rebuild again."
 }
 
+is_managed_python_312_linux_x86_64() {
+  [ "${OS_NAME}" = "linux" ] || return 1
+  [ "${ARCH}" = "x86_64" ] || return 1
+  [ -n "${MANAGED_PYTHON_PATH:-}" ] || return 1
+  [ -n "${PYTHON:-}" ] || return 1
+  [ "${PYTHON}" = "${MANAGED_PYTHON_PATH}" ] || return 1
+  [ -n "${DETECTED_PYTHON_VERSION:-}" ] || return 1
+  case "${DETECTED_PYTHON_VERSION}" in
+    3.12.*|3.12) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+find_managed_diffq_wheel() {
+  for wheel_dir in \
+    "${SCRIPT_DIR}/vendor/wheels/linux-x86_64-cp312" \
+    "${RUNTIME_BASE}/wheels/linux-x86_64-cp312" \
+    "${RUNTIME_BASE}/cache/wheels"
+  do
+    [ -d "${wheel_dir}" ] || continue
+    for wheel in "${wheel_dir}"/diffq-*.whl; do
+      [ -f "${wheel}" ] || continue
+      printf "%s\n" "${wheel}"
+      return 0
+    done
+  done
+  return 1
+}
+
+install_managed_diffq_wheel() {
+  [ -n "${VENV_PY:-}" ] || return 1
+  [ -x "${VENV_PY}" ] || return 1
+  diffq_wheel="$(find_managed_diffq_wheel || true)"
+  if [ -z "${diffq_wheel}" ]; then
+    BACKEND_DEPS_COMPLETE="no"
+    BACKEND_DEPS_REASON="managed_diffq_wheel_missing"
+    BACKEND_REASON="managed_diffq_wheel_missing"
+    log_step "Managed dependency wheel missing for diffq on Linux Python 3.12. Repair/Rebuild could not complete."
+    return 1
+  fi
+  log_step "Installing managed diffq wheel: ${diffq_wheel}"
+  "${VENV_PY}" -m pip install --no-index --find-links "$(dirname "${diffq_wheel}")" --only-binary=:all: "${diffq_wheel}" >> "${LOG_FILE}" 2>&1
+}
+
 clear_stale_python_backend_reason() {
   case "${BACKEND_REASON:-}" in
     python_missing|python_not_found|python_unsupported)
@@ -1098,15 +1142,33 @@ PY
     audio_repair_rc=0
     audio_import_rc=0
     audio_repair_attempted=0
+    managed_diffq_required=0
+    managed_diffq_ready=0
     audio_install_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
     : > "${audio_install_log}" || true
+    if is_managed_python_312_linux_x86_64; then
+      managed_diffq_required=1
+      if install_managed_diffq_wheel; then
+        managed_diffq_ready=1
+      else
+        audio_install_rc=1
+      fi
+    fi
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || audio_import_rc=$?
-    if [ "${audio_import_rc}" -ne 0 ]; then
+    if [ "${audio_import_rc}" -ne 0 ] && [ "${audio_install_rc}" -eq 0 ]; then
       if [ -n "${CONSTRAINTS_FILE}" ]; then
         log_step "Installing audio-separator 0.23.0 with constraints (torch pinned)"
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
+          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        else
+          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        fi
       else
-        "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
+          "${VENV_PY}" -m pip install --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        else
+          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        fi
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
@@ -1128,13 +1190,15 @@ PY
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
-    if [ "${audio_install_rc}" -ne 0 ]; then
+    if [ "${audio_install_rc}" -ne 0 ] && [ "${managed_diffq_required}" -eq 0 ]; then
       if detect_build_tools_missing_log "${audio_install_log}"; then
         mark_build_tools_missing
       fi
       log_step "audio-separator dependency install failed; retrying package install without dependency resolution"
       audio_install_rc=0
       "${VENV_PY}" -m pip install --no-deps "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
+    elif [ "${audio_install_rc}" -ne 0 ]; then
+      log_step "Managed wheel path required for Linux managed Python 3.12; skipping no-deps fallback"
     fi
     if [ "${audio_install_rc}" -eq 0 ]; then
       verify_audio_separator_runtime_deps || audio_install_rc=1
@@ -1145,10 +1209,30 @@ PY
       PACKAGE="audio-separator==0.23.0"
       audio_repair_rc=0
       : > "${audio_install_log}" || true
-      if [ -n "${CONSTRAINTS_FILE}" ]; then
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
-      else
-        "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+      if [ "${managed_diffq_required}" -eq 1 ]; then
+        if install_managed_diffq_wheel; then
+          managed_diffq_ready=1
+        else
+          audio_repair_rc=1
+        fi
+      fi
+      if [ "${audio_repair_rc}" -ne 0 ] && [ "${managed_diffq_required}" -eq 1 ]; then
+        log_step "Managed wheel path required for Linux managed Python 3.12; full dependency repair cannot continue without diffq wheel"
+      fi
+      if [ "${audio_repair_rc}" -eq 0 ]; then
+        if [ -n "${CONSTRAINTS_FILE}" ]; then
+          if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
+            "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+          else
+            "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+          fi
+        else
+          if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
+            "${VENV_PY}" -m pip install --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+          else
+            "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+          fi
+        fi
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
       if [ "${audio_repair_rc}" -eq 0 ]; then

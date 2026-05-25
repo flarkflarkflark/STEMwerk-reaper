@@ -613,6 +613,8 @@ local function prettySetupReason(reason)
             part = "stemwerk-core is missing after setup"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "managed_diffq_wheel_missing" then
+            part = "Managed dependency wheel missing for diffq on Linux Python 3.12. Repair/Rebuild could not complete."
         elseif lower == "missing_diffq_or_build_tools" then
             part = "Backend dependency build failed because no C compiler was found. Install clang/gcc/build tools, then run Repair/Rebuild again."
         elseif lower == "audio_separator_deps_missing" then
@@ -747,6 +749,8 @@ local function prettyBackendReason(reason)
             part = "No supported Python found (need 3.10-3.12)"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "managed_diffq_wheel_missing" then
+            part = "Managed dependency wheel missing for diffq on Linux Python 3.12"
         elseif lower == "audio_separator_missing" or lower == "audio_separator_missing_after_setup" then
             part = "audio-separator runtime is missing"
         elseif lower == "bootstrap_cuda_confirmed" then
