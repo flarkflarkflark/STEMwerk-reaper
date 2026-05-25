@@ -426,6 +426,22 @@ def test_setup_internal_treats_macos_cpu_mps_unavailable_as_info_not_failure():
     assert 'and trim(verification.ffmpegPath or "") ~= ""' in script
 
 
+def test_setup_internal_treats_linux_cpu_no_gpu_detected_as_info_not_failure():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'or (OS == "Linux"' in script
+    assert 'and profile == "linux-cpu"' in script
+    assert 'and backend == "cpu"' in script
+    assert 'and trim(state.STATUS or "") == "ok"' in script
+    assert 'and trim(state.STATUS_REASON or "") == ""' in script
+    assert 'and trim(state.AUDIO_SEPARATOR_IMPORT or "") == "ok"' in script
+    assert 'and trim(state.AUDIO_SEPARATOR_DEPS_COMPLETE or "") == "yes"' in script
+    assert 'and trim(state.BACKEND_DEPS_COMPLETE or "") ~= "no"' in script
+    assert 'and trim(verification.pythonPath or "") ~= ""' in script
+    assert 'and trim(verification.ffmpegPath or "") ~= ""' in script
+    assert 'and (trim(backendReason or "") == "" or trim(backendReason or "") == "no_gpu_detected")' in script
+
+
 def test_setup_internal_still_flags_real_failures_and_linux_deps_failed():
     script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
