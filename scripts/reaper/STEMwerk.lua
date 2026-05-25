@@ -16653,16 +16653,15 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
               script:write("#!/bin/sh\n")
               script:write("PY=" .. quoteArg(PYTHON_PATH) .. "\n")
               script:write("SEP=" .. quoteArg(SEPARATOR_SCRIPT) .. "\n")
-              if OS == "macOS" then
-                  local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath") or getExtStateValue("FFMPEG_PATH")
-                  if ffmpegPath and ffmpegPath ~= "" then
-                      script:write("FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\n")
-                      script:write("IMAGEIO_FFMPEG_EXE=" .. quoteArg(ffmpegPath) .. "\n")
-                      script:write("export FFMPEG_PATH IMAGEIO_FFMPEG_EXE\n")
-                      script:write("FFMPEG_DIR=$(dirname \"$FFMPEG_PATH\")\n")
-                      script:write("PATH=\"$FFMPEG_DIR:${PATH}\"\n")
-                      script:write("export PATH\n")
-                  end
+              local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath") or getExtStateValue("FFMPEG_PATH")
+              if ffmpegPath and ffmpegPath ~= "" then
+                  script:write("STEMWERK_FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\n")
+                  script:write("FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\n")
+                  script:write("IMAGEIO_FFMPEG_EXE=" .. quoteArg(ffmpegPath) .. "\n")
+                  script:write("export STEMWERK_FFMPEG_PATH FFMPEG_PATH IMAGEIO_FFMPEG_EXE\n")
+                  script:write("FFMPEG_DIR=$(dirname \"$FFMPEG_PATH\")\n")
+                  script:write("PATH=\"$FFMPEG_DIR:${PATH}\"\n")
+                  script:write("export PATH\n")
               end
               script:write("IN=" .. quoteArg(job.inputFile) .. "\n")
               script:write("OUT=" .. quoteArg(job.trackDir) .. "\n")

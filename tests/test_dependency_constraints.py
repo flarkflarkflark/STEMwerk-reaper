@@ -1077,6 +1077,27 @@ def test_linux_managed_ffmpeg_missing_path_still_fails_safely():
     assert 'set_status "missing_ffmpeg" "ffmpeg_not_found"' in script
 
 
+def test_runtime_launcher_exports_managed_ffmpeg_for_unix_processing():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert 'local ffmpegPath = FFMPEG_PATH or getExtStateValue("ffmpegPath") or getExtStateValue("FFMPEG_PATH")' in script
+    assert 'script:write("STEMWERK_FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\\n")' in script
+    assert 'script:write("FFMPEG_PATH=" .. quoteArg(ffmpegPath) .. "\\n")' in script
+    assert 'script:write("IMAGEIO_FFMPEG_EXE=" .. quoteArg(ffmpegPath) .. "\\n")' in script
+    assert 'script:write("export STEMWERK_FFMPEG_PATH FFMPEG_PATH IMAGEIO_FFMPEG_EXE\\n")' in script
+    assert 'script:write("PATH=\\"$FFMPEG_DIR:${PATH}\\"\\n")' in script
+
+
+def test_audio_separator_process_consumes_managed_ffmpeg_env_and_reports_it():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text()
+
+    assert 'for env_key in ("STEMWERK_FFMPEG_PATH", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE")' in script
+    assert 'os.environ["STEMWERK_FFMPEG_PATH"] = candidate_str' in script
+    assert 'os.environ["IMAGEIO_FFMPEG_EXE"] = candidate_str' in script
+    assert 'print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)' in script
+    assert 'print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)' in script
+
+
 def test_linux_managed_diffq_wheel_payload_is_present_and_resolvable():
     scripts_wheel_dir = Path("scripts/reaper/vendor/wheels/linux-x86_64-cp312")
     scripts_wheels = sorted(scripts_wheel_dir.glob("diffq-*-cp312-cp312-linux_x86_64.whl"))

@@ -191,8 +191,8 @@ def _candidate_ffmpeg_paths() -> List[Path]:
         seen.add(key)
         candidates.append(path)
 
-    ffmpeg_env = os.environ.get("FFMPEG_PATH") or os.environ.get("IMAGEIO_FFMPEG_EXE")
-    add(ffmpeg_env)
+    for env_key in ("STEMWERK_FFMPEG_PATH", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
+        add(os.environ.get(env_key))
 
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
@@ -230,6 +230,7 @@ def _configure_ffmpeg_runtime() -> Optional[Path]:
         normalized_dir = candidate_dir.lower()
         if normalized_dir not in {part.lower() for part in path_parts if part}:
             os.environ["PATH"] = candidate_dir + (os.pathsep + current_path if current_path else "")
+        os.environ["STEMWERK_FFMPEG_PATH"] = candidate_str
         os.environ["FFMPEG_PATH"] = candidate_str
         os.environ["IMAGEIO_FFMPEG_EXE"] = candidate_str
         return candidate
