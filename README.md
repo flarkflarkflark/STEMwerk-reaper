@@ -9,28 +9,21 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 STEMwerk-reaper is a REAPER script that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend (audio-separator/Demucs) and keeps processing on your machine.
 
 ### Stable release note
-This README describes the current public stable release, `v2.2.2.2`. Future development continues on separate branches, but the features documented here reflect the current stable release line.
+This README describes the current public stable release, `v2.2.2.2.5`. Future development continues on separate branches, but the features documented here reflect the current stable release line.
 
-`v2.2.2.2` is a reliability and packaging parity release on top of the `2.2.2.x` UI/workflow line.
+`v2.2.2.2.5` is a targeted patch release on top of the `2.2.2.2` stable line.
 
 <img src="https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/v2.2.2.2/STEMwerk-v2.2.2.2-REAPER-Native-UI-cropped-720.png" alt="STEMwerk v2.2.2.2 REAPER-Native UI" width="720">
 
-#### What's new in v2.2.2.2
-`v2.2.2.2` is a reliability, setup, packaging, and supportability release.
+#### What's new in v2.2.2.2.5
+`v2.2.2.2.5` is a support-bundle processing-summary accuracy patch.
 
-- Adds a cleaner REAPER-Native UI mode alongside the existing flarkAUDIO Visual mode
-- Improves Windows setup/status/repair flow inside REAPER (`Check only`, `Repair`, `Rebuild venv`)
-- Support bundles now produce a folder plus a ready-to-upload `.zip`
-- Support bundles include `support_bundle_timings.txt` and `processing_summary.txt`
-- Windows support-bundle collection is faster and bounded; macOS busy-window repaint is polished
-- Restores offline `samplerate==0.1.0` payloads and keeps bundled `julius` fallback/repair path
-- Polishes installer icon/header/status rendering behavior
-- Removes obsolete `themes/` payload from release packaging
-- Includes toolbar setup script and toolbar icon assets in release payloads
-- Improves Linux package icon metadata
-- Apple Silicon MPS remains experimental/R&D; this release does not claim production MPS acceleration
+- Fixes processing-summary classification so stale model-download/checksum errors no longer override successful runs
+- Classifies runs with `exit_code=0` and DONE/Complete/stems evidence as successful in processing summaries
+- Classifies `user_cancel` / exit code `143` as cancelled and avoids mislabeling those runs as model-download failures without current evidence
 
-Current stable release: [STEMwerk v2.2.2.2](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2).
+Current stable release: [STEMwerk v2.2.2.2.5](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2.5).
+Detailed release notes: [`docs/RELEASE_2.2.2.2.5.md`](docs/RELEASE_2.2.2.2.5.md).
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
@@ -316,7 +309,5 @@ Before tagging/releases:
 ## License / author
 MIT License.
 Author: flarkAUDIO (flarkaudio@pm.me)
-
-
 
 
