@@ -1309,8 +1309,8 @@ local function envJsonValue(envJson, key)
     if not envJson or envJson == "" then return "" end
     local s = envJson:match('"' .. key .. '"%s*:%s*"(.-)"')
     if s ~= nil then return s end
-    local b = envJson:match('"' .. key .. '"%s*:%s*(true|false)')
-    if b ~= nil then return b end
+    if envJson:match('"' .. key .. '"%s*:%s*true') then return "true" end
+    if envJson:match('"' .. key .. '"%s*:%s*false') then return "false" end
     local n = envJson:match('"' .. key .. '"%s*:%s*([%d%.%-]+)')
     if n ~= nil then return n end
     local null = envJson:match('"' .. key .. '"%s*:%s*(null)')

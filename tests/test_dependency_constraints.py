@@ -742,6 +742,9 @@ def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
     assert "function firstNonEmpty(...)" in setup_internal
+    assert 'if envJson:match(\'"\' .. key .. \'"%s*:%s*true\') then return "true" end' in setup_internal
+    assert 'if envJson:match(\'"\' .. key .. \'"%s*:%s*false\') then return "false" end' in setup_internal
+    assert "true|false" not in setup_internal
     assert "local verification = verifyRuntimePaths(state)" in setup_internal
     assert "local adjustedErrors = {}" in setup_internal
     assert "local canAcceptRocm7Torch210 = (" in setup_internal
