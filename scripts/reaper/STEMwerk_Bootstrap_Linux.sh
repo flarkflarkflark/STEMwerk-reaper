@@ -6,6 +6,9 @@ BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 PINNED_TORCH_VERSION="2.5.1"
 PINNED_TORCHAUDIO_VERSION="2.5.1"
 PINNED_TORCHVISION_VERSION="0.20.1"
+ROCM7_GFX1201_TORCH_VERSION="2.10.0"
+ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0"
+ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0"
 PINNED_NUMPY_VERSION="1.26.4"
 PINNED_NUMBA_VERSION="0.59.1"
 PINNED_LLVM_VERSION="0.42.0"
@@ -78,6 +81,11 @@ write_state() {
       [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
       [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
       [ -n "${BACKEND_NOTE}" ] && echo "BACKEND_NOTE=${BACKEND_NOTE}"
+      [ -n "${SELECTED_TORCH_INDEX}" ] && echo "SELECTED_TORCH_INDEX=${SELECTED_TORCH_INDEX}"
+      [ -n "${SELECTED_TORCH_STACK}" ] && echo "SELECTED_TORCH_STACK=${SELECTED_TORCH_STACK}"
+      [ -n "${ROCM_DETECTED_DEVICES}" ] && echo "ROCM_DETECTED_DEVICES=${ROCM_DETECTED_DEVICES}"
+      [ -n "${ROCM_SELECTED_DEVICE}" ] && echo "ROCM_SELECTED_DEVICE=${ROCM_SELECTED_DEVICE}"
+      [ -n "${ROCM_FALLBACK_REASON}" ] && echo "ROCM_FALLBACK_REASON=${ROCM_FALLBACK_REASON}"
       echo "AUDIO_SEPARATOR_IMPORT=${AUDIO_SEPARATOR_IMPORT}"
       echo "AUDIO_SEPARATOR_DEPS_COMPLETE=${AUDIO_SEPARATOR_DEPS_COMPLETE}"
       echo "BACKEND_DEPS_COMPLETE=${BACKEND_DEPS_COMPLETE}"
@@ -406,9 +414,9 @@ PY
 
 linux_torch_install_args() {
   printf '"torch==%s" "torchvision==%s" "torchaudio==%s"' \
-    "${PINNED_TORCH_VERSION}" \
-    "${PINNED_TORCHVISION_VERSION}" \
-    "${PINNED_TORCHAUDIO_VERSION}"
+    "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}" \
+    "${ACTIVE_TORCHVISION_VERSION:-${PINNED_TORCHVISION_VERSION}}" \
+    "${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}"
 }
 
 log_nvidia_packages() {
@@ -427,15 +435,15 @@ install_linux_torch_stack() {
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
   case "${_mode}" in
     cpu)
-      log_step "Torch source index: https://download.pytorch.org/whl/cpu (torch/torchaudio pinned to ${PINNED_TORCH_VERSION})"
+      log_step "Torch source index: https://download.pytorch.org/whl/cpu (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
       eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url https://download.pytorch.org/whl/cpu $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
       ;;
     rocm)
-      log_step "Torch source index: ${_index} (torch/torchaudio pinned to ${PINNED_TORCH_VERSION})"
+      log_step "Torch source index: ${_index} (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
       eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url \"${_index}\" $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
       ;;
     cuda)
-      log_step "Torch source index: default pip index (torch/torchaudio pinned to ${PINNED_TORCH_VERSION})"
+      log_step "Torch source index: default pip index (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
       eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
       ;;
     *)
@@ -448,8 +456,8 @@ install_linux_torch_stack() {
 assert_pinned_torch_stack() {
   _venv_py="$1"
   _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
-expected_torch = "${PINNED_TORCH_VERSION}"
-expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
+expected_torch = "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}"
+expected_torchaudio = "${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}"
 def core(ver):
     return str(ver).split("+", 1)[0]
 try:
@@ -477,7 +485,7 @@ PY
       ;;
   esac
   log_step "Pinned torch assertion failed: ${_probe}"
-  printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${PINNED_TORCH_VERSION}" "${PINNED_TORCHAUDIO_VERSION}" >&2
+  printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}" "${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}" >&2
   return 1
 }
 
@@ -541,6 +549,13 @@ BACKEND_REASON=""
 BACKEND_NOTE=""
 BACKEND_DEPS_COMPLETE="unknown"
 BACKEND_DEPS_REASON=""
+ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
+ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
+ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
+SELECTED_TORCH_STACK=""
+ROCM_DETECTED_DEVICES=""
+ROCM_SELECTED_DEVICE=""
+ROCM_FALLBACK_REASON=""
 BUILD_TOOLS_MISSING="no"
 AUDIO_SEPARATOR_IMPORT="unknown"
 AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
@@ -997,9 +1012,25 @@ if [ "${BACKEND}" = "rocm" ]; then
       fi
       if [ "${ROCM_GFX1201}" -eq 1 ]; then
         log_step "Detected gfx1201/RX 9070; trying experimental ROCm 7.x torch indexes first"
-        IDX_LIST="https://download.pytorch.org/whl/rocm7.0 https://download.pytorch.org/whl/rocm7.1 ${IDX_LIST}"
+        ACTIVE_TORCH_VERSION="${ROCM7_GFX1201_TORCH_VERSION}"
+        ACTIVE_TORCHVISION_VERSION="${ROCM7_GFX1201_TORCHVISION_VERSION}"
+        ACTIVE_TORCHAUDIO_VERSION="${ROCM7_GFX1201_TORCHAUDIO_VERSION}"
+        IDX_LIST="https://download.pytorch.org/whl/rocm7.0 https://download.pytorch.org/whl/rocm7.1 https://download.pytorch.org/whl/rocm7.2"
+        case "${ROCM_MM}" in
+          7.*)
+            IDX_LIST="${IDX_LIST} https://download.pytorch.org/whl/rocm${ROCM_MM}"
+            ;;
+        esac
+      else
+        ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
+        ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
+        ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
       fi
-      IDX_LIST="${IDX_LIST} https://download.pytorch.org/whl/rocm6.1 https://download.pytorch.org/whl/rocm6.0 https://download.pytorch.org/whl/rocm5.7 https://download.pytorch.org/whl/rocm5.6"
+      if [ "${ROCM_GFX1201}" -eq 1 ]; then
+        IDX_LIST="${IDX_LIST}"
+      else
+        IDX_LIST="${IDX_LIST} https://download.pytorch.org/whl/rocm6.1 https://download.pytorch.org/whl/rocm6.0 https://download.pytorch.org/whl/rocm5.7 https://download.pytorch.org/whl/rocm5.6"
+      fi
 
       for idx in ${IDX_LIST}
       do
@@ -1052,8 +1083,10 @@ PY
         device_props="$(printf "%s\n" "$probe_line" | sed -n 's/^ROCM_DEVICE_PROPS=//p' | tail -n 1)"
         if [ -n "${device_names}" ]; then
           log_step "ROCm device names: ${device_names}"
+          ROCM_DETECTED_DEVICES="${device_names}"
         else
           log_step "ROCm device names: (none)"
+          ROCM_DETECTED_DEVICES=""
         fi
         if [ -n "${device_props}" ]; then
           log_step "ROCm device props: ${device_props}"
@@ -1087,15 +1120,32 @@ EOF
           # ROCm build installed but runtime sees no device; stop trying older indexes.
           break
         fi
+        if [ "${ROCM_GFX1201}" -eq 1 ]; then
+          if printf "%s %s\n" "${device_names}" "${device_props}" | grep -Eiq "rx 9070|gfx1201"; then
+            ROCM_SELECTED_DEVICE="rx9070_gfx1201"
+          else
+            log_step "ROCm runtime probe missing RX 9070/gfx1201 device on gfx1201 machine; rejecting index ${idx}"
+            rocm_fail_reason="rocm_gfx1201_device_not_selected"
+            continue
+          fi
+        fi
 
         rocm_ok=1
         SELECTED_TORCH_INDEX="${idx}"
+        SELECTED_TORCH_STACK="torch==${ACTIVE_TORCH_VERSION}+$(basename "${idx}") torchvision==${ACTIVE_TORCHVISION_VERSION}+$(basename "${idx}") torchaudio==${ACTIVE_TORCHAUDIO_VERSION}+$(basename "${idx}")"
         break
       done
 
       if [ "${rocm_ok}" -ne 1 ]; then
+        if [ "${ROCM_GFX1201}" -eq 1 ] && [ "${rocm_fail_reason}" = "rocm_wheel_not_found" ]; then
+          rocm_fail_reason="rocm7_stack_unavailable_for_gfx1201"
+        fi
+        ROCM_FALLBACK_REASON="${rocm_fail_reason}"
         log_step "ROCm torch install/probe failed; falling back to CPU (reason=${rocm_fail_reason})"
         install_linux_torch_stack "cpu" || true
+        ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
+        ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
+        ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
         PROFILE="linux-cpu"
         BACKEND="cpu"
         BACKEND_REASON="${rocm_fail_reason}"

@@ -485,6 +485,43 @@ def test_linux_bootstrap_gpu_override_env_clear_keeps_explicit_rocm_detection_pr
     assert 'STEMWERK_BACKEND="${BACKEND}" "${VENV_PY}" - <<\'PY\'' in script
 
 
+def test_linux_bootstrap_gfx1201_prefers_rocm7_stack_not_251_pin():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'ROCM7_GFX1201_TORCH_VERSION="2.10.0"' in script
+    assert 'ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0"' in script
+    assert 'ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0"' in script
+    assert 'ACTIVE_TORCH_VERSION="${ROCM7_GFX1201_TORCH_VERSION}"' in script
+    assert 'ACTIVE_TORCHVISION_VERSION="${ROCM7_GFX1201_TORCHVISION_VERSION}"' in script
+    assert 'ACTIVE_TORCHAUDIO_VERSION="${ROCM7_GFX1201_TORCHAUDIO_VERSION}"' in script
+    assert 'IDX_LIST="https://download.pytorch.org/whl/rocm7.0 https://download.pytorch.org/whl/rocm7.1 https://download.pytorch.org/whl/rocm7.2"' in script
+    assert 'case "${ROCM_MM}" in' in script
+    assert '7.*)' in script
+    assert 'if [ "${ROCM_GFX1201}" -eq 1 ]; then' in script
+    assert 'if [ "${ROCM_GFX1201}" -eq 1 ] && [ "${rocm_fail_reason}" = "rocm_wheel_not_found" ]; then' in script
+    assert 'rocm_fail_reason="rocm7_stack_unavailable_for_gfx1201"' in script
+
+
+def test_linux_bootstrap_gfx1201_requires_rx9070_or_gfx1201_device_visibility():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'if printf "%s %s\\n" "${device_names}" "${device_props}" | grep -Eiq "rx 9070|gfx1201"; then' in script
+    assert 'ROCM_SELECTED_DEVICE="rx9070_gfx1201"' in script
+    assert 'rocm_fail_reason="rocm_gfx1201_device_not_selected"' in script
+    assert 'ROCM_DETECTED_DEVICES="${device_names}"' in script
+    assert 'SELECTED_TORCH_STACK="torch==${ACTIVE_TORCH_VERSION}+$(basename "${idx}") torchvision==${ACTIVE_TORCHVISION_VERSION}+$(basename "${idx}") torchaudio==${ACTIVE_TORCHAUDIO_VERSION}+$(basename "${idx}")"' in script
+
+
+def test_support_bundle_reports_rocm_selected_stack_and_devices():
+    script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'appendKey(diagnostics, "ROCm selected index"' in script
+    assert 'appendKey(diagnostics, "ROCm selected torch stack"' in script
+    assert 'appendKey(diagnostics, "ROCm detected devices"' in script
+    assert 'appendKey(diagnostics, "ROCm selected device"' in script
+    assert 'appendKey(diagnostics, "ROCm fallback reason"' in script
+
+
 def test_setup_internal_still_flags_real_failures_and_linux_deps_failed():
     script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
