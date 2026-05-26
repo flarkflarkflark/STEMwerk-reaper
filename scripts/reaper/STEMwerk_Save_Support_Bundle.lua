@@ -1694,6 +1694,7 @@ local function parseKeyValueLine(line)
 end
 
 local function parseSupportRunText(entry, text)
+    local fullText = tostring(text or "")
     for line in tostring(text or ""):gmatch("[^\r\n]+") do
         local raw = trim(line)
         local lower = raw:lower()
@@ -1743,6 +1744,18 @@ local function parseSupportRunText(entry, text)
                     entry._clearFailures = (entry._clearFailures or 0) + 1
                     setRunResult(entry, "fail", 4)
                 end
+            elseif key == "error_class" or key == "stemwerk_error_class" then
+                kvAssignLast(entry, "error_class", value)
+                setRunResult(entry, "fail", 5)
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+            elseif key == "error_hint" or key == "stemwerk_error_hint" then
+                kvAssignLast(entry, "error_hint", value)
+            elseif key == "model_cache_hint" or key == "stemwerk_model_cache_hint" then
+                kvAssignLast(entry, "model_cache_hint", value)
+            elseif key == "model_url" or key == "stemwerk_model_url" then
+                kvAssignLast(entry, "model_url", value)
+            elseif key == "model_path" or key == "stemwerk_model_path" then
+                kvAssignLast(entry, "model_path", value)
             elseif key == "status" then
                 local status = value:lower()
                 if status:find("fail", 1, true) or status:find("error", 1, true) then
@@ -1826,6 +1839,31 @@ local function parseSupportRunText(entry, text)
             setRunResult(entry, "fail", 4)
             setFailureReason(entry, trim(raw:gsub("^[Ee][Rr][Rr][Oo][Rr]:%s*", "")))
         end
+    end
+
+    local lowerAll = fullText:lower()
+    local hasTimeout = lowerAll:find("read timed out", 1, true) or lowerAll:find("httpsconnectionpool", 1, true)
+        or lowerAll:find("max retries exceeded", 1, true) or lowerAll:find("timeouterror", 1, true)
+    local hasDownload = lowerAll:find("dl.fbaipublicfiles.com", 1, true) or lowerAll:find("connectionerror", 1, true)
+        or lowerAll:find("temporary failure in name resolution", 1, true) or lowerAll:find("name or service not known", 1, true)
+        or lowerAll:find("certificate verify failed", 1, true)
+    local hasChecksum = lowerAll:find("invalid checksum", 1, true) or (lowerAll:find("checksum", 1, true) and lowerAll:find(".th", 1, true))
+    if hasChecksum and tostring(entry.error_class or "unknown") == "unknown" then
+        kvAssignLast(entry, "error_class", "model_checksum_failed")
+        kvAssignLast(entry, "error_hint", "Cached model file appears corrupted. Delete/redownload model cache.")
+        kvAssignLast(entry, "model_cache_hint", "Delete corrupted/partial files in the STEMwerk models folder and retry.")
+        setRunResult(entry, "fail", 5)
+        entry._clearFailures = (entry._clearFailures or 0) + 1
+    elseif hasTimeout and tostring(entry.error_class or "unknown") == "unknown" then
+        kvAssignLast(entry, "error_class", "model_download_timeout")
+        kvAssignLast(entry, "error_hint", "Model download timed out. Check network/VPN/firewall or delete partial model cache and retry.")
+        setRunResult(entry, "fail", 5)
+        entry._clearFailures = (entry._clearFailures or 0) + 1
+    elseif hasDownload and tostring(entry.error_class or "unknown") == "unknown" then
+        kvAssignLast(entry, "error_class", "model_download_failed")
+        kvAssignLast(entry, "error_hint", "Model download failed. Check internet/DNS/proxy/VPN/firewall and retry.")
+        setRunResult(entry, "fail", 5)
+        entry._clearFailures = (entry._clearFailures or 0) + 1
     end
 end
 
@@ -2395,6 +2433,17 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "realtime_factor: " .. tostring(entry.realtime_factor or "unknown")
         if tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial" then
             lines[#lines + 1] = "failure_reason: " .. tostring(entry.error_reason or "unknown")
+            lines[#lines + 1] = "error_class: " .. tostring(entry.error_class or "unknown")
+            lines[#lines + 1] = "error_hint: " .. tostring(entry.error_hint or "unknown")
+            if tostring(entry.model_cache_hint or "") ~= "" and tostring(entry.model_cache_hint or "unknown") ~= "unknown" then
+                lines[#lines + 1] = "model_cache_hint: " .. tostring(entry.model_cache_hint)
+            end
+            if tostring(entry.model_url or "") ~= "" and tostring(entry.model_url or "unknown") ~= "unknown" then
+                lines[#lines + 1] = "model_url: " .. tostring(entry.model_url)
+            end
+            if tostring(entry.model_path or "") ~= "" and tostring(entry.model_path or "unknown") ~= "unknown" then
+                lines[#lines + 1] = "model_path: " .. tostring(entry.model_path)
+            end
         end
         lines[#lines + 1] = "bundle_log_path: " .. tostring(entry.log_path or "unknown")
         lines[#lines + 1] = ""

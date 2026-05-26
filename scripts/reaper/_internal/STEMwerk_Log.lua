@@ -238,6 +238,87 @@ function SW_LOG.readFileSnippet(path, maxChars)
     return content
 end
 
+local function sw_lower_contains_any(lowerText, patterns)
+    for i = 1, #(patterns or {}) do
+        if lowerText:find(patterns[i], 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+function SW_LOG.classifyModelFailure(logText, stdoutText)
+    local joined = tostring(logText or "") .. "\n" .. tostring(stdoutText or "")
+    local lower = string.lower(joined)
+    if lower == "" then return nil end
+
+    local timeoutHints = {
+        "read timed out",
+        "httpsconnectionpool",
+        "dl.fbaipublicfiles.com",
+        "max retries exceeded",
+        "timeouterror",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "certificate verify failed",
+    }
+    local checksumHints = {
+        "invalid checksum",
+        "checksum",
+    }
+
+    local hasTimeout = sw_lower_contains_any(lower, timeoutHints)
+    local hasChecksum = sw_lower_contains_any(lower, checksumHints)
+    local hasModelFile = lower:find("%.th", 1) ~= nil
+        or lower:find("955717e8%-8726e21a%.th", 1) ~= nil
+        or lower:find("f7e0c4bc%-ba3fe64a%.th", 1) ~= nil
+        or lower:find("demucs", 1, true) ~= nil
+        or lower:find("audio_separator_model_dir", 1, true) ~= nil
+    local hasDownloadContext = lower:find("dl.fbaipublicfiles.com", 1, true) ~= nil
+        or lower:find("https://dl.fbaipublicfiles.com", 1, true) ~= nil
+        or lower:find("download", 1, true) ~= nil
+        or lower:find("connectionerror", 1, true) ~= nil
+
+    local function extractFirst(pattern)
+        local hit = joined:match(pattern)
+        return hit and tostring(hit) or nil
+    end
+    local modelPath = extractFirst("([^\r\n]*%.th)")
+    local modelUrl = extractFirst("(https?://[%w%._%-%/%?=&]+)")
+
+    if hasChecksum and hasModelFile then
+        return {
+            error_class = "model_checksum_failed",
+            error_hint = "Cached model file appears corrupted. Delete/redownload model cache.",
+            model_cache_hint = "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            model_path = modelPath,
+            model_url = modelUrl,
+            reason = "model_cache_corrupt",
+        }
+    end
+    if hasTimeout and (hasDownloadContext or hasModelFile) then
+        return {
+            error_class = "model_download_timeout",
+            error_hint = "Model download timed out. Check network/VPN/firewall or delete partial model cache and retry.",
+            model_cache_hint = "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            model_path = modelPath,
+            model_url = modelUrl,
+            reason = "model_load_failed",
+        }
+    end
+    if hasDownloadContext then
+        return {
+            error_class = "model_download_failed",
+            error_hint = "Model download failed. Check internet/DNS/proxy/VPN/firewall and retry.",
+            model_cache_hint = "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            model_path = modelPath,
+            model_url = modelUrl,
+            reason = "model_load_failed",
+        }
+    end
+    return nil
+end
+
 -- Copy all available diagnostic files from a run's temp output dir to the
 -- persistent log directory. Intended for incomplete or failed runs.
 -- Missing source files are silently skipped.
@@ -281,11 +362,37 @@ function SW_LOG.preserveDiagnosticsForRun(outputDir, opts)
     if exitCode == nil then
         exitCode = SW_LOG.readExitCode(outputDir .. sep .. "exit_code.txt")
     end
+    local sepText = SW_LOG.readFileSnippet(outputDir .. sep .. "separation_log.txt", 128000) or ""
+    local outText = SW_LOG.readFileSnippet(outputDir .. sep .. "stdout.txt", 128000) or ""
+    local failure = SW_LOG.classifyModelFailure(sepText, outText)
+    if failure and failure.reason and reason == "no_stems" then
+        reason = tostring(failure.reason)
+    end
     local lines = {
         "--- STEMwerk Run Summary ---",
         "timestamp: " .. os.date("%Y-%m-%d %H:%M:%S"),
         "reason: " .. reason,
     }
+    if failure then
+        lines[#lines + 1] = "error_class: " .. tostring(failure.error_class or "unknown")
+        lines[#lines + 1] = "error_hint: " .. tostring(failure.error_hint or "")
+        lines[#lines + 1] = "model_cache_hint: " .. tostring(failure.model_cache_hint or "")
+        if failure.model_url then
+            lines[#lines + 1] = "model_url: " .. tostring(failure.model_url)
+        end
+        if failure.model_path then
+            lines[#lines + 1] = "model_path: " .. tostring(failure.model_path)
+        end
+        SW_LOG.logExecResult(
+            "processing_diag",
+            nil,
+            "STEMWERK_ERROR_CLASS=" .. tostring(failure.error_class or "unknown") .. "\n"
+                .. "STEMWERK_ERROR_HINT=" .. tostring(failure.error_hint or "") .. "\n"
+                .. "STEMWERK_MODEL_CACHE_HINT=" .. tostring(failure.model_cache_hint or "")
+                .. (failure.model_url and ("\nSTEMWERK_MODEL_URL=" .. tostring(failure.model_url)) or "")
+                .. (failure.model_path and ("\nSTEMWERK_MODEL_PATH=" .. tostring(failure.model_path)) or "")
+        )
+    end
     if exitCode ~= nil then
         lines[#lines + 1] = "exit_code: " .. tostring(exitCode)
     end

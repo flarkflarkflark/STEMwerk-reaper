@@ -1419,6 +1419,43 @@ local function isKnownMpsUnsupportedFailure(logSnippet)
 end
 
 local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine, logPath, debugLogPath, stdoutSnippet)
+    local function modelCachePathHint()
+        if OS == "macOS" then
+            return "~/Library/Application Support/STEMwerk/models/"
+        end
+        if OS == "Windows" then
+            return "%APPDATA%/STEMwerk/models/ (or current runtime app-data path)"
+        end
+        return "~/.local/share/STEMwerk/models/"
+    end
+
+    if SW_LOG and SW_LOG.classifyModelFailure then
+        local failure = SW_LOG.classifyModelFailure(logSnippet, stdoutSnippet)
+        if failure then
+            local msg = "Model download/load failed.\n"
+                .. tostring(failure.error_hint or "Model download failed or timed out. Check your internet connection and retry.")
+                .. "\n\nModel cache folder:\n"
+                .. modelCachePathHint()
+                .. "\n\n"
+                .. tostring(failure.model_cache_hint or "Delete corrupted/partial files in the STEMwerk models folder and retry.")
+                .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+                .. "\nCommand: " .. tostring(cmdLine or "unknown")
+                .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+                .. tostring(logSnippet or "(no log output found)")
+                .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+            if failure.model_url then
+                msg = msg .. "\n\nModel URL: " .. tostring(failure.model_url)
+            end
+            if failure.model_path then
+                msg = msg .. "\nModel file: " .. tostring(failure.model_path)
+            end
+            if stdoutSnippet and stdoutSnippet ~= "" then
+                msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+            end
+            return msg
+        end
+    end
+
     if not isKnownMpsUnsupportedFailure(logSnippet) then
         return nil
     end
@@ -18835,6 +18872,7 @@ _sep.processAllStemsResult = function()
         local firstJob = multiTrackQueue.jobs and multiTrackQueue.jobs[1] or nil
         local logPath = firstJob and firstJob.logFile or nil
         local logSnippet = SW_LOG.readFileSnippet(logPath, 1400) or "(no log output found)"
+        local stdoutSnippet = firstJob and SW_LOG.readFileSnippet(firstJob.stdoutFile, 1200) or nil
         local exitCode = firstJob and SW_LOG.readExitCode(firstJob.exitCodeFile) or nil
         local cmdLine = firstJob and firstJob.lastCmd or nil
         local debugLogPath = firstJob and (firstJob.execLogPath or SW_LOG.getLogPath()) or SW_LOG.getLogPath()
@@ -18844,7 +18882,8 @@ _sep.processAllStemsResult = function()
             exitCode,
             cmdLine,
             logPath,
-            debugLogPath
+            debugLogPath,
+            stdoutSnippet
         )
         if not msg then
             msg = "No stems were created.\n\n"
@@ -18854,6 +18893,9 @@ _sep.processAllStemsResult = function()
                 .. "Python log (" .. tostring(logPath or "unknown") .. "):\n"
                 .. logSnippet
                 .. "\n\nDebug log: " .. tostring(debugLogPath)
+            if stdoutSnippet and stdoutSnippet ~= "" then
+                msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+            end
         end
 
         -- Friendly hint for the most common missing dependency.

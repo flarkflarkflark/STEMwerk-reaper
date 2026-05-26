@@ -1362,6 +1362,37 @@ def test_support_bundle_prefers_newest_runtime_run_over_stale_timing_summary():
     assert "if not firstFromRuntimeRuns then" in script
 
 
+def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
+    log_script = Path("scripts/reaper/_internal/STEMwerk_Log.lua").read_text()
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    py_script = Path("scripts/reaper/audio_separator_process.py").read_text()
+
+    assert 'error_class = "model_download_timeout"' in log_script
+    assert 'error_class = "model_download_failed"' in log_script
+    assert 'error_class = "model_checksum_failed"' in log_script
+    assert 'reason = "model_cache_corrupt"' in log_script
+    assert 'reason = "model_load_failed"' in log_script
+    assert "STEMWERK_ERROR_CLASS=" in log_script
+    assert "STEMWERK_ERROR_HINT=" in log_script
+    assert "STEMWERK_MODEL_CACHE_HINT=" in log_script
+    assert 'if failure and failure.reason and reason == "no_stems" then' in log_script
+
+    assert 'key == "error_class" or key == "stemwerk_error_class"' in support_script
+    assert 'kvAssignLast(entry, "error_class", "model_download_timeout")' in support_script
+    assert 'kvAssignLast(entry, "error_class", "model_download_failed")' in support_script
+    assert 'kvAssignLast(entry, "error_class", "model_checksum_failed")' in support_script
+    assert 'lines[#lines + 1] = "error_class: " .. tostring(entry.error_class or "unknown")' in support_script
+    assert 'lines[#lines + 1] = "error_hint: " .. tostring(entry.error_hint or "unknown")' in support_script
+
+    assert "Model download/load failed." in main_script
+    assert "Model cache folder:" in main_script
+    assert "SW_LOG.classifyModelFailure" in main_script
+
+    assert 'print(f"STEMWERK_ERROR_CLASS={model_failure[\'error_class\']}", file=sys.stderr)' in py_script
+    assert 'print(f"STEMWERK_ERROR_HINT={model_failure[\'error_hint\']}", file=sys.stderr)' in py_script
+
+
 def test_lua_wav_render_path_guards_unsigned_pack_overflow_and_invalid_samples():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 

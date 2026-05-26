@@ -665,6 +665,62 @@ def _classify_runtime_failure(
     }
 
 
+def _classify_model_failure_text(text: str) -> Optional[Dict[str, str]]:
+    lower = str(text or "").lower()
+    if not lower:
+        return None
+
+    has_timeout = any(
+        token in lower
+        for token in (
+            "read timed out",
+            "httpsconnectionpool",
+            "max retries exceeded",
+            "timeouterror",
+        )
+    )
+    has_download = any(
+        token in lower
+        for token in (
+            "dl.fbaipublicfiles.com",
+            "connectionerror",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "certificate verify failed",
+        )
+    )
+    has_checksum = "invalid checksum" in lower or ("checksum" in lower and ".th" in lower)
+
+    url_match = re.search(r"(https?://[^\s'\"]+)", text or "")
+    path_match = re.search(r"([^\r\n]*\.th)", text or "", flags=re.IGNORECASE)
+
+    if has_checksum:
+        return {
+            "error_class": "model_checksum_failed",
+            "error_hint": "Cached model file appears corrupted. Delete/redownload model cache.",
+            "model_cache_hint": "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            "model_url": url_match.group(1) if url_match else "",
+            "model_path": path_match.group(1).strip() if path_match else "",
+        }
+    if has_timeout and (has_download or ".th" in lower):
+        return {
+            "error_class": "model_download_timeout",
+            "error_hint": "Model download timed out. Check network/VPN/firewall or delete partial model cache and retry.",
+            "model_cache_hint": "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            "model_url": url_match.group(1) if url_match else "",
+            "model_path": path_match.group(1).strip() if path_match else "",
+        }
+    if has_download:
+        return {
+            "error_class": "model_download_failed",
+            "error_hint": "Model download failed. Check internet/DNS/proxy/VPN/firewall and retry.",
+            "model_cache_hint": "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            "model_url": url_match.group(1) if url_match else "",
+            "model_path": path_match.group(1).strip() if path_match else "",
+        }
+    return None
+
+
 def _parse_major_minor(version_text: Optional[str]) -> Tuple[int, int]:
     raw = str(version_text or "").strip()
     match = re.match(r"^\s*(\d+)\.(\d+)", raw)
@@ -1079,6 +1135,15 @@ def main():
         import traceback
 
         traceback_text = traceback.format_exc()
+        model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
+        if model_failure:
+            print(f"STEMWERK_ERROR_CLASS={model_failure['error_class']}", file=sys.stderr)
+            print(f"STEMWERK_ERROR_HINT={model_failure['error_hint']}", file=sys.stderr)
+            print(f"STEMWERK_MODEL_CACHE_HINT={model_failure['model_cache_hint']}", file=sys.stderr)
+            if model_failure.get("model_url"):
+                print(f"STEMWERK_MODEL_URL={model_failure['model_url']}", file=sys.stderr)
+            if model_failure.get("model_path"):
+                print(f"STEMWERK_MODEL_PATH={model_failure['model_path']}", file=sys.stderr)
         failure = _classify_runtime_failure(
             exc,
             traceback_text,
