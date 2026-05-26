@@ -1,6 +1,6 @@
 -- @description Stemwerk: Save Support Bundle
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.4
+-- @version 2.2.2.2.5
 -- @changelog
 --   Collects a read-only STEMwerk support bundle with runtime diagnostics, logs, and temp-folder inventory.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -1666,7 +1666,7 @@ end
 
 local function setRunResult(entry, result, priority)
     result = trim(result):lower()
-    if result ~= "success" and result ~= "fail" and result ~= "partial" and result ~= "unknown" then
+    if result ~= "success" and result ~= "fail" and result ~= "partial" and result ~= "unknown" and result ~= "cancelled" then
         return
     end
     local p = tonumber(priority) or 0
@@ -1698,6 +1698,18 @@ local function parseSupportRunText(entry, text)
     for line in tostring(text or ""):gmatch("[^\r\n]+") do
         local raw = trim(line)
         local lower = raw:lower()
+        if lower == "done" or lower == "success" or lower == "complete" then
+            entry._sawDoneSuccess = (entry._sawDoneSuccess or 0) + 1
+            entry._positiveHints = (entry._positiveHints or 0) + 1
+        end
+        if lower:find("progress:100", 1, true) or lower:find("processing complete", 1, true)
+            or lower:find("completed successfully", 1, true) then
+            entry._sawProgressComplete = (entry._sawProgressComplete or 0) + 1
+            entry._positiveHints = (entry._positiveHints or 0) + 1
+        end
+        if lower:find("user_cancel", 1, true) then
+            entry._sawUserCancel = (entry._sawUserCancel or 0) + 1
+        end
         local key, value = parseKeyValueLine(raw)
         if key then
             if key == "result" then
@@ -1740,9 +1752,15 @@ local function parseSupportRunText(entry, text)
                 end
             elseif key == "reason" or key == "error" or key == "failure_reason" then
                 if value ~= "" and value:lower() ~= "none" and value ~= "0" then
-                    setFailureReason(entry, value)
-                    entry._clearFailures = (entry._clearFailures or 0) + 1
-                    setRunResult(entry, "fail", 4)
+                    if value:lower():find("user_cancel", 1, true) then
+                        entry._sawUserCancel = (entry._sawUserCancel or 0) + 1
+                        kvAssignLast(entry, "error_reason", "user_cancel")
+                        setRunResult(entry, "cancelled", 5)
+                    else
+                        setFailureReason(entry, value)
+                        entry._clearFailures = (entry._clearFailures or 0) + 1
+                        setRunResult(entry, "fail", 4)
+                    end
                 end
             elseif key == "error_class" or key == "stemwerk_error_class" then
                 kvAssignLast(entry, "error_class", value)
@@ -1766,11 +1784,21 @@ local function parseSupportRunText(entry, text)
                 end
             elseif key == "timestamp" then
                 kvAssignLast(entry, "timestamp", value)
-            elseif key == "exit_code" and tonumber(value) and tonumber(value) ~= 0 then
-                kvAssignLast(entry, "error_reason", "exit_code: " .. tostring(value))
-                entry._exitNonZero = (entry._exitNonZero or 0) + 1
-                entry._clearFailures = (entry._clearFailures or 0) + 1
-                setRunResult(entry, "fail", 4)
+            elseif key == "exit_code" and tonumber(value) then
+                local rc = tonumber(value)
+                if rc == 0 then
+                    entry._sawExitZero = (entry._sawExitZero or 0) + 1
+                elseif rc == 143 then
+                    entry._sawUserCancel = (entry._sawUserCancel or 0) + 1
+                    kvAssignLast(entry, "error_reason", "user_cancel")
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                    setRunResult(entry, "cancelled", 5)
+                else
+                    kvAssignLast(entry, "error_reason", "exit_code: " .. tostring(value))
+                    entry._exitNonZero = (entry._exitNonZero or 0) + 1
+                    entry._clearFailures = (entry._clearFailures or 0) + 1
+                    setRunResult(entry, "fail", 4)
+                end
             elseif key == "error_or_cancel" then
                 local ec = tonumber(value)
                 if ec and ec > 0 then
@@ -1848,6 +1876,9 @@ local function parseSupportRunText(entry, text)
         or lowerAll:find("temporary failure in name resolution", 1, true) or lowerAll:find("name or service not known", 1, true)
         or lowerAll:find("certificate verify failed", 1, true)
     local hasChecksum = lowerAll:find("invalid checksum", 1, true) or (lowerAll:find("checksum", 1, true) and lowerAll:find(".th", 1, true))
+    if hasTimeout or hasDownload or hasChecksum then
+        entry._sawModelFailureEvidence = (entry._sawModelFailureEvidence or 0) + 1
+    end
     if hasChecksum and tostring(entry.error_class or "unknown") == "unknown" then
         kvAssignLast(entry, "error_class", "model_checksum_failed")
         kvAssignLast(entry, "error_hint", "Cached model file appears corrupted. Delete/redownload model cache.")
@@ -1864,6 +1895,44 @@ local function parseSupportRunText(entry, text)
         kvAssignLast(entry, "error_hint", "Model download failed. Check internet/DNS/proxy/VPN/firewall and retry.")
         setRunResult(entry, "fail", 5)
         entry._clearFailures = (entry._clearFailures or 0) + 1
+    end
+end
+
+local function finalizeRunClassification(entry)
+    local hasExitZero = tonumber(entry._sawExitZero or 0) > 0
+    local hasDoneSuccess = tonumber(entry._sawDoneSuccess or 0) > 0
+    local hasProgressComplete = tonumber(entry._sawProgressComplete or 0) > 0
+    local hasStemsOutput = tonumber(entry._sawStemsOutput or 0) > 0
+    local hasCancel = tonumber(entry._sawUserCancel or 0) > 0
+    local hasModelEvidence = tonumber(entry._sawModelFailureEvidence or 0) > 0
+    local strongSuccess = (hasExitZero and hasDoneSuccess)
+        or (hasExitZero and hasProgressComplete)
+        or (hasDoneSuccess and hasStemsOutput)
+
+    if strongSuccess then
+        setRunResult(entry, "success", 100)
+        entry.error_class = "unknown"
+        entry.error_hint = "unknown"
+        entry.model_cache_hint = "unknown"
+        entry.model_url = "unknown"
+        entry.model_path = "unknown"
+        entry.error_reason = "unknown"
+        entry._clearFailures = 0
+        entry._exitNonZero = 0
+        return
+    end
+
+    if hasCancel and not hasModelEvidence then
+        setRunResult(entry, "cancelled", 90)
+        if tostring(entry.error_class or "unknown"):find("^model_", 1) then
+            entry.error_class = "unknown"
+        end
+        if tostring(entry.error_hint or "unknown") ~= "unknown" then
+            entry.error_hint = "unknown"
+        end
+        if tostring(entry.error_reason or "unknown") == "unknown" then
+            entry.error_reason = "user_cancel"
+        end
     end
 end
 
@@ -2325,6 +2394,12 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
                 end
                 parseSupportRunText(entry, "exit_code: " .. tostring(trim(exitData)))
             end
+
+            local stemsJsonPath = joinPath(jobDir, "stems.json")
+            if pathExists(stemsJsonPath) then
+                entry._sawStemsOutput = (entry._sawStemsOutput or 0) + 1
+                entry._positiveHints = (entry._positiveHints or 0) + 1
+            end
         end
 
         if stat.minTime and stat.maxTime and stat.maxTime >= stat.minTime then
@@ -2339,6 +2414,7 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         end
 
         deriveRunResultFromJobs(entry, stat)
+        finalizeRunClassification(entry)
         out[#out + 1] = entry
     end
 

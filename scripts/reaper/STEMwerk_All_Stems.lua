@@ -1,6 +1,6 @@
 -- @description Stemwerk: All Stems
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.4
+-- @version 2.2.2.2.5
 -- @changelog
 --   Quick preset: all stems.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

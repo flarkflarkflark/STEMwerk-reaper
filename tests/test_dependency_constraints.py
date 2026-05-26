@@ -1393,6 +1393,21 @@ def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     assert 'print(f"STEMWERK_ERROR_HINT={model_failure[\'error_hint\']}", file=sys.stderr)' in py_script
 
 
+def test_support_bundle_processing_summary_prefers_current_success_and_guards_cancel():
+    script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert "local function finalizeRunClassification(entry)" in script
+    assert "local strongSuccess = (hasExitZero and hasDoneSuccess)" in script
+    assert "setRunResult(entry, \"success\", 100)" in script
+    assert "entry.error_class = \"unknown\"" in script
+    assert "entry.error_hint = \"unknown\"" in script
+    assert "entry.error_reason = \"unknown\"" in script
+    assert "if hasCancel and not hasModelEvidence then" in script
+    assert "setRunResult(entry, \"cancelled\", 90)" in script
+    assert "if pathExists(stemsJsonPath) then" in script
+    assert "finalizeRunClassification(entry)" in script
+
+
 def test_lua_wav_render_path_guards_unsigned_pack_overflow_and_invalid_samples():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
