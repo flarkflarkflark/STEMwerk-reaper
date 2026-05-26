@@ -442,6 +442,49 @@ def test_setup_internal_treats_linux_cpu_no_gpu_detected_as_info_not_failure():
     assert 'and (trim(backendReason or "") == "" or trim(backendReason or "") == "no_gpu_detected")' in script
 
 
+def test_setup_internal_preserves_linux_rocm_backend_detection_and_reasoning():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'local hipPresent = envJson' in script
+    assert 'local rocmHost = envJson and envJson:find(\'"rocm_path_exists"%s*:%s*true\') ~= nil' in script
+    assert "local rocmOk = hipPresent and cudaAvail and cudaCount > 0" in script
+    assert "if rocmOk then" in script
+    assert 'backend = "rocm"' in script
+    assert "if rocmHost then" in script
+    assert 'reason = "rocm_probe_failed"' in script
+    assert 'reason = "no_gpu_detected"' in script
+
+
+def test_linux_cpu_success_gate_does_not_match_rocm_backend_profiles():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'or (OS == "Linux"' in script
+    assert 'and profile == "linux-cpu"' in script
+    assert 'and backend == "cpu"' in script
+    assert 'and (trim(backendReason or "") == "" or trim(backendReason or "") == "no_gpu_detected")' in script
+
+
+def test_linux_bootstrap_rocm_failures_are_explicit_not_no_gpu_detected():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'rocm_fail_reason="rocm_probe_failed"' in script
+    assert 'rocm_fail_reason="rocm_torch_cpu_fallback"' in script
+    assert 'rocm_fail_reason="rocm_runtime_no_device"' in script
+    assert 'BACKEND_REASON="${rocm_fail_reason}"' in script
+    assert 'log_step "ROCm torch install/probe failed; falling back to CPU (reason=${rocm_fail_reason})"' in script
+
+
+def test_linux_bootstrap_gpu_override_env_clear_keeps_explicit_rocm_detection_probe():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert "unset HIP_VISIBLE_DEVICES HSA_OVERRIDE_GFX_VERSION ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES" in script
+    assert "if command -v rocminfo >/dev/null 2>&1; then" in script
+    assert "env -u HIP_VISIBLE_DEVICES -u HSA_OVERRIDE_GFX_VERSION -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES \\" in script
+    assert 'rocminfo 2>/dev/null | grep -E "Name:|Marketing Name:|gfx|Device Type|Vendor Name"' in script
+    assert 'if [ "${BACKEND}" = "rocm" ]; then' in script
+    assert 'STEMWERK_BACKEND="${BACKEND}" "${VENV_PY}" - <<\'PY\'' in script
+
+
 def test_setup_internal_still_flags_real_failures_and_linux_deps_failed():
     script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
