@@ -695,6 +695,7 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
     assert 'f:write("CUDA_AVAILABLE="' in setup_internal
     assert 'f:write("CUDA_COUNT="' in setup_internal
     assert 'f:write("TORCH_HIP="' in setup_internal
+    assert 'f:write("STATUS="' in setup_internal
     assert "allow_rocm7_gfx1201 = (" in setup_internal
     assert 'and ("rx 9070" in dev_text or "gfx1201" in dev_text)' in setup_internal
     assert 'local tmpPath = tostring(path) .. ".tmp"' in setup_internal
@@ -735,6 +736,20 @@ def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap
     assert "and verification == \"failed\"" in setup_internal
     assert "if staleFailedVerification then" in setup_internal
     assert "verification = \"\"" in setup_internal
+
+
+def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local verification = verifyRuntimePaths(state)" in setup_internal
+    assert "local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #verifyErrors == 0" in setup_internal
+    assert "writeCapabilities(capFile, {" in setup_internal
+    assert "verification = verifiedRuntimeOk and \"ok\" or \"failed\"" in setup_internal
+    assert "torchVersion = resolvedTorchVersion" in setup_internal
+    assert "torchaudioVersion = resolvedTorchaudioVersion" in setup_internal
+    assert "runtimeDriftDetected = runtimeDriftDetected" in setup_internal
+    assert "runtimeDriftReason = runtimeDriftReason" in setup_internal
+    assert "updateBootstrapEnv(stateFile, {" in setup_internal
 
 
 def test_linux_bootstrap_uses_managed_python_before_unsupported_system_python():

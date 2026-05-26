@@ -1453,6 +1453,7 @@ local function writeCapabilities(path, data, deviceOut)
     f:write("PYTHON_PATH=" .. tostring(data.pythonPath or "") .. "\n")
     f:write("FFMPEG_PATH=" .. tostring(data.ffmpegPath or "") .. "\n")
     f:write("RUNTIME_BASE=" .. tostring(data.runtimeBase or "") .. "\n")
+    f:write("STATUS=" .. tostring(data.status or "") .. "\n")
     f:write("BOOTSTRAP_STATUS=" .. tostring(data.bootstrapStatus or "") .. "\n")
     f:write("BOOTSTRAP_REASON=" .. tostring(data.bootstrapReason or "") .. "\n")
     f:write("VERIFICATION=" .. tostring(data.verification or "") .. "\n")
@@ -4957,8 +4958,149 @@ verifyExistingSetup = function(runtime, separatorScript)
         appendSetupLog(runtime, (c.ok and "  OK: " or "FAIL: ") .. c.label .. ": " .. tostring(c.detail), false)
         if not c.ok then allOk = false end
     end
-    appendSetupLog(runtime, "Result: " .. (allOk and "OK (file checks passed)" or "FAIL (needs repair)"), false)
-    appendSetupLog(runtime, "Note: imports (torch, audio_separator) not checked; run Repair if separation fails.", false)
+
+    local verification = verifyRuntimePaths(state)
+    local verifyErrors = verification.errors or {}
+    local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #verifyErrors == 0
+    if verifiedRuntimeOk then
+        state.STATUS = "ok"
+        state.STATUS_REASON = ""
+        state.RUNTIME_VERIFY_DETAIL = "ok"
+    end
+    local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
+    local envJson = extractEnvJson(deviceOut or "")
+    local deviceNames = collectDeviceNames(deviceOut or "")
+    local backend, backendReason = detectBackendFromProbe(deviceOut, envJson)
+    if probeErr and probeErr ~= "" then
+        backendReason = probeErr
+    end
+    local profile = profileForBackend(backend)
+
+    local runtimeDriftDetected = verification.runtimeDriftDetected
+    local runtimeDriftReason = verification.runtimeDriftReason
+    if verifiedRuntimeOk then
+        runtimeDriftDetected = "no"
+        runtimeDriftReason = ""
+    end
+
+    local resolvedTorchVersion = trim(verification.torchVersion or "")
+    if resolvedTorchVersion == "" then
+        resolvedTorchVersion = trim(envJsonValue(envJson, "torch_version"))
+    end
+    if resolvedTorchVersion == "" then
+        resolvedTorchVersion = trim(envJsonValue(envJson, "torch"))
+    end
+    local resolvedTorchaudioVersion = trim(verification.torchaudioVersion or "")
+    if resolvedTorchaudioVersion == "" then
+        resolvedTorchaudioVersion = trim(envJsonValue(envJson, "torchaudio_version"))
+    end
+    local resolvedTorchvisionVersion = trim(state.TORCHVISION_VERSION or envJsonValue(envJson, "torchvision_version"))
+    local resolvedNumpyVersion = trim(state.NUMPY_VERSION or envJsonValue(envJson, "numpy_version"))
+    local resolvedNumbaVersion = trim(state.NUMBA_VERSION or envJsonValue(envJson, "numba_version"))
+    local resolvedLlvmLiteVersion = trim(state.LLVMLITE_VERSION or envJsonValue(envJson, "llvmlite_version"))
+    local resolvedAudioSeparatorVersion = trim(state.AUDIO_SEPARATOR_VERSION or envJsonValue(envJson, "audio_separator_version"))
+    local resolvedOnnxRuntimeVersion = trim(state.ONNXRUNTIME_VERSION or envJsonValue(envJson, "onnxruntime_version"))
+    local resolvedCudaAvailable = trim(state.CUDA_AVAILABLE or envJsonValue(envJson, "cuda_available"))
+    local resolvedCudaCount = trim(state.CUDA_COUNT or envJsonValue(envJson, "cuda_count"))
+    local resolvedTorchHip = trim(state.TORCH_HIP or envJsonValue(envJson, "torch_hip"))
+    local resolvedTorchSupported = trim(verification.torchSupported or "")
+    local resolvedTorchaudioPresent = trim(verification.torchaudioPresent or "")
+    if verifiedRuntimeOk then
+        if resolvedTorchSupported == "" or resolvedTorchSupported == "no" then
+            resolvedTorchSupported = "yes"
+        end
+        if resolvedTorchaudioPresent == "" or resolvedTorchaudioPresent == "no" then
+            resolvedTorchaudioPresent = "yes"
+        end
+    end
+    local runtimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
+    if verifiedRuntimeOk then
+        runtimeVerifyDetail = "ok"
+    elseif runtimeVerifyDetail == "" then
+        runtimeVerifyDetail = table.concat(verifyErrors, ";")
+    end
+
+    writeCapabilities(capFile, {
+        profile = profile,
+        backend = backend,
+        backendReason = backendReason,
+        backendNote = state.BACKEND_NOTE or "",
+        supportedPythonFound = verification.supportedPythonFound,
+        detectedPythonVersion = verification.detectedPythonVersion,
+        supportedPythonRange = verification.supportedPythonRange,
+        managedPythonEnabled = state.MANAGED_PYTHON_ENABLED or "",
+        managedPythonStatus = state.MANAGED_PYTHON_STATUS or "",
+        managedPythonVersion = state.MANAGED_PYTHON_VERSION or "",
+        managedPythonRelease = state.MANAGED_PYTHON_RELEASE or "",
+        managedPythonPlatform = state.MANAGED_PYTHON_PLATFORM or "",
+        managedPythonArch = state.MANAGED_PYTHON_ARCH or "",
+        managedPythonUrl = state.MANAGED_PYTHON_URL or "",
+        managedPythonSha256Ok = state.MANAGED_PYTHON_SHA256_OK or "",
+        managedPythonPath = state.MANAGED_PYTHON_PATH or "",
+        managedPythonReplaced = state.MANAGED_PYTHON_REPLACED or "",
+        managedPythonRollback = state.MANAGED_PYTHON_ROLLBACK or "",
+        audioSeparatorImport = state.AUDIO_SEPARATOR_IMPORT or (verifiedRuntimeOk and "ok" or ""),
+        audioSeparatorDepsComplete = state.AUDIO_SEPARATOR_DEPS_COMPLETE or (verifiedRuntimeOk and "yes" or ""),
+        backendDepsComplete = state.BACKEND_DEPS_COMPLETE or "",
+        backendDepsReason = state.BACKEND_DEPS_REASON or "",
+        buildToolsMissing = state.BUILD_TOOLS_MISSING or "",
+        systemPythonPath = state.SYSTEM_PYTHON_PATH or "",
+        systemPythonVersion = state.SYSTEM_PYTHON_VERSION or "",
+        systemPythonUsed = state.SYSTEM_PYTHON_USED or "",
+        venvPythonPath = state.VENV_PYTHON_PATH or state.VENV_PYTHON or "",
+        torchVersion = resolvedTorchVersion,
+        torchaudioVersion = resolvedTorchaudioVersion,
+        torchvisionVersion = resolvedTorchvisionVersion,
+        numpyVersion = resolvedNumpyVersion,
+        numbaVersion = resolvedNumbaVersion,
+        llvmliteVersion = resolvedLlvmLiteVersion,
+        audioSeparatorVersion = resolvedAudioSeparatorVersion,
+        onnxruntimeVersion = resolvedOnnxRuntimeVersion,
+        torchSupported = resolvedTorchSupported,
+        torchaudioPresent = resolvedTorchaudioPresent,
+        runtimeDriftDetected = runtimeDriftDetected,
+        runtimeDriftReason = runtimeDriftReason,
+        runtimeDriftDetail = verifiedRuntimeOk and "" or runtimeDriftReason,
+        runtimeVerifyDetail = runtimeVerifyDetail,
+        pythonPath = verification.pythonPath,
+        ffmpegPath = verification.ffmpegPath,
+        runtimeBase = runtime.base,
+        status = state.STATUS or "",
+        bootstrapStatus = state.STATUS or "",
+        bootstrapReason = verifiedRuntimeOk and "" or (state.STATUS_REASON or ""),
+        verification = verifiedRuntimeOk and "ok" or "failed",
+        audioSeparator = verifiedRuntimeOk and "ok" or "",
+        stemwerkCore = verifiedRuntimeOk and "ok" or "",
+        deviceNames = deviceNames,
+        torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
+        cudaAvailable = resolvedCudaAvailable,
+        cudaCount = resolvedCudaCount,
+        torchHip = resolvedTorchHip,
+        selectedTorchIndex = state.SELECTED_TORCH_INDEX or "",
+        selectedTorchStack = state.SELECTED_TORCH_STACK or "",
+        rocmDetectedDevices = state.ROCM_DETECTED_DEVICES or "",
+        rocmSelectedDevice = state.ROCM_SELECTED_DEVICE or "",
+        rocmFallbackReason = state.ROCM_FALLBACK_REASON or "",
+        envJson = envJson,
+    }, deviceOut)
+
+    updateBootstrapEnv(stateFile, {
+        STATUS = state.STATUS or "",
+        STATUS_REASON = state.STATUS_REASON or "",
+        PROFILE = profile or "",
+        BACKEND = backend or "",
+        BACKEND_REASON = backendReason or "",
+        RUNTIME_VERIFY_DETAIL = runtimeVerifyDetail,
+        STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
+    })
+
+    if #verifyErrors > 0 then
+        appendSetupLog(runtime, "Verify runtime errors: " .. table.concat(verifyErrors, ", "), false)
+    end
+    allOk = allOk and verifiedRuntimeOk
+
+    appendSetupLog(runtime, "Result: " .. (allOk and "OK (runtime checks passed)" or "FAIL (needs repair)"), false)
+    appendSetupLog(runtime, "Note: Check refreshed capabilities from current runtime probe.", false)
 
     if runtime.base and runtime.base ~= "" then
         updateBootstrapEnv(stateFile, {
@@ -4969,8 +5111,8 @@ verifyExistingSetup = function(runtime, separatorScript)
 
     local finalMessage = {}
     if allOk then
-        finalMessage[#finalMessage + 1] = "Verify only: file checks passed."
-        finalMessage[#finalMessage + 1] = "(Lightweight check only — imports and devices not verified)"
+        finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
+        finalMessage[#finalMessage + 1] = "(Capabilities refreshed from current probe)"
     else
         finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
         finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
