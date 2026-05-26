@@ -16492,6 +16492,7 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.sequentialMode = not requestedParallel
     multiTrackQueue.forceSequentialReason = nil
     multiTrackQueue.parallelJobLimit = nil
+    multiTrackQueue.executionModeReason = requestedParallel and "user_parallel" or "user_sequential"
     local hasPerItemJobs = false
     for _, job in ipairs(trackJobs) do
         if job.perItem then
@@ -16523,6 +16524,39 @@ _sep.runSingleTrackSeparation = function(trackList)
             end
             return false
         end
+        local function detectLogicalCpuCount()
+            local envCount = tonumber(os.getenv("NUMBER_OF_PROCESSORS") or "")
+            if envCount and envCount > 0 then return math.floor(envCount) end
+            local h = io.popen("getconf _NPROCESSORS_ONLN 2>/dev/null")
+            if h then
+                local out = tonumber((h:read("*a") or ""):match("%d+"))
+                h:close()
+                if out and out > 0 then return math.floor(out) end
+            end
+            return nil
+        end
+        local function detectSystemRamGiB()
+            if OS == "Linux" then
+                local f = io.open("/proc/meminfo", "r")
+                if f then
+                    local txt = f:read("*a") or ""
+                    f:close()
+                    local kb = tonumber((txt:match("MemTotal:%s*(%d+)") or ""))
+                    if kb and kb > 0 then return kb / (1024 * 1024) end
+                end
+            elseif OS == "macOS" then
+                local h = io.popen("sysctl -n hw.memsize 2>/dev/null")
+                if h then
+                    local bytes = tonumber((h:read("*a") or ""):match("%d+"))
+                    h:close()
+                    if bytes and bytes > 0 then return bytes / (1024 * 1024 * 1024) end
+                end
+            elseif OS == "Windows" then
+                local kb = tonumber(os.getenv("TOTALPHYSICALMEMORYKB") or "")
+                if kb and kb > 0 then return kb / (1024 * 1024) end
+            end
+            return nil
+        end
 
         local dev = string.lower(effectiveRunDevice())
         local explicitDirectml = dev:find("directml", 1, true) ~= nil
@@ -16541,10 +16575,51 @@ _sep.runSingleTrackSeparation = function(trackList)
         -- Respect user's Parallel choice even on CPU.
         -- Only force sequential if device is "auto" AND we know for sure there is no GPU.
         if not multiTrackQueue.sequentialMode and dev == "auto" and not hasRuntimeGpuBackends() then
-            multiTrackQueue.sequentialMode = true
-            multiTrackQueue.forceSequentialReason = "auto_no_gpu"
-            debugLog("Forcing sequential multi-track processing (" .. multiTrackQueue.forceSequentialReason .. ")")
+            dev = "cpu"
         end
+
+        -- Adaptive CPU execution mode:
+        -- allow parallel on capable multi-core systems, otherwise stay sequential.
+        if not multiTrackQueue.sequentialMode and dev == "cpu" then
+            local cpuCount = detectLogicalCpuCount()
+            local ramGiB = detectSystemRamGiB()
+            local minCpuForParallel = 8
+            local minRamGiBForParallel = 8
+            local cpuOk = cpuCount and cpuCount >= minCpuForParallel
+            local ramOk = ramGiB and ramGiB >= minRamGiBForParallel
+            if cpuOk and ramOk then
+                local adaptiveCap = math.max(1, math.floor(cpuCount / 2))
+                multiTrackQueue.parallelJobLimit = math.min(#trackJobs, adaptiveCap)
+                multiTrackQueue.executionModeReason = "cpu_threads_ok"
+                debugLog(
+                    "Adaptive CPU parallel enabled: cores=" .. tostring(cpuCount)
+                        .. " ramGiB=" .. string.format("%.1f", ramGiB)
+                        .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit)
+                )
+            else
+                multiTrackQueue.sequentialMode = true
+                if not cpuCount then
+                    multiTrackQueue.forceSequentialReason = "cpu_threads_unknown"
+                    multiTrackQueue.executionModeReason = "cpu_threads_unknown"
+                elseif cpuCount < minCpuForParallel then
+                    multiTrackQueue.forceSequentialReason = "cpu_threads_low"
+                    multiTrackQueue.executionModeReason = "cpu_threads_low"
+                elseif not ramGiB then
+                    multiTrackQueue.forceSequentialReason = "cpu_ram_unknown"
+                    multiTrackQueue.executionModeReason = "cpu_ram_unknown"
+                else
+                    multiTrackQueue.forceSequentialReason = "cpu_ram_low"
+                    multiTrackQueue.executionModeReason = "cpu_ram_low"
+                end
+                debugLog(
+                    "Adaptive CPU sequential fallback (" .. tostring(multiTrackQueue.forceSequentialReason)
+                        .. "): cores=" .. tostring(cpuCount) .. " ramGiB=" .. tostring(ramGiB)
+                )
+            end
+        end
+    end
+    if multiTrackQueue.sequentialMode and not multiTrackQueue.executionModeReason then
+        multiTrackQueue.executionModeReason = multiTrackQueue.forceSequentialReason or "user_sequential"
     end
     multiTrackQueue.currentJobIndex = 0
     multiTrackQueue.globalStartTime = os.time()  -- Track total elapsed time
@@ -16575,7 +16650,8 @@ _sep.runSingleTrackSeparation = function(trackList)
     SW_LOG.logExecResult(
         "timing:workers_launched count=" .. tostring(#trackJobs)
             .. " mode=" .. (multiTrackQueue.sequentialMode and "sequential" or "parallel")
-            .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit or "none"),
+            .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit or "none")
+            .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none"),
         nil,
         ""
     )

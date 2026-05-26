@@ -581,6 +581,28 @@ def test_helpers_module_defines_local_file_exists_and_does_not_use_global_fileEx
     assert "SW_LOG, fileExists, debugLog" not in script
 
 
+def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "local function detectLogicalCpuCount()" in script
+    assert 'local h = io.popen("getconf _NPROCESSORS_ONLN 2>/dev/null")' in script
+    assert "local function detectSystemRamGiB()" in script
+    assert 'if OS == "Linux" then' in script
+    assert 'if not multiTrackQueue.sequentialMode and dev == "cpu" then' in script
+    assert "local minCpuForParallel = 8" in script
+    assert "local minRamGiBForParallel = 8" in script
+    assert 'multiTrackQueue.executionModeReason = "cpu_threads_ok"' in script
+    assert 'multiTrackQueue.forceSequentialReason = "cpu_threads_low"' in script
+    assert 'multiTrackQueue.forceSequentialReason = "cpu_threads_unknown"' in script
+    assert 'multiTrackQueue.forceSequentialReason = "cpu_ram_low"' in script
+    assert 'multiTrackQueue.forceSequentialReason = "cpu_ram_unknown"' in script
+    assert 'multiTrackQueue.parallelJobLimit = math.min(#trackJobs, adaptiveCap)' in script
+    assert 'if not multiTrackQueue.sequentialMode and directmlMultiJob then' in script
+    assert 'multiTrackQueue.forceSequentialReason = "directml_multi_track"' in script
+    assert 'timing:workers_launched count=' in script
+    assert ' .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none")' in script
+
+
 def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
     from pathlib import Path
 
