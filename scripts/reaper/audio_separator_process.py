@@ -665,6 +665,43 @@ def _classify_runtime_failure(
     }
 
 
+def _parse_major_minor(version_text: Optional[str]) -> Tuple[int, int]:
+    raw = str(version_text or "").strip()
+    match = re.match(r"^\s*(\d+)\.(\d+)", raw)
+    if not match:
+        return (0, 0)
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def _enable_torch_weights_only_compat(model_name: str, selected_device: str) -> bool:
+    if not _is_demucs_model(model_name):
+        print("STEMWERK_DIAG torch_weights_only_compat=off model_family=non_demucs", file=sys.stderr)
+        return False
+
+    try:
+        import torch
+    except Exception:
+        print("STEMWERK_DIAG torch_weights_only_compat=off torch_import_failed=1", file=sys.stderr)
+        return False
+
+    torch_ver = str(getattr(torch, "__version__", ""))
+    major, minor = _parse_major_minor(torch_ver)
+    if major < 2 or (major == 2 and minor < 6):
+        print(
+            f"STEMWERK_DIAG torch_weights_only_compat=off torch_version={torch_ver} model={model_name} device={selected_device}",
+            file=sys.stderr,
+        )
+        return False
+
+    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+    print(
+        f"STEMWERK_DIAG torch_weights_only_compat=enabled mode=TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD "
+        f"torch_version={torch_ver} model={model_name} device={selected_device}",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _log_device_diagnostics(devices: List[Dict[str, str]], env: Dict[str, object]) -> None:
     try:
         ids = [d.get("id", "") for d in devices]
@@ -974,6 +1011,7 @@ def main():
         _enable_mps_runtime_fallback(device_preference, resolved_device)
         resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, args.model)
         runtime_env = _emit_runtime_diagnostics(resolved_device)
+        _enable_torch_weights_only_compat(args.model, resolved_device)
 
         emit_phase("model_setup_start")
         sep = StemSeparator(model=args.model, device=resolved_device)

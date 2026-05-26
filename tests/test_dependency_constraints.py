@@ -1295,6 +1295,24 @@ def test_audio_separator_process_consumes_managed_ffmpeg_env_and_reports_it():
     assert 'print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)' in script
 
 
+def test_audio_separator_process_enables_torch26_demucs_checkpoint_compatibility():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text()
+
+    assert "def _enable_torch_weights_only_compat(model_name: str, selected_device: str) -> bool:" in script
+    assert 'if not _is_demucs_model(model_name):' in script
+    assert 'if major < 2 or (major == 2 and minor < 6):' in script
+    assert 'os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"' in script
+    assert "STEMWERK_DIAG torch_weights_only_compat=enabled mode=TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" in script
+    assert "_enable_torch_weights_only_compat(args.model, resolved_device)" in script
+
+
+def test_support_bundle_prefers_newest_runtime_run_over_stale_timing_summary():
+    script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'local firstFromRuntimeRuns = tostring(first.log_path or ""):find("runtime_runs/", 1, true) ~= nil' in script
+    assert "if not firstFromRuntimeRuns then" in script
+
+
 def test_lua_wav_render_path_guards_unsigned_pack_overflow_and_invalid_samples():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 

@@ -2333,18 +2333,21 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
 
     if #out > 0 and timingSummaryEntry then
         local first = out[1]
-        if tostring(timingSummaryEntry.result or "unknown") ~= "unknown" then first.result = timingSummaryEntry.result end
-        if tostring(timingSummaryEntry.model or "unknown") ~= "unknown" then first.model = timingSummaryEntry.model end
-        if tostring(timingSummaryEntry.device or "unknown") ~= "unknown" then first.device = timingSummaryEntry.device end
-        if tostring(timingSummaryEntry.mode or "unknown") ~= "unknown" then first.mode = timingSummaryEntry.mode end
-        if tostring(timingSummaryEntry.jobs or "unknown") ~= "unknown" then first.jobs = timingSummaryEntry.jobs end
-        if tostring(timingSummaryEntry.items or "unknown") ~= "unknown" then first.items = timingSummaryEntry.items end
-        if tostring(timingSummaryEntry.wall_clock_total or "unknown") ~= "unknown" then first.wall_clock_total = timingSummaryEntry.wall_clock_total end
-        if tostring(timingSummaryEntry.total_source_duration or "unknown") ~= "unknown" then first.total_source_duration = timingSummaryEntry.total_source_duration end
-        if tostring(timingSummaryEntry.realtime_factor or "unknown") ~= "unknown" then first.realtime_factor = timingSummaryEntry.realtime_factor end
-        if tostring(timingSummaryEntry.timestamp or "unknown") ~= "unknown" then first.timestamp = timingSummaryEntry.timestamp end
-        if tostring(first.log_path or "unknown") == "unknown" or tostring(first.log_path or ""):find("runtime_runs/", 1, true) then
-            first.log_path = timingSummaryEntry.log_path
+        local firstFromRuntimeRuns = tostring(first.log_path or ""):find("runtime_runs/", 1, true) ~= nil
+        if not firstFromRuntimeRuns then
+            if tostring(timingSummaryEntry.result or "unknown") ~= "unknown" then first.result = timingSummaryEntry.result end
+            if tostring(timingSummaryEntry.model or "unknown") ~= "unknown" then first.model = timingSummaryEntry.model end
+            if tostring(timingSummaryEntry.device or "unknown") ~= "unknown" then first.device = timingSummaryEntry.device end
+            if tostring(timingSummaryEntry.mode or "unknown") ~= "unknown" then first.mode = timingSummaryEntry.mode end
+            if tostring(timingSummaryEntry.jobs or "unknown") ~= "unknown" then first.jobs = timingSummaryEntry.jobs end
+            if tostring(timingSummaryEntry.items or "unknown") ~= "unknown" then first.items = timingSummaryEntry.items end
+            if tostring(timingSummaryEntry.wall_clock_total or "unknown") ~= "unknown" then first.wall_clock_total = timingSummaryEntry.wall_clock_total end
+            if tostring(timingSummaryEntry.total_source_duration or "unknown") ~= "unknown" then first.total_source_duration = timingSummaryEntry.total_source_duration end
+            if tostring(timingSummaryEntry.realtime_factor or "unknown") ~= "unknown" then first.realtime_factor = timingSummaryEntry.realtime_factor end
+            if tostring(timingSummaryEntry.timestamp or "unknown") ~= "unknown" then first.timestamp = timingSummaryEntry.timestamp end
+            if tostring(first.log_path or "unknown") == "unknown" or tostring(first.log_path or ""):find("runtime_runs/", 1, true) then
+                first.log_path = timingSummaryEntry.log_path
+            end
         end
     end
 
