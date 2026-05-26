@@ -35,3 +35,8 @@ def test_model_download_failed_dns_classification():
 def test_ordinary_no_stems_not_model_download_classified():
     text = "No stems were created. exit_code=1"
     assert mod._classify_model_failure_text(text) is None
+
+
+def test_user_cancel_not_model_download_classified():
+    text = "reason: user_cancel"
+    assert mod._classify_model_failure_text(text) is None
