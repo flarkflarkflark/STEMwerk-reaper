@@ -898,7 +898,14 @@ local capabilityStaleFailedVerification = (
 
 local function resolvedCapabilityValue(key, fallback)
     local value = trim(capabilityState[key] or "")
-    if capabilityStaleFailedVerification and (key == "VERIFICATION" or key == "RUNTIME_DRIFT_DETECTED" or key == "RUNTIME_DRIFT_REASON") then
+    if capabilityStaleFailedVerification and (
+        key == "VERIFICATION"
+        or key == "RUNTIME_DRIFT_DETECTED"
+        or key == "RUNTIME_DRIFT_REASON"
+        or key == "TORCH_SUPPORTED"
+        or key == "TORCH_VERSION"
+        or key == "TORCHAUDIO_VERSION"
+    ) then
         value = ""
     end
     if value ~= "" then

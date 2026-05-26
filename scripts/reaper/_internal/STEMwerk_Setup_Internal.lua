@@ -1465,10 +1465,27 @@ local function writeCapabilities(path, data, deviceOut)
     f:write("STEMWERK_CORE=" .. tostring(data.stemwerkCore or "") .. "\n")
     f:write("TORCH_VERSION=" .. tostring(data.torchVersion or "") .. "\n")
     f:write("TORCHAUDIO_VERSION=" .. tostring(data.torchaudioVersion or "") .. "\n")
+    f:write("TORCHVISION_VERSION=" .. tostring(data.torchvisionVersion or "") .. "\n")
+    f:write("NUMPY_VERSION=" .. tostring(data.numpyVersion or "") .. "\n")
+    f:write("NUMBA_VERSION=" .. tostring(data.numbaVersion or "") .. "\n")
+    f:write("LLVMLITE_VERSION=" .. tostring(data.llvmliteVersion or "") .. "\n")
+    f:write("AUDIO_SEPARATOR_VERSION=" .. tostring(data.audioSeparatorVersion or "") .. "\n")
+    f:write("ONNXRUNTIME_VERSION=" .. tostring(data.onnxruntimeVersion or "") .. "\n")
     f:write("TORCH_SUPPORTED=" .. tostring(data.torchSupported or "") .. "\n")
     f:write("TORCHAUDIO_PRESENT=" .. tostring(data.torchaudioPresent or "") .. "\n")
     f:write("RUNTIME_DRIFT_DETECTED=" .. tostring(data.runtimeDriftDetected or "") .. "\n")
     f:write("RUNTIME_DRIFT_REASON=" .. tostring(data.runtimeDriftReason or "") .. "\n")
+    f:write("RUNTIME_DRIFT_DETAIL=" .. tostring(data.runtimeDriftDetail or "") .. "\n")
+    f:write("RUNTIME_VERIFY_DETAIL=" .. tostring(data.runtimeVerifyDetail or "") .. "\n")
+    f:write("TORCH_RUNTIME_POLICY=" .. tostring(data.torchRuntimePolicy or "") .. "\n")
+    f:write("CUDA_AVAILABLE=" .. tostring(data.cudaAvailable or "") .. "\n")
+    f:write("CUDA_COUNT=" .. tostring(data.cudaCount or "") .. "\n")
+    f:write("TORCH_HIP=" .. tostring(data.torchHip or "") .. "\n")
+    f:write("SELECTED_TORCH_INDEX=" .. tostring(data.selectedTorchIndex or "") .. "\n")
+    f:write("SELECTED_TORCH_STACK=" .. tostring(data.selectedTorchStack or "") .. "\n")
+    f:write("ROCM_DETECTED_DEVICES=" .. tostring(data.rocmDetectedDevices or "") .. "\n")
+    f:write("ROCM_SELECTED_DEVICE=" .. tostring(data.rocmSelectedDevice or "") .. "\n")
+    f:write("ROCM_FALLBACK_REASON=" .. tostring(data.rocmFallbackReason or "") .. "\n")
     f:write("DEVICE_NAMES=" .. tostring(data.deviceNames or "") .. "\n")
     if data.envJson and data.envJson ~= "" then
         f:write("ENV_JSON=" .. tostring(data.envJson) .. "\n")
@@ -1481,6 +1498,7 @@ local function writeCapabilities(path, data, deviceOut)
         end
         f:write("DEVICES_OUTPUT_END\n")
     end
+    f:flush()
     f:close()
     local ok, renameErr = os.rename(tmpPath, path)
     if not ok then
@@ -2226,7 +2244,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0
     local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk
 
-    if verifiedRuntimeOk and state.STATUS ~= "ok" then
+    if verifiedRuntimeOk then
         if appendLogLine then
             appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
         else
@@ -2238,6 +2256,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
         state.STATUS = "ok"
         state.STATUS_REASON = ""
+        state.RUNTIME_VERIFY_DETAIL = "ok"
     end
 
     local finalMessage = {}
@@ -2403,6 +2422,43 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         runtimeDriftDetected = "no"
         runtimeDriftReason = ""
     end
+    local resolvedTorchVersion = trim(verification.torchVersion or "")
+    if resolvedTorchVersion == "" then
+        resolvedTorchVersion = trim(envJsonValue(envJson, "torch_version"))
+    end
+    if resolvedTorchVersion == "" then
+        resolvedTorchVersion = trim(envJsonValue(envJson, "torch"))
+    end
+    local resolvedTorchaudioVersion = trim(verification.torchaudioVersion or "")
+    if resolvedTorchaudioVersion == "" then
+        resolvedTorchaudioVersion = trim(envJsonValue(envJson, "torchaudio_version"))
+    end
+    local resolvedTorchvisionVersion = trim(state.TORCHVISION_VERSION or envJsonValue(envJson, "torchvision_version"))
+    local resolvedNumpyVersion = trim(state.NUMPY_VERSION or envJsonValue(envJson, "numpy_version"))
+    local resolvedNumbaVersion = trim(state.NUMBA_VERSION or envJsonValue(envJson, "numba_version"))
+    local resolvedLlvmLiteVersion = trim(state.LLVMLITE_VERSION or envJsonValue(envJson, "llvmlite_version"))
+    local resolvedAudioSeparatorVersion = trim(state.AUDIO_SEPARATOR_VERSION or envJsonValue(envJson, "audio_separator_version"))
+    local resolvedOnnxRuntimeVersion = trim(state.ONNXRUNTIME_VERSION or envJsonValue(envJson, "onnxruntime_version"))
+    local resolvedCudaAvailable = trim(state.CUDA_AVAILABLE or envJsonValue(envJson, "cuda_available"))
+    local resolvedCudaCount = trim(state.CUDA_COUNT or envJsonValue(envJson, "cuda_count"))
+    local resolvedTorchHip = trim(state.TORCH_HIP or envJsonValue(envJson, "torch_hip"))
+    local resolvedRuntimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
+    if verificationSuccess then
+        resolvedRuntimeVerifyDetail = "ok"
+    elseif resolvedRuntimeVerifyDetail == "" then
+        resolvedRuntimeVerifyDetail = trim(state.STATUS_REASON or "")
+    end
+    local bootstrapReason = verificationSuccess and "" or (state.STATUS_REASON or "")
+    local resolvedTorchSupported = trim(verification.torchSupported or "")
+    local resolvedTorchaudioPresent = trim(verification.torchaudioPresent or "")
+    if verificationSuccess then
+        if resolvedTorchSupported == "" or resolvedTorchSupported == "no" then
+            resolvedTorchSupported = "yes"
+        end
+        if resolvedTorchaudioPresent == "" or resolvedTorchaudioPresent == "no" then
+            resolvedTorchaudioPresent = "yes"
+        end
+    end
     local backendDepsReason = state.BACKEND_DEPS_REASON or ""
     if verificationSuccess and trim(state.BACKEND_DEPS_COMPLETE or "") == "yes" then
         backendDepsReason = ""
@@ -2438,21 +2494,38 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         systemPythonVersion = state.SYSTEM_PYTHON_VERSION or "",
         systemPythonUsed = state.SYSTEM_PYTHON_USED or "",
         venvPythonPath = state.VENV_PYTHON_PATH or state.VENV_PYTHON or "",
-        torchVersion = verification.torchVersion,
-        torchaudioVersion = verification.torchaudioVersion,
-        torchSupported = verification.torchSupported,
-        torchaudioPresent = verification.torchaudioPresent,
+        torchVersion = resolvedTorchVersion,
+        torchaudioVersion = resolvedTorchaudioVersion,
+        torchvisionVersion = resolvedTorchvisionVersion,
+        numpyVersion = resolvedNumpyVersion,
+        numbaVersion = resolvedNumbaVersion,
+        llvmliteVersion = resolvedLlvmLiteVersion,
+        audioSeparatorVersion = resolvedAudioSeparatorVersion,
+        onnxruntimeVersion = resolvedOnnxRuntimeVersion,
+        torchSupported = resolvedTorchSupported,
+        torchaudioPresent = resolvedTorchaudioPresent,
         runtimeDriftDetected = runtimeDriftDetected,
         runtimeDriftReason = runtimeDriftReason,
+        runtimeDriftDetail = verificationSuccess and "" or runtimeDriftReason,
+        runtimeVerifyDetail = resolvedRuntimeVerifyDetail,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
         bootstrapStatus = state.STATUS or "",
-        bootstrapReason = state.STATUS_REASON or "",
+        bootstrapReason = bootstrapReason,
         verification = verificationStatus,
         audioSeparator = audioStatus,
         stemwerkCore = coreStatus,
         deviceNames = deviceNames,
+        torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
+        cudaAvailable = resolvedCudaAvailable,
+        cudaCount = resolvedCudaCount,
+        torchHip = resolvedTorchHip,
+        selectedTorchIndex = state.SELECTED_TORCH_INDEX or "",
+        selectedTorchStack = state.SELECTED_TORCH_STACK or "",
+        rocmDetectedDevices = state.ROCM_DETECTED_DEVICES or "",
+        rocmSelectedDevice = state.ROCM_SELECTED_DEVICE or "",
+        rocmFallbackReason = state.ROCM_FALLBACK_REASON or "",
         envJson = envJson,
     }, deviceOut)
     if not wroteCaps then
@@ -3264,6 +3337,15 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     local verification = trim(capState.VERIFICATION or "")
     local status = trim(state.STATUS or "")
     local reason = trim(state.STATUS_REASON or "")
+    local capabilityBootstrapStatus = trim(capState.BOOTSTRAP_STATUS or "")
+    local staleFailedVerification = (
+        status == "ok"
+        and (capabilityBootstrapStatus == "" or capabilityBootstrapStatus == "ok")
+        and verification == "failed"
+    )
+    if staleFailedVerification then
+        verification = ""
+    end
     local ffmpeg = trim(resolvePath(capState.FFMPEG_PATH or state.FFMPEG_PATH or extFfmpeg))
     local python, pythonSource = setupResolveWindowsPython(runtime, state, capState)
     local needsRepair = false

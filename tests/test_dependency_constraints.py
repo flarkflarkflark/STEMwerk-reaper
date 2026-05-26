@@ -680,16 +680,29 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
 
     assert 'f:write("TORCH_VERSION="' in setup_internal
     assert 'f:write("TORCHAUDIO_VERSION="' in setup_internal
+    assert 'f:write("TORCHVISION_VERSION="' in setup_internal
+    assert 'f:write("NUMPY_VERSION="' in setup_internal
+    assert 'f:write("NUMBA_VERSION="' in setup_internal
+    assert 'f:write("LLVMLITE_VERSION="' in setup_internal
+    assert 'f:write("AUDIO_SEPARATOR_VERSION="' in setup_internal
+    assert 'f:write("ONNXRUNTIME_VERSION="' in setup_internal
     assert 'f:write("TORCH_SUPPORTED="' in setup_internal
     assert 'f:write("TORCHAUDIO_PRESENT="' in setup_internal
     assert 'f:write("RUNTIME_DRIFT_DETECTED="' in setup_internal
     assert 'f:write("RUNTIME_DRIFT_REASON="' in setup_internal
+    assert 'f:write("RUNTIME_VERIFY_DETAIL="' in setup_internal
+    assert 'f:write("TORCH_RUNTIME_POLICY="' in setup_internal
+    assert 'f:write("CUDA_AVAILABLE="' in setup_internal
+    assert 'f:write("CUDA_COUNT="' in setup_internal
+    assert 'f:write("TORCH_HIP="' in setup_internal
     assert "allow_rocm7_gfx1201 = (" in setup_internal
     assert 'and ("rx 9070" in dev_text or "gfx1201" in dev_text)' in setup_internal
     assert 'local tmpPath = tostring(path) .. ".tmp"' in setup_internal
     assert "os.rename(tmpPath, path)" in setup_internal
     assert "runtimeDriftDetected = \"no\"" in setup_internal
     assert "runtimeDriftReason = \"\"" in setup_internal
+    assert "state.STATUS_REASON = \"\"" in setup_internal
+    assert "state.RUNTIME_VERIFY_DETAIL = \"ok\"" in setup_internal
     assert 'if verificationSuccess and trim(state.BACKEND_DEPS_COMPLETE or "") == "yes" then' in setup_internal
     assert 'verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0' in setup_internal
     assert 'errors[#errors + 1] = torchRuntime.error' in setup_internal
@@ -709,8 +722,19 @@ def test_support_bundle_ignores_stale_capabilities_failed_verification_when_boot
     assert "local capabilityStaleFailedVerification = (" in support_bundle
     assert 'and capabilityVerification == "failed"' in support_bundle
     assert "local function resolvedCapabilityValue(key, fallback)" in support_bundle
-    assert 'if capabilityStaleFailedVerification and (key == "VERIFICATION" or key == "RUNTIME_DRIFT_DETECTED" or key == "RUNTIME_DRIFT_REASON") then' in support_bundle
+    assert 'or key == "TORCH_SUPPORTED"' in support_bundle
+    assert 'or key == "TORCH_VERSION"' in support_bundle
+    assert 'or key == "TORCHAUDIO_VERSION"' in support_bundle
     assert 'appendKey(diagnostics, "Capability verification", resolvedCapabilityValue("VERIFICATION", "missing")' in support_bundle
+
+
+def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap_ok():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local staleFailedVerification = (" in setup_internal
+    assert "and verification == \"failed\"" in setup_internal
+    assert "if staleFailedVerification then" in setup_internal
+    assert "verification = \"\"" in setup_internal
 
 
 def test_linux_bootstrap_uses_managed_python_before_unsupported_system_python():
