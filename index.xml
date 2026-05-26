@@ -2,12 +2,11 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.4" author="flarkAUDIO" time="1779797846">
+      <version name="2.2.2.2.5" author="flarkAUDIO" time="1779805637">
         <changelog><![CDATA[
-- Improve model download timeout diagnostics with clear support-facing guidance
-- Improve corrupted/checksum model-cache diagnostics and recovery hints
-- Surface model failure error class/hint and model URL/path in support bundles when available
-- Ensure user_cancel is not misclassified as a model-download failure
+- Fix support bundle processing summary so stale model-download/checksum errors do not override successful runs
+- Classify successful runs with exit_code=0 + DONE/Complete/stems evidence as success in processing_summary
+- Classify user_cancel/exit 143 as cancelled and avoid mislabeling as model_download_failed without current evidence
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
