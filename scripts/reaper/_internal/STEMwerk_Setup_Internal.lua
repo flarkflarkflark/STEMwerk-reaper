@@ -1294,6 +1294,17 @@ local function extractEnvJson(deviceOut)
     return nil
 end
 
+function firstNonEmpty(...)
+    local args = { ... }
+    for i = 1, #args do
+        local v = trim(args[i] or "")
+        if v ~= "" then
+            return v
+        end
+    end
+    return ""
+end
+
 local function envJsonValue(envJson, key)
     if not envJson or envJson == "" then return "" end
     local s = envJson:match('"' .. key .. '"%s*:%s*"(.-)"')
@@ -2434,15 +2445,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     if resolvedTorchaudioVersion == "" then
         resolvedTorchaudioVersion = trim(envJsonValue(envJson, "torchaudio_version"))
     end
-    local resolvedTorchvisionVersion = trim(state.TORCHVISION_VERSION or envJsonValue(envJson, "torchvision_version"))
-    local resolvedNumpyVersion = trim(state.NUMPY_VERSION or envJsonValue(envJson, "numpy_version"))
-    local resolvedNumbaVersion = trim(state.NUMBA_VERSION or envJsonValue(envJson, "numba_version"))
-    local resolvedLlvmLiteVersion = trim(state.LLVMLITE_VERSION or envJsonValue(envJson, "llvmlite_version"))
-    local resolvedAudioSeparatorVersion = trim(state.AUDIO_SEPARATOR_VERSION or envJsonValue(envJson, "audio_separator_version"))
-    local resolvedOnnxRuntimeVersion = trim(state.ONNXRUNTIME_VERSION or envJsonValue(envJson, "onnxruntime_version"))
-    local resolvedCudaAvailable = trim(state.CUDA_AVAILABLE or envJsonValue(envJson, "cuda_available"))
-    local resolvedCudaCount = trim(state.CUDA_COUNT or envJsonValue(envJson, "cuda_count"))
-    local resolvedTorchHip = trim(state.TORCH_HIP or envJsonValue(envJson, "torch_hip"))
+    local resolvedTorchvisionVersion = firstNonEmpty(state.TORCHVISION_VERSION, envJsonValue(envJson, "torchvision_version"))
+    local resolvedNumpyVersion = firstNonEmpty(state.NUMPY_VERSION, envJsonValue(envJson, "numpy_version"))
+    local resolvedNumbaVersion = firstNonEmpty(state.NUMBA_VERSION, envJsonValue(envJson, "numba_version"))
+    local resolvedLlvmLiteVersion = firstNonEmpty(state.LLVMLITE_VERSION, envJsonValue(envJson, "llvmlite_version"))
+    local resolvedAudioSeparatorVersion = firstNonEmpty(state.AUDIO_SEPARATOR_VERSION, envJsonValue(envJson, "audio_separator_version"))
+    local resolvedOnnxRuntimeVersion = firstNonEmpty(state.ONNXRUNTIME_VERSION, envJsonValue(envJson, "onnxruntime_version"))
+    local resolvedCudaAvailable = firstNonEmpty(state.CUDA_AVAILABLE, envJsonValue(envJson, "cuda_available"))
+    local resolvedCudaCount = firstNonEmpty(state.CUDA_COUNT, envJsonValue(envJson, "cuda_count"))
+    local resolvedTorchHip = firstNonEmpty(state.TORCH_HIP, envJsonValue(envJson, "torch_hip"))
     local resolvedRuntimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
     if verificationSuccess then
         resolvedRuntimeVerifyDetail = "ok"
@@ -4922,6 +4933,76 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
     reaper.defer(linuxSetupTick)
 end
 
+function reconcileCheckVerification(state, verification, envJson, deviceNames, backend)
+    local adjustedErrors = {}
+    for _, e in ipairs(verification.errors or {}) do
+        adjustedErrors[#adjustedErrors + 1] = e
+    end
+    local function removeError(errKey)
+        local kept = {}
+        for _, e in ipairs(adjustedErrors) do
+            if e ~= errKey then kept[#kept + 1] = e end
+        end
+        adjustedErrors = kept
+    end
+    local envTorchVersion = firstNonEmpty(envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
+    local envTorchaudioVersion = firstNonEmpty(envJsonValue(envJson, "torchaudio_version"))
+    local envTorchHip = firstNonEmpty(envJsonValue(envJson, "torch_hip"))
+    local envCudaAvail = firstNonEmpty(envJsonValue(envJson, "cuda_available"))
+    local envCudaCount = tonumber(firstNonEmpty(envJsonValue(envJson, "cuda_count"))) or 0
+    local rocmPolicy = firstNonEmpty(state.TORCH_RUNTIME_POLICY)
+    local rx9070Seen = tostring(deviceNames or ""):lower():find("rx 9070", 1, true) ~= nil
+    local canAcceptRocm7Torch210 = (
+        backend == "rocm"
+        and rocmPolicy == "rocm_gfx1201_allow_2_10_rocm7"
+        and envTorchVersion:match("^2%.10%.")
+        and envTorchaudioVersion:match("^2%.10%.")
+        and envTorchHip ~= "" and envTorchHip ~= "null"
+        and envCudaAvail == "true"
+        and envCudaCount > 0
+        and rx9070Seen
+    )
+    if canAcceptRocm7Torch210 then
+        removeError("torch_too_new_for_demucs")
+        removeError("torch_runtime_probe_failed")
+    end
+    local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0
+    local result = {
+        adjustedErrors = adjustedErrors,
+        verifiedRuntimeOk = verifiedRuntimeOk,
+        runtimeDriftDetected = verifiedRuntimeOk and "no" or verification.runtimeDriftDetected,
+        runtimeDriftReason = verifiedRuntimeOk and "" or verification.runtimeDriftReason,
+    }
+    result.torchVersion = firstNonEmpty(verification.torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
+    result.torchaudioVersion = firstNonEmpty(verification.torchaudioVersion, envJsonValue(envJson, "torchaudio_version"))
+    result.torchvisionVersion = firstNonEmpty(state.TORCHVISION_VERSION, envJsonValue(envJson, "torchvision_version"))
+    result.numpyVersion = firstNonEmpty(state.NUMPY_VERSION, envJsonValue(envJson, "numpy_version"))
+    result.numbaVersion = firstNonEmpty(state.NUMBA_VERSION, envJsonValue(envJson, "numba_version"))
+    result.llvmliteVersion = firstNonEmpty(state.LLVMLITE_VERSION, envJsonValue(envJson, "llvmlite_version"))
+    result.audioSeparatorVersion = firstNonEmpty(state.AUDIO_SEPARATOR_VERSION, envJsonValue(envJson, "audio_separator_version"))
+    result.onnxruntimeVersion = firstNonEmpty(state.ONNXRUNTIME_VERSION, envJsonValue(envJson, "onnxruntime_version"))
+    result.cudaAvailable = firstNonEmpty(state.CUDA_AVAILABLE, envJsonValue(envJson, "cuda_available"))
+    result.cudaCount = firstNonEmpty(state.CUDA_COUNT, envJsonValue(envJson, "cuda_count"))
+    result.torchHip = firstNonEmpty(state.TORCH_HIP, envJsonValue(envJson, "torch_hip"))
+    result.torchSupported = trim(verification.torchSupported or "")
+    result.torchaudioPresent = trim(verification.torchaudioPresent or "")
+    if verifiedRuntimeOk then
+        if result.torchSupported == "" or result.torchSupported == "no" then
+            result.torchSupported = "yes"
+        end
+        if result.torchaudioPresent == "" or result.torchaudioPresent == "no" then
+            result.torchaudioPresent = "yes"
+        end
+    end
+    result.runtimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
+    if verifiedRuntimeOk then
+        result.runtimeVerifyDetail = "ok"
+    elseif result.runtimeVerifyDetail == "" then
+        result.runtimeVerifyDetail = table.concat(adjustedErrors, ";")
+    end
+    return result
+end
+
 verifyExistingSetup = function(runtime, separatorScript)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
@@ -4961,12 +5042,6 @@ verifyExistingSetup = function(runtime, separatorScript)
 
     local verification = verifyRuntimePaths(state)
     local verifyErrors = verification.errors or {}
-    local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #verifyErrors == 0
-    if verifiedRuntimeOk then
-        state.STATUS = "ok"
-        state.STATUS_REASON = ""
-        state.RUNTIME_VERIFY_DETAIL = "ok"
-    end
     local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
     local envJson = extractEnvJson(deviceOut or "")
     local deviceNames = collectDeviceNames(deviceOut or "")
@@ -4975,49 +5050,13 @@ verifyExistingSetup = function(runtime, separatorScript)
         backendReason = probeErr
     end
     local profile = profileForBackend(backend)
-
-    local runtimeDriftDetected = verification.runtimeDriftDetected
-    local runtimeDriftReason = verification.runtimeDriftReason
+    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend)
+    local adjustedErrors = checkProbe.adjustedErrors
+    local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then
-        runtimeDriftDetected = "no"
-        runtimeDriftReason = ""
-    end
-
-    local resolvedTorchVersion = trim(verification.torchVersion or "")
-    if resolvedTorchVersion == "" then
-        resolvedTorchVersion = trim(envJsonValue(envJson, "torch_version"))
-    end
-    if resolvedTorchVersion == "" then
-        resolvedTorchVersion = trim(envJsonValue(envJson, "torch"))
-    end
-    local resolvedTorchaudioVersion = trim(verification.torchaudioVersion or "")
-    if resolvedTorchaudioVersion == "" then
-        resolvedTorchaudioVersion = trim(envJsonValue(envJson, "torchaudio_version"))
-    end
-    local resolvedTorchvisionVersion = trim(state.TORCHVISION_VERSION or envJsonValue(envJson, "torchvision_version"))
-    local resolvedNumpyVersion = trim(state.NUMPY_VERSION or envJsonValue(envJson, "numpy_version"))
-    local resolvedNumbaVersion = trim(state.NUMBA_VERSION or envJsonValue(envJson, "numba_version"))
-    local resolvedLlvmLiteVersion = trim(state.LLVMLITE_VERSION or envJsonValue(envJson, "llvmlite_version"))
-    local resolvedAudioSeparatorVersion = trim(state.AUDIO_SEPARATOR_VERSION or envJsonValue(envJson, "audio_separator_version"))
-    local resolvedOnnxRuntimeVersion = trim(state.ONNXRUNTIME_VERSION or envJsonValue(envJson, "onnxruntime_version"))
-    local resolvedCudaAvailable = trim(state.CUDA_AVAILABLE or envJsonValue(envJson, "cuda_available"))
-    local resolvedCudaCount = trim(state.CUDA_COUNT or envJsonValue(envJson, "cuda_count"))
-    local resolvedTorchHip = trim(state.TORCH_HIP or envJsonValue(envJson, "torch_hip"))
-    local resolvedTorchSupported = trim(verification.torchSupported or "")
-    local resolvedTorchaudioPresent = trim(verification.torchaudioPresent or "")
-    if verifiedRuntimeOk then
-        if resolvedTorchSupported == "" or resolvedTorchSupported == "no" then
-            resolvedTorchSupported = "yes"
-        end
-        if resolvedTorchaudioPresent == "" or resolvedTorchaudioPresent == "no" then
-            resolvedTorchaudioPresent = "yes"
-        end
-    end
-    local runtimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
-    if verifiedRuntimeOk then
-        runtimeVerifyDetail = "ok"
-    elseif runtimeVerifyDetail == "" then
-        runtimeVerifyDetail = table.concat(verifyErrors, ";")
+        state.STATUS = "ok"
+        state.STATUS_REASON = ""
+        state.RUNTIME_VERIFY_DETAIL = "ok"
     end
 
     writeCapabilities(capFile, {
@@ -5048,20 +5087,20 @@ verifyExistingSetup = function(runtime, separatorScript)
         systemPythonVersion = state.SYSTEM_PYTHON_VERSION or "",
         systemPythonUsed = state.SYSTEM_PYTHON_USED or "",
         venvPythonPath = state.VENV_PYTHON_PATH or state.VENV_PYTHON or "",
-        torchVersion = resolvedTorchVersion,
-        torchaudioVersion = resolvedTorchaudioVersion,
-        torchvisionVersion = resolvedTorchvisionVersion,
-        numpyVersion = resolvedNumpyVersion,
-        numbaVersion = resolvedNumbaVersion,
-        llvmliteVersion = resolvedLlvmLiteVersion,
-        audioSeparatorVersion = resolvedAudioSeparatorVersion,
-        onnxruntimeVersion = resolvedOnnxRuntimeVersion,
-        torchSupported = resolvedTorchSupported,
-        torchaudioPresent = resolvedTorchaudioPresent,
-        runtimeDriftDetected = runtimeDriftDetected,
-        runtimeDriftReason = runtimeDriftReason,
-        runtimeDriftDetail = verifiedRuntimeOk and "" or runtimeDriftReason,
-        runtimeVerifyDetail = runtimeVerifyDetail,
+        torchVersion = checkProbe.torchVersion,
+        torchaudioVersion = checkProbe.torchaudioVersion,
+        torchvisionVersion = checkProbe.torchvisionVersion,
+        numpyVersion = checkProbe.numpyVersion,
+        numbaVersion = checkProbe.numbaVersion,
+        llvmliteVersion = checkProbe.llvmliteVersion,
+        audioSeparatorVersion = checkProbe.audioSeparatorVersion,
+        onnxruntimeVersion = checkProbe.onnxruntimeVersion,
+        torchSupported = checkProbe.torchSupported,
+        torchaudioPresent = checkProbe.torchaudioPresent,
+        runtimeDriftDetected = checkProbe.runtimeDriftDetected,
+        runtimeDriftReason = checkProbe.runtimeDriftReason,
+        runtimeDriftDetail = verifiedRuntimeOk and "" or checkProbe.runtimeDriftReason,
+        runtimeVerifyDetail = checkProbe.runtimeVerifyDetail,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
@@ -5073,9 +5112,9 @@ verifyExistingSetup = function(runtime, separatorScript)
         stemwerkCore = verifiedRuntimeOk and "ok" or "",
         deviceNames = deviceNames,
         torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
-        cudaAvailable = resolvedCudaAvailable,
-        cudaCount = resolvedCudaCount,
-        torchHip = resolvedTorchHip,
+        cudaAvailable = checkProbe.cudaAvailable,
+        cudaCount = checkProbe.cudaCount,
+        torchHip = checkProbe.torchHip,
         selectedTorchIndex = state.SELECTED_TORCH_INDEX or "",
         selectedTorchStack = state.SELECTED_TORCH_STACK or "",
         rocmDetectedDevices = state.ROCM_DETECTED_DEVICES or "",
@@ -5090,12 +5129,12 @@ verifyExistingSetup = function(runtime, separatorScript)
         PROFILE = profile or "",
         BACKEND = backend or "",
         BACKEND_REASON = backendReason or "",
-        RUNTIME_VERIFY_DETAIL = runtimeVerifyDetail,
+        RUNTIME_VERIFY_DETAIL = checkProbe.runtimeVerifyDetail,
         STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
     })
 
-    if #verifyErrors > 0 then
-        appendSetupLog(runtime, "Verify runtime errors: " .. table.concat(verifyErrors, ", "), false)
+    if #adjustedErrors > 0 then
+        appendSetupLog(runtime, "Verify runtime errors: " .. table.concat(adjustedErrors, ", "), false)
     end
     allOk = allOk and verifiedRuntimeOk
 

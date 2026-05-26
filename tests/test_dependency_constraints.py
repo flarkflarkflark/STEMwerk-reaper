@@ -741,12 +741,17 @@ def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap
 def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
+    assert "function firstNonEmpty(...)" in setup_internal
     assert "local verification = verifyRuntimePaths(state)" in setup_internal
-    assert "local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #verifyErrors == 0" in setup_internal
+    assert "local adjustedErrors = {}" in setup_internal
+    assert "local canAcceptRocm7Torch210 = (" in setup_internal
+    assert "removeError(\"torch_runtime_probe_failed\")" in setup_internal
+    assert "local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0" in setup_internal
     assert "writeCapabilities(capFile, {" in setup_internal
     assert "verification = verifiedRuntimeOk and \"ok\" or \"failed\"" in setup_internal
-    assert "torchVersion = resolvedTorchVersion" in setup_internal
-    assert "torchaudioVersion = resolvedTorchaudioVersion" in setup_internal
+    assert "torchVersion = checkProbe.torchVersion" in setup_internal
+    assert "torchaudioVersion = checkProbe.torchaudioVersion" in setup_internal
+    assert "runtimeDriftDetected = checkProbe.runtimeDriftDetected" in setup_internal
     assert "runtimeDriftDetected = runtimeDriftDetected" in setup_internal
     assert "runtimeDriftReason = runtimeDriftReason" in setup_internal
     assert "updateBootstrapEnv(stateFile, {" in setup_internal
