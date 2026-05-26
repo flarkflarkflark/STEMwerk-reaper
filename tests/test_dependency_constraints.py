@@ -495,6 +495,21 @@ def test_setup_internal_still_flags_real_failures_and_linux_deps_failed():
     assert "Setup was not completely successful." in script
 
 
+def test_setup_window_has_default_size_and_minimum_clamp_without_forced_reinit():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local SETUP_MENU_DEFAULT_W = 1260" in script
+    assert "local SETUP_MENU_DEFAULT_H = 904" in script
+    assert "function enforceSetupWindowMinimum(state)" in script
+    assert "if not (gfx and gfx.dock) then return end" in script
+    assert "local needW = ww < 1120" in script
+    assert "local needH = wh < 760" in script
+    assert "gfx.dock(dockState or 0, wx or 0, wy or 0, targetW, targetH)" in script
+    assert "enforceSetupWindowMinimum(LINUX_SETUP)" in script
+    assert "enforceSetupWindowMinimum(m)" in script
+    assert "gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)" in script
+
+
 def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
     from pathlib import Path
 

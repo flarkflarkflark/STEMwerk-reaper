@@ -3115,6 +3115,22 @@ local function captureLinuxWindowGeometry()
     }
 end
 
+function enforceSetupWindowMinimum(state)
+    if not (gfx and gfx.dock) then return end
+    local dockState, wx, wy, ww, wh = gfx.dock(-1, 0, 0, 0, 0)
+    if type(ww) ~= "number" or type(wh) ~= "number" then return end
+    local needW = ww < 1120
+    local needH = wh < 760
+    if not (needW or needH) then
+        if state then state.windowSizeClamped = false end
+        return
+    end
+    local targetW = needW and 1120 or ww
+    local targetH = needH and 760 or wh
+    gfx.dock(dockState or 0, wx or 0, wy or 0, targetW, targetH)
+    if state then state.windowSizeClamped = true end
+end
+
 local function restoreLinuxWindowGeometry()
     if not (LINUX_SETUP and LINUX_SETUP.windowGeometry and gfx and gfx.dock) then return end
     if LINUX_SETUP.geometryRestored then return end
@@ -4093,6 +4109,8 @@ local function linuxSetupTick()
         LINUX_SETUP.launchPending = false
     end
 
+    enforceSetupWindowMinimum(LINUX_SETUP)
+
     local state = parseStateFile(LINUX_SETUP.stateFile)
     local logLines = readTail(LINUX_SETUP.logFile, 400)
     local pidAlive, pid = linuxPidAlive(LINUX_SETUP.pidFile)
@@ -4762,7 +4780,7 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     if not reuseWindow then
-        gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
+        gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
     end
     LINUX_SETUP = {
         runtime         = runtime,
@@ -4997,7 +5015,7 @@ startLinuxSetup = function(runtime, separatorScript, mode)
     if not launchPending then
         exec(cmd, 20000)
     end
-    gfx.init(setupWindowTitle(setupUiLabel()), 1260, 904, 0, 120, 80)
+    gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
     LINUX_SETUP = {
         runtime = runtime,
         mode = mode,
@@ -5036,6 +5054,7 @@ end
 local function existingRuntimeSetupMenuTick()
     if not SETUP_MENU then return end
     local m = SETUP_MENU
+    enforceSetupWindowMinimum(m)
     local w, h = gfx.w, gfx.h
 
     local outerPad = math.max(10, math.floor(w * 0.02))
