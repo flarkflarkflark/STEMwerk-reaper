@@ -3,6 +3,7 @@ local M = {}
 local C = {}
 local PATH_HELPER = nil
 local INSTALL_CACHE = nil
+local trim
 
 local function getPathHelper()
     if PATH_HELPER then return PATH_HELPER end
@@ -66,6 +67,10 @@ local function debugLog(msg)
     if type(C.debugLog) == "function" then
         C.debugLog(msg)
     end
+end
+
+trim = function(s)
+    return tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 local function logExec(cmd, rc, out)
@@ -538,9 +543,11 @@ function M.resolveCommandPath(cmd)
         if type(execProcess) == "function" then
             local rc, out = execProcess("command -v " .. q, 8000)
             if rc == 0 and out then
-                local path = out:match("([^\r\n]+)")
-                if path and path ~= "" then
-                    return path
+                for line in out:gmatch("[^\r\n]+") do
+                    local candidate = trim(line)
+                    if candidate:match("^/") and fileExists(candidate) then
+                        return candidate
+                    end
                 end
             end
         end
@@ -592,53 +599,95 @@ local function canImportModule(pythonPath, moduleName)
     return tonumber(rc) == 0
 end
 
-local function checkMacOSDemucsCompatibility(pythonPath)
-    if (C.OS or "") ~= "macOS" then return true, nil end
+local function checkDemucsRuntimeCompatibility(pythonPath)
     if not pythonPath or pythonPath == "" then return true, nil end
     local script = [=[
 import sys
 def core(v):
     return str(v).split("+", 1)[0]
+def parse_major_minor(v):
+    try:
+        p = core(v).split(".")
+        return int(p[0]), int(p[1])
+    except Exception:
+        return 999, 999
 try:
     import torch
 except Exception as exc:
     print("torch_import_failed:" + str(exc))
     sys.exit(1)
 try:
+    import torchaudio
+except Exception as exc:
+    print("torchaudio_missing:" + str(exc))
+    sys.exit(4)
+t = core(getattr(torch, "__version__", "0.0.0"))
+tmj, tmn = parse_major_minor(t)
+hip = getattr(getattr(torch, "version", None), "hip", None)
+cuda_avail = bool(torch.cuda.is_available())
+cuda_count = int(torch.cuda.device_count()) if cuda_avail else 0
+names = []
+if cuda_avail:
+    for i in range(cuda_count):
+        try:
+            names.append(str(torch.cuda.get_device_name(i)))
+        except Exception:
+            pass
+dev_text = "|".join(names).lower()
+allow_rocm7_gfx1201 = (
+    (tmj, tmn) == (2, 10)
+    and hip is not None
+    and cuda_avail
+    and cuda_count > 0
+    and ("rx 9070" in dev_text or "gfx1201" in dev_text)
+)
+if (tmj > 2 or (tmj == 2 and tmn >= 6)) and not allow_rocm7_gfx1201:
+    print("torch_too_new:" + t)
+    sys.exit(2)
+try:
     import numpy
 except Exception as exc:
     print("numpy_import_failed:" + str(exc))
     sys.exit(1)
-t = core(getattr(torch, "__version__", "0.0.0"))
 n = core(getattr(numpy, "__version__", "0.0.0"))
-try:
-    tmj, tmn = [int(x) for x in t.split(".")[:2]]
-except Exception:
-    tmj, tmn = 0, 0
 try:
     nmj = int(n.split(".", 1)[0])
 except Exception:
     nmj = 0
-if tmj > 2 or (tmj == 2 and tmn >= 6):
-    print("torch_too_new:" + t)
-    sys.exit(2)
 if nmj >= 2:
     print("numpy_too_new:" + n)
     sys.exit(3)
 print("ok")
 ]=]
-    local cmd = commandQuote(pythonPath) .. " -c " .. commandQuote(script)
+    local tmpPy = os.tmpname()
+    if not tmpPy or tmpPy == "" then
+        return false, "demucs_runtime_incompatible"
+    end
+    if (C.OS or "") == "Windows" and not tmpPy:lower():match("%.py$") then
+        tmpPy = tmpPy .. ".py"
+    end
+    local wf = io.open(tmpPy, "w")
+    if not wf then
+        return false, "demucs_runtime_incompatible"
+    end
+    wf:write(script)
+    wf:close()
+    local cmd = commandQuote(pythonPath) .. " " .. commandQuote(tmpPy)
     local rc, out = execCommandWithOutput(cmd, 15000)
+    pcall(os.remove, tmpPy)
     local text = trim(out or "")
     if tonumber(rc) == 0 then return true, nil end
-    logExec("macos_demucs_compat_failed", rc or -1, text)
+    logExec("demucs_runtime_compat_failed", rc or -1, text)
     if text:find("torch_too_new:", 1, true) then
         return false, "torch_too_new_for_demucs"
+    end
+    if text:find("torchaudio_missing:", 1, true) then
+        return false, "torchaudio_missing_for_demucs"
     end
     if text:find("numpy_too_new:", 1, true) then
         return false, "numpy_too_new_for_demucs"
     end
-    return false, "macos_demucs_runtime_incompatible"
+    return false, "demucs_runtime_incompatible"
 end
 
 function M.safeDofile(path)
@@ -763,7 +812,7 @@ function M.verifyRuntimeAfterBootstrap()
         errors[#errors + 1] = "stemwerk_core_missing"
     end
     if pythonOk then
-        local compatOk, compatErr = checkMacOSDemucsCompatibility(pythonPath)
+        local compatOk, compatErr = checkDemucsRuntimeCompatibility(pythonPath)
         if not compatOk and compatErr then
             errors[#errors + 1] = compatErr
         end
@@ -857,13 +906,8 @@ function M.ensureDependenciesInteractive()
         audioOk = M.canImportAudioSeparator(pythonPath)
     end
 
-    if pythonOk and ffmpegOk and audioOk then
-        setDepState("ok")
-        return true
-    end
-
     local runtimeOk, runtimeErrors = M.verifyRuntimeAfterBootstrap()
-    if runtimeOk then
+    if pythonOk and ffmpegOk and audioOk and runtimeOk then
         setDepState("ok")
         return true
     end
@@ -886,7 +930,10 @@ function M.ensureDependenciesInteractive()
             if err == "samplerate_missing" then hasSamplerate = true end
             if err == "stemwerk_core_missing" then hasCore = true end
             if err == "torch_too_new_for_demucs" then
-                missing[#missing + 1] = "macOS Torch version is too new for the bundled Demucs/audio-separator path; run Rebuild venv/Repair to install the pinned torch stack."
+                missing[#missing + 1] = "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+            end
+            if err == "torchaudio_missing_for_demucs" then
+                missing[#missing + 1] = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
             end
             if err == "numpy_too_new_for_demucs" then
                 missing[#missing + 1] = "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv or Repair"

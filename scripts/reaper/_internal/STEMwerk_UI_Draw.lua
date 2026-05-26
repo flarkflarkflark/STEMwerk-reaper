@@ -189,11 +189,6 @@ function M.drawTooltip()
     if GUI.richTooltip then
         gfx.setfont(1, "Arial", S(10))
         local is6Stem = (tostring(SETTINGS.model or "") == "htdemucs_6s")
-        local isDrumKitWorkflowActiveFn = optionalDep("isDrumKitWorkflowActive")
-        local getActiveStemListFn = optionalDep("getActiveStemListForCurrentWorkflow")
-        local stemFallbackList = optionalDep("STEMS") or STEMS
-        local drumKitMode = (type(isDrumKitWorkflowActiveFn) == "function") and isDrumKitWorkflowActiveFn() or false
-        local activeStemSource = (type(getActiveStemListFn) == "function") and getActiveStemListFn() or stemFallbackList
         local padding = S(8)
         local lineH = S(14)
         local stemNameKeyById = {
@@ -226,8 +221,8 @@ function M.drawTooltip()
         local titleColors = STEM_BORDER_COLORS
 
         local selectedStems = {}
-        for _, stem in ipairs(activeStemSource) do
-            if stem.selected and (drumKitMode or not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
+        for _, stem in ipairs(STEMS) do
+            if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
                 table.insert(selectedStems, { name = stemDisplayName(stem), color = stem.color })
             end
         end
@@ -373,13 +368,11 @@ function M.drawTooltip()
         gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
         gfx.x = labelX
         gfx.y = currentY
-        local richStemsLabel = drumKitMode and (T("drum_stems_label") or "Drum Stems:") or (T("rich_stems_label") or "Stems")
-        richStemsLabel = tostring(richStemsLabel):gsub(":%s*$", "")
-        gfx.drawstr(richStemsLabel)
+        gfx.drawstr(T("rich_stems_label") or "Stems")
 
         local activeStems = {}
-        for _, stem in ipairs(activeStemSource) do
-            if stem.selected and (drumKitMode or not stem.sixStemOnly or is6Stem) then
+        for _, stem in ipairs(STEMS) do
+            if stem.selected and (not stem.sixStemOnly or is6Stem) then
                 table.insert(activeStems, stem)
             end
         end
@@ -541,165 +534,49 @@ function M.drawTooltip()
     elseif GUI.shortcutTooltip then
         local tooltipColors = STEM_BORDER_COLORS
         local st = GUI.shortcutTooltip
-        local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
 
         gfx.setfont(1, "Arial", S(11))
         local padding = S(8)
-        local text = tostring(st.text or "")
-        local hasMultiline = text:find("\n", 1, true) ~= nil
+        local textW = gfx.measurestr(st.text)
+        local shortcutW = gfx.measurestr(" [" .. st.shortcut .. "]")
+        local tw = textW + shortcutW + padding * 2
+        local th = S(18) + padding * 2
+        local tx = GUI.tooltipX
+        local ty = GUI.tooltipY
 
-        if hasMultiline then
-            local function wrapTextToWidth(textIn, maxWidth)
-                local out = {}
-                for raw in (tostring(textIn or "") .. "\n"):gmatch("(.-)\n") do
-                    if raw == "" then
-                        out[#out + 1] = ""
-                    else
-                        local line = ""
-                        for word in raw:gmatch("%S+") do
-                            if line == "" then
-                                line = word
-                            else
-                                local candidate = line .. " " .. word
-                                if gfx.measurestr(candidate) <= maxWidth then
-                                    line = candidate
-                                else
-                                    out[#out + 1] = line
-                                    line = word
-                                end
-                            end
-                        end
-                        if line ~= "" then
-                            out[#out + 1] = line
-                        end
-                    end
-                end
-                if #out > 0 and out[#out] == "" then
-                    out[#out] = nil
-                end
-                return out
-            end
-
-            local maxTextW = math.floor(math.min(gfx.w * 0.56, S(460)))
-            maxTextW = math.max(S(180), maxTextW)
-            local lines = wrapTextToWidth(text, maxTextW)
-            if #lines == 0 then lines = { text } end
-
-            local shortcutTag = "[" .. tostring(st.shortcut or "") .. "]"
-            local lastLine = lines[#lines] or ""
-            local hasShortcutTagAlready = false
-            for _, ln in ipairs(lines) do
-                if ln:find("%[" .. tostring(st.shortcut or "") .. "%]") then
-                    hasShortcutTagAlready = true
-                    break
-                end
-            end
-            if not hasShortcutTagAlready then
-                local appended = (lastLine == "" and shortcutTag) or (lastLine .. " " .. shortcutTag)
-                if gfx.measurestr(appended) <= maxTextW then
-                    lines[#lines] = appended
-                else
-                    lines[#lines + 1] = shortcutTag
-                end
-            end
-
-            local maxLineW = 0
-            for _, line in ipairs(lines) do
-                local w = gfx.measurestr(line)
-                if w > maxLineW then maxLineW = w end
-            end
-
-            local lineH = gfx.texth + S(2)
-            local tw = maxLineW + padding * 2
-            local th = (lineH * #lines) + padding * 2 + S(2)
-            local tx = GUI.tooltipX
-            local ty = GUI.tooltipY
-
-            if tx + tw > gfx.w then tx = gfx.w - tw - S(5) end
-            if ty + th > gfx.h then ty = GUI.tooltipY - th - S(20) end
-            if tx < S(5) then tx = S(5) end
-            if ty < S(5) then ty = S(5) end
-
-            local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
-            local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
-            local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
-            drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
-
-            if not utilityMode then
-                for i = 0, tw - 1 do
-                    local colorIdx = math.floor(i / tw * 4) + 1
-                    colorIdx = math.min(4, math.max(1, colorIdx))
-                    local c = tooltipColors[colorIdx]
-                    gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
-                    gfx.line(tx + i, ty, tx + i, ty + 2)
-                end
-            end
-            gfx.set(ttText[1], ttText[2], ttText[3], 1)
-            local x = tx + padding
-            local y = ty + padding + S(2)
-            local shortcutTag = "[" .. tostring(st.shortcut or "") .. "]"
-            for idx, line in ipairs(lines) do
-                gfx.x = x
-                gfx.y = y
-                local isLast = idx == #lines
-                local tagStart = isLast and line:find("%[" .. tostring(st.shortcut or "") .. "%]$")
-                if tagStart then
-                    local prefix = line:sub(1, tagStart - 1)
-                    gfx.set(ttText[1], ttText[2], ttText[3], 1)
-                    gfx.drawstr(prefix)
-                    if utilityMode then
-                        gfx.set(ttText[1], ttText[2], ttText[3], 1)
-                    else
-                        gfx.set(st.color[1] / 255, st.color[2] / 255, st.color[3] / 255, 1)
-                    end
-                    gfx.drawstr(shortcutTag)
-                else
-                    gfx.set(ttText[1], ttText[2], ttText[3], 1)
-                    gfx.drawstr(line)
-                end
-                y = y + lineH
-            end
-        else
-            local textW = gfx.measurestr(st.text)
-            local shortcutW = gfx.measurestr(" [" .. st.shortcut .. "]")
-            local tw = textW + shortcutW + padding * 2
-            local th = S(18) + padding * 2
-            local tx = GUI.tooltipX
-            local ty = GUI.tooltipY
-
-            if tx + tw > gfx.w then
-                tx = gfx.w - tw - S(5)
-            end
-            if ty + th > gfx.h then
-                ty = GUI.tooltipY - th - S(20)
-            end
-
-            local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
-            local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
-            local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
-            drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
-
-            if not utilityMode then
-                for i = 0, tw - 1 do
-                    local colorIdx = math.floor(i / tw * 4) + 1
-                    colorIdx = math.min(4, math.max(1, colorIdx))
-                    local c = tooltipColors[colorIdx]
-                    gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
-                    gfx.line(tx + i, ty, tx + i, ty + 2)
-                end
-            end
-            gfx.set(ttText[1], ttText[2], ttText[3], 1)
-            gfx.x = tx + padding
-            gfx.y = ty + padding + S(2)
-            gfx.drawstr(st.text .. " ")
-
-            if utilityMode then
-                gfx.set(ttText[1], ttText[2], ttText[3], 0.7)
-            else
-                gfx.set(st.color[1] / 255, st.color[2] / 255, st.color[3] / 255, 1)
-            end
-            gfx.drawstr("[" .. st.shortcut .. "]")
+        if tx + tw > gfx.w then
+            tx = gfx.w - tw - S(5)
         end
+        if ty + th > gfx.h then
+            ty = GUI.tooltipY - th - S(20)
+        end
+
+        local ttBg, ttBorder, ttText, ttAlpha = getTooltipPalette()
+        local tooltipRadius = getThemeRadius(nil, S(6), math.floor(math.min(tw, th) / 2))
+        local tooltipBorderWeight = getThemeBorderWeight(nil, 1)
+        drawThemeSurfaceBox(tx, ty, tw, th, ttBg, ttBorder, ttAlpha, 1, tooltipRadius, tooltipBorderWeight, 0.75, "tooltip")
+
+        local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+        if not utilityMode then
+            for i = 0, tw - 1 do
+                local colorIdx = math.floor(i / tw * 4) + 1
+                colorIdx = math.min(4, math.max(1, colorIdx))
+                local c = tooltipColors[colorIdx]
+                gfx.set(c[1] / 255, c[2] / 255, c[3] / 255, 0.9)
+                gfx.line(tx + i, ty, tx + i, ty + 2)
+            end
+        end
+        gfx.set(ttText[1], ttText[2], ttText[3], 1)
+        gfx.x = tx + padding
+        gfx.y = ty + padding + S(2)
+        gfx.drawstr(st.text .. " ")
+
+        if utilityMode then
+            gfx.set(ttText[1], ttText[2], ttText[3], 0.7)
+        else
+            gfx.set(st.color[1] / 255, st.color[2] / 255, st.color[3] / 255, 1)
+        end
+        gfx.drawstr("[" .. st.shortcut .. "]")
 
         GUI.shortcutTooltip = nil
     end

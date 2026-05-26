@@ -86,9 +86,6 @@ local function setLanguage(lang_code)
 end
 
 local function T(key)
-    if not LANGUAGES then
-        loadLanguages()
-    end
     if LANG and LANG[key] then
         return LANG[key]
     end
@@ -99,18 +96,10 @@ local function T(key)
 end
 
 local function trPlural(count, singularKey, pluralKey, singularFallback, pluralFallback)
-    local function safeTranslate(key, fallback)
-        local translated = T(key)
-        if not translated or translated == "" then return fallback or key end
-        if translated == key or translated == key:gsub("_", " ") then
-            return fallback or key
-        end
-        return translated
-    end
     if (count or 0) == 1 then
-        return safeTranslate(singularKey, singularFallback)
+        return T(singularKey) or singularFallback or singularKey
     end
-    return safeTranslate(pluralKey, pluralFallback)
+    return T(pluralKey) or pluralFallback or pluralKey
 end
 
 local function getAvailableLanguages()

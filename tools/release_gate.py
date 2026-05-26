@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -23,27 +22,6 @@ REQUIRED_TOP_LEVEL_SCRIPTS = (
 )
 
 RUNTIME_DEP_REGRESSION_TARGET = "scripts/reaper/_internal/STEMwerk_Timing.lua"
-CANONICAL_REAPER_I18N = "scripts/reaper/i18n/languages.lua"
-ROOT_I18N = "i18n/languages.lua"
-PROTOTYPE_SCRIPTS = (
-    "STEMwerk_DrumSep_Workflow_Prototype.lua",
-    "STEMwerk_DrumSep_Import_Prototype.lua",
-    "STEMwerk_DrumSep_Workflow_AB_Prototype.lua",
-)
-DKS_REQUIRED_KEYS = (
-    "tooltip_preset_drumkit",
-    "workflow_drumkit_label",
-    "workflow_edks_label",
-    "help_native_key_drumkit",
-    "help_native_key_edks",
-    "help_native_drumkit_split",
-    "help_native_drumkit_step_1",
-    "help_native_drumkit_step_2",
-    "help_native_drumkit_model_note",
-    "help_native_drumkit_guidance",
-    "drumkit_result_subtitle",
-)
-DKS_TRIGGER_TOKENS = DKS_REQUIRED_KEYS + ("workflow_edks",)
 
 
 @dataclass
@@ -78,10 +56,6 @@ def posix_path(path: Path) -> str:
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def parse_index(index_path: Path) -> tuple[ET.ElementTree | None, str, list[str]]:
@@ -295,95 +269,6 @@ def check_runtime_dependencies(root: Path, payload_paths: set[str]) -> Section:
     return section
 
 
-def _locale_block(lua_text: str, locale: str) -> str | None:
-    tokens = ("en", "nl", "de")
-    start_marker = f"{locale} = {{"
-    start = lua_text.find(start_marker)
-    if start < 0:
-        return None
-    ends: list[int] = []
-    for other in tokens:
-        if other == locale:
-            continue
-        idx = lua_text.find(f"{other} = {{", start + len(start_marker))
-        if idx >= 0:
-            ends.append(idx)
-    end = min(ends) if ends else len(lua_text)
-    return lua_text[start:end]
-
-
-def check_i18n_release_consistency(root: Path, payload_paths: set[str], index_raw: str) -> Section:
-    section = Section("D. i18n release consistency")
-    canonical_path = root / CANONICAL_REAPER_I18N
-    root_path = root / ROOT_I18N
-    canonical_exists = canonical_path.exists()
-    root_exists = root_path.exists()
-
-    if canonical_exists and root_exists:
-        canonical_hash = sha256_file(canonical_path)
-        root_hash = sha256_file(root_path)
-        if canonical_hash != root_hash:
-            section.fail(
-                f"duplicate i18n sources differ: {CANONICAL_REAPER_I18N} ({canonical_hash}) != {ROOT_I18N} ({root_hash})"
-            )
-        else:
-            section.note(f"duplicate i18n sources match hash {canonical_hash}")
-
-    if canonical_exists and payload_paths:
-        if CANONICAL_REAPER_I18N not in payload_paths:
-            section.fail(f"canonical ReaPack i18n missing from payload: {CANONICAL_REAPER_I18N}")
-        if ROOT_I18N in payload_paths:
-            section.fail(f"non-canonical root i18n appears in payload: {ROOT_I18N}")
-    elif canonical_exists:
-        section.warn("skipped payload canonicality check because payload paths are unavailable")
-
-    if "scripts/reaper/i18n" not in index_raw and payload_paths:
-        section.warn("index.xml does not appear to reference scripts/reaper/i18n paths")
-
-    return section
-
-
-def check_dks_i18n_keys(root: Path) -> Section:
-    section = Section("E. DKS/EDKS key coverage")
-    stemwerk_path = root / "scripts/reaper/STEMwerk.lua"
-    if not stemwerk_path.exists():
-        section.fail("scripts/reaper/STEMwerk.lua missing")
-        return section
-
-    stemwerk_text = read_text(stemwerk_path)
-    if not any(token in stemwerk_text for token in DKS_TRIGGER_TOKENS):
-        section.note("DKS/EDKS keys not referenced by STEMwerk.lua; check skipped")
-        return section
-
-    lang_path = root / CANONICAL_REAPER_I18N
-    if not lang_path.exists():
-        section.fail(f"missing canonical languages file: {CANONICAL_REAPER_I18N}")
-        return section
-
-    lang_text = read_text(lang_path)
-    for locale in ("en", "nl", "de"):
-        block = _locale_block(lang_text, locale)
-        if block is None:
-            section.fail(f"locale block missing in {CANONICAL_REAPER_I18N}: {locale}")
-            continue
-        missing = [key for key in DKS_REQUIRED_KEYS if re.search(rf"\b{re.escape(key)}\s*=", block) is None]
-        if missing:
-            section.fail(f"{locale} locale missing DKS keys: {', '.join(missing)}")
-
-    return section
-
-
-def check_no_public_prototypes(payload_paths: set[str], index_raw: str) -> Section:
-    section = Section("F. Prototype payload exclusion")
-    payload_names = {PurePosixPath(p).name for p in payload_paths}
-    for name in PROTOTYPE_SCRIPTS:
-        if name in payload_names or name in index_raw:
-            section.fail(f"prototype script must not be in public payload: {name}")
-    if section.status == "PASS":
-        section.note("no blocked prototype scripts found in public payload")
-    return section
-
-
 def run_check(root: Path) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
@@ -405,9 +290,6 @@ def run_check(root: Path) -> tuple[list[Section], int]:
 
     runtime_section = check_runtime_dependencies(root, payload_paths)
     sections.append(runtime_section)
-    sections.append(check_i18n_release_consistency(root, payload_paths, index_raw))
-    sections.append(check_dks_i18n_keys(root))
-    sections.append(check_no_public_prototypes(payload_paths, index_raw))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count

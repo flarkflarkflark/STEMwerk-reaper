@@ -31,15 +31,7 @@ local function showMessage(title, message, icon, monitorSelection, onClose)
     end
 
     messageWindowState.title = title or "STEMwerk"
-    if type(message) == "table" then
-        messageWindowState.messageData = message
-        messageWindowState.message = ""
-        messageWindowState.resultContext = true
-    else
-        messageWindowState.messageData = nil
-        messageWindowState.message = message or ""
-        messageWindowState.resultContext = false
-    end
+    messageWindowState.message = message or ""
     messageWindowState.icon = icon or "info"
     messageWindowState.wasMouseDown = false
     messageWindowState.startTime = os.clock()
