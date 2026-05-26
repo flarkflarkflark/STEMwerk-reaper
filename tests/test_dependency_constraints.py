@@ -547,6 +547,16 @@ def test_setup_window_has_default_size_and_minimum_clamp_without_forced_reinit()
     assert "gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)" in script
 
 
+def test_helpers_module_defines_local_file_exists_and_does_not_use_global_fileExists():
+    script = Path("scripts/reaper/_internal/STEMwerk_Helpers.lua").read_text()
+
+    assert "local function helperFileExists(path)" in script
+    assert "while helperFileExists(candidate) do" in script
+    assert "while fileExists(candidate) do" not in script
+    assert "SW_LOG, debugLog" in script
+    assert "SW_LOG, fileExists, debugLog" not in script
+
+
 def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
     from pathlib import Path
 

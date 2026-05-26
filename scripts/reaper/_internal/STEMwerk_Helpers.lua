@@ -6,13 +6,22 @@
 -- Call HELPERS.configure({...}) immediately after dofile to inject locals.
 --
 -- Globals used directly (no injection needed):
---   SETTINGS, STEMS, OS, PATH_SEP, SW_LOG, fileExists, debugLog,
+--   SETTINGS, STEMS, OS, PATH_SEP, SW_LOG, debugLog,
 --   normalizeColorMode, getItemDisplayNameForTakes, reaper
 --
 -- Injected via configure():
 --   makeDir, adjustTrackLayout
 
 local C = {}  -- injected context
+local function helperFileExists(path)
+    if not path or path == "" then return false end
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
 
 function HELPERS.configure(ctx)
     for k, v in pairs(ctx) do C[k] = v end
@@ -373,7 +382,7 @@ function HELPERS.makeUniqueFilePath(dir, baseName, ext)
     local safeExt = ext or ""
     local candidate = dir .. PATH_SEP .. safeBase .. safeExt
     local counter = 2
-    while fileExists(candidate) do
+    while helperFileExists(candidate) do
         candidate = dir .. PATH_SEP .. safeBase .. "_" .. tostring(counter) .. safeExt
         counter = counter + 1
     end
