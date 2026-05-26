@@ -749,6 +749,8 @@ def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     assert "local adjustedErrors = {}" in setup_internal
     assert "local canAcceptRocm7Torch210 = (" in setup_internal
     assert "removeError(\"torch_runtime_probe_failed\")" in setup_internal
+    assert "removeError(\"torch_runtime_unsupported\")" in setup_internal
+    assert "removeError(\"torchaudio_missing_for_demucs\")" in setup_internal
     assert "local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0" in setup_internal
     assert "writeCapabilities(capFile, {" in setup_internal
     assert "verification = verifiedRuntimeOk and \"ok\" or \"failed\"" in setup_internal

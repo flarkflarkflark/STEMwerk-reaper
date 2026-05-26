@@ -4964,7 +4964,9 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
     )
     if canAcceptRocm7Torch210 then
         removeError("torch_too_new_for_demucs")
+        removeError("torch_runtime_unsupported")
         removeError("torch_runtime_probe_failed")
+        removeError("torchaudio_missing_for_demucs")
     end
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0
     local result = {
