@@ -16,12 +16,13 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 StemSeparator = None
 get_available_devices = None
@@ -32,8 +33,6 @@ _core_loaded = False
 
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
-DRUMSEP_MODEL_FILENAME = "mdx23c-drumsep-aufr33-jarredou.ckpt"
-DRUMSEP_CANONICAL_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
 
 def _is_darwin_arm64() -> bool:
@@ -132,92 +131,6 @@ def _resolve_stem_path(output_dir: Path, stem_path: Path | str) -> Path:
     return output_dir / path
 
 
-def _is_drumsep_model(model_name: Optional[str]) -> bool:
-    return Path(str(model_name or "")).name.lower() == DRUMSEP_MODEL_FILENAME
-
-
-def _normalize_drumsep_alias(token: str) -> Optional[str]:
-    normalized = re.sub(r"[^a-z0-9]+", "_", token.strip().lower()).strip("_")
-    alias_map = {
-        "kick": "kick",
-        "snare": "snare",
-        "tom": "toms",
-        "toms": "toms",
-        "hihat": "hihat",
-        "hi_hat": "hihat",
-        "hh": "hihat",
-        "ride": "ride",
-        "crash": "crash",
-    }
-    return alias_map.get(normalized)
-
-
-def _classify_drumsep_stem(path: Path) -> Optional[str]:
-    name = path.stem.lower()
-
-    parenthesized_tokens = re.findall(r"\(([^)]+)\)", name)
-    for token in parenthesized_tokens:
-        canonical = _normalize_drumsep_alias(token)
-        if canonical:
-            return canonical
-
-    tokens = [t for t in re.split(r"[^a-z0-9]+", name) if t]
-    for token in tokens:
-        canonical = _normalize_drumsep_alias(token)
-        if canonical:
-            return canonical
-    return None
-
-
-def _collect_drumsep_candidates(output_root: Path, result_stems: Dict[str, Path | str]) -> Dict[str, Path]:
-    candidates: List[Path] = []
-    for stem_path in result_stems.values():
-        abs_path = _resolve_stem_path(output_root, stem_path)
-        if abs_path.exists():
-            candidates.append(abs_path)
-    for wav_path in sorted(output_root.glob("*.wav")):
-        candidates.append(wav_path)
-
-    resolved: Dict[str, Path] = {}
-    for candidate in candidates:
-        stem_name = _classify_drumsep_stem(candidate)
-        if not stem_name:
-            continue
-        resolved[stem_name] = candidate.resolve()
-    return resolved
-
-
-def _finalize_drumsep_outputs(output_root: Path, result_stems: Dict[str, Path | str]) -> Dict[str, str]:
-    discovered = _collect_drumsep_candidates(output_root, result_stems)
-    reaper_stems: Dict[str, str] = {}
-    missing: List[str] = []
-
-    for stem_name in DRUMSEP_CANONICAL_STEMS:
-        source = discovered.get(stem_name)
-        if not source or not source.exists():
-            missing.append(stem_name)
-            print(f"STEMWERK_WARN missing_drumsep_stem={stem_name}", file=sys.stderr)
-            continue
-
-        target = output_root / f"{stem_name}.wav"
-        if source.resolve() != target.resolve():
-            if target.exists():
-                os.remove(target)
-            shutil.move(str(source), str(target))
-        reaper_stems[stem_name] = str(target)
-        print(f"  {stem_name}:  {target}", file=sys.stderr)
-
-    if not reaper_stems:
-        raise RuntimeError("DrumSep model produced no mappable drum stems")
-
-    status = "complete" if not missing else "partial"
-    print(f"STEMWERK_DRUMSEP_CONTRACT_STATUS={status}", file=sys.stderr)
-    print(f"STEMWERK_DRUMSEP_FOUND={','.join(sorted(reaper_stems.keys()))}", file=sys.stderr)
-    if missing:
-        print(f"STEMWERK_DRUMSEP_MISSING={','.join(missing)}", file=sys.stderr)
-    return reaper_stems
-
-
 def _setup_reaper_io(output_dir: Optional[str]):
     """If output_dir is set, write progress/log markers into that folder."""
     global _phase_file, _progress_file
@@ -262,6 +175,80 @@ def _read_simple_env_file(path: Path) -> Dict[str, str]:
     return values
 
 
+def _runtime_base_candidates() -> List[Path]:
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    def add(path_value: Optional[Path | str]) -> None:
+        if not path_value:
+            return
+        try:
+            path = Path(path_value).expanduser()
+        except Exception:
+            return
+        key = str(path).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    if os.name == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            add(Path(local_appdata) / "STEMwerk")
+    elif sys.platform == "darwin":
+        add(Path.home() / "Library" / "Application Support" / "STEMwerk")
+    else:
+        xdg_data_home = os.environ.get("XDG_DATA_HOME")
+        if xdg_data_home:
+            add(Path(xdg_data_home) / "STEMwerk")
+        add(Path.home() / ".local" / "share" / "STEMwerk")
+
+    return candidates
+
+
+def _prepend_path(path_value: str) -> None:
+    current_path = os.environ.get("PATH", "")
+    path_parts = current_path.split(os.pathsep) if current_path else []
+    normalized = path_value.lower()
+    if normalized not in {part.lower() for part in path_parts if part}:
+        os.environ["PATH"] = path_value + (os.pathsep + current_path if current_path else "")
+
+
+def _ensure_runtime_ffmpeg_wrapper(runtime_base: Path, ffmpeg_path: Path) -> Optional[Path]:
+    if os.name == "nt":
+        return ffmpeg_path
+    if ffmpeg_path.name == "ffmpeg":
+        return ffmpeg_path
+
+    wrapper_dir = runtime_base / "bin"
+    wrapper_path = wrapper_dir / "ffmpeg"
+    try:
+        wrapper_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+
+    target = str(ffmpeg_path)
+    try:
+        if wrapper_path.exists() or wrapper_path.is_symlink():
+            try:
+                if wrapper_path.is_symlink() and os.readlink(wrapper_path) == target:
+                    return wrapper_path
+            except Exception:
+                pass
+            wrapper_path.unlink()
+        os.symlink(target, wrapper_path)
+        return wrapper_path
+    except Exception:
+        script_body = "#!/bin/sh\nexec " + shlex.quote(target) + " \"$@\"\n"
+        try:
+            wrapper_path.write_text(script_body, encoding="utf-8")
+            wrapper_path.chmod(0o755)
+            return wrapper_path
+        except Exception:
+            return None
+
+
 def _candidate_ffmpeg_paths() -> List[Path]:
     candidates: List[Path] = []
     seen: Set[str] = set()
@@ -279,19 +266,24 @@ def _candidate_ffmpeg_paths() -> List[Path]:
         seen.add(key)
         candidates.append(path)
 
-    ffmpeg_env = os.environ.get("FFMPEG_PATH") or os.environ.get("IMAGEIO_FFMPEG_EXE")
-    add(ffmpeg_env)
+    for env_key in ("STEMWERK_FFMPEG_PATH", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
+        add(os.environ.get(env_key))
 
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if local_appdata:
-        runtime_base = Path(local_appdata) / "STEMwerk"
+    for runtime_base in _runtime_base_candidates():
         add(runtime_base / "ffmpeg" / "bin" / "ffmpeg.exe")
         add(runtime_base / "ffmpeg" / "ffmpeg.exe")
         add(runtime_base / "bin" / "ffmpeg.exe")
+        add(runtime_base / "ffmpeg" / "bin" / "ffmpeg")
+        add(runtime_base / "ffmpeg" / "ffmpeg")
+        add(runtime_base / "bin" / "ffmpeg")
         bootstrap_values = _read_simple_env_file(runtime_base / "state" / "bootstrap.env")
         add(bootstrap_values.get("FFMPEG_PATH"))
+        add(bootstrap_values.get("FFMPEG"))
+        add(bootstrap_values.get("MANAGED_FFMPEG_PATH"))
         capabilities_values = _read_simple_env_file(runtime_base / "state" / "capabilities.env")
         add(capabilities_values.get("FFMPEG_PATH"))
+        add(capabilities_values.get("FFMPEG"))
+        add(capabilities_values.get("MANAGED_FFMPEG_PATH"))
 
     exe_dir = Path(sys.executable).resolve().parent
     add(exe_dir / "ffmpeg.exe")
@@ -303,7 +295,7 @@ def _candidate_ffmpeg_paths() -> List[Path]:
     return candidates
 
 
-def _configure_ffmpeg_runtime() -> Optional[Path]:
+def _configure_ffmpeg_runtime() -> Tuple[Optional[Path], Optional[Path], Optional[str]]:
     for candidate in _candidate_ffmpeg_paths():
         try:
             if not candidate.exists() or candidate.is_dir():
@@ -311,17 +303,16 @@ def _configure_ffmpeg_runtime() -> Optional[Path]:
         except Exception:
             continue
 
-        candidate_str = str(candidate)
-        candidate_dir = str(candidate.parent)
-        current_path = os.environ.get("PATH", "")
-        path_parts = current_path.split(os.pathsep) if current_path else []
-        normalized_dir = candidate_dir.lower()
-        if normalized_dir not in {part.lower() for part in path_parts if part}:
-            os.environ["PATH"] = candidate_dir + (os.pathsep + current_path if current_path else "")
+        candidate_str = str(candidate.resolve())
+        runtime_base = _runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk"
+        wrapper = _ensure_runtime_ffmpeg_wrapper(runtime_base, Path(candidate_str))
+        path_prefix = str(wrapper.parent if wrapper else Path(candidate_str).parent)
+        _prepend_path(path_prefix)
+        os.environ["STEMWERK_FFMPEG_PATH"] = candidate_str
         os.environ["FFMPEG_PATH"] = candidate_str
         os.environ["IMAGEIO_FFMPEG_EXE"] = candidate_str
-        return candidate
-    return None
+        return Path(candidate_str), wrapper, path_prefix
+    return None, None, None
 
 
 def _default_model_cache_dir() -> Path:
@@ -609,22 +600,6 @@ def _build_env_json() -> Dict[str, object]:
 def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, object]:
     env = _build_env_json()
     env["selected_device"] = selected_device
-    selected = str(selected_device or "")
-    if selected == "cpu":
-        actual_backend = "cpu"
-    elif selected.startswith("cuda:") or selected == "cuda":
-        actual_backend = "cuda"
-    elif selected.startswith(("rocm", "hip", "privateuseone")):
-        actual_backend = "rocm"
-    elif selected.startswith("directml"):
-        actual_backend = "directml"
-    elif selected == "mps":
-        actual_backend = "mps"
-    else:
-        actual_backend = "unknown"
-    env["actual_runtime_backend"] = actual_backend
-    env["actual_torch_device"] = selected or "unknown"
-    env["actual_acceleration_available"] = actual_backend in {"cuda", "rocm", "directml", "mps"}
     print(f"STEMWERK_DIAG python_executable={env.get('python_executable')}", file=sys.stderr)
     print(f"STEMWERK_DIAG python_version={env.get('python_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG platform={env.get('platform')} machine={env.get('platform_machine')}", file=sys.stderr)
@@ -635,9 +610,6 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
     print(f"STEMWERK_DIAG selected_device={selected_device}", file=sys.stderr)
-    print(f"STEMWERK_DIAG actual_runtime_backend={actual_backend}", file=sys.stderr)
-    print(f"STEMWERK_DIAG actual_torch_device={env['actual_torch_device']}", file=sys.stderr)
-    print(f"STEMWERK_DIAG actual_acceleration_available={env['actual_acceleration_available']}", file=sys.stderr)
     return env
 
 
@@ -691,6 +663,99 @@ def _classify_runtime_failure(
         "marker": MPS_UNSUPPORTED_MARKER,
         "details": details,
     }
+
+
+def _classify_model_failure_text(text: str) -> Optional[Dict[str, str]]:
+    lower = str(text or "").lower()
+    if not lower:
+        return None
+
+    has_timeout = any(
+        token in lower
+        for token in (
+            "read timed out",
+            "httpsconnectionpool",
+            "max retries exceeded",
+            "timeouterror",
+        )
+    )
+    has_download = any(
+        token in lower
+        for token in (
+            "dl.fbaipublicfiles.com",
+            "connectionerror",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "certificate verify failed",
+        )
+    )
+    has_checksum = "invalid checksum" in lower or ("checksum" in lower and ".th" in lower)
+
+    url_match = re.search(r"(https?://[^\s'\"]+)", text or "")
+    path_match = re.search(r"([^\r\n]*\.th)", text or "", flags=re.IGNORECASE)
+
+    if has_checksum:
+        return {
+            "error_class": "model_checksum_failed",
+            "error_hint": "Cached model file appears corrupted. Delete/redownload model cache.",
+            "model_cache_hint": "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            "model_url": url_match.group(1) if url_match else "",
+            "model_path": path_match.group(1).strip() if path_match else "",
+        }
+    if has_timeout and (has_download or ".th" in lower):
+        return {
+            "error_class": "model_download_timeout",
+            "error_hint": "Model download timed out. Check network/VPN/firewall or delete partial model cache and retry.",
+            "model_cache_hint": "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            "model_url": url_match.group(1) if url_match else "",
+            "model_path": path_match.group(1).strip() if path_match else "",
+        }
+    if has_download:
+        return {
+            "error_class": "model_download_failed",
+            "error_hint": "Model download failed. Check internet/DNS/proxy/VPN/firewall and retry.",
+            "model_cache_hint": "Delete corrupted/partial files in the STEMwerk models folder and retry.",
+            "model_url": url_match.group(1) if url_match else "",
+            "model_path": path_match.group(1).strip() if path_match else "",
+        }
+    return None
+
+
+def _parse_major_minor(version_text: Optional[str]) -> Tuple[int, int]:
+    raw = str(version_text or "").strip()
+    match = re.match(r"^\s*(\d+)\.(\d+)", raw)
+    if not match:
+        return (0, 0)
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def _enable_torch_weights_only_compat(model_name: str, selected_device: str) -> bool:
+    if not _is_demucs_model(model_name):
+        print("STEMWERK_DIAG torch_weights_only_compat=off model_family=non_demucs", file=sys.stderr)
+        return False
+
+    try:
+        import torch
+    except Exception:
+        print("STEMWERK_DIAG torch_weights_only_compat=off torch_import_failed=1", file=sys.stderr)
+        return False
+
+    torch_ver = str(getattr(torch, "__version__", ""))
+    major, minor = _parse_major_minor(torch_ver)
+    if major < 2 or (major == 2 and minor < 6):
+        print(
+            f"STEMWERK_DIAG torch_weights_only_compat=off torch_version={torch_ver} model={model_name} device={selected_device}",
+            file=sys.stderr,
+        )
+        return False
+
+    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+    print(
+        f"STEMWERK_DIAG torch_weights_only_compat=enabled mode=TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD "
+        f"torch_version={torch_ver} model={model_name} device={selected_device}",
+        file=sys.stderr,
+    )
+    return True
 
 
 def _log_device_diagnostics(devices: List[Dict[str, str]], env: Dict[str, object]) -> None:
@@ -911,12 +976,22 @@ def main():
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
     emit_phase("python_start")
-    ffmpeg_path = _configure_ffmpeg_runtime()
+    ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
     if ffmpeg_path is not None:
         print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)
+        print(
+            f"STEMWERK_DIAG ffmpeg_wrapper={ffmpeg_wrapper if ffmpeg_wrapper is not None else 'none'}",
+            file=sys.stderr,
+        )
+        print(
+            f"STEMWERK_DIAG path_prefix={ffmpeg_path_prefix if ffmpeg_path_prefix else 'none'}",
+            file=sys.stderr,
+        )
     else:
         print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)
+        print("STEMWERK_DIAG ffmpeg_wrapper=none", file=sys.stderr)
+        print("STEMWERK_DIAG path_prefix=none", file=sys.stderr)
     print(f"STEMWERK_DIAG model_cache_dir={model_cache_dir}", file=sys.stderr)
 
     skip_devices = set(_split_list(args.skip_devices))
@@ -992,15 +1067,7 @@ def main():
         _enable_mps_runtime_fallback(device_preference, resolved_device)
         resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, args.model)
         runtime_env = _emit_runtime_diagnostics(resolved_device)
-        runtime_env["requested_device"] = device_preference
-        runtime_env["worker_requested_device"] = resolved_device
-        try:
-            (output_root / "runtime_device.json").write_text(
-                json.dumps(runtime_env, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            print(f"STEMWERK_WARN runtime_device_json_write_failed={exc}", file=sys.stderr)
+        _enable_torch_weights_only_compat(args.model, resolved_device)
 
         emit_phase("model_setup_start")
         sep = StemSeparator(model=args.model, device=resolved_device)
@@ -1019,44 +1086,40 @@ def main():
         # audio-separator writes model outputs inside sep.separate(); this phase
         # brackets the REAPER-facing output mapping and final stem renames.
         emit_phase("stem_write_start")
-        # Private R&D prototype path: keep DrumSep output contract isolated to this model.
-        if _is_drumsep_model(args.model):
-            reaper_stems = _finalize_drumsep_outputs(output_root, result.stems)
-        else:
-            # Mapping logica voor REAPER compatibiliteit
-            stem_mapping = {
-                'vocals': ['vocals', 'vocal', 'Vocals'],
-                'drums':  ['drums', 'drum', 'Drums'],
-                'bass': ['bass', 'Bass'],
-                'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental'],
-                'guitar': ['guitar', 'Guitar'],
-                'piano': ['piano', 'Piano', 'keys', 'Keys']
-            }
+        # Mapping logica voor REAPER compatibiliteit
+        stem_mapping = {
+            'vocals': ['vocals', 'vocal', 'Vocals'],
+            'drums':  ['drums', 'drum', 'Drums'],
+            'bass': ['bass', 'Bass'],
+            'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental'],
+            'guitar': ['guitar', 'Guitar'],
+            'piano': ['piano', 'Piano', 'keys', 'Keys']
+        }
 
-            reaper_stems = {}
-            for stem_name, stem_path in result.stems.items():
-                abs_path = _resolve_stem_path(output_root, stem_path)
-                if not abs_path.exists():
-                    raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
-
-                # Zoek naar de juiste REAPER naam
-                filename = abs_path.stem.lower()
-                target_name = stem_name  # fallback
-
-                for map_name, patterns in stem_mapping.items():
-                    if any(p.lower() in filename for p in patterns):
-                        target_name = map_name
-                        break
-
-                # Hernoem bestand naar simpele naam (bijv. vocals.wav)
-                new_path = abs_path.parent / f"{target_name}.wav"
-                if abs_path != new_path:
-                    if new_path.exists():
-                        os.remove(new_path)
-                    shutil.move(str(abs_path), str(new_path))
-
-                reaper_stems[target_name] = str(new_path)
-                print(f"  {target_name}:  {new_path}", file=sys.stderr)
+        reaper_stems = {}
+        for stem_name, stem_path in result.stems.items():
+            abs_path = _resolve_stem_path(output_root, stem_path)
+            if not abs_path.exists():
+                raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
+            
+            # Zoek naar de juiste REAPER naam
+            filename = abs_path.stem.lower()
+            target_name = stem_name  # fallback
+            
+            for map_name, patterns in stem_mapping.items():
+                if any(p.lower() in filename for p in patterns):
+                    target_name = map_name
+                    break
+            
+            # Hernoem bestand naar simpele naam (bijv. vocals.wav)
+            new_path = abs_path.parent / f"{target_name}.wav"
+            if abs_path != new_path:
+                if new_path.exists():
+                    os.remove(new_path)
+                shutil.move(str(abs_path), str(new_path))
+            
+            reaper_stems[target_name] = str(new_path)
+            print(f"  {target_name}:  {new_path}", file=sys.stderr)
 
         emit_phase("stem_write_end")
 
@@ -1072,6 +1135,15 @@ def main():
         import traceback
 
         traceback_text = traceback.format_exc()
+        model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
+        if model_failure:
+            print(f"STEMWERK_ERROR_CLASS={model_failure['error_class']}", file=sys.stderr)
+            print(f"STEMWERK_ERROR_HINT={model_failure['error_hint']}", file=sys.stderr)
+            print(f"STEMWERK_MODEL_CACHE_HINT={model_failure['model_cache_hint']}", file=sys.stderr)
+            if model_failure.get("model_url"):
+                print(f"STEMWERK_MODEL_URL={model_failure['model_url']}", file=sys.stderr)
+            if model_failure.get("model_path"):
+                print(f"STEMWERK_MODEL_PATH={model_failure['model_path']}", file=sys.stderr)
         failure = _classify_runtime_failure(
             exc,
             traceback_text,

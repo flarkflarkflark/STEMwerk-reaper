@@ -6,13 +6,22 @@
 -- Call HELPERS.configure({...}) immediately after dofile to inject locals.
 --
 -- Globals used directly (no injection needed):
---   SETTINGS, STEMS, OS, PATH_SEP, SW_LOG, fileExists, debugLog,
+--   SETTINGS, STEMS, OS, PATH_SEP, SW_LOG, debugLog,
 --   normalizeColorMode, getItemDisplayNameForTakes, reaper
 --
 -- Injected via configure():
 --   makeDir, adjustTrackLayout
 
 local C = {}  -- injected context
+local function helperFileExists(path)
+    if not path or path == "" then return false end
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
 
 function HELPERS.configure(ctx)
     for k, v in pairs(ctx) do C[k] = v end
@@ -248,7 +257,7 @@ end
 function HELPERS.getStemFilesCustomPathTooltip()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Vul de doelmap voor de definitieve stemfiles in." end
-    if lang == "de" then return "Zielordner für die finalen Stem-Dateien eingeben." end
+    if lang == "de" then return "Zielordner fuer die finalen Stem-Dateien eingeben." end
     return "Enter the destination folder for final stem files."
 end
 
@@ -262,21 +271,21 @@ end
 function HELPERS.getStemFilesMissingCustomWarning()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Stel eerst een eigen stemmap in, of zet Stem files terug op Temp/Project." end
-    if lang == "de" then return "Zuerst einen eigenen Stem-Ordner festlegen oder Stem-Dateien auf Temp/Projekt zurücksetzen." end
+    if lang == "de" then return "Zuerst einen eigenen Stem-Ordner festlegen, oder Stem-Dateien auf Temp/Projekt zuruecksetzen." end
     return "Set a custom stem folder first, or switch Stem files back to Temp/Project."
 end
 
 function HELPERS.getStemFilesProjectUnavailableWarning()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Project is niet beschikbaar voor dit project. Sla het project eerst op, of gebruik Temp/Custom." end
-    if lang == "de" then return "Projekt ist für dieses Projekt nicht verfügbar. Projekt zuerst speichern oder Temp/Custom verwenden." end
+    if lang == "de" then return "Projekt ist fuer dieses Projekt nicht verfuegbar. Projekt zuerst speichern, oder Temp/Custom verwenden." end
     return "Project is unavailable for this project. Save the project first, or use Temp/Custom."
 end
 
 function HELPERS.getNoAudibleTargetsTitle()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Geen hoorbare doelwitten" end
-    if lang == "de" then return "Keine hörbaren Ziele" end
+    if lang == "de" then return "Keine hoerbaren Ziele" end
     return "No audible targets"
 end
 
@@ -286,7 +295,7 @@ function HELPERS.getNoAudibleTargetsMessage()
         return "Er is wel audio binnen de huidige selectie, maar alle overeenkomende tracks/items zijn gemute of niet solo-hoorbaar.\n\nUnmute de relevante track of item, of pas de solo-status aan, en probeer opnieuw."
     end
     if lang == "de" then
-        return "Innerhalb der aktuellen Auswahl gibt es Audio, aber alle passenden Tracks/Items sind stummgeschaltet oder wegen Solo nicht hörbar.\n\nRelevanten Track oder Item entstummen oder den Solo-Status anpassen und erneut versuchen."
+        return "Innerhalb der aktuellen Auswahl gibt es Audio, aber alle passenden Tracks/Items sind stummgeschaltet oder wegen Solo nicht hoerbar.\n\nRelevanten Track oder Item entstummen oder den Solo-Status anpassen und erneut versuchen."
     end
     return "There is audio inside the current selection, but all matching tracks/items are muted or not solo-audible.\n\nUnmute the relevant track or item, or adjust solo state, then try again."
 end
@@ -309,7 +318,7 @@ function HELPERS.getSelectionMonitorPrompt()
             return HELPERS.getNoAudibleTargetsTitle(), "Selecteer audio of maak tracks/items hoorbaar in REAPER."
         end
         if lang == "de" then
-            return HELPERS.getNoAudibleTargetsTitle(), "Audio auswählen oder Tracks/Items in REAPER hörbar machen."
+            return HELPERS.getNoAudibleTargetsTitle(), "Audio auswaehlen oder Tracks/Items in REAPER hoerbar machen."
         end
         return HELPERS.getNoAudibleTargetsTitle(), "Select audio or make tracks/items audible in REAPER."
     end
@@ -317,7 +326,7 @@ function HELPERS.getSelectionMonitorPrompt()
         return "Start", "Selecteer audio in REAPER"
     end
     if lang == "de" then
-        return "Start", "Audio in REAPER auswählen"
+        return "Start", "Audio in REAPER auswaehlen"
     end
     return "Start", "Select audio in REAPER"
 end
@@ -373,7 +382,7 @@ function HELPERS.makeUniqueFilePath(dir, baseName, ext)
     local safeExt = ext or ""
     local candidate = dir .. PATH_SEP .. safeBase .. safeExt
     local counter = 2
-    while fileExists(candidate) do
+    while helperFileExists(candidate) do
         candidate = dir .. PATH_SEP .. safeBase .. "_" .. tostring(counter) .. safeExt
         counter = counter + 1
     end

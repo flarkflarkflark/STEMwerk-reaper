@@ -64,10 +64,13 @@ rsync -a --delete \
   "${src_dir}/" \
   "${dest}/"
 
-# NOTE: Do not overlay `${dest}/i18n` from `${repo_root}/i18n`.
-# The canonical REAPER runtime i18n lives under `${src_dir}/i18n` and is
-# already synced by the main rsync above. A second root-level i18n pass can
-# overwrite newer REAPER-specific keys (for example Drum Kit labels).
+rsync -a --delete \
+  --exclude='__pycache__/' \
+  --exclude='*.pyc' \
+  --exclude='*.pyo' \
+  --exclude='.DS_Store' \
+  "${repo_root}/i18n/" \
+  "${dest}/i18n/"
 
 if [[ ! -f "${dest}/vendor/stemwerk-core/pyproject.toml" ]] \
   || [[ ! -f "${dest}/vendor/stemwerk-core/src/stemwerk_core/__init__.py" ]] \

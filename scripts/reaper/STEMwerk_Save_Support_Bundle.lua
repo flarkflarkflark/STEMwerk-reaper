@@ -1,6 +1,6 @@
 -- @description Stemwerk: Save Support Bundle
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.2
+-- @version 2.2.2.2.4
 -- @changelog
 --   Collects a read-only STEMwerk support bundle with runtime diagnostics, logs, and temp-folder inventory.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -575,14 +575,22 @@ local function resolveCommandOnPath(name)
     if OS == "Windows" then
         local rc, out = execCommand("where.exe", {name}, 5000)
         if rc == 0 and out ~= "" then
-            local first = trim((out:gsub("\r", "")):match("([^\n]+)"))
-            return first or ""
+            for line in (out:gsub("\r", "")):gmatch("[^\n]+") do
+                local candidate = trim(line)
+                if candidate:match("^[A-Za-z]:[\\/]") and fileExists(candidate) then
+                    return candidate
+                end
+            end
         end
     else
         local rc, out = execCommand("which", {name}, 5000)
         if rc == 0 and out ~= "" then
-            local first = trim((out:gsub("\r", "")):match("([^\n]+)"))
-            return first or ""
+            for line in (out:gsub("\r", "")):gmatch("[^\n]+") do
+                local candidate = trim(line)
+                if candidate:match("^/") and fileExists(candidate) then
+                    return candidate
+                end
+            end
         end
     end
     return ""
@@ -879,6 +887,32 @@ local bootstrapPidPath = joinPath(runtimePaths.runtimeState, "bootstrap.pid")
 local bootstrapGuardPath = joinPath(runtimePaths.runtimeState, "bootstrap.guard")
 local runtimeState = readEnvFile(bootstrapEnvPath)
 local capabilityState = readEnvFile(capabilitiesEnvPath)
+local capabilityBootstrapStatus = trim(capabilityState.BOOTSTRAP_STATUS or "")
+local runtimeBootstrapStatus = trim(runtimeState.STATUS or "")
+local capabilityVerification = trim(capabilityState.VERIFICATION or "")
+local capabilityStaleFailedVerification = (
+    runtimeBootstrapStatus == "ok"
+    and (capabilityBootstrapStatus == "" or capabilityBootstrapStatus == "ok")
+    and capabilityVerification == "failed"
+)
+
+local function resolvedCapabilityValue(key, fallback)
+    local value = trim(capabilityState[key] or "")
+    if capabilityStaleFailedVerification and (
+        key == "VERIFICATION"
+        or key == "RUNTIME_DRIFT_DETECTED"
+        or key == "RUNTIME_DRIFT_REASON"
+        or key == "TORCH_SUPPORTED"
+        or key == "TORCH_VERSION"
+        or key == "TORCHAUDIO_VERSION"
+    ) then
+        value = ""
+    end
+    if value ~= "" then
+        return value
+    end
+    return trim(fallback or "")
+end
 
 local pythonPathCandidates = {
     capabilityState.PYTHON_PATH,
@@ -1551,125 +1585,6 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
     return lines
 end
 
-local function collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)
-    local lines = {}
-    local tempBase = getTempBase()
-    local destRoot = joinPath(bundleDir, "drumkit_split_runs")
-    local maxRunsToInclude = 5
-    ensureDir(destRoot)
-
-    local runNames = {}
-    for _, name in ipairs(enumerateSubdirs(tempBase)) do
-        local lower = tostring(name or ""):lower()
-        if lower:match("^stemwerk%-drumsep%-workflow%-prototype%-") and not shouldIgnoreTempFolder(lower) then
-            runNames[#runNames + 1] = tostring(name)
-        end
-    end
-    if #runNames == 0 then
-        appendLine(lines, "- no Drum Kit Split temp runs found")
-        appendKey(lines, "Drum Kit runs source", tempBase)
-        return lines
-    end
-
-    local entries = {}
-    for _, runName in ipairs(runNames) do
-        local runSrc = joinPath(tempBase, runName)
-        local stat = getPathStat(runSrc)
-        entries[#entries + 1] = {
-            name = runName,
-            src = runSrc,
-            epoch = tonumber(stat.epoch) or 0,
-        }
-    end
-    table.sort(entries, function(a, b)
-        if (a.epoch or 0) == (b.epoch or 0) then
-            return tostring(a.name) > tostring(b.name)
-        end
-        return (a.epoch or 0) > (b.epoch or 0)
-    end)
-
-    local selected = {}
-    for idx, entry in ipairs(entries) do
-        if idx <= maxRunsToInclude then
-            selected[#selected + 1] = entry
-        end
-    end
-
-    local rootAllowedFiles = {
-        ["drumkit_run_metadata.json"] = true,
-        ["drumkit_events.jsonl"] = true,
-        ["run_metadata.json"] = true,
-        ["source_resolution.json"] = true,
-        ["import_summary.json"] = true,
-    }
-    local stageAllowedFiles = {
-        ["cmd_stdout.txt"] = true,
-        ["cmd_stderr.txt"] = true,
-        ["stdout.txt"] = true,
-        ["separation_log.txt"] = true,
-        ["phase_events.jsonl"] = true,
-        ["ffmpeg_extract.log"] = true,
-    }
-
-    local copiedCount = 0
-    local includedRunNames = {}
-    for _, entry in ipairs(selected) do
-        local runSrc = entry.src
-        local runName = entry.name
-        local runDst = joinPath(destRoot, runName)
-        ensureDir(runDst)
-        includedRunNames[#includedRunNames + 1] = runName
-
-        for _, fileName in ipairs(enumerateFiles(runSrc)) do
-            if rootAllowedFiles[fileName] then
-                local src = joinPath(runSrc, fileName)
-                local dst = joinPath(runDst, fileName)
-                local ok, mode = copySupportTextFile(src, dst, 1024 * 1024)
-                if ok then
-                    copiedCount = copiedCount + 1
-                    copiedFiles[#copiedFiles + 1] = "drumkit_split_runs/" .. runName .. "/" .. fileName .. " (" .. mode .. ")"
-                end
-            end
-        end
-
-        for _, sourceDirName in ipairs(enumerateSubdirs(runSrc)) do
-            if tostring(sourceDirName):match("^source_%d+") then
-                local sourceSrc = joinPath(runSrc, sourceDirName)
-                for _, stageDirName in ipairs(enumerateSubdirs(sourceSrc)) do
-                    if tostring(stageDirName):match("^stage%d") then
-                        local stageSrc = joinPath(sourceSrc, stageDirName)
-                        local stageDst = joinPath(runDst, sourceDirName, stageDirName)
-                        ensureDir(stageDst)
-                        for _, fileName in ipairs(enumerateFiles(stageSrc)) do
-                            if stageAllowedFiles[fileName] then
-                                local src = joinPath(stageSrc, fileName)
-                                local dst = joinPath(stageDst, fileName)
-                                local ok, mode = copySupportTextFile(src, dst, 1024 * 1024)
-                                if ok then
-                                    copiedCount = copiedCount + 1
-                                    copiedFiles[#copiedFiles + 1] = "drumkit_split_runs/" .. runName .. "/" .. sourceDirName .. "/" .. stageDirName .. "/" .. fileName .. " (" .. mode .. ")"
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    local skipped = math.max(0, #entries - #selected)
-    appendLine(lines, string.format("- Drum Kit Split runs available: %d", #entries))
-    appendLine(lines, string.format("- Drum Kit Split runs included: %d (max %d)", #selected, maxRunsToInclude))
-    appendLine(lines, string.format("- Drum Kit Split runs skipped: %d", skipped))
-    appendLine(lines, string.format("- Drum Kit Split diagnostics files copied: %d", copiedCount))
-    if #includedRunNames > 0 then
-        appendLine(lines, "- included run_ids: " .. table.concat(includedRunNames, ", "))
-    end
-    appendLine(lines, "- exclusions: audio/media/reapeaks/model-cache payloads remain excluded")
-    appendKey(lines, "Drum Kit runs source", tempBase)
-    return lines
-end
-
 local function parseJsonStringField(line, key)
     local pattern = '"' .. tostring(key) .. '"%s*:%s*"(.-)"'
     local value = tostring(line or ""):match(pattern)
@@ -1779,6 +1694,7 @@ local function parseKeyValueLine(line)
 end
 
 local function parseSupportRunText(entry, text)
+    local fullText = tostring(text or "")
     for line in tostring(text or ""):gmatch("[^\r\n]+") do
         local raw = trim(line)
         local lower = raw:lower()
@@ -1828,6 +1744,18 @@ local function parseSupportRunText(entry, text)
                     entry._clearFailures = (entry._clearFailures or 0) + 1
                     setRunResult(entry, "fail", 4)
                 end
+            elseif key == "error_class" or key == "stemwerk_error_class" then
+                kvAssignLast(entry, "error_class", value)
+                setRunResult(entry, "fail", 5)
+                entry._clearFailures = (entry._clearFailures or 0) + 1
+            elseif key == "error_hint" or key == "stemwerk_error_hint" then
+                kvAssignLast(entry, "error_hint", value)
+            elseif key == "model_cache_hint" or key == "stemwerk_model_cache_hint" then
+                kvAssignLast(entry, "model_cache_hint", value)
+            elseif key == "model_url" or key == "stemwerk_model_url" then
+                kvAssignLast(entry, "model_url", value)
+            elseif key == "model_path" or key == "stemwerk_model_path" then
+                kvAssignLast(entry, "model_path", value)
             elseif key == "status" then
                 local status = value:lower()
                 if status:find("fail", 1, true) or status:find("error", 1, true) then
@@ -1911,6 +1839,31 @@ local function parseSupportRunText(entry, text)
             setRunResult(entry, "fail", 4)
             setFailureReason(entry, trim(raw:gsub("^[Ee][Rr][Rr][Oo][Rr]:%s*", "")))
         end
+    end
+
+    local lowerAll = fullText:lower()
+    local hasTimeout = lowerAll:find("read timed out", 1, true) or lowerAll:find("httpsconnectionpool", 1, true)
+        or lowerAll:find("max retries exceeded", 1, true) or lowerAll:find("timeouterror", 1, true)
+    local hasDownload = lowerAll:find("dl.fbaipublicfiles.com", 1, true) or lowerAll:find("connectionerror", 1, true)
+        or lowerAll:find("temporary failure in name resolution", 1, true) or lowerAll:find("name or service not known", 1, true)
+        or lowerAll:find("certificate verify failed", 1, true)
+    local hasChecksum = lowerAll:find("invalid checksum", 1, true) or (lowerAll:find("checksum", 1, true) and lowerAll:find(".th", 1, true))
+    if hasChecksum and tostring(entry.error_class or "unknown") == "unknown" then
+        kvAssignLast(entry, "error_class", "model_checksum_failed")
+        kvAssignLast(entry, "error_hint", "Cached model file appears corrupted. Delete/redownload model cache.")
+        kvAssignLast(entry, "model_cache_hint", "Delete corrupted/partial files in the STEMwerk models folder and retry.")
+        setRunResult(entry, "fail", 5)
+        entry._clearFailures = (entry._clearFailures or 0) + 1
+    elseif hasTimeout and tostring(entry.error_class or "unknown") == "unknown" then
+        kvAssignLast(entry, "error_class", "model_download_timeout")
+        kvAssignLast(entry, "error_hint", "Model download timed out. Check network/VPN/firewall or delete partial model cache and retry.")
+        setRunResult(entry, "fail", 5)
+        entry._clearFailures = (entry._clearFailures or 0) + 1
+    elseif hasDownload and tostring(entry.error_class or "unknown") == "unknown" then
+        kvAssignLast(entry, "error_class", "model_download_failed")
+        kvAssignLast(entry, "error_hint", "Model download failed. Check internet/DNS/proxy/VPN/firewall and retry.")
+        setRunResult(entry, "fail", 5)
+        entry._clearFailures = (entry._clearFailures or 0) + 1
     end
 end
 
@@ -2425,18 +2378,21 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
 
     if #out > 0 and timingSummaryEntry then
         local first = out[1]
-        if tostring(timingSummaryEntry.result or "unknown") ~= "unknown" then first.result = timingSummaryEntry.result end
-        if tostring(timingSummaryEntry.model or "unknown") ~= "unknown" then first.model = timingSummaryEntry.model end
-        if tostring(timingSummaryEntry.device or "unknown") ~= "unknown" then first.device = timingSummaryEntry.device end
-        if tostring(timingSummaryEntry.mode or "unknown") ~= "unknown" then first.mode = timingSummaryEntry.mode end
-        if tostring(timingSummaryEntry.jobs or "unknown") ~= "unknown" then first.jobs = timingSummaryEntry.jobs end
-        if tostring(timingSummaryEntry.items or "unknown") ~= "unknown" then first.items = timingSummaryEntry.items end
-        if tostring(timingSummaryEntry.wall_clock_total or "unknown") ~= "unknown" then first.wall_clock_total = timingSummaryEntry.wall_clock_total end
-        if tostring(timingSummaryEntry.total_source_duration or "unknown") ~= "unknown" then first.total_source_duration = timingSummaryEntry.total_source_duration end
-        if tostring(timingSummaryEntry.realtime_factor or "unknown") ~= "unknown" then first.realtime_factor = timingSummaryEntry.realtime_factor end
-        if tostring(timingSummaryEntry.timestamp or "unknown") ~= "unknown" then first.timestamp = timingSummaryEntry.timestamp end
-        if tostring(first.log_path or "unknown") == "unknown" or tostring(first.log_path or ""):find("runtime_runs/", 1, true) then
-            first.log_path = timingSummaryEntry.log_path
+        local firstFromRuntimeRuns = tostring(first.log_path or ""):find("runtime_runs/", 1, true) ~= nil
+        if not firstFromRuntimeRuns then
+            if tostring(timingSummaryEntry.result or "unknown") ~= "unknown" then first.result = timingSummaryEntry.result end
+            if tostring(timingSummaryEntry.model or "unknown") ~= "unknown" then first.model = timingSummaryEntry.model end
+            if tostring(timingSummaryEntry.device or "unknown") ~= "unknown" then first.device = timingSummaryEntry.device end
+            if tostring(timingSummaryEntry.mode or "unknown") ~= "unknown" then first.mode = timingSummaryEntry.mode end
+            if tostring(timingSummaryEntry.jobs or "unknown") ~= "unknown" then first.jobs = timingSummaryEntry.jobs end
+            if tostring(timingSummaryEntry.items or "unknown") ~= "unknown" then first.items = timingSummaryEntry.items end
+            if tostring(timingSummaryEntry.wall_clock_total or "unknown") ~= "unknown" then first.wall_clock_total = timingSummaryEntry.wall_clock_total end
+            if tostring(timingSummaryEntry.total_source_duration or "unknown") ~= "unknown" then first.total_source_duration = timingSummaryEntry.total_source_duration end
+            if tostring(timingSummaryEntry.realtime_factor or "unknown") ~= "unknown" then first.realtime_factor = timingSummaryEntry.realtime_factor end
+            if tostring(timingSummaryEntry.timestamp or "unknown") ~= "unknown" then first.timestamp = timingSummaryEntry.timestamp end
+            if tostring(first.log_path or "unknown") == "unknown" or tostring(first.log_path or ""):find("runtime_runs/", 1, true) then
+                first.log_path = timingSummaryEntry.log_path
+            end
         end
     end
 
@@ -2477,6 +2433,17 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "realtime_factor: " .. tostring(entry.realtime_factor or "unknown")
         if tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial" then
             lines[#lines + 1] = "failure_reason: " .. tostring(entry.error_reason or "unknown")
+            lines[#lines + 1] = "error_class: " .. tostring(entry.error_class or "unknown")
+            lines[#lines + 1] = "error_hint: " .. tostring(entry.error_hint or "unknown")
+            if tostring(entry.model_cache_hint or "") ~= "" and tostring(entry.model_cache_hint or "unknown") ~= "unknown" then
+                lines[#lines + 1] = "model_cache_hint: " .. tostring(entry.model_cache_hint)
+            end
+            if tostring(entry.model_url or "") ~= "" and tostring(entry.model_url or "unknown") ~= "unknown" then
+                lines[#lines + 1] = "model_url: " .. tostring(entry.model_url)
+            end
+            if tostring(entry.model_path or "") ~= "" and tostring(entry.model_path or "unknown") ~= "unknown" then
+                lines[#lines + 1] = "model_path: " .. tostring(entry.model_path)
+            end
         end
         lines[#lines + 1] = "bundle_log_path: " .. tostring(entry.log_path or "unknown")
         lines[#lines + 1] = ""
@@ -2806,6 +2773,31 @@ local function performBundleCollection()
     local pythonVersion = pythonProbe.data.python_version or getPythonVersion(detectedPythonPath)
     local ffmpegVersion = getFfmpegVersion(detectedFfmpegPath)
     phaseDone("collect_probes", probesStartedAt)
+    local probeTorchVersion = trim(pythonProbe.data.torch or "")
+    local probeTorchaudioVersion = trim(pythonProbe.data.torchaudio or "")
+    local probeTorchSupported = "unknown"
+    local probeTorchaudioPresent = "unknown"
+    local probeRuntimeDriftDetected = "unknown"
+    local probeRuntimeDriftReason = "unknown"
+    do
+        local coreTorch = probeTorchVersion:match("([0-9]+%.[0-9]+%.[0-9]+)") or probeTorchVersion:match("([0-9]+%.[0-9]+)")
+        local major, minor = coreTorch and coreTorch:match("^(%d+)%.(%d+)")
+        if major and minor then
+            local torchTooNew = (tonumber(major) or 999) > 2 or ((tonumber(major) or 999) == 2 and (tonumber(minor) or 999) >= 6)
+            probeTorchSupported = torchTooNew and "no" or "yes"
+            probeTorchaudioPresent = (probeTorchaudioVersion ~= "" and not probeTorchaudioVersion:find("missing", 1, true) and not probeTorchaudioVersion:find("import_error", 1, true)) and "yes" or "no"
+            if torchTooNew then
+                probeRuntimeDriftDetected = "yes"
+                probeRuntimeDriftReason = "torch_too_new_for_demucs"
+            elseif probeTorchaudioPresent ~= "yes" then
+                probeRuntimeDriftDetected = "yes"
+                probeRuntimeDriftReason = "torchaudio_missing_for_demucs"
+            else
+                probeRuntimeDriftDetected = "no"
+                probeRuntimeDriftReason = ""
+            end
+        end
+    end
 
     local diagnostics = {}
     appendLine(diagnostics, "=== COPY/PASTE VERSION AND PLATFORM SUMMARY ===")
@@ -2821,6 +2813,35 @@ local function performBundleCollection()
     appendKey(diagnostics, "Runtime base path", runtimeBase)
     appendKey(diagnostics, "Python path", sanitizePathValue(detectedPythonPath))
     appendKey(diagnostics, "Python version", pythonVersion)
+    appendKey(diagnostics, "supported_python_found", trim(capabilityState.SUPPORTED_PYTHON_FOUND) ~= "" and trim(capabilityState.SUPPORTED_PYTHON_FOUND) or trim(runtimeState.SUPPORTED_PYTHON_FOUND) ~= "" and trim(runtimeState.SUPPORTED_PYTHON_FOUND) or "unknown")
+    appendKey(diagnostics, "detected_python_version", trim(capabilityState.DETECTED_PYTHON_VERSION) ~= "" and trim(capabilityState.DETECTED_PYTHON_VERSION) or trim(runtimeState.DETECTED_PYTHON_VERSION) ~= "" and trim(runtimeState.DETECTED_PYTHON_VERSION) or pythonVersion)
+    appendKey(diagnostics, "supported_python_range", trim(capabilityState.SUPPORTED_PYTHON_RANGE) ~= "" and trim(capabilityState.SUPPORTED_PYTHON_RANGE) or trim(runtimeState.SUPPORTED_PYTHON_RANGE) ~= "" and trim(runtimeState.SUPPORTED_PYTHON_RANGE) or (OS ~= "Windows" and "3.10-3.12" or "3.11-3.12"))
+    appendKey(diagnostics, "MANAGED_PYTHON_ENABLED", trim(capabilityState.MANAGED_PYTHON_ENABLED) ~= "" and trim(capabilityState.MANAGED_PYTHON_ENABLED) or trim(runtimeState.MANAGED_PYTHON_ENABLED) ~= "" and trim(runtimeState.MANAGED_PYTHON_ENABLED) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_STATUS", trim(capabilityState.MANAGED_PYTHON_STATUS) ~= "" and trim(capabilityState.MANAGED_PYTHON_STATUS) or trim(runtimeState.MANAGED_PYTHON_STATUS) ~= "" and trim(runtimeState.MANAGED_PYTHON_STATUS) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_VERSION", trim(capabilityState.MANAGED_PYTHON_VERSION) ~= "" and trim(capabilityState.MANAGED_PYTHON_VERSION) or trim(runtimeState.MANAGED_PYTHON_VERSION) ~= "" and trim(runtimeState.MANAGED_PYTHON_VERSION) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_RELEASE", trim(capabilityState.MANAGED_PYTHON_RELEASE) ~= "" and trim(capabilityState.MANAGED_PYTHON_RELEASE) or trim(runtimeState.MANAGED_PYTHON_RELEASE) ~= "" and trim(runtimeState.MANAGED_PYTHON_RELEASE) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_PLATFORM", trim(capabilityState.MANAGED_PYTHON_PLATFORM) ~= "" and trim(capabilityState.MANAGED_PYTHON_PLATFORM) or trim(runtimeState.MANAGED_PYTHON_PLATFORM) ~= "" and trim(runtimeState.MANAGED_PYTHON_PLATFORM) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_ARCH", trim(capabilityState.MANAGED_PYTHON_ARCH) ~= "" and trim(capabilityState.MANAGED_PYTHON_ARCH) or trim(runtimeState.MANAGED_PYTHON_ARCH) ~= "" and trim(runtimeState.MANAGED_PYTHON_ARCH) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_URL", trim(capabilityState.MANAGED_PYTHON_URL) ~= "" and trim(capabilityState.MANAGED_PYTHON_URL) or trim(runtimeState.MANAGED_PYTHON_URL) ~= "" and trim(runtimeState.MANAGED_PYTHON_URL) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_SHA256_OK", trim(capabilityState.MANAGED_PYTHON_SHA256_OK) ~= "" and trim(capabilityState.MANAGED_PYTHON_SHA256_OK) or trim(runtimeState.MANAGED_PYTHON_SHA256_OK) ~= "" and trim(runtimeState.MANAGED_PYTHON_SHA256_OK) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_PATH", sanitizePathValue(trim(capabilityState.MANAGED_PYTHON_PATH) ~= "" and trim(capabilityState.MANAGED_PYTHON_PATH) or trim(runtimeState.MANAGED_PYTHON_PATH)))
+    appendKey(diagnostics, "MANAGED_PYTHON_REPLACED", trim(capabilityState.MANAGED_PYTHON_REPLACED) ~= "" and trim(capabilityState.MANAGED_PYTHON_REPLACED) or trim(runtimeState.MANAGED_PYTHON_REPLACED) ~= "" and trim(runtimeState.MANAGED_PYTHON_REPLACED) or "unknown")
+    appendKey(diagnostics, "MANAGED_PYTHON_ROLLBACK", trim(capabilityState.MANAGED_PYTHON_ROLLBACK) ~= "" and trim(capabilityState.MANAGED_PYTHON_ROLLBACK) or trim(runtimeState.MANAGED_PYTHON_ROLLBACK) ~= "" and trim(runtimeState.MANAGED_PYTHON_ROLLBACK) or "unknown")
+    appendKey(diagnostics, "SYSTEM_PYTHON_PATH", sanitizePathValue(trim(capabilityState.SYSTEM_PYTHON_PATH) ~= "" and trim(capabilityState.SYSTEM_PYTHON_PATH) or trim(runtimeState.SYSTEM_PYTHON_PATH)))
+    appendKey(diagnostics, "SYSTEM_PYTHON_VERSION", trim(capabilityState.SYSTEM_PYTHON_VERSION) ~= "" and trim(capabilityState.SYSTEM_PYTHON_VERSION) or trim(runtimeState.SYSTEM_PYTHON_VERSION) ~= "" and trim(runtimeState.SYSTEM_PYTHON_VERSION) or "unknown")
+    appendKey(diagnostics, "SYSTEM_PYTHON_USED", trim(capabilityState.SYSTEM_PYTHON_USED) ~= "" and trim(capabilityState.SYSTEM_PYTHON_USED) or trim(runtimeState.SYSTEM_PYTHON_USED) ~= "" and trim(runtimeState.SYSTEM_PYTHON_USED) or "unknown")
+    appendKey(diagnostics, "VENV_PYTHON_PATH", sanitizePathValue(trim(capabilityState.VENV_PYTHON_PATH) ~= "" and trim(capabilityState.VENV_PYTHON_PATH) or trim(runtimeState.VENV_PYTHON_PATH) ~= "" and trim(runtimeState.VENV_PYTHON_PATH) or trim(runtimeState.VENV_PYTHON)))
+    appendKey(diagnostics, "AUDIO_SEPARATOR_IMPORT", trim(capabilityState.AUDIO_SEPARATOR_IMPORT) ~= "" and trim(capabilityState.AUDIO_SEPARATOR_IMPORT) or trim(runtimeState.AUDIO_SEPARATOR_IMPORT) ~= "" and trim(runtimeState.AUDIO_SEPARATOR_IMPORT) or "unknown")
+    appendKey(diagnostics, "AUDIO_SEPARATOR_DEPS_COMPLETE", trim(capabilityState.AUDIO_SEPARATOR_DEPS_COMPLETE) ~= "" and trim(capabilityState.AUDIO_SEPARATOR_DEPS_COMPLETE) or trim(runtimeState.AUDIO_SEPARATOR_DEPS_COMPLETE) ~= "" and trim(runtimeState.AUDIO_SEPARATOR_DEPS_COMPLETE) or "unknown")
+    appendKey(diagnostics, "BACKEND_DEPS_COMPLETE", trim(capabilityState.BACKEND_DEPS_COMPLETE) ~= "" and trim(capabilityState.BACKEND_DEPS_COMPLETE) or trim(runtimeState.BACKEND_DEPS_COMPLETE) ~= "" and trim(runtimeState.BACKEND_DEPS_COMPLETE) or "unknown")
+    appendKey(diagnostics, "BACKEND_DEPS_REASON", trim(capabilityState.BACKEND_DEPS_REASON) ~= "" and trim(capabilityState.BACKEND_DEPS_REASON) or trim(runtimeState.BACKEND_DEPS_REASON) ~= "" and trim(runtimeState.BACKEND_DEPS_REASON) or "unknown")
+    appendKey(diagnostics, "BUILD_TOOLS_MISSING", trim(capabilityState.BUILD_TOOLS_MISSING) ~= "" and trim(capabilityState.BUILD_TOOLS_MISSING) or trim(runtimeState.BUILD_TOOLS_MISSING) ~= "" and trim(runtimeState.BUILD_TOOLS_MISSING) or "unknown")
+    appendKey(diagnostics, "TORCH_VERSION", trim(capabilityState.TORCH_VERSION) ~= "" and trim(capabilityState.TORCH_VERSION) or probeTorchVersion ~= "" and probeTorchVersion or "unknown")
+    appendKey(diagnostics, "TORCHAUDIO_VERSION", trim(capabilityState.TORCHAUDIO_VERSION) ~= "" and trim(capabilityState.TORCHAUDIO_VERSION) or probeTorchaudioVersion ~= "" and probeTorchaudioVersion or "unknown")
+    appendKey(diagnostics, "TORCH_SUPPORTED", trim(capabilityState.TORCH_SUPPORTED) ~= "" and trim(capabilityState.TORCH_SUPPORTED) or probeTorchSupported)
+    appendKey(diagnostics, "TORCHAUDIO_PRESENT", trim(capabilityState.TORCHAUDIO_PRESENT) ~= "" and trim(capabilityState.TORCHAUDIO_PRESENT) or probeTorchaudioPresent)
+    appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED", resolvedCapabilityValue("RUNTIME_DRIFT_DETECTED", probeRuntimeDriftDetected))
+    appendKey(diagnostics, "RUNTIME_DRIFT_REASON", resolvedCapabilityValue("RUNTIME_DRIFT_REASON", probeRuntimeDriftReason))
     appendKey(diagnostics, "FFmpeg path", sanitizePathValue(detectedFfmpegPath))
     appendKey(diagnostics, "FFmpeg version", ffmpegVersion)
     appendKey(diagnostics, "Bundle created", bundleTimestamp)
@@ -2911,22 +2932,27 @@ local function performBundleCollection()
     phaseDone("collect_recent_runs", recentRunsStartedAt)
     appendLine(diagnostics, "")
 
-    local drumKitRunsStartedAt = phaseStart("collect_drumkit_runs")
-    appendLine(diagnostics, "Drum Kit Split Developer-Preview Diagnostics")
-    for _, line in ipairs(collectDrumKitPrototypeDiagnostics(bundleDir, copiedFiles)) do
-        appendLine(diagnostics, line)
-    end
-    phaseDone("collect_drumkit_runs", drumKitRunsStartedAt)
-    appendLine(diagnostics, "")
-
     appendLine(diagnostics, "Settings Snapshot")
     local selectedModel = trim(extStateValue("model"))
     if selectedModel == "" then selectedModel = "htdemucs" end
     appendKey(diagnostics, "Backend/device mode", trim(extStateValue("device")) ~= "" and trim(extStateValue("device")) or "auto")
     appendKey(diagnostics, "Capability profile", trim(capabilityState.PROFILE) ~= "" and trim(capabilityState.PROFILE) or "missing")
     appendKey(diagnostics, "Capability backend", trim(capabilityState.BACKEND) ~= "" and trim(capabilityState.BACKEND) or "missing")
-    appendKey(diagnostics, "Capability verification", trim(capabilityState.VERIFICATION) ~= "" and trim(capabilityState.VERIFICATION) or "missing")
+    appendKey(diagnostics, "Capability verification", resolvedCapabilityValue("VERIFICATION", "missing") ~= "" and resolvedCapabilityValue("VERIFICATION", "missing") or "missing")
+    appendKey(diagnostics, "Capability audio_separator", trim(capabilityState.AUDIO_SEPARATOR) ~= "" and trim(capabilityState.AUDIO_SEPARATOR) or "unknown")
+    appendKey(diagnostics, "Capability audio_separator_import", trim(capabilityState.AUDIO_SEPARATOR_IMPORT) ~= "" and trim(capabilityState.AUDIO_SEPARATOR_IMPORT) or "unknown")
+    appendKey(diagnostics, "Capability audio_separator_deps_complete", trim(capabilityState.AUDIO_SEPARATOR_DEPS_COMPLETE) ~= "" and trim(capabilityState.AUDIO_SEPARATOR_DEPS_COMPLETE) or "unknown")
+    appendKey(diagnostics, "Capability stemwerk_core", trim(capabilityState.STEMWERK_CORE) ~= "" and trim(capabilityState.STEMWERK_CORE) or "unknown")
+    appendKey(diagnostics, "Capability runtime drift", resolvedCapabilityValue("RUNTIME_DRIFT_DETECTED", "unknown") ~= "" and resolvedCapabilityValue("RUNTIME_DRIFT_DETECTED", "unknown") or "unknown")
+    appendKey(diagnostics, "Capability runtime drift reason", resolvedCapabilityValue("RUNTIME_DRIFT_REASON", "unknown") ~= "" and resolvedCapabilityValue("RUNTIME_DRIFT_REASON", "unknown") or "unknown")
     appendKey(diagnostics, "Bootstrap status", trim(capabilityState.BOOTSTRAP_STATUS) ~= "" and trim(capabilityState.BOOTSTRAP_STATUS) or trim(runtimeState.STATUS) ~= "" and trim(runtimeState.STATUS) or "missing")
+    appendKey(diagnostics, "ROCm selected index", trim(runtimeState.SELECTED_TORCH_INDEX) ~= "" and trim(runtimeState.SELECTED_TORCH_INDEX) or "unknown")
+    appendKey(diagnostics, "ROCm selected torch stack", trim(runtimeState.SELECTED_TORCH_STACK) ~= "" and trim(runtimeState.SELECTED_TORCH_STACK) or "unknown")
+    appendKey(diagnostics, "ROCm torch policy", trim(runtimeState.TORCH_RUNTIME_POLICY) ~= "" and trim(runtimeState.TORCH_RUNTIME_POLICY) or "unknown")
+    appendKey(diagnostics, "ROCm detected devices", trim(runtimeState.ROCM_DETECTED_DEVICES) ~= "" and trim(runtimeState.ROCM_DETECTED_DEVICES) or "unknown")
+    appendKey(diagnostics, "ROCm selected device", trim(runtimeState.ROCM_SELECTED_DEVICE) ~= "" and trim(runtimeState.ROCM_SELECTED_DEVICE) or "unknown")
+    appendKey(diagnostics, "ROCm fallback reason", trim(runtimeState.ROCM_FALLBACK_REASON) ~= "" and trim(runtimeState.ROCM_FALLBACK_REASON) or "none")
+    appendKey(diagnostics, "Runtime verify detail", trim(runtimeState.RUNTIME_VERIFY_DETAIL) ~= "" and trim(runtimeState.RUNTIME_VERIFY_DETAIL) or "unknown")
     appendKey(diagnostics, "Quality/model mode", selectedModel .. " (" .. modelModeLabel(selectedModel) .. ")")
     appendKey(diagnostics, "Output track mode", extBool("createNewTracks") and "new tracks" or "in place / takes")
     appendKey(diagnostics, "Create folder", boolLabel(extBool("createFolder")))

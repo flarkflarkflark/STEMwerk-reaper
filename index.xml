@@ -2,21 +2,18 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.2" author="flarkAUDIO" time="1778373560">
+      <version name="2.2.2.2.4" author="flarkAUDIO" time="1779797846">
         <changelog><![CDATA[
-- ReaPack-only API correctness hotfix
-- Improved ReaScript API correctness in setup/support/process handling
-- Fixed Lua ExecProcess return parsing
-- Removed legacy/non-existent AudioAccessor setter calls
-- Avoid treating QN media-source lengths as seconds
-- No dependency stack changes
-- No installer or release asset changes
+- Improve model download timeout diagnostics with clear support-facing guidance
+- Improve corrupted/checksum model-cache diagnostics and recovery hints
+- Surface model failure error class/hint and model URL/path in support bundles when available
+- Ensure user_cancel is not misclassified as a model-download failure
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
-        <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
+        <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
         <source file="../STEMwerk_Save_Support_Bundle.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Save_Support_Bundle.lua</source>
         <source file="../STEMwerk_AI_Separate.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_AI_Separate.lua</source>
-        <source file="../STEMwerk_Setup_Toolbar.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
+        <source file="../STEMwerk_Setup_Toolbar.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
         <source file="../STEMwerk_Explode_Takes.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Explode_Takes.lua</source>
         <source file="../STEMwerk_All_Stems.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_All_Stems.lua</source>
         <source file="../STEMwerk_Vocals_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Vocals_Only.lua</source>
@@ -37,8 +34,9 @@
         <source file="../_internal/STEMwerk_I18N.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_I18N.lua</source>
         <source file="../_internal/STEMwerk_Linux_Setup_Guide.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Linux_Setup_Guide.txt</source>
         <source file="../_internal/STEMwerk_Log.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Log.lua</source>
+        <source file="../_internal/STEMwerk_Managed_Python.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Managed_Python.lua</source>
+        <source file="../_internal/STEMwerk_Managed_Python.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Managed_Python.sh</source>
         <source file="../_internal/STEMwerk_Messages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Messages.lua</source>
-        <source file="../_internal/STEMwerk_Models.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Models.lua</source>
         <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
         <source file="../_internal/STEMwerk_Platform.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Platform.lua</source>
         <source file="../_internal/STEMwerk_Progress_Render.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Progress_Render.lua</source>
@@ -66,6 +64,7 @@
 
         <source file="../vendor/julius/pyproject.toml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/julius/pyproject.toml</source>
         <source file="../vendor/julius/src/julius.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/julius/src/julius.py</source>
+        <source file="../vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl</source>
         <source file="../vendor/stemwerk-core/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/README.txt</source>
         <source file="../vendor/stemwerk-core/pyproject.toml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/pyproject.toml</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/__init__.py</source>
@@ -74,7 +73,7 @@
         <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
 
-        <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/languages.lua</source>
+        <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/stemwerk_language_wrapper.lua</source>
         <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>
         <source file="../i18n/language_checks.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/language_checks.py</source>

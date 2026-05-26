@@ -71,7 +71,7 @@ STEMwerk uses a Python runtime for separation. On first setup it may:
 - download the selected model on first use
 
 On Windows, the installer handles the runtime/bootstrap work outside REAPER.
-On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side setup and repair entry point.
+On macOS and Linux, `STEMwerk-SETUP.lua` is the normal REAPER-side setup and repair entry point. On supported Linux/macOS platforms it downloads a pinned STEMwerk-managed Python runtime on first setup instead of relying on system Python.
 
 ## Internet And Offline Use
 For most users, internet is needed on first install for:
@@ -316,7 +316,6 @@ Before tagging/releases:
 ## License / author
 MIT License.
 Author: flarkAUDIO (flarkaudio@pm.me)
-
 
 
 
