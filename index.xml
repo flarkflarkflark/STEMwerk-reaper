@@ -2,15 +2,18 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.2" author="flarkAUDIO" time="1778373560">
+      <version name="2.2.2.2.3" author="flarkAUDIO" time="1779769355">
         <changelog><![CDATA[
-- ReaPack-only API correctness hotfix
-- Improved ReaScript API correctness in setup/support/process handling
-- Fixed Lua ExecProcess return parsing
-- Removed legacy/non-existent AudioAccessor setter calls
-- Avoid treating QN media-source lengths as seconds
-- No dependency stack changes
-- No installer or release asset changes
+- Harden Linux/macOS managed Python setup and runtime verification
+- Add Linux managed diffq wheel and managed FFmpeg fallback/wrapper
+- Fix macOS/Linux CPU fallback status classification
+- Fix Lua helper binding and WAV render overflow crashes
+- Add adaptive CPU parallel processing policy with safe sequential fallback
+- Add AMD RX 9070/gfx1201 ROCm 7 torch stack selection and verification
+- Fix Demucs checkpoint loading on Torch 2.10 / PyTorch >=2.6
+- Fix stale capabilities after successful Setup Check
+- Improve setup window initial sizing and support-bundle processing summaries
+- Extensively validated on Linux/macOS, including AMD ROCm and NVIDIA CUDA; Windows bootstrap scripts unchanged
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
