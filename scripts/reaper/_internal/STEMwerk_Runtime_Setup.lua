@@ -623,7 +623,25 @@ except Exception as exc:
     sys.exit(4)
 t = core(getattr(torch, "__version__", "0.0.0"))
 tmj, tmn = parse_major_minor(t)
-if tmj > 2 or (tmj == 2 and tmn >= 6):
+hip = getattr(getattr(torch, "version", None), "hip", None)
+cuda_avail = bool(torch.cuda.is_available())
+cuda_count = int(torch.cuda.device_count()) if cuda_avail else 0
+names = []
+if cuda_avail:
+    for i in range(cuda_count):
+        try:
+            names.append(str(torch.cuda.get_device_name(i)))
+        except Exception:
+            pass
+dev_text = "|".join(names).lower()
+allow_rocm7_gfx1201 = (
+    (tmj, tmn) == (2, 10)
+    and hip is not None
+    and cuda_avail
+    and cuda_count > 0
+    and ("rx 9070" in dev_text or "gfx1201" in dev_text)
+)
+if (tmj > 2 or (tmj == 2 and tmn >= 6)) and not allow_rocm7_gfx1201:
     print("torch_too_new:" + t)
     sys.exit(2)
 try:

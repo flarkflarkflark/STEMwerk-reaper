@@ -988,6 +988,31 @@ except Exception:
 
 major, minor = parse_major_minor(torch_ver)
 torch_supported = (major, minor) < (2, 6)
+allow_rocm7_gfx1201 = False
+if not torch_supported:
+    try:
+        hip = getattr(getattr(torch, "version", None), "hip", None)
+        cuda_available = bool(torch.cuda.is_available())
+        cuda_count = int(torch.cuda.device_count()) if cuda_available else 0
+        names = []
+        if cuda_available:
+            for i in range(cuda_count):
+                try:
+                    names.append(str(torch.cuda.get_device_name(i)))
+                except Exception:
+                    pass
+        dev_text = "|".join(names).lower()
+        allow_rocm7_gfx1201 = (
+            (major, minor) == (2, 10)
+            and hip is not None
+            and cuda_available
+            and cuda_count > 0
+            and ("rx 9070" in dev_text or "gfx1201" in dev_text)
+        )
+    except Exception:
+        allow_rocm7_gfx1201 = False
+if allow_rocm7_gfx1201:
+    torch_supported = True
 reason = ""
 if not torch_supported:
     reason = "torch_too_new_for_demucs"

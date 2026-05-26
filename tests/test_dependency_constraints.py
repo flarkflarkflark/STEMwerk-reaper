@@ -45,6 +45,27 @@ def _service_line_torch_runtime_status(torch_version, torchaudio_version="2.5.1"
     }
 
 
+def _rocm_gfx1201_runtime_status(
+    torch_version,
+    torchaudio_version="2.10.0",
+    hip_present=True,
+    cuda_available=True,
+    cuda_count=1,
+    device_text="amd radeon rx 9070|gfx1201",
+):
+    core = str(torch_version).split("+", 1)[0]
+    major, minor = [int(x) for x in core.split(".")[:2]]
+    allow = (
+        (major, minor) == (2, 10)
+        and bool(torchaudio_version)
+        and hip_present
+        and cuda_available
+        and int(cuda_count) > 0
+        and ("rx 9070" in device_text.lower() or "gfx1201" in device_text.lower())
+    )
+    return allow
+
+
 def _core_version(ver):
     return ver.split("+", 1)[0]
 
@@ -500,6 +521,7 @@ def test_linux_bootstrap_gfx1201_prefers_rocm7_stack_not_251_pin():
     assert 'if [ "${ROCM_GFX1201}" -eq 1 ]; then' in script
     assert 'if [ "${ROCM_GFX1201}" -eq 1 ] && [ "${rocm_fail_reason}" = "rocm_wheel_not_found" ]; then' in script
     assert 'rocm_fail_reason="rocm7_stack_unavailable_for_gfx1201"' in script
+    assert 'TORCH_RUNTIME_POLICY="rocm_gfx1201_allow_2_10_rocm7"' in script
 
 
 def test_linux_bootstrap_gfx1201_requires_rx9070_or_gfx1201_device_visibility():
@@ -520,6 +542,8 @@ def test_support_bundle_reports_rocm_selected_stack_and_devices():
     assert 'appendKey(diagnostics, "ROCm detected devices"' in script
     assert 'appendKey(diagnostics, "ROCm selected device"' in script
     assert 'appendKey(diagnostics, "ROCm fallback reason"' in script
+    assert 'appendKey(diagnostics, "ROCm torch policy"' in script
+    assert 'appendKey(diagnostics, "Runtime verify detail"' in script
 
 
 def test_setup_internal_still_flags_real_failures_and_linux_deps_failed():
@@ -617,6 +641,13 @@ def test_service_line_torch_runtime_policy_rejects_missing_torchaudio():
     assert status["reason"] == "torchaudio_missing_for_demucs"
 
 
+def test_rocm_gfx1201_policy_allows_known_rocm7_stack_only_with_expected_signals():
+    assert _rocm_gfx1201_runtime_status("2.10.0", "2.10.0", True, True, 2, "AMD Radeon RX 9070|AMD Radeon 780M Graphics")
+    assert not _rocm_gfx1201_runtime_status("2.10.0", "2.10.0", True, True, 2, "AMD Radeon 780M Graphics")
+    assert not _rocm_gfx1201_runtime_status("2.11.0", "2.11.0", True, True, 2, "AMD Radeon RX 9070")
+    assert not _rocm_gfx1201_runtime_status("2.10.0", "", True, True, 2, "AMD Radeon RX 9070")
+
+
 def test_setup_runtime_drift_capabilities_cannot_report_ok():
     from pathlib import Path
 
@@ -631,6 +662,8 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
     assert 'f:write("TORCHAUDIO_PRESENT="' in setup_internal
     assert 'f:write("RUNTIME_DRIFT_DETECTED="' in setup_internal
     assert 'f:write("RUNTIME_DRIFT_REASON="' in setup_internal
+    assert "allow_rocm7_gfx1201 = (" in setup_internal
+    assert 'and ("rx 9070" in dev_text or "gfx1201" in dev_text)' in setup_internal
     assert 'local tmpPath = tostring(path) .. ".tmp"' in setup_internal
     assert "os.rename(tmpPath, path)" in setup_internal
     assert "runtimeDriftDetected = \"no\"" in setup_internal
@@ -641,6 +674,8 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
     assert 'pythonOk and ffmpegOk and audioOk and runtimeOk' in runtime_setup
     assert 'torchaudio_missing_for_demucs' in runtime_setup
     assert 'major > 2 or (major == 2 and minor >= 6)' in linux_bootstrap
+    assert "allow_rocm7_gfx1201 = (" in linux_bootstrap
+    assert 'and ("rx 9070" in dev_text or "gfx1201" in dev_text)' in linux_bootstrap
     assert 'import torchaudio  # noqa: F401' in linux_bootstrap
     assert 'appendKey(diagnostics, "TORCH_VERSION"' in support_bundle
     assert 'appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED"' in support_bundle

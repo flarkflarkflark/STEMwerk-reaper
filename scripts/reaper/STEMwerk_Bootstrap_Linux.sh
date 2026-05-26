@@ -86,6 +86,8 @@ write_state() {
       [ -n "${ROCM_DETECTED_DEVICES}" ] && echo "ROCM_DETECTED_DEVICES=${ROCM_DETECTED_DEVICES}"
       [ -n "${ROCM_SELECTED_DEVICE}" ] && echo "ROCM_SELECTED_DEVICE=${ROCM_SELECTED_DEVICE}"
       [ -n "${ROCM_FALLBACK_REASON}" ] && echo "ROCM_FALLBACK_REASON=${ROCM_FALLBACK_REASON}"
+      [ -n "${TORCH_RUNTIME_POLICY}" ] && echo "TORCH_RUNTIME_POLICY=${TORCH_RUNTIME_POLICY}"
+      [ -n "${RUNTIME_VERIFY_DETAIL}" ] && echo "RUNTIME_VERIFY_DETAIL=${RUNTIME_VERIFY_DETAIL}"
       echo "AUDIO_SEPARATOR_IMPORT=${AUDIO_SEPARATOR_IMPORT}"
       echo "AUDIO_SEPARATOR_DEPS_COMPLETE=${AUDIO_SEPARATOR_DEPS_COMPLETE}"
       echo "BACKEND_DEPS_COMPLETE=${BACKEND_DEPS_COMPLETE}"
@@ -556,6 +558,8 @@ SELECTED_TORCH_STACK=""
 ROCM_DETECTED_DEVICES=""
 ROCM_SELECTED_DEVICE=""
 ROCM_FALLBACK_REASON=""
+TORCH_RUNTIME_POLICY="service_line_default_torch_lt_2_6"
+RUNTIME_VERIFY_DETAIL=""
 BUILD_TOOLS_MISSING="no"
 AUDIO_SEPARATOR_IMPORT="unknown"
 AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
@@ -1012,6 +1016,7 @@ if [ "${BACKEND}" = "rocm" ]; then
       fi
       if [ "${ROCM_GFX1201}" -eq 1 ]; then
         log_step "Detected gfx1201/RX 9070; trying experimental ROCm 7.x torch indexes first"
+        TORCH_RUNTIME_POLICY="rocm_gfx1201_allow_2_10_rocm7"
         ACTIVE_TORCH_VERSION="${ROCM7_GFX1201_TORCH_VERSION}"
         ACTIVE_TORCHVISION_VERSION="${ROCM7_GFX1201_TORCHVISION_VERSION}"
         ACTIVE_TORCHAUDIO_VERSION="${ROCM7_GFX1201_TORCHAUDIO_VERSION}"
@@ -1022,6 +1027,7 @@ if [ "${BACKEND}" = "rocm" ]; then
             ;;
         esac
       else
+        TORCH_RUNTIME_POLICY="service_line_default_torch_lt_2_6"
         ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
         ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
         ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
@@ -1146,6 +1152,7 @@ EOF
         ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
         ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
         ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
+        TORCH_RUNTIME_POLICY="service_line_default_torch_lt_2_6"
         PROFILE="linux-cpu"
         BACKEND="cpu"
         BACKEND_REASON="${rocm_fail_reason}"
@@ -1474,11 +1481,29 @@ try:
         major, minor = [int(x) for x in ver.split(".")[:2]]
     except Exception:
         major, minor = 999, 999
-    if major > 2 or (major == 2 and minor >= 6):
+    hip = getattr(getattr(torch, "version", None), "hip", None)
+    cuda_available = bool(torch.cuda.is_available())
+    cuda_count = int(torch.cuda.device_count()) if cuda_available else 0
+    names = []
+    if cuda_available:
+        for i in range(cuda_count):
+            try:
+                names.append(str(torch.cuda.get_device_name(i)))
+            except Exception:
+                pass
+    dev_text = "|".join(names).lower()
+    allow_rocm7_gfx1201 = (
+        backend == "rocm"
+        and (major, minor) == (2, 10)
+        and hip is not None
+        and cuda_available
+        and cuda_count > 0
+        and ("rx 9070" in dev_text or "gfx1201" in dev_text)
+    )
+    if (major > 2 or (major == 2 and minor >= 6)) and not allow_rocm7_gfx1201:
         errors.append("torch_too_new_for_demucs:" + ver)
     if backend == "rocm":
-        hip = getattr(getattr(torch, "version", None), "hip", None)
-        if not (hip is not None and torch.cuda.is_available() and int(torch.cuda.device_count()) > 0):
+        if not (hip is not None and cuda_available and cuda_count > 0):
             errors.append("rocm_runtime_probe_failed")
     elif backend == "cuda":
         if not (torch.cuda.is_available() and int(torch.cuda.device_count()) > 0):
@@ -1497,8 +1522,11 @@ PY
 )
   if [ $? -ne 0 ]; then
     log_step "Final runtime probe failed: ${RUNTIME_VERIFY_PROBE}"
+    RUNTIME_VERIFY_DETAIL="${RUNTIME_VERIFY_PROBE}"
     set_status "deps_failed" "runtime_verify_failed"
     RUNTIME_STRICT_OK=0
+  else
+    RUNTIME_VERIFY_DETAIL="ok"
   fi
   if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
     set_status "audio_separator_check_failed" "audio_separator_missing_after_setup"
@@ -1536,7 +1564,23 @@ try:
     hip = getattr(getattr(torch, "version", None), "hip", None)
     cuda_avail = torch.cuda.is_available()
     cuda_cnt = torch.cuda.device_count()
-    ok = (major, minor) < (2, 6)
+    names = []
+    if cuda_avail:
+        for i in range(cuda_cnt):
+            try:
+                names.append(str(torch.cuda.get_device_name(i)))
+            except Exception:
+                pass
+    dev_text = "|".join(names).lower()
+    allow_rocm7_gfx1201 = (
+        backend == "rocm"
+        and (major, minor) == (2, 10)
+        and (hip is not None)
+        and cuda_avail
+        and cuda_cnt > 0
+        and ("rx 9070" in dev_text or "gfx1201" in dev_text)
+    )
+    ok = ((major, minor) < (2, 6)) or allow_rocm7_gfx1201
     try:
         import torchaudio  # noqa: F401
         torchaudio_present = True
