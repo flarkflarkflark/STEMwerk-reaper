@@ -1133,6 +1133,33 @@ def test_audio_separator_process_consumes_managed_ffmpeg_env_and_reports_it():
     assert 'print("STEMWERK_DIAG ffmpeg_path=NOT_FOUND", file=sys.stderr)' in script
 
 
+def test_lua_wav_render_path_guards_unsigned_pack_overflow_and_invalid_samples():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "local function clampSampleFloat(v)" in script
+    assert "if not isFiniteNumber(v) then return 0.0 end" in script
+    assert "if v > 1.0 then return 1.0 end" in script
+    assert "if v < -1.0 then return -1.0 end" in script
+    assert "local function safeUint(name, v, bits)" in script
+    assert "local function safeWritePack(fileHandle, fmt, value, label, bits)" in script
+    assert 'string.pack("<I4", safeRiffBytes' not in script
+    assert 'safeWritePack(f, "<I4", safeRiffBytes, "riff_size", 32)' in script
+    assert 'safeWritePack(f, "<I4", safeDataBytes, "data_size", 32)' in script
+    assert 'parts[i] = string.pack("<f", clampSampleFloat(buf[i] or 0.0))' in script
+    assert "WAV render failed:" in script
+    assert "out of range for uint%d" in script
+
+
+def test_lua_wav_render_failures_log_context_in_item_and_time_selection_paths():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "renderTakeAccessorToWav failed (partial transform)" in script
+    assert "renderTakeAccessorToWav failed (partial default)" in script
+    assert "renderTakeAccessorToWav failed (full item)" in script
+    assert "renderTakeAccessorToWav failed (time selection single item)" in script
+    assert "renderTakeAccessorToWav failed (time selection)" in script
+
+
 def test_linux_managed_diffq_wheel_payload_is_present_and_resolvable():
     scripts_wheel_dir = Path("scripts/reaper/vendor/wheels/linux-x86_64-cp312")
     scripts_wheels = sorted(scripts_wheel_dir.glob("diffq-*-cp312-cp312-linux_x86_64.whl"))

@@ -12486,6 +12486,49 @@ end
 -- Fallback extractor: render audio from REAPER itself (no ffmpeg dependency).
 -- Returns: ok(bool), err(string|nil)
 local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
+    local function isFiniteNumber(v)
+        return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+    end
+    local function clampSampleFloat(v)
+        if not isFiniteNumber(v) then return 0.0 end
+        if v > 1.0 then return 1.0 end
+        if v < -1.0 then return -1.0 end
+        return v
+    end
+    local function safeUint(name, v, bits)
+        bits = bits or 32
+        local max = (bits == 16) and 0xFFFF or 0xFFFFFFFF
+        if not isFiniteNumber(v) then
+            return nil, string.format("%s invalid (non-finite)", tostring(name))
+        end
+        local iv = math.floor(v + 0.0)
+        if iv < 0 or iv > max then
+            return nil, string.format("%s out of range for uint%d (%s)", tostring(name), bits, tostring(iv))
+        end
+        return iv, nil
+    end
+    local function safeWritePack(fileHandle, fmt, value, label, bits)
+        local safeValue, safeErr = safeUint(label, value, bits)
+        if not safeValue then
+            return false, safeErr
+        end
+        local okPack, packed = pcall(string.pack, fmt, safeValue)
+        if not okPack then
+            return false, string.format("%s pack failed (%s)", tostring(label), tostring(packed))
+        end
+        local okWrite = fileHandle:write(packed)
+        if not okWrite then
+            return false, string.format("%s write failed", tostring(label))
+        end
+        return true, nil
+    end
+    local function closeWithError(fileHandle, accHandle, msg)
+        if accHandle then pcall(reaper.DestroyAudioAccessor, accHandle) end
+        if fileHandle then pcall(function() fileHandle:close() end) end
+        pcall(os.remove, outputPath)
+        return false, "WAV render failed: " .. tostring(msg)
+    end
+
     if not (reaper and reaper.CreateTakeAudioAccessor and reaper.GetAudioAccessorSamples and reaper.DestroyAudioAccessor) then
         return false, "REAPER AudioAccessor API not available"
     end
@@ -12565,21 +12608,47 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
     local dataSizePos = nil
     local riffSizePos = nil
 
-    f:write("RIFF")
+    if not f:write("RIFF") then
+        return closeWithError(f, acc, "failed writing RIFF header")
+    end
     riffSizePos = f:seek()  -- position after 'RIFF'
-    f:write(string.pack("<I4", 0)) -- placeholder riff size
-    f:write("WAVE")
-    f:write("fmt ")
-    f:write(string.pack("<I4", 16)) -- fmt chunk size
-    f:write(string.pack("<I2", 3))  -- audio format 3 = IEEE float
-    f:write(string.pack("<I2", ch))
-    f:write(string.pack("<I4", sr))
-    f:write(string.pack("<I4", byteRate))
-    f:write(string.pack("<I2", blockAlign))
-    f:write(string.pack("<I2", 32)) -- bits per sample
-    f:write("data")
+    if not riffSizePos then
+        return closeWithError(f, acc, "failed seeking RIFF size position")
+    end
+    do
+        local ok, err = safeWritePack(f, "<I4", 0, "riff_size_placeholder", 32)
+        if not ok then return closeWithError(f, acc, err) end
+    end
+    if not f:write("WAVE") or not f:write("fmt ") then
+        return closeWithError(f, acc, "failed writing WAVE/fmt header")
+    end
+    do
+        local ok, err = safeWritePack(f, "<I4", 16, "fmt_chunk_size", 32)
+        if not ok then return closeWithError(f, acc, err) end
+        ok, err = safeWritePack(f, "<I2", 3, "audio_format", 16)
+        if not ok then return closeWithError(f, acc, err) end
+        ok, err = safeWritePack(f, "<I2", ch, "channel_count", 16)
+        if not ok then return closeWithError(f, acc, err) end
+        ok, err = safeWritePack(f, "<I4", sr, "sample_rate", 32)
+        if not ok then return closeWithError(f, acc, err) end
+        ok, err = safeWritePack(f, "<I4", byteRate, "byte_rate", 32)
+        if not ok then return closeWithError(f, acc, err) end
+        ok, err = safeWritePack(f, "<I2", blockAlign, "block_align", 16)
+        if not ok then return closeWithError(f, acc, err) end
+        ok, err = safeWritePack(f, "<I2", 32, "bits_per_sample", 16)
+        if not ok then return closeWithError(f, acc, err) end
+    end
+    if not f:write("data") then
+        return closeWithError(f, acc, "failed writing data header")
+    end
     dataSizePos = f:seek()
-    f:write(string.pack("<I4", 0)) -- placeholder data size
+    if not dataSizePos then
+        return closeWithError(f, acc, "failed seeking data size position")
+    end
+    do
+        local ok, err = safeWritePack(f, "<I4", 0, "data_size_placeholder", 32)
+        if not ok then return closeWithError(f, acc, err) end
+    end
 
     local blockFrames = 8192
     local buf = reaper.new_array(blockFrames * ch)
@@ -12599,7 +12668,7 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
         -- Write interleaved float32 samples
         local parts = {}
         for i = 1, need * ch do
-            parts[i] = string.pack("<f", buf[i] or 0.0)
+            parts[i] = string.pack("<f", clampSampleFloat(buf[i] or 0.0))
         end
         f:write(table.concat(parts))
         framesWritten = framesWritten + need
@@ -12611,12 +12680,30 @@ local function renderTakeAccessorToWav(take, startTime, endTime, outputPath)
     -- Finalize header sizes
     local dataBytes = framesWritten * ch * bytesPerSample
     local fileEnd = f:seek("end")
+    if not fileEnd then
+        return closeWithError(f, nil, "failed seeking file end for WAV size finalization")
+    end
+    local riffBytes = fileEnd - 8
+    local safeDataBytes, dataErr = safeUint("data_size", dataBytes, 32)
+    if not safeDataBytes then
+        return closeWithError(f, nil, dataErr)
+    end
+    local safeRiffBytes, riffErr = safeUint("riff_size", riffBytes, 32)
+    if not safeRiffBytes then
+        return closeWithError(f, nil, riffErr)
+    end
     -- data chunk size
     f:seek("set", dataSizePos)
-    f:write(string.pack("<I4", dataBytes))
+    do
+        local ok, err = safeWritePack(f, "<I4", safeDataBytes, "data_size", 32)
+        if not ok then return closeWithError(f, nil, err) end
+    end
     -- riff chunk size = fileSize - 8
     f:seek("set", riffSizePos)
-    f:write(string.pack("<I4", fileEnd - 8))
+    do
+        local ok, err = safeWritePack(f, "<I4", safeRiffBytes, "riff_size", 32)
+        if not ok then return closeWithError(f, nil, err) end
+    end
     f:close()
 
     if dataBytes <= 0 then
@@ -12722,6 +12809,16 @@ local function renderItemToWav(item, outputPath, explicitRenderStart, explicitRe
             if accOk and fileSizeBytes(outputPath) > 1024 then
                 return outputPath, nil, renderStart, renderEnd - renderStart
             end
+            if not accOk then
+                debugLog(string.format(
+                    "renderTakeAccessorToWav failed (partial transform): item=%s take=%s start=%.6f end=%.6f err=%s",
+                    tostring(item),
+                    tostring(take),
+                    tonumber(renderStart) or -1,
+                    tonumber(renderEnd) or -1,
+                    tostring(accErr)
+                ))
+            end
             if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
                 os.remove(outputPath)
             end
@@ -12730,6 +12827,16 @@ local function renderItemToWav(item, outputPath, explicitRenderStart, explicitRe
             local accOk, accErr = renderTakeAccessorToWav(take, renderStart, renderEnd, outputPath)
             if accOk and fileSizeBytes(outputPath) > 1024 then
                 return outputPath, nil, renderStart, renderEnd - renderStart
+            end
+            if not accOk then
+                debugLog(string.format(
+                    "renderTakeAccessorToWav failed (partial default): item=%s take=%s start=%.6f end=%.6f err=%s",
+                    tostring(item),
+                    tostring(take),
+                    tonumber(renderStart) or -1,
+                    tonumber(renderEnd) or -1,
+                    tostring(accErr)
+                ))
             end
             if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
                 os.remove(outputPath)
@@ -12750,6 +12857,16 @@ local function renderItemToWav(item, outputPath, explicitRenderStart, explicitRe
     local accOk, accErr = renderTakeAccessorToWav(take, renderStart, renderEnd, outputPath)
     if accOk and fileSizeBytes(outputPath) > 1024 then
         return outputPath, nil, renderStart, renderEnd - renderStart
+    end
+    if not accOk then
+        debugLog(string.format(
+            "renderTakeAccessorToWav failed (full item): item=%s take=%s start=%.6f end=%.6f err=%s",
+            tostring(item),
+            tostring(take),
+            tonumber(renderStart) or -1,
+            tonumber(renderEnd) or -1,
+            tostring(accErr)
+        ))
     end
     if fileSizeBytes(outputPath) > -1 and fileSizeBytes(outputPath) <= 1024 then
         os.remove(outputPath)
@@ -12827,6 +12944,14 @@ local function renderTimeSelectionToWav(outputPath)
         if accOk then
             return outputPath, nil, foundItem
         end
+        debugLog(string.format(
+            "renderTakeAccessorToWav failed (time selection single item): item=%s take=%s start=%.6f end=%.6f err=%s",
+            tostring(selectedItems[1].item),
+            tostring(take),
+            tonumber(renderStart) or -1,
+            tonumber(renderEnd) or -1,
+            tostring(accErr)
+        ))
         return nil, "Failed to extract audio (ffmpeg produced empty output). See: " .. tostring(ffmpegLog) .. (accErr and ("\nAudioAccessor: " .. tostring(accErr)) or ""), nil
     end
 
@@ -12885,6 +13010,14 @@ local function renderTimeSelectionToWav(outputPath)
     if accOk then
         return outputPath, nil, foundItem
     end
+    debugLog(string.format(
+        "renderTakeAccessorToWav failed (time selection): item=%s take=%s start=%.6f end=%.6f err=%s",
+        tostring(foundItem),
+        tostring(take),
+        tonumber(renderStart) or -1,
+        tonumber(renderEnd) or -1,
+        tostring(accErr)
+    ))
     return nil, "Failed to extract audio (ffmpeg produced empty output). See: " .. tostring(ffmpegLog) .. (accErr and ("\nAudioAccessor: " .. tostring(accErr)) or ""), nil
 end
 
