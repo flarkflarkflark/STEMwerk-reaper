@@ -2,24 +2,18 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.3" author="flarkAUDIO" time="1779769355">
+      <version name="2.2.2.2.4" author="flarkAUDIO" time="1779797846">
         <changelog><![CDATA[
-- Harden Linux/macOS managed Python setup and runtime verification
-- Add Linux managed diffq wheel and managed FFmpeg fallback/wrapper
-- Fix macOS/Linux CPU fallback status classification
-- Fix Lua helper binding and WAV render overflow crashes
-- Add adaptive CPU parallel processing policy with safe sequential fallback
-- Add AMD RX 9070/gfx1201 ROCm 7 torch stack selection and verification
-- Fix Demucs checkpoint loading on Torch 2.10 / PyTorch >=2.6
-- Fix stale capabilities after successful Setup Check
-- Improve setup window initial sizing and support-bundle processing summaries
-- Extensively validated on Linux/macOS, including AMD ROCm and NVIDIA CUDA; Windows bootstrap scripts unchanged
+- Improve model download timeout diagnostics with clear support-facing guidance
+- Improve corrupted/checksum model-cache diagnostics and recovery hints
+- Surface model failure error class/hint and model URL/path in support bundles when available
+- Ensure user_cancel is not misclassified as a model-download failure
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
-        <source file="../STEMwerk-SETUP.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
+        <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
         <source file="../STEMwerk_Save_Support_Bundle.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Save_Support_Bundle.lua</source>
         <source file="../STEMwerk_AI_Separate.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_AI_Separate.lua</source>
-        <source file="../STEMwerk_Setup_Toolbar.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
+        <source file="../STEMwerk_Setup_Toolbar.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
         <source file="../STEMwerk_Explode_Takes.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Explode_Takes.lua</source>
         <source file="../STEMwerk_All_Stems.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_All_Stems.lua</source>
         <source file="../STEMwerk_Vocals_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Vocals_Only.lua</source>

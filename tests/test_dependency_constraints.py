@@ -1486,3 +1486,24 @@ def test_setup_cannot_report_runtime_ok_after_venv_create_failed():
     assert 'set_status "venv_failed" "${VENV_CREATE_REASON:-venv_create_failed}"' in script
     assert 'if [ "${STATUS}" = "ok" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then' in script
     assert script.index('set_status "venv_failed" "${VENV_CREATE_REASON:-venv_create_failed}"') < script.index("Upgrading pip/setuptools/wheel")
+
+
+def test_reapack_registers_expected_user_actions_and_keeps_internal_files_non_actions():
+    index = Path("index.xml").read_text()
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    setup_script = Path("scripts/reaper/STEMwerk-SETUP.lua").read_text()
+    toolbar_script = Path("scripts/reaper/STEMwerk_Setup_Toolbar.lua").read_text()
+
+    assert '<source file="../STEMwerk.lua" type="script" main="main">' in index
+    assert '<source file="../STEMwerk-SETUP.lua" type="script" main="main">' in index
+    assert '<source file="../STEMwerk_Setup_Toolbar.lua" type="script" main="main">' in index
+
+    assert "-- @description STEMwerk - AI Stem Separation" in main_script
+    assert "-- @description STEMwerk - Setup" in setup_script
+    assert "-- @description STEMwerk - Setup Toolbar Actions" in toolbar_script
+
+    assert '<source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">' in index
+    assert '<source file="../audio_separator_process.py" type="file">' in index
+    assert '<source file="../STEMwerk_Bootstrap_Linux.sh" type="file">' in index
+    assert '<source file="../STEMwerk_Bootstrap_macOS.sh" type="file">' in index
+    assert '<source file="../STEMwerk_Bootstrap_Windows.ps1" type="file">' in index
