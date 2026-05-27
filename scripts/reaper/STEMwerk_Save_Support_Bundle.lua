@@ -1,6 +1,6 @@
 -- @description Stemwerk: Save Support Bundle
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.5
+-- @version 2.2.2.2.6
 -- @changelog
 --   Collects a read-only STEMwerk support bundle with runtime diagnostics, logs, and temp-folder inventory.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
