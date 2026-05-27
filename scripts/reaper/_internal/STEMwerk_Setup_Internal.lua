@@ -3322,6 +3322,35 @@ local function openPath(path)
     end
 end
 
+function openCapabilitiesPath(path)
+    local capPath = trim(path or "")
+    if capPath == "" then
+        msgBox("STEMwerk Setup", "Capabilities path is empty.", 0)
+        return false
+    end
+    if not fileExists(capPath) then
+        msgBox("STEMwerk Setup", "Capabilities file not found:\n\n" .. tostring(capPath), 0)
+        return false
+    end
+    if OS == "macOS" then
+        if tryExec("open -R " .. quoteArg(capPath) .. " >/dev/null 2>&1 &") then
+            return true
+        end
+        local capDir = capPath:match("^(.*)[/\\][^/\\]+$") or ""
+        if capDir ~= "" and tryExec("open " .. quoteArg(capDir) .. " >/dev/null 2>&1 &") then
+            return true
+        end
+        if reaper and reaper.CF_ShellExecute then
+            reaper.CF_ShellExecute(capPath)
+            return true
+        end
+        msgBox("STEMwerk Setup", "Could not open/reveal capabilities file:\n\n" .. tostring(capPath), 0)
+        return false
+    end
+    openPath(capPath)
+    return true
+end
+
 local function isWindowsPythonAliasPath(path)
     local p = trim(path):lower()
     return p == "python" or p == "python.exe" or p == "py" or p == "py.exe"
@@ -4351,7 +4380,7 @@ local function linuxSetupTick()
                     elseif b.action == "open_log" then
                         openPath(LINUX_SETUP.logFile)
                     elseif b.action == "open_cap" then
-                        openPath(LINUX_SETUP.capFile)
+                        openCapabilitiesPath(LINUX_SETUP.capFile)
                     elseif b.action == "open_action_list" then
                         openActionList()
                     elseif b.action == "open_help" then

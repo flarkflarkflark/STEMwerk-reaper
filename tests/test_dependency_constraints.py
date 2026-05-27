@@ -821,6 +821,15 @@ def test_verify_only_intel_macos_cpu_fallback_does_not_hide_real_missing_torch_f
     assert "and not hasHardImportFailures" in setup_internal
 
 
+def test_setup_open_capabilities_uses_dedicated_reveal_helper_and_safe_quoting():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "function openCapabilitiesPath(path)" in setup_internal
+    assert 'tryExec("open -R " .. quoteArg(capPath) .. " >/dev/null 2>&1 &")' in setup_internal
+    assert 'msgBox("STEMwerk Setup", "Capabilities file not found:\\n\\n" .. tostring(capPath), 0)' in setup_internal
+    assert "openCapabilitiesPath(LINUX_SETUP.capFile)" in setup_internal
+
+
 def test_linux_bootstrap_uses_managed_python_before_unsupported_system_python():
     from pathlib import Path
 
