@@ -4953,7 +4953,7 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
     reaper.defer(linuxSetupTick)
 end
 
-function reconcileCheckVerification(state, verification, envJson, deviceNames, backend)
+function reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = {}
     for _, e in ipairs(verification.errors or {}) do
         adjustedErrors[#adjustedErrors + 1] = e
@@ -4964,6 +4964,33 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
             if e ~= errKey then kept[#kept + 1] = e end
         end
         adjustedErrors = kept
+    end
+    local function hasError(errKey)
+        for _, e in ipairs(adjustedErrors) do
+            if e == errKey then return true end
+        end
+        return false
+    end
+    local function parseMajorMinor(ver)
+        local maj, min = tostring(ver or ""):match("^(%d+)%.(%d+)")
+        if not maj or not min then return nil, nil end
+        return tonumber(maj), tonumber(min)
+    end
+    local function torchVersionPinnedCompatible(ver)
+        local maj, min = parseMajorMinor(ver)
+        if not maj or not min then return false end
+        if maj < 2 then return true end
+        if maj > 2 then return false end
+        return min < 6
+    end
+    local function hasBootstrapRuntimeVerificationPass(path)
+        if not path or path == "" or not fileExists(path) then return false end
+        local f = io.open(path, "r")
+        if not f then return false end
+        local text = f:read("*a") or ""
+        f:close()
+        return text:find("Runtime verification passed.", 1, true) ~= nil
+            and text:find("Pinned runtime assertion passed", 1, true) ~= nil
     end
     local envTorchVersion = firstNonEmpty(envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
     local envTorchaudioVersion = firstNonEmpty(envJsonValue(envJson, "torchaudio_version"))
@@ -4988,6 +5015,44 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         removeError("torch_runtime_probe_failed")
         removeError("torchaudio_missing_for_demucs")
     end
+    local torchVersion = firstNonEmpty(verification.torchVersion, envTorchVersion)
+    local torchaudioVersion = firstNonEmpty(verification.torchaudioVersion, envTorchaudioVersion)
+    local bootstrapVerified = (
+        trim(state.STATUS or "") == "ok"
+        and hasBootstrapRuntimeVerificationPass(logFile)
+    )
+    local mpsInformational = (
+        trim(backendReason or "") == ""
+        or trim(backendReason or "") == "mps_unavailable"
+    )
+    local hasHardImportFailures = (
+        hasError("audio_separator_missing")
+        or hasError("stemwerk_core_missing")
+        or hasError("python_missing")
+        or hasError("python_unusable")
+        or hasError("python_unsupported")
+        or hasError("ffmpeg_missing")
+        or hasError("ffmpeg_unusable")
+    )
+    local canAcceptMacIntelCpuFallback = (
+        OS == "macOS"
+        and MAC_ARCH == "x86_64"
+        and backend == "cpu"
+        and mpsInformational
+        and verification.pythonOk
+        and verification.ffmpegOk
+        and not hasHardImportFailures
+        and torchVersionPinnedCompatible(torchVersion)
+        and torchaudioVersion ~= ""
+    )
+    if canAcceptMacIntelCpuFallback or bootstrapVerified then
+        removeError("torch_too_new_for_demucs")
+        removeError("torch_runtime_unsupported")
+        removeError("torch_runtime_probe_failed")
+        if torchaudioVersion ~= "" then
+            removeError("torchaudio_missing_for_demucs")
+        end
+    end
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0
     local result = {
         adjustedErrors = adjustedErrors,
@@ -4995,8 +5060,8 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         runtimeDriftDetected = verifiedRuntimeOk and "no" or verification.runtimeDriftDetected,
         runtimeDriftReason = verifiedRuntimeOk and "" or verification.runtimeDriftReason,
     }
-    result.torchVersion = firstNonEmpty(verification.torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
-    result.torchaudioVersion = firstNonEmpty(verification.torchaudioVersion, envJsonValue(envJson, "torchaudio_version"))
+    result.torchVersion = firstNonEmpty(torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
+    result.torchaudioVersion = firstNonEmpty(torchaudioVersion, envJsonValue(envJson, "torchaudio_version"))
     result.torchvisionVersion = firstNonEmpty(state.TORCHVISION_VERSION, envJsonValue(envJson, "torchvision_version"))
     result.numpyVersion = firstNonEmpty(state.NUMPY_VERSION, envJsonValue(envJson, "numpy_version"))
     result.numbaVersion = firstNonEmpty(state.NUMBA_VERSION, envJsonValue(envJson, "numba_version"))
@@ -5072,7 +5137,7 @@ verifyExistingSetup = function(runtime, separatorScript)
         backendReason = probeErr
     end
     local profile = profileForBackend(backend)
-    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend)
+    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = checkProbe.adjustedErrors
     local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then
