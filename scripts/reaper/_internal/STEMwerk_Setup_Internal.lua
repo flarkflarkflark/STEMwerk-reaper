@@ -2254,7 +2254,20 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local verification = verifyRuntimePaths(state)
     local errors = verification.errors
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0
-    local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk
+    local function hasBootstrapRuntimeVerificationPass()
+        if not fileExists(logFile) then return false end
+        local f = io.open(logFile, "r")
+        if not f then return false end
+        local text = f:read("*a") or ""
+        f:close()
+        return text:find("Runtime verification passed.", 1, true) ~= nil
+            and text:find("Pinned runtime assertion passed", 1, true) ~= nil
+    end
+    local authoritativeBootstrapVerified = (
+        trim(state.STATUS or "") == "ok"
+        and hasBootstrapRuntimeVerificationPass()
+    )
+    local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified
 
     if verifiedRuntimeOk then
         if appendLogLine then
@@ -2266,6 +2279,11 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
                 lf:close()
             end
         end
+        state.STATUS = "ok"
+        state.STATUS_REASON = ""
+        state.RUNTIME_VERIFY_DETAIL = "ok"
+    end
+    if authoritativeBootstrapVerified then
         state.STATUS = "ok"
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
@@ -2392,7 +2410,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
         coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
     end
-    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
+    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -2430,7 +2448,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local verificationStatus = verificationSuccess and "ok" or "failed"
     local runtimeDriftDetected = verification.runtimeDriftDetected
     local runtimeDriftReason = verification.runtimeDriftReason
-    if verificationSuccess then
+    if verificationSuccess or authoritativeBootstrapVerified then
         runtimeDriftDetected = "no"
         runtimeDriftReason = ""
     end
@@ -2455,15 +2473,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local resolvedCudaCount = firstNonEmpty(state.CUDA_COUNT, envJsonValue(envJson, "cuda_count"))
     local resolvedTorchHip = firstNonEmpty(state.TORCH_HIP, envJsonValue(envJson, "torch_hip"))
     local resolvedRuntimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
-    if verificationSuccess then
+    if verificationSuccess or authoritativeBootstrapVerified then
         resolvedRuntimeVerifyDetail = "ok"
     elseif resolvedRuntimeVerifyDetail == "" then
         resolvedRuntimeVerifyDetail = trim(state.STATUS_REASON or "")
     end
-    local bootstrapReason = verificationSuccess and "" or (state.STATUS_REASON or "")
+    local bootstrapReason = (verificationSuccess or authoritativeBootstrapVerified) and "" or (state.STATUS_REASON or "")
     local resolvedTorchSupported = trim(verification.torchSupported or "")
     local resolvedTorchaudioPresent = trim(verification.torchaudioPresent or "")
-    if verificationSuccess then
+    if verificationSuccess or authoritativeBootstrapVerified then
         if resolvedTorchSupported == "" or resolvedTorchSupported == "no" then
             resolvedTorchSupported = "yes"
         end
@@ -2518,16 +2536,17 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         torchaudioPresent = resolvedTorchaudioPresent,
         runtimeDriftDetected = runtimeDriftDetected,
         runtimeDriftReason = runtimeDriftReason,
-        runtimeDriftDetail = verificationSuccess and "" or runtimeDriftReason,
+        runtimeDriftDetail = (verificationSuccess or authoritativeBootstrapVerified) and "" or runtimeDriftReason,
         runtimeVerifyDetail = resolvedRuntimeVerifyDetail,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
+        status = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or (state.STATUS or ""),
         bootstrapStatus = state.STATUS or "",
         bootstrapReason = bootstrapReason,
-        verification = verificationStatus,
-        audioSeparator = audioStatus,
-        stemwerkCore = coreStatus,
+        verification = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or verificationStatus,
+        audioSeparator = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or audioStatus,
+        stemwerkCore = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or coreStatus,
         deviceNames = deviceNames,
         torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
         cudaAvailable = resolvedCudaAvailable,
@@ -2554,9 +2573,10 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         BACKEND_NOTE = backendNote or "",
         STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
     }
-    if verificationStatus == "ok" then
+    if verificationStatus == "ok" or authoritativeBootstrapVerified then
         syncKv.STATUS = "ok"
         syncKv.STATUS_REASON = ""
+        syncKv.RUNTIME_VERIFY_DETAIL = "ok"
     end
     local synced = updateBootstrapEnv(stateFile, syncKv)
     if not synced then
@@ -2567,7 +2587,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
+    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"

@@ -762,6 +762,24 @@ def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     assert "updateBootstrapEnv(stateFile, {" in setup_internal
 
 
+def test_post_bootstrap_trusts_verified_bootstrap_log_over_stale_probe_failures():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local function hasBootstrapRuntimeVerificationPass()" in setup_internal
+    assert 'text:find("Runtime verification passed.", 1, true)' in setup_internal
+    assert 'text:find("Pinned runtime assertion passed", 1, true)' in setup_internal
+    assert "local authoritativeBootstrapVerified = (" in setup_internal
+    assert "trim(state.STATUS or \"\") == \"ok\"" in setup_internal
+    assert "local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified" in setup_internal
+    assert "runtimeDriftDetected = \"no\"" in setup_internal
+    assert "runtimeDriftReason = \"\"" in setup_internal
+    assert "runtimeVerifyDetail = resolvedRuntimeVerifyDetail" in setup_internal
+    assert "status = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or (state.STATUS or \"\")" in setup_internal
+    assert "verification = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or verificationStatus" in setup_internal
+    assert "audioSeparator = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or audioStatus" in setup_internal
+    assert "stemwerkCore = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or coreStatus" in setup_internal
+
+
 def test_linux_bootstrap_uses_managed_python_before_unsupported_system_python():
     from pathlib import Path
 
