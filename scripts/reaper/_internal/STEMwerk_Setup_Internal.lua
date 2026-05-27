@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.5
+-- @version 2.2.2.2.6
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -2254,7 +2254,20 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local verification = verifyRuntimePaths(state)
     local errors = verification.errors
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0
-    local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk
+    local function hasBootstrapRuntimeVerificationPass()
+        if not fileExists(logFile) then return false end
+        local f = io.open(logFile, "r")
+        if not f then return false end
+        local text = f:read("*a") or ""
+        f:close()
+        return text:find("Runtime verification passed.", 1, true) ~= nil
+            and text:find("Pinned runtime assertion passed", 1, true) ~= nil
+    end
+    local authoritativeBootstrapVerified = (
+        trim(state.STATUS or "") == "ok"
+        and hasBootstrapRuntimeVerificationPass()
+    )
+    local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified
 
     if verifiedRuntimeOk then
         if appendLogLine then
@@ -2266,6 +2279,11 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
                 lf:close()
             end
         end
+        state.STATUS = "ok"
+        state.STATUS_REASON = ""
+        state.RUNTIME_VERIFY_DETAIL = "ok"
+    end
+    if authoritativeBootstrapVerified then
         state.STATUS = "ok"
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
@@ -2392,7 +2410,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
         coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
     end
-    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
+    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -2430,7 +2448,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local verificationStatus = verificationSuccess and "ok" or "failed"
     local runtimeDriftDetected = verification.runtimeDriftDetected
     local runtimeDriftReason = verification.runtimeDriftReason
-    if verificationSuccess then
+    if verificationSuccess or authoritativeBootstrapVerified then
         runtimeDriftDetected = "no"
         runtimeDriftReason = ""
     end
@@ -2455,15 +2473,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local resolvedCudaCount = firstNonEmpty(state.CUDA_COUNT, envJsonValue(envJson, "cuda_count"))
     local resolvedTorchHip = firstNonEmpty(state.TORCH_HIP, envJsonValue(envJson, "torch_hip"))
     local resolvedRuntimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
-    if verificationSuccess then
+    if verificationSuccess or authoritativeBootstrapVerified then
         resolvedRuntimeVerifyDetail = "ok"
     elseif resolvedRuntimeVerifyDetail == "" then
         resolvedRuntimeVerifyDetail = trim(state.STATUS_REASON or "")
     end
-    local bootstrapReason = verificationSuccess and "" or (state.STATUS_REASON or "")
+    local bootstrapReason = (verificationSuccess or authoritativeBootstrapVerified) and "" or (state.STATUS_REASON or "")
     local resolvedTorchSupported = trim(verification.torchSupported or "")
     local resolvedTorchaudioPresent = trim(verification.torchaudioPresent or "")
-    if verificationSuccess then
+    if verificationSuccess or authoritativeBootstrapVerified then
         if resolvedTorchSupported == "" or resolvedTorchSupported == "no" then
             resolvedTorchSupported = "yes"
         end
@@ -2518,16 +2536,17 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         torchaudioPresent = resolvedTorchaudioPresent,
         runtimeDriftDetected = runtimeDriftDetected,
         runtimeDriftReason = runtimeDriftReason,
-        runtimeDriftDetail = verificationSuccess and "" or runtimeDriftReason,
+        runtimeDriftDetail = (verificationSuccess or authoritativeBootstrapVerified) and "" or runtimeDriftReason,
         runtimeVerifyDetail = resolvedRuntimeVerifyDetail,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
+        status = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or (state.STATUS or ""),
         bootstrapStatus = state.STATUS or "",
         bootstrapReason = bootstrapReason,
-        verification = verificationStatus,
-        audioSeparator = audioStatus,
-        stemwerkCore = coreStatus,
+        verification = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or verificationStatus,
+        audioSeparator = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or audioStatus,
+        stemwerkCore = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or coreStatus,
         deviceNames = deviceNames,
         torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
         cudaAvailable = resolvedCudaAvailable,
@@ -2554,9 +2573,10 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         BACKEND_NOTE = backendNote or "",
         STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
     }
-    if verificationStatus == "ok" then
+    if verificationStatus == "ok" or authoritativeBootstrapVerified then
         syncKv.STATUS = "ok"
         syncKv.STATUS_REASON = ""
+        syncKv.RUNTIME_VERIFY_DETAIL = "ok"
     end
     local synced = updateBootstrapEnv(stateFile, syncKv)
     if not synced then
@@ -2567,7 +2587,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and #errors == 0)
+    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -3300,6 +3320,35 @@ local function openPath(path)
     if OS == "Linux" then
         tryExec("xdg-open " .. quoteArg(path) .. " >/dev/null 2>&1 &")
     end
+end
+
+function openCapabilitiesPath(path)
+    local capPath = trim(path or "")
+    if capPath == "" then
+        msgBox("STEMwerk Setup", "Capabilities path is empty.", 0)
+        return false
+    end
+    if not fileExists(capPath) then
+        msgBox("STEMwerk Setup", "Capabilities file not found:\n\n" .. tostring(capPath), 0)
+        return false
+    end
+    if OS == "macOS" then
+        if tryExec("open -R " .. quoteArg(capPath) .. " >/dev/null 2>&1 &") then
+            return true
+        end
+        local capDir = capPath:match("^(.*)[/\\][^/\\]+$") or ""
+        if capDir ~= "" and tryExec("open " .. quoteArg(capDir) .. " >/dev/null 2>&1 &") then
+            return true
+        end
+        if reaper and reaper.CF_ShellExecute then
+            reaper.CF_ShellExecute(capPath)
+            return true
+        end
+        msgBox("STEMwerk Setup", "Could not open/reveal capabilities file:\n\n" .. tostring(capPath), 0)
+        return false
+    end
+    openPath(capPath)
+    return true
 end
 
 local function isWindowsPythonAliasPath(path)
@@ -4331,7 +4380,7 @@ local function linuxSetupTick()
                     elseif b.action == "open_log" then
                         openPath(LINUX_SETUP.logFile)
                     elseif b.action == "open_cap" then
-                        openPath(LINUX_SETUP.capFile)
+                        openCapabilitiesPath(LINUX_SETUP.capFile)
                     elseif b.action == "open_action_list" then
                         openActionList()
                     elseif b.action == "open_help" then
@@ -4933,7 +4982,7 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
     reaper.defer(linuxSetupTick)
 end
 
-function reconcileCheckVerification(state, verification, envJson, deviceNames, backend)
+function reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = {}
     for _, e in ipairs(verification.errors or {}) do
         adjustedErrors[#adjustedErrors + 1] = e
@@ -4944,6 +4993,33 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
             if e ~= errKey then kept[#kept + 1] = e end
         end
         adjustedErrors = kept
+    end
+    local function hasError(errKey)
+        for _, e in ipairs(adjustedErrors) do
+            if e == errKey then return true end
+        end
+        return false
+    end
+    local function parseMajorMinor(ver)
+        local maj, min = tostring(ver or ""):match("^(%d+)%.(%d+)")
+        if not maj or not min then return nil, nil end
+        return tonumber(maj), tonumber(min)
+    end
+    local function torchVersionPinnedCompatible(ver)
+        local maj, min = parseMajorMinor(ver)
+        if not maj or not min then return false end
+        if maj < 2 then return true end
+        if maj > 2 then return false end
+        return min < 6
+    end
+    local function hasBootstrapRuntimeVerificationPass(path)
+        if not path or path == "" or not fileExists(path) then return false end
+        local f = io.open(path, "r")
+        if not f then return false end
+        local text = f:read("*a") or ""
+        f:close()
+        return text:find("Runtime verification passed.", 1, true) ~= nil
+            and text:find("Pinned runtime assertion passed", 1, true) ~= nil
     end
     local envTorchVersion = firstNonEmpty(envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
     local envTorchaudioVersion = firstNonEmpty(envJsonValue(envJson, "torchaudio_version"))
@@ -4968,6 +5044,44 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         removeError("torch_runtime_probe_failed")
         removeError("torchaudio_missing_for_demucs")
     end
+    local torchVersion = firstNonEmpty(verification.torchVersion, envTorchVersion)
+    local torchaudioVersion = firstNonEmpty(verification.torchaudioVersion, envTorchaudioVersion)
+    local bootstrapVerified = (
+        trim(state.STATUS or "") == "ok"
+        and hasBootstrapRuntimeVerificationPass(logFile)
+    )
+    local mpsInformational = (
+        trim(backendReason or "") == ""
+        or trim(backendReason or "") == "mps_unavailable"
+    )
+    local hasHardImportFailures = (
+        hasError("audio_separator_missing")
+        or hasError("stemwerk_core_missing")
+        or hasError("python_missing")
+        or hasError("python_unusable")
+        or hasError("python_unsupported")
+        or hasError("ffmpeg_missing")
+        or hasError("ffmpeg_unusable")
+    )
+    local canAcceptMacIntelCpuFallback = (
+        OS == "macOS"
+        and MAC_ARCH == "x86_64"
+        and backend == "cpu"
+        and mpsInformational
+        and verification.pythonOk
+        and verification.ffmpegOk
+        and not hasHardImportFailures
+        and torchVersionPinnedCompatible(torchVersion)
+        and torchaudioVersion ~= ""
+    )
+    if canAcceptMacIntelCpuFallback or bootstrapVerified then
+        removeError("torch_too_new_for_demucs")
+        removeError("torch_runtime_unsupported")
+        removeError("torch_runtime_probe_failed")
+        if torchaudioVersion ~= "" then
+            removeError("torchaudio_missing_for_demucs")
+        end
+    end
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0
     local result = {
         adjustedErrors = adjustedErrors,
@@ -4975,8 +5089,8 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         runtimeDriftDetected = verifiedRuntimeOk and "no" or verification.runtimeDriftDetected,
         runtimeDriftReason = verifiedRuntimeOk and "" or verification.runtimeDriftReason,
     }
-    result.torchVersion = firstNonEmpty(verification.torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
-    result.torchaudioVersion = firstNonEmpty(verification.torchaudioVersion, envJsonValue(envJson, "torchaudio_version"))
+    result.torchVersion = firstNonEmpty(torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
+    result.torchaudioVersion = firstNonEmpty(torchaudioVersion, envJsonValue(envJson, "torchaudio_version"))
     result.torchvisionVersion = firstNonEmpty(state.TORCHVISION_VERSION, envJsonValue(envJson, "torchvision_version"))
     result.numpyVersion = firstNonEmpty(state.NUMPY_VERSION, envJsonValue(envJson, "numpy_version"))
     result.numbaVersion = firstNonEmpty(state.NUMBA_VERSION, envJsonValue(envJson, "numba_version"))
@@ -5052,7 +5166,7 @@ verifyExistingSetup = function(runtime, separatorScript)
         backendReason = probeErr
     end
     local profile = profileForBackend(backend)
-    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend)
+    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = checkProbe.adjustedErrors
     local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then

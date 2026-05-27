@@ -762,6 +762,74 @@ def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     assert "updateBootstrapEnv(stateFile, {" in setup_internal
 
 
+def test_post_bootstrap_trusts_verified_bootstrap_log_over_stale_probe_failures():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local function hasBootstrapRuntimeVerificationPass()" in setup_internal
+    assert 'text:find("Runtime verification passed.", 1, true)' in setup_internal
+    assert 'text:find("Pinned runtime assertion passed", 1, true)' in setup_internal
+    assert "local authoritativeBootstrapVerified = (" in setup_internal
+    assert "trim(state.STATUS or \"\") == \"ok\"" in setup_internal
+    assert "local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified" in setup_internal
+    assert "runtimeDriftDetected = \"no\"" in setup_internal
+    assert "runtimeDriftReason = \"\"" in setup_internal
+    assert "runtimeVerifyDetail = resolvedRuntimeVerifyDetail" in setup_internal
+    assert "status = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or (state.STATUS or \"\")" in setup_internal
+    assert "verification = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or verificationStatus" in setup_internal
+    assert "audioSeparator = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or audioStatus" in setup_internal
+    assert "stemwerkCore = (verificationSuccess or authoritativeBootstrapVerified) and \"ok\" or coreStatus" in setup_internal
+
+
+def test_verify_only_accepts_intel_macos_cpu_fallback_when_imports_and_paths_are_ok():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "function reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)" in setup_internal
+    assert "local canAcceptMacIntelCpuFallback = (" in setup_internal
+    assert 'OS == "macOS"' in setup_internal
+    assert 'MAC_ARCH == "x86_64"' in setup_internal
+    assert 'and backend == "cpu"' in setup_internal
+    assert "and mpsInformational" in setup_internal
+    assert "and verification.pythonOk" in setup_internal
+    assert "and verification.ffmpegOk" in setup_internal
+    assert "and torchVersionPinnedCompatible(torchVersion)" in setup_internal
+    assert 'and torchaudioVersion ~= ""' in setup_internal
+
+
+def test_verify_only_keeps_mps_unavailable_as_informational_reason_for_intel_macos():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local mpsInformational = (" in setup_internal
+    assert 'trim(backendReason or "") == "mps_unavailable"' in setup_internal
+    assert "backendReason = backendReason" in setup_internal
+
+
+def test_verify_only_avoids_torch_runtime_unsupported_for_verified_intel_macos_cpu_fallback():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "if canAcceptMacIntelCpuFallback or bootstrapVerified then" in setup_internal
+    assert 'removeError("torch_runtime_unsupported")' in setup_internal
+    assert 'removeError("torch_runtime_probe_failed")' in setup_internal
+    assert 'result.runtimeVerifyDetail = "ok"' in setup_internal
+
+
+def test_verify_only_intel_macos_cpu_fallback_does_not_hide_real_missing_torch_failures():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local hasHardImportFailures = (" in setup_internal
+    assert 'hasError("audio_separator_missing")' in setup_internal
+    assert 'hasError("stemwerk_core_missing")' in setup_internal
+    assert "and not hasHardImportFailures" in setup_internal
+
+
+def test_setup_open_capabilities_uses_dedicated_reveal_helper_and_safe_quoting():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "function openCapabilitiesPath(path)" in setup_internal
+    assert 'tryExec("open -R " .. quoteArg(capPath) .. " >/dev/null 2>&1 &")' in setup_internal
+    assert 'msgBox("STEMwerk Setup", "Capabilities file not found:\\n\\n" .. tostring(capPath), 0)' in setup_internal
+    assert "openCapabilitiesPath(LINUX_SETUP.capFile)" in setup_internal
+
+
 def test_linux_bootstrap_uses_managed_python_before_unsupported_system_python():
     from pathlib import Path
 

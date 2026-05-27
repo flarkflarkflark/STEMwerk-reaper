@@ -2,11 +2,12 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.5" author="flarkAUDIO" time="1779805637">
+      <version name="2.2.2.2.6" author="flarkAUDIO" time="1779891060">
         <changelog><![CDATA[
-- Fix support bundle processing summary so stale model-download/checksum errors do not override successful runs
-- Classify successful runs with exit_code=0 + DONE/Complete/stems evidence as success in processing_summary
-- Classify user_cancel/exit 143 as cancelled and avoid mislabeling as model_download_failed without current evidence
+- Intel Mac Check/verify-only now accepts valid CPU fallback when MPS is unavailable
+- mac-cpu / MPS unavailable is treated as informational when Python, torch, torchaudio, audio_separator, and FFmpeg checks pass
+- stale torch_runtime_unsupported state no longer overrides successful Intel Mac CPU verification
+- Open Capabilities now reveals the capabilities/state location reliably on macOS
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
