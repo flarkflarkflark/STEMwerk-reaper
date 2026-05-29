@@ -222,108 +222,51 @@ PY
 
 repair_samplerate_if_arch_mismatch() {
   [ "${MAC_ARCH}" = "arm64" ] || return 0
-  _probe="$(probe_samplerate_runtime)"
-  [ -n "${_probe}" ] || return 0
+  [ -n "${VENV_PY}" ] || return 0
+  [ -x "${VENV_PY}" ] || return 0
 
-  SAMPLERATE_VERSION=""
-  SAMPLERATE_MODULE_PATH=""
-  SAMPLERATE_DYLIB_PATH=""
-  SAMPLERATE_DYLIB_ARCH=""
-  SAMPLERATE_PLATFORM_MACHINE=""
-  SAMPLERATE_SYSCONFIG_PLATFORM=""
-  SAMPLERATE_ARCH_MATCH="unknown"
-  SAMPLERATE_REPAIR_ATTEMPTED="no"
-
-  _samplerate_import=""
-  _samplerate_dylib_exists=""
-  while IFS='=' read -r _k _v; do
-    case "${_k}" in
-      samplerate_import) _samplerate_import="${_v}" ;;
-      samplerate_version) SAMPLERATE_VERSION="${_v}" ;;
-      samplerate_module) SAMPLERATE_MODULE_PATH="${_v}" ;;
-      samplerate_dylib) SAMPLERATE_DYLIB_PATH="${_v}" ;;
-      samplerate_dylib_exists) _samplerate_dylib_exists="${_v}" ;;
-      samplerate_dylib_file) SAMPLERATE_DYLIB_ARCH="${_v}" ;;
-      platform_machine) SAMPLERATE_PLATFORM_MACHINE="${_v}" ;;
-      sysconfig_platform) SAMPLERATE_SYSCONFIG_PLATFORM="${_v}" ;;
-      samplerate_error) log "samplerate probe error: ${_v}" ;;
-    esac
-  done <<EOF
-${_probe}
-EOF
-
-  log "samplerate diagnostics: version=${SAMPLERATE_VERSION:-missing}; module=${SAMPLERATE_MODULE_PATH:-missing}; dylib=${SAMPLERATE_DYLIB_PATH:-missing}"
-  log "samplerate diagnostics: platform_machine=${SAMPLERATE_PLATFORM_MACHINE:-unknown}; sysconfig_platform=${SAMPLERATE_SYSCONFIG_PLATFORM:-unknown}"
-  [ -n "${SAMPLERATE_DYLIB_ARCH}" ] && log "samplerate diagnostics: file ${SAMPLERATE_DYLIB_ARCH}"
-
-  _arch_bad=0
-  if [ "${_samplerate_import}" != "ok" ] || [ "${_samplerate_dylib_exists}" != "yes" ]; then
-    _arch_bad=1
-  elif [ -n "${SAMPLERATE_DYLIB_ARCH}" ]; then
-    case "${SAMPLERATE_DYLIB_ARCH}" in
-      *arm64*|*universal*)
-        SAMPLERATE_ARCH_MATCH="yes"
-        _arch_bad=0
-        ;;
-      *)
-        SAMPLERATE_ARCH_MATCH="no"
-        _arch_bad=1
-        ;;
-    esac
-  fi
-
-  if [ "${_arch_bad}" -eq 0 ]; then
-    return 0
-  fi
-
-  SAMPLERATE_REPAIR_ATTEMPTED="yes"
-  log "Detected samplerate runtime mismatch on Apple Silicon; attempting forced reinstall of samplerate==0.2.4"
-  "${VENV_PY}" -m pip uninstall -y samplerate >> "${LOG_FILE}" 2>&1 || true
-  if ! "${VENV_PY}" -m pip install --force-reinstall --no-cache-dir "samplerate==0.2.4" >> "${LOG_FILE}" 2>&1; then
-    BACKEND_DEPS_REASON="samplerate_reinstall_failed"
-    return 1
-  fi
-
-  _probe2="$(probe_samplerate_runtime)"
-  [ -n "${_probe2}" ] || {
+  _guard_script="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  if [ ! -f "${_guard_script}" ]; then
+    log "samplerate guard script missing: ${_guard_script}"
     BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild"
     return 1
-  }
-  _arch_ok=0
-  _import_ok=0
-  while IFS='=' read -r _k _v; do
-    case "${_k}" in
-      samplerate_import)
-        [ "${_v}" = "ok" ] && _import_ok=1
-        ;;
-      samplerate_version) SAMPLERATE_VERSION="${_v}" ;;
-      samplerate_module) SAMPLERATE_MODULE_PATH="${_v}" ;;
-      samplerate_dylib) SAMPLERATE_DYLIB_PATH="${_v}" ;;
-      samplerate_dylib_file)
-        SAMPLERATE_DYLIB_ARCH="${_v}"
-        case "${_v}" in
-          *arm64*|*universal*) _arch_ok=1 ;;
-        esac
-        ;;
-      platform_machine) SAMPLERATE_PLATFORM_MACHINE="${_v}" ;;
-      sysconfig_platform) SAMPLERATE_SYSCONFIG_PLATFORM="${_v}" ;;
-      samplerate_error) log "samplerate repair probe error: ${_v}" ;;
-    esac
-  done <<EOF
-${_probe2}
-EOF
-
-  log "samplerate diagnostics after repair: version=${SAMPLERATE_VERSION:-missing}; module=${SAMPLERATE_MODULE_PATH:-missing}; dylib=${SAMPLERATE_DYLIB_PATH:-missing}"
-  [ -n "${SAMPLERATE_DYLIB_ARCH}" ] && log "samplerate diagnostics after repair: file ${SAMPLERATE_DYLIB_ARCH}"
-  if [ "${_import_ok}" -eq 1 ] && [ "${_arch_ok}" -eq 1 ]; then
-    SAMPLERATE_ARCH_MATCH="yes"
-    BACKEND_DEPS_REASON=""
-    return 0
   fi
 
-  SAMPLERATE_ARCH_MATCH="no"
-  BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild"
-  return 1
+  _guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"
+  _guard_rc=$?
+  [ -n "${_guard_out}" ] && printf "%s\n" "${_guard_out}" >> "${LOG_FILE}"
+
+  while IFS= read -r _line; do
+    case "${_line}" in
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_version=*) SAMPLERATE_VERSION="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_version=*) SAMPLERATE_VERSION="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_module=*) SAMPLERATE_MODULE_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_module=*) SAMPLERATE_MODULE_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_dylib=*) SAMPLERATE_DYLIB_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_dylib=*) SAMPLERATE_DYLIB_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_dylib_file=*) SAMPLERATE_DYLIB_ARCH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_dylib_file=*) SAMPLERATE_DYLIB_ARCH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_platform_machine=*) SAMPLERATE_PLATFORM_MACHINE="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_platform_machine=*) SAMPLERATE_PLATFORM_MACHINE="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_sysconfig_platform=*) SAMPLERATE_SYSCONFIG_PLATFORM="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_sysconfig_platform=*) SAMPLERATE_SYSCONFIG_PLATFORM="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ repair_attempted=*) SAMPLERATE_REPAIR_ATTEMPTED="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ arch_match=*) SAMPLERATE_ARCH_MATCH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_reinstall_failed) BACKEND_DEPS_REASON="samplerate_reinstall_failed" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_arch_mismatch_requires_runtime_rebuild) BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild" ;;
+    esac
+  done <<EOF
+${_guard_out}
+EOF
+
+  if [ "${_guard_rc}" -ne 0 ]; then
+    if [ -z "${BACKEND_DEPS_REASON}" ]; then
+      BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild"
+    fi
+    return 1
+  fi
+  BACKEND_DEPS_REASON=""
+  return 0
 }
 
 log_python_candidate() {
@@ -1038,8 +981,7 @@ else
     "${VENV_PY}" -m pip install --only-binary=:all: "llvmlite==0.42.0" "numba==0.59.1" >> "${LOG_FILE}" 2>&1 || \
       log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
-    "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
-      {
+    if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
         _audio_tmp_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
         : > "${_audio_tmp_log}" || true
         if [ -f "${MACOS_CONSTRAINTS_FILE}" ]; then
@@ -1064,7 +1006,15 @@ else
           fi
         fi
         rm -f "${_audio_tmp_log}" >/dev/null 2>&1 || true
-      }
+    fi
+
+    if ! repair_samplerate_if_arch_mismatch; then
+      if [ -n "${BACKEND_DEPS_REASON}" ]; then
+        set_status "deps_failed" "${BACKEND_DEPS_REASON}"
+      else
+        set_status "deps_failed" "samplerate_arch_mismatch_requires_runtime_rebuild"
+      fi
+    fi
 
     if ! install_pinned_torch_stack; then
       if [ "${MAC_ARCH}" = "x86_64" ]; then
@@ -1116,13 +1066,6 @@ fi
 set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
 
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
-  if ! repair_samplerate_if_arch_mismatch; then
-    if [ -n "${BACKEND_DEPS_REASON}" ]; then
-      set_status "deps_failed" "${BACKEND_DEPS_REASON}"
-    else
-      set_status "deps_failed" "samplerate_arch_mismatch_requires_runtime_rebuild"
-    fi
-  fi
   "${VENV_PY}" -c "import numba" >/dev/null 2>&1 || set_status "deps_failed" "numba_missing_after_setup"
   log_final_dependency_versions "${VENV_PY}"
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"

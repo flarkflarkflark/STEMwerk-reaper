@@ -1593,14 +1593,22 @@ def test_reapack_registers_expected_user_actions_and_keeps_internal_files_non_ac
 
 def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+    guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
 
     assert "repair_samplerate_if_arch_mismatch" in script
-    assert "samplerate==0.2.4" in script
-    assert '"${VENV_PY}" -m pip install --force-reinstall --no-cache-dir "samplerate==0.2.4"' in script
+    assert "stemwerk_samplerate_guard.py" in script
+    assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
+    assert 'if ! repair_samplerate_if_arch_mismatch; then' in script
     assert "samplerate_arch_mismatch_requires_runtime_rebuild" in script
     assert "samplerate_reinstall_failed" in script
-    assert "samplerate diagnostics:" in script
-    assert "samplerate diagnostics after repair:" in script
+    assert 'f"samplerate=={args.repair_version}"' in guard
+
+
+def test_macos_bootstrap_runs_samplerate_guard_before_final_dependency_verification():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert script.index('if ! repair_samplerate_if_arch_mismatch; then') < script.index('"${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"')
+    assert script.index('if ! repair_samplerate_if_arch_mismatch; then') < script.index('if ! verify_audio_separator_runtime_deps; then')
 
 
 def test_macos_bootstrap_persists_samplerate_arch_diagnostics_into_state():
@@ -1632,9 +1640,12 @@ def test_setup_internal_surfaces_samplerate_arch_mismatch_reason_and_capabilitie
 def test_macos_apple_silicon_sanity_workflow_asserts_samplerate_dylib_architecture():
     workflow = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text()
 
+    assert "Run samplerate arm64 repair guard (bootstrap parity)" in workflow
+    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py" in workflow
     assert "import samplerate" in workflow
     assert 'samplerate_root / "_samplerate_data" / "libsamplerate.dylib"' in workflow
     assert 'subprocess.check_output(["file", str(samplerate_dylib)], text=True).strip()' in workflow
     assert 'assert payload["samplerate_dylib_exists"] is True' in workflow
     assert 'assert ("arm64" in payload["samplerate_dylib_file"] or "universal" in payload["samplerate_dylib_file"])' in workflow
     assert 'assert "x86_64" not in payload["samplerate_dylib_file"]' in workflow
+    assert workflow.index("Run samplerate arm64 repair guard (bootstrap parity)") < workflow.index("Run Apple Silicon dependency and backend assertions")

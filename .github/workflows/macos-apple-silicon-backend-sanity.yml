@@ -65,6 +65,11 @@ jobs:
             "torchaudio==2.5.1"
           pip install onnxruntime-silicon || pip install onnxruntime
 
+      - name: Run samplerate arm64 repair guard (bootstrap parity)
+        run: |
+          . .venv/bin/activate
+          python scripts/reaper/_internal/stemwerk_samplerate_guard.py --python "$(pwd)/.venv/bin/python"
+
       - name: Run Apple Silicon dependency and backend assertions
         run: |
           . .venv/bin/activate
