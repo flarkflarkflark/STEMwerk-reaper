@@ -65,6 +65,11 @@ jobs:
             "torchaudio==2.5.1"
           pip install onnxruntime-silicon || pip install onnxruntime
 
+      - name: Run samplerate arm64 repair guard (bootstrap parity)
+        run: |
+          . .venv/bin/activate
+          python scripts/reaper/_internal/stemwerk_samplerate_guard.py --python "$(pwd)/.venv/bin/python"
+
       - name: Run Apple Silicon dependency and backend assertions
         run: |
           . .venv/bin/activate
@@ -79,9 +84,12 @@ jobs:
           import numba
           import onnxruntime
           import stemwerk_core
+          import samplerate
           import torch
           import torchvision
           import torchaudio
+          from pathlib import Path
+          import subprocess
 
           def core(ver):
               return str(ver).split("+", 1)[0]
@@ -108,6 +116,25 @@ jobs:
               "audio_separator_import": audio_separator.__name__,
               "stemwerk_core_import": stemwerk_core.__name__,
           }
+          samplerate_root = Path(samplerate.__file__).resolve().parent
+          dylib_candidates = sorted({str(p.resolve()) for p in samplerate_root.rglob("*.dylib")})
+          payload["samplerate_version"] = getattr(samplerate, "__version__", "unknown")
+          payload["samplerate_module"] = str(Path(samplerate.__file__).resolve())
+          payload["samplerate_dylib_candidates"] = dylib_candidates
+          dylib_files = {}
+          x86_only = []
+          arm_or_universal = []
+          for candidate in dylib_candidates:
+              file_output = subprocess.check_output(["file", candidate], text=True).strip()
+              dylib_files[candidate] = file_output
+              lower = file_output.lower()
+              if "x86_64" in lower and "arm64" not in lower and "universal" not in lower:
+                  x86_only.append(candidate)
+              if "arm64" in lower or "universal" in lower:
+                  arm_or_universal.append(candidate)
+          payload["samplerate_dylib_file_outputs"] = dylib_files
+          payload["samplerate_dylib_x86_only"] = x86_only
+          payload["samplerate_dylib_arm_or_universal"] = arm_or_universal
           print("SANITY_DIAGNOSTICS_JSON=" + json.dumps(payload, sort_keys=True))
 
           assert platform.system() == "Darwin", f"Expected Darwin, got {platform.system()!r}"
@@ -117,6 +144,9 @@ jobs:
           assert core(payload["torchvision_version"]) == "0.20.1", payload["torchvision_version"]
           assert core(payload["torchaudio_version"]) == "2.5.1", payload["torchaudio_version"]
           assert core(payload["audio_separator_version"]) == "0.23.0", payload["audio_separator_version"]
+          assert len(payload["samplerate_dylib_x86_only"]) == 0, payload["samplerate_dylib_file_outputs"]
+          if payload["samplerate_dylib_candidates"]:
+              assert len(payload["samplerate_dylib_arm_or_universal"]) > 0, payload["samplerate_dylib_file_outputs"]
           assert onnxruntime is not None
           assert torch.backends.mps.is_built() is True, "Expected torch wheel with MPS support built in"
           PY
