@@ -22,6 +22,9 @@ REQUIRED_TOP_LEVEL_SCRIPTS = (
 )
 
 RUNTIME_DEP_REGRESSION_TARGET = "scripts/reaper/_internal/STEMwerk_Timing.lua"
+BOOTSTRAP_MACOS = "scripts/reaper/STEMwerk_Bootstrap_macOS.sh"
+SAMPLERATE_GUARD_REL = "_internal/stemwerk_samplerate_guard.py"
+SAMPLERATE_GUARD_PAYLOAD_PATH = f"scripts/reaper/{SAMPLERATE_GUARD_REL}"
 
 
 @dataclass
@@ -269,6 +272,34 @@ def check_runtime_dependencies(root: Path, payload_paths: set[str]) -> Section:
     return section
 
 
+def check_bootstrap_guard_payload(root: Path, payload_paths: set[str]) -> Section:
+    section = Section("D. Bootstrap helper payload linkage")
+    bootstrap_path = root / BOOTSTRAP_MACOS
+    if not bootstrap_path.exists():
+        section.fail(f"missing bootstrap script: {BOOTSTRAP_MACOS}")
+        return section
+
+    bootstrap_text = read_text(bootstrap_path)
+    if SAMPLERATE_GUARD_REL not in bootstrap_text:
+        section.note(
+            f"{BOOTSTRAP_MACOS} does not reference {SAMPLERATE_GUARD_REL}; guard linkage check not required"
+        )
+        return section
+
+    if not (root / SAMPLERATE_GUARD_PAYLOAD_PATH).exists():
+        section.fail(f"bootstrap references missing local helper: {SAMPLERATE_GUARD_PAYLOAD_PATH}")
+
+    if SAMPLERATE_GUARD_PAYLOAD_PATH not in payload_paths:
+        section.fail(
+            "bootstrap references helper missing from index.xml payload: "
+            f"{SAMPLERATE_GUARD_PAYLOAD_PATH}"
+        )
+    else:
+        section.note(f"payload includes bootstrap helper: {SAMPLERATE_GUARD_PAYLOAD_PATH}")
+
+    return section
+
+
 def run_check(root: Path) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
@@ -290,6 +321,7 @@ def run_check(root: Path) -> tuple[list[Section], int]:
 
     runtime_section = check_runtime_dependencies(root, payload_paths)
     sections.append(runtime_section)
+    sections.append(check_bootstrap_guard_payload(root, payload_paths))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count
