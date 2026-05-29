@@ -43,7 +43,13 @@ def _module_search_roots(module: object) -> list[Path]:
     roots: list[Path] = []
     module_file = Path(getattr(module, "__file__", "") or "")
     if module_file:
-        roots.append(module_file.resolve().parent)
+        parent = module_file.resolve().parent
+        # samplerate 0.1.x layout
+        roots.append(parent / "samplerate" / "_samplerate_data")
+        # samplerate 0.2.x layout (extension module + sibling data dir)
+        roots.append(parent / "_samplerate_data")
+        # keep module package root for package-style installs
+        roots.append(parent / "samplerate")
     module_path = getattr(module, "__path__", None)
     if module_path:
         for p in module_path:
