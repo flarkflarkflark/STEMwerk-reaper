@@ -1248,7 +1248,8 @@ def test_linux_final_verification_requires_audio_separator_dependency_imports():
         assert f'"{module}"' in mac_script
     assert "if ! verify_audio_separator_runtime_deps; then" in linux_script
     assert 'set_status "deps_failed" "audio_separator_install_failed"' in linux_script
-    assert 'verify_audio_separator_runtime_deps || set_status "deps_failed" "audio_separator_install_failed"' in mac_script
+    assert "if ! verify_audio_separator_runtime_deps; then" in mac_script
+    assert 'set_status "deps_failed" "audio_separator_install_failed"' in mac_script
     assert '[ "${AUDIO_SEPARATOR_DEPS_COMPLETE}" = "yes" ]' in linux_script
     assert 'log_step "Venv runtime incomplete; refusing to set PYTHON_PATH"' in linux_script
     assert 'log_step "Venv runtime verified; PYTHON_PATH set to venv"' in linux_script
