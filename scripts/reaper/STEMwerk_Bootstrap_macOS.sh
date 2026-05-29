@@ -161,9 +161,112 @@ PY
   AUDIO_SEPARATOR_IMPORT="failed"
   AUDIO_SEPARATOR_DEPS_COMPLETE="no"
   BACKEND_DEPS_COMPLETE="no"
-  BACKEND_DEPS_REASON="${BACKEND_DEPS_REASON:-audio_separator_deps_missing}"
+  case "${_probe}" in
+    *samplerate*incompatible*architecture*|*samplerate*incompatible*arch*)
+      if [ "${MAC_ARCH}" = "arm64" ]; then
+        BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild"
+      else
+        BACKEND_DEPS_REASON="${BACKEND_DEPS_REASON:-audio_separator_deps_missing}"
+      fi
+      ;;
+    *)
+      BACKEND_DEPS_REASON="${BACKEND_DEPS_REASON:-audio_separator_deps_missing}"
+      ;;
+  esac
   log "audio-separator dependency verification failed: ${_probe}"
   return 1
+}
+
+probe_samplerate_runtime() {
+  if [ -z "${VENV_PY}" ] || [ ! -x "${VENV_PY}" ]; then
+    return 1
+  fi
+  "${VENV_PY}" - <<'PY' 2>/dev/null || true
+import importlib
+import os
+import platform
+import subprocess
+import sysconfig
+
+def emit(name, value):
+    print(f"{name}={value if value is not None else ''}")
+
+emit("platform_machine", platform.machine())
+emit("sysconfig_platform", sysconfig.get_platform())
+
+try:
+    samplerate = importlib.import_module("samplerate")
+except Exception as exc:
+    emit("samplerate_import", "failed")
+    emit("samplerate_error", str(exc).replace("\n", " "))
+    raise SystemExit(0)
+
+emit("samplerate_import", "ok")
+emit("samplerate_version", getattr(samplerate, "__version__", ""))
+emit("samplerate_module", getattr(samplerate, "__file__", ""))
+
+base = os.path.dirname(getattr(samplerate, "__file__", "") or "")
+dylib = os.path.join(base, "_samplerate_data", "libsamplerate.dylib")
+emit("samplerate_dylib", dylib)
+if os.path.isfile(dylib):
+    emit("samplerate_dylib_exists", "yes")
+    try:
+        out = subprocess.check_output(["file", dylib], text=True, stderr=subprocess.STDOUT).strip()
+    except Exception as exc:
+        out = f"file_error:{exc}"
+    emit("samplerate_dylib_file", out)
+else:
+    emit("samplerate_dylib_exists", "no")
+PY
+}
+
+repair_samplerate_if_arch_mismatch() {
+  [ "${MAC_ARCH}" = "arm64" ] || return 0
+  [ -n "${VENV_PY}" ] || return 0
+  [ -x "${VENV_PY}" ] || return 0
+
+  _guard_script="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  if [ ! -f "${_guard_script}" ]; then
+    log "samplerate guard script missing: ${_guard_script}"
+    BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild"
+    return 1
+  fi
+
+  _guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"
+  _guard_rc=$?
+  [ -n "${_guard_out}" ] && printf "%s\n" "${_guard_out}" >> "${LOG_FILE}"
+
+  while IFS= read -r _line; do
+    case "${_line}" in
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_version=*) SAMPLERATE_VERSION="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_version=*) SAMPLERATE_VERSION="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_module=*) SAMPLERATE_MODULE_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_module=*) SAMPLERATE_MODULE_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_dylib=*) SAMPLERATE_DYLIB_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_dylib=*) SAMPLERATE_DYLIB_PATH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_dylib_file=*) SAMPLERATE_DYLIB_ARCH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_dylib_file=*) SAMPLERATE_DYLIB_ARCH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_platform_machine=*) SAMPLERATE_PLATFORM_MACHINE="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_platform_machine=*) SAMPLERATE_PLATFORM_MACHINE="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_sysconfig_platform=*) SAMPLERATE_SYSCONFIG_PLATFORM="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_sysconfig_platform=*) SAMPLERATE_SYSCONFIG_PLATFORM="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ repair_attempted=*) SAMPLERATE_REPAIR_ATTEMPTED="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ arch_match=*) SAMPLERATE_ARCH_MATCH="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_reinstall_failed) BACKEND_DEPS_REASON="samplerate_reinstall_failed" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_arch_mismatch_requires_runtime_rebuild) BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild" ;;
+    esac
+  done <<EOF
+${_guard_out}
+EOF
+
+  if [ "${_guard_rc}" -ne 0 ]; then
+    if [ -z "${BACKEND_DEPS_REASON}" ]; then
+      BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild"
+    fi
+    return 1
+  fi
+  BACKEND_DEPS_REASON=""
+  return 0
 }
 
 log_python_candidate() {
@@ -408,7 +511,7 @@ log_final_dependency_versions() {
   "${_venv_py}" - <<'PY' >> "${LOG_FILE}" 2>&1 || true
 from importlib.metadata import PackageNotFoundError, version
 
-for name in ("torch", "torchvision", "torchaudio", "audio-separator", "onnxruntime"):
+for name in ("torch", "torchvision", "torchaudio", "audio-separator", "onnxruntime", "samplerate"):
     try:
         print(f"{name}={version(name)}")
     except PackageNotFoundError:
@@ -537,6 +640,14 @@ write_state() {
       echo "AUDIO_SEPARATOR_DEPS_COMPLETE=${AUDIO_SEPARATOR_DEPS_COMPLETE}"
       echo "BACKEND_DEPS_COMPLETE=${BACKEND_DEPS_COMPLETE}"
       [ -n "${BACKEND_DEPS_REASON}" ] && echo "BACKEND_DEPS_REASON=${BACKEND_DEPS_REASON}"
+      [ -n "${SAMPLERATE_VERSION}" ] && echo "SAMPLERATE_VERSION=${SAMPLERATE_VERSION}"
+      [ -n "${SAMPLERATE_MODULE_PATH}" ] && echo "SAMPLERATE_MODULE_PATH=${SAMPLERATE_MODULE_PATH}"
+      [ -n "${SAMPLERATE_DYLIB_PATH}" ] && echo "SAMPLERATE_DYLIB_PATH=${SAMPLERATE_DYLIB_PATH}"
+      [ -n "${SAMPLERATE_DYLIB_ARCH}" ] && echo "SAMPLERATE_DYLIB_ARCH=${SAMPLERATE_DYLIB_ARCH}"
+      [ -n "${SAMPLERATE_PLATFORM_MACHINE}" ] && echo "SAMPLERATE_PLATFORM_MACHINE=${SAMPLERATE_PLATFORM_MACHINE}"
+      [ -n "${SAMPLERATE_SYSCONFIG_PLATFORM}" ] && echo "SAMPLERATE_SYSCONFIG_PLATFORM=${SAMPLERATE_SYSCONFIG_PLATFORM}"
+      [ -n "${SAMPLERATE_ARCH_MATCH}" ] && echo "SAMPLERATE_ARCH_MATCH=${SAMPLERATE_ARCH_MATCH}"
+      [ -n "${SAMPLERATE_REPAIR_ATTEMPTED}" ] && echo "SAMPLERATE_REPAIR_ATTEMPTED=${SAMPLERATE_REPAIR_ATTEMPTED}"
       echo "BUILD_TOOLS_MISSING=${BUILD_TOOLS_MISSING}"
       if [ -n "${PYTHON}" ]; then
         echo "SUPPORTED_PYTHON_FOUND=yes"
@@ -698,6 +809,14 @@ MANAGED_PYTHON_REPLACED="no"
 MANAGED_PYTHON_ROLLBACK="no"
 BACKEND_DEPS_COMPLETE="unknown"
 BACKEND_DEPS_REASON=""
+SAMPLERATE_VERSION=""
+SAMPLERATE_MODULE_PATH=""
+SAMPLERATE_DYLIB_PATH=""
+SAMPLERATE_DYLIB_ARCH=""
+SAMPLERATE_PLATFORM_MACHINE=""
+SAMPLERATE_SYSCONFIG_PLATFORM=""
+SAMPLERATE_ARCH_MATCH=""
+SAMPLERATE_REPAIR_ATTEMPTED="no"
 BUILD_TOOLS_MISSING="no"
 AUDIO_SEPARATOR_IMPORT="unknown"
 AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
@@ -862,8 +981,7 @@ else
     "${VENV_PY}" -m pip install --only-binary=:all: "llvmlite==0.42.0" "numba==0.59.1" >> "${LOG_FILE}" 2>&1 || \
       log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
-    "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || \
-      {
+    if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
         _audio_tmp_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
         : > "${_audio_tmp_log}" || true
         if [ -f "${MACOS_CONSTRAINTS_FILE}" ]; then
@@ -888,7 +1006,15 @@ else
           fi
         fi
         rm -f "${_audio_tmp_log}" >/dev/null 2>&1 || true
-      }
+    fi
+
+    if ! repair_samplerate_if_arch_mismatch; then
+      if [ -n "${BACKEND_DEPS_REASON}" ]; then
+        set_status "deps_failed" "${BACKEND_DEPS_REASON}"
+      else
+        set_status "deps_failed" "samplerate_arch_mismatch_requires_runtime_rebuild"
+      fi
+    fi
 
     if ! install_pinned_torch_stack; then
       if [ "${MAC_ARCH}" = "x86_64" ]; then
@@ -943,7 +1069,13 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   "${VENV_PY}" -c "import numba" >/dev/null 2>&1 || set_status "deps_failed" "numba_missing_after_setup"
   log_final_dependency_versions "${VENV_PY}"
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
-  verify_audio_separator_runtime_deps || set_status "deps_failed" "audio_separator_install_failed"
+  if ! verify_audio_separator_runtime_deps; then
+    if [ "${BACKEND_DEPS_REASON}" = "samplerate_arch_mismatch_requires_runtime_rebuild" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_reinstall_failed" ]; then
+      set_status "deps_failed" "${BACKEND_DEPS_REASON}"
+    else
+      set_status "deps_failed" "audio_separator_install_failed"
+    fi
+  fi
   "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
   "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 || set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
   if ! assert_pinned_torch_stack "${VENV_PY}"; then

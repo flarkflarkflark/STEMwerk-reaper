@@ -1248,7 +1248,8 @@ def test_linux_final_verification_requires_audio_separator_dependency_imports():
         assert f'"{module}"' in mac_script
     assert "if ! verify_audio_separator_runtime_deps; then" in linux_script
     assert 'set_status "deps_failed" "audio_separator_install_failed"' in linux_script
-    assert 'verify_audio_separator_runtime_deps || set_status "deps_failed" "audio_separator_install_failed"' in mac_script
+    assert "if ! verify_audio_separator_runtime_deps; then" in mac_script
+    assert 'set_status "deps_failed" "audio_separator_install_failed"' in mac_script
     assert '[ "${AUDIO_SEPARATOR_DEPS_COMPLETE}" = "yes" ]' in linux_script
     assert 'log_step "Venv runtime incomplete; refusing to set PYTHON_PATH"' in linux_script
     assert 'log_step "Venv runtime verified; PYTHON_PATH set to venv"' in linux_script
@@ -1590,3 +1591,84 @@ def test_reapack_registers_expected_user_actions_and_keeps_internal_files_non_ac
     assert '<source file="../STEMwerk_Bootstrap_Linux.sh" type="file">' in index
     assert '<source file="../STEMwerk_Bootstrap_macOS.sh" type="file">' in index
     assert '<source file="../STEMwerk_Bootstrap_Windows.ps1" type="file">' in index
+
+def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+    guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
+
+    assert "repair_samplerate_if_arch_mismatch" in script
+    assert "stemwerk_samplerate_guard.py" in script
+    assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
+    assert 'if ! repair_samplerate_if_arch_mismatch; then' in script
+    assert "samplerate_arch_mismatch_requires_runtime_rebuild" in script
+    assert "samplerate_reinstall_failed" in script
+    assert 'f"samplerate=={args.repair_version}"' in guard
+    assert "--no-deps" in guard
+    assert "samplerate_dylib_not_found_after_repair_but_import_ok" in guard
+    assert "after_audio_separator_import" in guard
+    assert "audio_separator_import_failed_after_samplerate_repair" in guard
+
+
+def test_samplerate_guard_discovers_dylibs_recursively_and_does_not_require_legacy_path():
+    guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
+
+    assert "for path in root.rglob(\"*.dylib\")" in guard
+    assert "samplerate_dylib_candidate_count" in guard
+    assert "samplerate_dylib_candidate_" in guard
+    assert "if dylib_count == 0:" in guard
+    assert "samplerate_dylib_not_found_after_repair_but_import_ok" in guard
+
+
+def test_samplerate_guard_requires_repair_on_x86_only_or_import_failure_and_fails_on_post_repair_import_error():
+    guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
+
+    assert "if probe.get(\"samplerate_import\") != \"ok\":" in guard
+    assert "if x86_only > 0 and arm_ok == 0:" in guard
+    assert "samplerate_import_failed_after_repair" in guard
+
+
+def test_macos_bootstrap_runs_samplerate_guard_before_final_dependency_verification():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert script.index('if ! repair_samplerate_if_arch_mismatch; then') < script.index('"${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"')
+    assert script.index('if ! repair_samplerate_if_arch_mismatch; then') < script.index('if ! verify_audio_separator_runtime_deps; then')
+
+
+def test_macos_bootstrap_persists_samplerate_arch_diagnostics_into_state():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    for field in [
+        "SAMPLERATE_VERSION",
+        "SAMPLERATE_MODULE_PATH",
+        "SAMPLERATE_DYLIB_PATH",
+        "SAMPLERATE_DYLIB_ARCH",
+        "SAMPLERATE_PLATFORM_MACHINE",
+        "SAMPLERATE_SYSCONFIG_PLATFORM",
+        "SAMPLERATE_ARCH_MATCH",
+        "SAMPLERATE_REPAIR_ATTEMPTED",
+    ]:
+        assert f'echo "{field}=' in script
+
+
+def test_setup_internal_surfaces_samplerate_arch_mismatch_reason_and_capabilities_fields():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'elseif lower == "samplerate_arch_mismatch_requires_runtime_rebuild" then' in script
+    assert 'elseif lower == "samplerate_reinstall_failed" then' in script
+    assert "SAMPLERATE_DYLIB_ARCH" in script
+    assert "SAMPLERATE_ARCH_MATCH" in script
+    assert "SAMPLERATE_REPAIR_ATTEMPTED" in script
+
+
+def test_macos_apple_silicon_sanity_workflow_asserts_samplerate_dylib_architecture():
+    workflow = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text()
+
+    assert "Run samplerate arm64 repair guard (bootstrap parity)" in workflow
+    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py" in workflow
+    assert "import samplerate" in workflow
+    assert 'samplerate_root.rglob("*.dylib")' in workflow
+    assert 'payload["samplerate_dylib_file_outputs"]' in workflow
+    assert 'assert len(payload["samplerate_dylib_x86_only"]) == 0' in workflow
+    assert 'if payload["samplerate_dylib_candidates"]:' in workflow
+    assert 'assert len(payload["samplerate_dylib_arm_or_universal"]) > 0' in workflow
+    assert workflow.index("Run samplerate arm64 repair guard (bootstrap parity)") < workflow.index("Run Apple Silicon dependency and backend assertions")

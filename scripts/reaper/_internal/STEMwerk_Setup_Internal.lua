@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.6
+-- @version 2.2.2.2.7
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -613,12 +613,20 @@ local function prettySetupReason(reason)
             part = "stemwerk-core is missing after setup"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "samplerate_reinstall_failed" then
+            part = "samplerate repair failed on Apple Silicon"
+        elseif lower == "samplerate_arch_mismatch_requires_runtime_rebuild" then
+            part = "samplerate runtime architecture mismatch on Apple Silicon; delete runtime and rebuild venv"
         elseif lower == "managed_diffq_wheel_missing" then
             part = "Managed dependency wheel missing for diffq on Linux Python 3.12. Repair/Rebuild could not complete."
         elseif lower == "missing_diffq_or_build_tools" then
             part = "Backend dependency build failed because no C compiler was found. Install clang/gcc/build tools, then run Repair/Rebuild again."
         elseif lower == "audio_separator_deps_missing" then
             part = "audio-separator runtime dependencies are missing"
+        elseif lower == "samplerate_reinstall_failed" then
+            part = "samplerate repair failed on Apple Silicon (forced reinstall did not complete)"
+        elseif lower == "samplerate_arch_mismatch_requires_runtime_rebuild" then
+            part = "samplerate runtime architecture mismatch on Apple Silicon; delete runtime and rebuild venv"
         elseif lower == "audio_separator_torch_unavailable" then
             part = "audio-separator install failed: PyTorch is unavailable for this macOS/Python/architecture combination"
         elseif lower == "audio_separator_torch_unavailable_macos_intel" then
@@ -782,6 +790,8 @@ local function knownRuntimeFailureState(state)
         return true
     end
     return reason == "audio_separator_install_failed"
+        or reason == "samplerate_reinstall_failed"
+        or reason == "samplerate_arch_mismatch_requires_runtime_rebuild"
         or reason == "runtime_verify_failed"
         or reason == "runtime_python_split_brain"
         or reason == "onnxruntime_install_failed"
@@ -1483,6 +1493,14 @@ local function writeCapabilities(path, data, deviceOut)
     f:write("LLVMLITE_VERSION=" .. tostring(data.llvmliteVersion or "") .. "\n")
     f:write("AUDIO_SEPARATOR_VERSION=" .. tostring(data.audioSeparatorVersion or "") .. "\n")
     f:write("ONNXRUNTIME_VERSION=" .. tostring(data.onnxruntimeVersion or "") .. "\n")
+    f:write("SAMPLERATE_VERSION=" .. tostring(data.samplerateVersion or "") .. "\n")
+    f:write("SAMPLERATE_MODULE_PATH=" .. tostring(data.samplerateModulePath or "") .. "\n")
+    f:write("SAMPLERATE_DYLIB_PATH=" .. tostring(data.samplerateDylibPath or "") .. "\n")
+    f:write("SAMPLERATE_DYLIB_ARCH=" .. tostring(data.samplerateDylibArch or "") .. "\n")
+    f:write("SAMPLERATE_PLATFORM_MACHINE=" .. tostring(data.sampleratePlatformMachine or "") .. "\n")
+    f:write("SAMPLERATE_SYSCONFIG_PLATFORM=" .. tostring(data.samplerateSysconfigPlatform or "") .. "\n")
+    f:write("SAMPLERATE_ARCH_MATCH=" .. tostring(data.samplerateArchMatch or "") .. "\n")
+    f:write("SAMPLERATE_REPAIR_ATTEMPTED=" .. tostring(data.samplerateRepairAttempted or "") .. "\n")
     f:write("TORCH_SUPPORTED=" .. tostring(data.torchSupported or "") .. "\n")
     f:write("TORCHAUDIO_PRESENT=" .. tostring(data.torchaudioPresent or "") .. "\n")
     f:write("RUNTIME_DRIFT_DETECTED=" .. tostring(data.runtimeDriftDetected or "") .. "\n")
@@ -2469,6 +2487,14 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local resolvedLlvmLiteVersion = firstNonEmpty(state.LLVMLITE_VERSION, envJsonValue(envJson, "llvmlite_version"))
     local resolvedAudioSeparatorVersion = firstNonEmpty(state.AUDIO_SEPARATOR_VERSION, envJsonValue(envJson, "audio_separator_version"))
     local resolvedOnnxRuntimeVersion = firstNonEmpty(state.ONNXRUNTIME_VERSION, envJsonValue(envJson, "onnxruntime_version"))
+    local resolvedSamplerateVersion = firstNonEmpty(state.SAMPLERATE_VERSION, envJsonValue(envJson, "samplerate_version"))
+    local resolvedSamplerateModulePath = firstNonEmpty(state.SAMPLERATE_MODULE_PATH, envJsonValue(envJson, "samplerate_module"))
+    local resolvedSamplerateDylibPath = firstNonEmpty(state.SAMPLERATE_DYLIB_PATH, envJsonValue(envJson, "samplerate_dylib"))
+    local resolvedSamplerateDylibArch = firstNonEmpty(state.SAMPLERATE_DYLIB_ARCH, envJsonValue(envJson, "samplerate_dylib_file"))
+    local resolvedSampleratePlatformMachine = firstNonEmpty(state.SAMPLERATE_PLATFORM_MACHINE, envJsonValue(envJson, "platform_machine"))
+    local resolvedSamplerateSysconfigPlatform = firstNonEmpty(state.SAMPLERATE_SYSCONFIG_PLATFORM, envJsonValue(envJson, "sysconfig_platform"))
+    local resolvedSamplerateArchMatch = firstNonEmpty(state.SAMPLERATE_ARCH_MATCH, envJsonValue(envJson, "samplerate_arch_match"))
+    local resolvedSamplerateRepairAttempted = firstNonEmpty(state.SAMPLERATE_REPAIR_ATTEMPTED, envJsonValue(envJson, "samplerate_repair_attempted"))
     local resolvedCudaAvailable = firstNonEmpty(state.CUDA_AVAILABLE, envJsonValue(envJson, "cuda_available"))
     local resolvedCudaCount = firstNonEmpty(state.CUDA_COUNT, envJsonValue(envJson, "cuda_count"))
     local resolvedTorchHip = firstNonEmpty(state.TORCH_HIP, envJsonValue(envJson, "torch_hip"))
@@ -2532,6 +2558,14 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         llvmliteVersion = resolvedLlvmLiteVersion,
         audioSeparatorVersion = resolvedAudioSeparatorVersion,
         onnxruntimeVersion = resolvedOnnxRuntimeVersion,
+        samplerateVersion = resolvedSamplerateVersion,
+        samplerateModulePath = resolvedSamplerateModulePath,
+        samplerateDylibPath = resolvedSamplerateDylibPath,
+        samplerateDylibArch = resolvedSamplerateDylibArch,
+        sampleratePlatformMachine = resolvedSampleratePlatformMachine,
+        samplerateSysconfigPlatform = resolvedSamplerateSysconfigPlatform,
+        samplerateArchMatch = resolvedSamplerateArchMatch,
+        samplerateRepairAttempted = resolvedSamplerateRepairAttempted,
         torchSupported = resolvedTorchSupported,
         torchaudioPresent = resolvedTorchaudioPresent,
         runtimeDriftDetected = runtimeDriftDetected,

@@ -2,7 +2,7 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.6" author="flarkAUDIO" time="1779891060">
+      <version name="2.2.2.2.7" author="flarkAUDIO" time="1780055621">
         <changelog><![CDATA[
 - Intel Mac Check/verify-only now accepts valid CPU fallback when MPS is unavailable
 - mac-cpu / MPS unavailable is treated as informational when Python, torch, torchaudio, audio_separator, and FFmpeg checks pass
