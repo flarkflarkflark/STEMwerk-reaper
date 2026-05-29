@@ -1590,3 +1590,51 @@ def test_reapack_registers_expected_user_actions_and_keeps_internal_files_non_ac
     assert '<source file="../STEMwerk_Bootstrap_Linux.sh" type="file">' in index
     assert '<source file="../STEMwerk_Bootstrap_macOS.sh" type="file">' in index
     assert '<source file="../STEMwerk_Bootstrap_Windows.ps1" type="file">' in index
+
+def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert "repair_samplerate_if_arch_mismatch" in script
+    assert "samplerate==0.2.4" in script
+    assert '"${VENV_PY}" -m pip install --force-reinstall --no-cache-dir "samplerate==0.2.4"' in script
+    assert "samplerate_arch_mismatch_requires_runtime_rebuild" in script
+    assert "samplerate_reinstall_failed" in script
+    assert "samplerate diagnostics:" in script
+    assert "samplerate diagnostics after repair:" in script
+
+
+def test_macos_bootstrap_persists_samplerate_arch_diagnostics_into_state():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    for field in [
+        "SAMPLERATE_VERSION",
+        "SAMPLERATE_MODULE_PATH",
+        "SAMPLERATE_DYLIB_PATH",
+        "SAMPLERATE_DYLIB_ARCH",
+        "SAMPLERATE_PLATFORM_MACHINE",
+        "SAMPLERATE_SYSCONFIG_PLATFORM",
+        "SAMPLERATE_ARCH_MATCH",
+        "SAMPLERATE_REPAIR_ATTEMPTED",
+    ]:
+        assert f'echo "{field}=' in script
+
+
+def test_setup_internal_surfaces_samplerate_arch_mismatch_reason_and_capabilities_fields():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'elseif lower == "samplerate_arch_mismatch_requires_runtime_rebuild" then' in script
+    assert 'elseif lower == "samplerate_reinstall_failed" then' in script
+    assert "SAMPLERATE_DYLIB_ARCH" in script
+    assert "SAMPLERATE_ARCH_MATCH" in script
+    assert "SAMPLERATE_REPAIR_ATTEMPTED" in script
+
+
+def test_macos_apple_silicon_sanity_workflow_asserts_samplerate_dylib_architecture():
+    workflow = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text()
+
+    assert "import samplerate" in workflow
+    assert 'samplerate_root / "_samplerate_data" / "libsamplerate.dylib"' in workflow
+    assert 'subprocess.check_output(["file", str(samplerate_dylib)], text=True).strip()' in workflow
+    assert 'assert payload["samplerate_dylib_exists"] is True' in workflow
+    assert 'assert ("arm64" in payload["samplerate_dylib_file"] or "universal" in payload["samplerate_dylib_file"])' in workflow
+    assert 'assert "x86_64" not in payload["samplerate_dylib_file"]' in workflow

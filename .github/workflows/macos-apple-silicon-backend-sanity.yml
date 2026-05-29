@@ -79,9 +79,12 @@ jobs:
           import numba
           import onnxruntime
           import stemwerk_core
+          import samplerate
           import torch
           import torchvision
           import torchaudio
+          from pathlib import Path
+          import subprocess
 
           def core(ver):
               return str(ver).split("+", 1)[0]
@@ -108,6 +111,14 @@ jobs:
               "audio_separator_import": audio_separator.__name__,
               "stemwerk_core_import": stemwerk_core.__name__,
           }
+          samplerate_root = Path(samplerate.__file__).resolve().parent
+          samplerate_dylib = samplerate_root / "_samplerate_data" / "libsamplerate.dylib"
+          payload["samplerate_version"] = getattr(samplerate, "__version__", "unknown")
+          payload["samplerate_module"] = str(Path(samplerate.__file__).resolve())
+          payload["samplerate_dylib"] = str(samplerate_dylib)
+          payload["samplerate_dylib_exists"] = samplerate_dylib.exists()
+          file_output = subprocess.check_output(["file", str(samplerate_dylib)], text=True).strip()
+          payload["samplerate_dylib_file"] = file_output
           print("SANITY_DIAGNOSTICS_JSON=" + json.dumps(payload, sort_keys=True))
 
           assert platform.system() == "Darwin", f"Expected Darwin, got {platform.system()!r}"
@@ -117,6 +128,9 @@ jobs:
           assert core(payload["torchvision_version"]) == "0.20.1", payload["torchvision_version"]
           assert core(payload["torchaudio_version"]) == "2.5.1", payload["torchaudio_version"]
           assert core(payload["audio_separator_version"]) == "0.23.0", payload["audio_separator_version"]
+          assert payload["samplerate_dylib_exists"] is True, payload["samplerate_dylib"]
+          assert ("arm64" in payload["samplerate_dylib_file"] or "universal" in payload["samplerate_dylib_file"]), payload["samplerate_dylib_file"]
+          assert "x86_64" not in payload["samplerate_dylib_file"], payload["samplerate_dylib_file"]
           assert onnxruntime is not None
           assert torch.backends.mps.is_built() is True, "Expected torch wheel with MPS support built in"
           PY
