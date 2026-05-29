@@ -34,8 +34,16 @@ def _seed_required_top_level(root: Path, version: str) -> None:
         root / "scripts/reaper/STEMwerk.lua",
         f'-- @version {version}\nlocal APP_VERSION = "{version}"\ndofile(script_path .. "_internal/STEMwerk_Timing.lua")\n',
     )
-    _write(root / "scripts/reaper/STEMwerk-SETUP.lua", f"-- @version {version}\n")
+    _write(
+        root / "scripts/reaper/STEMwerk-SETUP.lua",
+        f"-- @version {version}\n",
+    )
     _write(root / "scripts/reaper/STEMwerk_Save_Support_Bundle.lua", f"-- @version {version}\n")
+    _write(
+        root / "scripts/reaper/STEMwerk_Bootstrap_macOS.sh",
+        "#!/bin/sh\n"
+        "_guard_script=\"${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py\"\n",
+    )
 
 
 def test_missing_local_file_referenced_by_index_fails(tmp_path: Path) -> None:
@@ -79,3 +87,30 @@ def test_valid_fixture_passes(tmp_path: Path) -> None:
 
     assert fail_count == 0
     assert all(s.status in {"PASS", "WARN"} for s in sections)
+
+
+def test_samplerate_guard_referenced_by_bootstrap_must_be_in_payload(tmp_path: Path) -> None:
+    version = "2.2.2.2.2"
+    _write(tmp_path / "VERSION", version + "\n")
+    _seed_required_top_level(tmp_path, version)
+    _write(tmp_path / "scripts/reaper/_internal/STEMwerk_Timing.lua", "-- timing\n")
+    _write(tmp_path / "scripts/reaper/_internal/stemwerk_samplerate_guard.py", "# guard\n")
+    _write(
+        tmp_path / "index.xml",
+        _mk_index(
+            version,
+            [
+                "STEMwerk.lua",
+                "STEMwerk-SETUP.lua",
+                "STEMwerk_Save_Support_Bundle.lua",
+                "_internal/STEMwerk_Timing.lua",
+            ],
+        ),
+    )
+
+    sections, fail_count = release_gate.run_check(tmp_path)
+
+    assert fail_count > 0
+    msgs = "\n".join("\n".join(s.messages) for s in sections)
+    assert "bootstrap references helper missing from index.xml payload" in msgs
+    assert "scripts/reaper/_internal/stemwerk_samplerate_guard.py" in msgs
