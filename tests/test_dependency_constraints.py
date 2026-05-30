@@ -1598,6 +1598,8 @@ def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64()
 
     assert "repair_samplerate_if_arch_mismatch" in script
     assert "stemwerk_samplerate_guard.py" in script
+    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"' in script
+    assert '_guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"' not in script
     assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
     assert "samplerate_arch_mismatch_requires_runtime_rebuild" in script
