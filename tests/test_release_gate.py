@@ -81,7 +81,20 @@ def test_valid_fixture_passes(tmp_path: Path) -> None:
     _write(tmp_path / "VERSION", version + "\n")
     _seed_required_top_level(tmp_path, version)
     _write(tmp_path / "scripts/reaper/_internal/STEMwerk_Timing.lua", "-- timing\n")
-    _write(tmp_path / "index.xml", _mk_index(version, ["STEMwerk.lua", "STEMwerk-SETUP.lua", "STEMwerk_Save_Support_Bundle.lua", "_internal/STEMwerk_Timing.lua"]))
+    _write(tmp_path / "scripts/reaper/_internal/stemwerk_samplerate_guard.py", "# guard\n")
+    _write(
+        tmp_path / "index.xml",
+        _mk_index(
+            version,
+            [
+                "STEMwerk.lua",
+                "STEMwerk-SETUP.lua",
+                "STEMwerk_Save_Support_Bundle.lua",
+                "_internal/STEMwerk_Timing.lua",
+                "_internal/stemwerk_samplerate_guard.py",
+            ],
+        ),
+    )
 
     sections, fail_count = release_gate.run_check(tmp_path)
 
