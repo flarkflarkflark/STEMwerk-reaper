@@ -2,7 +2,7 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.2.2.2.8" author="flarkAUDIO" time="1780055621">
+      <version name="2.2.2.2.9" author="flarkAUDIO" time="1780055621">
         <changelog><![CDATA[
 - Intel Mac Check/verify-only now accepts valid CPU fallback when MPS is unavailable
 - mac-cpu / MPS unavailable is treated as informational when Python, torch, torchaudio, audio_separator, and FFmpeg checks pass
@@ -43,6 +43,7 @@
         <source file="../_internal/STEMwerk_Runtime_Setup.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua</source>
         <source file="../_internal/STEMwerk_Settings.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Settings.lua</source>
         <source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua</source>
+        <source file="../_internal/stemwerk_samplerate_guard.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/stemwerk_samplerate_guard.py</source>
         <source file="../_internal/STEMwerk_System.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_System.lua</source>
         <source file="../_internal/STEMwerk_Timing.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Timing.lua</source>
         <source file="../_internal/STEMwerk_UI.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI.lua</source>
@@ -55,7 +56,6 @@
         <source file="../_internal/STEMwerk_UI_Window.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_UI_Window.lua</source>
         <source file="../_internal/STEMwerk_Window.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Window.lua</source>
         <source file="../_internal/STEMwerk_Workflow.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Workflow.lua</source>
-        <source file="../_internal/stemwerk_samplerate_guard.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/stemwerk_samplerate_guard.py</source>
 
         <source file="../constraints/base.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/base.txt</source>
         <source file="../constraints/cuda.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/constraints/cuda.txt</source>
