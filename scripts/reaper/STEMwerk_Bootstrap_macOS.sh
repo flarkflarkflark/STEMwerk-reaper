@@ -221,11 +221,14 @@ PY
 }
 
 repair_samplerate_if_arch_mismatch() {
+  _guard_phase="${1:-unspecified}"
   [ "${MAC_ARCH}" = "arm64" ] || return 0
   [ -n "${VENV_PY}" ] || return 0
   [ -x "${VENV_PY}" ] || return 0
 
   _guard_script="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  log "samplerate_guard_start phase=${_guard_phase}"
+  log "samplerate_guard_script_path=${_guard_script}"
   if [ ! -f "${_guard_script}" ]; then
     log "samplerate guard script missing: ${_guard_script}"
     BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild"
@@ -235,11 +238,24 @@ repair_samplerate_if_arch_mismatch() {
   _guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"
   _guard_rc=$?
   [ -n "${_guard_out}" ] && printf "%s\n" "${_guard_out}" >> "${LOG_FILE}"
+  _guard_before_samplerate_import="unknown"
+  _guard_after_samplerate_import="unknown"
+  _guard_before_samplerate_version=""
+  _guard_after_samplerate_version=""
+  _guard_before_audio_separator_import="not_checked"
+  _guard_after_audio_separator_import="not_checked"
+  _guard_repair_attempted="no"
 
   while IFS= read -r _line; do
     case "${_line}" in
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_import=*) _guard_before_samplerate_import="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_import=*) _guard_after_samplerate_import="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ before_samplerate_version=*) SAMPLERATE_VERSION="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ after_samplerate_version=*) SAMPLERATE_VERSION="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_samplerate_version=*) _guard_before_samplerate_version="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_samplerate_version=*) _guard_after_samplerate_version="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ before_audio_separator_import=*) _guard_before_audio_separator_import="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ after_audio_separator_import=*) _guard_after_audio_separator_import="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ before_samplerate_module=*) SAMPLERATE_MODULE_PATH="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ after_samplerate_module=*) SAMPLERATE_MODULE_PATH="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ before_samplerate_dylib=*) SAMPLERATE_DYLIB_PATH="${_line#*=}" ;;
@@ -250,7 +266,7 @@ repair_samplerate_if_arch_mismatch() {
       STEMWERK_SAMPLERATE_GUARD\ after_platform_machine=*) SAMPLERATE_PLATFORM_MACHINE="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ before_sysconfig_platform=*) SAMPLERATE_SYSCONFIG_PLATFORM="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ after_sysconfig_platform=*) SAMPLERATE_SYSCONFIG_PLATFORM="${_line#*=}" ;;
-      STEMWERK_SAMPLERATE_GUARD\ repair_attempted=*) SAMPLERATE_REPAIR_ATTEMPTED="${_line#*=}" ;;
+      STEMWERK_SAMPLERATE_GUARD\ repair_attempted=*) _guard_repair_attempted="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ arch_match=*) SAMPLERATE_ARCH_MATCH="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ error=samplerate_reinstall_failed) BACKEND_DEPS_REASON="samplerate_reinstall_failed" ;;
       STEMWERK_SAMPLERATE_GUARD\ error=samplerate_arch_mismatch_requires_runtime_rebuild) BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild" ;;
@@ -258,6 +274,18 @@ repair_samplerate_if_arch_mismatch() {
   done <<EOF
 ${_guard_out}
 EOF
+  if [ "${_guard_repair_attempted}" = "yes" ]; then
+    SAMPLERATE_REPAIR_ATTEMPTED="yes"
+  elif [ "${SAMPLERATE_REPAIR_ATTEMPTED}" != "yes" ]; then
+    SAMPLERATE_REPAIR_ATTEMPTED="no"
+  fi
+  log "samplerate_guard_before_samplerate_import=${_guard_before_samplerate_import}"
+  log "samplerate_guard_after_samplerate_import=${_guard_after_samplerate_import}"
+  log "samplerate_guard_before_samplerate_version=${_guard_before_samplerate_version}"
+  log "samplerate_guard_after_samplerate_version=${_guard_after_samplerate_version}"
+  log "samplerate_guard_before_audio_separator_import=${_guard_before_audio_separator_import}"
+  log "samplerate_guard_after_audio_separator_import=${_guard_after_audio_separator_import}"
+  log "samplerate_guard_repair_attempted=${SAMPLERATE_REPAIR_ATTEMPTED}"
 
   if [ "${_guard_rc}" -ne 0 ]; then
     if [ -z "${BACKEND_DEPS_REASON}" ]; then
@@ -1008,7 +1036,7 @@ else
         rm -f "${_audio_tmp_log}" >/dev/null 2>&1 || true
     fi
 
-    if ! repair_samplerate_if_arch_mismatch; then
+    if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then
       if [ -n "${BACKEND_DEPS_REASON}" ]; then
         set_status "deps_failed" "${BACKEND_DEPS_REASON}"
       else
@@ -1068,6 +1096,13 @@ set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   "${VENV_PY}" -c "import numba" >/dev/null 2>&1 || set_status "deps_failed" "numba_missing_after_setup"
   log_final_dependency_versions "${VENV_PY}"
+  if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then
+    if [ -n "${BACKEND_DEPS_REASON}" ]; then
+      set_status "deps_failed" "${BACKEND_DEPS_REASON}"
+    else
+      set_status "deps_failed" "samplerate_arch_mismatch_requires_runtime_rebuild"
+    fi
+  fi
   "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
   if ! verify_audio_separator_runtime_deps; then
     if [ "${BACKEND_DEPS_REASON}" = "samplerate_arch_mismatch_requires_runtime_rebuild" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_reinstall_failed" ]; then
