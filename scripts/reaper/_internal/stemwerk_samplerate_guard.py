@@ -199,7 +199,15 @@ def main() -> int:
 
     probe_before = _probe_samplerate()
     _emit_probe("before", probe_before)
+    audio_before_ok, audio_before_err = _check_audio_separator_import()
+    _print_diag("before_audio_separator_import", "ok" if audio_before_ok else "failed")
+    if audio_before_err:
+        _print_diag("before_audio_separator_error", audio_before_err)
     if not _repair_needed(probe_before):
+        _emit_probe("after", probe_before)
+        _print_diag("after_audio_separator_import", "ok" if audio_before_ok else "failed")
+        if audio_before_err:
+            _print_diag("after_audio_separator_error", audio_before_err)
         _print_diag("arch_match", "yes")
         _print_diag("repair_attempted", "no")
         return 0
