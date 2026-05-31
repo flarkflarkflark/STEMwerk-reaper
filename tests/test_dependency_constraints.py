@@ -1437,8 +1437,9 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     script = Path("scripts/reaper/audio_separator_process.py").read_text()
 
     assert 'parser.add_argument("--workflow-mode", default=""' in script
+    assert 'parser.add_argument("--workflow-source", default=""' in script
     assert 'parser.add_argument("--requested-stage2-model", default=""' in script
-    assert "if _is_direct_dks_mode(args.workflow_mode):" in script
+    assert "if _is_direct_dks_source(args.workflow_mode, args.workflow_source):" in script
     assert 'emit_phase("stage2_preflight")' in script
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print("error_reason=drumsep_model_missing", file=sys.stderr)' in script
@@ -1456,9 +1457,18 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert "error_reason=drumsep_model_missing" in main_script
     assert 'WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, workflowModel, runOptions)' in main_script
     assert 'pythonCmd = pythonCmd .. " --workflow-mode " .. C.quoteArg(workflowModeArg)' in workflow_script
+    assert 'pythonCmd = pythonCmd .. " --workflow-source " .. C.quoteArg(workflowSourceArg)' in workflow_script
     assert 'pythonCmd = pythonCmd .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)' in workflow_script
-    assert 'M.DIRECT_DKS_PRESET = "dks_direct"' in dks_script
+    assert 'M.WORKFLOW_DRUMKIT = "drumkit"' in dks_script
+    assert 'M.SOURCE_DIRECT = "dks_direct"' in dks_script
     assert 'M.DIRECT_DKS_MODEL = "MDX23C-DrumSep-aufr33-jarredou.ckpt"' in dks_script
+
+
+def test_drumkit_wrapper_selects_integrated_mode_and_direct_source():
+    wrapper = Path("scripts/reaper/STEMwerk_Drum_Kit_Split.lua").read_text()
+    assert 'reaper.SetExtState(EXT_SECTION, "quick_preset", "drumkit", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_mode", "drumkit", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_direct", false)' in wrapper
 
 
 def test_support_bundle_prefers_newest_runtime_run_over_stale_timing_summary():

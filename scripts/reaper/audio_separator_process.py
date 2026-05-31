@@ -48,6 +48,12 @@ def _is_direct_dks_mode(workflow_mode: Optional[str]) -> bool:
     return str(workflow_mode or "").strip().lower() == "dks_direct"
 
 
+def _is_direct_dks_source(workflow_mode: Optional[str], workflow_source: Optional[str]) -> bool:
+    mode = str(workflow_mode or "").strip().lower()
+    source = str(workflow_source or "").strip().lower()
+    return source == "dks_direct" or mode == "dks_direct"
+
+
 def _resolve_run_model(args: argparse.Namespace) -> str:
     if _is_direct_dks_mode(getattr(args, "workflow_mode", "")):
         requested = str(getattr(args, "requested_stage2_model", "") or "").strip()
@@ -979,7 +985,9 @@ def main():
     parser.add_argument("--list-devices-machine", action="store_true",
                         help="List available devices in a machine-readable format (for REAPER UIs)")
     parser.add_argument("--workflow-mode", default="",
-                        help="Optional workflow mode (e.g. dks_direct)")
+                        help="Optional workflow mode")
+    parser.add_argument("--workflow-source", default="",
+                        help="Optional workflow source route (internal)")
     parser.add_argument("--requested-stage2-model", default="",
                         help="Optional stage2 model override for direct DKS")
 
@@ -1055,7 +1063,7 @@ def main():
 
     stems = _split_list(args.stems)
     run_model = _resolve_run_model(args)
-    if _is_direct_dks_mode(args.workflow_mode):
+    if _is_direct_dks_source(args.workflow_mode, args.workflow_source):
         emit_phase("stage2_preflight")
         try:
             StemSeparator(model=run_model, device="cpu")
