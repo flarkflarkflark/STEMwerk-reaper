@@ -38,6 +38,8 @@ MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DIRECT_DKS_MODEL_ENTRY_NAME = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
+DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
+DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 
 
 def _is_darwin_arm64() -> bool:
@@ -114,6 +116,20 @@ def _emit_direct_dks_runtime_unsupported_markers(requested_model: str, resolved_
         print(f"Resolved model: {resolved_model}", file=sys.stderr)
     if detail:
         print(f"Detail: {detail}", file=sys.stderr)
+
+
+def _emit_direct_dks_stage2_runtime_markers(reason: str, python_path: Path, detail: str = "") -> None:
+    print("error_stage=stage2_runtime", file=sys.stderr)
+    print(f"error_reason={reason}", file=sys.stderr)
+    print(f"drumsep_runtime_python={python_path}", file=sys.stderr)
+    if detail:
+        print(f"detail={detail}", file=sys.stderr)
+    print(f"guidance={DRUMSEP_RUNTIME_GUIDANCE}", file=sys.stderr)
+    if reason == "drumsep_runtime_missing":
+        print("Direct Drum Kit Split runtime is not installed.", file=sys.stderr)
+    else:
+        print("Direct Drum Kit Split runtime is broken.", file=sys.stderr)
+    print(DRUMSEP_RUNTIME_GUIDANCE, file=sys.stderr)
 
 
 def _repository_root() -> Path:
@@ -439,6 +455,73 @@ def _runtime_base_candidates() -> List[Path]:
         add(Path.home() / ".local" / "share" / "STEMwerk")
 
     return candidates
+
+
+def _drumsep_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    runtime_dir = base / DRUMSEP_RUNTIME_DIRNAME
+    if os.name == "nt":
+        return runtime_dir / "Scripts" / "python.exe"
+    return runtime_dir / "bin" / "python"
+
+
+def _verify_drumsep_runtime(python_path: Path) -> Tuple[bool, str]:
+    try:
+        exists = python_path.exists()
+    except Exception:
+        exists = False
+    if not exists:
+        return False, "missing"
+    if not os.access(str(python_path), os.X_OK):
+        return False, "not_executable"
+
+    verify_code = r"""
+import importlib
+import importlib.metadata as metadata
+import json
+import sys
+
+required = ["audio_separator", "numpy", "torch", "onnx", "onnxruntime"]
+optional = ["onnx2torch"]
+versions = {}
+
+for module_name in required:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "module": module_name, "error": f"{type(exc).__name__}: {exc}"}))
+        sys.exit(1)
+
+for dist_name in ["audio-separator", "numpy", "torch", "onnx", "onnxruntime", "onnx2torch", "onnx2torch-py313"]:
+    try:
+        versions[dist_name] = metadata.version(dist_name)
+    except Exception:
+        versions[dist_name] = ""
+
+for module_name in optional:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        versions[module_name + "_import_error"] = f"{type(exc).__name__}: {exc}"
+
+print(json.dumps({"ok": True, "versions": versions}, sort_keys=True))
+"""
+    try:
+        completed = subprocess.run(
+            [str(python_path), "-c", verify_code],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            **_windows_no_window_kwargs(),
+        )
+    except Exception as exc:
+        return False, f"verify_spawn_failed:{type(exc).__name__}:{exc}"
+
+    output = " ".join(part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip())
+    if completed.returncode != 0:
+        return False, output[:1200] or f"verify_exit_{completed.returncode}"
+    return True, output[:1200] or "ok"
 
 
 def _prepend_path(path_value: str) -> None:
@@ -1286,6 +1369,15 @@ def main():
             f"Direct Drum Kit Split route detected: workflow_mode={args.workflow_mode} workflow_source={args.workflow_source}",
             file=sys.stderr,
         )
+        drumsep_python = _drumsep_runtime_python_path()
+        runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)
+        if not runtime_ok:
+            reason = "drumsep_runtime_missing" if runtime_detail == "missing" else "drumsep_runtime_broken"
+            _emit_direct_dks_stage2_runtime_markers(reason, drumsep_python, runtime_detail)
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return 1
         try:
             ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
             if not ok:

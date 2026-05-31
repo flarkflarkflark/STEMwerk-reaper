@@ -1450,6 +1450,31 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
         return msg
     end
 
+    if lowerLog:find("error_stage=stage2_runtime", 1, true)
+        and (lowerLog:find("error_reason=drumsep_runtime_missing", 1, true)
+            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)) then
+        local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_runtime_missing"
+        local detail = tostring(logSnippet or ""):match("detail=([^\r\n]+)") or ""
+        local headline = reason == "drumsep_runtime_broken"
+            and "Drum Kit Split runtime is broken."
+            or "Drum Kit Split runtime is not installed."
+        local msg = headline .. "\n"
+            .. "Run Setup/Repair Drum Kit Split runtime.\n"
+            .. "Reason: " .. tostring(reason)
+            .. (detail ~= "" and ("\nDetail: " .. tostring(detail)) or "")
+            .. "\nerror_stage=stage2_runtime\n"
+            .. "error_reason=" .. tostring(reason)
+            .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+            .. "\nCommand: " .. tostring(cmdLine or "unknown")
+            .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+            .. tostring(logSnippet or "(no log output found)")
+            .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+        if stdoutSnippet and stdoutSnippet ~= "" then
+            msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+        end
+        return msg
+    end
+
     if lowerLog:find("error_stage=stage2_model_load", 1, true)
         and lowerLog:find("error_reason=drumsep_model_runtime_unsupported", 1, true) then
         local requested = tostring(logSnippet or ""):match("requested_model=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
