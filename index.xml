@@ -18,6 +18,7 @@
         <source file="../STEMwerk_All_Stems.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_All_Stems.lua</source>
         <source file="../STEMwerk_Vocals_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Vocals_Only.lua</source>
         <source file="../STEMwerk_Drums_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Drums_Only.lua</source>
+        <source file="../STEMwerk_Drum_Kit_Split.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Drum_Kit_Split.lua</source>
         <source file="../STEMwerk_Bass_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bass_Only.lua</source>
         <source file="../STEMwerk_Karaoke.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Karaoke.lua</source>
 
