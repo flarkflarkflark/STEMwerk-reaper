@@ -45,6 +45,7 @@
         <source file="../_internal/STEMwerk_Runtime_Setup.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua</source>
         <source file="../_internal/STEMwerk_Settings.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Settings.lua</source>
         <source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua</source>
+        <source file="../_internal/stemwerk_drumsep_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/stemwerk_drumsep_process.py</source>
         <source file="../_internal/stemwerk_samplerate_guard.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/stemwerk_samplerate_guard.py</source>
         <source file="../_internal/STEMwerk_System.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_System.lua</source>
         <source file="../_internal/STEMwerk_Timing.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Timing.lua</source>
