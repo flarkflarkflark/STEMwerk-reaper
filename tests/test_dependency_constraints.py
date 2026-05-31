@@ -1443,7 +1443,10 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert 'emit_phase("stage2_preflight")' in script
     assert "DIRECT_DKS_MODEL_ALIAS = \"MDX23C-DrumSep-aufr33-jarredou.ckpt\"" in script
     assert "DIRECT_DKS_MODEL_FILENAME = \"aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt\"" in script
-    assert "def _resolve_direct_dks_model_catalog_entry(requested_model: str)" in script
+    assert "def _resolve_direct_dks_model_catalog_entry(requested_model: str, model_cache_dir: Path)" in script
+    assert "catalog_paths_checked=" in script
+    assert "catalog_lookup_status=" in script
+    assert "resolved_default = DIRECT_DKS_MODEL_FILENAME" in script
     assert "other_network_list_new" in script
     assert "def _ensure_runtime_download_checks_has_drumsep(" in script
     assert "mdx23c_download_list" in script
@@ -1457,6 +1460,7 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert 'print(f"requested_model={requested_model}", file=sys.stderr)' in script
     assert 'print(f"Direct Drum Kit Split preflight failed: {reason}", file=sys.stderr)' in script
     assert "drumsep_model_download_failed" in script
+    assert "known_err_text.startswith(\"catalog_\")" in script
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
