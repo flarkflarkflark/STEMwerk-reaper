@@ -1094,27 +1094,45 @@ fi
 set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
 
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  FINAL_RUNTIME_VERIFIED="yes"
   "${VENV_PY}" -c "import numba" >/dev/null 2>&1 || set_status "deps_failed" "numba_missing_after_setup"
   log_final_dependency_versions "${VENV_PY}"
   if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then
+    FINAL_RUNTIME_VERIFIED="no"
     if [ -n "${BACKEND_DEPS_REASON}" ]; then
       set_status "deps_failed" "${BACKEND_DEPS_REASON}"
     else
       set_status "deps_failed" "samplerate_arch_mismatch_requires_runtime_rebuild"
     fi
   fi
-  "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"
+  if ! "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; then
+    FINAL_RUNTIME_VERIFIED="no"
+    set_status "audio_separator_check_failed" "audio_separator_import_failed"
+  fi
   if ! verify_audio_separator_runtime_deps; then
+    FINAL_RUNTIME_VERIFIED="no"
     if [ "${BACKEND_DEPS_REASON}" = "samplerate_arch_mismatch_requires_runtime_rebuild" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_reinstall_failed" ]; then
       set_status "deps_failed" "${BACKEND_DEPS_REASON}"
     else
       set_status "deps_failed" "audio_separator_install_failed"
     fi
   fi
-  "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1 || set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
-  "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1 || set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
+  if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
+    FINAL_RUNTIME_VERIFIED="no"
+    set_status "onnxruntime_check_failed" "onnxruntime_missing_after_setup"
+  fi
+  if ! "${VENV_PY}" -c "import stemwerk_core" >/dev/null 2>&1; then
+    FINAL_RUNTIME_VERIFIED="no"
+    set_status "stemwerk_core_check_failed" "stemwerk_core_missing_after_setup"
+  fi
   if ! assert_pinned_torch_stack "${VENV_PY}"; then
+    FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "torch_pin_assert_failed"
+  fi
+  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then
+    STATUS="ok"
+    STATUS_REASON=""
+    log "Cleared stale STATUS from earlier pinned runtime assertion failure after final runtime verification success"
   fi
 fi
 

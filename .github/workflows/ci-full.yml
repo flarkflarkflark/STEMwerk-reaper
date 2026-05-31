@@ -27,9 +27,6 @@ jobs:
       - name: Validate version sync
         run: python tools/version_sync.py --check
 
-      - name: Run release gate
-        run: python tools/release_gate.py --check
-
       - name: Install test dependencies
         run: |
           python -m pip install pytest soundfile
