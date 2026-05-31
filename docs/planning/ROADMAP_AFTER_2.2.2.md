@@ -65,6 +65,18 @@ Purpose of this branch:
 - ReaPack payload validation.
 - Release asset naming validation.
 
+## Drum Kit Split Groundwork (R&D)
+
+- Branch groundwork exists on `feature/dks-direct-on-main`.
+- Direct route integration is in place: workflow `drumkit` with source route `dks_direct`.
+- Direct route correctly skips Demucs/stage1 and uses DrumSep model alias/catalog/cache resolution.
+- Current pinned runtime (`audio-separator==0.23.0`) reaches MDXC load but cannot run this DrumSep MDX23C model (`AttributeError: "'model'"` in MDXC loader path).
+- `audio-separator==0.44.2` is not a safe drop-in under current stack (probe segfault) and introduces high-risk dependency churn (`numpy>=2`, `onnx-weekly`, `onnx2torch-py313`, broader torch/runtime changes).
+- Next spike options:
+- 1. targeted STEMwerk-side MDXC YAML/config adapter
+- 2. dedicated audio-separator upgrade branch with full regression matrix for normal workflows
+- 3. alternative supported DrumSep/kit model
+
 ## Optional Native Bridge - Future Spike
 
 Recommended experimental branch: `feature/native-bridge-spike`
