@@ -582,24 +582,58 @@ def _run_direct_dks_drumsep_helper(
         "--log-file",
         str(helper_log),
     ]
-    completed = subprocess.run(
-        cmd,
-        text=True,
-        capture_output=True,
-        timeout=60 * 60,
-        **_windows_no_window_kwargs(),
-    )
-    helper_stdout.write_text(completed.stdout or "", encoding="utf-8", errors="replace")
-    helper_stderr.write_text(completed.stderr or "", encoding="utf-8", errors="replace")
+    print("PROGRESS:1:Starting DrumSep runtime", flush=True)
 
-    print(f"drumsep_helper_returncode={completed.returncode}", file=sys.stderr)
-    if completed.stdout:
+    def helper_log_percent() -> Optional[int]:
+        try:
+            text = helper_log.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return None
+        matches = list(re.finditer(r"(\d{1,3})%\|", text))
+        if not matches:
+            return None
+        return max(0, min(99, int(matches[-1].group(1))))
+
+    with helper_stdout.open("w", encoding="utf-8", errors="replace") as stdout_fh, helper_stderr.open(
+        "w", encoding="utf-8", errors="replace"
+    ) as stderr_fh:
+        process = subprocess.Popen(
+            cmd,
+            text=True,
+            stdout=stdout_fh,
+            stderr=stderr_fh,
+            **_windows_no_window_kwargs(),
+        )
+        start_time = time.monotonic()
+        last_percent = -1
+        while True:
+            rc = process.poll()
+            percent = helper_log_percent()
+            if percent is None:
+                elapsed = int(time.monotonic() - start_time)
+                percent = min(12, 1 + elapsed // 10)
+            if percent != last_percent:
+                print(f"PROGRESS:{percent}:DrumSep stage2 separating kit stems", flush=True)
+                last_percent = percent
+            if rc is not None:
+                break
+            if time.monotonic() - start_time > 60 * 60:
+                process.kill()
+                return False, {}, "drumsep_helper_failed", "helper timeout after 3600 seconds"
+            time.sleep(2.0)
+
+    completed_returncode = process.returncode
+
+    helper_stdout_text = helper_stdout.read_text(encoding="utf-8", errors="replace") if helper_stdout.exists() else ""
+    helper_stderr_text = helper_stderr.read_text(encoding="utf-8", errors="replace") if helper_stderr.exists() else ""
+    print(f"drumsep_helper_returncode={completed_returncode}", file=sys.stderr)
+    if helper_stdout_text:
         print("drumsep_helper_stdout_begin", file=sys.stderr)
-        print(completed.stdout.rstrip(), file=sys.stderr)
+        print(helper_stdout_text.rstrip(), file=sys.stderr)
         print("drumsep_helper_stdout_end", file=sys.stderr)
-    if completed.stderr:
+    if helper_stderr_text:
         print("drumsep_helper_stderr_begin", file=sys.stderr)
-        print(completed.stderr.rstrip(), file=sys.stderr)
+        print(helper_stderr_text.rstrip(), file=sys.stderr)
         print("drumsep_helper_stderr_end", file=sys.stderr)
 
     try:
@@ -607,7 +641,7 @@ def _run_direct_dks_drumsep_helper(
     except Exception as exc:
         return False, {}, "drumsep_helper_failed", f"failed reading helper result JSON: {type(exc).__name__}: {exc}"
 
-    if completed.returncode != 0 or not result_data.get("ok"):
+    if completed_returncode != 0 or not result_data.get("ok"):
         reason = str(result_data.get("error_reason") or "drumsep_helper_failed")
         detail = str(result_data.get("message") or result_data)
         return False, {}, reason, detail
