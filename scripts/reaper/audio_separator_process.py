@@ -13,6 +13,7 @@ from contextlib import contextmanager
 import importlib
 import importlib.util
 import json
+import hashlib
 import os
 import platform
 import re
@@ -21,8 +22,9 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 StemSeparator = None
 get_available_devices = None
@@ -33,6 +35,9 @@ _core_loaded = False
 
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
+DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+DIRECT_DKS_MODEL_ENTRY_NAME = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 
 
 def _is_darwin_arm64() -> bool:
@@ -67,31 +72,149 @@ def _is_known_drumsep_model_missing_error(exc: Exception) -> bool:
     return "not found in supported model files" in text and "model file" in text
 
 
-def _emit_direct_dks_model_missing_markers(model_name: str) -> None:
+def _emit_direct_dks_preflight_markers(reason: str, requested_model: str, resolved_model: str = "", detail: str = "") -> None:
     print("error_stage=stage2_preflight", file=sys.stderr)
-    print("error_reason=drumsep_model_missing", file=sys.stderr)
-    print(f"requested_model={model_name}", file=sys.stderr)
-    print("Direct Drum Kit Split preflight failed: drumsep_model_missing", file=sys.stderr)
-    print(f"Requested model: {model_name}", file=sys.stderr)
+    print(f"error_reason={reason}", file=sys.stderr)
+    print(f"requested_model={requested_model}", file=sys.stderr)
+    if resolved_model:
+        print(f"resolved_model={resolved_model}", file=sys.stderr)
+    print(f"Direct Drum Kit Split preflight failed: {reason}", file=sys.stderr)
+    print(f"Requested model: {requested_model}", file=sys.stderr)
+    if resolved_model:
+        print(f"Resolved model: {resolved_model}", file=sys.stderr)
+    if detail:
+        print(f"Detail: {detail}", file=sys.stderr)
     print(
         "guidance=Update or repair runtime model catalog/audio-separator mapping for DrumSep and retry.",
         file=sys.stderr,
     )
 
 
-def _direct_dks_preflight_check(model_name: str) -> Tuple[bool, Optional[str]]:
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _find_repo_download_checks_path() -> Optional[Path]:
+    payload_root = _repository_root() / "installer" / "windows" / "payload"
+    if not payload_root.exists():
+        return None
+    candidates = sorted(
+        payload_root.glob("models-*-allmodels/download_checks.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    fallback = sorted(payload_root.glob("models-*/download_checks.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return fallback[0] if fallback else None
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _resolve_direct_dks_model_catalog_entry(requested_model: str) -> Tuple[str, Dict[str, str], Optional[Path]]:
+    requested = str(requested_model or "").strip()
+    if requested and requested != DIRECT_DKS_MODEL_ALIAS and requested != DIRECT_DKS_MODEL_FILENAME:
+        return requested, {}, None
+    checks_path = _find_repo_download_checks_path()
+    if not checks_path or not checks_path.exists():
+        return requested or DIRECT_DKS_MODEL_FILENAME, {}, checks_path
+    data = _read_json_file(checks_path)
+    other_network = data.get("other_network_list_new", {}) or {}
+    entry = other_network.get(DIRECT_DKS_MODEL_ENTRY_NAME, {}) or {}
+    if not isinstance(entry, dict):
+        return requested or DIRECT_DKS_MODEL_FILENAME, {}, checks_path
+    normalized = {str(k): str(v) for k, v in entry.items() if str(v).strip()}
+    resolved = DIRECT_DKS_MODEL_FILENAME if DIRECT_DKS_MODEL_FILENAME in normalized else requested or DIRECT_DKS_MODEL_FILENAME
+    return resolved, normalized, checks_path
+
+
+def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_name: str, entry_payload: Dict[str, str], source_checks_path: Optional[Path]) -> Tuple[bool, str]:
+    checks_path = model_cache_dir / "download_checks.json"
+    checks_data: Dict[str, Any]
+    try:
+        if checks_path.exists():
+            checks_data = _read_json_file(checks_path)
+        elif source_checks_path and source_checks_path.exists():
+            checks_data = _read_json_file(source_checks_path)
+        else:
+            return False, "runtime_download_checks_missing"
+    except Exception as exc:
+        return False, f"download_checks_read_failed:{exc}"
+
+    changed = False
+    mdx23c = checks_data.setdefault("mdx23c_download_list", {})
+    if not isinstance(mdx23c, dict):
+        return False, "mdx23c_download_list_invalid"
+    current = mdx23c.get(entry_name)
+    if current != entry_payload:
+        mdx23c[entry_name] = dict(entry_payload)
+        changed = True
+
+    if changed or not checks_path.exists():
+        try:
+            checks_path.parent.mkdir(parents=True, exist_ok=True)
+            checks_path.write_text(json.dumps(checks_data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        except Exception as exc:
+            return False, f"download_checks_write_failed:{exc}"
+    return True, str(checks_path)
+
+
+def _download_direct_dks_assets(model_cache_dir: Path, asset_map: Dict[str, str]) -> Tuple[bool, str]:
+    for filename, url in asset_map.items():
+        target = model_cache_dir / filename
+        if target.exists():
+            continue
+        if not url:
+            return False, f"asset_url_missing:{filename}"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with urllib.request.urlopen(url, timeout=120) as response:
+                data = response.read()
+            tmp = target.with_suffix(target.suffix + ".part")
+            tmp.write_bytes(data)
+            tmp.replace(target)
+            if target.suffix.lower() == ".ckpt":
+                digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                print(f"drumsep_cache_sha256={digest}", file=sys.stderr)
+            print(f"drumsep_cache_asset={target}", file=sys.stderr)
+        except Exception as exc:
+            return False, f"asset_download_failed:{filename}:{exc}"
+    return True, "ok"
+
+
+def _direct_dks_preflight_check(model_name: str, model_cache_dir: Path) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
     # This prevents delayed failure in sep.separate()/load_model for known
     # unresolved DrumSep model names.
+    requested_model = str(model_name or "").strip()
+    resolved_model, asset_map, source_path = _resolve_direct_dks_model_catalog_entry(requested_model)
+    if not asset_map:
+        return False, requested_model, resolved_model, "catalog_entry_missing"
+    ok, check_detail = _ensure_runtime_download_checks_has_drumsep(
+        model_cache_dir,
+        DIRECT_DKS_MODEL_ENTRY_NAME,
+        asset_map,
+        source_path,
+    )
+    if not ok:
+        return False, requested_model, resolved_model, check_detail
+    print(f"requested_model={requested_model}", file=sys.stderr)
+    print(f"resolved_model={resolved_model}", file=sys.stderr)
+    print(f"catalog_source={source_path if source_path else 'none'}", file=sys.stderr)
+    dl_ok, dl_detail = _download_direct_dks_assets(model_cache_dir, asset_map)
+    if not dl_ok:
+        return False, requested_model, resolved_model, dl_detail
     try:
         from audio_separator.separator import Separator as AudioSeparator
 
-        sep = AudioSeparator(model_file_dir=str(_configure_model_cache_runtime()), output_dir=".")
-        sep.download_model_files(model_name)
-        return True, None
+        sep = AudioSeparator(model_file_dir=str(model_cache_dir), output_dir=".")
+        sep.download_model_files(resolved_model)
+        return True, requested_model, resolved_model, None
     except Exception as exc:
         if _is_known_drumsep_model_missing_error(exc):
-            return False, str(exc)
+            return False, requested_model, resolved_model, str(exc)
         raise
 
 
@@ -1103,18 +1226,17 @@ def main():
             file=sys.stderr,
         )
         try:
-            ok, known_err = _direct_dks_preflight_check(run_model)
+            ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
             if not ok:
-                _emit_direct_dks_model_missing_markers(run_model)
-                if known_err:
-                    print(f"DETAIL: {known_err}", file=sys.stderr)
+                reason = "drumsep_model_missing" if "not found in supported model files" in str(known_err or "").lower() or "catalog_entry_missing" in str(known_err or "").lower() else "drumsep_model_download_failed"
+                _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", str(known_err or ""))
                 emit_phase("python_error")
                 if write_done:
                     write_done("ERROR")
                 return 1
+            run_model = resolved_model or run_model
         except Exception as exc:
-            _emit_direct_dks_model_missing_markers(run_model)
-            print(f"ERROR: {exc}", file=sys.stderr)
+            _emit_direct_dks_preflight_markers("drumsep_model_download_failed", run_model, "", str(exc))
             emit_phase("python_error")
             if write_done:
                 write_done("ERROR")

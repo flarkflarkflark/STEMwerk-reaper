@@ -1426,13 +1426,17 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
     local hasFallbackModelMissing = lowerLog:find("not found in supported model files", 1, true)
         and lowerLog:find("model file", 1, true)
     if lowerLog:find("error_stage=stage2_preflight", 1, true)
-        and lowerLog:find("error_reason=drumsep_model_missing", 1, true) then
+        and (lowerLog:find("error_reason=drumsep_model_missing", 1, true)
+            or lowerLog:find("error_reason=drumsep_model_download_failed", 1, true)) then
+        local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_model_missing"
         local requested = tostring(logSnippet or ""):match("requested_model=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
+        local resolved = tostring(logSnippet or ""):match("resolved_model=([^\r\n]+)") or ""
         local msg = "Direct Drum Kit Split preflight failed.\n"
-            .. "Reason: drumsep_model_missing\n"
+            .. "Reason: " .. tostring(reason) .. "\n"
             .. "Requested model: " .. tostring(requested)
+            .. (resolved ~= "" and ("\nResolved model: " .. tostring(resolved)) or "")
             .. "\nerror_stage=stage2_preflight\n"
-            .. "error_reason=drumsep_model_missing"
+            .. "error_reason=" .. tostring(reason)
             .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this DrumSep model.\n"
             .. "Update/repair the STEMwerk runtime model catalog, then retry."
             .. "\n\nExit code: " .. tostring(exitCode or "unknown")

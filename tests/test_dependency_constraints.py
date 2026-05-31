@@ -1441,14 +1441,22 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert 'parser.add_argument("--requested-stage2-model", default=""' in script
     assert "if _is_direct_dks_source(args.workflow_mode, args.workflow_source):" in script
     assert 'emit_phase("stage2_preflight")' in script
-    assert "def _direct_dks_preflight_check(model_name: str) -> Tuple[bool, Optional[str]]:" in script
-    assert "sep.download_model_files(model_name)" in script
+    assert "DIRECT_DKS_MODEL_ALIAS = \"MDX23C-DrumSep-aufr33-jarredou.ckpt\"" in script
+    assert "DIRECT_DKS_MODEL_FILENAME = \"aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt\"" in script
+    assert "def _resolve_direct_dks_model_catalog_entry(requested_model: str)" in script
+    assert "other_network_list_new" in script
+    assert "def _ensure_runtime_download_checks_has_drumsep(" in script
+    assert "mdx23c_download_list" in script
+    assert "def _download_direct_dks_assets(" in script
+    assert "sep.download_model_files(resolved_model)" in script
+    assert "resolved_model=" in script
     assert "Direct Drum Kit Split route detected: workflow_mode=" in script
     assert "workflow_source=" in script
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
-    assert 'print("error_reason=drumsep_model_missing", file=sys.stderr)' in script
-    assert 'print(f"requested_model={model_name}", file=sys.stderr)' in script
-    assert 'print("Direct Drum Kit Split preflight failed: drumsep_model_missing", file=sys.stderr)' in script
+    assert 'print(f"error_reason={reason}", file=sys.stderr)' in script
+    assert 'print(f"requested_model={requested_model}", file=sys.stderr)' in script
+    assert 'print(f"Direct Drum Kit Split preflight failed: {reason}", file=sys.stderr)' in script
+    assert "drumsep_model_download_failed" in script
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
@@ -1463,6 +1471,7 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert 'if (not trustedWindowsRuntime) and (not isDirectDKS) and (not ensureDependenciesInteractive()) then' in main_script
     assert "error_stage=stage2_preflight" in main_script
     assert "error_reason=drumsep_model_missing" in main_script
+    assert "error_reason=drumsep_model_download_failed" in main_script
     assert "not found in supported model files" in main_script
     assert "workflow%-source" in main_script
     assert 'WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, workflowModel, runOptions)' in main_script
