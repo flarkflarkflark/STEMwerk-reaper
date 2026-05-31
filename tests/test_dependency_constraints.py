@@ -1,5 +1,6 @@
 """Regression smoke for the v2.2.2.1 macOS/Linux torch pin hotfix."""
 
+import importlib.util
 import json
 import platform
 import subprocess
@@ -15,6 +16,15 @@ EXPECTED_TORCH = "2.5.1"
 EXPECTED_TORCHVISION = "0.20.1"
 EXPECTED_TORCHAUDIO = "2.5.1"
 EXPECTED_AUDIO_SEPARATOR = "0.23.0"
+
+
+def _load_audio_separator_process_module():
+    path = Path("scripts/reaper/audio_separator_process.py")
+    spec = importlib.util.spec_from_file_location("audio_separator_process_dependency_test", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
 
 
 def _service_line_torch_runtime_status(torch_version, torchaudio_version="2.5.1"):
@@ -1460,6 +1470,22 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "resolved_model=" in script
     assert "Direct Drum Kit Split route detected: workflow_mode=" in script
     assert "workflow_source=" in script
+    assert "DRUMSEP_RUNTIME_DIRNAME = \".venv-drumsep\"" in script
+    assert "DRUMSEP_RUNTIME_GUIDANCE = \"Run Setup/Repair Drum Kit Split runtime.\"" in script
+    assert "def _drumsep_runtime_python_path(" in script
+    assert "def _verify_drumsep_runtime(" in script
+    assert "def _run_direct_dks_drumsep_helper(" in script
+    assert "stemwerk_drumsep_process.py" in script
+    assert "drumsep_python = _drumsep_runtime_python_path()" in script
+    assert "runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)" in script
+    assert "reason = \"drumsep_runtime_missing\" if runtime_detail == \"missing\" else \"drumsep_runtime_broken\"" in script
+    assert "_emit_direct_dks_stage2_runtime_markers(reason, drumsep_python, runtime_detail)" in script
+    assert "helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(" in script
+    assert "drumsep_helper_python=" in script
+    assert "drumsep_helper_ok=true" in script
+    assert "_direct_dks_preflight_check(run_model, model_cache_dir)" in script
+    assert script.index("runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)") < script.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
+    assert script.index("_direct_dks_preflight_check(run_model, model_cache_dir)") < script.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print(f"error_reason={reason}", file=sys.stderr)' in script
     assert 'print(f"requested_model={requested_model}", file=sys.stderr)' in script
@@ -1469,6 +1495,48 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
+
+
+def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    missing_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+
+    ok, detail = module._verify_drumsep_runtime(missing_python)
+    module._emit_direct_dks_stage2_runtime_markers("drumsep_runtime_missing", missing_python, detail)
+
+    captured = capsys.readouterr()
+    assert ok is False
+    assert detail == "missing"
+    assert "error_stage=stage2_runtime" in captured.err
+    assert "error_reason=drumsep_runtime_missing" in captured.err
+    assert "guidance=Run Setup/Repair Drum Kit Split runtime." in captured.err
+    assert "stage2_model_load" not in captured.err
+
+
+def test_drumsep_runtime_broken_reports_import_error(tmp_path):
+    module = _load_audio_separator_process_module()
+    runtime_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.write_text("#!/bin/sh\necho 'ImportError: audio_separator missing' >&2\nexit 1\n", encoding="utf-8")
+    runtime_python.chmod(0o755)
+
+    ok, detail = module._verify_drumsep_runtime(runtime_python)
+
+    assert ok is False
+    assert "ImportError: audio_separator missing" in detail
+
+
+def test_normal_stem_workflows_do_not_reference_drumsep_runtime():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text()
+    marker = 'if _is_direct_dks_source(args.workflow_mode, args.workflow_source):'
+    assert marker in script
+    _, after_direct_dks = script.split(marker, 1)
+
+    assert "_verify_drumsep_runtime(" in after_direct_dks
+    assert after_direct_dks.index("_verify_drumsep_runtime(") < after_direct_dks.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
+    assert after_direct_dks.index("_verify_drumsep_runtime(") < after_direct_dks.index('emit_phase("model_setup_start")')
+    assert after_direct_dks.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(") < after_direct_dks.index('emit_phase("model_setup_start")')
+    assert "_enable_torch_weights_only_compat(run_model, resolved_device)" in script
 
 
 def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
@@ -1481,6 +1549,16 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert "error_stage=stage2_preflight" in main_script
     assert "error_reason=drumsep_model_missing" in main_script
     assert "error_reason=drumsep_model_download_failed" in main_script
+    assert "error_stage=stage2_runtime" in main_script
+    assert "error_reason=drumsep_runtime_missing" in main_script
+    assert "error_reason=drumsep_runtime_broken" in main_script
+    assert "error_reason=drumsep_helper_failed" in main_script
+    assert "error_reason=drumsep_model_load_failed" in main_script
+    assert "error_reason=drumsep_separate_failed" in main_script
+    assert "error_reason=drumsep_output_count_mismatch" in main_script
+    assert 'file = "hi-hat.wav"' in main_script
+    assert "activateWorkflowStemSet(isDirectDKS)" in main_script
+    assert "Run Setup/Repair Drum Kit Split runtime." in main_script
     assert "error_stage=stage2_model_load" in main_script
     assert "error_reason=drumsep_model_runtime_unsupported" in main_script
     assert "not found in supported model files" in main_script
@@ -1492,6 +1570,64 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert 'M.WORKFLOW_DRUMKIT = "drumkit"' in dks_script
     assert 'M.SOURCE_DIRECT = "dks_direct"' in dks_script
     assert 'M.DIRECT_DKS_MODEL = "MDX23C-DrumSep-aufr33-jarredou.ckpt"' in dks_script
+
+
+def test_drumsep_helper_payload_and_stem_normalization():
+    helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
+    index_xml = Path("index.xml").read_text()
+
+    assert helper_path.exists()
+    assert "_internal/stemwerk_drumsep_process.py" in index_xml
+
+    spec = importlib.util.spec_from_file_location("stemwerk_drumsep_process_test", helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(helper)
+
+    assert helper.normalize_stem_name("Kick") == "kick"
+    assert helper.normalize_stem_name("Snare") == "snare"
+    assert helper.normalize_stem_name("Toms") == "toms"
+    assert helper.normalize_stem_name("Hh") == "hihat"
+    assert helper.normalize_stem_name("Hi-Hat") == "hihat"
+    assert helper.normalize_stem_name("Ride") == "ride"
+    assert helper.normalize_stem_name("Crash") == "crash"
+    assert helper.REAPER_FILENAMES["hihat"] == "hi-hat.wav"
+
+
+def test_drumsep_helper_wrong_output_count_schema(tmp_path):
+    helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
+    spec = importlib.util.spec_from_file_location("stemwerk_drumsep_process_count_test", helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(helper)
+
+    raw_file = tmp_path / "input_(Kick).wav"
+    raw_file.write_bytes(b"RIFF")
+    stems, raw_outputs = helper.normalize_outputs(tmp_path, [str(raw_file)], set())
+    payload = helper._error_payload(
+        "drumsep_output_count_mismatch",
+        "stage2_output_validation",
+        "expected 6 stems, got 1",
+        stems=stems,
+        raw_outputs=raw_outputs,
+    )
+
+    assert stems == {"kick": str(tmp_path / "kick.wav")}
+    assert payload["ok"] is False
+    assert payload["error_stage"] == "stage2_output_validation"
+    assert payload["error_reason"] == "drumsep_output_count_mismatch"
+
+
+def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text()
+
+    assert 'DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"' in script
+    assert 'str(drumsep_python),' in script
+    assert '"--result-json",' in script
+    assert 'drumsep_helper_stdout.txt' in script
+    assert 'drumsep_helper_stderr.txt' in script
+    assert 'error_reason=drumsep_stage2_delegation_not_implemented' not in script
+    assert 'drumsep_output_count_mismatch' in script
 
 
 def test_drumkit_wrapper_selects_integrated_mode_and_direct_source():

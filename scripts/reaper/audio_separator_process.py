@@ -38,6 +38,9 @@ MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DIRECT_DKS_MODEL_ENTRY_NAME = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
+DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
+DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
+DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 
 
 def _is_darwin_arm64() -> bool:
@@ -116,8 +119,37 @@ def _emit_direct_dks_runtime_unsupported_markers(requested_model: str, resolved_
         print(f"Detail: {detail}", file=sys.stderr)
 
 
+def _emit_direct_dks_stage2_runtime_markers(reason: str, python_path: Path, detail: str = "") -> None:
+    print("error_stage=stage2_runtime", file=sys.stderr)
+    print(f"error_reason={reason}", file=sys.stderr)
+    print(f"drumsep_runtime_python={python_path}", file=sys.stderr)
+    if detail:
+        print(f"detail={detail}", file=sys.stderr)
+    print(f"guidance={DRUMSEP_RUNTIME_GUIDANCE}", file=sys.stderr)
+    if reason == "drumsep_runtime_missing":
+        print("Direct Drum Kit Split runtime is not installed.", file=sys.stderr)
+    else:
+        print("Direct Drum Kit Split runtime is broken.", file=sys.stderr)
+    print(DRUMSEP_RUNTIME_GUIDANCE, file=sys.stderr)
+
+
+def _emit_direct_dks_helper_failure_markers(reason: str, stage: str, requested_model: str, resolved_model: str, detail: str = "") -> None:
+    print(f"error_stage={stage}", file=sys.stderr)
+    print(f"error_reason={reason}", file=sys.stderr)
+    print(f"requested_model={requested_model}", file=sys.stderr)
+    if resolved_model:
+        print(f"resolved_model={resolved_model}", file=sys.stderr)
+    if detail:
+        print(f"detail={detail}", file=sys.stderr)
+    print(f"Direct Drum Kit Split helper failed: {reason}", file=sys.stderr)
+
+
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _drumsep_helper_path() -> Path:
+    return Path(__file__).resolve().parent / DRUMSEP_HELPER_RELATIVE
 
 
 def _find_repo_download_checks_path() -> Optional[Path]:
@@ -439,6 +471,177 @@ def _runtime_base_candidates() -> List[Path]:
         add(Path.home() / ".local" / "share" / "STEMwerk")
 
     return candidates
+
+
+def _drumsep_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    runtime_dir = base / DRUMSEP_RUNTIME_DIRNAME
+    if os.name == "nt":
+        return runtime_dir / "Scripts" / "python.exe"
+    return runtime_dir / "bin" / "python"
+
+
+def _verify_drumsep_runtime(python_path: Path) -> Tuple[bool, str]:
+    try:
+        exists = python_path.exists()
+    except Exception:
+        exists = False
+    if not exists:
+        return False, "missing"
+    if not os.access(str(python_path), os.X_OK):
+        return False, "not_executable"
+
+    verify_code = r"""
+import importlib
+import importlib.metadata as metadata
+import json
+import sys
+
+required = ["audio_separator", "numpy", "torch", "onnx", "onnxruntime"]
+optional = ["onnx2torch"]
+versions = {}
+
+for module_name in required:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "module": module_name, "error": f"{type(exc).__name__}: {exc}"}))
+        sys.exit(1)
+
+for dist_name in ["audio-separator", "numpy", "torch", "onnx", "onnxruntime", "onnx2torch", "onnx2torch-py313"]:
+    try:
+        versions[dist_name] = metadata.version(dist_name)
+    except Exception:
+        versions[dist_name] = ""
+
+for module_name in optional:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        versions[module_name + "_import_error"] = f"{type(exc).__name__}: {exc}"
+
+print(json.dumps({"ok": True, "versions": versions}, sort_keys=True))
+"""
+    try:
+        completed = subprocess.run(
+            [str(python_path), "-c", verify_code],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            **_windows_no_window_kwargs(),
+        )
+    except Exception as exc:
+        return False, f"verify_spawn_failed:{type(exc).__name__}:{exc}"
+
+    output = " ".join(part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip())
+    if completed.returncode != 0:
+        return False, output[:1200] or f"verify_exit_{completed.returncode}"
+    return True, output[:1200] or "ok"
+
+
+def _run_direct_dks_drumsep_helper(
+    input_path: Path,
+    output_root: Path,
+    model_cache_dir: Path,
+    drumsep_python: Path,
+    requested_model: str,
+    resolved_model: str,
+) -> Tuple[bool, Dict[str, str], str, str]:
+    helper_path = _drumsep_helper_path()
+    result_json = output_root / "drumsep_result.json"
+    helper_stdout = output_root / "drumsep_helper_stdout.txt"
+    helper_stderr = output_root / "drumsep_helper_stderr.txt"
+    helper_log = output_root / "drumsep_helper.log"
+
+    print("drumsep_helper_start", file=sys.stderr)
+    print(f"drumsep_helper_python={drumsep_python}", file=sys.stderr)
+    print(f"drumsep_helper_script={helper_path}", file=sys.stderr)
+    print(f"drumsep_helper_model={resolved_model}", file=sys.stderr)
+    print(f"drumsep_helper_output_dir={output_root}", file=sys.stderr)
+    print(f"drumsep_helper_result_json={result_json}", file=sys.stderr)
+    print(f"drumsep_helper_stdout={helper_stdout}", file=sys.stderr)
+    print(f"drumsep_helper_stderr={helper_stderr}", file=sys.stderr)
+
+    if not helper_path.exists():
+        return False, {}, "drumsep_helper_failed", f"helper script missing: {helper_path}"
+
+    cmd = [
+        str(drumsep_python),
+        str(helper_path),
+        "--input",
+        str(input_path),
+        "--output-dir",
+        str(output_root),
+        "--model-dir",
+        str(model_cache_dir),
+        "--model",
+        resolved_model,
+        "--result-json",
+        str(result_json),
+        "--log-file",
+        str(helper_log),
+    ]
+    completed = subprocess.run(
+        cmd,
+        text=True,
+        capture_output=True,
+        timeout=60 * 60,
+        **_windows_no_window_kwargs(),
+    )
+    helper_stdout.write_text(completed.stdout or "", encoding="utf-8", errors="replace")
+    helper_stderr.write_text(completed.stderr or "", encoding="utf-8", errors="replace")
+
+    print(f"drumsep_helper_returncode={completed.returncode}", file=sys.stderr)
+    if completed.stdout:
+        print("drumsep_helper_stdout_begin", file=sys.stderr)
+        print(completed.stdout.rstrip(), file=sys.stderr)
+        print("drumsep_helper_stdout_end", file=sys.stderr)
+    if completed.stderr:
+        print("drumsep_helper_stderr_begin", file=sys.stderr)
+        print(completed.stderr.rstrip(), file=sys.stderr)
+        print("drumsep_helper_stderr_end", file=sys.stderr)
+
+    try:
+        result_data = json.loads(result_json.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, {}, "drumsep_helper_failed", f"failed reading helper result JSON: {type(exc).__name__}: {exc}"
+
+    if completed.returncode != 0 or not result_data.get("ok"):
+        reason = str(result_data.get("error_reason") or "drumsep_helper_failed")
+        detail = str(result_data.get("message") or result_data)
+        return False, {}, reason, detail
+
+    raw_stems = result_data.get("stems") or {}
+    if not isinstance(raw_stems, dict):
+        return False, {}, "drumsep_output_count_mismatch", "helper result stems is not an object"
+
+    key_to_reaper = {
+        "kick": "kick",
+        "snare": "snare",
+        "toms": "toms",
+        "hihat": "hi-hat",
+        "ride": "ride",
+        "crash": "crash",
+    }
+    reaper_stems: Dict[str, str] = {}
+    for source_key, reaper_key in key_to_reaper.items():
+        value = raw_stems.get(source_key)
+        if not value:
+            return False, {}, "drumsep_output_count_mismatch", f"missing helper stem: {source_key}"
+        path = _resolve_stem_path(output_root, str(value))
+        if not path.exists():
+            return False, {}, "drumsep_output_count_mismatch", f"helper stem missing on disk: {path}"
+        target = output_root / f"{reaper_key}.wav"
+        if path.resolve() != target.resolve():
+            if target.exists():
+                target.unlink()
+            shutil.move(str(path), str(target))
+        reaper_stems[reaper_key] = str(target)
+        print(f"  {reaper_key}:  {target}", file=sys.stderr)
+
+    print("drumsep_helper_ok=true", file=sys.stderr)
+    return True, reaper_stems, "", ""
 
 
 def _prepend_path(path_value: str) -> None:
@@ -1286,6 +1489,15 @@ def main():
             f"Direct Drum Kit Split route detected: workflow_mode={args.workflow_mode} workflow_source={args.workflow_source}",
             file=sys.stderr,
         )
+        drumsep_python = _drumsep_runtime_python_path()
+        runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)
+        if not runtime_ok:
+            reason = "drumsep_runtime_missing" if runtime_detail == "missing" else "drumsep_runtime_broken"
+            _emit_direct_dks_stage2_runtime_markers(reason, drumsep_python, runtime_detail)
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return 1
         try:
             ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
             if not ok:
@@ -1309,6 +1521,42 @@ def main():
             if write_done:
                 write_done("ERROR")
             return 1
+        output_root = Path(args.output_dir).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        emit_phase("separate_start")
+        helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
+            Path(args.input).resolve(),
+            output_root,
+            model_cache_dir,
+            drumsep_python,
+            requested_stage2_model,
+            run_model,
+        )
+        if not helper_ok:
+            stage = "stage2_separate"
+            if helper_reason == "drumsep_model_load_failed":
+                stage = "stage2_model_load"
+            elif helper_reason == "drumsep_output_count_mismatch":
+                stage = "stage2_output_validation"
+            _emit_direct_dks_helper_failure_markers(
+                helper_reason or "drumsep_helper_failed",
+                stage,
+                requested_stage2_model,
+                run_model,
+                helper_detail,
+            )
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return 1
+        emit_phase("separate_end")
+        emit_phase("stem_write_start")
+        print(json.dumps(helper_stems))
+        emit_phase("stem_write_end")
+        emit_phase("python_done")
+        if write_done:
+            write_done("DONE")
+        return 0
 
     resolved_device = device_preference
     if device_preference == "auto":

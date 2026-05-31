@@ -1080,6 +1080,23 @@ STEMS = {
     { name = "Piano",  color = {255, 120, 200}, file = "piano.wav", selected = true, key = "6", sixStemOnly = true },
 }
 
+local STANDARD_STEMS = STEMS
+local DRUMKIT_STEMS = {
+    { name = "Kick",   color = {230, 120, 70},  file = "kick.wav",   selected = true, key = "1", sixStemOnly = false },
+    { name = "Snare",  color = {240, 190, 80},  file = "snare.wav",  selected = true, key = "2", sixStemOnly = false },
+    { name = "Toms",   color = {120, 200, 120}, file = "toms.wav",   selected = true, key = "3", sixStemOnly = false },
+    { name = "Hi-Hat", color = {90, 190, 230},  file = "hi-hat.wav", selected = true, key = "4", sixStemOnly = false },
+    { name = "Ride",   color = {150, 130, 240}, file = "ride.wav",   selected = true, key = "5", sixStemOnly = false },
+    { name = "Crash",  color = {240, 120, 180}, file = "crash.wav",  selected = true, key = "6", sixStemOnly = false },
+}
+
+local function activateWorkflowStemSet(isDirectDKS)
+    STEMS = isDirectDKS and DRUMKIT_STEMS or STANDARD_STEMS
+    if SETTINGS_MOD and SETTINGS_MOD.configure then
+        SETTINGS_MOD.configure({ STEMS = STEMS })
+    end
+end
+
 -- Available processing devices
 DEVICES = {
     { id = "auto", name = "Auto", desc = "Automatically select best GPU" },
@@ -1439,6 +1456,55 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             .. "error_reason=" .. tostring(reason)
             .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this DrumSep model.\n"
             .. "Update/repair the STEMwerk runtime model catalog, then retry."
+            .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+            .. "\nCommand: " .. tostring(cmdLine or "unknown")
+            .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+            .. tostring(logSnippet or "(no log output found)")
+            .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+        if stdoutSnippet and stdoutSnippet ~= "" then
+            msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+        end
+        return msg
+    end
+
+    if lowerLog:find("error_stage=stage2_runtime", 1, true)
+        and (lowerLog:find("error_reason=drumsep_runtime_missing", 1, true)
+            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)
+            or lowerLog:find("error_reason=drumsep_stage2_delegation_not_implemented", 1, true)) then
+        local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_runtime_missing"
+        local detail = tostring(logSnippet or ""):match("detail=([^\r\n]+)") or ""
+        local headline = reason == "drumsep_stage2_delegation_not_implemented"
+            and "Drum Kit Split runtime is installed, but stage2 delegation is not implemented yet."
+            or reason == "drumsep_runtime_broken"
+            and "Drum Kit Split runtime is broken."
+            or "Drum Kit Split runtime is not installed."
+        local msg = headline .. "\n"
+            .. "Run Setup/Repair Drum Kit Split runtime.\n"
+            .. "Reason: " .. tostring(reason)
+            .. (detail ~= "" and ("\nDetail: " .. tostring(detail)) or "")
+            .. "\nerror_stage=stage2_runtime\n"
+            .. "error_reason=" .. tostring(reason)
+            .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+            .. "\nCommand: " .. tostring(cmdLine or "unknown")
+            .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+            .. tostring(logSnippet or "(no log output found)")
+            .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+        if stdoutSnippet and stdoutSnippet ~= "" then
+            msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+        end
+        return msg
+    end
+
+    if lowerLog:find("error_reason=drumsep_helper_failed", 1, true)
+        or lowerLog:find("error_reason=drumsep_model_load_failed", 1, true)
+        or lowerLog:find("error_reason=drumsep_separate_failed", 1, true)
+        or lowerLog:find("error_reason=drumsep_output_count_mismatch", 1, true) then
+        local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_helper_failed"
+        local stage = tostring(logSnippet or ""):match("error_stage=([^\r\n]+)") or "stage2_separate"
+        local msg = "Drum Kit Split separation failed.\n"
+            .. "Reason: " .. tostring(reason)
+            .. "\nerror_stage=" .. tostring(stage)
+            .. "\nerror_reason=" .. tostring(reason)
             .. "\n\nExit code: " .. tostring(exitCode or "unknown")
             .. "\nCommand: " .. tostring(cmdLine or "unknown")
             .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
@@ -19336,6 +19402,7 @@ function runSeparationWorkflow()
         runOptions = DKS_WORKFLOW.buildDirectRunOptions()
         debugLog("Direct DKS mode active: skipping Demucs dependency guard")
     end
+    activateWorkflowStemSet(isDirectDKS)
     setWorkflowContextForRun(runOptions)
 
     if OS == "Windows" then
