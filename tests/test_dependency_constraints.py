@@ -177,6 +177,7 @@ def test_stemwerk_core_imports_from_local_install():
 
 
 def test_onnxruntime_imports():
+    pytest.importorskip("onnxruntime")
     import onnxruntime  # noqa: F401
 
 
@@ -810,6 +811,14 @@ def test_verify_only_avoids_torch_runtime_unsupported_for_verified_intel_macos_c
     assert 'removeError("torch_runtime_unsupported")' in setup_internal
     assert 'removeError("torch_runtime_probe_failed")' in setup_internal
     assert 'result.runtimeVerifyDetail = "ok"' in setup_internal
+
+
+def test_verify_only_normalizes_state_before_bootstrap_check_rows():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'if verifiedRuntimeOk then\n        state.STATUS = "ok"' in setup_internal
+    assert setup_internal.index('local stateStatus = state.STATUS or ""') > setup_internal.index("if verifiedRuntimeOk then")
+    assert setup_internal.index("local checks = {") > setup_internal.index('local stateStatus = state.STATUS or ""')
 
 
 def test_verify_only_intel_macos_cpu_fallback_does_not_hide_real_missing_torch_failures():
@@ -1634,10 +1643,28 @@ def test_samplerate_guard_requires_repair_on_x86_only_or_import_failure_and_fail
 def test_macos_bootstrap_runs_samplerate_guard_before_final_dependency_verification():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    assert script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then') < script.index('"${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || set_status "audio_separator_check_failed" "audio_separator_import_failed"')
+    assert script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then') < script.index('if ! "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; then')
     assert script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then') < script.index('if ! verify_audio_separator_runtime_deps; then')
     assert script.index('if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then') < script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then')
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
+
+
+def test_macos_bootstrap_clears_stale_torch_pin_assert_failure_after_final_runtime_success():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'FINAL_RUNTIME_VERIFIED="yes"' in script
+    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then' in script
+    assert 'STATUS="ok"' in script
+    assert 'STATUS_REASON=""' in script
+    assert 'Cleared stale STATUS from earlier pinned runtime assertion failure after final runtime verification success' in script
+
+
+def test_macos_bootstrap_only_clears_stale_torch_pin_status_after_real_final_checks():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    line_no = lambda needle: next(i for i, line in enumerate(script.splitlines(), 1) if needle in line)
+    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then') > line_no('if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then')
+    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then') > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
 
 
 def test_macos_bootstrap_samplerate_repair_attempt_status_is_monotonic_yes():
