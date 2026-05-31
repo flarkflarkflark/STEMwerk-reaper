@@ -62,6 +62,36 @@ def _resolve_run_model(args: argparse.Namespace) -> str:
     return str(getattr(args, "model", "htdemucs") or "htdemucs")
 
 
+def _is_known_drumsep_model_missing_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "not found in supported model files" in text and "model file" in text
+
+
+def _emit_direct_dks_model_missing_markers(model_name: str) -> None:
+    print("error_stage=stage2_preflight", file=sys.stderr)
+    print("error_reason=drumsep_model_missing", file=sys.stderr)
+    print(f"requested_model={model_name}", file=sys.stderr)
+    print("Direct Drum Kit Split preflight failed: drumsep_model_missing", file=sys.stderr)
+    print(f"Requested model: {model_name}", file=sys.stderr)
+    print(
+        "guidance=Update or repair runtime model catalog/audio-separator mapping for DrumSep and retry.",
+        file=sys.stderr,
+    )
+
+
+def _direct_dks_preflight_check(model_name: str) -> Tuple[bool, Optional[str]]:
+    try:
+        sep = StemSeparator(model=model_name, device="cpu")
+        loader = getattr(getattr(sep, "separator", None), "load_model", None)
+        if callable(loader):
+            loader()
+        return True, None
+    except Exception as exc:
+        if _is_known_drumsep_model_missing_error(exc):
+            return False, str(exc)
+        raise
+
+
 def _enforce_mps_demucs_cpu_policy(requested_device: str, resolved_device: str, model_name: str) -> str:
     if resolved_device != "mps":
         return resolved_device
@@ -1066,15 +1096,17 @@ def main():
     if _is_direct_dks_source(args.workflow_mode, args.workflow_source):
         emit_phase("stage2_preflight")
         try:
-            StemSeparator(model=run_model, device="cpu")
+            ok, known_err = _direct_dks_preflight_check(run_model)
+            if not ok:
+                _emit_direct_dks_model_missing_markers(run_model)
+                if known_err:
+                    print(f"DETAIL: {known_err}", file=sys.stderr)
+                emit_phase("python_error")
+                if write_done:
+                    write_done("ERROR")
+                return 1
         except Exception as exc:
-            print("error_stage=stage2_preflight", file=sys.stderr)
-            print("error_reason=drumsep_model_missing", file=sys.stderr)
-            print(f"requested_model={run_model}", file=sys.stderr)
-            print(
-                "guidance=Update or repair runtime model catalog/audio-separator mapping for DrumSep and retry.",
-                file=sys.stderr,
-            )
+            _emit_direct_dks_model_missing_markers(run_model)
             print(f"ERROR: {exc}", file=sys.stderr)
             emit_phase("python_error")
             if write_done:
