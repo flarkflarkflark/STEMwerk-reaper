@@ -14183,7 +14183,7 @@ local function drawProgressWindow()
             gfx.setfont(1, "Courier", PS(10), string.byte('b'))
             gfx.x = displayX + PS(5)
             gfx.y = displayY + PS(3)
-            gfx.drawstr(T("terminal_output_title") or "DEMUCS OUTPUT")
+            gfx.drawstr(isDrumKitWorkflowActive() and "DRUMSEP OUTPUT" or (T("terminal_output_title") or "DEMUCS OUTPUT"))
 
             -- Read latest terminal output from stdout file
             local now = uiNow()
@@ -17846,7 +17846,7 @@ function drawMultiTrackProgressWindow()
         gfx.setfont(1, "Courier", PS(10), string.byte('b'))
         gfx.x = displayX + PS(5)
         gfx.y = displayY + PS(3)
-        gfx.drawstr(T("terminal_output_title") or "DEMUCS OUTPUT")
+        gfx.drawstr(isDrumKitWorkflowActive() and "DRUMSEP OUTPUT" or (T("terminal_output_title") or "DEMUCS OUTPUT"))
 
         local function tailFileLines(filePath, maxLines)
             if not filePath or filePath == "" then return {} end

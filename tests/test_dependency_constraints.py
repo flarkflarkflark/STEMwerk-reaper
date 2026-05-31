@@ -1626,6 +1626,8 @@ def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     assert '"--result-json",' in script
     assert 'drumsep_helper_stdout.txt' in script
     assert 'drumsep_helper_stderr.txt' in script
+    assert 'print("PROGRESS:1:Starting DrumSep runtime", flush=True)' in script
+    assert "DrumSep stage2 separating kit stems" in script
     assert 'error_reason=drumsep_stage2_delegation_not_implemented' not in script
     assert 'drumsep_output_count_mismatch' in script
 
