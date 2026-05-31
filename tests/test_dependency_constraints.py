@@ -1451,6 +1451,11 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "def _ensure_runtime_download_checks_has_drumsep(" in script
     assert "mdx23c_download_list" in script
     assert "def _download_direct_dks_assets(" in script
+    assert "def _is_known_drumsep_runtime_unsupported_error(exc: Exception, traceback_text: str, model_name: str) -> bool:" in script
+    assert "def _emit_direct_dks_runtime_unsupported_markers(" in script
+    assert 'print("error_stage=stage2_model_load", file=sys.stderr)' in script
+    assert 'print("error_reason=drumsep_model_runtime_unsupported", file=sys.stderr)' in script
+    assert "audio_separator mdxc loader missing expected config field 'model'" in script
     assert "sep.download_model_files(resolved_model)" in script
     assert "resolved_model=" in script
     assert "Direct Drum Kit Split route detected: workflow_mode=" in script
@@ -1476,6 +1481,8 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert "error_stage=stage2_preflight" in main_script
     assert "error_reason=drumsep_model_missing" in main_script
     assert "error_reason=drumsep_model_download_failed" in main_script
+    assert "error_stage=stage2_model_load" in main_script
+    assert "error_reason=drumsep_model_runtime_unsupported" in main_script
     assert "not found in supported model files" in main_script
     assert "workflow%-source" in main_script
     assert 'WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, workflowModel, runOptions)' in main_script

@@ -72,6 +72,18 @@ def _is_known_drumsep_model_missing_error(exc: Exception) -> bool:
     return "not found in supported model files" in text and "model file" in text
 
 
+def _is_known_drumsep_runtime_unsupported_error(exc: Exception, traceback_text: str, model_name: str) -> bool:
+    text = f"{exc}\n{traceback_text}".lower()
+    model_text = str(model_name or "").lower()
+    if "drumsep" not in model_text and "mdx23c_ep_141" not in model_text:
+        return False
+    return (
+        ("mdxc_separator.py" in text or "mdxc_separator" in text)
+        and "attributeerror" in text
+        and ("'model'" in text or "\"model\"" in text)
+    )
+
+
 def _emit_direct_dks_preflight_markers(reason: str, requested_model: str, resolved_model: str = "", detail: str = "") -> None:
     print("error_stage=stage2_preflight", file=sys.stderr)
     print(f"error_reason={reason}", file=sys.stderr)
@@ -88,6 +100,20 @@ def _emit_direct_dks_preflight_markers(reason: str, requested_model: str, resolv
         "guidance=Update or repair runtime model catalog/audio-separator mapping for DrumSep and retry.",
         file=sys.stderr,
     )
+
+
+def _emit_direct_dks_runtime_unsupported_markers(requested_model: str, resolved_model: str, detail: str) -> None:
+    print("error_stage=stage2_model_load", file=sys.stderr)
+    print("error_reason=drumsep_model_runtime_unsupported", file=sys.stderr)
+    print(f"requested_model={requested_model}", file=sys.stderr)
+    if resolved_model:
+        print(f"resolved_model={resolved_model}", file=sys.stderr)
+    print("Direct Drum Kit Split model load failed: drumsep_model_runtime_unsupported", file=sys.stderr)
+    print(f"Requested model: {requested_model}", file=sys.stderr)
+    if resolved_model:
+        print(f"Resolved model: {resolved_model}", file=sys.stderr)
+    if detail:
+        print(f"Detail: {detail}", file=sys.stderr)
 
 
 def _repository_root() -> Path:
@@ -1253,6 +1279,7 @@ def main():
 
     stems = _split_list(args.stems)
     run_model = _resolve_run_model(args)
+    requested_stage2_model = run_model
     if _is_direct_dks_source(args.workflow_mode, args.workflow_source):
         emit_phase("stage2_preflight")
         print(
@@ -1274,6 +1301,7 @@ def main():
                 if write_done:
                     write_done("ERROR")
                 return 1
+            requested_stage2_model = requested_model or requested_stage2_model
             run_model = resolved_model or run_model
         except Exception as exc:
             _emit_direct_dks_preflight_markers("drumsep_model_download_failed", run_model, "", str(exc))
@@ -1378,6 +1406,16 @@ def main():
         import traceback
 
         traceback_text = traceback.format_exc()
+        if _is_direct_dks_source(args.workflow_mode, args.workflow_source) and _is_known_drumsep_runtime_unsupported_error(exc, traceback_text, run_model):
+            _emit_direct_dks_runtime_unsupported_markers(
+                requested_stage2_model or run_model,
+                run_model,
+                "audio_separator mdxc loader missing expected config field 'model'",
+            )
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return 1
         model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
         if model_failure:
             print(f"STEMWERK_ERROR_CLASS={model_failure['error_class']}", file=sys.stderr)
