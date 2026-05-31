@@ -1441,9 +1441,14 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert 'parser.add_argument("--requested-stage2-model", default=""' in script
     assert "if _is_direct_dks_source(args.workflow_mode, args.workflow_source):" in script
     assert 'emit_phase("stage2_preflight")' in script
+    assert "def _direct_dks_preflight_check(model_name: str) -> Tuple[bool, Optional[str]]:" in script
+    assert "loader = getattr(getattr(sep, \"separator\", None), \"load_model\", None)" in script
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print("error_reason=drumsep_model_missing", file=sys.stderr)' in script
-    assert 'print(f"requested_model={run_model}", file=sys.stderr)' in script
+    assert 'print(f"requested_model={model_name}", file=sys.stderr)' in script
+    assert 'print("Direct Drum Kit Split preflight failed: drumsep_model_missing", file=sys.stderr)' in script
+    assert "if not ok:" in script
+    assert 'emit_phase("model_setup_start")' in script
 
 
 def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
@@ -1455,6 +1460,8 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert 'if (not trustedWindowsRuntime) and (not isDirectDKS) and (not ensureDependenciesInteractive()) then' in main_script
     assert "error_stage=stage2_preflight" in main_script
     assert "error_reason=drumsep_model_missing" in main_script
+    assert "not found in supported model files" in main_script
+    assert "workflow%-source" in main_script
     assert 'WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, workflowModel, runOptions)' in main_script
     assert 'pythonCmd = pythonCmd .. " --workflow-mode " .. C.quoteArg(workflowModeArg)' in workflow_script
     assert 'pythonCmd = pythonCmd .. " --workflow-source " .. C.quoteArg(workflowSourceArg)' in workflow_script

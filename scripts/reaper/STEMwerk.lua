@@ -1421,9 +1421,35 @@ end
 
 local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine, logPath, debugLogPath, stdoutSnippet)
     local lowerLog = string.lower(tostring(logSnippet or ""))
+    local lowerCmd = string.lower(tostring(cmdLine or ""))
+    local isDirectDksCmd = lowerCmd:find("workflow%-source", 1, false) and lowerCmd:find("dks_direct", 1, true)
+    local hasFallbackModelMissing = lowerLog:find("not found in supported model files", 1, true)
+        and lowerLog:find("model file", 1, true)
     if lowerLog:find("error_stage=stage2_preflight", 1, true)
         and lowerLog:find("error_reason=drumsep_model_missing", 1, true) then
         local requested = tostring(logSnippet or ""):match("requested_model=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
+        local msg = "Direct Drum Kit Split preflight failed.\n"
+            .. "Reason: drumsep_model_missing\n"
+            .. "Requested model: " .. tostring(requested)
+            .. "\nerror_stage=stage2_preflight\n"
+            .. "error_reason=drumsep_model_missing"
+            .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this DrumSep model.\n"
+            .. "Update/repair the STEMwerk runtime model catalog, then retry."
+            .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+            .. "\nCommand: " .. tostring(cmdLine or "unknown")
+            .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+            .. tostring(logSnippet or "(no log output found)")
+            .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+        if stdoutSnippet and stdoutSnippet ~= "" then
+            msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+        end
+        return msg
+    end
+
+    if isDirectDksCmd and hasFallbackModelMissing then
+        local requested = tostring(logSnippet or ""):match("requested_model=([^\r\n]+)")
+            or tostring(cmdLine or ""):match("%-%-requested%-stage2%-model%s+['\"]?([^%s'\"]+)")
+            or DKS_WORKFLOW.DIRECT_DKS_MODEL
         local msg = "Direct Drum Kit Split preflight failed.\n"
             .. "Reason: drumsep_model_missing\n"
             .. "Requested model: " .. tostring(requested)
