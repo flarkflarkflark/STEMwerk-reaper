@@ -13,6 +13,17 @@ PINNED_NUMPY_VERSION="1.26.4"
 PINNED_NUMBA_VERSION="0.59.1"
 PINNED_LLVM_VERSION="0.42.0"
 PINNED_IMAGEIO_FFMPEG_VERSION="0.6.0"
+DRUMSEP_AUDIO_SEPARATOR_VERSION="0.34.1"
+DRUMSEP_NUMPY_VERSION="2.4.6"
+DRUMSEP_ONNXRUNTIME_VERSION="1.26.0"
+DRUMSEP_ONNX_VERSION="1.21.0"
+DRUMSEP_ONNX2TORCH_VERSION="1.5.15"
+DRUMSEP_ONNX2TORCH_PY313_VERSION="1.6.0"
+DRUMSEP_TORCH_VERSION="2.12.0"
+DRUMSEP_TORCHVISION_VERSION="0.27.0"
+DRUMSEP_NUMBA_VERSION="0.65.1"
+DRUMSEP_MODEL_FILE="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+DRUMSEP_MODEL_YAML="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -61,6 +72,75 @@ model_cache_dir() {
   else
     printf "%s/.local/share/STEMwerk/models\n" "${HOME:-/tmp}"
   fi
+}
+
+drumsep_state_file() {
+  printf "%s/state/drumsep_runtime.env\n" "${RUNTIME_BASE}"
+}
+
+drumsep_log_file() {
+  printf "%s/logs/drumsep_install.log\n" "${RUNTIME_BASE}"
+}
+
+drumsep_runtime_python() {
+  printf "%s/.venv-drumsep/bin/python\n" "${RUNTIME_BASE}"
+}
+
+write_drumsep_state() {
+  _status="$1"
+  _model_status="${2:-missing}"
+  _detail="${3:-}"
+  _py="$(drumsep_runtime_python)"
+  _state="$(drumsep_state_file)"
+  _model_dir="$(model_cache_dir)"
+  _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
+  _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
+  _last_check="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
+
+  _versions=""
+  if [ -x "${_py}" ]; then
+    _versions="$("${_py}" - <<'PY' 2>/dev/null || true
+import importlib.metadata as metadata
+for env_key, dist_name in (
+    ("DRUMSEP_AUDIO_SEPARATOR_VERSION", "audio-separator"),
+    ("DRUMSEP_NUMPY_VERSION", "numpy"),
+    ("DRUMSEP_TORCH_VERSION", "torch"),
+    ("DRUMSEP_ONNX_VERSION", "onnx"),
+    ("DRUMSEP_ONNXRUNTIME_VERSION", "onnxruntime"),
+    ("DRUMSEP_ONNX2TORCH_VERSION", "onnx2torch"),
+    ("DRUMSEP_ONNX2TORCH_PY313_VERSION", "onnx2torch-py313"),
+):
+    try:
+        value = metadata.version(dist_name)
+    except Exception:
+        value = ""
+    print(f"{env_key}={value}")
+PY
+)"
+  fi
+
+  {
+    echo "STATUS=${_status}"
+    [ -n "${_detail}" ] && echo "STATUS_REASON=${_detail}"
+    echo "DRUMSEP_RUNTIME_STATUS=${_status}"
+    [ -n "${_detail}" ] && echo "DRUMSEP_RUNTIME_DETAIL=${_detail}"
+    echo "DRUMSEP_PYTHON=${_py}"
+    if [ -n "${_versions}" ]; then
+      printf "%s\n" "${_versions}"
+    else
+      echo "DRUMSEP_AUDIO_SEPARATOR_VERSION="
+      echo "DRUMSEP_NUMPY_VERSION="
+      echo "DRUMSEP_TORCH_VERSION="
+      echo "DRUMSEP_ONNX_VERSION="
+      echo "DRUMSEP_ONNXRUNTIME_VERSION="
+      echo "DRUMSEP_ONNX2TORCH_VERSION="
+      echo "DRUMSEP_ONNX2TORCH_PY313_VERSION="
+    fi
+    echo "DRUMSEP_LAST_CHECK_UTC=${_last_check}"
+    echo "DRUMSEP_MODEL_STATUS=${_model_status}"
+    echo "DRUMSEP_MODEL_FILE=${_model_file}"
+    echo "DRUMSEP_MODEL_YAML=${_model_yaml}"
+  } > "${_state}"
 }
 
 write_state() {
@@ -350,6 +430,140 @@ set_progress() {
   STEP_LABEL="$3"
   log "STEP ${STEP_INDEX}/${STEP_TOTAL}: ${STEP_LABEL}"
   write_state
+}
+
+verify_drumsep_runtime() {
+  _py="$(drumsep_runtime_python)"
+  _model_dir="$(model_cache_dir)"
+  _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
+  _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
+  if [ ! -x "${_py}" ]; then
+    write_drumsep_state "missing" "missing" "python_missing"
+    return 1
+  fi
+  "${_py}" - <<PY >> "$(drumsep_log_file)" 2>&1
+import importlib
+import importlib.metadata as metadata
+import os
+import sys
+
+expected = {
+    "audio-separator": "${DRUMSEP_AUDIO_SEPARATOR_VERSION}",
+    "numpy": "${DRUMSEP_NUMPY_VERSION}",
+    "torch": "${DRUMSEP_TORCH_VERSION}",
+    "onnx": "${DRUMSEP_ONNX_VERSION}",
+    "onnxruntime": "${DRUMSEP_ONNXRUNTIME_VERSION}",
+    "onnx2torch": "${DRUMSEP_ONNX2TORCH_VERSION}",
+    "onnx2torch-py313": "${DRUMSEP_ONNX2TORCH_PY313_VERSION}",
+    "numba": "${DRUMSEP_NUMBA_VERSION}",
+    "torchvision": "${DRUMSEP_TORCHVISION_VERSION}",
+}
+modules = ["audio_separator", "numpy", "torch", "onnx", "onnxruntime", "onnx2torch"]
+errors = []
+for module_name in modules:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        errors.append(f"import_failed:{module_name}:{type(exc).__name__}:{exc}")
+
+for dist_name, wanted in expected.items():
+    try:
+        found = metadata.version(dist_name).split("+", 1)[0]
+    except Exception as exc:
+        errors.append(f"version_missing:{dist_name}:{type(exc).__name__}:{exc}")
+        continue
+    if found != wanted:
+        errors.append(f"version_mismatch:{dist_name}:expected={wanted}:found={found}")
+
+model_file = "${_model_file}"
+model_yaml = "${_model_yaml}"
+if not os.path.isfile(model_file) or not os.path.isfile(model_yaml):
+    print("DRUMSEP_VERIFY model_missing")
+    raise SystemExit(2)
+
+if errors:
+    print("DRUMSEP_VERIFY broken " + ";".join(errors))
+    raise SystemExit(1)
+
+try:
+    import torch
+    torch.cuda.is_available = lambda: False
+    from audio_separator.separator import Separator
+    sep = Separator(model_file_dir="${_model_dir}", output_dir=".", output_format="wav")
+    sep.load_model("${DRUMSEP_MODEL_FILE}")
+except Exception as exc:
+    print(f"DRUMSEP_VERIFY load_failed {type(exc).__name__}: {exc}")
+    raise SystemExit(3)
+
+print("DRUMSEP_VERIFY ok")
+PY
+  _rc=$?
+  case "${_rc}" in
+    0)
+      write_drumsep_state "ok" "ok" "ok"
+      return 0
+      ;;
+    2)
+      write_drumsep_state "model_missing" "missing" "model_missing"
+      return 0
+      ;;
+    3)
+      write_drumsep_state "broken" "load_failed" "model_load_failed"
+      return 1
+      ;;
+    *)
+      write_drumsep_state "broken" "missing" "verify_failed"
+      return 1
+      ;;
+  esac
+}
+
+install_drumsep_runtime() {
+  _drumsep_log="$(drumsep_log_file)"
+  _drumsep_py="$(drumsep_runtime_python)"
+  : > "${_drumsep_log}" || true
+  log_stage "Installing optional DrumSep runtime"
+  log_step "DrumSep runtime path: ${RUNTIME_BASE}/.venv-drumsep"
+  log_step "DrumSep install log: ${_drumsep_log}"
+  STEP_TOTAL="4"
+  set_progress "1" "${STEP_TOTAL}" "Creating DrumSep runtime"
+  rm -rf "${RUNTIME_BASE}/.venv-drumsep"
+  if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep" >> "${_drumsep_log}" 2>&1; then
+    write_drumsep_state "install_failed" "missing" "venv_create_failed"
+    return 1
+  fi
+  if [ ! -x "${_drumsep_py}" ]; then
+    write_drumsep_state "install_failed" "missing" "python_missing_after_create"
+    return 1
+  fi
+
+  set_progress "2" "${STEP_TOTAL}" "Upgrading DrumSep pip"
+  if ! "${_drumsep_py}" -m pip install --upgrade pip setuptools wheel >> "${_drumsep_log}" 2>&1; then
+    write_drumsep_state "install_failed" "missing" "pip_upgrade_failed"
+    return 1
+  fi
+
+  set_progress "3" "${STEP_TOTAL}" "Installing DrumSep packages"
+  if ! "${_drumsep_py}" -m pip install \
+    "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" \
+    "numpy==${DRUMSEP_NUMPY_VERSION}" \
+    "onnxruntime==${DRUMSEP_ONNXRUNTIME_VERSION}" \
+    "onnx==${DRUMSEP_ONNX_VERSION}" \
+    "onnx2torch==${DRUMSEP_ONNX2TORCH_VERSION}" \
+    "onnx2torch-py313==${DRUMSEP_ONNX2TORCH_PY313_VERSION}" \
+    "torch==${DRUMSEP_TORCH_VERSION}" \
+    "torchvision==${DRUMSEP_TORCHVISION_VERSION}" \
+    "numba==${DRUMSEP_NUMBA_VERSION}" >> "${_drumsep_log}" 2>&1; then
+    write_drumsep_state "install_failed" "missing" "package_install_failed"
+    return 1
+  fi
+
+  set_progress "4" "${STEP_TOTAL}" "Verifying DrumSep runtime"
+  if ! verify_drumsep_runtime; then
+    return 1
+  fi
+  log_step "DrumSep runtime verification complete"
+  return 0
 }
 
 resolve_core_target() {
@@ -895,6 +1109,10 @@ if [ -z "${PYTHON}" ]; then
     log_step "${msg}"
     printf "%s\n" "${msg}" >&2
     set_status "missing_python" "managed_python_unavailable"
+    if [ "${MODE}" = "drumsep-runtime" ]; then
+      write_drumsep_state "install_failed" "missing" "python_missing"
+      exit 1
+    fi
   else
     BACKEND_REASON="python_not_found"
     if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
@@ -909,8 +1127,23 @@ if [ -z "${PYTHON}" ]; then
     log_step "${msg}"
     printf "%s\n" "${msg}" >&2
     set_status "missing_python" "managed_python_unavailable"
+    if [ "${MODE}" = "drumsep-runtime" ]; then
+      write_drumsep_state "install_failed" "missing" "python_missing"
+      exit 1
+    fi
   fi
 else
+  if [ "${MODE}" = "drumsep-runtime" ]; then
+    if install_drumsep_runtime; then
+      STATUS="ok"
+      STATUS_REASON=""
+      write_drumsep_state "ok" "ok" "ok"
+      log_stage "DrumSep runtime install finished"
+      exit 0
+    fi
+    log "DrumSep runtime install failed"
+    exit 1
+  fi
   log_stage "Creating venv"
   log_step "Creating STEMwerk virtual environment..."
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
