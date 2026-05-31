@@ -44,6 +44,18 @@ def _is_demucs_model(model_name: Optional[str]) -> bool:
     return name.startswith("htdemucs") or name.startswith("hdemucs")
 
 
+def _is_direct_dks_mode(workflow_mode: Optional[str]) -> bool:
+    return str(workflow_mode or "").strip().lower() == "dks_direct"
+
+
+def _resolve_run_model(args: argparse.Namespace) -> str:
+    if _is_direct_dks_mode(getattr(args, "workflow_mode", "")):
+        requested = str(getattr(args, "requested_stage2_model", "") or "").strip()
+        if requested:
+            return requested
+    return str(getattr(args, "model", "htdemucs") or "htdemucs")
+
+
 def _enforce_mps_demucs_cpu_policy(requested_device: str, resolved_device: str, model_name: str) -> str:
     if resolved_device != "mps":
         return resolved_device
@@ -966,6 +978,10 @@ def main():
                         help="List available compute devices")
     parser.add_argument("--list-devices-machine", action="store_true",
                         help="List available devices in a machine-readable format (for REAPER UIs)")
+    parser.add_argument("--workflow-mode", default="",
+                        help="Optional workflow mode (e.g. dks_direct)")
+    parser.add_argument("--requested-stage2-model", default="",
+                        help="Optional stage2 model override for direct DKS")
 
     args = parser.parse_args()
 
@@ -1038,6 +1054,24 @@ def main():
         device_preference = "auto"
 
     stems = _split_list(args.stems)
+    run_model = _resolve_run_model(args)
+    if _is_direct_dks_mode(args.workflow_mode):
+        emit_phase("stage2_preflight")
+        try:
+            StemSeparator(model=run_model, device="cpu")
+        except Exception as exc:
+            print("error_stage=stage2_preflight", file=sys.stderr)
+            print("error_reason=drumsep_model_missing", file=sys.stderr)
+            print(f"requested_model={run_model}", file=sys.stderr)
+            print(
+                "guidance=Update or repair runtime model catalog/audio-separator mapping for DrumSep and retry.",
+                file=sys.stderr,
+            )
+            print(f"ERROR: {exc}", file=sys.stderr)
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return 1
 
     resolved_device = device_preference
     if device_preference == "auto":
@@ -1065,12 +1099,12 @@ def main():
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         _enable_mps_runtime_fallback(device_preference, resolved_device)
-        resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, args.model)
+        resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, run_model)
         runtime_env = _emit_runtime_diagnostics(resolved_device)
-        _enable_torch_weights_only_compat(args.model, resolved_device)
+        _enable_torch_weights_only_compat(run_model, resolved_device)
 
         emit_phase("model_setup_start")
-        sep = StemSeparator(model=args.model, device=resolved_device)
+        sep = StemSeparator(model=run_model, device=resolved_device)
         emit_phase("model_setup_end")
 
         def reaper_progress(pct: float, msg: str):
@@ -1149,7 +1183,7 @@ def main():
             traceback_text,
             device_preference,
             resolved_device,
-            args.model,
+            run_model,
             runtime_env,
         )
         if failure:
