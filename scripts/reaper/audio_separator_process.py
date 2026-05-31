@@ -55,7 +55,7 @@ def _is_direct_dks_source(workflow_mode: Optional[str], workflow_source: Optiona
 
 
 def _resolve_run_model(args: argparse.Namespace) -> str:
-    if _is_direct_dks_mode(getattr(args, "workflow_mode", "")):
+    if _is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", "")):
         requested = str(getattr(args, "requested_stage2_model", "") or "").strip()
         if requested:
             return requested
@@ -80,11 +80,14 @@ def _emit_direct_dks_model_missing_markers(model_name: str) -> None:
 
 
 def _direct_dks_preflight_check(model_name: str) -> Tuple[bool, Optional[str]]:
+    # Force an explicit model-catalog lookup before normal workflow setup.
+    # This prevents delayed failure in sep.separate()/load_model for known
+    # unresolved DrumSep model names.
     try:
-        sep = StemSeparator(model=model_name, device="cpu")
-        loader = getattr(getattr(sep, "separator", None), "load_model", None)
-        if callable(loader):
-            loader()
+        from audio_separator.separator import Separator as AudioSeparator
+
+        sep = AudioSeparator(model_file_dir=str(_configure_model_cache_runtime()), output_dir=".")
+        sep.download_model_files(model_name)
         return True, None
     except Exception as exc:
         if _is_known_drumsep_model_missing_error(exc):
@@ -1095,6 +1098,10 @@ def main():
     run_model = _resolve_run_model(args)
     if _is_direct_dks_source(args.workflow_mode, args.workflow_source):
         emit_phase("stage2_preflight")
+        print(
+            f"Direct Drum Kit Split route detected: workflow_mode={args.workflow_mode} workflow_source={args.workflow_source}",
+            file=sys.stderr,
+        )
         try:
             ok, known_err = _direct_dks_preflight_check(run_model)
             if not ok:

@@ -1442,13 +1442,16 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "if _is_direct_dks_source(args.workflow_mode, args.workflow_source):" in script
     assert 'emit_phase("stage2_preflight")' in script
     assert "def _direct_dks_preflight_check(model_name: str) -> Tuple[bool, Optional[str]]:" in script
-    assert "loader = getattr(getattr(sep, \"separator\", None), \"load_model\", None)" in script
+    assert "sep.download_model_files(model_name)" in script
+    assert "Direct Drum Kit Split route detected: workflow_mode=" in script
+    assert "workflow_source=" in script
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print("error_reason=drumsep_model_missing", file=sys.stderr)' in script
     assert 'print(f"requested_model={model_name}", file=sys.stderr)' in script
     assert 'print("Direct Drum Kit Split preflight failed: drumsep_model_missing", file=sys.stderr)' in script
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
+    assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
 
 
 def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
