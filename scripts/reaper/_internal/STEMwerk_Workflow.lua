@@ -235,7 +235,7 @@ function WORKFLOW.checkSeparationDone()
 end
 
 -- Start separation process in background (Windows)
-function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
+function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions)
         append_diag_log("[workflow] start")
         append_diag_log("[workflow] outputDir=" .. tostring(outputDir))
         append_diag_log("[workflow] stdoutFile=" .. tostring(outputDir .. PATH_SEP .. "stdout.txt"))
@@ -398,6 +398,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
         -- Use WMI Win32_Process.Create to get a PID for proper cancel.
         local requestedDeviceArg = SETTINGS.device or "auto"
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
+        local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
+        local requestedStage2ModelArg = tostring((runOptions and runOptions.requestedStage2Model) or "")
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
             C.quoteArg(PYTHON_PATH),
@@ -407,6 +409,12 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             C.quoteArg(model),
             C.quoteArg(deviceArg)
         )
+        if workflowModeArg ~= "" then
+            pythonCmd = pythonCmd .. " --workflow-mode " .. C.quoteArg(workflowModeArg)
+        end
+        if requestedStage2ModelArg ~= "" then
+            pythonCmd = pythonCmd .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
+        end
         C.progressState.lastCmd = pythonCmd
         SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
         if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
@@ -431,6 +439,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             local outD = escPS(outputDir)
             local m = escPS(model)
             local dev = escPS(deviceArg)
+            local workflowMode = escPS(workflowModeArg)
+            local requestedStage2Model = escPS(requestedStage2ModelArg)
             local stdoutF = escPS(stdoutFile)
             local stderrF = escPS(logFile)
             local pidF = escPS(pidFile)
@@ -457,7 +467,12 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
                 "$outq=$dq + $out + $dq;" ..
                 "$modelq=$dq + $model + $dq;" ..
                 "$devq=$dq + $dev + $dq;" ..
-                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "'; " ..
+                "$wm='" .. workflowMode .. "';" ..
+                "$s2='" .. requestedStage2Model .. "';" ..
+                "$args=@('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq);" ..
+                "if ($wm -ne '') { $args += @('--workflow-mode',($dq + $wm + $dq)) };" ..
+                "if ($s2 -ne '') { $args += @('--requested-stage2-model',($dq + $s2 + $dq)) };" ..
+                "$p = Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "'; " ..
                 "Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii; " ..
                 "Wait-Process -Id $p.Id; " ..
                 "$ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii; " ..
@@ -488,6 +503,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
         local requestedDeviceArg = tostring(SETTINGS.device or "auto")
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
         local modelArg  = tostring(model or SETTINGS.model or "htdemucs")
+        local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
+        local requestedStage2ModelArg = tostring((runOptions and runOptions.requestedStage2Model) or "")
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
             C.quoteArg(PYTHON_PATH),
@@ -497,6 +514,12 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             C.quoteArg(modelArg),
             C.quoteArg(deviceArg)
         )
+        if workflowModeArg ~= "" then
+            pythonCmd = pythonCmd .. " --workflow-mode " .. C.quoteArg(workflowModeArg)
+        end
+        if requestedStage2ModelArg ~= "" then
+            pythonCmd = pythonCmd .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
+        end
         C.progressState.lastCmd = pythonCmd
         SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
         if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
@@ -548,6 +571,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             script:write("OUT=" .. C.quoteArg(outputDir) .. "\n")
             script:write("MODEL=" .. C.quoteArg(modelArg) .. "\n")
             script:write("DEVICE=" .. C.quoteArg(deviceArg) .. "\n")
+            script:write("WORKFLOW_MODE=" .. C.quoteArg(workflowModeArg) .. "\n")
+            script:write("REQUESTED_STAGE2_MODEL=" .. C.quoteArg(requestedStage2ModelArg) .. "\n")
             script:write("STDOUT=" .. C.quoteArg(stdoutFile) .. "\n")
             script:write("STDERR=" .. C.quoteArg(logFile) .. "\n")
             script:write("DONE=" .. C.quoteArg(doneFile) .. "\n")
@@ -566,7 +591,10 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
             script:write("(\n")
-            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR" &\n')
+            script:write('  set -- "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE"\n')
+            script:write('  if [ -n "$WORKFLOW_MODE" ]; then set -- "$@" --workflow-mode "$WORKFLOW_MODE"; fi\n')
+            script:write('  if [ -n "$REQUESTED_STAGE2_MODEL" ]; then set -- "$@" --requested-stage2-model "$REQUESTED_STAGE2_MODEL"; fi\n')
+            script:write('  "$@" >"$STDOUT" 2>"$STDERR" &\n')
             script:write('  worker_pid=$!\n')
             script:write('  echo "$worker_pid" > "$PIDFILE"\n')
             script:write('  wait "$worker_pid"\n')
@@ -587,14 +615,22 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
             end -- if OS == "Windows"
         else
             -- If we couldn't write the launcher, fall back to a direct foreground run (old behavior).
+            local extraArgs = ""
+            if workflowModeArg ~= "" then
+                extraArgs = extraArgs .. " --workflow-mode " .. C.quoteArg(workflowModeArg)
+            end
+            if requestedStage2ModelArg ~= "" then
+                extraArgs = extraArgs .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
+            end
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s >%s 2>%s && echo DONE > %s',
+                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
                 C.quoteArg(PYTHON_PATH),
                 C.quoteArg(SEPARATOR_SCRIPT),
                 C.quoteArg(inputFile),
                 C.quoteArg(outputDir),
                 C.quoteArg(modelArg),
                 C.quoteArg(deviceArg),
+                extraArgs,
                 C.quoteArg(stdoutFile),
                 C.quoteArg(logFile),
                 C.quoteArg(doneFile)
@@ -807,7 +843,7 @@ function WORKFLOW.finishSeparationCallback()
 end
 
 -- Run separation with progress UI
-function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
+function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model, runOptions)
     -- Load settings to get current theme
     C.loadSettings()
     C.updateTheme()
@@ -817,7 +853,7 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model)
     end
 
     -- Start the process
-    local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model)
+    local ok = WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions)
     if ok == false then
         if OS == "Windows" and C.progressState.windowOpen then
             closeProcessingWindow()

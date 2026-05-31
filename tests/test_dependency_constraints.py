@@ -1430,7 +1430,35 @@ def test_audio_separator_process_enables_torch26_demucs_checkpoint_compatibility
     assert 'if major < 2 or (major == 2 and minor < 6):' in script
     assert 'os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"' in script
     assert "STEMWERK_DIAG torch_weights_only_compat=enabled mode=TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" in script
-    assert "_enable_torch_weights_only_compat(args.model, resolved_device)" in script
+    assert "_enable_torch_weights_only_compat(run_model, resolved_device)" in script
+
+
+def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text()
+
+    assert 'parser.add_argument("--workflow-mode", default=""' in script
+    assert 'parser.add_argument("--requested-stage2-model", default=""' in script
+    assert "if _is_direct_dks_mode(args.workflow_mode):" in script
+    assert 'emit_phase("stage2_preflight")' in script
+    assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
+    assert 'print("error_reason=drumsep_model_missing", file=sys.stderr)' in script
+    assert 'print(f"requested_model={run_model}", file=sys.stderr)' in script
+
+
+def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    workflow_script = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text()
+    dks_script = Path("scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua").read_text()
+
+    assert 'local DKS_WORKFLOW = dofile(script_path .. "_internal/STEMwerk_DrumKit_Workflow.lua")' in main_script
+    assert 'if (not trustedWindowsRuntime) and (not isDirectDKS) and (not ensureDependenciesInteractive()) then' in main_script
+    assert "error_stage=stage2_preflight" in main_script
+    assert "error_reason=drumsep_model_missing" in main_script
+    assert 'WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, workflowModel, runOptions)' in main_script
+    assert 'pythonCmd = pythonCmd .. " --workflow-mode " .. C.quoteArg(workflowModeArg)' in workflow_script
+    assert 'pythonCmd = pythonCmd .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)' in workflow_script
+    assert 'M.DIRECT_DKS_PRESET = "dks_direct"' in dks_script
+    assert 'M.DIRECT_DKS_MODEL = "MDX23C-DrumSep-aufr33-jarredou.ckpt"' in dks_script
 
 
 def test_support_bundle_prefers_newest_runtime_run_over_stale_timing_summary():

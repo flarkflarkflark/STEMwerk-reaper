@@ -106,6 +106,7 @@ local function loadModule(path, label)
 end
 
 local SW_SETUP = dofile(script_path .. "_internal/STEMwerk_Runtime_Setup.lua")
+local DKS_WORKFLOW = dofile(script_path .. "_internal/STEMwerk_DrumKit_Workflow.lua")
 local SYSTEM = dofile(script_path .. "_internal/STEMwerk_System.lua")
 local getOS = SYSTEM.getOS
 local isAbsolutePath = SYSTEM.isAbsolutePath
@@ -1419,6 +1420,27 @@ local function isKnownMpsUnsupportedFailure(logSnippet)
 end
 
 local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine, logPath, debugLogPath, stdoutSnippet)
+    local lowerLog = string.lower(tostring(logSnippet or ""))
+    if lowerLog:find("error_stage=stage2_preflight", 1, true)
+        and lowerLog:find("error_reason=drumsep_model_missing", 1, true) then
+        local requested = tostring(logSnippet or ""):match("requested_model=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
+        local msg = "Direct Drum Kit Split preflight failed.\n"
+            .. "error_stage=stage2_preflight\n"
+            .. "error_reason=drumsep_model_missing\n"
+            .. "requested_model=" .. tostring(requested)
+            .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this DrumSep model.\n"
+            .. "Update/repair the STEMwerk runtime model catalog, then retry."
+            .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+            .. "\nCommand: " .. tostring(cmdLine or "unknown")
+            .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+            .. tostring(logSnippet or "(no log output found)")
+            .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+        if stdoutSnippet and stdoutSnippet ~= "" then
+            msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+        end
+        return msg
+    end
+
     local function modelCachePathHint()
         if OS == "macOS" then
             return "~/Library/Application Support/STEMwerk/models/"
@@ -19213,7 +19235,18 @@ function runSeparationWorkflow()
         applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
     end
 
-    if (not trustedWindowsRuntime) and (not ensureDependenciesInteractive()) then
+    local runOptions = nil
+    local quickModePreset = reaper.GetExtState(EXT_SECTION, "active_workflow_mode")
+    local isDirectDKS = DKS_WORKFLOW.isDirectPreset(quickModePreset)
+    if quickModePreset ~= "" then
+        reaper.DeleteExtState(EXT_SECTION, "active_workflow_mode", false)
+    end
+    if isDirectDKS then
+        runOptions = DKS_WORKFLOW.buildDirectRunOptions()
+        debugLog("Direct DKS mode active: skipping Demucs dependency guard")
+    end
+
+    if (not trustedWindowsRuntime) and (not isDirectDKS) and (not ensureDependenciesInteractive()) then
         if OS == "Windows" and progressState.windowOpen then
             closeProcessingWindow()
         end
@@ -19764,7 +19797,11 @@ function runSeparationWorkflow()
     end
     -- Start separation with progress UI (async)
     writeTimingEvent(WORKFLOW_TEMP_DIR, "python_launch", "single", { mode = "single" })
-    WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, SETTINGS.model)
+    local workflowModel = SETTINGS.model
+    if runOptions and runOptions.requestedStage2Model then
+        workflowModel = runOptions.requestedStage2Model
+    end
+    WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, workflowModel, runOptions)
     debugLog("runSeparationWithProgress called")
 end
 
@@ -19792,6 +19829,8 @@ function checkQuickPreset()
             STEMS[4].selected = false
         elseif preset == "all" then
             applyPresetAll()
+        elseif DKS_WORKFLOW.isDirectPreset(preset) then
+            reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.DIRECT_DKS_PRESET, false)
         end
 
         return true  -- Quick mode, skip dialog
