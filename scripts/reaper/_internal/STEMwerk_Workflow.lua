@@ -399,6 +399,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         local requestedDeviceArg = SETTINGS.device or "auto"
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
         local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
+        local workflowSourceArg = tostring((runOptions and runOptions.workflowSource) or "")
         local requestedStage2ModelArg = tostring((runOptions and runOptions.requestedStage2Model) or "")
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
@@ -411,6 +412,9 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         )
         if workflowModeArg ~= "" then
             pythonCmd = pythonCmd .. " --workflow-mode " .. C.quoteArg(workflowModeArg)
+        end
+        if workflowSourceArg ~= "" then
+            pythonCmd = pythonCmd .. " --workflow-source " .. C.quoteArg(workflowSourceArg)
         end
         if requestedStage2ModelArg ~= "" then
             pythonCmd = pythonCmd .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
@@ -440,6 +444,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             local m = escPS(model)
             local dev = escPS(deviceArg)
             local workflowMode = escPS(workflowModeArg)
+            local workflowSource = escPS(workflowSourceArg)
             local requestedStage2Model = escPS(requestedStage2ModelArg)
             local stdoutF = escPS(stdoutFile)
             local stderrF = escPS(logFile)
@@ -468,9 +473,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 "$modelq=$dq + $model + $dq;" ..
                 "$devq=$dq + $dev + $dq;" ..
                 "$wm='" .. workflowMode .. "';" ..
+                "$ws='" .. workflowSource .. "';" ..
                 "$s2='" .. requestedStage2Model .. "';" ..
                 "$args=@('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq);" ..
                 "if ($wm -ne '') { $args += @('--workflow-mode',($dq + $wm + $dq)) };" ..
+                "if ($ws -ne '') { $args += @('--workflow-source',($dq + $ws + $dq)) };" ..
                 "if ($s2 -ne '') { $args += @('--requested-stage2-model',($dq + $s2 + $dq)) };" ..
                 "$p = Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "'; " ..
                 "Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii; " ..
@@ -504,6 +511,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
         local modelArg  = tostring(model or SETTINGS.model or "htdemucs")
         local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
+        local workflowSourceArg = tostring((runOptions and runOptions.workflowSource) or "")
         local requestedStage2ModelArg = tostring((runOptions and runOptions.requestedStage2Model) or "")
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
@@ -516,6 +524,9 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         )
         if workflowModeArg ~= "" then
             pythonCmd = pythonCmd .. " --workflow-mode " .. C.quoteArg(workflowModeArg)
+        end
+        if workflowSourceArg ~= "" then
+            pythonCmd = pythonCmd .. " --workflow-source " .. C.quoteArg(workflowSourceArg)
         end
         if requestedStage2ModelArg ~= "" then
             pythonCmd = pythonCmd .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
@@ -572,6 +583,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             script:write("MODEL=" .. C.quoteArg(modelArg) .. "\n")
             script:write("DEVICE=" .. C.quoteArg(deviceArg) .. "\n")
             script:write("WORKFLOW_MODE=" .. C.quoteArg(workflowModeArg) .. "\n")
+            script:write("WORKFLOW_SOURCE=" .. C.quoteArg(workflowSourceArg) .. "\n")
             script:write("REQUESTED_STAGE2_MODEL=" .. C.quoteArg(requestedStage2ModelArg) .. "\n")
             script:write("STDOUT=" .. C.quoteArg(stdoutFile) .. "\n")
             script:write("STDERR=" .. C.quoteArg(logFile) .. "\n")
@@ -593,6 +605,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             script:write("(\n")
             script:write('  set -- "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE"\n')
             script:write('  if [ -n "$WORKFLOW_MODE" ]; then set -- "$@" --workflow-mode "$WORKFLOW_MODE"; fi\n')
+            script:write('  if [ -n "$WORKFLOW_SOURCE" ]; then set -- "$@" --workflow-source "$WORKFLOW_SOURCE"; fi\n')
             script:write('  if [ -n "$REQUESTED_STAGE2_MODEL" ]; then set -- "$@" --requested-stage2-model "$REQUESTED_STAGE2_MODEL"; fi\n')
             script:write('  "$@" >"$STDOUT" 2>"$STDERR" &\n')
             script:write('  worker_pid=$!\n')
@@ -618,6 +631,9 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             local extraArgs = ""
             if workflowModeArg ~= "" then
                 extraArgs = extraArgs .. " --workflow-mode " .. C.quoteArg(workflowModeArg)
+            end
+            if workflowSourceArg ~= "" then
+                extraArgs = extraArgs .. " --workflow-source " .. C.quoteArg(workflowSourceArg)
             end
             if requestedStage2ModelArg ~= "" then
                 extraArgs = extraArgs .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)

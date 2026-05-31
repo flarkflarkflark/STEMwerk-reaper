@@ -1425,9 +1425,10 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
         and lowerLog:find("error_reason=drumsep_model_missing", 1, true) then
         local requested = tostring(logSnippet or ""):match("requested_model=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
         local msg = "Direct Drum Kit Split preflight failed.\n"
-            .. "error_stage=stage2_preflight\n"
-            .. "error_reason=drumsep_model_missing\n"
-            .. "requested_model=" .. tostring(requested)
+            .. "Reason: drumsep_model_missing\n"
+            .. "Requested model: " .. tostring(requested)
+            .. "\nerror_stage=stage2_preflight\n"
+            .. "error_reason=drumsep_model_missing"
             .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this DrumSep model.\n"
             .. "Update/repair the STEMwerk runtime model catalog, then retry."
             .. "\n\nExit code: " .. tostring(exitCode or "unknown")
@@ -13265,7 +13266,19 @@ local progressState = {
     nextFrameAt = 0,
     nextPollAt = 0,
     doneDetected = false,
+    workflowMode = "",
+    workflowSource = "",
 }
+
+local function isDrumKitWorkflowActive()
+    return tostring(progressState.workflowMode or "") == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+end
+
+local function setWorkflowContextForRun(runOptions)
+    runOptions = runOptions or {}
+    progressState.workflowMode = tostring(runOptions.workflowMode or "")
+    progressState.workflowSource = tostring(runOptions.workflowSource or "")
+end
 
 UI_PROGRESS.configure({
     progressState               = progressState,
@@ -13331,7 +13344,7 @@ function showProcessingPlaceholderWindow(stage)
     local fillW = math.max(24, math.floor(barW * (0.18 + 0.22 * pulse)))
 
     gfx.setfont(1, "Arial", 20, string.byte('b'))
-    local title = "STEMwerk"
+    local title = isDrumKitWorkflowActive() and "Drum Kit Split" or "STEMwerk"
     local titleW = gfx.measurestr(title)
     gfx.set(text[1], text[2], text[3], 1)
     gfx.x = math.floor((w - titleW) / 2)
@@ -13676,6 +13689,8 @@ local function drawProgressWindow()
     local titleX = PS(25)
     local titleY = PS(28)
 
+    local drumKitMode = isDrumKitWorkflowActive()
+
     -- In multi-track mode, show which track
     if multiTrackQueue.active then
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
@@ -13687,23 +13702,27 @@ local function drawProgressWindow()
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
         gfx.x = titleX
         gfx.y = titleY
-        local singleTrackLabel = T("single_track") or "Single-Track"
-        gfx.drawstr(singleTrackLabel .. " ")
-        local aiW = gfx.measurestr(singleTrackLabel .. " ")
-        if utilityMode then
-            gfx.drawstr("STEMwerk")
+        if drumKitMode then
+            gfx.drawstr("Drum Kit Split")
         else
-            drawWavingStemwerkLogo({
-                x = titleX + aiW,
-                y = titleY,
-                fontSize = PS(18),
-                time = os.clock(),
-                amp = PS(2),
-                speed = 3,
-                phase = 0.5,
-                alphaStem = 1,
-                alphaRest = 1,
-            })
+            local singleTrackLabel = T("single_track") or "Single-Track"
+            gfx.drawstr(singleTrackLabel .. " ")
+            local aiW = gfx.measurestr(singleTrackLabel .. " ")
+            if utilityMode then
+                gfx.drawstr("STEMwerk")
+            else
+                drawWavingStemwerkLogo({
+                    x = titleX + aiW,
+                    y = titleY,
+                    fontSize = PS(18),
+                    time = os.clock(),
+                    amp = PS(2),
+                    speed = 3,
+                    phase = 0.5,
+                    alphaStem = 1,
+                    alphaRest = 1,
+                })
+            end
         end
     end
 
@@ -13712,23 +13731,41 @@ local function drawProgressWindow()
     local stemY = PS(63)
     local stemBoxSize = PS(14)
     gfx.setfont(1, "Arial", PS(11))
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
-            -- Stem marker box. REAPER Native keeps processing windows neutral.
+    if drumKitMode then
+        local kitLabels = DKS_WORKFLOW.KIT_STEMS or {}
+        for _, stemLabel in ipairs(kitLabels) do
             if utilityMode then
                 local ur, ug, ub = utilityProgressMutedColor()
                 gfx.set(ur, ug, ub, 1)
             else
-                gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+                gfx.set((THEME.accent[1] or 0.5), (THEME.accent[2] or 0.5), (THEME.accent[3] or 0.5), 1)
             end
             gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
-            -- Stem name
             gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
             gfx.x = stemX + stemBoxSize + PS(6)
             gfx.y = stemY + PS(1)
-            local stemLabel = getStemDisplayName(stem)
             gfx.drawstr(stemLabel)
             stemX = stemX + stemBoxSize + gfx.measurestr(stemLabel) + PS(20)
+        end
+    else
+        for _, stem in ipairs(STEMS) do
+            if stem.selected and (not stem.sixStemOnly or runIs6Stem) then
+                -- Stem marker box. REAPER Native keeps processing windows neutral.
+                if utilityMode then
+                    local ur, ug, ub = utilityProgressMutedColor()
+                    gfx.set(ur, ug, ub, 1)
+                else
+                    gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+                end
+                gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
+                -- Stem name
+                gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+                gfx.x = stemX + stemBoxSize + PS(6)
+                gfx.y = stemY + PS(1)
+                local stemLabel = getStemDisplayName(stem)
+                gfx.drawstr(stemLabel)
+                stemX = stemX + stemBoxSize + gfx.measurestr(stemLabel) + PS(20)
+            end
         end
     end
 
@@ -19225,10 +19262,6 @@ function runSeparationWorkflow()
     debugLog("=== runSeparationWorkflow started ===")
     captureActiveRunConfig()
 
-    if OS == "Windows" then
-        showProcessingPlaceholderWindow(T("progress_checking_runtime") or "Checking runtime...")
-    end
-
     local trustedWindowsRuntime = nil
     if OS == "Windows" then
         trustedWindowsRuntime = getTrustedWindowsRuntimeState()
@@ -19236,20 +19269,31 @@ function runSeparationWorkflow()
     end
 
     local runOptions = nil
-    local quickModePreset = reaper.GetExtState(EXT_SECTION, "active_workflow_mode")
-    local isDirectDKS = DKS_WORKFLOW.isDirectPreset(quickModePreset)
-    if quickModePreset ~= "" then
+    local workflowModeState = tostring(reaper.GetExtState(EXT_SECTION, "active_workflow_mode") or "")
+    local workflowSourceState = tostring(reaper.GetExtState(EXT_SECTION, "active_workflow_source") or "")
+    local isDirectDKS = (workflowModeState == DKS_WORKFLOW.WORKFLOW_DRUMKIT)
+        and (workflowSourceState == DKS_WORKFLOW.SOURCE_DIRECT or DKS_WORKFLOW.isDirectPreset(workflowSourceState))
+    if workflowModeState ~= "" then
         reaper.DeleteExtState(EXT_SECTION, "active_workflow_mode", false)
+    end
+    if workflowSourceState ~= "" then
+        reaper.DeleteExtState(EXT_SECTION, "active_workflow_source", false)
     end
     if isDirectDKS then
         runOptions = DKS_WORKFLOW.buildDirectRunOptions()
         debugLog("Direct DKS mode active: skipping Demucs dependency guard")
+    end
+    setWorkflowContextForRun(runOptions)
+
+    if OS == "Windows" then
+        showProcessingPlaceholderWindow(T("progress_checking_runtime") or "Checking runtime...")
     end
 
     if (not trustedWindowsRuntime) and (not isDirectDKS) and (not ensureDependenciesInteractive()) then
         if OS == "Windows" and progressState.windowOpen then
             closeProcessingWindow()
         end
+        setWorkflowContextForRun(nil)
         isProcessingActive = false
         return
     end
@@ -19354,6 +19398,7 @@ function runSeparationWorkflow()
             closeProcessingWindow()
         end
         showMessage(T("no_stems_selected") or "No Stems Selected", T("please_select_stem") or "Please select at least one stem.", "warning")
+        setWorkflowContextForRun(nil)
         isProcessingActive = false
         return
     end
@@ -19363,6 +19408,7 @@ function runSeparationWorkflow()
             closeProcessingWindow()
         end
         showMessage(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesMissingCustomWarning(), "warning")
+        setWorkflowContextForRun(nil)
         isProcessingActive = false
         return
     end
@@ -19371,6 +19417,7 @@ function runSeparationWorkflow()
             closeProcessingWindow()
         end
         showMessage(HELPERS.getStemFilesWarningTitle(), HELPERS.getStemFilesProjectUnavailableWarning(), "warning")
+        setWorkflowContextForRun(nil)
         isProcessingActive = false
         return
     end
@@ -19432,6 +19479,7 @@ function runSeparationWorkflow()
                 closeProcessingWindow()
             end
             showMessage("No audible tracks", "All selected tracks are muted or not solo-audible.", "info", true)
+            setWorkflowContextForRun(nil)
             isProcessingActive = false
             return
         end
@@ -19529,6 +19577,7 @@ function runSeparationWorkflow()
         end
         local promptTitle, promptMessage = HELPERS.getSelectionMonitorPrompt()
         showMessage(promptTitle, promptMessage, "info", true)
+        setWorkflowContextForRun(nil)
         isProcessingActive = false
         return
     end
@@ -19763,6 +19812,7 @@ function runSeparationWorkflow()
                 showMessage(promptTitle, promptMessage, "info", true)
             end
         end)
+        setWorkflowContextForRun(nil)
         return
     end
 
@@ -19829,8 +19879,9 @@ function checkQuickPreset()
             STEMS[4].selected = false
         elseif preset == "all" then
             applyPresetAll()
-        elseif DKS_WORKFLOW.isDirectPreset(preset) then
-            reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.DIRECT_DKS_PRESET, false)
+        elseif preset == DKS_WORKFLOW.WORKFLOW_DRUMKIT or DKS_WORKFLOW.isDirectPreset(preset) then
+            reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
+            reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)
         end
 
         return true  -- Quick mode, skip dialog
