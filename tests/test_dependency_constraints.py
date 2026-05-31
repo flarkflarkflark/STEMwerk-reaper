@@ -1474,10 +1474,12 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "DRUMSEP_RUNTIME_GUIDANCE = \"Run Setup/Repair Drum Kit Split runtime.\"" in script
     assert "def _drumsep_runtime_python_path(" in script
     assert "def _verify_drumsep_runtime(" in script
+    assert "def _emit_direct_dks_stage2_delegation_pending_markers(" in script
     assert "drumsep_python = _drumsep_runtime_python_path()" in script
     assert "runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)" in script
     assert "reason = \"drumsep_runtime_missing\" if runtime_detail == \"missing\" else \"drumsep_runtime_broken\"" in script
     assert "_emit_direct_dks_stage2_runtime_markers(reason, drumsep_python, runtime_detail)" in script
+    assert "_emit_direct_dks_stage2_delegation_pending_markers(drumsep_python, runtime_detail)" in script
     assert "_direct_dks_preflight_check(run_model, model_cache_dir)" in script
     assert script.index("runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)") < script.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
@@ -1529,6 +1531,7 @@ def test_normal_stem_workflows_do_not_reference_drumsep_runtime():
     assert "_verify_drumsep_runtime(" in after_direct_dks
     assert after_direct_dks.index("_verify_drumsep_runtime(") < after_direct_dks.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
     assert after_direct_dks.index("_verify_drumsep_runtime(") < after_direct_dks.index('emit_phase("model_setup_start")')
+    assert after_direct_dks.index("_emit_direct_dks_stage2_delegation_pending_markers") < after_direct_dks.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
     assert "_enable_torch_weights_only_compat(run_model, resolved_device)" in script
 
 
@@ -1545,6 +1548,7 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert "error_stage=stage2_runtime" in main_script
     assert "error_reason=drumsep_runtime_missing" in main_script
     assert "error_reason=drumsep_runtime_broken" in main_script
+    assert "error_reason=drumsep_stage2_delegation_not_implemented" in main_script
     assert "Run Setup/Repair Drum Kit Split runtime." in main_script
     assert "error_stage=stage2_model_load" in main_script
     assert "error_reason=drumsep_model_runtime_unsupported" in main_script
@@ -1557,6 +1561,63 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert 'M.WORKFLOW_DRUMKIT = "drumkit"' in dks_script
     assert 'M.SOURCE_DIRECT = "dks_direct"' in dks_script
     assert 'M.DIRECT_DKS_MODEL = "MDX23C-DrumSep-aufr33-jarredou.ckpt"' in dks_script
+
+
+def test_linux_drumsep_runtime_installer_is_isolated_and_pinned():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'DRUMSEP_AUDIO_SEPARATOR_VERSION="0.34.1"' in script
+    assert 'DRUMSEP_NUMPY_VERSION="2.4.6"' in script
+    assert 'DRUMSEP_ONNXRUNTIME_VERSION="1.26.0"' in script
+    assert 'DRUMSEP_ONNX_VERSION="1.21.0"' in script
+    assert 'DRUMSEP_ONNX2TORCH_VERSION="1.5.15"' in script
+    assert 'DRUMSEP_ONNX2TORCH_PY313_VERSION="1.6.0"' in script
+    assert 'DRUMSEP_TORCH_VERSION="2.12.0"' in script
+    assert 'DRUMSEP_TORCHVISION_VERSION="0.27.0"' in script
+    assert 'DRUMSEP_NUMBA_VERSION="0.65.1"' in script
+    assert 'printf "%s/.venv-drumsep/bin/python\\n" "${RUNTIME_BASE}"' in script
+    assert '"${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep"' in script
+    assert '"${_drumsep_py}" -m pip install' in script
+    assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
+    assert '"numpy==${DRUMSEP_NUMPY_VERSION}"' in script
+    assert '"torch==${DRUMSEP_TORCH_VERSION}"' in script
+    assert "create_venv_with_selected_python" in script
+    assert script.index('if [ "${MODE}" = "drumsep-runtime" ]; then') < script.index('log_stage "Creating venv"')
+
+
+def test_linux_drumsep_runtime_state_fields_are_written():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    for field in (
+        "DRUMSEP_RUNTIME_STATUS=",
+        "DRUMSEP_PYTHON=",
+        "DRUMSEP_AUDIO_SEPARATOR_VERSION=",
+        "DRUMSEP_NUMPY_VERSION=",
+        "DRUMSEP_TORCH_VERSION=",
+        "DRUMSEP_ONNX_VERSION=",
+        "DRUMSEP_ONNXRUNTIME_VERSION=",
+        "DRUMSEP_ONNX2TORCH_VERSION=",
+        "DRUMSEP_LAST_CHECK_UTC=",
+        "DRUMSEP_MODEL_STATUS=",
+        "DRUMSEP_MODEL_FILE=",
+        "DRUMSEP_MODEL_YAML=",
+    ):
+        assert field in script
+    assert 'printf "%s/state/drumsep_runtime.env\\n" "${RUNTIME_BASE}"' in script
+    assert 'printf "%s/logs/drumsep_install.log\\n" "${RUNTIME_BASE}"' in script
+
+
+def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setup_autoinstall():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime"' in setup_internal
+    assert 'isDrumsepRuntime and "drumsep_runtime.env" or "bootstrap.env"' in setup_internal
+    assert 'isDrumsepRuntime and "drumsep_install.log" or "bootstrap.log"' in setup_internal
+    assert '{ id = "drumsep-runtime", label = "Drum Kit Split runtime"' in setup_internal
+    assert 'startLinuxSetup(runtime, separatorScript, chosen)' in setup_internal
+    assert 'if [ "${MODE}" = "drumsep-runtime" ]; then' in linux_bootstrap
+    assert 'write_drumsep_state "install_failed" "missing" "python_missing"' in linux_bootstrap
 
 
 def test_drumkit_wrapper_selects_integrated_mode_and_direct_source():

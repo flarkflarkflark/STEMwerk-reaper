@@ -5319,19 +5319,25 @@ end
 
 startLinuxSetup = function(runtime, separatorScript, mode)
     mode = tostring(mode or "repair")
-    if mode ~= "repair" and mode ~= "rebuild-venv" then
+    if mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" then
         mode = "repair"
     end
-    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
-    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local isDrumsepRuntime = mode == "drumsep-runtime"
+    local stateFile = runtime.runtimeState .. PATH_SEP .. (isDrumsepRuntime and "drumsep_runtime.env" or "bootstrap.env")
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. (isDrumsepRuntime and "drumsep_install.log" or "bootstrap.log")
+    local pidFile = runtime.runtimeState .. PATH_SEP .. (isDrumsepRuntime and "drumsep_runtime.pid" or "bootstrap.pid")
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     ensureDir(runtime.runtimeState)
     ensureDir(runtime.runtimeLogs)
 
     clearTransientSetupState(runtime)
-    if mode == "rebuild-venv" then
+    if mode == "drumsep-runtime" then
+        appendSetupLog(runtime, "Drum Kit Split runtime setup started (" .. setupUiLabel() .. ")", true)
+        appendSetupLog(runtime, "Mode: drumsep-runtime", false)
+        appendSetupLog(runtime, "Target runtime: " .. tostring(runtime.base .. PATH_SEP .. ".venv-drumsep"), false)
+        appendSetupLog(runtime, "Keeping main runtime unchanged: " .. tostring(runtime.venvDir), false)
+    elseif mode == "rebuild-venv" then
         appendSetupLog(runtime, "Setup run started (" .. setupUiLabel() .. ")", true)
         appendSetupLog(runtime, "Mode: rebuild-venv", false)
         appendSetupLog(runtime, "Keeping downloaded models: " .. getModelCacheDir(), false)
@@ -6131,7 +6137,7 @@ local function existingRuntimeSetupMenuTick()
                 gfx.quit()
                 verifyExistingSetup(runtime, separatorScript)
             end
-        elseif chosen == "repair" or chosen == "rebuild-venv" then
+        elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" then
             if OS == "Windows" then
                 windowsVerifyStart(runtime, separatorScript, true)
             else
@@ -6176,6 +6182,7 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
         { id = "open-runtime", label = "Open runtime folder", sub = "Open runtime base", accent = { 0.35, 0.56, 0.82 } },
     }
     if OS ~= "Windows" then
+        choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional DrumSep venv", accent = { 0.22, 0.62, 0.70 } }
         choices[#choices + 1] = { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } }
         choices[#choices + 1] = { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } }
     end

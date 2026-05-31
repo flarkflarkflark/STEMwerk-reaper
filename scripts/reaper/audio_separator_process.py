@@ -132,6 +132,15 @@ def _emit_direct_dks_stage2_runtime_markers(reason: str, python_path: Path, deta
     print(DRUMSEP_RUNTIME_GUIDANCE, file=sys.stderr)
 
 
+def _emit_direct_dks_stage2_delegation_pending_markers(python_path: Path, detail: str = "") -> None:
+    print("error_stage=stage2_runtime", file=sys.stderr)
+    print("error_reason=drumsep_stage2_delegation_not_implemented", file=sys.stderr)
+    print(f"drumsep_runtime_python={python_path}", file=sys.stderr)
+    if detail:
+        print(f"detail={detail}", file=sys.stderr)
+    print("Direct Drum Kit Split runtime verified; stage2 delegation is not implemented in this slice.", file=sys.stderr)
+
+
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -1378,6 +1387,11 @@ def main():
             if write_done:
                 write_done("ERROR")
             return 1
+        _emit_direct_dks_stage2_delegation_pending_markers(drumsep_python, runtime_detail)
+        emit_phase("python_error")
+        if write_done:
+            write_done("ERROR")
+        return 1
         try:
             ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
             if not ok:

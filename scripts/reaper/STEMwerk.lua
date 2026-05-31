@@ -1452,10 +1452,13 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
 
     if lowerLog:find("error_stage=stage2_runtime", 1, true)
         and (lowerLog:find("error_reason=drumsep_runtime_missing", 1, true)
-            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)) then
+            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)
+            or lowerLog:find("error_reason=drumsep_stage2_delegation_not_implemented", 1, true)) then
         local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_runtime_missing"
         local detail = tostring(logSnippet or ""):match("detail=([^\r\n]+)") or ""
-        local headline = reason == "drumsep_runtime_broken"
+        local headline = reason == "drumsep_stage2_delegation_not_implemented"
+            and "Drum Kit Split runtime is installed, but stage2 delegation is not implemented yet."
+            or reason == "drumsep_runtime_broken"
             and "Drum Kit Split runtime is broken."
             or "Drum Kit Split runtime is not installed."
         local msg = headline .. "\n"
