@@ -113,21 +113,49 @@ def _read_json_file(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _resolve_direct_dks_model_catalog_entry(requested_model: str) -> Tuple[str, Dict[str, str], Optional[Path]]:
+def _runtime_download_checks_path(model_cache_dir: Path) -> Path:
+    return model_cache_dir / "download_checks.json"
+
+
+def _resolve_direct_dks_model_catalog_entry(requested_model: str, model_cache_dir: Path) -> Tuple[str, Dict[str, str], Optional[Path], List[str], str]:
     requested = str(requested_model or "").strip()
     if requested and requested != DIRECT_DKS_MODEL_ALIAS and requested != DIRECT_DKS_MODEL_FILENAME:
-        return requested, {}, None
-    checks_path = _find_repo_download_checks_path()
-    if not checks_path or not checks_path.exists():
-        return requested or DIRECT_DKS_MODEL_FILENAME, {}, checks_path
-    data = _read_json_file(checks_path)
-    other_network = data.get("other_network_list_new", {}) or {}
-    entry = other_network.get(DIRECT_DKS_MODEL_ENTRY_NAME, {}) or {}
-    if not isinstance(entry, dict):
-        return requested or DIRECT_DKS_MODEL_FILENAME, {}, checks_path
-    normalized = {str(k): str(v) for k, v in entry.items() if str(v).strip()}
-    resolved = DIRECT_DKS_MODEL_FILENAME if DIRECT_DKS_MODEL_FILENAME in normalized else requested or DIRECT_DKS_MODEL_FILENAME
-    return resolved, normalized, checks_path
+        return requested, {}, None, [], "unsupported_requested_model"
+
+    resolved_default = DIRECT_DKS_MODEL_FILENAME
+    checked_paths: List[str] = []
+    candidate_paths: List[Path] = []
+    runtime_checks = _runtime_download_checks_path(model_cache_dir)
+    candidate_paths.append(runtime_checks)
+    repo_checks = _find_repo_download_checks_path()
+    if repo_checks:
+        candidate_paths.append(repo_checks)
+
+    seen: Set[str] = set()
+    for path in candidate_paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        checked_paths.append(key + (" [exists]" if path.exists() else " [missing]"))
+        if not path.exists():
+            continue
+        try:
+            data = _read_json_file(path)
+        except Exception:
+            continue
+        other_network = data.get("other_network_list_new", {}) or {}
+        if not isinstance(other_network, dict):
+            continue
+        entry = other_network.get(DIRECT_DKS_MODEL_ENTRY_NAME, {}) or {}
+        if not isinstance(entry, dict):
+            continue
+        normalized = {str(k): str(v) for k, v in entry.items() if str(v).strip()}
+        if not normalized:
+            return resolved_default, {}, path, checked_paths, "catalog_entry_empty"
+        return resolved_default, normalized, path, checked_paths, "ok"
+
+    return resolved_default, {}, None, checked_paths, "catalog_entry_missing"
 
 
 def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_name: str, entry_payload: Dict[str, str], source_checks_path: Optional[Path]) -> Tuple[bool, str]:
@@ -189,9 +217,15 @@ def _direct_dks_preflight_check(model_name: str, model_cache_dir: Path) -> Tuple
     # This prevents delayed failure in sep.separate()/load_model for known
     # unresolved DrumSep model names.
     requested_model = str(model_name or "").strip()
-    resolved_model, asset_map, source_path = _resolve_direct_dks_model_catalog_entry(requested_model)
+    resolved_model, asset_map, source_path, checked_paths, lookup_status = _resolve_direct_dks_model_catalog_entry(
+        requested_model,
+        model_cache_dir,
+    )
+    if checked_paths:
+        print("catalog_paths_checked=" + " | ".join(checked_paths), file=sys.stderr)
+    print(f"catalog_lookup_status={lookup_status}", file=sys.stderr)
     if not asset_map:
-        return False, requested_model, resolved_model, "catalog_entry_missing"
+        return False, requested_model, resolved_model, lookup_status
     ok, check_detail = _ensure_runtime_download_checks_has_drumsep(
         model_cache_dir,
         DIRECT_DKS_MODEL_ENTRY_NAME,
@@ -1228,7 +1262,13 @@ def main():
         try:
             ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
             if not ok:
-                reason = "drumsep_model_missing" if "not found in supported model files" in str(known_err or "").lower() or "catalog_entry_missing" in str(known_err or "").lower() else "drumsep_model_download_failed"
+                known_err_text = str(known_err or "").lower()
+                reason = (
+                    "drumsep_model_missing"
+                    if "not found in supported model files" in known_err_text
+                    or known_err_text.startswith("catalog_")
+                    else "drumsep_model_download_failed"
+                )
                 _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", str(known_err or ""))
                 emit_phase("python_error")
                 if write_done:
