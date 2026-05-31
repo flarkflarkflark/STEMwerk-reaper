@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.10
+-- @version 2.2.2.2.11
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -5168,6 +5168,24 @@ verifyExistingSetup = function(runtime, separatorScript)
     local capState = parseStateFile(capFile)
     local pythonPath = trim(resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(state)))
     local ffmpegPath = trim(resolvePath(state.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(state)))
+    local verification = verifyRuntimePaths(state)
+    local verifyErrors = verification.errors or {}
+    local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
+    local envJson = extractEnvJson(deviceOut or "")
+    local deviceNames = collectDeviceNames(deviceOut or "")
+    local backend, backendReason = detectBackendFromProbe(deviceOut, envJson)
+    if probeErr and probeErr ~= "" then
+        backendReason = probeErr
+    end
+    local profile = profileForBackend(backend)
+    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
+    local adjustedErrors = checkProbe.adjustedErrors
+    local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
+    if verifiedRuntimeOk then
+        state.STATUS = "ok"
+        state.STATUS_REASON = ""
+        state.RUNTIME_VERIFY_DETAIL = "ok"
+    end
     local stateStatus = state.STATUS or ""
     local stateOk = fileExists(stateFile) and state and next(state) ~= nil
         and (stateStatus == "ok" or stateStatus == "")
@@ -5188,25 +5206,6 @@ verifyExistingSetup = function(runtime, separatorScript)
     for _, c in ipairs(checks) do
         appendSetupLog(runtime, (c.ok and "  OK: " or "FAIL: ") .. c.label .. ": " .. tostring(c.detail), false)
         if not c.ok then allOk = false end
-    end
-
-    local verification = verifyRuntimePaths(state)
-    local verifyErrors = verification.errors or {}
-    local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
-    local envJson = extractEnvJson(deviceOut or "")
-    local deviceNames = collectDeviceNames(deviceOut or "")
-    local backend, backendReason = detectBackendFromProbe(deviceOut, envJson)
-    if probeErr and probeErr ~= "" then
-        backendReason = probeErr
-    end
-    local profile = profileForBackend(backend)
-    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
-    local adjustedErrors = checkProbe.adjustedErrors
-    local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
-    if verifiedRuntimeOk then
-        state.STATUS = "ok"
-        state.STATUS_REASON = ""
-        state.RUNTIME_VERIFY_DETAIL = "ok"
     end
 
     writeCapabilities(capFile, {
