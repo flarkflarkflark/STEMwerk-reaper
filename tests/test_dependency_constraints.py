@@ -1900,10 +1900,14 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")' in main_script
     assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
     assert 'trPlural(sourceCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
+    assert 'trPlural(stemsCreated, "drumkit_result_track_one", "drumkit_result_track_many", "drum track", "drum tracks")' in main_script
 
     assert 'drumkit_complete_title = "Direct Drum Kit completed successfully!"' in langs
     assert 'drumkit_complete_title = "Direct Drum Kit succesvol voltooid!"' in langs
     assert 'drumkit_complete_title = "Direct Drum Kit erfolgreich abgeschlossen!"' in langs
+    assert 'drumkit_result_track_many = "drum tracks"' in langs
+    assert 'drumkit_result_track_many = "drumtracks"' in langs
+    assert 'drumkit_result_track_many = "Drum-Tracks"' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s added as takes (press T to switch)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s toegevoegd als takes (druk T om te wisselen)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s als Takes hinzugefügt (T zum Wechseln)."' in langs
@@ -1911,6 +1915,10 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_result_source_item_one = "Quellelement"' in langs
     assert "local function resolveOrFallback(key, fallback)" in i18n_internal
     assert "if value == \"\" or value == keyText or value == humanized then" in i18n_internal
+    assert "terminal_hint_return_to_art = \"Klik >_ om terug te gaan naar voortgang\"" in langs
+    assert "terminal_hint_return_to_art = \"Klick >_ für Fortschritt\"" in langs
+    assert "terminal_hint_return_to_art = \"Click >_ to return to progress\"" in langs
+    assert "Art-Ansicht" not in langs
 
 
 def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
@@ -2073,6 +2081,12 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'footer_device_cpu_runtime = "CPU-runtime"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU-Runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU-Runtime"' in langs
+
+
+def test_sync_to_reaper_does_not_overwrite_script_local_i18n_with_repo_root_i18n():
+    sync_script = Path("scripts/reaper/sync_to_reaper.sh").read_text()
+    assert '"${src_dir}/"' in sync_script
+    assert '"${repo_root}/i18n/"' not in sync_script
 
 
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():

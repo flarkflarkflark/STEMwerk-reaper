@@ -8946,7 +8946,7 @@ function buildResultMessageLines()
         local sourceKind = data.sourceKind or "tracks"
         local drumKitCopy = drumKitCopyActive
         local stemWord = drumKitCopy
-            and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
+            and trPlural(stemsCreated, "drumkit_result_track_one", "drumkit_result_track_many", "drum track", "drum tracks")
             or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
         local srcWord
         if sourceKind == "items" then
@@ -8987,7 +8987,7 @@ function buildResultMessageLines()
             local sourceCount = data.sourceCount or 0
             local drumKitCopy = drumKitCopyActive
             local stemWord = drumKitCopy
-                and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
+                and trPlural(stemsCreated, "drumkit_result_track_one", "drumkit_result_track_many", "drum track", "drum tracks")
                 or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
             if data.sourceKind == "time_selection" then
                 line1 = string.format(T("result_time_selection_created") or "%d stem %s created from time selection.", stemsCreated, stemWord)
@@ -14541,7 +14541,7 @@ local function drawProgressWindow()
             -- Terminal hint
             gfx.set(termDimR, termDimG, termDimB, termDimA)
             gfx.setfont(1, "Courier", PS(8))
-            local termHint = utilityMode and "Click >_ to return to progress" or (T("terminal_hint_return_to_art") or "Click >_ to return to art")
+            local termHint = utilityMode and "Click >_ to return to progress" or (T("terminal_hint_return_to_art") or "Click >_ to return to progress")
             local termHintW = gfx.measurestr(termHint)
             gfx.x = displayX + (displayW - termHintW) / 2
             gfx.y = displayY + displayH - PS(16)
@@ -18286,7 +18286,7 @@ function drawMultiTrackProgressWindow()
         -- Terminal hint
         gfx.set(termDimR, termDimG, termDimB, termDimA)
         gfx.setfont(1, "Courier", PS(8))
-        local termHint = utilityMode and "Click >_ to return to progress" or (T("terminal_hint_return_to_art") or "Click >_ to return to art")
+        local termHint = utilityMode and "Click >_ to return to progress" or (T("terminal_hint_return_to_art") or "Click >_ to return to progress")
         local termHintW = gfx.measurestr(termHint)
         gfx.x = displayX + (displayW - termHintW) / 2
         gfx.y = displayY + displayH - PS(16)

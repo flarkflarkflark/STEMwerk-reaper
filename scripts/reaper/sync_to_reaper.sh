@@ -64,13 +64,9 @@ rsync -a --delete \
   "${src_dir}/" \
   "${dest}/"
 
-rsync -a --delete \
-  --exclude='__pycache__/' \
-  --exclude='*.pyc' \
-  --exclude='*.pyo' \
-  --exclude='.DS_Store' \
-  "${repo_root}/i18n/" \
-  "${dest}/i18n/"
+# Keep using script-local i18n from scripts/reaper/i18n.
+# Do not overwrite with repo-root i18n, which can be older and cause
+# raw-key/fallback regressions in live REAPER UI.
 
 if [[ ! -f "${dest}/vendor/stemwerk-core/pyproject.toml" ]] \
   || [[ ! -f "${dest}/vendor/stemwerk-core/src/stemwerk_core/__init__.py" ]] \
