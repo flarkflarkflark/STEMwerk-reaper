@@ -1826,6 +1826,21 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert "drumsep_rocm_install.log" in script
 
 
+def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+
+    assert 'T("drumkit_complete_title")' in main_script
+    assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
+    assert 'trPlural(sourceCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
+
+    assert 'drumkit_complete_title = "Drum Kit Split completed successfully!"' in langs
+    assert 'drumkit_complete_title = "Drum Kit Split succesvol voltooid!"' in langs
+    assert 'drumkit_complete_title = "Drum Kit Split erfolgreich abgeschlossen!"' in langs
+    assert 'drumkit_result_source_item_one = "bronitem"' in langs
+    assert 'drumkit_result_source_item_one = "Quellelement"' in langs
+
+
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     log_script = Path("scripts/reaper/_internal/STEMwerk_Log.lua").read_text()
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()

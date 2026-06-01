@@ -8699,6 +8699,19 @@ end
 
 local getStemDisplayName
 
+local function isDrumKitResultCopy(selectedStems)
+    if isDrumKitWorkflowActive() then
+        return true
+    end
+    local names = {}
+    for _, stem in ipairs(selectedStems or {}) do
+        names[string.lower(tostring(stem and stem.name or ""))] = true
+    end
+    return names["kick"] and names["snare"] and names["toms"]
+        and (names["hi-hat"] or names["hihat"] or names["hh"])
+        and names["ride"] and names["crash"]
+end
+
 function renderResultTitleArea(ctx)
     local w, PS = ctx.w, ctx.PS
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
@@ -8736,20 +8749,33 @@ function renderResultTitleArea(ctx)
         {150, 100, 255},
         {100, 255, 150},
     }
-    local stemPart = "STEM"
-    local restPart = T("complete_title_suffix") or "werk Complete!"
-    local stemW = gfx.measurestr(stemPart)
-    local restW = gfx.measurestr(restPart)
-    local totalW = stemW + restW
-    local titleX = (w - totalW) / 2
+    local drumKitCopy = isDrumKitResultCopy(selectedStems)
     local titleY = PS(spacing.titleY or 100)
 
     if utilityMode then
+        local stemPart = "STEM"
+        local restPart = T("complete_title_suffix") or "werk Complete!"
+        local totalW = gfx.measurestr(stemPart .. restPart)
+        local titleX = (w - totalW) / 2
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
         gfx.x = titleX
         gfx.y = titleY
         gfx.drawstr(stemPart .. restPart)
+    elseif drumKitCopy then
+        local title = T("drumkit_complete_title") or "Drum Kit Split completed successfully!"
+        local titleW = gfx.measurestr(title)
+        local titleX = (w - titleW) / 2
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = titleX
+        gfx.y = titleY
+        gfx.drawstr(title)
     else
+        local stemPart = "STEM"
+        local restPart = T("complete_title_suffix") or "werk Complete!"
+        local stemW = gfx.measurestr(stemPart)
+        local restW = gfx.measurestr(restPart)
+        local totalW = stemW + restW
+        local titleX = (w - totalW) / 2
         local charX = titleX
         for i = 1, 4 do
             local char = stemPart:sub(i, i)
@@ -8840,12 +8866,15 @@ function buildResultMessageLines()
         local stemsCreated = data.stemsCreated or 0
         local srcCount = data.sourceCount or 0
         local sourceKind = data.sourceKind or "tracks"
+        local drumKitCopy = isDrumKitWorkflowActive()
         local stemWord = isDrumKitWorkflowActive()
             and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
             or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
         local srcWord
         if sourceKind == "items" then
-            srcWord = trPlural(srcCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
+            srcWord = drumKitCopy
+                and trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many", "source item", "source items")
+                or trPlural(srcCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
         else
             srcWord = trPlural(srcCount, "result_source_track_one", "result_source_track_many", "source track", "source tracks")
         end
@@ -8878,13 +8907,16 @@ function buildResultMessageLines()
         if data.stemsCreated and data.sourceCount and data.sourceKind then
             local stemsCreated = data.stemsCreated or 0
             local sourceCount = data.sourceCount or 0
+            local drumKitCopy = isDrumKitWorkflowActive()
             local stemWord = isDrumKitWorkflowActive()
                 and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
                 or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
             if data.sourceKind == "time_selection" then
                 line1 = string.format(T("result_time_selection_created") or "%d stem %s created from time selection.", stemsCreated, stemWord)
             else
-                local srcWord = trPlural(sourceCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
+                local srcWord = drumKitCopy
+                    and trPlural(sourceCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many", "source item", "source items")
+                    or trPlural(sourceCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
                 line1 = string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, sourceCount, srcWord)
             end
         elseif data.mainKey then
