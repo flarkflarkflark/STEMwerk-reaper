@@ -1471,20 +1471,24 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "Direct Drum Kit Split route detected: workflow_mode=" in script
     assert "workflow_source=" in script
     assert "DRUMSEP_RUNTIME_DIRNAME = \".venv-drumsep\"" in script
+    assert "DRUMSEP_RUNTIME_ROCM_DIRNAME = \".venv-drumsep-rocm\"" in script
     assert "DRUMSEP_RUNTIME_GUIDANCE = \"Run Setup/Repair Drum Kit Split runtime.\"" in script
     assert "def _drumsep_runtime_python_path(" in script
+    assert "def _drumsep_rocm_runtime_python_path(" in script
     assert "def _verify_drumsep_runtime(" in script
+    assert "def _select_drumsep_runtime(" in script
     assert "def _run_direct_dks_drumsep_helper(" in script
     assert "stemwerk_drumsep_process.py" in script
-    assert "drumsep_python = _drumsep_runtime_python_path()" in script
-    assert "runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)" in script
-    assert "reason = \"drumsep_runtime_missing\" if runtime_detail == \"missing\" else \"drumsep_runtime_broken\"" in script
-    assert "_emit_direct_dks_stage2_runtime_markers(reason, drumsep_python, runtime_detail)" in script
+    assert "drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime()" in script
+    assert "reason = \"drumsep_runtime_missing\" if runtime_kind == \"missing\" else \"drumsep_runtime_broken\"" in script
+    assert "_emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))" in script
+    assert "drumsep_runtime_selected=" in script
+    assert "drumsep_runtime_fallback_reason=" in script
     assert "helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(" in script
     assert "drumsep_helper_python=" in script
     assert "drumsep_helper_ok=true" in script
     assert "_direct_dks_preflight_check(run_model, model_cache_dir)" in script
-    assert script.index("runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)") < script.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
+    assert script.index("drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime()") < script.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
     assert script.index("_direct_dks_preflight_check(run_model, model_cache_dir)") < script.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print(f"error_reason={reason}", file=sys.stderr)' in script
@@ -1501,7 +1505,7 @@ def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, 
     module = _load_audio_separator_process_module()
     missing_python = tmp_path / ".venv-drumsep" / "bin" / "python"
 
-    ok, detail = module._verify_drumsep_runtime(missing_python)
+    ok, detail, _payload = module._verify_drumsep_runtime(missing_python)
     module._emit_direct_dks_stage2_runtime_markers("drumsep_runtime_missing", missing_python, detail)
 
     captured = capsys.readouterr()
@@ -1520,10 +1524,67 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path):
     runtime_python.write_text("#!/bin/sh\necho 'ImportError: audio_separator missing' >&2\nexit 1\n", encoding="utf-8")
     runtime_python.chmod(0o755)
 
-    ok, detail = module._verify_drumsep_runtime(runtime_python)
+    ok, detail, _payload = module._verify_drumsep_runtime(runtime_python)
 
     assert ok is False
     assert "ImportError: audio_separator missing" in detail
+
+
+def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
+    module = _load_audio_separator_process_module()
+    base = tmp_path
+    rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
+    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    rocm_python.parent.mkdir(parents=True, exist_ok=True)
+    cpu_python.parent.mkdir(parents=True, exist_ok=True)
+    rocm_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cpu_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    rocm_python.chmod(0o755)
+    cpu_python.chmod(0o755)
+
+    def fake_verify(path, require_gpu=False):
+        if "drumsep-rocm" in str(path):
+            return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
+        return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
+
+    module._verify_drumsep_runtime = fake_verify
+    selected, kind, info = module._select_drumsep_runtime(base)
+    assert selected == rocm_python
+    assert kind == "rocm"
+    assert info["torch_hip"] == "6.4"
+
+
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
+    module = _load_audio_separator_process_module()
+    base = tmp_path
+    rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
+    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    rocm_python.parent.mkdir(parents=True, exist_ok=True)
+    cpu_python.parent.mkdir(parents=True, exist_ok=True)
+    rocm_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    cpu_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    rocm_python.chmod(0o755)
+    cpu_python.chmod(0o755)
+
+    def fake_verify(path, require_gpu=False):
+        if "drumsep-rocm" in str(path):
+            return (False, "rocm_no_hip", {})
+        return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
+
+    module._verify_drumsep_runtime = fake_verify
+    selected, kind, info = module._select_drumsep_runtime(base)
+    assert selected == cpu_python
+    assert kind == "cpu"
+    assert info["fallback_reason"] == "rocm_skipped:rocm_no_hip"
+
+
+def test_drumsep_runtime_selector_reports_missing_when_both_absent(tmp_path):
+    module = _load_audio_separator_process_module()
+    selected, kind, info = module._select_drumsep_runtime(tmp_path)
+    assert selected is None
+    assert kind == "missing"
+    assert info["rocm_detail"] == "missing"
+    assert info["cpu_detail"] == "missing"
 
 
 def test_normal_stem_workflows_do_not_reference_drumsep_runtime():
@@ -1532,9 +1593,9 @@ def test_normal_stem_workflows_do_not_reference_drumsep_runtime():
     assert marker in script
     _, after_direct_dks = script.split(marker, 1)
 
-    assert "_verify_drumsep_runtime(" in after_direct_dks
-    assert after_direct_dks.index("_verify_drumsep_runtime(") < after_direct_dks.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
-    assert after_direct_dks.index("_verify_drumsep_runtime(") < after_direct_dks.index('emit_phase("model_setup_start")')
+    assert "_select_drumsep_runtime(" in after_direct_dks
+    assert after_direct_dks.index("_select_drumsep_runtime(") < after_direct_dks.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
+    assert after_direct_dks.index("_select_drumsep_runtime(") < after_direct_dks.index('emit_phase("model_setup_start")')
     assert after_direct_dks.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(") < after_direct_dks.index('emit_phase("model_setup_start")')
     assert "_enable_torch_weights_only_compat(run_model, resolved_device)" in script
 
@@ -1679,6 +1740,8 @@ def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     script = Path("scripts/reaper/audio_separator_process.py").read_text()
 
     assert 'DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"' in script
+    assert 'DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"' in script
+    assert "drumsep_runtime_selected=" in script
     assert 'str(drumsep_python),' in script
     assert '"--result-json",' in script
     assert 'drumsep_helper_stdout.txt' in script

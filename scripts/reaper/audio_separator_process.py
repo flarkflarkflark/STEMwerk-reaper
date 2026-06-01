@@ -39,6 +39,7 @@ DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DIRECT_DKS_MODEL_ENTRY_NAME = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
+DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 
@@ -481,15 +482,23 @@ def _drumsep_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     return runtime_dir / "bin" / "python"
 
 
-def _verify_drumsep_runtime(python_path: Path) -> Tuple[bool, str]:
+def _drumsep_rocm_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    runtime_dir = base / DRUMSEP_RUNTIME_ROCM_DIRNAME
+    if os.name == "nt":
+        return runtime_dir / "Scripts" / "python.exe"
+    return runtime_dir / "bin" / "python"
+
+
+def _verify_drumsep_runtime(python_path: Path, require_gpu: bool = False) -> Tuple[bool, str, Dict[str, Any]]:
     try:
         exists = python_path.exists()
     except Exception:
         exists = False
     if not exists:
-        return False, "missing"
+        return False, "missing", {}
     if not os.access(str(python_path), os.X_OK):
-        return False, "not_executable"
+        return False, "not_executable", {}
 
     verify_code = r"""
 import importlib
@@ -520,7 +529,29 @@ for module_name in optional:
     except Exception as exc:
         versions[module_name + "_import_error"] = f"{type(exc).__name__}: {exc}"
 
-print(json.dumps({"ok": True, "versions": versions}, sort_keys=True))
+device_names = []
+torch_hip = ""
+torch_cuda_available = False
+try:
+    import torch
+    torch_hip = str(getattr(torch.version, "hip", "") or "")
+    torch_cuda_available = bool(torch.cuda.is_available())
+    if torch_cuda_available:
+        for idx in range(int(torch.cuda.device_count())):
+            try:
+                device_names.append(str(torch.cuda.get_device_name(idx)))
+            except Exception:
+                pass
+except Exception:
+    pass
+
+print(json.dumps({
+    "ok": True,
+    "versions": versions,
+    "torch_hip": torch_hip,
+    "torch_cuda_available": torch_cuda_available,
+    "device_names": device_names,
+}, sort_keys=True))
 """
     try:
         completed = subprocess.run(
@@ -532,12 +563,63 @@ print(json.dumps({"ok": True, "versions": versions}, sort_keys=True))
             **_windows_no_window_kwargs(),
         )
     except Exception as exc:
-        return False, f"verify_spawn_failed:{type(exc).__name__}:{exc}"
+        return False, f"verify_spawn_failed:{type(exc).__name__}:{exc}", {}
 
     output = " ".join(part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip())
     if completed.returncode != 0:
-        return False, output[:1200] or f"verify_exit_{completed.returncode}"
-    return True, output[:1200] or "ok"
+        return False, output[:1200] or f"verify_exit_{completed.returncode}", {}
+
+    try:
+        payload = json.loads((completed.stdout or "").strip() or "{}")
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    if require_gpu:
+        hip = str(payload.get("torch_hip") or "")
+        cuda_available = bool(payload.get("torch_cuda_available"))
+        device_names = payload.get("device_names") or []
+        if not isinstance(device_names, list):
+            device_names = []
+        if not hip:
+            return False, "rocm_no_hip", payload
+        if not cuda_available:
+            return False, "rocm_cuda_unavailable", payload
+        if len([d for d in device_names if str(d).strip()]) == 0:
+            return False, "rocm_no_device_names", payload
+
+    return True, output[:1200] or "ok", payload
+
+
+def _select_drumsep_runtime(runtime_base: Optional[Path] = None) -> Tuple[Optional[Path], str, Dict[str, Any]]:
+    rocm_python = _drumsep_rocm_runtime_python_path(runtime_base)
+    cpu_python = _drumsep_runtime_python_path(runtime_base)
+
+    rocm_ok, rocm_detail, rocm_payload = _verify_drumsep_runtime(rocm_python, require_gpu=True)
+    if rocm_ok:
+        info = dict(rocm_payload or {})
+        info["kind"] = "rocm"
+        info["detail"] = rocm_detail
+        info["fallback_reason"] = ""
+        return rocm_python, "rocm", info
+
+    cpu_ok, cpu_detail, cpu_payload = _verify_drumsep_runtime(cpu_python, require_gpu=False)
+    if cpu_ok:
+        info = dict(cpu_payload or {})
+        info["kind"] = "cpu"
+        info["detail"] = cpu_detail
+        info["fallback_reason"] = f"rocm_skipped:{rocm_detail}"
+        return cpu_python, "cpu", info
+
+    info = {
+        "rocm_detail": rocm_detail,
+        "cpu_detail": cpu_detail,
+        "rocm_python": str(rocm_python),
+        "cpu_python": str(cpu_python),
+    }
+    reason = "missing" if rocm_detail == "missing" and cpu_detail == "missing" else "broken"
+    return None, reason, info
 
 
 def _run_direct_dks_drumsep_helper(
@@ -1523,15 +1605,26 @@ def main():
             f"Direct Drum Kit Split route detected: workflow_mode={args.workflow_mode} workflow_source={args.workflow_source}",
             file=sys.stderr,
         )
-        drumsep_python = _drumsep_runtime_python_path()
-        runtime_ok, runtime_detail = _verify_drumsep_runtime(drumsep_python)
-        if not runtime_ok:
-            reason = "drumsep_runtime_missing" if runtime_detail == "missing" else "drumsep_runtime_broken"
-            _emit_direct_dks_stage2_runtime_markers(reason, drumsep_python, runtime_detail)
+        drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime()
+        if drumsep_python is None:
+            reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+            runtime_path = _drumsep_rocm_runtime_python_path()
+            _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
             emit_phase("python_error")
             if write_done:
                 write_done("ERROR")
             return 1
+        versions = runtime_info.get("versions") if isinstance(runtime_info.get("versions"), dict) else {}
+        device_names = runtime_info.get("device_names") if isinstance(runtime_info.get("device_names"), list) else []
+        fallback_reason = str(runtime_info.get("fallback_reason") or "")
+        print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
+        print(f"drumsep_python={drumsep_python}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind == 'rocm' else 'no'}", file=sys.stderr)
+        print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
+        print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
+        print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
+        if fallback_reason:
+            print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
         try:
             ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
             if not ok:
