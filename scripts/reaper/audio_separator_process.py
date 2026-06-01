@@ -595,10 +595,35 @@ print(json.dumps({
     return True, output[:1200] or "ok", payload
 
 
-def _select_drumsep_runtime(runtime_base: Optional[Path] = None) -> Tuple[Optional[Path], str, Dict[str, Any]]:
+def _select_drumsep_runtime(
+    requested_device: str = "auto", runtime_base: Optional[Path] = None
+) -> Tuple[Optional[Path], str, Dict[str, Any]]:
     rocm_python = _drumsep_rocm_runtime_python_path(runtime_base)
     cpu_python = _drumsep_runtime_python_path(runtime_base)
+    device_norm = str(requested_device or "auto").strip().lower()
+    explicit_cpu = device_norm == "cpu"
 
+    if explicit_cpu:
+        print("drumsep_runtime_selection_policy=explicit_cpu", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
+        cpu_ok, cpu_detail, cpu_payload = _verify_drumsep_runtime(cpu_python, require_gpu=False)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
+        if cpu_ok:
+            info = dict(cpu_payload or {})
+            info["kind"] = "cpu"
+            info["detail"] = cpu_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = "explicit_cpu"
+            return cpu_python, "cpu", info
+        info = {
+            "cpu_detail": cpu_detail,
+            "cpu_python": str(cpu_python),
+            "selection_policy": "explicit_cpu",
+        }
+        reason = "missing" if cpu_detail == "missing" else "broken"
+        return None, reason, info
+
+    print("drumsep_runtime_selection_policy=auto_prefer_rocm", file=sys.stderr)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_start", file=sys.stderr)
     rocm_ok, rocm_detail, rocm_payload = _verify_drumsep_runtime(rocm_python, require_gpu=True)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_end detail={rocm_detail}", file=sys.stderr)
@@ -612,6 +637,7 @@ def _select_drumsep_runtime(runtime_base: Optional[Path] = None) -> Tuple[Option
         info["kind"] = "rocm"
         info["detail"] = rocm_detail
         info["fallback_reason"] = ""
+        info["selection_policy"] = "auto_prefer_rocm"
         return rocm_python, "rocm", info
 
     print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
@@ -622,6 +648,7 @@ def _select_drumsep_runtime(runtime_base: Optional[Path] = None) -> Tuple[Option
         info["kind"] = "cpu"
         info["detail"] = cpu_detail
         info["fallback_reason"] = f"rocm_skipped:{rocm_detail}"
+        info["selection_policy"] = "fallback_cpu"
         return cpu_python, "cpu", info
 
     info = {
@@ -629,6 +656,7 @@ def _select_drumsep_runtime(runtime_base: Optional[Path] = None) -> Tuple[Option
         "cpu_detail": cpu_detail,
         "rocm_python": str(rocm_python),
         "cpu_python": str(cpu_python),
+        "selection_policy": "fallback_cpu",
     }
     reason = "missing" if rocm_detail == "missing" and cpu_detail == "missing" else "broken"
     return None, reason, info
@@ -1620,7 +1648,9 @@ def main():
             f"Direct Drum Kit Split route detected: workflow_mode={args.workflow_mode} workflow_source={args.workflow_source}",
             file=sys.stderr,
         )
-        drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime()
+        print(f"ui_device_selected_before_run={device_preference}", file=sys.stderr)
+        print(f"backend_device_arg={device_preference}", file=sys.stderr)
+        drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         if drumsep_python is None:
             reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
@@ -1634,6 +1664,10 @@ def main():
         device_names = runtime_info.get("device_names") if isinstance(runtime_info.get("device_names"), list) else []
         fallback_reason = str(runtime_info.get("fallback_reason") or "")
         print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
+        print(
+            f"drumsep_runtime_selection_policy={runtime_info.get('selection_policy', '')}",
+            file=sys.stderr,
+        )
         print(f"drumsep_python={drumsep_python}", file=sys.stderr)
         print(f"drumsep_gpu_capable={'yes' if runtime_kind == 'rocm' else 'no'}", file=sys.stderr)
         print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
