@@ -10965,20 +10965,23 @@ buildFooterLines = function()
     local directMode = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
     local function stemUnit(n)
         if directMode then
-            return trSingularPlural(n, "footer_drum_track", "footer_drum_tracks")
+            if (n or 0) == 1 then return trSafe("footer_drum_track", "drum track") end
+            return trSafe("footer_drum_tracks", "drum tracks")
         end
         if (n or 0) == 1 then return trSafe("stem", "stem") end
         return trSafe("stems", "stems")
     end
     local function stemTrackUnit(n)
         if directMode then
-            return trSingularPlural(n, "footer_drum_track", "footer_drum_tracks")
+            if (n or 0) == 1 then return trSafe("footer_drum_track", "drum track") end
+            return trSafe("footer_drum_tracks", "drum tracks")
         end
         return trSingularPlural(n, "footer_stem_track", "footer_stem_tracks")
     end
     local function stemFolderUnit(n)
         if directMode then
-            return trSingularPlural(n, "footer_drum_stem_folder", "footer_drum_stem_folders")
+            if (n or 0) == 1 then return trSafe("footer_drum_stem_folder", "drum-stem folder") end
+            return trSafe("footer_drum_stem_folders", "drum-stem folders")
         end
         return trSingularPlural(n, "footer_stem_folder", "footer_stem_folders")
     end
@@ -11629,7 +11632,7 @@ function renderMainColumns(ctx)
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
-        and (T("drum_stems_label") or "Drum Stems:")
+        and trSafe("drum_stems_label", "Drum Stems:")
         or (is6Stem and T("stems_6") or "Stems:")
     drawColumnHeader(stemsHeader, col2X, stemsW, mainHeaderFont, contentTop)
     setTooltip(col2X, contentTop, stemsW, S(16), T("tooltip_section_stems") or "Choose which stems to create.")
@@ -11644,6 +11647,14 @@ function renderMainColumns(ctx)
         Guitar = "tooltip_stem_guitar",
         Piano = "tooltip_stem_piano"
     }
+    local drumStemTooltipKeys = {
+        ["Kick"] = "tooltip_stem_drumkit_kick",
+        ["Snare"] = "tooltip_stem_drumkit_snare",
+        ["Toms"] = "tooltip_stem_drumkit_toms",
+        ["Hi-Hat"] = "tooltip_stem_drumkit_hihat",
+        ["Ride"] = "tooltip_stem_drumkit_ride",
+        ["Crash"] = "tooltip_stem_drumkit_crash",
+    }
     local stemLabels = {}
     for _, st in ipairs(STEMS) do
         if not st.sixStemOnly or is6Stem then
@@ -11657,7 +11668,9 @@ function renderMainColumns(ctx)
     for i, stem in ipairs(STEMS) do
         if not stem.sixStemOnly or is6Stem then
             local k = tostring(stem.name or ""):lower()
-            local displayName = T(k) or stem.name
+            local displayName = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
+                and stem.name
+                or (T(k) or stem.name)
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
             local clicked
             if utilityMode then
@@ -11666,7 +11679,9 @@ function renderMainColumns(ctx)
                 clicked = drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize)
             end
             if clicked then toggleStemSelection(i) end
-            local tooltipKey = stemTooltipKeys[stem.name] or "tooltip_stem_other"
+            local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
+                and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")
+                or (stemTooltipKeys[stem.name] or "tooltip_stem_other")
             setTooltipWithShortcut(col2X, stemY, colW, btnH, T(tooltipKey), stem.key, stem.color)
             stemY = stemY + S(22)
         end
@@ -11701,9 +11716,18 @@ function renderMainColumns(ctx)
         local modelAvailable = isModelAvailableInCurrentMode(model.id)
         local modelColor = modelAvailable and nil or {120, 120, 120}
         local modelDisplayName = model.name
+        if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT then
+            if model.id == "htdemucs" then
+                modelDisplayName = T("model_label_fast") or "Fast"
+            elseif model.id == "htdemucs_ft" then
+                modelDisplayName = T("model_label_quality") or "Quality"
+            elseif model.id == "htdemucs_6s" then
+                modelDisplayName = T("model_label_expanded") or "Expanded"
+            end
+        end
         if utilityMode then
             local mk = modelShortcutKeys[model.id]
-            if mk then modelDisplayName = model.name .. " (" .. mk .. ")" end
+            if mk then modelDisplayName = modelDisplayName .. " (" .. mk .. ")" end
         end
         if drawRadio(col3X, modelY, SETTINGS.model == model.id, modelDisplayName, nil, modelBoxW, nil, nil, modelBtnFontSize) and modelAvailable then
             setModelPreservingStemIntent(model.id)
@@ -14424,9 +14448,16 @@ local function drawProgressWindow()
 
     local segValue = "30"
     local footerModel = effectiveRunModel()
-    local modelDisplay = (footerModel == "htdemucs_ft")
-        and (T("model_label_quality") or "Quality")
-        or ((footerModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+    local modelDisplay
+    if isDrumKitWorkflowActive() then
+        modelDisplay = (footerModel == "htdemucs_ft")
+            and (T("model_label_quality") or "Quality")
+            or ((footerModel == "htdemucs_6s") and (T("model_label_expanded") or "Expanded") or (T("model_label_fast") or "Fast"))
+    else
+        modelDisplay = (footerModel == "htdemucs_ft")
+            and (T("model_label_quality") or "Quality")
+            or ((footerModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+    end
     local mtTime = T("mt_time") or "Time"
     local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
@@ -18456,9 +18487,16 @@ function drawMultiTrackProgressWindow()
     end
 
     local runModel = effectiveRunModel()
-    local modelDisplay = (runModel == "htdemucs_ft")
-        and (T("model_label_quality") or "Quality")
-        or ((runModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+    local modelDisplay
+    if isDrumKitWorkflowActive() then
+        modelDisplay = (runModel == "htdemucs_ft")
+            and (T("model_label_quality") or "Quality")
+            or ((runModel == "htdemucs_6s") and (T("model_label_expanded") or "Expanded") or (T("model_label_fast") or "Fast"))
+    else
+        modelDisplay = (runModel == "htdemucs_ft")
+            and (T("model_label_quality") or "Quality")
+            or ((runModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
+    end
     local modeDisplay = multiTrackQueue.sequentialMode and (T("sequential") or "Sequential") or (T("parallel") or "Parallel")
     if (not multiTrackQueue.sequentialMode) and multiTrackQueue.parallelJobLimit then
         local capLabel = T("mt_parallel_cap") or "Parallel cap %d"

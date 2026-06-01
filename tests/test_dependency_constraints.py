@@ -1917,7 +1917,7 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_label", "Direct Drum Kit") .. " (Z)"' in main_script
     assert 'local presetLabelEdks    = trSafe("workflow_edks_label", "Drum Kit Split") .. " (X)"' in main_script
     assert 'local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
-    assert 'and (T("drum_stems_label") or "Drum Stems:")' in main_script
+    assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
     assert 'if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then' in main_script
     assert 'showExtractKitPlannedNotice()' in main_script
@@ -1935,6 +1935,23 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'tooltip_preset_edks = "Gepland: eerst drums uit een mix halen, daarna de drumkit splitsen."' in langs
     assert 'tooltip_preset_drumkit = "Teilt Drum-Material in Kick, Snare, Toms, Hi-Hat, Ride und Crash."' in langs
     assert 'tooltip_preset_edks = "Geplant: erst Drums aus einem Mix extrahieren, dann das Kit aufteilen."' in langs
+    assert 'tooltip_stem_drumkit_kick = "Kick drum / bass drum [1]"' in langs
+    assert 'tooltip_stem_drumkit_snare = "Snare drum [2]"' in langs
+    assert 'tooltip_stem_drumkit_toms = "Toms [3]"' in langs
+    assert 'tooltip_stem_drumkit_hihat = "Hi-hat [4]"' in langs
+    assert 'tooltip_stem_drumkit_ride = "Ride cymbal [5]"' in langs
+    assert 'tooltip_stem_drumkit_crash = "Crash cymbal [6]"' in langs
+    assert 'tooltip_stem_drumkit_kick = "Kickdrum / bassdrum [1]"' in langs
+    assert 'tooltip_stem_drumkit_crash = "Crash-bekken [6]"' in langs
+    assert 'tooltip_stem_drumkit_kick = "Kickdrum / Bassdrum [1]"' in langs
+    assert 'tooltip_stem_drumkit_crash = "Crash-Becken [6]"' in langs
+    assert 'drum_stems_label = "Drumstemmen:"' in langs
+    assert 'drum_stems_label = "Drum-Spuren:"' in langs
+    assert 'model_label_expanded = "Expanded"' in langs
+    assert 'device = "Gerät:"' in langs
+    assert 'selected = "Ausgewählt:"' in langs
+    assert 'delete_original = "Original löschen"' in langs
+    assert 'tooltip_close = "STEMwerk schließen (ESC)"' in langs
     assert 'edks_planned_title = "Drum Kit Split is planned"' in langs
     assert 'edks_planned_title = "Drum Kit Split komt later"' in langs
     assert 'edks_planned_title = "Drum Kit Split ist geplant"' in langs
@@ -1957,6 +1974,12 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'footer_drum_tracks = "drumtracks"' in langs
     assert 'footer_drum_tracks = "Drum-Spuren"' in langs
     assert 'direct_drum_kit_folder_suffix = "Direct Drum Kit"' in langs
+    assert 'local displayName = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'and stem.name' in main_script
+    assert 'local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")' in main_script
+    assert 'if model.id == "htdemucs"' in main_script
+    assert 'modelDisplayName = T("model_label_expanded") or "Expanded"' in main_script
     assert 'preparing direct drum kit' in progress_render
     assert 'starting drum kit runtime' in progress_render
     assert 'writing drum tracks' in progress_render
