@@ -11621,6 +11621,10 @@ function renderMainColumns(ctx)
     local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
     local _pa = {}
     do
+        local workflowMode = tostring(SETTINGS.workflowMode or "")
+        local workflowSource = tostring(dialogWorkflowSource or SETTINGS.workflowSource or "")
+        local inDrumKitWorkflow = workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+            and (workflowSource == DKS_WORKFLOW.SOURCE_DIRECT or workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT or DKS_WORKFLOW.isDirectPreset(workflowSource))
         local function ss(i) return STEMS[i] and STEMS[i].selected or false end
         local v, d, b, o = ss(1), ss(2), ss(3), ss(4)
         local g, p = ss(5), ss(6)
@@ -11628,15 +11632,15 @@ function renderMainColumns(ctx)
         local yes56 = not is6Stem or (g and p)
         _pa.karaoke = (not v) and d and b and o and yes56
         _pa.all     = v and d and b and o and yes56
-        _pa.drumkit = dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT
-        _pa.edks    = false
+        _pa.drumkit = workflowSource == DKS_WORKFLOW.SOURCE_DIRECT or DKS_WORKFLOW.isDirectPreset(workflowSource)
+        _pa.edks    = workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT
         _pa.vocals  = v and (not d) and (not b) and (not o) and no56
         _pa.drums   = (not v) and d and (not b) and (not o) and no56
         _pa.bass    = (not v) and (not d) and b and (not o) and no56
         _pa.other   = (not v) and (not d) and (not b) and o and no56
         _pa.guitar  = is6Stem and (not v) and (not d) and (not b) and (not o) and g and (not p)
         _pa.piano   = is6Stem and (not v) and (not d) and (not b) and (not o) and (not g) and p
-        if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT then
+        if inDrumKitWorkflow then
             _pa.karaoke = false
             _pa.all = false
             _pa.vocals = false
@@ -11670,7 +11674,7 @@ function renderMainColumns(ctx)
     presetY = presetY + S(22)
 
     local disabledColor = utilityMode and {130, 130, 130} or {90, 90, 90}
-    if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then
+    if drawToggleButton(col1X, presetY, colW, btnH, presetLabelEdks, _pa.edks == true, disabledColor, presetsBtnFontSize) then
         showExtractKitPlannedNotice()
     end
     setTooltipWithShortcut(

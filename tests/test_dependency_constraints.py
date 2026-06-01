@@ -1931,7 +1931,7 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
     assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
-    assert 'if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then' in main_script
+    assert 'if drawToggleButton(col1X, presetY, colW, btnH, presetLabelEdks, _pa.edks == true, disabledColor, presetsBtnFontSize) then' in main_script
     assert 'showExtractKitPlannedNotice()' in main_script
     assert 'if type(showMessage) == "function" then' in main_script
     assert 'if type(MESSAGES) == "table" and type(MESSAGES.showMessage) == "function" then' in main_script
@@ -2004,6 +2004,8 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert "return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, rawColor, presetsBtnFontSize)" in main_script
     assert "_pa.all = false" in main_script
     assert "_pa.vocals = false" in main_script
+    assert "_pa.edks    = workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT" in main_script
+    assert "local inDrumKitWorkflow = workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT" in main_script
     assert 'preparing direct drum kit' in progress_render
     assert 'starting drum kit runtime' in progress_render
     assert 'writing drum tracks' in progress_render
