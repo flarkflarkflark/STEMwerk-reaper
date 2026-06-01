@@ -13801,6 +13801,10 @@ local function drawProgressWindow()
     if progressState.logFile and (not progressState._deviceInfoLastAt or (os.clock() - progressState._deviceInfoLastAt) > 0.5) then
         progressState._deviceInfoLastAt = os.clock()
         local devId, devName = nil, nil
+        local runtimeSelected = nil
+        local normalizedRequest = nil
+        local gpuCapable = nil
+        local runtimeDeviceNames = nil
         local f = io.open(progressState.logFile, "r")
         if f then
             local n = 0
@@ -13818,12 +13822,32 @@ local function drawProgressWindow()
                     devId = "cuda:" .. idx
                     devName = name2
                 end
+                local selected = line:match("drumsep_runtime_selected=([%w_:%-]+)")
+                if selected then
+                    runtimeSelected = selected
+                end
+                local req = line:match("normalized_device_request=([%w_:%-]+)")
+                if req then
+                    normalizedRequest = req
+                end
+                local gpu = line:match("drumsep_gpu_capable=([%w_:%-]+)")
+                if gpu then
+                    gpuCapable = gpu
+                end
+                local names = line:match("drumsep_device_names=(.+)")
+                if names and names ~= "" then
+                    runtimeDeviceNames = names
+                end
                 if n >= 80 then break end
             end
             f:close()
         end
         progressState._deviceId = devId
         progressState._deviceName = devName
+        progressState._runtimeSelected = runtimeSelected
+        progressState._normalizedDeviceRequest = normalizedRequest
+        progressState._runtimeGpuCapable = gpuCapable
+        progressState._runtimeDeviceNames = runtimeDeviceNames
     end
 
     -- === THEME TOGGLE (top right) ===
@@ -14131,6 +14155,49 @@ local function drawProgressWindow()
     end
     local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
     local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
+    local function deriveResolvedRuntimeFooter()
+        if not isDrumKitWorkflowActive() then
+            return footerDeviceDetail
+        end
+        local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
+        local runtimeSel = tostring(progressState._runtimeSelected or ""):lower()
+        local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
+        local deviceName = progressState._deviceName
+        if (not deviceName or deviceName == "") and progressState._runtimeDeviceNames and progressState._runtimeDeviceNames ~= "" then
+            deviceName = tostring(progressState._runtimeDeviceNames):match("([^,;]+)")
+        end
+        if deviceName then
+            deviceName = tostring(deviceName):gsub("^%s+", ""):gsub("%s+$", "")
+        end
+
+        if req == "cpu" then
+            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
+        end
+        if runtimeSel == "rocm" then
+            local gpuLabel = (deviceName and deviceName ~= "") and deviceName or "ROCm"
+            if req == "auto" then
+                return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), gpuLabel)
+            end
+            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), gpuLabel)
+        end
+        if runtimeSel == "cpu" then
+            if req == "auto" then
+                return trSafeValue("footer_device_auto_resolved_cpu", "Auto -> CPU runtime")
+            end
+            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
+        end
+        if gpuCap == "yes" and deviceName and deviceName ~= "" then
+            if req == "auto" then
+                return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), deviceName)
+            end
+            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), deviceName)
+        end
+        if req == "cpu" then
+            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
+        end
+        return footerDeviceDetail
+    end
+    footerDeviceDetail = deriveResolvedRuntimeFooter()
 
     -- Stage text inside the main progress bar, like the multi-track job bars.
     local stageDisplay = normalizeProgressStage(progressState.stage or (T("starting") or "Starting..."))

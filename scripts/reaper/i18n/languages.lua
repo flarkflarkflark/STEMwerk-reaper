@@ -104,6 +104,10 @@ en = {
         footer_line_location_simple = "Location: %s",
         footer_output_calc = "%d stems (%d x %d tracks)",
         footer_using_device = "Using: %s",
+        footer_device_auto_resolved_gpu = "Auto -> GPU/ROCm: %s",
+        footer_device_auto_resolved_cpu = "Auto -> CPU runtime",
+        footer_device_cpu_runtime = "CPU runtime",
+        footer_device_gpu_runtime = "GPU/ROCm: %s",
         footer_device_none = "CPU (No GPU)",
 
         -- Stems
@@ -678,6 +682,10 @@ en = {
         footer_line_location_simple = "Locatie: %s",
         footer_output_calc = "%d stems (%d x %d tracks)",
         footer_using_device = "Gebruikt: %s",
+        footer_device_auto_resolved_gpu = "Auto -> GPU/ROCm: %s",
+        footer_device_auto_resolved_cpu = "Auto -> CPU-runtime",
+        footer_device_cpu_runtime = "CPU-runtime",
+        footer_device_gpu_runtime = "GPU/ROCm: %s",
         footer_device_none = "CPU (Geen GPU)",
 
         -- Stems
@@ -1250,6 +1258,10 @@ en = {
         footer_line_location_simple = "Ort: %s",
         footer_output_calc = "%d Stems (%d x %d Tracks)",
         footer_using_device = "Verwendet: %s",
+        footer_device_auto_resolved_gpu = "Auto -> GPU/ROCm: %s",
+        footer_device_auto_resolved_cpu = "Auto -> CPU-Runtime",
+        footer_device_cpu_runtime = "CPU-Runtime",
+        footer_device_gpu_runtime = "GPU/ROCm: %s",
         footer_device_none = "CPU (Keine GPU)",
 
         -- Stems

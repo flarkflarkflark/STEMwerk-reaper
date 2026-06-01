@@ -2003,6 +2003,29 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert "function trSafeValue(key, fallback)" in script
     assert 'local title = isDrumKitWorkflowActive() and trSafeValue("workflow_drumkit_label", "Direct Drum Kit") or "STEMwerk"' in script
     assert 'setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)' in script
+    assert 'local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"' in script
+    assert 'local title = trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")' in script
+
+
+def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+
+    assert "local function deriveResolvedRuntimeFooter()" in script
+    assert "progressState._runtimeSelected" in script
+    assert "progressState._normalizedDeviceRequest" in script
+    assert "progressState._runtimeGpuCapable" in script
+    assert "progressState._runtimeDeviceNames" in script
+    assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s")' in script
+    assert 'trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
+    assert 'footer_device_auto_resolved_gpu = "Auto -> GPU/ROCm: %s"' in langs
+    assert 'footer_device_auto_resolved_cpu = "Auto -> CPU runtime"' in langs
+    assert 'footer_device_cpu_runtime = "CPU runtime"' in langs
+    assert 'footer_device_gpu_runtime = "GPU/ROCm: %s"' in langs
+    assert 'footer_device_auto_resolved_cpu = "Auto -> CPU-runtime"' in langs
+    assert 'footer_device_cpu_runtime = "CPU-runtime"' in langs
+    assert 'footer_device_auto_resolved_cpu = "Auto -> CPU-Runtime"' in langs
+    assert 'footer_device_cpu_runtime = "CPU-Runtime"' in langs
 
 
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
