@@ -3439,14 +3439,6 @@ local function performBundleCollection()
     writeFile(joinPath(bundleDir, "platform_details.txt"), table.concat(platform.rawBlocks, "\n\n"), "wb")
     writeFile(joinPath(bundleDir, "python_diagnostics.txt"), pythonProbe.rawOutput or "", "wb")
 
-    local zipStartedAt = phaseStart("create_zip")
-    local zipOk, zipPath, zipError, zipMethod = createZipArchive(bundleParent, bundleDir, bundleName, detectedPythonPath)
-    phaseDone("create_zip", zipStartedAt)
-
-    phaseTimings.total = math.max(0, os.clock() - totalStartedAt)
-    timingEvent("total", "end", string.format("duration=%.3f", phaseTimings.total))
-    finalizeTimingsAfterZip()
-
     appendLine(diagnostics, "Support Bundle Phase Timings (seconds)")
     appendKey(diagnostics, "total_start", "see support_bundle_timings.txt")
     appendKey(diagnostics, "collect_root_diagnostics", string.format("%.3f", phaseTimings.collect_root_diagnostics or 0))
@@ -3461,10 +3453,18 @@ local function performBundleCollection()
     appendLine(diagnostics, "Zip Scope")
     appendKey(diagnostics, "Zip source folder", bundleDir)
     appendKey(diagnostics, "Zip parent folder", bundleParent)
-    appendKey(diagnostics, "Zip target", zipOk and zipPath or (bundleName .. ".zip (failed)"))
+    appendKey(diagnostics, "Zip target", bundleName .. ".zip")
     appendLine(diagnostics, "")
 
     writeFile(joinPath(bundleDir, "diagnostics.txt"), table.concat(diagnostics, "\n"), "wb")
+
+    local zipStartedAt = phaseStart("create_zip")
+    local zipOk, zipPath, zipError, zipMethod = createZipArchive(bundleParent, bundleDir, bundleName, detectedPythonPath)
+    phaseDone("create_zip", zipStartedAt)
+
+    phaseTimings.total = math.max(0, os.clock() - totalStartedAt)
+    timingEvent("total", "end", string.format("duration=%.3f", phaseTimings.total))
+    finalizeTimingsAfterZip()
     writeFile(
         joinPath(bundleDir, "support_bundle_result.txt"),
         table.concat({

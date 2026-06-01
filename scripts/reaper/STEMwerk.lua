@@ -8752,6 +8752,17 @@ local function isDrumKitResultCopy(selectedStems)
         and names["ride"] and names["crash"]
 end
 
+function trSafeValue(key, fallback)
+    local v = T(key)
+    if not v or v == "" then return fallback end
+    local raw = tostring(key or "")
+    local value = tostring(v)
+    if value == raw or value == raw:gsub("_", " ") then
+        return fallback
+    end
+    return value
+end
+
 function renderResultTitleArea(ctx)
     local w, PS = ctx.w, ctx.PS
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
@@ -8792,7 +8803,15 @@ function renderResultTitleArea(ctx)
     local drumKitCopy = isDrumKitResultCopy(selectedStems)
     local titleY = PS(spacing.titleY or 100)
 
-    if utilityMode then
+    if drumKitCopy then
+        local title = trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")
+        local titleW = gfx.measurestr(title)
+        local titleX = (w - titleW) / 2
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = titleX
+        gfx.y = titleY
+        gfx.drawstr(title)
+    elseif utilityMode then
         local stemPart = "STEM"
         local restPart = T("complete_title_suffix") or "werk Complete!"
         local totalW = gfx.measurestr(stemPart .. restPart)
@@ -8801,14 +8820,6 @@ function renderResultTitleArea(ctx)
         gfx.x = titleX
         gfx.y = titleY
         gfx.drawstr(stemPart .. restPart)
-    elseif drumKitCopy then
-        local title = T("drumkit_complete_title") or "Direct Drum Kit completed successfully!"
-        local titleW = gfx.measurestr(title)
-        local titleX = (w - titleW) / 2
-        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-        gfx.x = titleX
-        gfx.y = titleY
-        gfx.drawstr(title)
     else
         local stemPart = "STEM"
         local restPart = T("complete_title_suffix") or "werk Complete!"
@@ -8902,12 +8913,18 @@ function buildResultMessageLines()
     local lines = {}
     local timeStr = string.format("%d:%02d", math.floor((data.totalTimeSec or 0) / 60), (data.totalTimeSec or 0) % 60)
 
+    local selectedStems = resultWindowState and resultWindowState.selectedStems or {}
+    local drumKitCopyActive = data.drumKitCopy
+    if drumKitCopyActive == nil then
+        drumKitCopyActive = isDrumKitWorkflowActive() or isDrumKitResultCopy(selectedStems)
+    end
+
     if data.kind == "multi_new_tracks" then
         local stemsCreated = data.stemsCreated or 0
         local srcCount = data.sourceCount or 0
         local sourceKind = data.sourceKind or "tracks"
-        local drumKitCopy = isDrumKitWorkflowActive()
-        local stemWord = isDrumKitWorkflowActive()
+        local drumKitCopy = drumKitCopyActive
+        local stemWord = drumKitCopy
             and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
             or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
         local srcWord
@@ -8947,8 +8964,8 @@ function buildResultMessageLines()
         if data.stemsCreated and data.sourceCount and data.sourceKind then
             local stemsCreated = data.stemsCreated or 0
             local sourceCount = data.sourceCount or 0
-            local drumKitCopy = isDrumKitWorkflowActive()
-            local stemWord = isDrumKitWorkflowActive()
+            local drumKitCopy = drumKitCopyActive
+            local stemWord = drumKitCopy
                 and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
                 or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
             if data.sourceKind == "time_selection" then
@@ -11682,7 +11699,7 @@ function renderMainColumns(ctx)
             local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
                 and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")
                 or (stemTooltipKeys[stem.name] or "tooltip_stem_other")
-            setTooltipWithShortcut(col2X, stemY, colW, btnH, T(tooltipKey), stem.key, stem.color)
+            setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)
             stemY = stemY + S(22)
         end
     end
@@ -11718,11 +11735,11 @@ function renderMainColumns(ctx)
         local modelDisplayName = model.name
         if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT then
             if model.id == "htdemucs" then
-                modelDisplayName = T("model_label_fast") or "Fast"
+                modelDisplayName = trSafe("model_label_fast", "Fast")
             elseif model.id == "htdemucs_ft" then
-                modelDisplayName = T("model_label_quality") or "Quality"
+                modelDisplayName = trSafe("model_label_quality", "Quality")
             elseif model.id == "htdemucs_6s" then
-                modelDisplayName = T("model_label_expanded") or "Expanded"
+                modelDisplayName = trSafe("model_label_expanded", "Expanded")
             end
         end
         if utilityMode then
@@ -11733,7 +11750,7 @@ function renderMainColumns(ctx)
             setModelPreservingStemIntent(model.id)
         end
         local descKey = modelDescKeys[model.id] or "model_fast_desc"
-        local tip = T(descKey)
+        local tip = trSafe(descKey, modelDisplayName)
         if not modelAvailable then
             tip = tostring(tip or "") .. "\n\n" .. unavailableModelTooltipSuffix()
         end
@@ -13617,7 +13634,7 @@ function showProcessingPlaceholderWindow(stage)
     local fillW = math.max(24, math.floor(barW * (0.18 + 0.22 * pulse)))
 
     gfx.setfont(1, "Arial", 20, string.byte('b'))
-    local title = isDrumKitWorkflowActive() and (T("workflow_drumkit_label") or "Direct Drum Kit") or "STEMwerk"
+    local title = isDrumKitWorkflowActive() and trSafeValue("workflow_drumkit_label", "Direct Drum Kit") or "STEMwerk"
     local titleW = gfx.measurestr(title)
     gfx.set(text[1], text[2], text[3], 1)
     gfx.x = math.floor((w - titleW) / 2)
@@ -13976,7 +13993,7 @@ local function drawProgressWindow()
         gfx.x = titleX
         gfx.y = titleY
         if drumKitMode then
-            gfx.drawstr(T("workflow_drumkit_label") or "Direct Drum Kit")
+            gfx.drawstr(trSafeValue("workflow_drumkit_label", "Direct Drum Kit"))
         else
             local singleTrackLabel = T("single_track") or "Single-Track"
             gfx.drawstr(singleTrackLabel .. " ")
@@ -14452,7 +14469,7 @@ local function drawProgressWindow()
     if isDrumKitWorkflowActive() then
         modelDisplay = (footerModel == "htdemucs_ft")
             and (T("model_label_quality") or "Quality")
-            or ((footerModel == "htdemucs_6s") and (T("model_label_expanded") or "Expanded") or (T("model_label_fast") or "Fast"))
+            or ((footerModel == "htdemucs_6s") and trSafeValue("model_label_expanded", "Expanded") or trSafeValue("model_label_fast", "Fast"))
     else
         modelDisplay = (footerModel == "htdemucs_ft")
             and (T("model_label_quality") or "Quality")
@@ -14912,7 +14929,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
         if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end
     end
 
-    local folderKind = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+    local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
     local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
     local importedItems = {}
     local importedPaths = {}
@@ -15498,7 +15515,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 folderTrack = reaper.GetTrack(0, trackIdx)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
-                local folderLabel = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+                local folderLabel = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
                 reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - " .. folderLabel, true)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderDepth(plannedTargets)) then
@@ -15611,7 +15628,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 end
             end
         end
-        local folderKind = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+        local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
         local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
 
         local trackIdx = getInsertIndexForTrack(track)
@@ -16261,6 +16278,9 @@ function showResultWindow(selectedStems, message)
 
     resultWindowState.selectedStems = selectedStems
     if type(message) == "table" then
+        if message.drumKitCopy == nil then
+            message.drumKitCopy = isDrumKitWorkflowActive() or isDrumKitResultCopy(selectedStems or {})
+        end
         resultWindowState.messageData = message
         resultWindowState.message = ""
     else
@@ -18491,7 +18511,7 @@ function drawMultiTrackProgressWindow()
     if isDrumKitWorkflowActive() then
         modelDisplay = (runModel == "htdemucs_ft")
             and (T("model_label_quality") or "Quality")
-            or ((runModel == "htdemucs_6s") and (T("model_label_expanded") or "Expanded") or (T("model_label_fast") or "Fast"))
+            or ((runModel == "htdemucs_6s") and trSafeValue("model_label_expanded", "Expanded") or trSafeValue("model_label_fast", "Fast"))
     else
         modelDisplay = (runModel == "htdemucs_ft")
             and (T("model_label_quality") or "Quality")
@@ -18979,7 +18999,7 @@ _sep.processAllStemsResult = function()
             insertedTrackCount = insertedTrackCount + 1
             local folderTrack = reaper.GetTrack(0, trackIdx)
             targets.folderTrack = folderTrack
-            local folderLabel = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+            local folderLabel = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - " .. folderLabel, true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))

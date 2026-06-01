@@ -1889,6 +1889,7 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert "drumsep_gpu_capable" in script
     assert "drumsep_install.log" in script
     assert "drumsep_rocm_install.log" in script
+    assert script.index('writeFile(joinPath(bundleDir, "diagnostics.txt"') < script.index('local zipStartedAt = phaseStart("create_zip")')
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
@@ -1896,7 +1897,7 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
     i18n_internal = Path("scripts/reaper/_internal/STEMwerk_i18n.lua").read_text()
 
-    assert 'T("drumkit_complete_title")' in main_script
+    assert 'trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")' in main_script
     assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
     assert 'trPlural(sourceCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
 
@@ -1979,7 +1980,7 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
     assert 'and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")' in main_script
     assert 'if model.id == "htdemucs"' in main_script
-    assert 'modelDisplayName = T("model_label_expanded") or "Expanded"' in main_script
+    assert 'modelDisplayName = trSafe("model_label_expanded", "Expanded")' in main_script
     assert 'preparing direct drum kit' in progress_render
     assert 'starting drum kit runtime' in progress_render
     assert 'writing drum tracks' in progress_render
@@ -1991,10 +1992,17 @@ def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_devic
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     workflow_script = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text()
 
-    assert 'local folderKind = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"' in main_script
+    assert 'local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"' in main_script
     assert 'sourceTrackName .. " - " .. folderLabel' in main_script
     assert "ui_device_selected_before_run=" in workflow_script
     assert "backend_device_arg=" in workflow_script
+
+
+def test_drumkit_ui_strings_use_safe_translation_resolution():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    assert "function trSafeValue(key, fallback)" in script
+    assert 'local title = isDrumKitWorkflowActive() and trSafeValue("workflow_drumkit_label", "Direct Drum Kit") or "STEMwerk"' in script
+    assert 'setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)' in script
 
 
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():

@@ -1151,7 +1151,7 @@ en = {
     de = {
         -- General
         help = "Hilfe",
-        close = "Schliessen",
+        close = "Schließen",
         back = "Zurück",
         cancel = "Abbrechen",
         yes = "Ja",
@@ -1531,7 +1531,7 @@ en = {
         hint_keys = "Enter / Leertaste / ESC",
         hint_monitor = "F1 = Hilfe | ESC = Schliessen",
         hint_nav = "< > Navigieren | Scrollen zum Zoomen | Rechts ziehen zum Schwenken | ESC zum Schliessen",
-        hint_cancel = "ESC druecken oder Fenster schliessen zum Abbrechen",
+        hint_cancel = "ESC drücken oder Fenster schließen zum Abbrechen",
         click_new_art = "Klicken fuer neue Kunst",
         gallery_fx_off_message = "Visuelle FX aus - Klicke auf FX zum Aktivieren",
         help_gallery_controls_tip = "Gallery Bedienung:\n- Mausrad: Zoom\n- Links ziehen: Pan\n- Rechts ziehen: Rotation\n- Doppelklick: Reset View\n- Leertaste: Neue Kunst\n- Links/Rechts: Tabs wechseln",
@@ -1700,7 +1700,7 @@ en = {
         help_reaper_title = "REAPER-Dateien",
         help_reaper_sub = "Wie STEMwerk Temp-Ordner und Logs handhabt",
         help_reaper_selection_title = "Auswahlregeln",
-        help_reaper_selection_body = "Zeitbereich wird nur verwendet, wenn keine Items oder Tracks ausgewaehlt sind. Bei ausgewaehlten Items verarbeitet STEMwerk die kompletten Items, auch wenn ein Zeitbereich existiert. Bei ausgewaehlten Tracks werden die Items auf diesen Tracks vollstaendig verarbeitet.",
+        help_reaper_selection_body = "Zeitbereich wird nur verwendet, wenn keine Items oder Tracks ausgewählt sind. Bei ausgewählten Items verarbeitet STEMwerk die kompletten Items, auch wenn ein Zeitbereich existiert. Bei ausgewählten Tracks werden die Items auf diesen Tracks vollständig verarbeitet.",
         help_reaper_temp_title = "Temporaerer Arbeitsordner",
         help_reaper_temp_body = "Waerend der Trennung erstellt STEMwerk eine temporaere Eingabe und schreibt Ausgaben in einen STEMwerk_* Ordner im System-Temp. Diese Dateien koennen geloescht werden, sobald REAPER die Stems geladen hat.",
         help_reaper_logs_title = "Logs und Diagnose",
