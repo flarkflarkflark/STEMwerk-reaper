@@ -1854,6 +1854,8 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
 
     assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_label", "Direct Drum Kit") .. " (Z)"' in main_script
     assert 'local presetLabelEdks    = trSafe("workflow_edks_label", "Drum Kit Split") .. " (X)"' in main_script
+    assert 'local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'and (T("drum_stems_label") or "Drum Stems:")' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
     assert 'if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then' in main_script
     assert 'showExtractKitPlannedNotice()' in main_script
@@ -1864,6 +1866,7 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
 
     assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
     assert 'workflow_edks_label = "Drum Kit Split"' in langs
+    assert 'drum_stems_label = "Drum Stems:"' in langs
     assert 'tooltip_preset_drumkit = "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
     assert 'tooltip_preset_edks = "Planned: extract drums from a full mix, then split the kit."' in langs
     assert 'tooltip_preset_drumkit = "Splits drummateriaal naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
@@ -1888,11 +1891,25 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
+    assert 'footer_drum_tracks = "drum tracks"' in langs
+    assert 'footer_drum_tracks = "drumtracks"' in langs
+    assert 'footer_drum_tracks = "Drum-Spuren"' in langs
+    assert 'direct_drum_kit_folder_suffix = "Direct Drum Kit"' in langs
     assert 'preparing direct drum kit' in progress_render
     assert 'starting drum kit runtime' in progress_render
     assert 'writing drum tracks' in progress_render
     assert 'drumsep stage2 separating kit stems' in progress_render
     assert 'progress_stage_splitting_drum_kit' in progress_render
+
+
+def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_device_breadcrumbs():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    workflow_script = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text()
+
+    assert 'local folderKind = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"' in main_script
+    assert 'sourceTrackName .. " - " .. folderLabel' in main_script
+    assert "ui_device_selected_before_run=" in workflow_script
+    assert "backend_device_arg=" in workflow_script
 
 
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():

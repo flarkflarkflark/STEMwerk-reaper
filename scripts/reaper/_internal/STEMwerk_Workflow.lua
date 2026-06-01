@@ -398,6 +398,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         -- Use WMI Win32_Process.Create to get a PID for proper cancel.
         local requestedDeviceArg = SETTINGS.device or "auto"
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
+        debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
+        debugLog("backend_device_arg=" .. tostring(deviceArg))
         local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
         local workflowSourceArg = tostring((runOptions and runOptions.workflowSource) or "")
         local requestedStage2ModelArg = tostring((runOptions and runOptions.requestedStage2Model) or "")
@@ -509,6 +511,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         -- and writes done.txt only when the worker exits successfully.
         local requestedDeviceArg = tostring(SETTINGS.device or "auto")
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
+        debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
+        debugLog("backend_device_arg=" .. tostring(deviceArg))
         local modelArg  = tostring(model or SETTINGS.model or "htdemucs")
         local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
         local workflowSourceArg = tostring((runOptions and runOptions.workflowSource) or "")

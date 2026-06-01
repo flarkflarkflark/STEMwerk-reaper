@@ -10962,14 +10962,24 @@ buildFooterLines = function()
 
     local outLine
     local locLine
+    local directMode = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
     local function stemUnit(n)
+        if directMode then
+            return trSingularPlural(n, "footer_drum_track", "footer_drum_tracks")
+        end
         if (n or 0) == 1 then return trSafe("stem", "stem") end
         return trSafe("stems", "stems")
     end
     local function stemTrackUnit(n)
+        if directMode then
+            return trSingularPlural(n, "footer_drum_track", "footer_drum_tracks")
+        end
         return trSingularPlural(n, "footer_stem_track", "footer_stem_tracks")
     end
     local function stemFolderUnit(n)
+        if directMode then
+            return trSingularPlural(n, "footer_drum_stem_folder", "footer_drum_stem_folders")
+        end
         return trSingularPlural(n, "footer_stem_folder", "footer_stem_folders")
     end
 
@@ -11062,9 +11072,13 @@ buildFooterLines = function()
         if SETTINGS.createNewTracks then
             local baseLoc
             if summary.targetIsItem and effectiveTargets > 1 then
-                baseLoc = trSafe("footer_per_item_folders", "Per-item stem folders")
+                baseLoc = directMode
+                    and trSafe("footer_per_item_drum_folders", "Per-item drum-stem folders")
+                    or trSafe("footer_per_item_folders", "Per-item stem folders")
             else
-                baseLoc = effectiveTargets > 1 and (trSafe("footer_per_track_folders", "Per-track stem folders")) or trSafe("footer_location_new_folder", "New folder")
+                baseLoc = effectiveTargets > 1
+                    and (directMode and trSafe("footer_per_track_drum_folders", "Per-track drum-stem folders") or trSafe("footer_per_track_folders", "Per-track stem folders"))
+                    or (directMode and trSafe("footer_location_new_drum_folder", "New folder with drum tracks") or trSafe("footer_location_new_folder", "New folder"))
             end
             locLine = trFmt(
                 "footer_line_location_details",
@@ -11614,7 +11628,10 @@ function renderMainColumns(ctx)
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    drawColumnHeader(is6Stem and T("stems_6") or "Stems:", col2X, stemsW, mainHeaderFont, contentTop)
+    local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
+        and (T("drum_stems_label") or "Drum Stems:")
+        or (is6Stem and T("stems_6") or "Stems:")
+    drawColumnHeader(stemsHeader, col2X, stemsW, mainHeaderFont, contentTop)
     setTooltip(col2X, contentTop, stemsW, S(16), T("tooltip_section_stems") or "Choose which stems to create.")
 
     local stemY = contentTop + S(20)
@@ -13576,7 +13593,7 @@ function showProcessingPlaceholderWindow(stage)
     local fillW = math.max(24, math.floor(barW * (0.18 + 0.22 * pulse)))
 
     gfx.setfont(1, "Arial", 20, string.byte('b'))
-    local title = isDrumKitWorkflowActive() and "Drum Kit Split" or "STEMwerk"
+    local title = isDrumKitWorkflowActive() and (T("workflow_drumkit_label") or "Direct Drum Kit") or "STEMwerk"
     local titleW = gfx.measurestr(title)
     gfx.set(text[1], text[2], text[3], 1)
     gfx.x = math.floor((w - titleW) / 2)
@@ -13935,7 +13952,7 @@ local function drawProgressWindow()
         gfx.x = titleX
         gfx.y = titleY
         if drumKitMode then
-            gfx.drawstr("Drum Kit Split")
+            gfx.drawstr(T("workflow_drumkit_label") or "Direct Drum Kit")
         else
             local singleTrackLabel = T("single_track") or "Single-Track"
             gfx.drawstr(singleTrackLabel .. " ")
@@ -14864,7 +14881,8 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
         if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end
     end
 
-    local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, "Stems")
+    local folderKind = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+    local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
     local importedItems = {}
     local importedPaths = {}
 
@@ -14872,7 +14890,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
     if SETTINGS.createFolder then
         reaper.InsertTrackAtIndex(trackIdx, true)
         folderTrack = reaper.GetTrack(0, trackIdx)
-        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
+        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - " .. folderKind, true)
         reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
         HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
         UI_Window.ensureTrackHeight(folderTrack)
@@ -15449,7 +15467,8 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 folderTrack = reaper.GetTrack(0, trackIdx)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
-                reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
+                local folderLabel = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+                reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - " .. folderLabel, true)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderDepth(plannedTargets)) then
                 reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
@@ -15561,7 +15580,8 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 end
             end
         end
-        local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, "Stems")
+        local folderKind = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+        local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
 
         local trackIdx = getInsertIndexForTrack(track)
         local insertedForThisItem = 0
@@ -15585,7 +15605,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 folderTrack = reaper.GetTrack(0, trackIdx)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
-                reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - Stems", true)
+                reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", folderNames.folderBase .. " - " .. folderKind, true)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderDepth(plannedTargets)) then
                 reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
@@ -18921,7 +18941,8 @@ _sep.processAllStemsResult = function()
             insertedTrackCount = insertedTrackCount + 1
             local folderTrack = reaper.GetTrack(0, trackIdx)
             targets.folderTrack = folderTrack
-            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - Stems", true)
+            local folderLabel = isDrumKitWorkflowActive() and (T("direct_drum_kit_folder_suffix") or "Direct Drum Kit") or "Stems"
+            reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - " .. folderLabel, true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
             UI_Window.ensureTrackHeight(folderTrack)

@@ -599,7 +599,14 @@ def _select_drumsep_runtime(runtime_base: Optional[Path] = None) -> Tuple[Option
     rocm_python = _drumsep_rocm_runtime_python_path(runtime_base)
     cpu_python = _drumsep_runtime_python_path(runtime_base)
 
+    print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_start", file=sys.stderr)
     rocm_ok, rocm_detail, rocm_payload = _verify_drumsep_runtime(rocm_python, require_gpu=True)
+    print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_end detail={rocm_detail}", file=sys.stderr)
+    if not rocm_ok and rocm_detail in {"rocm_cuda_unavailable", "rocm_no_device_names"}:
+        time.sleep(1.0)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_start", file=sys.stderr)
+        rocm_ok, rocm_detail, rocm_payload = _verify_drumsep_runtime(rocm_python, require_gpu=True)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_end detail={rocm_detail}", file=sys.stderr)
     if rocm_ok:
         info = dict(rocm_payload or {})
         info["kind"] = "rocm"
@@ -607,7 +614,9 @@ def _select_drumsep_runtime(runtime_base: Optional[Path] = None) -> Tuple[Option
         info["fallback_reason"] = ""
         return rocm_python, "rocm", info
 
+    print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
     cpu_ok, cpu_detail, cpu_payload = _verify_drumsep_runtime(cpu_python, require_gpu=False)
+    print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
     if cpu_ok:
         info = dict(cpu_payload or {})
         info["kind"] = "cpu"
