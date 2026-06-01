@@ -1812,6 +1812,20 @@ def test_support_bundle_prefers_newest_runtime_run_over_stale_timing_summary():
     assert "if not firstFromRuntimeRuns then" in script
 
 
+def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files():
+    script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert "buildDrumsepRuntimeDiagnostics(" in script
+    assert "drumsep_runtime_status.txt" in script
+    assert "[CPU fallback runtime]" in script
+    assert "[ROCm runtime]" in script
+    assert "[Latest Direct DKS markers]" in script
+    assert "drumsep_runtime_selected" in script
+    assert "drumsep_gpu_capable" in script
+    assert "drumsep_install.log" in script
+    assert "drumsep_rocm_install.log" in script
+
+
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     log_script = Path("scripts/reaper/_internal/STEMwerk_Log.lua").read_text()
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()

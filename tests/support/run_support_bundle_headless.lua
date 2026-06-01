@@ -622,6 +622,7 @@ local function assertPresentScenario(bundleDir, context)
     assertf(fileExists(joinPath(bundleDir, "diagnostics.txt")), "diagnostics.txt missing")
     assertf(fileExists(joinPath(bundleDir, "platform_details.txt")), "platform_details.txt missing")
     assertf(fileExists(joinPath(bundleDir, "python_diagnostics.txt")), "python_diagnostics.txt missing")
+    assertf(fileExists(joinPath(bundleDir, "drumsep_runtime_status.txt")), "drumsep_runtime_status.txt missing")
     assertf(fileExists(joinPath(bundleDir, "temp_inventory.txt")), "temp_inventory.txt missing")
     assertf(fileExists(joinPath(bundleDir, "runtime_state", "bootstrap.env")), "bootstrap.env not copied")
     assertf(fileExists(joinPath(bundleDir, "runtime_state", "capabilities.env")), "capabilities.env not copied")
@@ -631,6 +632,7 @@ local function assertPresentScenario(bundleDir, context)
 
     local diagnostics = readFile(joinPath(bundleDir, "diagnostics.txt")) or ""
     local pythonDiagnostics = readFile(joinPath(bundleDir, "python_diagnostics.txt")) or ""
+    local drumsepDiagnostics = readFile(joinPath(bundleDir, "drumsep_runtime_status.txt")) or ""
     local tempInventory = readFile(joinPath(bundleDir, "temp_inventory.txt")) or ""
     local allText = readBundleText(bundleDir)
 
@@ -645,6 +647,9 @@ local function assertPresentScenario(bundleDir, context)
         assertf(diagnostics:find("FFmpeg version", 1, true) ~= nil and diagnostics:find("ffmpeg version 7.0-fake", 1, true) ~= nil, "diagnostics missing FFmpeg version")
     end
     assertf(trim(pythonDiagnostics) ~= "", "python_diagnostics.txt is empty")
+    assertf(drumsepDiagnostics:find("DrumSep Runtime Diagnostics", 1, true) ~= nil, "drumsep runtime diagnostics missing header")
+    assertf(drumsepDiagnostics:find("[CPU fallback runtime]", 1, true) ~= nil, "drumsep runtime diagnostics missing CPU section")
+    assertf(drumsepDiagnostics:find("[ROCm runtime]", 1, true) ~= nil, "drumsep runtime diagnostics missing ROCm section")
     if IS_WINDOWS then
         assertf(pythonDiagnostics:find("Python diagnostics skipped for speed.", 1, true) ~= nil,
             "Windows python diagnostics missing skip payload")
@@ -669,10 +674,12 @@ local function assertMissingScenario(bundleDir)
     assertf(fileExists(joinPath(bundleDir, "diagnostics.txt")), "diagnostics.txt missing")
     assertf(fileExists(joinPath(bundleDir, "platform_details.txt")), "platform_details.txt missing")
     assertf(fileExists(joinPath(bundleDir, "python_diagnostics.txt")), "python_diagnostics.txt missing")
+    assertf(fileExists(joinPath(bundleDir, "drumsep_runtime_status.txt")), "drumsep_runtime_status.txt missing")
     assertf(fileExists(joinPath(bundleDir, "temp_inventory.txt")), "temp_inventory.txt missing")
 
     local diagnostics = readFile(joinPath(bundleDir, "diagnostics.txt")) or ""
     local pythonDiagnostics = readFile(joinPath(bundleDir, "python_diagnostics.txt")) or ""
+    local drumsepDiagnostics = readFile(joinPath(bundleDir, "drumsep_runtime_status.txt")) or ""
 
     assertf(diagnostics:find("Python path", 1, true) ~= nil and diagnostics:find("missing", 1, true) ~= nil, "missing scenario did not report missing Python path")
     assertf(diagnostics:find("FFmpeg path", 1, true) ~= nil and diagnostics:find("missing", 1, true) ~= nil, "missing scenario did not report missing FFmpeg path")
@@ -685,6 +692,7 @@ local function assertMissingScenario(bundleDir)
         assertf(pythonDiagnostics:find("no Python path detected", 1, true) ~= nil or pythonDiagnostics:find("missing", 1, true) ~= nil,
             "missing scenario python diagnostics did not explain the failure")
     end
+    assertf(drumsepDiagnostics:find("DrumSep Runtime Diagnostics", 1, true) ~= nil, "missing scenario drumsep diagnostics missing header")
 
     assertNoForbiddenFiles(bundleDir)
     assertMaxFileSize(bundleDir, 1024 * 1024)
