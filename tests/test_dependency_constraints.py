@@ -1845,8 +1845,8 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
 
-    assert 'local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (X)"' in main_script
-    assert 'local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (E)"' in main_script
+    assert 'local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (Z)"' in main_script
+    assert 'local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (X)"' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
     assert 'if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then' in main_script
     assert 'showExtractKitPlannedNotice()' in main_script

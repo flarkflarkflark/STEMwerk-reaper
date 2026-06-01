@@ -11483,8 +11483,8 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
-    local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (X)"
-    local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (E)"
+    local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (Z)"
+    local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (X)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
@@ -11549,7 +11549,7 @@ function renderMainColumns(ctx)
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
         T("tooltip_preset_drumkit") or "Direct Drum Kit: Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
-        "X", {170, 150, 240}
+        "Z", {170, 150, 240}
     )
     presetY = presetY + S(22)
 
@@ -11560,7 +11560,7 @@ function renderMainColumns(ctx)
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
         T("tooltip_preset_edks") or "Drum Kit Split: Planned two-stage workflow (full mix -> extract drums -> split kit).",
-        "E", {130, 130, 130}
+        "X", {130, 130, 130}
     )
     presetY = presetY + S(28)
 
@@ -12251,9 +12251,9 @@ function handleDialogKeyboard(ctx)
     elseif char == 52 then toggleStemSelection(4)
     elseif char == 53 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(5)
     elseif char == 54 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(6)
-    elseif char == 120 or char == 88 then
+    elseif char == 122 or char == 90 then
         selectDirectDrumKitWorkflow()
-    elseif char == 101 or char == 69 then
+    elseif char == 120 or char == 88 then
         showExtractKitPlannedNotice()
     elseif char == 118 or char == 86 then clearDialogWorkflowSelection(); applyPresetVocalsOnly()
     elseif char == 100 or char == 68 then clearDialogWorkflowSelection(); applyPresetDrumsOnly()
