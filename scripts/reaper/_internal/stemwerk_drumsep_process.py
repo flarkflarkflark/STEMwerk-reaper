@@ -11,6 +11,7 @@ import sys
 import traceback
 from pathlib import Path
 from typing import Any
+import time
 
 
 EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
@@ -118,18 +119,22 @@ def run(args: argparse.Namespace) -> int:
     before = {p.resolve() for p in output_dir.glob("*.wav")}
 
     try:
+        print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_imports_start", file=sys.stderr)
         from audio_separator.separator import Separator
+        print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_imports_done", file=sys.stderr)
     except Exception as exc:
         write_result(result_json, _error_payload("drumsep_helper_failed", "stage2_runtime", f"{type(exc).__name__}: {exc}"))
         return 1
 
     try:
+        print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_model_load_start", file=sys.stderr)
         print(f"drumsep_helper_start input={input_path}", file=sys.stderr)
         print(f"drumsep_helper_model_dir={model_dir}", file=sys.stderr)
         print(f"drumsep_helper_model={model_name}", file=sys.stderr)
         print(f"drumsep_helper_output_dir={output_dir}", file=sys.stderr)
         sep = Separator(model_file_dir=str(model_dir), output_dir=str(output_dir), output_format="WAV")
         sep.load_model(model_name)
+        print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_model_load_end", file=sys.stderr)
     except Exception as exc:
         write_result(
             result_json,
@@ -143,7 +148,9 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     try:
+        print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_start", file=sys.stderr)
         raw_outputs = sep.separate(str(input_path))
+        print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_end", file=sys.stderr)
     except Exception as exc:
         write_result(
             result_json,

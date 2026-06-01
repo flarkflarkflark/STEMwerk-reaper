@@ -43,6 +43,9 @@ DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 
+def _ts() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+
 
 def _is_darwin_arm64() -> bool:
     return sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
@@ -636,7 +639,7 @@ def _run_direct_dks_drumsep_helper(
     helper_stderr = output_root / "drumsep_helper_stderr.txt"
     helper_log = output_root / "drumsep_helper.log"
 
-    print("drumsep_helper_start", file=sys.stderr)
+    print(f"timing_utc={_ts()} drumsep_helper_start", file=sys.stderr)
     print(f"drumsep_helper_python={drumsep_python}", file=sys.stderr)
     print(f"drumsep_helper_script={helper_path}", file=sys.stderr)
     print(f"drumsep_helper_model={resolved_model}", file=sys.stderr)
@@ -664,7 +667,8 @@ def _run_direct_dks_drumsep_helper(
         "--log-file",
         str(helper_log),
     ]
-    print("PROGRESS:1:Starting DrumSep runtime", flush=True)
+    print("PROGRESS:1:Starting Drum Kit runtime...", flush=True)
+    print(f"timing_utc={_ts()} drumsep_helper_python_start", file=sys.stderr)
 
     def helper_log_percent() -> Optional[int]:
         try:
@@ -695,7 +699,7 @@ def _run_direct_dks_drumsep_helper(
                 elapsed = int(time.monotonic() - start_time)
                 percent = min(12, 1 + elapsed // 10)
             if percent != last_percent:
-                print(f"PROGRESS:{percent}:DrumSep stage2 separating kit stems", flush=True)
+                print(f"PROGRESS:{percent}:Splitting drum kit...", flush=True)
                 last_percent = percent
             if rc is not None:
                 break
@@ -708,7 +712,7 @@ def _run_direct_dks_drumsep_helper(
 
     helper_stdout_text = helper_stdout.read_text(encoding="utf-8", errors="replace") if helper_stdout.exists() else ""
     helper_stderr_text = helper_stderr.read_text(encoding="utf-8", errors="replace") if helper_stderr.exists() else ""
-    print(f"drumsep_helper_returncode={completed_returncode}", file=sys.stderr)
+    print(f"timing_utc={_ts()} drumsep_helper_returncode={completed_returncode}", file=sys.stderr)
     if helper_stdout_text:
         print("drumsep_helper_stdout_begin", file=sys.stderr)
         print(helper_stdout_text.rstrip(), file=sys.stderr)
@@ -756,7 +760,7 @@ def _run_direct_dks_drumsep_helper(
         reaper_stems[reaper_key] = str(target)
         print(f"  {reaper_key}:  {target}", file=sys.stderr)
 
-    print("drumsep_helper_ok=true", file=sys.stderr)
+    print(f"timing_utc={_ts()} drumsep_helper_ok=true", file=sys.stderr)
     return True, reaper_stems, "", ""
 
 
@@ -1601,11 +1605,14 @@ def main():
     requested_stage2_model = run_model
     if _is_direct_dks_source(args.workflow_mode, args.workflow_source):
         emit_phase("stage2_preflight")
+        print("PROGRESS:0:Preparing Direct Drum Kit...", flush=True)
+        print(f"timing_utc={_ts()} drumsep_runtime_select_start", file=sys.stderr)
         print(
             f"Direct Drum Kit Split route detected: workflow_mode={args.workflow_mode} workflow_source={args.workflow_source}",
             file=sys.stderr,
         )
         drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime()
+        print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         if drumsep_python is None:
             reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
             runtime_path = _drumsep_rocm_runtime_python_path()
@@ -1651,6 +1658,7 @@ def main():
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         emit_phase("separate_start")
+        print(f"timing_utc={_ts()} drumsep_helper_start", file=sys.stderr)
         helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
             Path(args.input).resolve(),
             output_root,
@@ -1678,6 +1686,7 @@ def main():
             return 1
         emit_phase("separate_end")
         emit_phase("stem_write_start")
+        print("PROGRESS:95:Writing drum tracks...", flush=True)
         print(json.dumps(helper_stems))
         emit_phase("stem_write_end")
         emit_phase("python_done")

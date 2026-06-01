@@ -54,8 +54,16 @@ local function normalizeProgressStage(stage)
             key = "progress_stage_loading_ai_model"
         elseif flat == "starting separation" then
             key = "progress_stage_starting_separation"
+        elseif flat == "preparing direct drum kit" then
+            key = "progress_stage_preparing_direct_drum_kit"
+        elseif flat == "starting drum kit runtime" then
+            key = "progress_stage_starting_drum_kit_runtime"
+        elseif flat == "splitting drum kit" then
+            key = "progress_stage_splitting_drum_kit"
         elseif flat == "drumsep stage2 separating kit stems" then
             key = "progress_stage_splitting_drum_kit"
+        elseif flat == "writing drum tracks" then
+            key = "progress_stage_writing_drum_tracks"
         elseif flat == "writing stems" then
             key = "progress_stage_writing_stems"
         elseif flat == "complete" then
@@ -77,7 +85,11 @@ local function localizeProgressStagePrefix(stageText)
         {"loading ai model",    progressUiLabel("progress_stage_loading_ai_model",   "Loading AI model")},
         {"loading model",       progressUiLabel("progress_stage_loading_model",      "Loading model")},
         {"starting separation", progressUiLabel("progress_stage_starting_separation","Starting separation")},
+        {"preparing direct drum kit", progressUiLabel("progress_stage_preparing_direct_drum_kit","Preparing Direct Drum Kit...")},
+        {"starting drum kit runtime", progressUiLabel("progress_stage_starting_drum_kit_runtime","Starting Drum Kit runtime...")},
+        {"splitting drum kit", progressUiLabel("progress_stage_splitting_drum_kit","Splitting drum kit...")},
         {"drumsep stage2 separating kit stems", progressUiLabel("progress_stage_splitting_drum_kit","Splitting drum kit...")},
+        {"writing drum tracks", progressUiLabel("progress_stage_writing_drum_tracks","Writing drum tracks...")},
         {"writing stems",       progressUiLabel("progress_stage_writing_stems",      "Writing stems")},
         {"complete",            progressUiLabel("progress_stage_complete",           "Complete")},
     }

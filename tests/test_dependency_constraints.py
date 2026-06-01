@@ -1792,8 +1792,11 @@ def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     assert '"--result-json",' in script
     assert 'drumsep_helper_stdout.txt' in script
     assert 'drumsep_helper_stderr.txt' in script
-    assert 'print("PROGRESS:1:Starting DrumSep runtime", flush=True)' in script
-    assert "DrumSep stage2 separating kit stems" in script
+    assert 'print("PROGRESS:1:Starting Drum Kit runtime...", flush=True)' in script
+    assert 'print("PROGRESS:0:Preparing Direct Drum Kit...", flush=True)' in script
+    assert 'print("PROGRESS:95:Writing drum tracks...", flush=True)' in script
+    assert "Splitting drum kit..." in script
+    assert "timing_utc=" in script
     assert 'error_reason=drumsep_stage2_delegation_not_implemented' not in script
     assert 'drumsep_output_count_mismatch' in script
 
@@ -1829,6 +1832,7 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+    i18n_internal = Path("scripts/reaper/_internal/STEMwerk_i18n.lua").read_text()
 
     assert 'T("drumkit_complete_title")' in main_script
     assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
@@ -1839,6 +1843,8 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_complete_title = "Direct Drum Kit erfolgreich abgeschlossen!"' in langs
     assert 'drumkit_result_source_item_one = "bronitem"' in langs
     assert 'drumkit_result_source_item_one = "Quellelement"' in langs
+    assert "local function resolveOrFallback(key, fallback)" in i18n_internal
+    assert "if value == \"\" or value == keyText or value == humanized then" in i18n_internal
 
 
 def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
@@ -1873,6 +1879,18 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'progress_stage_splitting_drum_kit = "Splitting drum kit..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Drumkit splitsen..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Drumkit wird aufgeteilt..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Preparing Direct Drum Kit..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit voorbereiden..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit wird vorbereitet..."' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Starting Drum Kit runtime..."' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-runtime starten..."' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-Runtime wird gestartet..."' in langs
+    assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
+    assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
+    assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
+    assert 'preparing direct drum kit' in progress_render
+    assert 'starting drum kit runtime' in progress_render
+    assert 'writing drum tracks' in progress_render
     assert 'drumsep stage2 separating kit stems' in progress_render
     assert 'progress_stage_splitting_drum_kit' in progress_render
 
