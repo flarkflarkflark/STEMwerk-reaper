@@ -54,6 +54,8 @@ local function normalizeProgressStage(stage)
             key = "progress_stage_loading_ai_model"
         elseif flat == "starting separation" then
             key = "progress_stage_starting_separation"
+        elseif flat == "drumsep stage2 separating kit stems" then
+            key = "progress_stage_splitting_drum_kit"
         elseif flat == "writing stems" then
             key = "progress_stage_writing_stems"
         elseif flat == "complete" then
@@ -75,6 +77,7 @@ local function localizeProgressStagePrefix(stageText)
         {"loading ai model",    progressUiLabel("progress_stage_loading_ai_model",   "Loading AI model")},
         {"loading model",       progressUiLabel("progress_stage_loading_model",      "Loading model")},
         {"starting separation", progressUiLabel("progress_stage_starting_separation","Starting separation")},
+        {"drumsep stage2 separating kit stems", progressUiLabel("progress_stage_splitting_drum_kit","Splitting drum kit...")},
         {"writing stems",       progressUiLabel("progress_stage_writing_stems",      "Writing stems")},
         {"complete",            progressUiLabel("progress_stage_complete",           "Complete")},
     }

@@ -1844,23 +1844,37 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
 def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+    progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text()
 
-    assert 'local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (Z)"' in main_script
-    assert 'local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (X)"' in main_script
+    assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_label", "Direct Drum Kit") .. " (Z)"' in main_script
+    assert 'local presetLabelEdks    = trSafe("workflow_edks_label", "Drum Kit Split") .. " (X)"' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
     assert 'if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then' in main_script
     assert 'showExtractKitPlannedNotice()' in main_script
+    assert 'if type(showMessage) == "function" then' in main_script
+    assert 'if type(MESSAGES) == "table" and type(MESSAGES.showMessage) == "function" then' in main_script
     assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)' in main_script
     assert 'activateWorkflowStemSet(true)' in main_script
 
     assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
     assert 'workflow_edks_label = "Drum Kit Split"' in langs
+    assert 'tooltip_preset_drumkit = "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
+    assert 'tooltip_preset_edks = "Planned: extract drums from a full mix, then split the kit."' in langs
+    assert 'tooltip_preset_drumkit = "Splits drummateriaal naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
+    assert 'tooltip_preset_edks = "Gepland: eerst drums uit een mix halen, daarna de drumkit splitsen."' in langs
+    assert 'tooltip_preset_drumkit = "Teilt Drum-Material in Kick, Snare, Toms, Hi-Hat, Ride und Crash."' in langs
+    assert 'tooltip_preset_edks = "Geplant: erst Drums aus einem Mix extrahieren, dann das Kit aufteilen."' in langs
     assert 'edks_planned_title = "Drum Kit Split is planned"' in langs
     assert 'edks_planned_title = "Drum Kit Split komt later"' in langs
     assert 'edks_planned_title = "Drum Kit Split ist geplant"' in langs
     assert 'edks_planned_message = "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material."' in langs
     assert 'edks_planned_message = "Deze tweetraps-workflow haalt eerst drums uit een volledige mix en splitst daarna de drumkit. Gebruik Direct Drum Kit voor materiaal dat al drums is."' in langs
     assert 'edks_planned_message = "Dieser zweistufige Workflow extrahiert zuerst Drums aus einem vollstaendigen Mix und teilt danach das Kit auf. Verwende Direct Drum Kit fuer bereits isoliertes Drum-Material."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Splitting drum kit..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Drumkit splitsen..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Drumkit wird aufgeteilt..."' in langs
+    assert 'drumsep stage2 separating kit stems' in progress_render
+    assert 'progress_stage_splitting_drum_kit' in progress_render
 
 
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():

@@ -1790,12 +1790,25 @@ local function selectDirectDrumKitWorkflow()
 end
 
 local function showExtractKitPlannedNotice()
-    showMessage(
-        T("edks_planned_title") or "Drum Kit Split is planned",
-        T("edks_planned_message") or "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material.",
-        "info",
-        true
-    )
+    local title = type(T) == "function" and T("edks_planned_title") or nil
+    if title == nil or title == "" or title == "edks_planned_title" or title == "edks planned title" then
+        title = "Drum Kit Split is planned"
+    end
+    local msg = type(T) == "function" and T("edks_planned_message") or nil
+    if msg == nil or msg == "" or msg == "edks_planned_message" or msg == "edks planned message" then
+        msg = "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material."
+    end
+    if type(showMessage) == "function" then
+        showMessage(title, msg, "info", true)
+        return
+    end
+    if type(MESSAGES) == "table" and type(MESSAGES.showMessage) == "function" then
+        MESSAGES.showMessage(title, msg, "info", true)
+        return
+    end
+    if reaper and reaper.ShowMessageBox then
+        reaper.ShowMessageBox(msg, title, 0)
+    end
 end
 
 local function rgbToReaperColor(r, g, b)
@@ -5142,6 +5155,8 @@ local STEMwerkArt = {
 
 -- Forward declaration for showMessage
 local showMessage
+-- Forward declaration for workflow helper used before definition.
+local isDrumKitWorkflowActive
 -- Forward declaration for shared font-size cache helper used by earlier UI paths (e.g. About/Gallery).
 local getUniformFontSizeCached
 
@@ -11481,10 +11496,22 @@ function renderMainColumns(ctx)
     drawColumnHeader(T("presets"), col1X, presetsW, mainHeaderFont, contentTop)
     setTooltip(col1X, contentTop, presetsW, S(16), T("tooltip_section_presets") or "Quick choices for common stem sets.")
 
+    local function trSafe(key, fallback)
+        local translated = type(T) == "function" and T(key) or nil
+        local rawKey = tostring(key or "")
+        local humanized = rawKey:gsub("_", " ")
+        if translated == nil then return fallback end
+        translated = tostring(translated)
+        if translated == "" or translated == rawKey or translated == humanized then
+            return fallback
+        end
+        return translated
+    end
+
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
-    local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (Z)"
-    local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (X)"
+    local presetLabelDrumKit = trSafe("workflow_drumkit_label", "Direct Drum Kit") .. " (Z)"
+    local presetLabelEdks    = trSafe("workflow_edks_label", "Drum Kit Split") .. " (X)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
@@ -11548,7 +11575,7 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        T("tooltip_preset_drumkit") or "Direct Drum Kit: Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
+        trSafe("tooltip_preset_drumkit", "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."),
         "Z", {170, 150, 240}
     )
     presetY = presetY + S(22)
@@ -11559,7 +11586,7 @@ function renderMainColumns(ctx)
     end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        T("tooltip_preset_edks") or "Drum Kit Split: Planned two-stage workflow (full mix -> extract drums -> split kit).",
+        trSafe("tooltip_preset_edks", "Planned: extract drums from a full mix, then split the kit."),
         "X", {130, 130, 130}
     )
     presetY = presetY + S(28)
@@ -13475,7 +13502,7 @@ local progressState = {
     workflowSource = "",
 }
 
-local function isDrumKitWorkflowActive()
+isDrumKitWorkflowActive = function()
     return tostring(progressState.workflowMode or "") == DKS_WORKFLOW.WORKFLOW_DRUMKIT
 end
 
