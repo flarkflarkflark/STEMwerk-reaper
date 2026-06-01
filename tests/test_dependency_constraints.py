@@ -1834,9 +1834,9 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
     assert 'trPlural(sourceCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
 
-    assert 'drumkit_complete_title = "Drum Kit Split completed successfully!"' in langs
-    assert 'drumkit_complete_title = "Drum Kit Split succesvol voltooid!"' in langs
-    assert 'drumkit_complete_title = "Drum Kit Split erfolgreich abgeschlossen!"' in langs
+    assert 'drumkit_complete_title = "Direct Drum Kit completed successfully!"' in langs
+    assert 'drumkit_complete_title = "Direct Drum Kit succesvol voltooid!"' in langs
+    assert 'drumkit_complete_title = "Direct Drum Kit erfolgreich abgeschlossen!"' in langs
     assert 'drumkit_result_source_item_one = "bronitem"' in langs
     assert 'drumkit_result_source_item_one = "Quellelement"' in langs
 
@@ -1845,19 +1845,22 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
 
-    assert 'local presetLabelDrumKit = (T("workflow_drumkit_label") or "Drum Kit") .. " (X)"' in main_script
-    assert 'local presetLabelEdks    = (T("workflow_edks_label") or "Extract + Kit") .. " (E)"' in main_script
+    assert 'local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (X)"' in main_script
+    assert 'local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (E)"' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
     assert 'if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then' in main_script
     assert 'showExtractKitPlannedNotice()' in main_script
     assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)' in main_script
     assert 'activateWorkflowStemSet(true)' in main_script
 
-    assert 'workflow_drumkit_label = "Drum Kit"' in langs
-    assert 'workflow_edks_label = "Extract + Kit"' in langs
-    assert 'edks_planned_message = "Extract + Kit is planned. Use Drum Kit for already-drum material."' in langs
-    assert 'edks_planned_message = "Extract + Kit komt later. Gebruik Drum Kit voor materiaal dat al drums is."' in langs
-    assert 'edks_planned_message = "Extract + Kit ist geplant. Verwende Drum Kit fuer bereits isoliertes Drum-Material."' in langs
+    assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
+    assert 'workflow_edks_label = "Drum Kit Split"' in langs
+    assert 'edks_planned_title = "Drum Kit Split is planned"' in langs
+    assert 'edks_planned_title = "Drum Kit Split komt later"' in langs
+    assert 'edks_planned_title = "Drum Kit Split ist geplant"' in langs
+    assert 'edks_planned_message = "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material."' in langs
+    assert 'edks_planned_message = "Deze tweetraps-workflow haalt eerst drums uit een volledige mix en splitst daarna de drumkit. Gebruik Direct Drum Kit voor materiaal dat al drums is."' in langs
+    assert 'edks_planned_message = "Dieser zweistufige Workflow extrahiert zuerst Drums aus einem vollstaendigen Mix und teilt danach das Kit auf. Verwende Direct Drum Kit fuer bereits isoliertes Drum-Material."' in langs
 
 
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():

@@ -1791,8 +1791,8 @@ end
 
 local function showExtractKitPlannedNotice()
     showMessage(
-        T("edks_planned_title") or "Extract + Kit",
-        T("edks_planned_message") or "Extract + Kit is planned. Use Drum Kit for already-drum material.",
+        T("edks_planned_title") or "Drum Kit Split is planned",
+        T("edks_planned_message") or "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material.",
         "info",
         true
     )
@@ -8787,7 +8787,7 @@ function renderResultTitleArea(ctx)
         gfx.y = titleY
         gfx.drawstr(stemPart .. restPart)
     elseif drumKitCopy then
-        local title = T("drumkit_complete_title") or "Drum Kit Split completed successfully!"
+        local title = T("drumkit_complete_title") or "Direct Drum Kit completed successfully!"
         local titleW = gfx.measurestr(title)
         local titleX = (w - titleW) / 2
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
@@ -11483,8 +11483,8 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
-    local presetLabelDrumKit = (T("workflow_drumkit_label") or "Drum Kit") .. " (X)"
-    local presetLabelEdks    = (T("workflow_edks_label") or "Extract + Kit") .. " (E)"
+    local presetLabelDrumKit = (T("workflow_drumkit_label") or "Direct Drum Kit") .. " (X)"
+    local presetLabelEdks    = (T("workflow_edks_label") or "Drum Kit Split") .. " (E)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
@@ -11548,7 +11548,7 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        T("tooltip_preset_drumkit") or "Drum Kit: Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
+        T("tooltip_preset_drumkit") or "Direct Drum Kit: Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
         "X", {170, 150, 240}
     )
     presetY = presetY + S(22)
@@ -11559,7 +11559,7 @@ function renderMainColumns(ctx)
     end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        T("tooltip_preset_edks") or "Extract + Kit: Planned: extract drums from a full mix, then split the kit.",
+        T("tooltip_preset_edks") or "Drum Kit Split: Planned two-stage workflow (full mix -> extract drums -> split kit).",
         "E", {130, 130, 130}
     )
     presetY = presetY + S(28)
