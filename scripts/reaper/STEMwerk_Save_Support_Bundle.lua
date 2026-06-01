@@ -1243,6 +1243,312 @@ local function runPythonProbe(bundleDir, pythonPath)
     return result
 end
 
+local function readTailText(path, maxBytes)
+    local filePath = trim(path)
+    if filePath == "" or not fileExists(filePath) then
+        return ""
+    end
+    local cap = math.max(1024, tonumber(maxBytes) or (128 * 1024))
+    local size = fileSizeBytes(filePath) or 0
+    local f = io.open(filePath, "rb")
+    if not f then return "" end
+    if size > cap then
+        f:seek("end", -cap)
+    else
+        f:seek("set", 0)
+    end
+    local data = f:read("*a") or ""
+    f:close()
+    if size > cap then
+        data = "(tail excerpt; file truncated)\n" .. data
+    end
+    return data
+end
+
+local function toLowerSet(values)
+    local out = {}
+    for i = 1, #(values or {}) do
+        out[tostring(values[i]):lower()] = true
+    end
+    return out
+end
+
+local function buildDrumsepRuntimeProbe(runtimePython)
+    local result = {}
+    local py = trim(runtimePython)
+    if py == "" or not fileExists(py) then
+        result.error = "python_missing"
+        return result
+    end
+    if OS == "Windows" then
+        result.error = "probe_skipped_windows"
+        return result
+    end
+
+    local script = table.concat({
+        "import importlib",
+        "import importlib.metadata as metadata",
+        "",
+        "def emit(k, v):",
+        "    if isinstance(v, bool):",
+        "        v = 'true' if v else 'false'",
+        "    elif isinstance(v, (list, tuple)):",
+        "        v = '|'.join(str(x) for x in v)",
+        "    elif v is None:",
+        "        v = ''",
+        "    print(f'{k}={v}')",
+        "",
+        "def ver(mod_name, dist_name):",
+        "    try:",
+        "        m = importlib.import_module(mod_name)",
+        "        return getattr(m, '__version__', '') or metadata.version(dist_name)",
+        "    except Exception as exc:",
+        "        return f'error:{type(exc).__name__}'",
+        "",
+        "emit('audio_separator', ver('audio_separator', 'audio-separator'))",
+        "emit('numpy', ver('numpy', 'numpy'))",
+        "emit('torch', ver('torch', 'torch'))",
+        "emit('onnx', ver('onnx', 'onnx'))",
+        "emit('onnxruntime', ver('onnxruntime', 'onnxruntime'))",
+        "emit('onnx2torch', ver('onnx2torch', 'onnx2torch'))",
+        "try:",
+        "    import torch",
+        "    emit('torch_version_cuda', getattr(getattr(torch, 'version', None), 'cuda', ''))",
+        "    emit('torch_version_hip', getattr(getattr(torch, 'version', None), 'hip', ''))",
+        "    emit('torch_cuda_available', torch.cuda.is_available())",
+        "    count = torch.cuda.device_count() if torch.cuda.is_available() else 0",
+        "    emit('torch_cuda_device_count', count)",
+        "    names = []",
+        "    if count:",
+        "        for i in range(count):",
+        "            try:",
+        "                names.append(torch.cuda.get_device_name(i))",
+        "            except Exception as exc:",
+        "                names.append(f'error:{type(exc).__name__}')",
+        "    emit('torch_device_names', names)",
+        "except Exception as exc:",
+        "    emit('torch_error', f'{type(exc).__name__}:{exc}')",
+        "try:",
+        "    import onnxruntime as ort",
+        "    emit('onnxruntime_providers', ort.get_available_providers())",
+        "except Exception as exc:",
+        "    emit('onnxruntime_providers_error', f'{type(exc).__name__}:{exc}')",
+    }, "\n")
+
+    local probePath = joinPath(runtimePaths.base, "state", "_drumsep_support_probe.py")
+    if not writeFile(probePath, script, "wb") then
+        result.error = "probe_script_write_failed"
+        return result
+    end
+    local rc, out = execCommand(py, {probePath}, 12000)
+    if fileExists(probePath) then os.remove(probePath) end
+    result.rc = rc
+    result.output = out or ""
+    result.data = parseKeyValueText(result.output)
+    if rc ~= 0 then
+        result.error = "probe_failed_exit_" .. tostring(rc)
+    end
+    return result
+end
+
+local function appendDrumsepRuntimeBlock(lines, title, runtimePython, stateData, probe, modelFile, modelYaml)
+    appendLine(lines, title)
+    appendKey(lines, "python_path", sanitizePathValue(runtimePython))
+    appendKey(lines, "python_exists", fileExists(runtimePython) and "yes" or "no")
+    appendKey(lines, "runtime_status", trim(stateData.STATUS or stateData.DRUMSEP_RUNTIME_STATUS or stateData.DRUMSEP_ROCM_RUNTIME_STATUS) ~= "" and trim(stateData.STATUS or stateData.DRUMSEP_RUNTIME_STATUS or stateData.DRUMSEP_ROCM_RUNTIME_STATUS) or "unknown")
+    appendKey(lines, "runtime_reason", trim(stateData.STATUS_REASON or stateData.DRUMSEP_RUNTIME_DETAIL or stateData.DRUMSEP_ROCM_RUNTIME_DETAIL) ~= "" and trim(stateData.STATUS_REASON or stateData.DRUMSEP_RUNTIME_DETAIL or stateData.DRUMSEP_ROCM_RUNTIME_DETAIL) or "unknown")
+    if probe and probe.data then
+        appendKey(lines, "audio_separator_version", probe.data.audio_separator or "unknown")
+        appendKey(lines, "numpy_version", probe.data.numpy or "unknown")
+        appendKey(lines, "torch_version", probe.data.torch or "unknown")
+        appendKey(lines, "torch.version.cuda", probe.data.torch_version_cuda or "unknown")
+        appendKey(lines, "torch.version.hip", probe.data.torch_version_hip or "unknown")
+        appendKey(lines, "torch.cuda.is_available", probe.data.torch_cuda_available or "unknown")
+        appendKey(lines, "torch.cuda.device_count", probe.data.torch_cuda_device_count or "unknown")
+        appendKey(lines, "torch_device_names", probe.data.torch_device_names or "unknown")
+        appendKey(lines, "onnx_version", probe.data.onnx or "unknown")
+        appendKey(lines, "onnxruntime_version", probe.data.onnxruntime or "unknown")
+        appendKey(lines, "onnxruntime_providers", probe.data.onnxruntime_providers or probe.data.onnxruntime_providers_error or "unknown")
+        appendKey(lines, "onnx2torch_version", probe.data.onnx2torch or "unknown")
+        if trim(probe.error or "") ~= "" then
+            appendKey(lines, "probe_error", probe.error)
+        end
+    else
+        appendKey(lines, "probe_status", "not_run")
+    end
+    appendKey(lines, "model_status", trim(stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) ~= "" and trim(stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) or "unknown")
+    appendKey(lines, "model_file", sanitizePathValue(modelFile))
+    appendKey(lines, "model_file_exists", fileExists(modelFile) and "yes" or "no")
+    appendKey(lines, "model_file_size_bytes", tostring(fileSizeBytes(modelFile) or 0))
+    appendKey(lines, "model_yaml", sanitizePathValue(modelYaml))
+    appendKey(lines, "model_yaml_exists", fileExists(modelYaml) and "yes" or "no")
+    appendKey(lines, "model_yaml_size_bytes", tostring(fileSizeBytes(modelYaml) or 0))
+    if trim(stateData.DRUMSEP_ROCM_TEMP_DIR or "") ~= "" then
+        appendKey(lines, "rocm_temp_dir", stateData.DRUMSEP_ROCM_TEMP_DIR)
+    end
+    if trim(stateData.DRUMSEP_ROCM_LAST_CHECK_UTC or stateData.DRUMSEP_LAST_CHECK_UTC or "") ~= "" then
+        appendKey(lines, "last_check_utc", trim(stateData.DRUMSEP_ROCM_LAST_CHECK_UTC or stateData.DRUMSEP_LAST_CHECK_UTC or ""))
+    end
+    appendLine(lines, "")
+end
+
+local function collectLatestDksMarkers(cacheLogDir)
+    local markerKeys = toLowerSet({
+        "workflow_mode", "workflow_source", "error_stage", "error_reason",
+        "drumsep_runtime_selected", "drumsep_python", "drumsep_gpu_capable",
+        "drumsep_runtime_fallback_reason", "drumsep_torch_version", "drumsep_torch_hip",
+        "drumsep_device_names", "separate_start", "separate_end",
+        "stem_write_start", "stem_write_end", "python_done", "drumsep_helper_start",
+        "drumsep_helper_ok", "drumsep_helper_stdout", "drumsep_helper_stderr",
+    })
+    local sourceCandidates = {}
+    local addIfExists = function(path)
+        if trim(path) ~= "" and fileExists(path) then
+            sourceCandidates[#sourceCandidates + 1] = path
+        end
+    end
+
+    addIfExists(joinPath(cacheLogDir, "stdout.txt"))
+    addIfExists(joinPath(cacheLogDir, "separation_log.txt"))
+    addIfExists(joinPath(cacheLogDir, "stemwerk.log"))
+
+    local runsRoot = joinPath(cacheLogDir, "runs")
+    if pathExists(runsRoot) then
+        local runDirs = enumerateSubdirs(runsRoot)
+        table.sort(runDirs, function(a, b) return tostring(a) > tostring(b) end)
+        for i = 1, math.min(2, #runDirs) do
+            local runDir = joinPath(runsRoot, runDirs[i])
+            for _, jobName in ipairs(enumerateSubdirs(runDir)) do
+                addIfExists(joinPath(runDir, jobName, "stdout.txt"))
+                addIfExists(joinPath(runDir, jobName, "separation_log.txt"))
+                addIfExists(joinPath(runDir, jobName, "phase_events.jsonl"))
+            end
+        end
+    end
+
+    local tempBase = getTempBase()
+    if pathExists(tempBase) then
+        local tempRuns = {}
+        for _, name in ipairs(enumerateSubdirs(tempBase)) do
+            if tostring(name):lower():find("stemwerk_", 1, true) == 1 then
+                tempRuns[#tempRuns + 1] = name
+            end
+        end
+        table.sort(tempRuns, function(a, b) return tostring(a) > tostring(b) end)
+        for i = 1, math.min(2, #tempRuns) do
+            local runDir = joinPath(tempBase, tempRuns[i])
+            addIfExists(joinPath(runDir, "stdout.txt"))
+            addIfExists(joinPath(runDir, "stderr.txt"))
+            addIfExists(joinPath(runDir, "separation_log.txt"))
+            addIfExists(joinPath(runDir, "drumsep_helper_stdout.txt"))
+            addIfExists(joinPath(runDir, "drumsep_helper_stderr.txt"))
+            addIfExists(joinPath(runDir, "phase_events.jsonl"))
+        end
+    end
+
+    local markers = {}
+    local seen = {}
+    for i = 1, #sourceCandidates do
+        local src = sourceCandidates[i]
+        local tail = readTailText(src, 256 * 1024)
+        for line in tostring(tail or ""):gmatch("[^\r\n]+") do
+            local raw = trim(line)
+            local lower = raw:lower()
+            local key, value = raw:match("^%s*([%w%._%-%s/]+)%s*[:=]%s*(.-)%s*$")
+            key = key and trim(key):lower():gsub("%s+", "_") or nil
+            value = value and trim(value) or nil
+            if key and markerKeys[key] then
+                local composed = key .. "=" .. tostring(value)
+                if not seen[composed] then
+                    seen[composed] = true
+                    markers[#markers + 1] = composed .. "  [source=" .. basename(src) .. "]"
+                end
+            else
+                for marker, _ in pairs(markerKeys) do
+                    if lower:find(marker, 1, true) then
+                        local composed = raw .. "  [source=" .. basename(src) .. "]"
+                        if not seen[composed] then
+                            seen[composed] = true
+                            markers[#markers + 1] = composed
+                        end
+                        break
+                    end
+                end
+            end
+            if #markers >= 120 then
+                return markers
+            end
+        end
+    end
+    return markers
+end
+
+local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runtimeLogDir, cacheLogDir)
+    local lines = {}
+    local modelDir = joinPath(runtimeBase, "models")
+    local modelFile = joinPath(modelDir, "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt")
+    local modelYaml = joinPath(modelDir, "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml")
+
+    local cpuPy = OS == "Windows"
+        and joinPath(runtimeBase, ".venv-drumsep", "Scripts", "python.exe")
+        or joinPath(runtimeBase, ".venv-drumsep", "bin", "python")
+    local rocmPy = OS == "Windows"
+        and joinPath(runtimeBase, ".venv-drumsep-rocm", "Scripts", "python.exe")
+        or joinPath(runtimeBase, ".venv-drumsep-rocm", "bin", "python")
+
+    local cpuStatePath = joinPath(runtimeStateDir, "drumsep_runtime.env")
+    local rocmStatePath = joinPath(runtimeStateDir, "drumsep_runtime_rocm.env")
+    local cpuState = readEnvFile(cpuStatePath)
+    local rocmState = readEnvFile(rocmStatePath)
+    local cpuProbe = buildDrumsepRuntimeProbe(cpuPy)
+    local rocmProbe = buildDrumsepRuntimeProbe(rocmPy)
+
+    appendLine(lines, "DrumSep Runtime Diagnostics")
+    appendKey(lines, "runtime_base", runtimeBase)
+    appendKey(lines, "runtime_state_dir", runtimeStateDir)
+    appendKey(lines, "runtime_logs_dir", runtimeLogDir)
+    appendKey(lines, "model_cache_dir", modelDir)
+    appendLine(lines, "")
+
+    appendDrumsepRuntimeBlock(lines, "[CPU fallback runtime]", cpuPy, cpuState, cpuProbe, modelFile, modelYaml)
+    appendDrumsepRuntimeBlock(lines, "[ROCm runtime]", rocmPy, rocmState, rocmProbe, modelFile, modelYaml)
+
+    appendLine(lines, "[Selector status]")
+    appendKey(lines, "selected_runtime", trim(rocmState.DRUMSEP_SELECTED_RUNTIME or cpuState.DRUMSEP_SELECTED_RUNTIME or "") ~= "" and trim(rocmState.DRUMSEP_SELECTED_RUNTIME or cpuState.DRUMSEP_SELECTED_RUNTIME or "") or "unknown")
+    appendKey(lines, "gpu_capable", trim(rocmState.DRUMSEP_GPU_CAPABLE or cpuState.DRUMSEP_GPU_CAPABLE or "") ~= "" and trim(rocmState.DRUMSEP_GPU_CAPABLE or cpuState.DRUMSEP_GPU_CAPABLE or "") or "unknown")
+    appendLine(lines, "")
+
+    appendLine(lines, "[Latest Direct DKS markers]")
+    local markers = collectLatestDksMarkers(cacheLogDir)
+    if #markers == 0 then
+        appendLine(lines, "no Direct DKS markers found in recent logs")
+    else
+        for i = 1, #markers do
+            appendLine(lines, markers[i])
+        end
+    end
+    appendLine(lines, "")
+
+    appendLine(lines, "[Install log tails]")
+    local cpuInstallLog = joinPath(runtimeLogDir, "drumsep_install.log")
+    local rocmInstallLog = joinPath(runtimeLogDir, "drumsep_rocm_install.log")
+    appendKey(lines, "drumsep_install.log", fileExists(cpuInstallLog) and "present" or "missing")
+    appendKey(lines, "drumsep_rocm_install.log", fileExists(rocmInstallLog) and "present" or "missing")
+    appendLine(lines, "")
+    if fileExists(cpuInstallLog) then
+        appendLine(lines, "----- tail: drumsep_install.log -----")
+        appendLine(lines, readTailText(cpuInstallLog, 180 * 1024))
+        appendLine(lines, "")
+    end
+    if fileExists(rocmInstallLog) then
+        appendLine(lines, "----- tail: drumsep_rocm_install.log -----")
+        appendLine(lines, readTailText(rocmInstallLog, 180 * 1024))
+        appendLine(lines, "")
+    end
+
+    return lines
+end
+
 local function psLiteral(text)
     return "'" .. tostring(text or ""):gsub("'", "''") .. "'"
 end
@@ -3008,6 +3314,15 @@ local function performBundleCollection()
     phaseDone("collect_recent_runs", recentRunsStartedAt)
     appendLine(diagnostics, "")
 
+    local drumsepDiagnostics = buildDrumsepRuntimeDiagnostics(runtimePaths.base, runtimePaths.runtimeState, runtimePaths.runtimeLogs, cacheLogDir)
+    writeFile(joinPath(bundleDir, "drumsep_runtime_status.txt"), table.concat(drumsepDiagnostics, "\n"), "wb")
+    copiedFiles[#copiedFiles + 1] = "drumsep_runtime_status.txt"
+    appendLine(diagnostics, "DrumSep Runtime Diagnostics")
+    appendKey(diagnostics, "DrumSep runtime status file", "drumsep_runtime_status.txt")
+    appendKey(diagnostics, "CPU runtime state", fileExists(joinPath(runtimePaths.runtimeState, "drumsep_runtime.env")) and "present" or "missing")
+    appendKey(diagnostics, "ROCm runtime state", fileExists(joinPath(runtimePaths.runtimeState, "drumsep_runtime_rocm.env")) and "present" or "missing")
+    appendLine(diagnostics, "")
+
     appendLine(diagnostics, "Settings Snapshot")
     local selectedModel = trim(extStateValue("model"))
     if selectedModel == "" then selectedModel = "htdemucs" end
@@ -3105,6 +3420,7 @@ local function performBundleCollection()
         "- support_bundle_timings.txt with phase timing checkpoints",
         "- platform_details.txt with platform probe output",
         "- python_diagnostics.txt with dependency probe output when available",
+        "- drumsep_runtime_status.txt with DrumSep CPU/ROCm runtime diagnostics and recent Direct DKS markers",
         "- See processing_summary.txt for recent processing results and speed.",
         "",
         "Intentionally excluded:",
