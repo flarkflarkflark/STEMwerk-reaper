@@ -1490,7 +1490,8 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "_direct_dks_preflight_check(run_model, model_cache_dir)" in script
     assert script.index("drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)") < script.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
     assert "drumsep_runtime_selection_policy=explicit_cpu" in script
-    assert "drumsep_runtime_selection_policy=auto_prefer_rocm" in script
+    assert 'selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"' in script
+    assert "normalized_device_request=" in script
     assert 'info["selection_policy"] = "fallback_cpu"' in script
     assert script.index("_direct_dks_preflight_check(run_model, model_cache_dir)") < script.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
@@ -1600,12 +1601,43 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
 
-    module._verify_drumsep_runtime = fake_verify
+    verify_calls = []
+    def fake_verify_with_calls(path, require_gpu=False):
+        verify_calls.append((str(path), require_gpu))
+        return fake_verify(path, require_gpu=require_gpu)
+
+    module._verify_drumsep_runtime = fake_verify_with_calls
     selected, kind, info = module._select_drumsep_runtime("cpu", base)
     assert selected == cpu_python
     assert kind == "cpu"
     assert info["selection_policy"] == "explicit_cpu"
     assert info["fallback_reason"] == ""
+    assert all("drumsep-rocm" not in p for p, _ in verify_calls)
+    assert verify_calls and verify_calls[0][1] is False
+
+
+def test_drumsep_runtime_selector_treats_gpu_request_as_rocm_preferred(tmp_path):
+    module = _load_audio_separator_process_module()
+    base = tmp_path
+    rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
+    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    rocm_python.parent.mkdir(parents=True, exist_ok=True)
+    cpu_python.parent.mkdir(parents=True, exist_ok=True)
+    rocm_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cpu_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    rocm_python.chmod(0o755)
+    cpu_python.chmod(0o755)
+
+    def fake_verify(path, require_gpu=False):
+        if "drumsep-rocm" in str(path):
+            return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
+        return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
+
+    module._verify_drumsep_runtime = fake_verify
+    selected, kind, info = module._select_drumsep_runtime("cuda:0", base)
+    assert selected == rocm_python
+    assert kind == "rocm"
+    assert info["selection_policy"] == "gpu_prefer_rocm"
 
 
 def test_drumsep_runtime_selector_reports_missing_when_both_absent(tmp_path):

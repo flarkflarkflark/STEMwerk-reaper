@@ -1126,7 +1126,8 @@ function DEVICE_RUNTIME.applyTrustedWindowsRuntimeState(state)
 end
 
 function DEVICE_RUNTIME.normalizeRequestedDeviceForRuntime(requestedDevice)
-    local req = tostring(requestedDevice or "auto")
+    local rawReq = tostring(requestedDevice or "auto")
+    local req = rawReq:gsub("^%s+", ""):gsub("%s+$", ""):lower()
     if req == "" then return "auto" end
     if req == "mps" and OS == "macOS" and ARCH == "arm64" then return "cpu" end
     if req == "auto" or req == "cpu" or req == "mps" then return req end

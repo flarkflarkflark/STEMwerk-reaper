@@ -601,7 +601,21 @@ def _select_drumsep_runtime(
     rocm_python = _drumsep_rocm_runtime_python_path(runtime_base)
     cpu_python = _drumsep_runtime_python_path(runtime_base)
     device_norm = str(requested_device or "auto").strip().lower()
-    explicit_cpu = device_norm == "cpu"
+
+    def _normalized_device_request(value: str) -> str:
+        if value == "cpu":
+            return "cpu"
+        if value == "" or value == "auto":
+            return "auto"
+        if value.startswith("cuda") or value.startswith("directml") or value.startswith("rocm") or value == "mps":
+            return "gpu"
+        if "rx " in value or "radeon" in value or "nvidia" in value or value.startswith("gpu"):
+            return "gpu"
+        return "unknown"
+
+    normalized_request = _normalized_device_request(device_norm)
+    explicit_cpu = normalized_request == "cpu"
+    print(f"normalized_device_request={normalized_request}", file=sys.stderr)
 
     if explicit_cpu:
         print("drumsep_runtime_selection_policy=explicit_cpu", file=sys.stderr)
@@ -623,7 +637,8 @@ def _select_drumsep_runtime(
         reason = "missing" if cpu_detail == "missing" else "broken"
         return None, reason, info
 
-    print("drumsep_runtime_selection_policy=auto_prefer_rocm", file=sys.stderr)
+    selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"
+    print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_start", file=sys.stderr)
     rocm_ok, rocm_detail, rocm_payload = _verify_drumsep_runtime(rocm_python, require_gpu=True)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_end detail={rocm_detail}", file=sys.stderr)
@@ -637,7 +652,7 @@ def _select_drumsep_runtime(
         info["kind"] = "rocm"
         info["detail"] = rocm_detail
         info["fallback_reason"] = ""
-        info["selection_policy"] = "auto_prefer_rocm"
+        info["selection_policy"] = selection_policy
         return rocm_python, "rocm", info
 
     print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
@@ -657,6 +672,7 @@ def _select_drumsep_runtime(
         "rocm_python": str(rocm_python),
         "cpu_python": str(cpu_python),
         "selection_policy": "fallback_cpu",
+        "normalized_request": normalized_request,
     }
     reason = "missing" if rocm_detail == "missing" and cpu_detail == "missing" else "broken"
     return None, reason, info
