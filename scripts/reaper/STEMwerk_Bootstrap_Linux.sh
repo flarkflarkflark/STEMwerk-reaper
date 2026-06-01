@@ -22,6 +22,11 @@ DRUMSEP_ONNX2TORCH_PY313_VERSION="1.6.0"
 DRUMSEP_TORCH_VERSION="2.12.0"
 DRUMSEP_TORCHVISION_VERSION="0.27.0"
 DRUMSEP_NUMBA_VERSION="0.65.1"
+DRUMSEP_ROCM_TORCH_VERSION="2.9.1+rocm6.4"
+DRUMSEP_ROCM_TORCHVISION_VERSION="0.24.1+rocm6.4"
+DRUMSEP_ROCM_TORCHAUDIO_VERSION="2.9.1+rocm6.4"
+DRUMSEP_ROCM_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm6.4"
+DRUMSEP_ROCM_MIN_FREE_GB="20"
 DRUMSEP_MODEL_FILE="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DRUMSEP_MODEL_YAML="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 
@@ -86,6 +91,18 @@ drumsep_runtime_python() {
   printf "%s/.venv-drumsep/bin/python\n" "${RUNTIME_BASE}"
 }
 
+drumsep_rocm_state_file() {
+  printf "%s/state/drumsep_runtime_rocm.env\n" "${RUNTIME_BASE}"
+}
+
+drumsep_rocm_log_file() {
+  printf "%s/logs/drumsep_rocm_install.log\n" "${RUNTIME_BASE}"
+}
+
+drumsep_rocm_runtime_python() {
+  printf "%s/.venv-drumsep-rocm/bin/python\n" "${RUNTIME_BASE}"
+}
+
 write_drumsep_state() {
   _status="$1"
   _model_status="${2:-missing}"
@@ -140,6 +157,102 @@ PY
     echo "DRUMSEP_MODEL_STATUS=${_model_status}"
     echo "DRUMSEP_MODEL_FILE=${_model_file}"
     echo "DRUMSEP_MODEL_YAML=${_model_yaml}"
+  } > "${_state}"
+}
+
+write_drumsep_rocm_state() {
+  _status="$1"
+  _model_status="${2:-missing}"
+  _detail="${3:-}"
+  _py="$(drumsep_rocm_runtime_python)"
+  _state="$(drumsep_rocm_state_file)"
+  _model_dir="$(model_cache_dir)"
+  _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
+  _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
+  _last_check="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
+  _tmp_dir="${DRUMSEP_ROCM_TMPDIR:-}"
+
+  _versions=""
+  if [ -x "${_py}" ]; then
+    _versions="$("${_py}" - <<'PY' 2>/dev/null || true
+import importlib.metadata as metadata
+for env_key, dist_name in (
+    ("DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION", "audio-separator"),
+    ("DRUMSEP_ROCM_NUMPY_VERSION", "numpy"),
+    ("DRUMSEP_ROCM_TORCH_VERSION", "torch"),
+    ("DRUMSEP_ROCM_ONNX_VERSION", "onnx"),
+    ("DRUMSEP_ROCM_ONNXRUNTIME_VERSION", "onnxruntime"),
+    ("DRUMSEP_ROCM_ONNX2TORCH_VERSION", "onnx2torch"),
+):
+    try:
+        value = metadata.version(dist_name)
+    except Exception:
+        value = ""
+    print(f"{env_key}={value}")
+PY
+)"
+  fi
+
+  _gpu_probe=""
+  if [ -x "${_py}" ]; then
+    _gpu_probe="$("${_py}" - <<'PY' 2>/dev/null || true
+import json
+try:
+    import torch
+    hip = str(getattr(getattr(torch, "version", None), "hip", "") or "")
+    avail = bool(torch.cuda.is_available())
+    names = []
+    if avail:
+        for i in range(int(torch.cuda.device_count())):
+            try:
+                names.append(str(torch.cuda.get_device_name(i)))
+            except Exception:
+                pass
+    print(json.dumps({
+        "hip": hip,
+        "cuda_available": avail,
+        "device_names": names,
+    }))
+except Exception:
+    print("{}")
+PY
+)"
+  fi
+  _hip=""
+  _cuda_available="false"
+  _device_names=""
+  if [ -n "${_gpu_probe}" ]; then
+    _hip="$(printf "%s" "${_gpu_probe}" | sed -n 's/.*"hip"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tail -n1)"
+    if printf "%s" "${_gpu_probe}" | grep -q '"cuda_available"[[:space:]]*:[[:space:]]*true'; then
+      _cuda_available="true"
+    fi
+    _device_names="$(printf "%s" "${_gpu_probe}" | sed -n 's/.*"device_names"[[:space:]]*:[[:space:]]*\[\(.*\)\].*/\1/p' | tail -n1 | tr -d '"' | tr ',' '|' | tr -d ' ')"
+  fi
+
+  {
+    echo "STATUS=${_status}"
+    [ -n "${_detail}" ] && echo "STATUS_REASON=${_detail}"
+    echo "DRUMSEP_ROCM_RUNTIME_STATUS=${_status}"
+    [ -n "${_detail}" ] && echo "DRUMSEP_ROCM_RUNTIME_DETAIL=${_detail}"
+    echo "DRUMSEP_ROCM_PYTHON=${_py}"
+    if [ -n "${_versions}" ]; then
+      printf "%s\n" "${_versions}"
+    else
+      echo "DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION="
+      echo "DRUMSEP_ROCM_NUMPY_VERSION="
+      echo "DRUMSEP_ROCM_TORCH_VERSION="
+      echo "DRUMSEP_ROCM_ONNX_VERSION="
+      echo "DRUMSEP_ROCM_ONNXRUNTIME_VERSION="
+      echo "DRUMSEP_ROCM_ONNX2TORCH_VERSION="
+    fi
+    echo "DRUMSEP_ROCM_TORCH_HIP=${_hip}"
+    echo "DRUMSEP_ROCM_CUDA_AVAILABLE=${_cuda_available}"
+    echo "DRUMSEP_ROCM_DEVICE_NAMES=${_device_names}"
+    echo "DRUMSEP_ROCM_LAST_CHECK_UTC=${_last_check}"
+    echo "DRUMSEP_ROCM_MODEL_STATUS=${_model_status}"
+    echo "DRUMSEP_ROCM_MODEL_FILE=${_model_file}"
+    echo "DRUMSEP_ROCM_MODEL_YAML=${_model_yaml}"
+    echo "DRUMSEP_ROCM_TEMP_DIR=${_tmp_dir}"
   } > "${_state}"
 }
 
@@ -516,6 +629,257 @@ PY
       return 1
       ;;
   esac
+}
+
+free_kb_for_path() {
+  _path="$1"
+  df -Pk "${_path}" 2>/dev/null | awk 'NR==2{print $4}'
+}
+
+resolve_drumsep_rocm_tmpdir() {
+  _required_kb="$1"
+  for _cand in \
+    "/mnt/PRODUCTION/TMP/stemwerk-rocm-tmp" \
+    "${RUNTIME_BASE}/tmp/stemwerk-rocm-tmp" \
+    "${HOME:-/tmp}/.cache/STEMwerk/tmp/stemwerk-rocm-tmp"
+  do
+    _parent="$(dirname "${_cand}")"
+    mkdir -p "${_parent}" >/dev/null 2>&1 || true
+    mkdir -p "${_cand}" >/dev/null 2>&1 || continue
+    if [ ! -w "${_cand}" ]; then
+      continue
+    fi
+    _avail_kb="$(free_kb_for_path "${_cand}")"
+    if [ -n "${_avail_kb}" ] && [ "${_avail_kb}" -ge "${_required_kb}" ]; then
+      printf "%s\n" "${_cand}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+drumsep_rocm_disk_preflight() {
+  _required_kb="$((DRUMSEP_ROCM_MIN_FREE_GB * 1024 * 1024))"
+  _target_dir="${RUNTIME_BASE}"
+  _target_avail_kb="$(free_kb_for_path "${_target_dir}")"
+  _target_avail_gb="0"
+  if [ -n "${_target_avail_kb}" ]; then
+    _target_avail_gb=$(( _target_avail_kb / 1024 / 1024 ))
+  fi
+  log_step "ROCm disk preflight target=${_target_dir} free_gb=${_target_avail_gb} required_gb=${DRUMSEP_ROCM_MIN_FREE_GB}"
+  if [ -z "${_target_avail_kb}" ] || [ "${_target_avail_kb}" -lt "${_required_kb}" ]; then
+    DRUMSEP_ROCM_PREFLIGHT_DETAIL="target_free_space_insufficient"
+    return 1
+  fi
+
+  DRUMSEP_ROCM_TMPDIR="$(resolve_drumsep_rocm_tmpdir "${_required_kb}" || true)"
+  if [ -z "${DRUMSEP_ROCM_TMPDIR}" ]; then
+    DRUMSEP_ROCM_PREFLIGHT_DETAIL="temp_dir_free_space_insufficient"
+    return 1
+  fi
+  _tmp_avail_kb="$(free_kb_for_path "${DRUMSEP_ROCM_TMPDIR}")"
+  _tmp_avail_gb=$(( _tmp_avail_kb / 1024 / 1024 ))
+  log_step "ROCm disk preflight tmp=${DRUMSEP_ROCM_TMPDIR} free_gb=${_tmp_avail_gb} required_gb=${DRUMSEP_ROCM_MIN_FREE_GB}"
+  return 0
+}
+
+verify_drumsep_rocm_runtime() {
+  _py="$(drumsep_rocm_runtime_python)"
+  _model_dir="$(model_cache_dir)"
+  _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
+  _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
+  if [ ! -x "${_py}" ]; then
+    write_drumsep_rocm_state "missing" "missing" "python_missing"
+    return 1
+  fi
+  "${_py}" - <<PY >> "$(drumsep_rocm_log_file)" 2>&1
+import importlib
+import importlib.metadata as metadata
+import os
+import sys
+
+expected = {
+    "audio-separator": "${DRUMSEP_AUDIO_SEPARATOR_VERSION}",
+    "numpy": "${DRUMSEP_NUMPY_VERSION}",
+    "onnxruntime": "${DRUMSEP_ONNXRUNTIME_VERSION}",
+    "onnx": "${DRUMSEP_ONNX_VERSION}",
+    "onnx2torch": "${DRUMSEP_ONNX2TORCH_VERSION}",
+    "numba": "${DRUMSEP_NUMBA_VERSION}",
+}
+modules = ["audio_separator", "numpy", "torch", "onnx", "onnxruntime", "onnx2torch"]
+errors = []
+for module_name in modules:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        errors.append(f"import_failed:{module_name}:{type(exc).__name__}:{exc}")
+
+for dist_name, wanted in expected.items():
+    try:
+        found = metadata.version(dist_name).split("+", 1)[0]
+    except Exception as exc:
+        errors.append(f"version_missing:{dist_name}:{type(exc).__name__}:{exc}")
+        continue
+    if found != wanted:
+        errors.append(f"version_mismatch:{dist_name}:expected={wanted}:found={found}")
+
+try:
+    import torch
+    torch_ver = str(getattr(torch, "__version__", ""))
+    hip = getattr(getattr(torch, "version", None), "hip", None)
+    cuda_available = bool(torch.cuda.is_available())
+    device_count = int(torch.cuda.device_count()) if cuda_available else 0
+    names = []
+    if cuda_available:
+        for i in range(device_count):
+            try:
+                names.append(str(torch.cuda.get_device_name(i)))
+            except Exception:
+                pass
+except Exception as exc:
+    errors.append(f"torch_probe_failed:{type(exc).__name__}:{exc}")
+    torch_ver = ""
+    hip = None
+    cuda_available = False
+    device_count = 0
+    names = []
+
+if "+rocm" not in torch_ver:
+    errors.append(f"rocm_torch_required:found={torch_ver}")
+if hip is None or str(hip).strip() == "":
+    errors.append("rocm_hip_missing")
+if not cuda_available:
+    errors.append("rocm_cuda_unavailable")
+if device_count <= 0:
+    errors.append("rocm_no_device")
+if not any(("amd" in n.lower() or "radeon" in n.lower() or "rx " in n.lower()) for n in names):
+    errors.append("rocm_amd_device_missing")
+
+model_file = "${_model_file}"
+model_yaml = "${_model_yaml}"
+if not os.path.isfile(model_file) or not os.path.isfile(model_yaml):
+    print("DRUMSEP_ROCM_VERIFY model_missing")
+    raise SystemExit(2)
+
+if errors:
+    print("DRUMSEP_ROCM_VERIFY broken " + ";".join(errors))
+    raise SystemExit(1)
+
+try:
+    from audio_separator.separator import Separator
+    sep = Separator(model_file_dir="${_model_dir}", output_dir=".", output_format="wav")
+    sep.load_model("${DRUMSEP_MODEL_FILE}")
+except Exception as exc:
+    print(f"DRUMSEP_ROCM_VERIFY load_failed {type(exc).__name__}: {exc}")
+    raise SystemExit(3)
+
+print("DRUMSEP_ROCM_VERIFY ok")
+PY
+  _rc=$?
+  case "${_rc}" in
+    0)
+      write_drumsep_rocm_state "ok" "ok" "ok"
+      return 0
+      ;;
+    2)
+      write_drumsep_rocm_state "model_missing" "missing" "model_missing"
+      return 0
+      ;;
+    3)
+      write_drumsep_rocm_state "broken" "load_failed" "model_load_failed"
+      return 1
+      ;;
+    *)
+      write_drumsep_rocm_state "broken" "missing" "verify_failed"
+      return 1
+      ;;
+  esac
+}
+
+install_drumsep_rocm_runtime() {
+  _log="$(drumsep_rocm_log_file)"
+  _py="$(drumsep_rocm_runtime_python)"
+  : > "${_log}" || true
+  log_stage "Installing optional DrumSep ROCm runtime"
+  log_step "DrumSep ROCm runtime path: ${RUNTIME_BASE}/.venv-drumsep-rocm"
+  log_step "DrumSep ROCm install log: ${_log}"
+
+  # Repair path: if runtime already exists and verifies, succeed without reinstall.
+  if [ -x "${_py}" ]; then
+    log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"
+    if verify_drumsep_rocm_runtime; then
+      log_step "Existing DrumSep ROCm runtime verified; skipping reinstall"
+      return 0
+    fi
+    log_step "Existing DrumSep ROCm runtime failed verification; rebuilding"
+  fi
+
+  if ! drumsep_rocm_disk_preflight; then
+    log_step "ROCm preflight failed: ${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-unknown}"
+    write_drumsep_rocm_state "disk_space_insufficient" "missing" "${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-disk_space_insufficient}"
+    return 1
+  fi
+  log_step "ROCm temp dir selected: ${DRUMSEP_ROCM_TMPDIR}"
+  export TMPDIR="${DRUMSEP_ROCM_TMPDIR}"
+
+  STEP_TOTAL="5"
+  set_progress "1" "${STEP_TOTAL}" "Creating DrumSep ROCm runtime"
+  rm -rf "${RUNTIME_BASE}/.venv-drumsep-rocm"
+  if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep-rocm" >> "${_log}" 2>&1; then
+    write_drumsep_rocm_state "install_failed" "missing" "venv_create_failed"
+    return 1
+  fi
+  if [ ! -x "${_py}" ]; then
+    write_drumsep_rocm_state "install_failed" "missing" "python_missing_after_create"
+    return 1
+  fi
+
+  set_progress "2" "${STEP_TOTAL}" "Upgrading ROCm runtime pip"
+  if ! "${_py}" -m pip install --no-cache-dir --upgrade pip setuptools wheel >> "${_log}" 2>&1; then
+    write_drumsep_rocm_state "install_failed" "missing" "pip_upgrade_failed"
+    return 1
+  fi
+
+  set_progress "3" "${STEP_TOTAL}" "Installing ROCm torch stack"
+  if ! "${_py}" -m pip install --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}" \
+    "torch==${DRUMSEP_ROCM_TORCH_VERSION}" \
+    "torchvision==${DRUMSEP_ROCM_TORCHVISION_VERSION}" \
+    "torchaudio==${DRUMSEP_ROCM_TORCHAUDIO_VERSION}" >> "${_log}" 2>&1; then
+    write_drumsep_rocm_state "install_failed" "missing" "rocm_torch_install_failed"
+    return 1
+  fi
+
+  set_progress "4" "${STEP_TOTAL}" "Installing DrumSep packages"
+  if ! "${_py}" -m pip install --no-cache-dir --no-deps \
+    "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" >> "${_log}" 2>&1; then
+    write_drumsep_rocm_state "install_failed" "missing" "audio_separator_install_failed"
+    return 1
+  fi
+  if ! "${_py}" -m pip install --no-cache-dir \
+    "numpy==${DRUMSEP_NUMPY_VERSION}" \
+    "onnxruntime==${DRUMSEP_ONNXRUNTIME_VERSION}" \
+    "onnx==${DRUMSEP_ONNX_VERSION}" \
+    "onnx2torch==${DRUMSEP_ONNX2TORCH_VERSION}" \
+    "onnx2torch-py313==${DRUMSEP_ONNX2TORCH_PY313_VERSION}" \
+    "numba==${DRUMSEP_NUMBA_VERSION}" \
+    "beartype==0.18.5" "diffq==0.2.4" "einops==0.8.2" "julius==0.2.7" \
+    "librosa==0.11.0" "ml_collections==1.1.0" "pydub==0.25.1" "pyyaml==6.0.3" \
+    "requests==2.34.2" "resampy==0.4.3" "rotary-embedding-torch==0.6.5" \
+    "samplerate==0.1.0" "scipy==1.17.1" "six==1.17.0" "tqdm==4.67.3" >> "${_log}" 2>&1; then
+    write_drumsep_rocm_state "install_failed" "missing" "package_install_failed"
+    return 1
+  fi
+  if ! "${_py}" -m pip check >> "${_log}" 2>&1; then
+    write_drumsep_rocm_state "install_failed" "missing" "pip_check_failed"
+    return 1
+  fi
+
+  set_progress "5" "${STEP_TOTAL}" "Verifying DrumSep ROCm runtime"
+  if ! verify_drumsep_rocm_runtime; then
+    return 1
+  fi
+  log_step "DrumSep ROCm runtime verification complete"
+  return 0
 }
 
 install_drumsep_runtime() {
@@ -1113,6 +1477,10 @@ if [ -z "${PYTHON}" ]; then
       write_drumsep_state "install_failed" "missing" "python_missing"
       exit 1
     fi
+    if [ "${MODE}" = "drumsep-rocm-runtime" ]; then
+      write_drumsep_rocm_state "install_failed" "missing" "python_missing"
+      exit 1
+    fi
   else
     BACKEND_REASON="python_not_found"
     if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
@@ -1131,6 +1499,10 @@ if [ -z "${PYTHON}" ]; then
       write_drumsep_state "install_failed" "missing" "python_missing"
       exit 1
     fi
+    if [ "${MODE}" = "drumsep-rocm-runtime" ]; then
+      write_drumsep_rocm_state "install_failed" "missing" "python_missing"
+      exit 1
+    fi
   fi
 else
   if [ "${MODE}" = "drumsep-runtime" ]; then
@@ -1142,6 +1514,16 @@ else
       exit 0
     fi
     log "DrumSep runtime install failed"
+    exit 1
+  elif [ "${MODE}" = "drumsep-rocm-runtime" ]; then
+    if install_drumsep_rocm_runtime; then
+      STATUS="ok"
+      STATUS_REASON=""
+      write_drumsep_rocm_state "ok" "ok" "ok"
+      log_stage "DrumSep ROCm runtime install finished"
+      exit 0
+    fi
+    log "DrumSep ROCm runtime install failed"
     exit 1
   fi
   log_stage "Creating venv"

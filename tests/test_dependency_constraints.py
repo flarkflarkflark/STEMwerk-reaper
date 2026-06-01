@@ -1681,13 +1681,59 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
     linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
-    assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime"' in setup_internal
-    assert 'isDrumsepRuntime and "drumsep_runtime.env" or "bootstrap.env"' in setup_internal
-    assert 'isDrumsepRuntime and "drumsep_install.log" or "bootstrap.log"' in setup_internal
+    assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime"' in setup_internal
+    assert '((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")' in setup_internal
+    assert '((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or "bootstrap.log")' in setup_internal
     assert '{ id = "drumsep-runtime", label = "Drum Kit Split runtime"' in setup_internal
+    assert '{ id = "drumsep-rocm-runtime", label = "Drum Kit Split ROCm runtime"' in setup_internal
     assert 'startLinuxSetup(runtime, separatorScript, chosen)' in setup_internal
     assert 'if [ "${MODE}" = "drumsep-runtime" ]; then' in linux_bootstrap
     assert 'write_drumsep_state "install_failed" "missing" "python_missing"' in linux_bootstrap
+    assert 'elif [ "${MODE}" = "drumsep-rocm-runtime" ]; then' in linux_bootstrap
+    assert 'write_drumsep_rocm_state "install_failed" "missing" "python_missing"' in linux_bootstrap
+
+
+def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'DRUMSEP_ROCM_TORCH_VERSION="2.9.1+rocm6.4"' in script
+    assert 'DRUMSEP_ROCM_TORCHVISION_VERSION="0.24.1+rocm6.4"' in script
+    assert 'DRUMSEP_ROCM_TORCHAUDIO_VERSION="2.9.1+rocm6.4"' in script
+    assert 'DRUMSEP_ROCM_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm6.4"' in script
+    assert 'DRUMSEP_ROCM_MIN_FREE_GB="20"' in script
+    assert "drumsep_rocm_disk_preflight()" in script
+    assert "resolve_drumsep_rocm_tmpdir()" in script
+    assert 'write_drumsep_rocm_state "disk_space_insufficient" "missing"' in script
+    assert '"${_py}" -m pip install --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
+    assert '"torch==${DRUMSEP_ROCM_TORCH_VERSION}"' in script
+    assert '"${_py}" -m pip install --no-cache-dir --no-deps' in script
+    assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
+    assert '"${_py}" -m pip check' in script
+    assert "verify_drumsep_rocm_runtime()" in script
+
+
+def test_linux_drumsep_rocm_state_fields_are_written():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    for field in (
+        "DRUMSEP_ROCM_RUNTIME_STATUS=",
+        "DRUMSEP_ROCM_PYTHON=",
+        "DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION=",
+        "DRUMSEP_ROCM_TORCH_VERSION=",
+        "DRUMSEP_ROCM_TORCH_HIP=",
+        "DRUMSEP_ROCM_CUDA_AVAILABLE=",
+        "DRUMSEP_ROCM_DEVICE_NAMES=",
+        "DRUMSEP_ROCM_NUMPY_VERSION=",
+        "DRUMSEP_ROCM_ONNX_VERSION=",
+        "DRUMSEP_ROCM_ONNXRUNTIME_VERSION=",
+        "DRUMSEP_ROCM_ONNX2TORCH_VERSION=",
+        "DRUMSEP_ROCM_MODEL_STATUS=",
+        "DRUMSEP_ROCM_LAST_CHECK_UTC=",
+        "DRUMSEP_ROCM_TEMP_DIR=",
+    ):
+        assert field in script
+    assert 'printf "%s/state/drumsep_runtime_rocm.env\\n" "${RUNTIME_BASE}"' in script
+    assert 'printf "%s/logs/drumsep_rocm_install.log\\n" "${RUNTIME_BASE}"' in script
 
 
 def test_drumsep_helper_payload_and_stem_normalization():
