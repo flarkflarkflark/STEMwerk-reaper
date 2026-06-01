@@ -8979,8 +8979,19 @@ function buildResultMessageLines()
         elseif data.mainKey then
             if data.mainKey == "result_time_selection_created" or data.mainKey == "result_stems_created_generic" then
                 local count = data.count or 0
-                local trackWord = trPlural(count, "footer_track", "footer_tracks", "track", "tracks")
+                local trackWord = drumKitCopyActive
+                    and trPlural(count, "footer_drum_track", "footer_drum_tracks", "drum track", "drum tracks")
+                    or trPlural(count, "footer_track", "footer_tracks", "track", "tracks")
                 line1 = string.format(T(data.mainKey) or "%d stem %s created.", count, trackWord)
+            elseif drumKitCopyActive and data.mainKey == "result_stems_added_takes_hint" then
+                local partWord = trPlural((data.count or 0), "footer_drum_track", "footer_drum_tracks", "drum part", "drum parts")
+                line1 = string.format(
+                    T("drumkit_result_added_takes_hint") or "%d %s added as takes (press T to switch).",
+                    data.count or 0,
+                    partWord
+                )
+            elseif drumKitCopyActive and data.mainKey == "result_stems_created_exploded" then
+                line1 = T("drumkit_result_created_exploded") or "Drum tracks created and takes exploded."
             else
                 line1 = T(data.mainKey) or ""
             end
@@ -11100,21 +11111,29 @@ buildFooterLines = function()
                     and (directMode and trSafe("footer_per_track_drum_folders", "Per-track drum-stem folders") or trSafe("footer_per_track_folders", "Per-track stem folders"))
                     or (directMode and trSafe("footer_location_new_drum_folder", "New folder with drum tracks") or trSafe("footer_location_new_folder", "New folder"))
             end
-            locLine = trFmt(
-                "footer_line_location_details",
-                "Location: %s (%d: %s)",
-                baseLoc,
-                stemsPerTrack,
-                namesStr
-            )
+            if directMode then
+                locLine = trFmt("footer_line_location_simple", "Location: %s", baseLoc)
+            else
+                locLine = trFmt(
+                    "footer_line_location_details",
+                    "Location: %s (%d: %s)",
+                    baseLoc,
+                    stemsPerTrack,
+                    namesStr
+                )
+            end
         elseif SETTINGS.outputMode == "in-place" or not SETTINGS.createNewTracks then
-            locLine = trFmt(
-                "footer_line_location_details",
-                "Location: %s (%d: %s)",
-                trSafe("in_place", "In-place"),
-                stemsPerTrack,
-                namesStr
-            )
+            if directMode then
+                locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))
+            else
+                locLine = trFmt(
+                    "footer_line_location_details",
+                    "Location: %s (%d: %s)",
+                    trSafe("in_place", "In-place"),
+                    stemsPerTrack,
+                    namesStr
+                )
+            end
         else
             locLine = trFmt(
                 "footer_line_location_simple",
@@ -14155,6 +14174,16 @@ local function drawProgressWindow()
     end
     local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
     local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
+    local function shortRuntimeGpuName(name)
+        local s = tostring(name or "")
+        s = s:gsub("^%s+", ""):gsub("%s+$", "")
+        if s == "" then return "" end
+        local first = s:match("^([^|,;]+)") or s
+        first = first:gsub("^%s+", ""):gsub("%s+$", "")
+        first = first:gsub("^AMD Radeon%s+", "")
+        return first
+    end
+
     local function deriveResolvedRuntimeFooter()
         if not isDrumKitWorkflowActive() then
             return footerDeviceDetail
@@ -14174,7 +14203,8 @@ local function drawProgressWindow()
             return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
         end
         if runtimeSel == "rocm" then
-            local gpuLabel = (deviceName and deviceName ~= "") and deviceName or "ROCm"
+            local gpuLabel = shortRuntimeGpuName(deviceName)
+            if gpuLabel == "" then gpuLabel = "ROCm" end
             if req == "auto" then
                 return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), gpuLabel)
             end
@@ -14187,10 +14217,12 @@ local function drawProgressWindow()
             return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
         end
         if gpuCap == "yes" and deviceName and deviceName ~= "" then
+            local short = shortRuntimeGpuName(deviceName)
+            if short == "" then short = tostring(deviceName) end
             if req == "auto" then
-                return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), deviceName)
+                return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), short)
             end
-            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), deviceName)
+            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short)
         end
         if req == "cpu" then
             return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
@@ -14257,9 +14289,9 @@ local function drawProgressWindow()
     if nerdHover then
         GUI.uiClickedThisFrame = true
         if utilityMode then
-            tooltipText = progressState.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         elseif progressState.showTerminal then
-            tooltipText = T("tooltip_nerd_mode_hide") or "Switch to Art View"
+            tooltipText = trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")
         else
             tooltipText = T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output"
         end
@@ -14530,7 +14562,6 @@ local function drawProgressWindow()
         etaText = " | " .. tostring(etaLabel) .. " " .. tostring(bottomEta)
     end
 
-    local segValue = "30"
     local footerModel = effectiveRunModel()
     local modelDisplay
     if isDrumKitWorkflowActive() then
@@ -14543,7 +14574,6 @@ local function drawProgressWindow()
             or ((footerModel == "htdemucs_6s") and (T("model_label_6stem") or "6-Stem") or (T("model_label_fast") or "Fast"))
     end
     local mtTime = T("mt_time") or "Time"
-    local mtSeg = T("mt_seg") or "Seg"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
     local cancelBtnText = progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
 
@@ -14558,11 +14588,11 @@ local function drawProgressWindow()
     local audioDurStr = processedAudioDur > 0 and string.format("%.1fs", processedAudioDur) or nil
     local realtimeFactor = footerRealtimeFactor
 
-    local leftParts = {
-        string.format("%s: %d:%02d%s", mtTime, elapsedMins, elapsedSecs, etaText),
-        string.format("%s: %s", mtSeg, segValue),
-        modelDisplay,
-    }
+    local leftParts = { string.format("%s: %d:%02d%s", mtTime, elapsedMins, elapsedSecs, etaText), modelDisplay }
+    if not isDrumKitWorkflowActive() then
+        local mtSeg = T("mt_seg") or "Seg"
+        leftParts[#leftParts + 1] = string.format("%s: %s", mtSeg, "30")
+    end
     local rightParts = {}
     if currentLabel and currentLabel ~= "" then
         if audioDurStr then
@@ -15946,7 +15976,7 @@ function processStemsResult(stems)
                         end
                     end
                     resultMsg = count == 1 and "Selection replaced with stem." or "Selection replaced with stems as takes (press T to switch)."
-                    resultData = { kind = "single", mainKey = (count == 1) and "result_selection_replaced_single" or "result_selection_replaced_takes_hint" }
+                    resultData = { kind = "single", count = count, mainKey = (count == 1) and "result_selection_replaced_single" or "result_selection_replaced_takes_hint" }
                 end
             else
                 -- Fallback: create new tracks if no source item
@@ -16013,7 +16043,7 @@ function processStemsResult(stems)
                     end
                 end
                 resultMsg = count == 1 and "Selection replaced with stem." or "Selection replaced with stems as takes (press T to switch)."
-                resultData = { kind = "single", mainKey = (count == 1) and "result_selection_replaced_single" or "result_selection_replaced_takes_hint" }
+                resultData = { kind = "single", count = count, mainKey = (count == 1) and "result_selection_replaced_single" or "result_selection_replaced_takes_hint" }
             end
         else
             SW_LOG.logExecResult("timing:import_start mode=in_place single=item_full", nil, "")
@@ -16022,7 +16052,7 @@ function processStemsResult(stems)
             local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
             if exploded > 0 then
                 resultMsg = "Stems created and takes exploded."
-                resultData = { kind = "single", mainKey = "result_stems_created_exploded" }
+                resultData = { kind = "single", count = count, mainKey = "result_stems_created_exploded" }
             else
                 if mainItem and reaper.ValidatePtr(mainItem, "MediaItem*") then
                     local takeCount = reaper.CountTakes(mainItem) or 0
@@ -16032,7 +16062,7 @@ function processStemsResult(stems)
                     end
                 end
                 resultMsg = count == 1 and "Stem replaced." or "Stems added as takes (press T to switch)."
-                resultData = { kind = "single", mainKey = (count == 1) and "result_stem_replaced" or "result_stems_added_takes_hint" }
+                resultData = { kind = "single", count = count, mainKey = (count == 1) and "result_stem_replaced" or "result_stems_added_takes_hint" }
             end
         end
     end
@@ -17912,9 +17942,9 @@ function drawMultiTrackProgressWindow()
 
     if nerdHover then
         if utilityMode then
-            tooltipText = multiTrackQueue.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = multiTrackQueue.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         else
-            tooltipText = multiTrackQueue.showTerminal and (T("tooltip_nerd_mode_hide") or "Switch to Art View") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = multiTrackQueue.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         end
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not multiTrackQueue.wasMouseDown then

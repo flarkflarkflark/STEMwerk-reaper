@@ -1904,6 +1904,9 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_complete_title = "Direct Drum Kit completed successfully!"' in langs
     assert 'drumkit_complete_title = "Direct Drum Kit succesvol voltooid!"' in langs
     assert 'drumkit_complete_title = "Direct Drum Kit erfolgreich abgeschlossen!"' in langs
+    assert 'drumkit_result_added_takes_hint = "%d %s added as takes (press T to switch)."' in langs
+    assert 'drumkit_result_added_takes_hint = "%d %s toegevoegd als takes (druk T om te wisselen)."' in langs
+    assert 'drumkit_result_added_takes_hint = "%d %s als Takes hinzugefügt (T zum Wechseln)."' in langs
     assert 'drumkit_result_source_item_one = "bronitem"' in langs
     assert 'drumkit_result_source_item_one = "Quellelement"' in langs
     assert "local function resolveOrFallback(key, fallback)" in i18n_internal
@@ -1929,10 +1932,10 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
 
     assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
     assert 'workflow_edks_label = "Drum Kit Split"' in langs
-    assert 'drum_stems_label = "Drum Stems:"' in langs
+    assert 'drum_stems_label = "Drum Parts:"' in langs
     assert 'tooltip_preset_drumkit = "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
     assert 'tooltip_preset_edks = "Planned: extract drums from a full mix, then split the kit."' in langs
-    assert 'tooltip_preset_drumkit = "Splits drummateriaal naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
+    assert 'tooltip_preset_drumkit = "Splitst drum-only materiaal naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
     assert 'tooltip_preset_edks = "Gepland: eerst drums uit een mix halen, daarna de drumkit splitsen."' in langs
     assert 'tooltip_preset_drumkit = "Teilt Drum-Material in Kick, Snare, Toms, Hi-Hat, Ride und Crash."' in langs
     assert 'tooltip_preset_edks = "Geplant: erst Drums aus einem Mix extrahieren, dann das Kit aufteilen."' in langs
@@ -1946,8 +1949,8 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'tooltip_stem_drumkit_crash = "Crash-bekken [6]"' in langs
     assert 'tooltip_stem_drumkit_kick = "Kickdrum / Bassdrum [1]"' in langs
     assert 'tooltip_stem_drumkit_crash = "Crash-Becken [6]"' in langs
-    assert 'drum_stems_label = "Drumstemmen:"' in langs
-    assert 'drum_stems_label = "Drum-Spuren:"' in langs
+    assert 'drum_stems_label = "Drumparts:"' in langs
+    assert 'drum_stems_label = "Drum-Parts:"' in langs
     assert 'model_label_expanded = "Expanded"' in langs
     assert 'device = "Gerät:"' in langs
     assert 'selected = "Ausgewählt:"' in langs
@@ -1971,10 +1974,14 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
+    assert 'tooltip_nerd_mode_hide = "Back to progress view"' in langs
+    assert 'tooltip_nerd_mode_hide = "Terug naar voortgang"' in langs
+    assert 'tooltip_nerd_mode_hide = "Zurück zur Fortschrittsansicht"' in langs
     assert 'footer_drum_tracks = "drum tracks"' in langs
     assert 'footer_drum_tracks = "drumtracks"' in langs
     assert 'footer_drum_tracks = "Drum-Spuren"' in langs
     assert 'direct_drum_kit_folder_suffix = "Direct Drum Kit"' in langs
+    assert 'model_label_quality = "Qualität"' in langs
     assert 'local displayName = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
     assert 'and stem.name' in main_script
     assert 'local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
@@ -2005,6 +2012,9 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)' in script
     assert 'local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"' in script
     assert 'local title = trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")' in script
+    assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", baseLoc)' in script
+    assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))' in script
+    assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")' in script
 
 
 def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
@@ -2016,8 +2026,14 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "progressState._normalizedDeviceRequest" in script
     assert "progressState._runtimeGpuCapable" in script
     assert "progressState._runtimeDeviceNames" in script
+    assert "local function shortRuntimeGpuName(name)" in script
+    assert "local first = s:match(\"^([^|,;]+)\") or s" in script
+    assert "first = first:gsub(\"^AMD Radeon%s+\", \"\")" in script
     assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s")' in script
     assert 'trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
+    assert "if not isDrumKitWorkflowActive() then" in script
+    assert "if not isDrumKitWorkflowActive() then" in script
+    assert 'leftParts[#leftParts + 1] = string.format("%s: %s", mtSeg, "30")' in script
     assert 'footer_device_auto_resolved_gpu = "Auto -> GPU/ROCm: %s"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU runtime"' in langs
