@@ -1940,7 +1940,7 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
 
     assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
     assert 'workflow_edks_label = "Drum Kit Split"' in langs
-    assert 'drum_stems_label = "Drum Parts:"' in langs
+    assert 'drum_stems_label = "Drum Stems:"' in langs
     assert 'tooltip_preset_drumkit = "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
     assert 'tooltip_preset_edks = "Planned: extract drums from a full mix, then split the kit."' in langs
     assert 'tooltip_preset_drumkit = "Splitst drum-only materiaal naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
@@ -1957,9 +1957,12 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'tooltip_stem_drumkit_crash = "Crash-bekken [6]"' in langs
     assert 'tooltip_stem_drumkit_kick = "Kickdrum / Bassdrum [1]"' in langs
     assert 'tooltip_stem_drumkit_crash = "Crash-Becken [6]"' in langs
-    assert 'drum_stems_label = "Drumparts:"' in langs
-    assert 'drum_stems_label = "Drum-Parts:"' in langs
+    assert 'drum_stems_label = "Drumstems:"' in langs
+    assert 'drum_stems_label = "Drum-Stems:"' in langs
     assert 'model_label_expanded = "Expanded"' in langs
+    assert 'model_expanded_drumkit_desc = "Expanded DrumSep model for more detailed drum-kit splitting."' in langs
+    assert 'model_expanded_drumkit_desc = "Uitgebreid DrumSep-model voor gedetailleerdere drumkit-splitsing."' in langs
+    assert 'model_expanded_drumkit_desc = "Erweitertes DrumSep-Modell für detailliertere Drumkit-Trennung."' in langs
     assert 'device = "Gerät:"' in langs
     assert 'selected = "Ausgewählt:"' in langs
     assert 'delete_original = "Original löschen"' in langs
@@ -1969,7 +1972,7 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'edks_planned_title = "Drum Kit Split ist geplant"' in langs
     assert 'edks_planned_message = "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material."' in langs
     assert 'edks_planned_message = "Deze tweetraps-workflow haalt eerst drums uit een volledige mix en splitst daarna de drumkit. Gebruik Direct Drum Kit voor materiaal dat al drums is."' in langs
-    assert 'edks_planned_message = "Dieser zweistufige Workflow extrahiert zuerst Drums aus einem vollstaendigen Mix und teilt danach das Kit auf. Verwende Direct Drum Kit fuer bereits isoliertes Drum-Material."' in langs
+    assert 'edks_planned_message = "Dieser zweistufige Workflow extrahiert zuerst Drums aus einem vollständigen Mix und teilt danach das Kit auf. Verwende Direct Drum Kit für bereits isoliertes Drum-Material."' in langs
     assert 'progress_stage_splitting_drum_kit = "Splitting drum kit..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Drumkit splitsen..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Drumkit wird aufgeteilt..."' in langs
@@ -1996,6 +1999,11 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")' in main_script
     assert 'if model.id == "htdemucs"' in main_script
     assert 'modelDisplayName = trSafe("model_label_expanded", "Expanded")' in main_script
+    assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT and model.id == "htdemucs_6s" then' in main_script
+    assert 'descKey = "model_expanded_drumkit_desc"' in main_script
+    assert "return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, rawColor, presetsBtnFontSize)" in main_script
+    assert "_pa.all = false" in main_script
+    assert "_pa.vocals = false" in main_script
     assert 'preparing direct drum kit' in progress_render
     assert 'starting drum kit runtime' in progress_render
     assert 'writing drum tracks' in progress_render
@@ -2023,6 +2031,7 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", baseLoc)' in script
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))' in script
     assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")' in script
+    assert 'textStr = textStr:gsub("%s*%[" .. shortcutEsc .. "%]%s*$", "")' in script
 
 
 def test_drumkit_workflow_state_persists_and_restores_on_reopen():
@@ -2087,6 +2096,15 @@ def test_sync_to_reaper_does_not_overwrite_script_local_i18n_with_repo_root_i18n
     sync_script = Path("scripts/reaper/sync_to_reaper.sh").read_text()
     assert '"${src_dir}/"' in sync_script
     assert '"${repo_root}/i18n/"' not in sync_script
+
+
+def test_german_visual_and_help_copy_uses_umlauts_for_direct_dks_paths():
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+    assert "Audio in REAPER auswählen" in langs
+    assert "Tracks, Medien-Items oder Zeitauswahl wählen" in langs
+    assert "Ausgewählte Multi-Take Items" in langs
+    assert "Mehrere Qualitätsmodi" in langs
+    assert "Was jeder Stem enthält" in langs
 
 
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():

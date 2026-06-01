@@ -8670,8 +8670,13 @@ local function setTooltipWithShortcut(x, y, w, h, text, shortcut, color)
     end
     local mx, my = gfx.mouse_x, gfx.mouse_y
     if mx >= x and mx <= x + w and my >= y and my <= y + h then
+        local textStr = tostring(text or "")
+        local shortcutEsc = tostring(shortcut or ""):gsub("([^%w])", "%%%1")
+        if shortcutEsc ~= "" then
+            textStr = textStr:gsub("%s*%[" .. shortcutEsc .. "%]%s*$", "")
+        end
         GUI.shortcutTooltip = {
-            text = text,
+            text = textStr,
             shortcut = shortcut,
             color = color or {255, 200, 100}  -- Default orange/yellow
         }
@@ -11615,7 +11620,7 @@ function renderMainColumns(ctx)
 
     local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
     local _pa = {}
-    if utilityMode then
+    do
         local function ss(i) return STEMS[i] and STEMS[i].selected or false end
         local v, d, b, o = ss(1), ss(2), ss(3), ss(4)
         local g, p = ss(5), ss(6)
@@ -11631,12 +11636,22 @@ function renderMainColumns(ctx)
         _pa.other   = (not v) and (not d) and (not b) and o and no56
         _pa.guitar  = is6Stem and (not v) and (not d) and (not b) and (not o) and g and (not p)
         _pa.piano   = is6Stem and (not v) and (not d) and (not b) and (not o) and (not g) and p
+        if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT then
+            _pa.karaoke = false
+            _pa.all = false
+            _pa.vocals = false
+            _pa.drums = false
+            _pa.bass = false
+            _pa.other = false
+            _pa.guitar = false
+            _pa.piano = false
+        end
     end
     local function drawPresetBtn(py, label, rawColor, isActive)
         if utilityMode then
             return drawRadio(col1X, py, isActive, label, nil, colW, nil, nil, presetsBtnFontSize)
         end
-        return drawButton(col1X, py, colW, btnH, label, false, rawColor, presetsBtnFontSize)
+        return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, rawColor, presetsBtnFontSize)
     end
     if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, _pa.karaoke) then clearDialogWorkflowSelection(); applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
@@ -11790,6 +11805,9 @@ function renderMainColumns(ctx)
             setModelPreservingStemIntent(model.id)
         end
         local descKey = modelDescKeys[model.id] or "model_fast_desc"
+        if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT and model.id == "htdemucs_6s" then
+            descKey = "model_expanded_drumkit_desc"
+        end
         local tip = trSafe(descKey, modelDisplayName)
         if not modelAvailable then
             tip = tostring(tip or "") .. "\n\n" .. unavailableModelTooltipSuffix()
