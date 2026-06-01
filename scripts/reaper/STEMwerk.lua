@@ -1773,6 +1773,31 @@ applyPresetGuitarOnly = function() GLUE_HELPERS.applyPresetGuitarOnly(STEMS) end
 applyPresetPianoOnly = function() GLUE_HELPERS.applyPresetPianoOnly(STEMS) end
 applyPresetAll = function() GLUE_HELPERS.applyPresetAll(STEMS) end
 
+local dialogWorkflowSource = ""
+
+local function clearDialogWorkflowSelection()
+    dialogWorkflowSource = ""
+    reaper.DeleteExtState(EXT_SECTION, "active_workflow_mode", false)
+    reaper.DeleteExtState(EXT_SECTION, "active_workflow_source", false)
+    activateWorkflowStemSet(false)
+end
+
+local function selectDirectDrumKitWorkflow()
+    dialogWorkflowSource = DKS_WORKFLOW.SOURCE_DIRECT
+    reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
+    reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)
+    activateWorkflowStemSet(true)
+end
+
+local function showExtractKitPlannedNotice()
+    showMessage(
+        T("edks_planned_title") or "Extract + Kit",
+        T("edks_planned_message") or "Extract + Kit is planned. Use Drum Kit for already-drum material.",
+        "info",
+        true
+    )
+end
+
 local function rgbToReaperColor(r, g, b)
     return reaper.ColorToNative(r, g, b) | 0x1000000
 end
@@ -11458,13 +11483,15 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
+    local presetLabelDrumKit = (T("workflow_drumkit_label") or "Drum Kit") .. " (X)"
+    local presetLabelEdks    = (T("workflow_edks_label") or "Extract + Kit") .. " (E)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
     local presetLabelOther   = (T("other") or "Other")      .. " (O)"
     local presetLabelPiano   = (T("piano") or "Piano")      .. " (P)"
     local presetLabelGuitar  = (T("guitar") or "Guitar")    .. " (G)"
-    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
+    local presetLabels = { presetLabelKaraoke, presetLabelAll, presetLabelDrumKit, presetLabelEdks, presetLabelVocals, presetLabelDrums, presetLabelBass, presetLabelOther }
     if is6Stem then
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
@@ -11495,6 +11522,8 @@ function renderMainColumns(ctx)
         local yes56 = not is6Stem or (g and p)
         _pa.karaoke = (not v) and d and b and o and yes56
         _pa.all     = v and d and b and o and yes56
+        _pa.drumkit = dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT
+        _pa.edks    = false
         _pa.vocals  = v and (not d) and (not b) and (not o) and no56
         _pa.drums   = (not v) and d and (not b) and (not o) and no56
         _pa.bass    = (not v) and (not d) and b and (not o) and no56
@@ -11508,32 +11537,51 @@ function renderMainColumns(ctx)
         end
         return drawButton(col1X, py, colW, btnH, label, false, rawColor, presetsBtnFontSize)
     end
-    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, _pa.karaoke) then applyPresetKaraoke() end
+    if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, _pa.karaoke) then clearDialogWorkflowSelection(); applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}, _pa.all) then applyPresetAll() end
+    if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}, _pa.all) then clearDialogWorkflowSelection(); applyPresetAll() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
 
     presetY = presetY + S(28)
 
-    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals) then applyPresetVocalsOnly() end
+    if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
+    setTooltipWithShortcut(
+        col1X, presetY, colW, btnH,
+        T("tooltip_preset_drumkit") or "Drum Kit: Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
+        "X", {170, 150, 240}
+    )
+    presetY = presetY + S(22)
+
+    local disabledColor = utilityMode and {130, 130, 130} or {90, 90, 90}
+    if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then
+        showExtractKitPlannedNotice()
+    end
+    setTooltipWithShortcut(
+        col1X, presetY, colW, btnH,
+        T("tooltip_preset_edks") or "Extract + Kit: Planned: extract drums from a full mix, then split the kit.",
+        "E", {130, 130, 130}
+    )
+    presetY = presetY + S(28)
+
+    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals) then clearDialogWorkflowSelection(); applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums) then applyPresetDrumsOnly() end
+    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums) then clearDialogWorkflowSelection(); applyPresetDrumsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass) then applyPresetBassOnly() end
+    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass) then clearDialogWorkflowSelection(); applyPresetBassOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + S(22)
-    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other) then applyPresetOtherOnly() end
+    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other) then clearDialogWorkflowSelection(); applyPresetOtherOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + S(22)
 
     if is6Stem then
-        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then applyPresetGuitarOnly() end
+        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then clearDialogWorkflowSelection(); applyPresetGuitarOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + S(22)
-        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then applyPresetPianoOnly() end
+        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then clearDialogWorkflowSelection(); applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + S(22)
     end
@@ -12203,15 +12251,19 @@ function handleDialogKeyboard(ctx)
     elseif char == 52 then toggleStemSelection(4)
     elseif char == 53 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(5)
     elseif char == 54 and SETTINGS.model == "htdemucs_6s" then toggleStemSelection(6)
-    elseif char == 118 or char == 86 then applyPresetVocalsOnly()
-    elseif char == 100 or char == 68 then applyPresetDrumsOnly()
-    elseif char == 98 or char == 66 then applyPresetBassOnly()
-    elseif char == 111 or char == 79 then applyPresetOtherOnly()
-    elseif char == 112 or char == 80 then applyPresetPianoOnly()
-    elseif char == 103 or char == 71 then applyPresetGuitarOnly()
-    elseif char == 107 or char == 75 then applyPresetKaraoke()
-    elseif char == 105 or char == 73 then applyPresetKaraoke()
-    elseif char == 97 or char == 65 then applyPresetAll()
+    elseif char == 120 or char == 88 then
+        selectDirectDrumKitWorkflow()
+    elseif char == 101 or char == 69 then
+        showExtractKitPlannedNotice()
+    elseif char == 118 or char == 86 then clearDialogWorkflowSelection(); applyPresetVocalsOnly()
+    elseif char == 100 or char == 68 then clearDialogWorkflowSelection(); applyPresetDrumsOnly()
+    elseif char == 98 or char == 66 then clearDialogWorkflowSelection(); applyPresetBassOnly()
+    elseif char == 111 or char == 79 then clearDialogWorkflowSelection(); applyPresetOtherOnly()
+    elseif char == 112 or char == 80 then clearDialogWorkflowSelection(); applyPresetPianoOnly()
+    elseif char == 103 or char == 71 then clearDialogWorkflowSelection(); applyPresetGuitarOnly()
+    elseif char == 107 or char == 75 then clearDialogWorkflowSelection(); applyPresetKaraoke()
+    elseif char == 105 or char == 73 then clearDialogWorkflowSelection(); applyPresetKaraoke()
+    elseif char == 97 or char == 65 then clearDialogWorkflowSelection(); applyPresetAll()
     elseif char == 102 or char == 70 then
         if isModelAvailableInCurrentMode("htdemucs") then
             setModelPreservingStemIntent("htdemucs")

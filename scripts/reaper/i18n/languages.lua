@@ -109,6 +109,8 @@ en = {
         -- Presets
         karaoke = "Karaoke",
         all_stems = "All",
+        workflow_drumkit_label = "Drum Kit",
+        workflow_edks_label = "Extract + Kit",
         instrumental = "Instrumental",
 
         -- Output options
@@ -330,6 +332,8 @@ en = {
         -- Preset tooltips
         tooltip_preset_karaoke = "Everything except vocals",
         tooltip_preset_all = "Select all available stems",
+        tooltip_preset_drumkit = "Drum Kit: Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
+        tooltip_preset_edks = "Extract + Kit: Planned: extract drums from a full mix, then split the kit.",
         tooltip_preset_vocals = "Select only Vocals stem",
         tooltip_preset_drums = "Select only Drums stem",
         tooltip_preset_bass = "Select only Bass stem",
@@ -342,6 +346,8 @@ en = {
         tooltip_stem_drums = "Drums, percussion, cymbals",
         tooltip_stem_bass = "Bass guitar, synth bass",
         tooltip_stem_other = "Synths, strings, keys, effects",
+        edks_planned_title = "Extract + Kit",
+        edks_planned_message = "Extract + Kit is planned. Use Drum Kit for already-drum material.",
         tooltip_stem_guitar = "Electric and acoustic guitars",
         tooltip_stem_piano = "Piano, keys, Rhodes",
 
@@ -657,6 +663,8 @@ en = {
         -- Presets
         karaoke = "Karaoke",
         all_stems = "Alles",
+        workflow_drumkit_label = "Drum Kit",
+        workflow_edks_label = "Extract + Kit",
         instrumental = "Instrumentaal",
 
         -- Output options
@@ -878,6 +886,8 @@ en = {
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles behalve zang",
         tooltip_preset_all = "Selecteer alle beschikbare stems",
+        tooltip_preset_drumkit = "Drum Kit: Splits drummateriaal naar Kick, Snare, Toms, Hi-Hat, Ride en Crash.",
+        tooltip_preset_edks = "Extract + Kit: Gepland: eerst drums uit een mix halen, daarna de drumkit splitsen.",
         tooltip_preset_vocals = "Selecteer alleen Zang stem",
         tooltip_preset_drums = "Selecteer alleen Drums stem",
         tooltip_preset_bass = "Selecteer alleen Bas stem",
@@ -890,6 +900,8 @@ en = {
         tooltip_stem_drums = "Drums, percussie, bekkens",
         tooltip_stem_bass = "Basgitaar, synthbas",
         tooltip_stem_other = "Synths, strijkers, keys, effecten",
+        edks_planned_title = "Extract + Kit",
+        edks_planned_message = "Extract + Kit komt later. Gebruik Drum Kit voor materiaal dat al drums is.",
         tooltip_stem_guitar = "Elektrische en akoestische gitaren",
         tooltip_stem_piano = "Piano, keys, Rhodes",
 
@@ -1203,6 +1215,8 @@ en = {
         -- Presets
         karaoke = "Karaoke",
         all_stems = "Alle",
+        workflow_drumkit_label = "Drum Kit",
+        workflow_edks_label = "Extract + Kit",
         instrumental = "Instrumental",
 
         -- Output options
@@ -1424,6 +1438,8 @@ en = {
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles ausser Gesang",
         tooltip_preset_all = "Alle verfuegbaren Stems auswaehlen",
+        tooltip_preset_drumkit = "Drum Kit: Teilt Drum-Material in Kick, Snare, Toms, Hi-Hat, Ride und Crash.",
+        tooltip_preset_edks = "Extract + Kit: Geplant: erst Drums aus einem Mix extrahieren, dann das Kit aufteilen.",
         tooltip_preset_vocals = "Nur Gesang Stem auswaehlen",
         tooltip_preset_drums = "Nur Schlagzeug Stem auswaehlen",
         tooltip_preset_bass = "Nur Bass Stem auswaehlen",
@@ -1436,6 +1452,8 @@ en = {
         tooltip_stem_drums = "Schlagzeug, Perkussion, Becken",
         tooltip_stem_bass = "Bassgitarre, Synthbass",
         tooltip_stem_other = "Synths, Streicher, Keys, Effekte",
+        edks_planned_title = "Extract + Kit",
+        edks_planned_message = "Extract + Kit ist geplant. Verwende Drum Kit fuer bereits isoliertes Drum-Material.",
         tooltip_stem_guitar = "Elektrische und akustische Gitarren",
         tooltip_stem_piano = "Klavier, Keys, Rhodes",
 

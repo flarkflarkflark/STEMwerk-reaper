@@ -1841,6 +1841,25 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_result_source_item_one = "Quellelement"' in langs
 
 
+def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+
+    assert 'local presetLabelDrumKit = (T("workflow_drumkit_label") or "Drum Kit") .. " (X)"' in main_script
+    assert 'local presetLabelEdks    = (T("workflow_edks_label") or "Extract + Kit") .. " (E)"' in main_script
+    assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
+    assert 'if drawButton(col1X, presetY, colW, btnH, presetLabelEdks, false, disabledColor, presetsBtnFontSize) then' in main_script
+    assert 'showExtractKitPlannedNotice()' in main_script
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)' in main_script
+    assert 'activateWorkflowStemSet(true)' in main_script
+
+    assert 'workflow_drumkit_label = "Drum Kit"' in langs
+    assert 'workflow_edks_label = "Extract + Kit"' in langs
+    assert 'edks_planned_message = "Extract + Kit is planned. Use Drum Kit for already-drum material."' in langs
+    assert 'edks_planned_message = "Extract + Kit komt later. Gebruik Drum Kit voor materiaal dat al drums is."' in langs
+    assert 'edks_planned_message = "Extract + Kit ist geplant. Verwende Drum Kit fuer bereits isoliertes Drum-Material."' in langs
+
+
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     log_script = Path("scripts/reaper/_internal/STEMwerk_Log.lua").read_text()
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
