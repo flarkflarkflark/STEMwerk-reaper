@@ -1255,6 +1255,8 @@ SETTINGS = {
     tooltips = true,           -- Global tooltip toggle
     keepTempFiles = false,     -- Keep temp audio/work files after a run (logs always preserved)
     device = "auto",           -- Device selection: "auto", "cpu", "cuda:0", "cuda:1", "directml"
+    workflowMode = "",
+    workflowSource = "",
 }
 
 local function normalizeOutputGrouping(value)
@@ -1733,6 +1735,8 @@ SETTINGS_MOD.configure({
     setWindowState = function(x, y, w, h)
         lastDialogX, lastDialogY, lastDialogW, lastDialogH = x, y, w, h
     end,
+    DKS_WORKFLOW = DKS_WORKFLOW,
+    activateWorkflowStemSet = activateWorkflowStemSet,
 })
 DEVICE_RUNTIME.configure({
     DEVICES = DEVICES,
@@ -1777,6 +1781,8 @@ local dialogWorkflowSource = ""
 
 local function clearDialogWorkflowSelection()
     dialogWorkflowSource = ""
+    SETTINGS.workflowMode = ""
+    SETTINGS.workflowSource = ""
     reaper.DeleteExtState(EXT_SECTION, "active_workflow_mode", false)
     reaper.DeleteExtState(EXT_SECTION, "active_workflow_source", false)
     activateWorkflowStemSet(false)
@@ -1784,9 +1790,24 @@ end
 
 local function selectDirectDrumKitWorkflow()
     dialogWorkflowSource = DKS_WORKFLOW.SOURCE_DIRECT
+    SETTINGS.workflowMode = DKS_WORKFLOW.WORKFLOW_DRUMKIT
+    SETTINGS.workflowSource = DKS_WORKFLOW.SOURCE_DIRECT
     reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
     reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)
     activateWorkflowStemSet(true)
+end
+
+restoreDialogWorkflowSelection = function()
+    local mode = tostring(SETTINGS.workflowMode or "")
+    local source = tostring(SETTINGS.workflowSource or "")
+    local direct = mode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+        and (source == DKS_WORKFLOW.SOURCE_DIRECT or DKS_WORKFLOW.isDirectPreset(source))
+    if direct then
+        selectDirectDrumKitWorkflow()
+        return
+    end
+    dialogWorkflowSource = ""
+    activateWorkflowStemSet(false)
 end
 
 local function showExtractKitPlannedNotice()
@@ -12583,6 +12604,7 @@ end
 showStemSelectionDialog = function()
     ACTIVE_RUN_CONFIG = nil
     loadSettings()
+    restoreDialogWorkflowSelection()
     PROCESS_AUDIBILITY_SOLO_ACTIVE = nil
     perfMark("showStemSelectionDialog(): loadSettings done")
     GUI.result = nil
@@ -20369,6 +20391,7 @@ main = function()
 
     -- Load settings first (needed for window position in error messages)
     loadSettings()
+    restoreDialogWorkflowSelection()
     perfMark("loadSettings() done")
 
     -- Quick command mode (toolbar direct tools): run and exit without opening the main UI.

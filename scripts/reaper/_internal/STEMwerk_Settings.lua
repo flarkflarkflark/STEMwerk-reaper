@@ -103,6 +103,27 @@ end
 function SETTINGS_MOD.load()
     C.refreshModelAvailability()
 
+    local workflowMode = C.reaper.GetExtState(C.EXT_SECTION, "workflow_mode")
+    local workflowSource = C.reaper.GetExtState(C.EXT_SECTION, "workflow_source")
+    if workflowMode == "" then
+        workflowMode = C.reaper.GetExtState(C.EXT_SECTION, "active_workflow_mode")
+    end
+    if workflowSource == "" then
+        workflowSource = C.reaper.GetExtState(C.EXT_SECTION, "active_workflow_source")
+    end
+
+    C.SETTINGS.workflowMode = tostring(workflowMode or "")
+    C.SETTINGS.workflowSource = tostring(workflowSource or "")
+    local directWorkflow = C.DKS_WORKFLOW
+        and C.SETTINGS.workflowMode == C.DKS_WORKFLOW.WORKFLOW_DRUMKIT
+        and (
+            C.SETTINGS.workflowSource == C.DKS_WORKFLOW.SOURCE_DIRECT
+            or C.DKS_WORKFLOW.isDirectPreset(C.SETTINGS.workflowSource)
+        )
+    if C.activateWorkflowStemSet then
+        C.activateWorkflowStemSet(directWorkflow and true or false)
+    end
+
     local model = C.reaper.GetExtState(C.EXT_SECTION, "model")
     if model ~= "" then C.SETTINGS.model = model end
 
@@ -289,6 +310,8 @@ function SETTINGS_MOD.save()
         C.SETTINGS.device = "cpu"
     end
     C.reaper.SetExtState(C.EXT_SECTION, "device", C.SETTINGS.device, true)
+    C.reaper.SetExtState(C.EXT_SECTION, "workflow_mode", tostring(C.SETTINGS.workflowMode or ""), true)
+    C.reaper.SetExtState(C.EXT_SECTION, "workflow_source", tostring(C.SETTINGS.workflowSource or ""), true)
 
     for _, stem in ipairs(C.STEMS) do
         C.reaper.SetExtState(C.EXT_SECTION, "stem_" .. stem.name, stem.selected and "1" or "0", true)

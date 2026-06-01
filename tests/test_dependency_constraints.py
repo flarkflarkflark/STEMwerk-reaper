@@ -2017,6 +2017,37 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")' in script
 
 
+def test_drumkit_workflow_state_persists_and_restores_on_reopen():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    settings_script = Path("scripts/reaper/_internal/STEMwerk_Settings.lua").read_text()
+
+    assert 'workflowMode = ""' in main_script
+    assert 'workflowSource = ""' in main_script
+    assert "restoreDialogWorkflowSelection = function()" in main_script
+    assert "restoreDialogWorkflowSelection()" in main_script
+    assert 'SETTINGS.workflowMode = DKS_WORKFLOW.WORKFLOW_DRUMKIT' in main_script
+    assert 'SETTINGS.workflowSource = DKS_WORKFLOW.SOURCE_DIRECT' in main_script
+    assert 'SETTINGS.workflowMode = ""' in main_script
+    assert 'SETTINGS.workflowSource = ""' in main_script
+
+    assert 'local workflowMode = C.reaper.GetExtState(C.EXT_SECTION, "workflow_mode")' in settings_script
+    assert 'local workflowSource = C.reaper.GetExtState(C.EXT_SECTION, "workflow_source")' in settings_script
+    assert 'C.reaper.SetExtState(C.EXT_SECTION, "workflow_mode", tostring(C.SETTINGS.workflowMode or ""), true)' in settings_script
+    assert 'C.reaper.SetExtState(C.EXT_SECTION, "workflow_source", tostring(C.SETTINGS.workflowSource or ""), true)' in settings_script
+    assert "if C.activateWorkflowStemSet then" in settings_script
+
+
+def test_drumkit_expanded_model_stays_route_scoped_and_does_not_force_normal_stems():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "local function activateWorkflowStemSet(isDirectDKS)" in main_script
+    assert "STEMS = isDirectDKS and DRUMKIT_STEMS or STANDARD_STEMS" in main_script
+    assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT then' in main_script
+    assert 'modelDisplayName = trSafe("model_label_expanded", "Expanded")' in main_script
+    assert 'local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
+
+
 def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
