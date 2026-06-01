@@ -1469,17 +1469,15 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
 
     if lowerLog:find("error_stage=stage2_runtime", 1, true)
         and (lowerLog:find("error_reason=drumsep_runtime_missing", 1, true)
-            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)
-            or lowerLog:find("error_reason=drumsep_stage2_delegation_not_implemented", 1, true)) then
+            or lowerLog:find("error_reason=drumsep_runtime_broken", 1, true)) then
         local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_runtime_missing"
         local detail = tostring(logSnippet or ""):match("detail=([^\r\n]+)") or ""
-        local headline = reason == "drumsep_stage2_delegation_not_implemented"
-            and "Drum Kit Split runtime is installed, but stage2 delegation is not implemented yet."
-            or reason == "drumsep_runtime_broken"
+        local headline = reason == "drumsep_runtime_broken"
             and "Drum Kit Split runtime is broken."
             or "Drum Kit Split runtime is not installed."
         local msg = headline .. "\n"
             .. "Run Setup/Repair Drum Kit Split runtime.\n"
+            .. "Optional GPU path: Setup/Repair Drum Kit Split ROCm runtime.\n"
             .. "Reason: " .. tostring(reason)
             .. (detail ~= "" and ("\nDetail: " .. tostring(detail)) or "")
             .. "\nerror_stage=stage2_runtime\n"
@@ -8842,7 +8840,9 @@ function buildResultMessageLines()
         local stemsCreated = data.stemsCreated or 0
         local srcCount = data.sourceCount or 0
         local sourceKind = data.sourceKind or "tracks"
-        local stemWord = trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
+        local stemWord = isDrumKitWorkflowActive()
+            and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
+            or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
         local srcWord
         if sourceKind == "items" then
             srcWord = trPlural(srcCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
@@ -8878,7 +8878,9 @@ function buildResultMessageLines()
         if data.stemsCreated and data.sourceCount and data.sourceKind then
             local stemsCreated = data.stemsCreated or 0
             local sourceCount = data.sourceCount or 0
-            local stemWord = trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
+            local stemWord = isDrumKitWorkflowActive()
+                and trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "drum track", "drum tracks")
+                or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
             if data.sourceKind == "time_selection" then
                 line1 = string.format(T("result_time_selection_created") or "%d stem %s created from time selection.", stemsCreated, stemWord)
             else
