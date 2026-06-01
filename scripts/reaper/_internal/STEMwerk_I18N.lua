@@ -96,10 +96,23 @@ local function T(key)
 end
 
 local function trPlural(count, singularKey, pluralKey, singularFallback, pluralFallback)
-    if (count or 0) == 1 then
-        return T(singularKey) or singularFallback or singularKey
+    local function resolveOrFallback(key, fallback)
+        local value = T(key)
+        local keyText = tostring(key or "")
+        local humanized = keyText:gsub("_", " ")
+        if value == nil then
+            return fallback or keyText
+        end
+        value = tostring(value)
+        if value == "" or value == keyText or value == humanized then
+            return fallback or keyText
+        end
+        return value
     end
-    return T(pluralKey) or pluralFallback or pluralKey
+    if (count or 0) == 1 then
+        return resolveOrFallback(singularKey, singularFallback)
+    end
+    return resolveOrFallback(pluralKey, pluralFallback)
 end
 
 local function getAvailableLanguages()
