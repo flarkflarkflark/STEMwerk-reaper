@@ -1445,6 +1445,7 @@ def test_audio_separator_process_enables_torch26_demucs_checkpoint_compatibility
 
 def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     script = Path("scripts/reaper/audio_separator_process.py").read_text()
+    _, after_direct_route = script.split("if _is_direct_dks_source(args.workflow_mode, args.workflow_source):", 1)
 
     assert 'parser.add_argument("--workflow-mode", default=""' in script
     assert 'parser.add_argument("--workflow-source", default=""' in script
@@ -1493,13 +1494,14 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert 'selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"' in script
     assert "normalized_device_request=" in script
     assert 'info["selection_policy"] = "fallback_cpu"' in script
-    assert script.index("_direct_dks_preflight_check(run_model, model_cache_dir)") < script.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
+    assert after_direct_route.index("_direct_dks_preflight_check(run_model, model_cache_dir)") < after_direct_route.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print(f"error_reason={reason}", file=sys.stderr)' in script
     assert 'print(f"requested_model={requested_model}", file=sys.stderr)' in script
     assert 'print(f"Direct Drum Kit Split preflight failed: {reason}", file=sys.stderr)' in script
     assert "drumsep_model_download_failed" in script
     assert "known_err_text.startswith(\"catalog_\")" in script
+    assert 'known_err_text.startswith("unsupported_")' in script
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
@@ -1514,6 +1516,7 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "if _is_extract_dks_source(args.workflow_mode, args.workflow_source):" in script
     assert 'stage1_root = output_root / "stage1_normal"' in script
     assert 'stage2_root = output_root / "stage2_drumsep"' in script
+    assert "stage1_model = run_model" in script
     assert 'stage1_result = stage1_sep.separate(args.input, str(stage1_root), stems=["drums"])' in script
     assert 'drums_input = Path(stage1_stems.get("drums", stage1_root / "drums.wav")).resolve()' in script
     assert "dks_extract_stage1_runtime=normal" in script
@@ -1522,10 +1525,30 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "dks_extract_stage2_runtime=drumsep" in script
     assert "dks_extract_stage2_device=" in script
     assert "dks_extract_stage2_requested_device=" in script
+    assert "_direct_dks_preflight_check(requested_stage2_model, model_cache_dir)" in script
+    assert "requested_stage2_model = _resolve_requested_stage2_model(args)" in script
+    assert "known_err_text.startswith(\"unsupported_\")" in script
     assert "print(json.dumps(final_stems))" in script
     assert "workflow_source=dks_extract" not in support_script
     assert '"dks_extract_stage1_runtime", "dks_extract_stage1_requested_device"' in support_script
     assert '"dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_intermediate_dir"' in support_script
+
+
+def test_drumkit_extract_stage2_uses_requested_drumsep_model_not_stage1_demucs_model():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+
+    assert "def _resolve_requested_stage2_model(args: argparse.Namespace) -> str:" in script
+    assert "return DIRECT_DKS_MODEL_ALIAS" in script
+    assert "requested_stage2_model = _resolve_requested_stage2_model(args)" in script
+    assert "_direct_dks_preflight_check(requested_stage2_model, model_cache_dir)" in script
+    assert "_emit_direct_dks_preflight_markers(reason, requested_model or requested_stage2_model, resolved_model or \"\", str(known_err or \"\"))" in script
+
+
+def test_drumsep_runtime_verify_and_helper_use_clean_subprocess_env():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+
+    assert "env=_clean_env()," in script
+    assert script.count("env=_clean_env(),") >= 2
 
 
 def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, capsys):

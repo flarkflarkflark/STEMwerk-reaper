@@ -80,6 +80,13 @@ def _resolve_run_model(args: argparse.Namespace) -> str:
     return str(getattr(args, "model", "htdemucs") or "htdemucs")
 
 
+def _resolve_requested_stage2_model(args: argparse.Namespace) -> str:
+    requested = str(getattr(args, "requested_stage2_model", "") or "").strip()
+    if requested:
+        return requested
+    return DIRECT_DKS_MODEL_ALIAS
+
+
 def _is_known_drumsep_model_missing_error(exc: Exception) -> bool:
     text = str(exc or "").lower()
     return "not found in supported model files" in text and "model file" in text
@@ -569,6 +576,7 @@ print(json.dumps({
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=30,
+            env=_clean_env(),
             **_windows_no_window_kwargs(),
         )
     except Exception as exc:
@@ -747,6 +755,7 @@ def _run_direct_dks_drumsep_helper(
             text=True,
             stdout=stdout_fh,
             stderr=stderr_fh,
+            env=_clean_env(),
             **_windows_no_window_kwargs(),
         )
         start_time = time.monotonic()
@@ -1734,7 +1743,7 @@ def main():
 
     stems = _split_list(args.stems)
     run_model = _resolve_run_model(args)
-    requested_stage2_model = run_model
+    requested_stage2_model = _resolve_requested_stage2_model(args)
     if _is_extract_dks_source(args.workflow_mode, args.workflow_source):
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
@@ -1742,6 +1751,7 @@ def main():
         stage2_root = output_root / "stage2_drumsep"
         stage1_root.mkdir(parents=True, exist_ok=True)
         stage2_root.mkdir(parents=True, exist_ok=True)
+        stage1_model = run_model
         stage1_requested, stage1_resolved, stage1_preview, live_device_ids = _resolve_normal_runtime_device(device_preference)
         stage1_preview_device, _sep, stage1_preview_name = stage1_preview.partition("|")
         print(
@@ -1768,10 +1778,10 @@ def main():
             emit_phase("stage1_parent_start")
             runtime_env = _emit_runtime_diagnostics(stage1_preview_device or stage1_resolved)
             _enable_mps_runtime_fallback(stage1_requested, stage1_resolved)
-            stage1_runtime_device = _enforce_mps_demucs_cpu_policy(stage1_requested, stage1_preview_device or stage1_resolved, run_model)
-            _enable_torch_weights_only_compat(run_model, stage1_runtime_device)
+            stage1_runtime_device = _enforce_mps_demucs_cpu_policy(stage1_requested, stage1_preview_device or stage1_resolved, stage1_model)
+            _enable_torch_weights_only_compat(stage1_model, stage1_runtime_device)
             emit_phase("model_setup_start")
-            stage1_sep = StemSeparator(model=run_model, device=stage1_runtime_device)
+            stage1_sep = StemSeparator(model=stage1_model, device=stage1_runtime_device)
             emit_phase("model_setup_end")
 
             def stage1_progress(pct: float, _msg: str):
@@ -1822,15 +1832,15 @@ def main():
             print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
             if fallback_reason:
                 print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
-            ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
+            ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(requested_stage2_model, model_cache_dir)
             if not ok:
                 known_err_text = str(known_err or "").lower()
                 reason = (
                     "drumsep_model_missing"
-                    if "not found in supported model files" in known_err_text or known_err_text.startswith("catalog_")
+                    if "not found in supported model files" in known_err_text or known_err_text.startswith("catalog_") or known_err_text.startswith("unsupported_")
                     else "drumsep_model_download_failed"
                 )
-                _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", str(known_err or ""))
+                _emit_direct_dks_preflight_markers(reason, requested_model or requested_stage2_model, resolved_model or "", str(known_err or ""))
                 emit_phase("python_error")
                 if write_done:
                     write_done("ERROR")
