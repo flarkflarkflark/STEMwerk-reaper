@@ -236,7 +236,7 @@ end
 function HELPERS.getStemFilesTempTooltip()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Bewaar de gemaakte stemfiles in de tijdelijke STEMwerk-map." end
-    if lang == "de" then return "Speichert die erzeugten Stem-Dateien im temporaeren STEMwerk-Ordner." end
+    if lang == "de" then return "Speichert die erzeugten Stem-Dateien im temporären STEMwerk-Ordner." end
     return "Keep generated stem files in STEMwerk temp folders."
 end
 
@@ -257,7 +257,7 @@ end
 function HELPERS.getStemFilesCustomPathTooltip()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Vul de doelmap voor de definitieve stemfiles in." end
-    if lang == "de" then return "Zielordner fuer die finalen Stem-Dateien eingeben." end
+    if lang == "de" then return "Zielordner für die finalen Stem-Dateien eingeben." end
     return "Enter the destination folder for final stem files."
 end
 
@@ -271,21 +271,21 @@ end
 function HELPERS.getStemFilesMissingCustomWarning()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Stel eerst een eigen stemmap in, of zet Stem files terug op Temp/Project." end
-    if lang == "de" then return "Zuerst einen eigenen Stem-Ordner festlegen, oder Stem-Dateien auf Temp/Projekt zuruecksetzen." end
+    if lang == "de" then return "Zuerst einen eigenen Stem-Ordner festlegen, oder Stem-Dateien auf Temp/Projekt zurücksetzen." end
     return "Set a custom stem folder first, or switch Stem files back to Temp/Project."
 end
 
 function HELPERS.getStemFilesProjectUnavailableWarning()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Project is niet beschikbaar voor dit project. Sla het project eerst op, of gebruik Temp/Custom." end
-    if lang == "de" then return "Projekt ist fuer dieses Projekt nicht verfuegbar. Projekt zuerst speichern, oder Temp/Custom verwenden." end
+    if lang == "de" then return "Projekt ist für dieses Projekt nicht verfügbar. Projekt zuerst speichern, oder Temp/Custom verwenden." end
     return "Project is unavailable for this project. Save the project first, or use Temp/Custom."
 end
 
 function HELPERS.getNoAudibleTargetsTitle()
     local lang = HELPERS.getUiLanguageCode()
     if lang == "nl" then return "Geen hoorbare doelwitten" end
-    if lang == "de" then return "Keine hoerbaren Ziele" end
+    if lang == "de" then return "Keine hörbaren Ziele" end
     return "No audible targets"
 end
 
@@ -295,7 +295,7 @@ function HELPERS.getNoAudibleTargetsMessage()
         return "Er is wel audio binnen de huidige selectie, maar alle overeenkomende tracks/items zijn gemute of niet solo-hoorbaar.\n\nUnmute de relevante track of item, of pas de solo-status aan, en probeer opnieuw."
     end
     if lang == "de" then
-        return "Innerhalb der aktuellen Auswahl gibt es Audio, aber alle passenden Tracks/Items sind stummgeschaltet oder wegen Solo nicht hoerbar.\n\nRelevanten Track oder Item entstummen oder den Solo-Status anpassen und erneut versuchen."
+        return "Innerhalb der aktuellen Auswahl gibt es Audio, aber alle passenden Tracks/Items sind stummgeschaltet oder wegen Solo nicht hörbar.\n\nRelevanten Track oder Item entstummen oder den Solo-Status anpassen und erneut versuchen."
     end
     return "There is audio inside the current selection, but all matching tracks/items are muted or not solo-audible.\n\nUnmute the relevant track or item, or adjust solo state, then try again."
 end
@@ -306,6 +306,7 @@ function HELPERS.isNoAudibleTargetsError(err)
     if s:find("no audible targets overlap", 1, true) then return true end
     if s:find("muted or not solo%-audible") then return true end
     if s:find("geen hoorbare doelwitten", 1, true) then return true end
+    if s:find("keine hörbaren ziele", 1, true) then return true end
     if s:find("keine hoerbaren ziele", 1, true) then return true end
     return false
 end
@@ -318,7 +319,7 @@ function HELPERS.getSelectionMonitorPrompt()
             return HELPERS.getNoAudibleTargetsTitle(), "Selecteer audio of maak tracks/items hoorbaar in REAPER."
         end
         if lang == "de" then
-            return HELPERS.getNoAudibleTargetsTitle(), "Audio auswaehlen oder Tracks/Items in REAPER hoerbar machen."
+            return HELPERS.getNoAudibleTargetsTitle(), "Audio auswählen oder Tracks/Items in REAPER hörbar machen."
         end
         return HELPERS.getNoAudibleTargetsTitle(), "Select audio or make tracks/items audible in REAPER."
     end
@@ -326,7 +327,7 @@ function HELPERS.getSelectionMonitorPrompt()
         return "Start", "Selecteer audio in REAPER"
     end
     if lang == "de" then
-        return "Start", "Audio in REAPER auswaehlen"
+        return "Start", "Audio in REAPER auswählen"
     end
     return "Start", "Select audio in REAPER"
 end

@@ -11589,8 +11589,8 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
-    local presetLabelDrumKit = trSafe("workflow_drumkit_label", "Direct Drum Kit") .. " (Z)"
-    local presetLabelEdks    = trSafe("workflow_edks_label", "Drum Kit Split") .. " (X)"
+    local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"
+    local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Split") .. " (X)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
@@ -11615,7 +11615,36 @@ function renderMainColumns(ctx)
     }
     local processingBtnFontSize = _ubfs
 
-    local presetY = contentTop + S(20)
+    local footerStatusFontSize = S(9)
+    local footerStatusSubFontSize = S(8)
+    gfx.setfont(1, "Arial", footerStatusFontSize)
+    local footerStatusLineH = gfx.texth
+    gfx.setfont(1, "Arial", footerStatusSubFontSize)
+    local footerStatusSubLineH = gfx.texth
+    local footerStatusBlockH = footerStatusLineH + footerStatusSubLineH + S(6) * 2 + S(2)
+    local footerRow4Y = (ctx.h or gfx.h) - footerStatusBlockH - S(10) - btnH
+    local presetBottomLimit = footerRow4Y - S(6)
+
+    local presetPrimaryCount = is6Stem and 6 or 4
+    local presetStep = S(22)
+    local presetSectionGap = S(28)
+    local function estimatePresetBottom(startY, step, gap, count)
+        local bottom = startY + btnH
+        if count >= 2 then bottom = bottom + step end
+        if count >= 3 then bottom = bottom + step + gap end
+        if count >= 4 then bottom = bottom + step end
+        if count >= 5 then bottom = bottom + gap end
+        if count > 5 then bottom = bottom + (count - 5) * step end
+        return bottom
+    end
+    local presetButtonCount = presetPrimaryCount + 4
+    local presetStartY = contentTop + S(20)
+    if estimatePresetBottom(presetStartY, presetStep, presetSectionGap, presetButtonCount) > presetBottomLimit then
+        presetStep = btnH
+        presetSectionGap = S(24)
+    end
+
+    local presetY = presetStartY
     gfx.setfont(1, "Arial", S(13))
 
     local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
@@ -11663,15 +11692,15 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelAll, {80, 80, 90}, _pa.all) then clearDialogWorkflowSelection(); applyPresetAll() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_all"), "A", {255, 200, 100})
 
-    presetY = presetY + S(28)
+    presetY = presetY + presetSectionGap
 
     if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("tooltip_preset_drumkit", "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."),
+        trSafe("workflow_drumkit_label", "Direct Drum Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."),
         "Z", {170, 150, 240}
     )
-    presetY = presetY + S(22)
+    presetY = presetY + presetStep
 
     local disabledColor = utilityMode and {130, 130, 130} or {90, 90, 90}
     if drawToggleButton(col1X, presetY, colW, btnH, presetLabelEdks, _pa.edks == true, disabledColor, presetsBtnFontSize) then
@@ -11679,31 +11708,31 @@ function renderMainColumns(ctx)
     end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("tooltip_preset_edks", "Planned: extract drums from a full mix, then split the kit."),
+        trSafe("workflow_edks_label", "Drum Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Planned: extract drums from a full mix, then split the kit."),
         "X", {130, 130, 130}
     )
-    presetY = presetY + S(28)
+    presetY = presetY + presetSectionGap
 
     if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals) then clearDialogWorkflowSelection(); applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
-    presetY = presetY + S(22)
+    presetY = presetY + presetStep
     if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums) then clearDialogWorkflowSelection(); applyPresetDrumsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
-    presetY = presetY + S(22)
+    presetY = presetY + presetStep
     if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass) then clearDialogWorkflowSelection(); applyPresetBassOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
-    presetY = presetY + S(22)
+    presetY = presetY + presetStep
     if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other) then clearDialogWorkflowSelection(); applyPresetOtherOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
-    presetY = presetY + S(22)
+    presetY = presetY + presetStep
 
     if is6Stem then
         if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then clearDialogWorkflowSelection(); applyPresetGuitarOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
-        presetY = presetY + S(22)
+        presetY = presetY + presetStep
         if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then clearDialogWorkflowSelection(); applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
-        presetY = presetY + S(22)
+        presetY = presetY + presetStep
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)

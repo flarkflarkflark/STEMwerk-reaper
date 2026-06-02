@@ -1926,8 +1926,8 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
     progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text()
 
-    assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_label", "Direct Drum Kit") .. " (Z)"' in main_script
-    assert 'local presetLabelEdks    = trSafe("workflow_edks_label", "Drum Kit Split") .. " (X)"' in main_script
+    assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"' in main_script
+    assert 'local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Split") .. " (X)"' in main_script
     assert 'local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
     assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
@@ -1939,7 +1939,9 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'activateWorkflowStemSet(true)' in main_script
 
     assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
+    assert 'workflow_drumkit_short_label = "Direct Kit"' in langs
     assert 'workflow_edks_label = "Drum Kit Split"' in langs
+    assert 'workflow_edks_short_label = "Drum Split"' in langs
     assert 'drum_stems_label = "Drum Stems:"' in langs
     assert 'tooltip_preset_drumkit = "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
     assert 'tooltip_preset_edks = "Planned: extract drums from a full mix, then split the kit."' in langs
@@ -1947,16 +1949,16 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'tooltip_preset_edks = "Gepland: eerst drums uit een mix halen, daarna de drumkit splitsen."' in langs
     assert 'tooltip_preset_drumkit = "Teilt Drum-Material in Kick, Snare, Toms, Hi-Hat, Ride und Crash."' in langs
     assert 'tooltip_preset_edks = "Geplant: erst Drums aus einem Mix extrahieren, dann das Kit aufteilen."' in langs
-    assert 'tooltip_stem_drumkit_kick = "Kick drum / bass drum [1]"' in langs
-    assert 'tooltip_stem_drumkit_snare = "Snare drum [2]"' in langs
-    assert 'tooltip_stem_drumkit_toms = "Toms [3]"' in langs
-    assert 'tooltip_stem_drumkit_hihat = "Hi-hat [4]"' in langs
-    assert 'tooltip_stem_drumkit_ride = "Ride cymbal [5]"' in langs
-    assert 'tooltip_stem_drumkit_crash = "Crash cymbal [6]"' in langs
-    assert 'tooltip_stem_drumkit_kick = "Kickdrum / bassdrum [1]"' in langs
-    assert 'tooltip_stem_drumkit_crash = "Crash-bekken [6]"' in langs
-    assert 'tooltip_stem_drumkit_kick = "Kickdrum / Bassdrum [1]"' in langs
-    assert 'tooltip_stem_drumkit_crash = "Crash-Becken [6]"' in langs
+    assert 'tooltip_stem_drumkit_kick = "Kick drum / bass drum"' in langs
+    assert 'tooltip_stem_drumkit_snare = "Snare drum"' in langs
+    assert 'tooltip_stem_drumkit_toms = "Toms"' in langs
+    assert 'tooltip_stem_drumkit_hihat = "Hi-hat"' in langs
+    assert 'tooltip_stem_drumkit_ride = "Ride cymbal"' in langs
+    assert 'tooltip_stem_drumkit_crash = "Crash cymbal"' in langs
+    assert 'tooltip_stem_drumkit_kick = "Kickdrum / bassdrum"' in langs
+    assert 'tooltip_stem_drumkit_crash = "Crash-bekken"' in langs
+    assert 'tooltip_stem_drumkit_kick = "Kickdrum / Bassdrum"' in langs
+    assert 'tooltip_stem_drumkit_crash = "Crash-Becken"' in langs
     assert 'drum_stems_label = "Drumstems:"' in langs
     assert 'drum_stems_label = "Drum-Stems:"' in langs
     assert 'model_label_expanded = "Expanded"' in langs
@@ -1997,11 +1999,15 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'and stem.name' in main_script
     assert 'local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
     assert 'and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")' in main_script
+    assert 'trSafe("workflow_drumkit_label", "Direct Drum Kit") .. "\\n" .. trSafe("tooltip_preset_drumkit", "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.")' in main_script
+    assert 'trSafe("workflow_edks_label", "Drum Kit Split") .. "\\n" .. trSafe("tooltip_preset_edks", "Planned: extract drums from a full mix, then split the kit.")' in main_script
     assert 'if model.id == "htdemucs"' in main_script
     assert 'modelDisplayName = trSafe("model_label_expanded", "Expanded")' in main_script
     assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT and model.id == "htdemucs_6s" then' in main_script
     assert 'descKey = "model_expanded_drumkit_desc"' in main_script
     assert "return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, rawColor, presetsBtnFontSize)" in main_script
+    assert "local presetBottomLimit = footerRow4Y - S(6)" in main_script
+    assert "if estimatePresetBottom(presetStartY, presetStep, presetSectionGap, presetButtonCount) > presetBottomLimit then" in main_script
     assert "_pa.all = false" in main_script
     assert "_pa.vocals = false" in main_script
     assert "_pa.edks    = workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT" in main_script
@@ -2034,6 +2040,53 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))' in script
     assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")' in script
     assert 'textStr = textStr:gsub("%s*%[" .. shortcutEsc .. "%]%s*$", "")' in script
+
+
+def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations():
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+    helpers = Path("scripts/reaper/_internal/STEMwerk_Helpers.lua").read_text()
+    combined = langs + "\n" + helpers
+
+    forbidden = [
+        "fuer",
+        "waehlen",
+        "auswaehlen",
+        "enthaelt",
+        "Geraet",
+        "Qualitaet",
+        "Loeschen",
+        "loeschen",
+        "Schliessen",
+        "schliessen",
+        "Zurueck",
+        "Ausgewaehlt",
+    ]
+    for token in forbidden:
+        assert token not in combined
+
+    assert "Zielordner für die finalen Stem-Dateien eingeben." in helpers
+    assert "Audio auswählen oder Tracks/Items in REAPER hörbar machen." in helpers
+    assert '"device = "Gerät:"' in langs
+    assert '"selected = "Ausgewählt:"' in langs
+    assert '"tooltip_close = "STEMwerk schließen (ESC)"' in langs
+
+
+def test_direct_drumkit_tooltips_use_single_shortcut_and_route_scoped_expanded_copy():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+
+    assert "[1] [1]" not in langs
+    assert 'tooltip_stem_drumkit_kick = "Kickdrum / Bassdrum"' in langs
+    assert 'tooltip_stem_drumkit_snare = "Snaredrum"' in langs
+    assert 'textStr = textStr:gsub("%s*%[" .. shortcutEsc .. "%]%s*$", "")' in main_script
+    assert 'model_6stem_desc = "htdemucs_6s - Adds Guitar & Piano separation"' in langs
+    assert 'model_6stem_desc = "htdemucs_6s - Voegt Gitaar & Piano separatie toe"' in langs
+    assert 'model_6stem_desc = "htdemucs_6s - Fügt Gitarre & Klavier Trennung hinzu"' in langs
+    assert 'model_expanded_drumkit_desc = "Expanded DrumSep model for more detailed drum-kit splitting."' in langs
+    assert 'model_expanded_drumkit_desc = "Uitgebreid DrumSep-model voor gedetailleerdere drumkit-splitsing."' in langs
+    assert 'model_expanded_drumkit_desc = "Erweitertes DrumSep-Modell für detailliertere Drumkit-Trennung."' in langs
+    assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT and model.id == "htdemucs_6s" then' in main_script
+    assert 'descKey = "model_expanded_drumkit_desc"' in main_script
 
 
 def test_drumkit_workflow_state_persists_and_restores_on_reopen():
