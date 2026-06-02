@@ -1097,6 +1097,38 @@ local function activateWorkflowStemSet(isDirectDKS)
     end
 end
 
+local function normalizeStemPathKey(name)
+    local key = tostring(name or ""):lower()
+    if key == "hihat" or key == "hh" then
+        return "hi-hat"
+    end
+    return key
+end
+
+local function normalizeStemPathMap(stemPaths)
+    local normalized = {}
+    for key, path in pairs(stemPaths or {}) do
+        normalized[normalizeStemPathKey(key)] = path
+    end
+    return normalized
+end
+
+local function stemPathMapLooksLikeDrumKit(stemPaths)
+    local normalized = normalizeStemPathMap(stemPaths)
+    return normalized["kick"] and normalized["snare"] and normalized["toms"]
+        and normalized["hi-hat"] and normalized["ride"] and normalized["crash"]
+end
+
+local function resolveStemSetForPaths(stemPaths)
+    if stemPathMapLooksLikeDrumKit(stemPaths) then
+        return DRUMKIT_STEMS, true
+    end
+    if isDrumKitWorkflowActive() then
+        return DRUMKIT_STEMS, true
+    end
+    return STANDARD_STEMS, false
+end
+
 -- Available processing devices
 DEVICES = {
     { id = "auto", name = "Auto", desc = "Automatically select best GPU" },
@@ -9003,7 +9035,13 @@ function buildResultMessageLines()
                 and trPlural(stemsCreated, "drumkit_result_track_one", "drumkit_result_track_many", "drum track", "drum tracks")
                 or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
             if data.sourceKind == "time_selection" then
-                line1 = string.format(T("result_time_selection_created") or "%d stem %s created from time selection.", stemsCreated, stemWord)
+                line1 = drumKitCopy
+                    and string.format(
+                        T("drumkit_result_time_selection_created") or "%d %s created from time selection.",
+                        stemsCreated,
+                        stemWord
+                    )
+                    or string.format(T("result_time_selection_created") or "%d stem %s created from time selection.", stemsCreated, stemWord)
             else
                 local srcWord = drumKitCopy
                     and trPlural(sourceCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many", "source item", "source items")
@@ -9016,7 +9054,9 @@ function buildResultMessageLines()
                 local trackWord = drumKitCopyActive
                     and trPlural(count, "footer_drum_track", "footer_drum_tracks", "drum track", "drum tracks")
                     or trPlural(count, "footer_track", "footer_tracks", "track", "tracks")
-                line1 = string.format(T(data.mainKey) or "%d stem %s created.", count, trackWord)
+                line1 = drumKitCopyActive
+                    and string.format(T("drumkit_result_created_generic") or "%d %s created.", count, trackWord)
+                    or string.format(T(data.mainKey) or "%d stem %s created.", count, trackWord)
             elseif drumKitCopyActive and data.mainKey == "result_stems_added_takes_hint" then
                 local partWord = trPlural((data.count or 0), "footer_drum_track", "footer_drum_tracks", "drum part", "drum parts")
                 line1 = string.format(
@@ -11137,16 +11177,19 @@ buildFooterLines = function()
         end
     end
 
-    local stemsPerTrack = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then stemsPerTrack = stemsPerTrack + 1 end
-    end
-
     local outLine
     local locLine
-    local directMode = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
+    local workflowModeFooter = tostring(SETTINGS.workflowMode or "")
+    local workflowSourceFooter = tostring(dialogWorkflowSource or SETTINGS.workflowSource or "")
+    local drumKitFooterMode = workflowModeFooter == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+        and DKS_WORKFLOW.isDrumKitSource(workflowSourceFooter)
+    local footerStemSet = drumKitFooterMode and DRUMKIT_STEMS or STEMS
+    local stemsPerTrack = 0
+    for _, stem in ipairs(footerStemSet) do
+        if stem.selected and (not stem.sixStemOnly or is6Stem) then stemsPerTrack = stemsPerTrack + 1 end
+    end
     local function stemUnit(n)
-        if directMode then
+        if drumKitFooterMode then
             if (n or 0) == 1 then return trSafe("footer_drum_track", "drum track") end
             return trSafe("footer_drum_tracks", "drum tracks")
         end
@@ -11154,16 +11197,16 @@ buildFooterLines = function()
         return trSafe("stems", "stems")
     end
     local function stemTrackUnit(n)
-        if directMode then
+        if drumKitFooterMode then
             if (n or 0) == 1 then return trSafe("footer_drum_track", "drum track") end
             return trSafe("footer_drum_tracks", "drum tracks")
         end
         return trSingularPlural(n, "footer_stem_track", "footer_stem_tracks")
     end
     local function stemFolderUnit(n)
-        if directMode then
-            if (n or 0) == 1 then return trSafe("footer_drum_stem_folder", "drum-stem folder") end
-            return trSafe("footer_drum_stem_folders", "drum-stem folders")
+        if drumKitFooterMode then
+            if (n or 0) == 1 then return trSafe("footer_drum_stem_folder", "drum folder") end
+            return trSafe("footer_drum_stem_folders", "drum folders")
         end
         return trSingularPlural(n, "footer_stem_folder", "footer_stem_folders")
     end
@@ -11247,7 +11290,7 @@ buildFooterLines = function()
         end
 
         local selectedNames = {}
-        for _, stem in ipairs(STEMS) do
+        for _, stem in ipairs(footerStemSet) do
             if stem.selected and (not stem.sixStemOnly or is6Stem) then
                 table.insert(selectedNames, T(stem.name:lower()))
             end
@@ -11257,15 +11300,15 @@ buildFooterLines = function()
         if SETTINGS.createNewTracks then
             local baseLoc
             if summary.targetIsItem and effectiveTargets > 1 then
-                baseLoc = directMode
-                    and trSafe("footer_per_item_drum_folders", "Per-item drum-stem folders")
+                baseLoc = drumKitFooterMode
+                    and trSafe("footer_per_item_drum_folders", "Per-item drum folders")
                     or trSafe("footer_per_item_folders", "Per-item stem folders")
             else
                 baseLoc = effectiveTargets > 1
-                    and (directMode and trSafe("footer_per_track_drum_folders", "Per-track drum-stem folders") or trSafe("footer_per_track_folders", "Per-track stem folders"))
-                    or (directMode and trSafe("footer_location_new_drum_folder", "New folder with drum tracks") or trSafe("footer_location_new_folder", "New folder"))
+                    and (drumKitFooterMode and trSafe("footer_per_track_drum_folders", "Per-track drum folders") or trSafe("footer_per_track_folders", "Per-track stem folders"))
+                    or (drumKitFooterMode and trSafe("footer_location_new_drum_folder", "New folder with drum tracks") or trSafe("footer_location_new_folder", "New folder"))
             end
-            if directMode then
+            if drumKitFooterMode then
                 locLine = trFmt("footer_line_location_simple", "Location: %s", baseLoc)
             else
                 locLine = trFmt(
@@ -11277,7 +11320,7 @@ buildFooterLines = function()
                 )
             end
         elseif SETTINGS.outputMode == "in-place" or not SETTINGS.createNewTracks then
-            if directMode then
+            if drumKitFooterMode then
                 locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))
             else
                 locLine = trFmt(
@@ -15215,7 +15258,7 @@ explodeTakesFromItem = function(item, mode, skipUndo, nameBase)
 end
 
 -- Create new tracks for each selected stem
-function createStemTracks(item, stemPaths, itemPos, itemLen)
+function createStemTracks(item, stemPaths, itemPos, itemLen, options)
     local track = reaper.GetMediaItem_Track(item)
     local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
     local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
@@ -15239,15 +15282,21 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
         end
     end
     local sourcePlaybackState = GLUE_HELPERS.snapshotTakePlaybackState(take)
+    local normalizedStemPaths = normalizeStemPathMap(stemPaths)
+    local stemSet, drumKitOutput = resolveStemSetForPaths(normalizedStemPaths)
+    if type(options) == "table" and options.stemSet then
+        stemSet = options.stemSet
+        drumKitOutput = stemSet == DRUMKIT_STEMS
+    end
 
     reaper.Undo_BeginBlock()
 
     local selectedCount = 0
-    for _, stem in ipairs(STEMS) do
-        if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end
+    for _, stem in ipairs(stemSet) do
+        if stem.selected and normalizedStemPaths[normalizeStemPathKey(stem.name)] then selectedCount = selectedCount + 1 end
     end
 
-    local folderKind = isDrumKitWorkflowActive() and activeDrumKitFolderSuffix() or "Stems"
+    local folderKind = drumKitOutput and activeDrumKitFolderSuffix() or "Stems"
     local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
     local importedItems = {}
     local importedPaths = {}
@@ -15264,9 +15313,9 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
     end
 
     local importedCount = 0
-    for _, stem in ipairs(STEMS) do
+    for _, stem in ipairs(stemSet) do
         if stem.selected then
-            local stemPath = stemPaths[stem.name:lower()]
+            local stemPath = normalizedStemPaths[normalizeStemPathKey(stem.name)]
             if stemPath then
                 reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
                 local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
@@ -15580,10 +15629,17 @@ end
 function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, itemsOverride, useItemNameForTrack, preferredInsertIndex, options)
     reaper.Undo_BeginBlock()
     lastNoAudibleOverlap = false
+    local normalizedStemPaths = normalizeStemPathMap(stemPaths)
+    local stemSet, drumKitOutput = resolveStemSetForPaths(normalizedStemPaths)
+    if type(options) == "table" and options.stemSet then
+        stemSet = options.stemSet
+        drumKitOutput = stemSet == DRUMKIT_STEMS
+    end
     local importedItems = {}
     local importedPaths = {}
     local shouldReturnTrackTargets = type(options) == "table" and options.returnTrackTargets == true
     local createdTrackTargets = shouldReturnTrackTargets and { contexts = {} } or nil
+    local isExtractDrumKitImport = drumKitOutput and tostring(progressState.workflowSource or "") == DKS_WORKFLOW.SOURCE_EXTRACT
     local soloActive = getProcessingSoloActive()
     local function trackAudible(track)
         return AUDIBILITY.isTrackAudible(track, soloActive)
@@ -15806,7 +15862,12 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         local insertedTrackCount = 0
 
         local selectedCount = 0
-        for _, stem in ipairs(STEMS) do if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end end
+        for _, stem in ipairs(stemSet) do
+            if stem.selected and normalizedStemPaths[normalizeStemPathKey(stem.name)] then selectedCount = selectedCount + 1 end
+        end
+        if isExtractDrumKitImport then
+            SW_LOG.logExecResult("lua_dks_extract_import_candidate_count=" .. tostring(selectedCount), nil, "")
+        end
 
         local folderTrack = nil
         local stemTrackTargets = {}
@@ -15833,7 +15894,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 folderTrack = reaper.GetTrack(0, trackIdx)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
-                local folderLabel = isDrumKitWorkflowActive() and activeDrumKitFolderSuffix() or "Stems"
+                local folderLabel = drumKitOutput and activeDrumKitFolderSuffix() or "Stems"
                 reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - " .. folderLabel, true)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderDepth(plannedTargets)) then
@@ -15849,9 +15910,21 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
         end
 
         local importedCount = 0
-        for _, stem in ipairs(STEMS) do
+        local selectedImportCount = 0
+        for _, stem in ipairs(stemSet) do
             if stem.selected then
-                local stemPath = stemPaths[stem.name:lower()]
+                selectedImportCount = selectedImportCount + 1
+                local stemKey = normalizeStemPathKey(stem.name)
+                local stemPath = normalizedStemPaths[stemKey]
+                if isExtractDrumKitImport then
+                    SW_LOG.logExecResult(
+                        "import_stem_key=" .. tostring(stemKey)
+                            .. " path_exists=" .. tostring(stemPath ~= nil and stemPath ~= "")
+                            .. " imported=" .. tostring(stemPath ~= nil and stemPath ~= ""),
+                        nil,
+                        ""
+                    )
+                end
                 if stemPath then
                     local plannedStemTrack = getPlannedStemTrack(plannedTargets, stem)
                     local newTrack = nil
@@ -15885,6 +15958,10 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     importedCount = importedCount + 1
                 end
             end
+        end
+        if isExtractDrumKitImport then
+            SW_LOG.logExecResult("lua_dks_extract_import_selected_count=" .. tostring(selectedImportCount), nil, "")
+            SW_LOG.logExecResult("lua_dks_extract_import_created=" .. tostring(importedCount), nil, "")
         end
 
         if folderTrack and importedCount > 0 and not shouldKeepPlannedFolderDepth(plannedTargets) then
@@ -15946,7 +16023,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 end
             end
         end
-        local folderKind = isDrumKitWorkflowActive() and activeDrumKitFolderSuffix() or "Stems"
+        local folderKind = drumKitOutput and activeDrumKitFolderSuffix() or "Stems"
         local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
 
         local trackIdx = getInsertIndexForTrack(track)
@@ -15987,11 +16064,28 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
 
         local createdForThisItem = 0
         local selectedCount = 0
-        for _, s in ipairs(STEMS) do if s.selected and stemPaths[s.name:lower()] then selectedCount = selectedCount + 1 end end
+        for _, s in ipairs(stemSet) do
+            if s.selected and normalizedStemPaths[normalizeStemPathKey(s.name)] then selectedCount = selectedCount + 1 end
+        end
+        if isExtractDrumKitImport then
+            SW_LOG.logExecResult("lua_dks_extract_import_candidate_count=" .. tostring(selectedCount), nil, "")
+        end
 
-        for _, stem in ipairs(STEMS) do
+        local selectedImportCount = 0
+        for _, stem in ipairs(stemSet) do
             if stem.selected then
-                local stemPath = stemPaths[stem.name:lower()]
+                selectedImportCount = selectedImportCount + 1
+                local stemKey = normalizeStemPathKey(stem.name)
+                local stemPath = normalizedStemPaths[stemKey]
+                if isExtractDrumKitImport then
+                    SW_LOG.logExecResult(
+                        "import_stem_key=" .. tostring(stemKey)
+                            .. " path_exists=" .. tostring(stemPath ~= nil and stemPath ~= "")
+                            .. " imported=" .. tostring(stemPath ~= nil and stemPath ~= ""),
+                        nil,
+                        ""
+                    )
+                end
                 if stemPath then
                     local plannedStemTrack = getPlannedStemTrack(plannedTargets, stem)
                     local newTrack = nil
@@ -16028,6 +16122,10 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                     totalCreated = totalCreated + 1
                 end
             end
+        end
+        if isExtractDrumKitImport then
+            SW_LOG.logExecResult("lua_dks_extract_import_selected_count=" .. tostring(selectedImportCount), nil, "")
+            SW_LOG.logExecResult("lua_dks_extract_import_created=" .. tostring(createdForThisItem), nil, "")
         end
 
         if folderTrack and createdForThisItem > 0 and not shouldKeepPlannedFolderDepth(plannedTargets) then
@@ -16070,6 +16168,7 @@ function processStemsResult(stems)
         sourceItemName = sourceItemName or "Selection"
     end
     stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
+    local stemSet, drumKitOutput = resolveStemSetForPaths(stems)
 
     writeTimingEvent(WORKFLOW_TEMP_DIR, "import_start", "single", {
         mode = SETTINGS.createNewTracks and "new_tracks" or "in_place",
@@ -16085,7 +16184,9 @@ function processStemsResult(stems)
             local itemsOverride = timeSelectionResolvedItems
             -- Create stems first so the selection-based cleanup doesn't disturb placement
             SW_LOG.logExecResult("timing:import_start mode=new_tracks single=time_selection", nil, "")
-            count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
+            count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false, nil, {
+                stemSet = stemSet,
+            })
             SW_LOG.logExecResult("timing:import_end mode=new_tracks single=time_selection created=" .. tostring(count), nil, "")
             if lastNoAudibleOverlap and count == 0 then
                 showMessage(HELPERS.getNoAudibleTargetsTitle(), noAudibleOverlapMsg, "info", true)
@@ -16150,13 +16251,15 @@ function processStemsResult(stems)
                 local itemWord = itemCount == 1 and "item" or "items"
                 actionMsg = "\nSelection deleted from " .. itemCount .. " " .. itemWord .. "."
             end
-            local trackWord = count == 1 and "track" or "tracks"
+            local trackWord = drumKitOutput
+                and ((count == 1) and "drumtrack" or "drumtracks")
+                or ((count == 1) and "track" or "tracks")
             -- In multi-track mode, show which track we're on
             local trackInfo = ""
             if multiTrackQueue.active then
                 trackInfo = " [Track " .. multiTrackQueue.currentIndex .. "/" .. multiTrackQueue.totalTracks .. ": " .. (multiTrackQueue.currentTrackName or "?") .. "]"
             end
-            resultMsg = count .. " stem " .. trackWord .. " created from time selection." .. actionMsg .. trackInfo
+            resultMsg = count .. " " .. trackWord .. " created from time selection." .. actionMsg .. trackInfo
             resultData = {
                 kind = "single",
                 mainKey = "result_time_selection_created",
@@ -16164,6 +16267,7 @@ function processStemsResult(stems)
                 stemsCreated = count,
                 sourceCount = 1,
                 sourceKind = "time_selection",
+                drumKitCopy = drumKitOutput,
             }
         else
             -- In-place mode: replace only the selected portion of the item
@@ -16204,14 +16308,18 @@ function processStemsResult(stems)
                 local sourceTrack = multiTrackQueue.active and multiTrackQueue.currentSourceTrack or nil
                 local itemsOverride = timeSelectionResolvedItems
                 SW_LOG.logExecResult("timing:import_start mode=new_tracks single=time_selection_fallback", nil, "")
-                count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false)
+                count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack, itemsOverride, false, nil, {
+                    stemSet = stemSet,
+                })
                 SW_LOG.logExecResult("timing:import_end mode=new_tracks single=time_selection_fallback created=" .. tostring(count), nil, "")
                 if lastNoAudibleOverlap and count == 0 then
                     showMessage(HELPERS.getNoAudibleTargetsTitle(), noAudibleOverlapMsg, "info", true)
                     return
                 end
-                local trackWord = count == 1 and "track" or "tracks"
-                resultMsg = count .. " stem " .. trackWord .. " created from time selection."
+                local trackWord = drumKitOutput
+                    and ((count == 1) and "drumtrack" or "drumtracks")
+                    or ((count == 1) and "track" or "tracks")
+                resultMsg = count .. " " .. trackWord .. " created from time selection."
                 resultData = {
                     kind = "single",
                     mainKey = "result_time_selection_created",
@@ -16219,12 +16327,13 @@ function processStemsResult(stems)
                     stemsCreated = count,
                     sourceCount = 1,
                     sourceKind = "time_selection",
+                    drumKitCopy = drumKitOutput,
                 }
             end
         end
     elseif SETTINGS.createNewTracks then
         SW_LOG.logExecResult("timing:import_start mode=new_tracks single=items", nil, "")
-        count = createStemTracks(selectedItem, stems, itemPos, itemLen)
+        count = createStemTracks(selectedItem, stems, itemPos, itemLen, { stemSet = stemSet })
         SW_LOG.logExecResult("timing:import_end mode=new_tracks single=items created=" .. tostring(count), nil, "")
         local actionKey = SETTINGS.deleteOriginalTrack and "result_track_deleted" or
                           (SETTINGS.muteOriginalTrack and "result_track_muted" or
@@ -16232,8 +16341,10 @@ function processStemsResult(stems)
                           (SETTINGS.deleteSelection and "result_selection_deleted" or
                           (SETTINGS.muteOriginal and "result_item_muted" or
                           (SETTINGS.muteSelection and "result_selection_muted" or nil)))))
-        local trackWord = count == 1 and "track" or "tracks"
-        resultMsg = count .. " stem " .. trackWord .. " created."
+        local trackWord = drumKitOutput
+            and ((count == 1) and "drumtrack" or "drumtracks")
+            or ((count == 1) and "track" or "tracks")
+        resultMsg = count .. " " .. trackWord .. " created."
         if actionKey then resultMsg = resultMsg .. "\n" .. (T(actionKey) or "") end
         resultData = {
             kind = "single",
@@ -16243,6 +16354,7 @@ function processStemsResult(stems)
             stemsCreated = count,
             sourceCount = 1,
             sourceKind = "items",
+            drumKitCopy = drumKitOutput,
         }
     else
         -- Check if we processed a sub-selection of the item
@@ -16291,9 +16403,10 @@ function processStemsResult(stems)
     local selectedNames = {}
     local selectedStemData = {}
     local is6Stem = isEffectiveRun6Stem()
-    for _, stem in ipairs(STEMS) do
+    local normalizedStems = normalizeStemPathMap(stems)
+    for _, stem in ipairs(stemSet) do
         -- Only include stems that were actually processed (respect sixStemOnly flag)
-        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+        if stem.selected and (not stem.sixStemOnly or is6Stem) and normalizedStems[normalizeStemPathKey(stem.name)] then
             selectedNames[#selectedNames + 1] = stem.name
             selectedStemData[#selectedStemData + 1] = stem
         end
@@ -16318,6 +16431,7 @@ function processStemsResult(stems)
         local requestedParallel = effectiveRunRequestedParallel()
         resultData.sequentialMode = requestedParallel and false or true
         resultData.requestedParallel = requestedParallel and true or false
+        resultData.drumKitCopy = drumKitOutput or resultData.drumKitCopy
     end
 
     reaper.UpdateArrange()

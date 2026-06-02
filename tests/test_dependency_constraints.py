@@ -1561,6 +1561,7 @@ def test_drumsep_runtime_verify_and_helper_use_clean_subprocess_env():
 
 def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers():
     workflow = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
+    main = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
     assert "local function collectStemPathsFromStdoutJson(stdoutFile)" in workflow
     assert 'if key == "hihat" or key == "hihat" or key == "hh" then' in workflow
@@ -1574,6 +1575,10 @@ def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers
     assert 'SW_LOG.logExecResult("lua_dks_extract_outputs_detected=yes", nil, "lua_dks_extract_output_count=" .. tostring(outputCount))' in workflow
     assert 'SW_LOG.logExecResult("lua_dks_extract_import_start", nil, "")' in workflow
     assert 'SW_LOG.logExecResult("lua_dks_extract_import_end", nil, "")' in workflow
+    assert 'SW_LOG.logExecResult("lua_dks_extract_import_candidate_count=" .. tostring(selectedCount), nil, "")' in main
+    assert 'SW_LOG.logExecResult("lua_dks_extract_import_selected_count=" .. tostring(selectedImportCount), nil, "")' in main
+    assert 'SW_LOG.logExecResult("lua_dks_extract_import_created=" .. tostring(importedCount), nil, "")' in main
+    assert '"import_stem_key=" .. tostring(stemKey)' in main
 
 
 def test_support_bundle_excludes_dev_matrix_temp_dirs_and_reports_temp_log_budget():
@@ -2083,9 +2088,18 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'footer_drum_tracks = "drum tracks"' in langs
     assert 'footer_drum_tracks = "drumtracks"' in langs
     assert 'footer_drum_tracks = "Drum-Spuren"' in langs
+    assert 'footer_drum_stem_folder = "drum folder"' in langs
+    assert 'footer_drum_stem_folder = "drum-map"' in langs
+    assert 'footer_drum_stem_folder = "Drum-Ordner"' in langs
     assert 'direct_drum_kit_folder_suffix = "Direct Drum Kit"' in langs
     assert 'drum_kit_split_folder_suffix = "Drum Kit Split"' in langs
     assert 'edks_complete_title = "Drum Kit Split completed successfully!"' in langs
+    assert 'drumkit_result_time_selection_created = "%d %s created from time selection."' in langs
+    assert 'drumkit_result_time_selection_created = "%d %s aangemaakt uit tijdselectie."' in langs
+    assert 'drumkit_result_time_selection_created = "%d %s aus Zeitauswahl erstellt."' in langs
+    assert 'drumkit_result_created_generic = "%d %s created."' in langs
+    assert 'drumkit_result_created_generic = "%d %s aangemaakt."' in langs
+    assert 'drumkit_result_created_generic = "%d %s erstellt."' in langs
     assert 'model_label_quality = "Qualität"' in langs
     assert 'local displayName = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and stem.name' in main_script
@@ -2140,7 +2154,11 @@ def test_single_track_workflow_uses_run_snapshot_device_and_resets_progress_devi
 
 def test_drumkit_ui_strings_use_safe_translation_resolution():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
     assert "function trSafeValue(key, fallback)" in script
+    assert "local function normalizeStemPathMap(stemPaths)" in script
+    assert "local function resolveStemSetForPaths(stemPaths)" in script
+    assert 'if stemPathMapLooksLikeDrumKit(stemPaths) then' in script
     assert 'function activeDrumKitWorkflowTitle()' in script
     assert 'return trSafeValue("workflow_edks_label", "Drum Kit Split")' in script
     assert 'return trSafeValue("workflow_drumkit_label", "Direct Drum Kit")' in script
@@ -2149,10 +2167,15 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'function activeDrumKitCompleteTitle()' in script
     assert 'return trSafeValue("edks_complete_title", "Drum Kit Split completed successfully!")' in script
     assert 'return trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")' in script
+    assert 'T("drumkit_result_time_selection_created") or "%d %s created from time selection."' in script
+    assert 'T("drumkit_result_created_generic") or "%d %s created."' in script
+    assert 'local drumKitFooterMode = workflowModeFooter == DKS_WORKFLOW.WORKFLOW_DRUMKIT' in script
+    assert 'local footerStemSet = drumKitFooterMode and DRUMKIT_STEMS or STEMS' in script
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", baseLoc)' in script
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))' in script
     assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")' in script
     assert 'textStr = textStr:gsub("%s*%[" .. shortcutEsc .. "%]%s*$", "")' in script
+    assert 'footer_drum_stem_folder = "drum-map"' in langs
 
 
 def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations():
