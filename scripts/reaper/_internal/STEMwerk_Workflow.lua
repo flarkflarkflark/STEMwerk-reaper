@@ -72,7 +72,7 @@ local function collectStemPathsFromStdoutJson(stdoutFile)
     local lastJsonLine = nil
     for line in tostring(text):gmatch("[^\r\n]+") do
         local trimmed = tostring(line or ""):match("^%s*(.-)%s*$") or ""
-        if trimmed:sub(1, 1) == "{" and trimmed:sub(-1) == "}" and trimmed:find('":"', 1, true) then
+        if trimmed:sub(1, 1) == "{" and trimmed:sub(-1) == "}" and trimmed:find('"%s*:%s*"', 1) then
             lastJsonLine = trimmed
         end
     end
@@ -920,21 +920,38 @@ function WORKFLOW.finishSeparationCallback()
     debugLog("[LOG] finishSeparationCallback: stdoutFile=" .. tostring(C.progressState.stdoutFile) .. ", separationLogFile=" .. tostring(C.progressState.logFile) .. ", outputDir=" .. tostring(C.progressState.outputDir))
     local function checkFiles()
         checkCount = checkCount + 1
+        debugLog("lua_result_probe_start")
+        append_diag_log("lua_result_probe_start")
+        debugLog("lua_result_probe_workflow_source=" .. tostring(C.progressState.workflowSource or ""))
+        append_diag_log("lua_result_probe_workflow_source=" .. tostring(C.progressState.workflowSource or ""))
         local stems = {}
+        local topLevelCount = 0
         for _, stem in ipairs(STEMS) do
             if stem.selected then
                 local stemPath = C.progressState.outputDir .. PATH_SEP .. stem.file
                 local f = io.open(stemPath, "r")
-                if f then f:close(); stems[stem.name:lower()] = stemPath end
+                if f then
+                    f:close()
+                    stems[stem.name:lower()] = stemPath
+                    topLevelCount = topLevelCount + 1
+                end
             end
         end
+        debugLog("lua_result_probe_top_level_count=" .. tostring(topLevelCount))
+        append_diag_log("lua_result_probe_top_level_count=" .. tostring(topLevelCount))
 
         if next(stems) == nil then
+            debugLog("lua_result_probe_stdout_json_attempt=yes")
+            append_diag_log("lua_result_probe_stdout_json_attempt=yes")
             local stdoutStems = collectStemPathsFromStdoutJson(C.progressState.stdoutFile)
             if next(stdoutStems) then
                 stems = stdoutStems
                 local outputCount = 0
                 for _ in pairs(stems) do outputCount = outputCount + 1 end
+                debugLog("lua_result_probe_stdout_json_ok=yes")
+                append_diag_log("lua_result_probe_stdout_json_ok=yes")
+                debugLog("lua_result_probe_stdout_json_count=" .. tostring(outputCount))
+                append_diag_log("lua_result_probe_stdout_json_count=" .. tostring(outputCount))
                 if tostring(C.progressState.workflowSource or "") == "dks_extract" then
                     debugLog("lua_dks_extract_outputs_detected=yes")
                     debugLog("lua_dks_extract_output_count=" .. tostring(outputCount))
@@ -942,7 +959,15 @@ function WORKFLOW.finishSeparationCallback()
                     append_diag_log("lua_dks_extract_output_count=" .. tostring(outputCount))
                     SW_LOG.logExecResult("lua_dks_extract_outputs_detected=yes", nil, "lua_dks_extract_output_count=" .. tostring(outputCount))
                 end
+            else
+                debugLog("lua_result_probe_stdout_json_ok=no")
+                append_diag_log("lua_result_probe_stdout_json_ok=no")
+                debugLog("lua_no_stems_reason=stdout_json_missing_or_invalid")
+                append_diag_log("lua_no_stems_reason=stdout_json_missing_or_invalid")
             end
+        else
+            debugLog("lua_result_probe_stdout_json_attempt=no")
+            append_diag_log("lua_result_probe_stdout_json_attempt=no")
         end
 
         if next(stems) then
@@ -972,6 +997,9 @@ function WORKFLOW.finishSeparationCallback()
             reaper.defer(checkFiles)
         else
             -- Failed
+            debugLog("lua_dks_extract_outputs_detected=no")
+            append_diag_log("lua_dks_extract_outputs_detected=no")
+            SW_LOG.logExecResult("lua_dks_extract_outputs_detected=no", nil, "")
             persistWithExitCodeRetry(function()
                 isProcessingActive = false  -- Reset guard so workflow can be restarted
                 local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
@@ -989,6 +1017,8 @@ function WORKFLOW.finishSeparationCallback()
                     )
                 end
                 if not errMsg then
+                    debugLog("lua_no_stems_reason=no_detected_outputs_after_retries")
+                    append_diag_log("lua_no_stems_reason=no_detected_outputs_after_retries")
                     errMsg = "No stems created"
                         .. "\n\nExit code: " .. tostring(exitCode or "unknown")
                         .. "\nCommand: " .. tostring(C.progressState.lastCmd or "unknown")

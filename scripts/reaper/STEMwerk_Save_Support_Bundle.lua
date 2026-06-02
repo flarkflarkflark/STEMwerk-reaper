@@ -1408,7 +1408,10 @@ local function collectLatestDksMarkers(cacheLogDir)
         "dks_extract_stage1_fallback_reason", "dks_extract_stage1_output", "dks_extract_stage2_runtime",
         "dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_intermediate_dir",
         "dks_extract_stage2_dir", "lua_dks_extract_outputs_detected", "lua_dks_extract_output_count",
-        "lua_dks_extract_import_start", "lua_dks_extract_import_end", "separate_start", "separate_end",
+        "lua_dks_extract_import_start", "lua_dks_extract_import_end", "lua_result_probe_start",
+        "lua_result_probe_workflow_source", "lua_result_probe_top_level_count", "lua_result_probe_stdout_json_attempt",
+        "lua_result_probe_stdout_json_ok", "lua_result_probe_stdout_json_count", "lua_no_stems_reason",
+        "separate_start", "separate_end",
         "stem_write_start", "stem_write_end", "python_done", "drumsep_helper_start",
         "drumsep_helper_ok", "drumsep_helper_stdout", "drumsep_helper_stderr",
     })
@@ -3330,7 +3333,9 @@ local function performBundleCollection()
     phaseDone("collect_recent_runs", recentRunsStartedAt)
     appendLine(diagnostics, "")
 
+    local drumsepDiagnosticsStartedAt = phaseStart("collect_drumsep_runtime")
     local drumsepDiagnostics = buildDrumsepRuntimeDiagnostics(runtimePaths.base, runtimePaths.runtimeState, runtimePaths.runtimeLogs, cacheLogDir)
+    phaseDone("collect_drumsep_runtime", drumsepDiagnosticsStartedAt)
     writeFile(joinPath(bundleDir, "drumsep_runtime_status.txt"), table.concat(drumsepDiagnostics, "\n"), "wb")
     copiedFiles[#copiedFiles + 1] = "drumsep_runtime_status.txt"
     appendLine(diagnostics, "DrumSep Runtime Diagnostics")
@@ -3463,6 +3468,7 @@ local function performBundleCollection()
     appendKey(diagnostics, "collect_state", string.format("%.3f", phaseTimings.collect_state or 0))
     appendKey(diagnostics, "collect_runtime_logs", string.format("%.3f", phaseTimings.collect_runtime_logs or 0))
     appendKey(diagnostics, "collect_recent_runs", string.format("%.3f", phaseTimings.collect_recent_runs or 0))
+    appendKey(diagnostics, "collect_drumsep_runtime", string.format("%.3f", phaseTimings.collect_drumsep_runtime or 0))
     appendKey(diagnostics, "collect_temp_inventory", string.format("%.3f", phaseTimings.collect_temp_inventory or 0))
     appendKey(diagnostics, "collect_probes", string.format("%.3f", phaseTimings.collect_probes or 0))
     appendKey(diagnostics, "create_zip", string.format("%.3f", phaseTimings.create_zip or 0))

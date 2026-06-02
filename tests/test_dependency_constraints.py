@@ -1564,7 +1564,12 @@ def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers
 
     assert "local function collectStemPathsFromStdoutJson(stdoutFile)" in workflow
     assert 'if key == "hihat" or key == "hihat" or key == "hh" then' in workflow
+    assert 'trimmed:find(\'"%s*:%s*"\', 1)' in workflow
     assert 'local stdoutStems = collectStemPathsFromStdoutJson(C.progressState.stdoutFile)' in workflow
+    assert 'debugLog("lua_result_probe_start")' in workflow
+    assert 'debugLog("lua_result_probe_stdout_json_attempt=yes")' in workflow
+    assert 'debugLog("lua_result_probe_stdout_json_ok=yes")' in workflow
+    assert 'debugLog("lua_result_probe_stdout_json_count=" .. tostring(outputCount))' in workflow
     assert 'debugLog("lua_dks_extract_outputs_detected=yes")' in workflow
     assert 'SW_LOG.logExecResult("lua_dks_extract_outputs_detected=yes", nil, "lua_dks_extract_output_count=" .. tostring(outputCount))' in workflow
     assert 'SW_LOG.logExecResult("lua_dks_extract_import_start", nil, "")' in workflow
@@ -1578,6 +1583,9 @@ def test_support_bundle_excludes_dev_matrix_temp_dirs_and_reports_temp_log_budge
     assert 'if lower:match("^stemwerk%-slice%-") then' in script
     assert 'appendKey(diagnostics, "support_bundle_temp_logs_count", tostring((tempMeta and tempMeta.copiedCount) or 0))' in script
     assert 'appendKey(diagnostics, "support_bundle_temp_logs_bytes", tostring((tempMeta and tempMeta.copiedBytes) or 0))' in script
+    assert 'local drumsepDiagnosticsStartedAt = phaseStart("collect_drumsep_runtime")' in script
+    assert 'phaseDone("collect_drumsep_runtime", drumsepDiagnosticsStartedAt)' in script
+    assert 'appendKey(diagnostics, "collect_drumsep_runtime", string.format("%.3f", phaseTimings.collect_drumsep_runtime or 0))' in script
 
 
 def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, capsys):
