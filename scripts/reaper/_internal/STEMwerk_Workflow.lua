@@ -271,6 +271,13 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
     C.progressState.percent = 0
     C.progressState.stage = C.T("progress_starting_backend") or "Starting backend..."
     C.progressState.startTime = os.time()
+    C.progressState._deviceId = nil
+    C.progressState._deviceName = nil
+    C.progressState._runtimeSelected = nil
+    C.progressState._normalizedDeviceRequest = nil
+    C.progressState._runtimeGpuCapable = nil
+    C.progressState._runtimeDeviceNames = nil
+    C.progressState._deviceInfoLastAt = nil
     C.progressState.lastActivityAt = C.progressState.startTime
     C.progressState.lastActivityReason = "process_start"
     C.progressState.lastStdoutSize = getFileSizeSafe(stdoutFile)
@@ -396,7 +403,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
 
         -- Launch Python hidden WITHOUT a .bat/.cmd (prevents console windows).
         -- Use WMI Win32_Process.Create to get a PID for proper cancel.
-        local requestedDeviceArg = SETTINGS.device or "auto"
+        local requestedDeviceArg = (type(C.effectiveRunDevice) == "function" and C.effectiveRunDevice()) or SETTINGS.device or "auto"
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
         debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
         debugLog("backend_device_arg=" .. tostring(deviceArg))
@@ -509,7 +516,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         -- Unix: run in background so REAPER stays responsive and the progress window can update.
         -- Launch a tiny sh script that starts the Python worker in the background, writes a pid.txt,
         -- and writes done.txt only when the worker exits successfully.
-        local requestedDeviceArg = tostring(SETTINGS.device or "auto")
+        local requestedDeviceArg = tostring((type(C.effectiveRunDevice) == "function" and C.effectiveRunDevice()) or SETTINGS.device or "auto")
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
         debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
         debugLog("backend_device_arg=" .. tostring(deviceArg))

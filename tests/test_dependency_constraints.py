@@ -2027,6 +2027,21 @@ def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_devic
     assert 'sourceTrackName .. " - " .. folderLabel' in main_script
     assert "ui_device_selected_before_run=" in workflow_script
     assert "backend_device_arg=" in workflow_script
+    assert "effectiveRunDevice            = effectiveRunDevice," in main_script
+
+
+def test_single_track_workflow_uses_run_snapshot_device_and_resets_progress_device_state():
+    workflow_script = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text()
+
+    assert 'local requestedDeviceArg = (type(C.effectiveRunDevice) == "function" and C.effectiveRunDevice()) or SETTINGS.device or "auto"' in workflow_script
+    assert 'local requestedDeviceArg = tostring((type(C.effectiveRunDevice) == "function" and C.effectiveRunDevice()) or SETTINGS.device or "auto")' in workflow_script
+    assert "C.progressState._deviceId = nil" in workflow_script
+    assert "C.progressState._deviceName = nil" in workflow_script
+    assert "C.progressState._runtimeSelected = nil" in workflow_script
+    assert "C.progressState._normalizedDeviceRequest = nil" in workflow_script
+    assert "C.progressState._runtimeGpuCapable = nil" in workflow_script
+    assert "C.progressState._runtimeDeviceNames = nil" in workflow_script
+    assert "C.progressState._deviceInfoLastAt = nil" in workflow_script
 
 
 def test_drumkit_ui_strings_use_safe_translation_resolution():

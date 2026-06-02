@@ -14840,6 +14840,7 @@ WORKFLOW.configure({
     drawProgressWindow            = drawProgressWindow,
     refreshPythonPathFromExtState = refreshPythonPathFromExtState,
     recordTimingEvent             = writeTimingEvent,
+    effectiveRunDevice            = effectiveRunDevice,
 })
 
 MESSAGES.configure({
