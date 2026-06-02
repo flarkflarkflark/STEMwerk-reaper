@@ -1097,7 +1097,7 @@ local function activateWorkflowStemSet(isDirectDKS)
     end
 end
 
-local function normalizeStemPathKey(name)
+function normalizeStemPathKey(name)
     local key = tostring(name or ""):lower()
     if key == "hihat" or key == "hh" then
         return "hi-hat"
@@ -1105,7 +1105,7 @@ local function normalizeStemPathKey(name)
     return key
 end
 
-local function normalizeStemPathMap(stemPaths)
+function normalizeStemPathMap(stemPaths)
     local normalized = {}
     for key, path in pairs(stemPaths or {}) do
         normalized[normalizeStemPathKey(key)] = path
@@ -1113,13 +1113,13 @@ local function normalizeStemPathMap(stemPaths)
     return normalized
 end
 
-local function stemPathMapLooksLikeDrumKit(stemPaths)
+function stemPathMapLooksLikeDrumKit(stemPaths)
     local normalized = normalizeStemPathMap(stemPaths)
     return normalized["kick"] and normalized["snare"] and normalized["toms"]
         and normalized["hi-hat"] and normalized["ride"] and normalized["crash"]
 end
 
-local function resolveStemSetForPaths(stemPaths)
+function resolveStemSetForPaths(stemPaths)
     if stemPathMapLooksLikeDrumKit(stemPaths) then
         return DRUMKIT_STEMS, true
     end
@@ -13853,6 +13853,76 @@ function activeDrumKitCompleteTitle()
     return trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")
 end
 
+function activeProcessingRouteBadge()
+    if isExtractDrumKitWorkflowActive() then
+        return trSafeValue("workflow_edks_short_label", "Drum Split")
+    end
+    if isDrumKitWorkflowActive() then
+        return trSafeValue("workflow_drumkit_short_label", "Direct Kit")
+    end
+    return trSafeValue("route_badge_normal", "Normal STEMwerk")
+end
+
+function inferProgressStageIndex(stageText)
+    local lower = tostring(stageText or ""):lower()
+    if lower:find("stage 1", 1, true) or lower:find("extracting drums", 1, true) then
+        return 1
+    end
+    if lower:find("stage 2", 1, true)
+        or lower:find("starting drum kit runtime", 1, true)
+        or lower:find("splitting drum kit", 1, true)
+        or lower:find("writing drum tracks", 1, true)
+        or lower:find("drumsep stage2 separating kit stems", 1, true)
+    then
+        return 2
+    end
+    return nil
+end
+
+function compactRuntimeKindLabel(kind)
+    local lower = tostring(kind or ""):lower()
+    if lower == "rocm" then return "ROCm" end
+    if lower == "cpu" then return "CPU" end
+    if lower == "normal" then return trSafeValue("progress_runtime_normal", "normal runtime") end
+    if lower == "drumsep" then return "DrumSep" end
+    return tostring(kind or "")
+end
+
+function buildProgressRouteSummary(deviceDetail)
+    if isExtractDrumKitWorkflowActive() then
+        local stageIdx = inferProgressStageIndex(progressState.stage)
+        local stageBadge = stageIdx == 1
+            and trSafeValue("progress_stage_label_1_of_2", "Stage 1/2")
+            or trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
+        local stage1Device = compactRuntimeKindLabel(progressState._stage1Device or "cpu")
+        local stage2Device = compactRuntimeKindLabel(progressState._stage2Device or progressState._runtimeSelected or "")
+        local stage1Summary = string.format(
+            trSafeValue("progress_stage1_footer_summary", "Stage 1: %s"),
+            trSafeValue("progress_stage1_runtime_compact", "normal CPU"):gsub("CPU", stage1Device)
+        )
+        local stage2Compact = compactRuntimeKindLabel(progressState._stage2Runtime or "drumsep")
+        if deviceDetail and deviceDetail ~= "" then
+            stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)
+        elseif stage2Device ~= "" then
+            stage2Compact = stage2Compact .. " " .. stage2Device
+        end
+        local stage2Summary = string.format(
+            trSafeValue("progress_stage2_footer_summary", "Stage 2: %s"),
+            stage2Compact
+        )
+        return activeProcessingRouteBadge() .. " · " .. stageBadge,
+            stage1Summary .. " -> " .. stage2Summary
+    end
+    if isDrumKitWorkflowActive() then
+        local directSummary = activeProcessingRouteBadge() .. " · DrumSep"
+        if deviceDetail and deviceDetail ~= "" then
+            directSummary = directSummary .. " · " .. tostring(deviceDetail)
+        end
+        return directSummary, deviceDetail
+    end
+    return nil, deviceDetail
+end
+
 function shortRuntimeGpuName(name)
     local s = tostring(name or "")
     s = s:gsub("^%s+", ""):gsub("%s+$", "")
@@ -14136,11 +14206,7 @@ function drawProgressWindow()
     -- We update at most ~2x/sec to keep it cheap.
     if progressState.logFile and (not progressState._deviceInfoLastAt or (os.clock() - progressState._deviceInfoLastAt) > 0.5) then
         progressState._deviceInfoLastAt = os.clock()
-        local devId, devName = nil, nil
-        local runtimeSelected = nil
-        local normalizedRequest = nil
-        local gpuCapable = nil
-        local runtimeDeviceNames = nil
+        local info = {}
         local f = io.open(progressState.logFile, "r")
         if f then
             local n = 0
@@ -14149,41 +14215,61 @@ function drawProgressWindow()
                 -- Example: Selected device: cuda:0 (AMD Radeon RX 9070)
                 local id, name = line:match("^Selected device:%s*([%w%-%_:%.]+)%s*%((.+)%)")
                 if id then
-                    devId = id
-                    devName = name
+                    info.devId = id
+                    info.devName = name
                 end
                 -- Example: STEMWERK: torch.cuda.set_device(1) -> current_device=1 (AMD Radeon 780M Graphics)
                 local idx, name2 = line:match("^STEMWERK:%s*torch%.cuda%.set_device%((%d+)%)%s*%-%>%s*current_device=%d+%s*%((.+)%)")
                 if idx then
-                    devId = "cuda:" .. idx
-                    devName = name2
+                    info.devId = "cuda:" .. idx
+                    info.devName = name2
                 end
                 local selected = line:match("drumsep_runtime_selected=([%w_:%-]+)")
                 if selected then
-                    runtimeSelected = selected
+                    info.runtimeSelected = selected
                 end
                 local req = line:match("normalized_device_request=([%w_:%-]+)")
                 if req then
-                    normalizedRequest = req
+                    info.normalizedRequest = req
                 end
                 local gpu = line:match("drumsep_gpu_capable=([%w_:%-]+)")
                 if gpu then
-                    gpuCapable = gpu
+                    info.gpuCapable = gpu
                 end
                 local names = line:match("drumsep_device_names=(.+)")
                 if names and names ~= "" then
-                    runtimeDeviceNames = names
+                    info.runtimeDeviceNames = names
+                end
+                local s1r = line:match("dks_extract_stage1_runtime=([%w_:%-]+)")
+                if s1r then
+                    info.stage1Runtime = s1r
+                end
+                local s1d = line:match("dks_extract_stage1_device=([%w_:%-]+)")
+                if s1d then
+                    info.stage1Device = s1d
+                end
+                local s2r = line:match("dks_extract_stage2_runtime=([%w_:%-]+)")
+                if s2r then
+                    info.stage2Runtime = s2r
+                end
+                local s2d = line:match("dks_extract_stage2_device=([%w_:%-]+)")
+                if s2d then
+                    info.stage2Device = s2d
                 end
                 if n >= 80 then break end
             end
             f:close()
         end
-        progressState._deviceId = devId
-        progressState._deviceName = devName
-        progressState._runtimeSelected = runtimeSelected
-        progressState._normalizedDeviceRequest = normalizedRequest
-        progressState._runtimeGpuCapable = gpuCapable
-        progressState._runtimeDeviceNames = runtimeDeviceNames
+        progressState._deviceId = info.devId
+        progressState._deviceName = info.devName
+        progressState._runtimeSelected = info.runtimeSelected
+        progressState._normalizedDeviceRequest = info.normalizedRequest
+        progressState._runtimeGpuCapable = info.gpuCapable
+        progressState._runtimeDeviceNames = info.runtimeDeviceNames
+        progressState._stage1Runtime = info.stage1Runtime
+        progressState._stage1Device = info.stage1Device
+        progressState._stage2Runtime = info.stage2Runtime
+        progressState._stage2Device = info.stage2Device
     end
 
     -- === THEME TOGGLE (top right) ===
@@ -14374,6 +14460,20 @@ function drawProgressWindow()
                 })
             end
         end
+    end
+
+    local routeBadge = activeProcessingRouteBadge()
+    if routeBadge and routeBadge ~= "" then
+        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
+        local routeBadgeW = gfx.measurestr(routeBadge) + PS(14)
+        local routeBadgeH = PS(16)
+        local routeBadgeX = titleX
+        local routeBadgeY = titleY + PS(22)
+        drawThemeSurfaceBox(routeBadgeX, routeBadgeY, routeBadgeW, routeBadgeH, THEME.inputBg, THEME.border, 0.95, 0.95, getThemeRadius(PS, 8, math.floor(routeBadgeH / 2)), getThemeBorderWeight(PS, 1), 0.45, "button")
+        gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+        gfx.x = routeBadgeX + PS(7)
+        gfx.y = routeBadgeY + PS(2)
+        gfx.drawstr(routeBadge)
     end
 
     -- Stem indicators (simple colored boxes)
@@ -14873,6 +14973,13 @@ function drawProgressWindow()
     local summaryRight = nil
     if not progressState.showTerminal then
         summaryRight = deviceDetail
+    end
+    local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)
+    if routeSummaryLeft and routeSummaryLeft ~= "" then
+        summaryLeft = routeSummaryLeft
+    end
+    if routeSummaryRight and routeSummaryRight ~= "" then
+        summaryRight = routeSummaryRight
     end
 
     local statusFontSize = PS(10)

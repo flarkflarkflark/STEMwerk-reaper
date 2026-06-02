@@ -2076,9 +2076,16 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_preparing_direct_drum_kit = "Preparing Direct Drum Kit..."' in langs
     assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit voorbereiden..."' in langs
     assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit wird vorbereitet..."' in langs
+    assert 'progress_stage_extracting_drums = "Extracting drums..."' in langs
+    assert 'progress_stage_extracting_drums = "Drums extraheren..."' in langs
+    assert 'progress_stage_extracting_drums = "Drums werden extrahiert..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Starting Drum Kit runtime..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-runtime starten..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-Runtime wird gestartet..."' in langs
+    assert 'progress_stage_label_1_of_2 = "Stage 1/2"' in langs
+    assert 'progress_stage_label_2_of_2 = "Stage 2/2"' in langs
+    assert 'progress_stage_label_1_of_2 = "Stufe 1/2"' in langs
+    assert 'progress_stage_label_2_of_2 = "Stufe 2/2"' in langs
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
@@ -2094,6 +2101,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'direct_drum_kit_folder_suffix = "Direct Drum Kit"' in langs
     assert 'drum_kit_split_folder_suffix = "Drum Kit Split"' in langs
     assert 'edks_complete_title = "Drum Kit Split completed successfully!"' in langs
+    assert 'route_badge_normal = "Normal STEMwerk"' in langs
+    assert 'route_badge_normal = "Normale STEMwerk"' in langs
+    assert 'route_badge_normal = "Normales STEMwerk"' in langs
     assert 'drumkit_result_time_selection_created = "%d %s created from time selection."' in langs
     assert 'drumkit_result_time_selection_created = "%d %s aangemaakt uit tijdselectie."' in langs
     assert 'drumkit_result_time_selection_created = "%d %s aus Zeitauswahl erstellt."' in langs
@@ -2119,10 +2129,14 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert "_pa.edks    = workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT" in main_script
     assert "local inDrumKitWorkflow = workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT" in main_script
     assert 'preparing direct drum kit' in progress_render
+    assert 'extracting drums' in progress_render
     assert 'starting drum kit runtime' in progress_render
     assert 'writing drum tracks' in progress_render
     assert 'drumsep stage2 separating kit stems' in progress_render
     assert 'progress_stage_splitting_drum_kit' in progress_render
+    assert 'progress_stage_label_1_of_2' in progress_render
+    assert 'progress_stage_label_2_of_2' in progress_render
+    assert 'isExtractDrumKitProgress()' in progress_render
 
 
 def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_device_breadcrumbs():
@@ -2149,6 +2163,10 @@ def test_single_track_workflow_uses_run_snapshot_device_and_resets_progress_devi
     assert "C.progressState._normalizedDeviceRequest = nil" in workflow_script
     assert "C.progressState._runtimeGpuCapable = nil" in workflow_script
     assert "C.progressState._runtimeDeviceNames = nil" in workflow_script
+    assert "C.progressState._stage1Runtime = nil" in workflow_script
+    assert "C.progressState._stage1Device = nil" in workflow_script
+    assert "C.progressState._stage2Runtime = nil" in workflow_script
+    assert "C.progressState._stage2Device = nil" in workflow_script
     assert "C.progressState._deviceInfoLastAt = nil" in workflow_script
 
 
@@ -2156,12 +2174,19 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
     assert "function trSafeValue(key, fallback)" in script
-    assert "local function normalizeStemPathMap(stemPaths)" in script
-    assert "local function resolveStemSetForPaths(stemPaths)" in script
+    assert 'function activeProcessingRouteBadge()' in script
+    assert 'function buildProgressRouteSummary(deviceDetail)' in script
+    assert 'return activeProcessingRouteBadge() .. " · " .. stageBadge,' in script
+    assert 'local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)' in script
+    assert "function normalizeStemPathMap(stemPaths)" in script
+    assert "function resolveStemSetForPaths(stemPaths)" in script
     assert 'if stemPathMapLooksLikeDrumKit(stemPaths) then' in script
     assert 'function activeDrumKitWorkflowTitle()' in script
     assert 'return trSafeValue("workflow_edks_label", "Drum Kit Split")' in script
     assert 'return trSafeValue("workflow_drumkit_label", "Direct Drum Kit")' in script
+    assert 'return trSafeValue("workflow_edks_short_label", "Drum Split")' in script
+    assert 'return trSafeValue("workflow_drumkit_short_label", "Direct Kit")' in script
+    assert 'return trSafeValue("route_badge_normal", "Normal STEMwerk")' in script
     assert 'setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)' in script
     assert 'function activeDrumKitFolderSuffix()' in script
     assert 'function activeDrumKitCompleteTitle()' in script

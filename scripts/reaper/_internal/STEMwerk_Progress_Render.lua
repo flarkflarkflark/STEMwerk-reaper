@@ -33,8 +33,69 @@ local function progressUiLabel(key, fallback)
     return translated
 end
 
+local function progressWorkflowSource()
+    local ps = _deps.progressState or {}
+    return tostring(ps.workflowSource or "")
+end
+
+local function isExtractDrumKitProgress()
+    return progressWorkflowSource() == "dks_extract"
+end
+
+local function isDirectDrumKitProgress()
+    return progressWorkflowSource() == "dks_direct"
+end
+
+local function stagePrefixLabel(stageIndex)
+    if stageIndex == 1 then
+        return progressUiLabel("progress_stage_label_1_of_2", "Stage 1/2")
+    elseif stageIndex == 2 then
+        return progressUiLabel("progress_stage_label_2_of_2", "Stage 2/2")
+    end
+    return ""
+end
+
+local function inferDrumKitStageIndex(stageText)
+    local lower = tostring(stageText or ""):lower()
+    if lower:find("stage 1", 1, true) or lower:find("extracting drums", 1, true) then
+        return 1
+    end
+    if lower:find("stage 2", 1, true)
+        or lower:find("starting drum kit runtime", 1, true)
+        or lower:find("splitting drum kit", 1, true)
+        or lower:find("writing drum tracks", 1, true)
+        or lower:find("drumsep stage2 separating kit stems", 1, true)
+    then
+        return 2
+    end
+    return nil
+end
+
+local function decorateDrumKitStage(stageText, rawStage)
+    if not isExtractDrumKitProgress() then
+        return stageText
+    end
+    local stageIndex = inferDrumKitStageIndex(rawStage or stageText)
+    if not stageIndex then
+        return stageText
+    end
+    local prefix = stagePrefixLabel(stageIndex)
+    if prefix == "" then
+        return stageText
+    end
+    local normalized = tostring(stageText or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if normalized == "" then
+        return prefix
+    end
+    if normalized:find(prefix, 1, true) == 1 then
+        return normalized
+    end
+    return prefix .. ": " .. normalized
+end
+
 local function normalizeProgressStage(stage)
-    stage = tostring(stage or "")
+    local rawStage = tostring(stage or "")
+    stage = rawStage
     stage = stage:gsub("%s*%b[]", "")
     stage = stage:gsub("%s*%b()", "")
     stage = stage:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
@@ -73,7 +134,7 @@ local function normalizeProgressStage(stage)
             stage = progressUiLabel(key, stage)
         end
     end
-    return stage
+    return decorateDrumKitStage(stage, rawStage)
 end
 
 local function localizeProgressStagePrefix(stageText)
@@ -120,7 +181,7 @@ local function localizeProgressStagePrefix(stageText)
             return dst
         end
     end
-    return text
+    return decorateDrumKitStage(text, stageText)
 end
 
 local function readableTerminalAccent(r, g, b)
