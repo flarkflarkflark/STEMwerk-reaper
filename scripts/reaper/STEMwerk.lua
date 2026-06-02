@@ -14839,6 +14839,7 @@ WORKFLOW.configure({
     cleanupTempWorkDir            = cleanupTempWorkDir,
     drawProgressWindow            = drawProgressWindow,
     refreshPythonPathFromExtState = refreshPythonPathFromExtState,
+    refreshRuntimeDevices         = refreshRuntimeDevices,
     recordTimingEvent             = writeTimingEvent,
     effectiveRunDevice            = effectiveRunDevice,
 })

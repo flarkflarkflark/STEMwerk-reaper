@@ -1216,6 +1216,8 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     print(f"STEMWERK_DIAG torch_version={env.get('torch_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG torchaudio_version={env.get('torchaudio_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG onnxruntime_version={env.get('onnxruntime_version')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG cuda_available={env.get('cuda_available')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG cuda_count={env.get('cuda_count')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_built={env.get('mps_built')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
@@ -1754,10 +1756,14 @@ def main():
         return 0
 
     resolved_device = device_preference
+    print(f"normal_workflow_backend_seen_device_request={device_preference}", file=sys.stderr)
+    live_devices = get_available_devices()
+    live_device_ids = [str(dev.get("id", "")) for dev in live_devices]
+    print(f"normal_workflow_live_device_ids={','.join(live_device_ids)}", file=sys.stderr)
     if device_preference == "auto":
         preferred = None
         if sys.platform.startswith("linux"):
-            preferred = _prefer_linux_amd_device(get_available_devices(), _get_skip_ids())
+            preferred = _prefer_linux_amd_device(live_devices, _get_skip_ids())
         if preferred:
             resolved_device = preferred.get("id") or "auto"
             print(
@@ -1773,6 +1779,23 @@ def main():
                 resolved_device = "auto"
     else:
         print(f"STEMWERK_DIAG requested_device={device_preference}", file=sys.stderr)
+
+    preview_device_id = resolved_device
+    preview_device_name = ""
+    try:
+        preview_device_id, preview_device_name = select_device(resolved_device)
+    except Exception as exc:
+        print(f"normal_workflow_backend_preview_error={type(exc).__name__}:{exc}", file=sys.stderr)
+    print(f"normal_workflow_backend_seen_device_resolved={resolved_device}", file=sys.stderr)
+    print(f"normal_workflow_backend_preview_device={preview_device_id}", file=sys.stderr)
+    print(f"normal_workflow_backend_preview_name={preview_device_name}", file=sys.stderr)
+    if str(device_preference or "auto").strip().lower() != "cpu" and str(preview_device_id) == "cpu":
+        print("normal_workflow_backend_fallback_reason=live_runtime_cpu_only", file=sys.stderr)
+        print(
+            "Runtime device fallback blocked: requested GPU/Auto but the live normal STEMwerk runtime exposes CPU only.",
+            file=sys.stderr,
+        )
+        return 2
 
     runtime_env: Dict[str, object] = {}
     try:

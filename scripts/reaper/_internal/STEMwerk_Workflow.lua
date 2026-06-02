@@ -118,6 +118,71 @@ function WORKFLOW.configure(ctx)
     for k, v in pairs(ctx) do C[k] = v end
 end
 
+local function isDirectDrumKitRoute(runOptions)
+    local workflowMode = tostring((runOptions and runOptions.workflowMode) or "")
+    local workflowSource = tostring((runOptions and runOptions.workflowSource) or "")
+    return workflowMode == "drumkit" and workflowSource == "dks_direct"
+end
+
+local function collectRuntimeDeviceIds()
+    local ids = {}
+    for _, dev in ipairs(RUNTIME_DEVICES or {}) do
+        ids[#ids + 1] = tostring(dev and dev.id or "")
+    end
+    return ids
+end
+
+local function runtimeHasGpuDevice()
+    for _, dev in ipairs(RUNTIME_DEVICES or {}) do
+        local id = tostring(dev and dev.id or "")
+        local typ = tostring(dev and dev.type or "")
+        if typ == "cuda" or typ == "directml" or typ == "mps"
+            or id:match("^cuda:%d+$") or id:match("^directml:%d+$") or id == "cuda" or id == "directml" or id == "mps" then
+            return true
+        end
+    end
+    return false
+end
+
+local function preflightNormalWorkflowDeviceRoute(runOptions)
+    if isDirectDrumKitRoute(runOptions) then
+        return true
+    end
+
+    local requestedUiDevice = (type(C.effectiveRunDevice) == "function" and C.effectiveRunDevice()) or SETTINGS.device or "auto"
+    local workflowMode = tostring((runOptions and runOptions.workflowMode) or "")
+    local workflowSource = tostring((runOptions and runOptions.workflowSource) or "")
+    debugLog("workflow_mode=" .. workflowMode)
+    debugLog("workflow_source=" .. workflowSource)
+    debugLog("normal_workflow_device_ui=" .. tostring(SETTINGS.device or ""))
+    debugLog("normal_workflow_device_snapshot=" .. tostring(requestedUiDevice))
+
+    if type(C.refreshRuntimeDevices) == "function" then
+        C.refreshRuntimeDevices(true)
+    end
+
+    local liveIds = collectRuntimeDeviceIds()
+    local liveIdsText = table.concat(liveIds, ",")
+    local gpuAvailable = runtimeHasGpuDevice()
+    debugLog("normal_workflow_live_device_ids=" .. liveIdsText)
+    debugLog("normal_workflow_live_gpu_available=" .. (gpuAvailable and "yes" or "no"))
+
+    local normalizedRequest = string.lower(tostring(requestedUiDevice or "auto"))
+    if normalizedRequest ~= "" and normalizedRequest ~= "cpu" and not gpuAvailable then
+        debugLog("normal_workflow_fallback_reason=live_runtime_cpu_only")
+        local msg =
+            "Normal STEMwerk processing was stopped because the live runtime probe reports CPU-only devices.\n\n"
+            .. "Requested device: " .. tostring(requestedUiDevice) .. "\n"
+            .. "Live runtime devices: " .. (liveIdsText ~= "" and liveIdsText or "auto,cpu") .. "\n\n"
+            .. "This prevents a silent fallback to CPU.\n"
+            .. "Run STEMwerk-SETUP and repair/rebuild the normal runtime before processing."
+        C.showMessage("Runtime Device Unavailable", msg, "error", false)
+        return false
+    end
+
+    return true
+end
+
 local function snapshotActiveTakePlaybackState(item)
     if not item or not reaper.ValidatePtr(item, "MediaItem*") then
         return nil
@@ -405,10 +470,13 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         -- Use WMI Win32_Process.Create to get a PID for proper cancel.
         local requestedDeviceArg = (type(C.effectiveRunDevice) == "function" and C.effectiveRunDevice()) or SETTINGS.device or "auto"
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
-        debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
-        debugLog("backend_device_arg=" .. tostring(deviceArg))
         local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
         local workflowSourceArg = tostring((runOptions and runOptions.workflowSource) or "")
+        debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
+        debugLog("backend_device_arg=" .. tostring(deviceArg))
+        if not isDirectDrumKitRoute(runOptions) then
+            debugLog("normal_workflow_command_device=" .. tostring(deviceArg))
+        end
         local requestedStage2ModelArg = tostring((runOptions and runOptions.requestedStage2Model) or "")
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
@@ -518,11 +586,14 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
         -- and writes done.txt only when the worker exits successfully.
         local requestedDeviceArg = tostring((type(C.effectiveRunDevice) == "function" and C.effectiveRunDevice()) or SETTINGS.device or "auto")
         local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
-        debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
-        debugLog("backend_device_arg=" .. tostring(deviceArg))
         local modelArg  = tostring(model or SETTINGS.model or "htdemucs")
         local workflowModeArg = tostring((runOptions and runOptions.workflowMode) or "")
         local workflowSourceArg = tostring((runOptions and runOptions.workflowSource) or "")
+        debugLog("ui_device_selected_before_run=" .. tostring(requestedDeviceArg))
+        debugLog("backend_device_arg=" .. tostring(deviceArg))
+        if not isDirectDrumKitRoute(runOptions) then
+            debugLog("normal_workflow_command_device=" .. tostring(deviceArg))
+        end
         local requestedStage2ModelArg = tostring((runOptions and runOptions.requestedStage2Model) or "")
         local pythonCmd = string.format(
             '%s -u %s %s %s --model %s --device %s',
@@ -874,6 +945,14 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model, runOpti
     -- Load settings to get current theme
     C.loadSettings()
     C.updateTheme()
+
+    if preflightNormalWorkflowDeviceRoute(runOptions) == false then
+        if OS == "Windows" and C.progressState.windowOpen then
+            closeProcessingWindow()
+        end
+        isProcessingActive = false
+        return
+    end
 
     if OS == "Windows" and C.progressState.windowOpen then
         showProcessingPlaceholderWindow(C.T("progress_initializing") or "Initializing...")

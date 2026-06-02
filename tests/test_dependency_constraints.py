@@ -2450,3 +2450,34 @@ def test_macos_apple_silicon_sanity_workflow_asserts_samplerate_dylib_architectu
     assert 'if payload["samplerate_dylib_candidates"]:' in workflow
     assert 'assert len(payload["samplerate_dylib_arm_or_universal"]) > 0' in workflow
     assert workflow.index("Run samplerate arm64 repair guard (bootstrap parity)") < workflow.index("Run Apple Silicon dependency and backend assertions")
+
+
+def test_normal_workflow_device_preflight_blocks_silent_cpu_fallback():
+    workflow = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
+
+    assert "normal_workflow_device_ui=" in workflow
+    assert "normal_workflow_device_snapshot=" in workflow
+    assert "normal_workflow_live_device_ids=" in workflow
+    assert "normal_workflow_live_gpu_available=" in workflow
+    assert "normal_workflow_fallback_reason=live_runtime_cpu_only" in workflow
+    assert "silent fallback to CPU" in workflow
+    assert "normal_workflow_command_device=" in workflow
+
+
+def test_normal_workflow_python_logs_live_device_preview_and_blocks_cpu_only_gpu_requests():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+
+    assert "normal_workflow_backend_seen_device_request=" in script
+    assert "normal_workflow_live_device_ids=" in script
+    assert "normal_workflow_backend_seen_device_resolved=" in script
+    assert "normal_workflow_backend_preview_device=" in script
+    assert "normal_workflow_backend_preview_name=" in script
+    assert "normal_workflow_backend_fallback_reason=live_runtime_cpu_only" in script
+    assert 'if str(device_preference or "auto").strip().lower() != "cpu" and str(preview_device_id) == "cpu":' in script
+
+
+def test_audio_separator_runtime_diagnostics_include_cuda_visibility():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+
+    assert 'print(f"STEMWERK_DIAG cuda_available={env.get(\'cuda_available\')}", file=sys.stderr)' in script
+    assert 'print(f"STEMWERK_DIAG cuda_count={env.get(\'cuda_count\')}", file=sys.stderr)' in script
