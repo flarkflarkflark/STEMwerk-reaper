@@ -66,6 +66,12 @@ def _is_direct_dks_source(workflow_mode: Optional[str], workflow_source: Optiona
     return source == "dks_direct" or mode == "dks_direct"
 
 
+def _is_extract_dks_source(workflow_mode: Optional[str], workflow_source: Optional[str]) -> bool:
+    mode = str(workflow_mode or "").strip().lower()
+    source = str(workflow_source or "").strip().lower()
+    return mode == "drumkit" and source == "dks_extract"
+
+
 def _resolve_run_model(args: argparse.Namespace) -> str:
     if _is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", "")):
         requested = str(getattr(args, "requested_stage2_model", "") or "").strip()
@@ -998,6 +1004,77 @@ def _split_list(value: Optional[str]) -> List[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
+def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, str, List[str]]:
+    requested = str(device_preference or "auto")
+    resolved = requested
+    live_devices = get_available_devices()
+    live_device_ids = [str(dev.get("id", "")) for dev in live_devices]
+
+    if requested == "auto":
+        preferred = None
+        if sys.platform.startswith("linux"):
+            preferred = _prefer_linux_amd_device(live_devices, _get_skip_ids())
+        if preferred:
+            resolved = preferred.get("id") or "auto"
+            print(
+                f"STEMWERK_DIAG auto_selected_preferred={resolved} ({preferred.get('name','')})",
+                file=sys.stderr,
+            )
+        else:
+            try:
+                dev_id, dev_name = select_device("auto")
+                print(f"STEMWERK_DIAG auto_selected={dev_id} ({dev_name})", file=sys.stderr)
+                resolved = dev_id
+            except Exception:
+                resolved = "auto"
+    else:
+        print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
+
+    preview_device_id = resolved
+    preview_device_name = ""
+    try:
+        preview_device_id, preview_device_name = select_device(resolved)
+    except Exception as exc:
+        print(f"normal_workflow_backend_preview_error={type(exc).__name__}:{exc}", file=sys.stderr)
+
+    return requested, resolved, f"{preview_device_id}|{preview_device_name}", live_device_ids
+
+
+def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, str]:
+    stem_mapping = {
+        "vocals": ["vocals", "vocal", "Vocals"],
+        "drums": ["drums", "drum", "Drums"],
+        "bass": ["bass", "Bass"],
+        "other": ["other", "Other", "no_vocals", "instrumental", "Instrumental"],
+        "guitar": ["guitar", "Guitar"],
+        "piano": ["piano", "Piano", "keys", "Keys"],
+    }
+
+    reaper_stems: Dict[str, str] = {}
+    for stem_name, stem_path in result.stems.items():
+        abs_path = _resolve_stem_path(output_root, stem_path)
+        if not abs_path.exists():
+            raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
+
+        filename = abs_path.stem.lower()
+        target_name = stem_name
+        for map_name, patterns in stem_mapping.items():
+            if any(p.lower() in filename for p in patterns):
+                target_name = map_name
+                break
+
+        new_path = abs_path.parent / f"{target_name}.wav"
+        if abs_path != new_path:
+            if new_path.exists():
+                os.remove(new_path)
+            shutil.move(str(abs_path), str(new_path))
+
+        reaper_stems[target_name] = str(new_path)
+        print(f"  {target_name}:  {new_path}", file=sys.stderr)
+
+    return reaper_stems
+
+
 def _get_device_skips() -> List[Dict[str, str]]:
     _require_core()
     skips = getattr(core_devices, "_DEVICE_SKIPS", None)
@@ -1658,6 +1735,161 @@ def main():
     stems = _split_list(args.stems)
     run_model = _resolve_run_model(args)
     requested_stage2_model = run_model
+    if _is_extract_dks_source(args.workflow_mode, args.workflow_source):
+        output_root = Path(args.output_dir).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        stage1_root = output_root / "stage1_normal"
+        stage2_root = output_root / "stage2_drumsep"
+        stage1_root.mkdir(parents=True, exist_ok=True)
+        stage2_root.mkdir(parents=True, exist_ok=True)
+        stage1_requested, stage1_resolved, stage1_preview, live_device_ids = _resolve_normal_runtime_device(device_preference)
+        stage1_preview_device, _sep, stage1_preview_name = stage1_preview.partition("|")
+        print(
+            f"Drum Kit Split route detected: workflow_mode={args.workflow_mode} workflow_source={args.workflow_source}",
+            file=sys.stderr,
+        )
+        print(f"workflow_mode={args.workflow_mode}", file=sys.stderr)
+        print(f"workflow_source={args.workflow_source}", file=sys.stderr)
+        print(f"ui_device_selected_before_run={device_preference}", file=sys.stderr)
+        print(f"backend_device_arg={stage1_resolved}", file=sys.stderr)
+        print(f"dks_extract_stage1_runtime=normal", file=sys.stderr)
+        print(f"dks_extract_stage1_requested_device={stage1_requested}", file=sys.stderr)
+        print(f"dks_extract_stage1_device={stage1_preview_device or stage1_resolved}", file=sys.stderr)
+        print(f"dks_extract_stage1_device_name={stage1_preview_name}", file=sys.stderr)
+        print(f"dks_extract_stage1_live_device_ids={','.join(live_device_ids)}", file=sys.stderr)
+        print(f"dks_extract_intermediate_dir={stage1_root}", file=sys.stderr)
+        print(f"dks_extract_stage2_dir={stage2_root}", file=sys.stderr)
+        stage1_fallback_reason = ""
+        if str(stage1_requested).strip().lower() != "cpu" and str(stage1_preview_device) == "cpu":
+            stage1_fallback_reason = "live_runtime_cpu_only"
+            print(f"dks_extract_stage1_fallback_reason={stage1_fallback_reason}", file=sys.stderr)
+        try:
+            print("PROGRESS:1:Extracting drums [Stage 1]...", flush=True)
+            emit_phase("stage1_parent_start")
+            runtime_env = _emit_runtime_diagnostics(stage1_preview_device or stage1_resolved)
+            _enable_mps_runtime_fallback(stage1_requested, stage1_resolved)
+            stage1_runtime_device = _enforce_mps_demucs_cpu_policy(stage1_requested, stage1_preview_device or stage1_resolved, run_model)
+            _enable_torch_weights_only_compat(run_model, stage1_runtime_device)
+            emit_phase("model_setup_start")
+            stage1_sep = StemSeparator(model=run_model, device=stage1_runtime_device)
+            emit_phase("model_setup_end")
+
+            def stage1_progress(pct: float, _msg: str):
+                bounded = max(1, min(48, int(float(pct or 0) * 0.48)))
+                emit_progress(bounded, f"Extracting drums [{stage1_runtime_device}]...")
+
+            stage1_sep.on_progress = stage1_progress
+            with _working_directory(stage1_root):
+                emit_phase("separate_start")
+                stage1_result = stage1_sep.separate(args.input, str(stage1_root), stems=["drums"])
+                emit_phase("separate_end")
+            stage1_stems = _map_reaper_stems_from_result(stage1_result, stage1_root)
+            drums_input = Path(stage1_stems.get("drums", stage1_root / "drums.wav")).resolve()
+            if not drums_input.exists():
+                print("error_stage=stage1_parent", file=sys.stderr)
+                print("error_reason=missing_drums_intermediate", file=sys.stderr)
+                print(f"dks_extract_stage1_output={drums_input}", file=sys.stderr)
+                return 1
+            print(f"dks_extract_stage1_output={drums_input}", file=sys.stderr)
+            emit_phase("stage1_parent_end")
+
+            emit_phase("stage2_preflight")
+            print("PROGRESS:50:Starting Drum Kit runtime [Stage 2]...", flush=True)
+            print(f"timing_utc={_ts()} drumsep_runtime_select_start", file=sys.stderr)
+            drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
+            print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
+            if drumsep_python is None:
+                reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+                runtime_path = _drumsep_rocm_runtime_python_path()
+                _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
+                print("dks_extract_stage2_runtime=drumsep", file=sys.stderr)
+                emit_phase("python_error")
+                if write_done:
+                    write_done("ERROR")
+                return 1
+            versions = runtime_info.get("versions") if isinstance(runtime_info.get("versions"), dict) else {}
+            device_names = runtime_info.get("device_names") if isinstance(runtime_info.get("device_names"), list) else []
+            fallback_reason = str(runtime_info.get("fallback_reason") or "")
+            print(f"dks_extract_stage2_runtime=drumsep", file=sys.stderr)
+            print(f"dks_extract_stage2_device={runtime_kind}", file=sys.stderr)
+            print(f"dks_extract_stage2_requested_device={device_preference}", file=sys.stderr)
+            print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
+            print(f"drumsep_runtime_selection_policy={runtime_info.get('selection_policy', '')}", file=sys.stderr)
+            print(f"drumsep_python={drumsep_python}", file=sys.stderr)
+            print(f"drumsep_gpu_capable={'yes' if runtime_kind == 'rocm' else 'no'}", file=sys.stderr)
+            print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
+            print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
+            print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
+            if fallback_reason:
+                print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
+            ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
+            if not ok:
+                known_err_text = str(known_err or "").lower()
+                reason = (
+                    "drumsep_model_missing"
+                    if "not found in supported model files" in known_err_text or known_err_text.startswith("catalog_")
+                    else "drumsep_model_download_failed"
+                )
+                _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", str(known_err or ""))
+                emit_phase("python_error")
+                if write_done:
+                    write_done("ERROR")
+                return 1
+            requested_stage2_model = requested_model or requested_stage2_model
+            run_model = resolved_model or run_model
+            emit_phase("stage2_separate")
+            helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
+                drums_input,
+                stage2_root,
+                model_cache_dir,
+                drumsep_python,
+                requested_stage2_model,
+                run_model,
+            )
+            if not helper_ok:
+                stage = "stage2_separate"
+                if helper_reason == "drumsep_model_load_failed":
+                    stage = "stage2_model_load"
+                elif helper_reason == "drumsep_output_count_mismatch":
+                    stage = "stage2_output_validation"
+                _emit_direct_dks_helper_failure_markers(
+                    helper_reason or "drumsep_helper_failed",
+                    stage,
+                    requested_stage2_model,
+                    run_model,
+                    helper_detail,
+                )
+                emit_phase("python_error")
+                if write_done:
+                    write_done("ERROR")
+                return 1
+            emit_phase("stem_write_start")
+            print("PROGRESS:95:Writing drum tracks...", flush=True)
+            final_stems: Dict[str, str] = {}
+            for stem_name, stage2_path in helper_stems.items():
+                src = Path(stage2_path).resolve()
+                dst = output_root / f"{stem_name}.wav"
+                if dst.exists():
+                    dst.unlink()
+                shutil.move(str(src), str(dst))
+                final_stems[stem_name] = str(dst)
+            print(json.dumps(final_stems))
+            emit_phase("stem_write_end")
+            emit_phase("python_done")
+            if write_done:
+                write_done("DONE")
+            return 0
+        except Exception as exc:
+            import traceback
+
+            traceback_text = traceback.format_exc()
+            print(f"ERROR: {exc}", file=sys.stderr)
+            print(traceback_text, file=sys.stderr, end="" if traceback_text.endswith("\n") else "\n")
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return 1
+
     if _is_direct_dks_source(args.workflow_mode, args.workflow_source):
         emit_phase("stage2_preflight")
         print("PROGRESS:0:Preparing Direct Drum Kit...", flush=True)
@@ -1755,37 +1987,10 @@ def main():
             write_done("DONE")
         return 0
 
-    resolved_device = device_preference
-    print(f"normal_workflow_backend_seen_device_request={device_preference}", file=sys.stderr)
-    live_devices = get_available_devices()
-    live_device_ids = [str(dev.get("id", "")) for dev in live_devices]
+    requested_device, resolved_device, preview_text, live_device_ids = _resolve_normal_runtime_device(device_preference)
+    preview_device_id, _sep, preview_device_name = preview_text.partition("|")
+    print(f"normal_workflow_backend_seen_device_request={requested_device}", file=sys.stderr)
     print(f"normal_workflow_live_device_ids={','.join(live_device_ids)}", file=sys.stderr)
-    if device_preference == "auto":
-        preferred = None
-        if sys.platform.startswith("linux"):
-            preferred = _prefer_linux_amd_device(live_devices, _get_skip_ids())
-        if preferred:
-            resolved_device = preferred.get("id") or "auto"
-            print(
-                f"STEMWERK_DIAG auto_selected_preferred={resolved_device} ({preferred.get('name','')})",
-                file=sys.stderr,
-            )
-        else:
-            try:
-                dev_id, dev_name = select_device("auto")
-                print(f"STEMWERK_DIAG auto_selected={dev_id} ({dev_name})", file=sys.stderr)
-                resolved_device = dev_id
-            except Exception:
-                resolved_device = "auto"
-    else:
-        print(f"STEMWERK_DIAG requested_device={device_preference}", file=sys.stderr)
-
-    preview_device_id = resolved_device
-    preview_device_name = ""
-    try:
-        preview_device_id, preview_device_name = select_device(resolved_device)
-    except Exception as exc:
-        print(f"normal_workflow_backend_preview_error={type(exc).__name__}:{exc}", file=sys.stderr)
     print(f"normal_workflow_backend_seen_device_resolved={resolved_device}", file=sys.stderr)
     print(f"normal_workflow_backend_preview_device={preview_device_id}", file=sys.stderr)
     print(f"normal_workflow_backend_preview_name={preview_device_name}", file=sys.stderr)
@@ -1823,40 +2028,7 @@ def main():
         # audio-separator writes model outputs inside sep.separate(); this phase
         # brackets the REAPER-facing output mapping and final stem renames.
         emit_phase("stem_write_start")
-        # Mapping logica voor REAPER compatibiliteit
-        stem_mapping = {
-            'vocals': ['vocals', 'vocal', 'Vocals'],
-            'drums':  ['drums', 'drum', 'Drums'],
-            'bass': ['bass', 'Bass'],
-            'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental'],
-            'guitar': ['guitar', 'Guitar'],
-            'piano': ['piano', 'Piano', 'keys', 'Keys']
-        }
-
-        reaper_stems = {}
-        for stem_name, stem_path in result.stems.items():
-            abs_path = _resolve_stem_path(output_root, stem_path)
-            if not abs_path.exists():
-                raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
-            
-            # Zoek naar de juiste REAPER naam
-            filename = abs_path.stem.lower()
-            target_name = stem_name  # fallback
-            
-            for map_name, patterns in stem_mapping.items():
-                if any(p.lower() in filename for p in patterns):
-                    target_name = map_name
-                    break
-            
-            # Hernoem bestand naar simpele naam (bijv. vocals.wav)
-            new_path = abs_path.parent / f"{target_name}.wav"
-            if abs_path != new_path:
-                if new_path.exists():
-                    os.remove(new_path)
-                shutil.move(str(abs_path), str(new_path))
-            
-            reaper_stems[target_name] = str(new_path)
-            print(f"  {target_name}:  {new_path}", file=sys.stderr)
+        reaper_stems = _map_reaper_stems_from_result(result, output_root)
 
         emit_phase("stem_write_end")
 
@@ -1872,7 +2044,7 @@ def main():
         import traceback
 
         traceback_text = traceback.format_exc()
-        if _is_direct_dks_source(args.workflow_mode, args.workflow_source) and _is_known_drumsep_runtime_unsupported_error(exc, traceback_text, run_model):
+        if (_is_direct_dks_source(args.workflow_mode, args.workflow_source) or _is_extract_dks_source(args.workflow_mode, args.workflow_source)) and _is_known_drumsep_runtime_unsupported_error(exc, traceback_text, run_model):
             _emit_direct_dks_runtime_unsupported_markers(
                 requested_stage2_model or run_model,
                 run_model,

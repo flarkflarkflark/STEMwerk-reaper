@@ -1397,7 +1397,11 @@ local function collectLatestDksMarkers(cacheLogDir)
         "workflow_mode", "workflow_source", "error_stage", "error_reason",
         "drumsep_runtime_selected", "drumsep_python", "drumsep_gpu_capable",
         "drumsep_runtime_fallback_reason", "drumsep_torch_version", "drumsep_torch_hip",
-        "drumsep_device_names", "separate_start", "separate_end",
+        "drumsep_device_names", "dks_extract_stage1_runtime", "dks_extract_stage1_requested_device",
+        "dks_extract_stage1_device", "dks_extract_stage1_device_name", "dks_extract_stage1_live_device_ids",
+        "dks_extract_stage1_fallback_reason", "dks_extract_stage1_output", "dks_extract_stage2_runtime",
+        "dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_intermediate_dir",
+        "dks_extract_stage2_dir", "separate_start", "separate_end",
         "stem_write_start", "stem_write_end", "python_done", "drumsep_helper_start",
         "drumsep_helper_ok", "drumsep_helper_stdout", "drumsep_helper_stderr",
     })

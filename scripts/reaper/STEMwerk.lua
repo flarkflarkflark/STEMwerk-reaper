@@ -1797,39 +1797,29 @@ local function selectDirectDrumKitWorkflow()
     activateWorkflowStemSet(true)
 end
 
+local function selectExtractDrumKitWorkflow()
+    dialogWorkflowSource = DKS_WORKFLOW.SOURCE_EXTRACT
+    SETTINGS.workflowMode = DKS_WORKFLOW.WORKFLOW_DRUMKIT
+    SETTINGS.workflowSource = DKS_WORKFLOW.SOURCE_EXTRACT
+    reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
+    reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_EXTRACT, false)
+    activateWorkflowStemSet(true)
+end
+
 restoreDialogWorkflowSelection = function()
     local mode = tostring(SETTINGS.workflowMode or "")
     local source = tostring(SETTINGS.workflowSource or "")
-    local direct = mode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
-        and (source == DKS_WORKFLOW.SOURCE_DIRECT or DKS_WORKFLOW.isDirectPreset(source))
-    if direct then
+    local drumkit = mode == DKS_WORKFLOW.WORKFLOW_DRUMKIT and DKS_WORKFLOW.isDrumKitSource(source)
+    if drumkit and source == DKS_WORKFLOW.SOURCE_EXTRACT then
+        selectExtractDrumKitWorkflow()
+        return
+    end
+    if drumkit then
         selectDirectDrumKitWorkflow()
         return
     end
     dialogWorkflowSource = ""
     activateWorkflowStemSet(false)
-end
-
-local function showExtractKitPlannedNotice()
-    local title = type(T) == "function" and T("edks_planned_title") or nil
-    if title == nil or title == "" or title == "edks_planned_title" or title == "edks planned title" then
-        title = "Drum Kit Split is planned"
-    end
-    local msg = type(T) == "function" and T("edks_planned_message") or nil
-    if msg == nil or msg == "" or msg == "edks_planned_message" or msg == "edks planned message" then
-        msg = "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material."
-    end
-    if type(showMessage) == "function" then
-        showMessage(title, msg, "info", true)
-        return
-    end
-    if type(MESSAGES) == "table" and type(MESSAGES.showMessage) == "function" then
-        MESSAGES.showMessage(title, msg, "info", true)
-        return
-    end
-    if reaper and reaper.ShowMessageBox then
-        reaper.ShowMessageBox(msg, title, 0)
-    end
 end
 
 local function rgbToReaperColor(r, g, b)
@@ -8848,7 +8838,7 @@ function renderResultTitleArea(ctx)
     local titleY = PS(spacing.titleY or 100)
 
     if drumKitCopy then
-        local title = trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")
+        local title = activeDrumKitCompleteTitle()
         local titleW = gfx.measurestr(title)
         local titleX = (w - titleW) / 2
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
@@ -9925,7 +9915,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local workflowMode = tostring(SETTINGS.workflowMode or "")
         local workflowSource = tostring(dialogWorkflowSource or SETTINGS.workflowSource or "")
         return workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
-            and (workflowSource == DKS_WORKFLOW.SOURCE_DIRECT or DKS_WORKFLOW.isDirectPreset(workflowSource))
+            and DKS_WORKFLOW.isDrumKitSource(workflowSource)
     end
 
     local function readEnvFile(path)
@@ -11790,8 +11780,7 @@ function renderMainColumns(ctx)
     do
         local workflowMode = tostring(SETTINGS.workflowMode or "")
         local workflowSource = tostring(dialogWorkflowSource or SETTINGS.workflowSource or "")
-        local inDrumKitWorkflow = workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
-            and (workflowSource == DKS_WORKFLOW.SOURCE_DIRECT or workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT or DKS_WORKFLOW.isDirectPreset(workflowSource))
+        local inDrumKitWorkflow = workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT and DKS_WORKFLOW.isDrumKitSource(workflowSource)
         local function ss(i) return STEMS[i] and STEMS[i].selected or false end
         local v, d, b, o = ss(1), ss(2), ss(3), ss(4)
         local g, p = ss(5), ss(6)
@@ -11840,14 +11829,11 @@ function renderMainColumns(ctx)
     )
     presetY = presetY + presetStep
 
-    local disabledColor = utilityMode and {130, 130, 130} or {90, 90, 90}
-    if drawToggleButton(col1X, presetY, colW, btnH, presetLabelEdks, _pa.edks == true, disabledColor, presetsBtnFontSize) then
-        showExtractKitPlannedNotice()
-    end
+    if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("workflow_edks_label", "Drum Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Planned: extract drums from a full mix, then split the kit."),
-        "X", {130, 130, 130}
+        trSafe("workflow_edks_label", "Drum Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Extract drums from a full mix, then split the kit into Kick, Snare, Toms, Hi-Hat, Ride and Crash."),
+        "X", {150, 132, 228}
     )
     presetY = presetY + presetSectionGap
 
@@ -11874,7 +11860,7 @@ function renderMainColumns(ctx)
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
+    local stemsHeader = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))
         and trSafe("drum_stems_label", "Drum Stems:")
         or (is6Stem and T("stems_6") or "Stems:")
     drawColumnHeader(stemsHeader, col2X, stemsW, mainHeaderFont, contentTop)
@@ -11911,7 +11897,7 @@ function renderMainColumns(ctx)
     for i, stem in ipairs(STEMS) do
         if not stem.sixStemOnly or is6Stem then
             local k = tostring(stem.name or ""):lower()
-            local displayName = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
+            local displayName = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))
                 and stem.name
                 or (T(k) or stem.name)
             local label = tostring(displayName) .. " (" .. stem.key .. ")"
@@ -11922,7 +11908,7 @@ function renderMainColumns(ctx)
                 clicked = drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color, stemsBtnFontSize)
             end
             if clicked then toggleStemSelection(i) end
-            local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)
+            local tooltipKey = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))
                 and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")
                 or (stemTooltipKeys[stem.name] or "tooltip_stem_other")
             setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)
@@ -11959,7 +11945,7 @@ function renderMainColumns(ctx)
         local modelAvailable = isModelAvailableInCurrentMode(model.id)
         local modelColor = modelAvailable and nil or {120, 120, 120}
         local modelDisplayName = model.name
-        if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT then
+        if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT then
             if model.id == "htdemucs" then
                 modelDisplayName = trSafe("model_label_fast", "Fast")
             elseif model.id == "htdemucs_ft" then
@@ -11976,7 +11962,7 @@ function renderMainColumns(ctx)
             setModelPreservingStemIntent(model.id)
         end
         local descKey = modelDescKeys[model.id] or "model_fast_desc"
-        if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT and model.id == "htdemucs_6s" then
+        if (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT) and model.id == "htdemucs_6s" then
             descKey = "model_expanded_drumkit_desc"
         end
         local tip = trSafe(descKey, modelDisplayName)
@@ -12568,7 +12554,7 @@ function handleDialogKeyboard(ctx)
     elseif char == 122 or char == 90 then
         selectDirectDrumKitWorkflow()
     elseif char == 120 or char == 88 then
-        showExtractKitPlannedNotice()
+        selectExtractDrumKitWorkflow()
     elseif char == 118 or char == 86 then clearDialogWorkflowSelection(); applyPresetVocalsOnly()
     elseif char == 100 or char == 68 then clearDialogWorkflowSelection(); applyPresetDrumsOnly()
     elseif char == 98 or char == 66 then clearDialogWorkflowSelection(); applyPresetBassOnly()
@@ -13799,7 +13785,88 @@ isDrumKitWorkflowActive = function()
     return tostring(progressState.workflowMode or "") == DKS_WORKFLOW.WORKFLOW_DRUMKIT
 end
 
-local function setWorkflowContextForRun(runOptions)
+function isExtractDrumKitWorkflowActive()
+    return isDrumKitWorkflowActive() and tostring(progressState.workflowSource or "") == DKS_WORKFLOW.SOURCE_EXTRACT
+end
+
+function activeDrumKitWorkflowTitle()
+    if isExtractDrumKitWorkflowActive() then
+        return trSafeValue("workflow_edks_label", "Drum Kit Split")
+    end
+    return trSafeValue("workflow_drumkit_label", "Direct Drum Kit")
+end
+
+function activeDrumKitFolderSuffix()
+    if isExtractDrumKitWorkflowActive() then
+        return trSafeValue("drum_kit_split_folder_suffix", "Drum Kit Split")
+    end
+    return trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit")
+end
+
+function activeDrumKitCompleteTitle()
+    if isExtractDrumKitWorkflowActive() then
+        return trSafeValue("edks_complete_title", "Drum Kit Split completed successfully!")
+    end
+    return trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")
+end
+
+function shortRuntimeGpuName(name)
+    local s = tostring(name or "")
+    s = s:gsub("^%s+", ""):gsub("%s+$", "")
+    if s == "" then return "" end
+    local first = s:match("^([^|,;]+)") or s
+    first = first:gsub("^%s+", ""):gsub("%s+$", "")
+    first = first:gsub("^AMD Radeon%s+", "")
+    return first
+end
+
+function deriveResolvedRuntimeFooter(footerDeviceDetail)
+    if not isDrumKitWorkflowActive() then
+        return footerDeviceDetail
+    end
+    local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
+    local runtimeSel = tostring(progressState._runtimeSelected or ""):lower()
+    local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
+    local deviceName = progressState._deviceName
+    if (not deviceName or deviceName == "") and progressState._runtimeDeviceNames and progressState._runtimeDeviceNames ~= "" then
+        deviceName = tostring(progressState._runtimeDeviceNames):match("([^,;]+)")
+    end
+    if deviceName then
+        deviceName = tostring(deviceName):gsub("^%s+", ""):gsub("%s+$", "")
+    end
+
+    if req == "cpu" then
+        return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
+    end
+    if runtimeSel == "rocm" then
+        local gpuLabel = shortRuntimeGpuName(deviceName)
+        if gpuLabel == "" then gpuLabel = "ROCm" end
+        if req == "auto" then
+            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), gpuLabel)
+        end
+        return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), gpuLabel)
+    end
+    if runtimeSel == "cpu" then
+        if req == "auto" then
+            return trSafeValue("footer_device_auto_resolved_cpu", "Auto -> CPU runtime")
+        end
+        return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
+    end
+    if gpuCap == "yes" and deviceName and deviceName ~= "" then
+        local short = shortRuntimeGpuName(deviceName)
+        if short == "" then short = tostring(deviceName) end
+        if req == "auto" then
+            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), short)
+        end
+        return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short)
+    end
+    if req == "cpu" then
+        return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
+    end
+    return footerDeviceDetail
+end
+
+function setWorkflowContextForRun(runOptions)
     runOptions = runOptions or {}
     progressState.workflowMode = tostring(runOptions.workflowMode or "")
     progressState.workflowSource = tostring(runOptions.workflowSource or "")
@@ -13869,7 +13936,7 @@ function showProcessingPlaceholderWindow(stage)
     local fillW = math.max(24, math.floor(barW * (0.18 + 0.22 * pulse)))
 
     gfx.setfont(1, "Arial", 20, string.byte('b'))
-    local title = isDrumKitWorkflowActive() and trSafeValue("workflow_drumkit_label", "Direct Drum Kit") or "STEMwerk"
+    local title = isDrumKitWorkflowActive() and activeDrumKitWorkflowTitle() or "STEMwerk"
     local titleW = gfx.measurestr(title)
     gfx.set(text[1], text[2], text[3], 1)
     gfx.x = math.floor((w - titleW) / 2)
@@ -13969,21 +14036,12 @@ function utilityProgressMutedColor()
 end
 
 -- Draw progress window with stem colors and eye candy (scalable)
-local function drawProgressWindow()
-    -- Function-level aliases for extracted module (don't count toward chunk local limit)
-    local PROGRESS_BASE_W        = UI_PROGRESS.PROGRESS_BASE_W
-    local PROGRESS_BASE_H        = UI_PROGRESS.PROGRESS_BASE_H
-    local makeProgressWindowResizable = UI_PROGRESS.makeProgressWindowResizable
-    local normalizeProgressStage = UI_PROGRESS.normalizeProgressStage
-    local readableTerminalAccent = UI_PROGRESS.readableTerminalAccent
-    local drawTerminalFx         = UI_PROGRESS.drawTerminalFx
-    local formatProgressLine     = UI_PROGRESS.formatProgressLine
-    local progressUiLabel        = UI_PROGRESS.progressUiLabel
+function drawProgressWindow()
     local w, h = gfx.w, gfx.h
 
     -- Calculate scale based on window size
-    local scaleW = w / PROGRESS_BASE_W
-    local scaleH = h / PROGRESS_BASE_H
+    local scaleW = w / UI_PROGRESS.PROGRESS_BASE_W
+    local scaleH = h / UI_PROGRESS.PROGRESS_BASE_H
     local scale = math.min(scaleW, scaleH)
     scale = math.max(0.5, math.min(4.0, scale))  -- Clamp scale
 
@@ -13992,7 +14050,7 @@ local function drawProgressWindow()
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
 
     -- Try to make window resizable
-    makeProgressWindowResizable()
+    UI_PROGRESS.makeProgressWindowResizable()
 
     -- === PROCEDURAL ART AS FULL BACKGROUND LAYER ===
     -- Pure black/white background first
@@ -14252,7 +14310,7 @@ local function drawProgressWindow()
         gfx.x = titleX
         gfx.y = titleY
         if drumKitMode then
-            gfx.drawstr(trSafeValue("workflow_drumkit_label", "Direct Drum Kit"))
+            gfx.drawstr(activeDrumKitWorkflowTitle())
         else
             local singleTrackLabel = T("single_track") or "Single-Track"
             gfx.drawstr(singleTrackLabel .. " ")
@@ -14390,65 +14448,10 @@ local function drawProgressWindow()
     end
     local footerRealtimeFactor = (footerProcessedAudioDur > 0 and footerElapsed > 0) and (footerProcessedAudioDur / footerElapsed) or 0
     local footerDeviceDetail = (progressState.stage or ""):match("%[([^%]]+)%]") or nil
-    local function shortRuntimeGpuName(name)
-        local s = tostring(name or "")
-        s = s:gsub("^%s+", ""):gsub("%s+$", "")
-        if s == "" then return "" end
-        local first = s:match("^([^|,;]+)") or s
-        first = first:gsub("^%s+", ""):gsub("%s+$", "")
-        first = first:gsub("^AMD Radeon%s+", "")
-        return first
-    end
-
-    local function deriveResolvedRuntimeFooter()
-        if not isDrumKitWorkflowActive() then
-            return footerDeviceDetail
-        end
-        local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
-        local runtimeSel = tostring(progressState._runtimeSelected or ""):lower()
-        local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
-        local deviceName = progressState._deviceName
-        if (not deviceName or deviceName == "") and progressState._runtimeDeviceNames and progressState._runtimeDeviceNames ~= "" then
-            deviceName = tostring(progressState._runtimeDeviceNames):match("([^,;]+)")
-        end
-        if deviceName then
-            deviceName = tostring(deviceName):gsub("^%s+", ""):gsub("%s+$", "")
-        end
-
-        if req == "cpu" then
-            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
-        end
-        if runtimeSel == "rocm" then
-            local gpuLabel = shortRuntimeGpuName(deviceName)
-            if gpuLabel == "" then gpuLabel = "ROCm" end
-            if req == "auto" then
-                return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), gpuLabel)
-            end
-            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), gpuLabel)
-        end
-        if runtimeSel == "cpu" then
-            if req == "auto" then
-                return trSafeValue("footer_device_auto_resolved_cpu", "Auto -> CPU runtime")
-            end
-            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
-        end
-        if gpuCap == "yes" and deviceName and deviceName ~= "" then
-            local short = shortRuntimeGpuName(deviceName)
-            if short == "" then short = tostring(deviceName) end
-            if req == "auto" then
-                return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), short)
-            end
-            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short)
-        end
-        if req == "cpu" then
-            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
-        end
-        return footerDeviceDetail
-    end
-    footerDeviceDetail = deriveResolvedRuntimeFooter()
+    footerDeviceDetail = deriveResolvedRuntimeFooter(footerDeviceDetail)
 
     -- Stage text inside the main progress bar, like the multi-track job bars.
-    local stageDisplay = normalizeProgressStage(progressState.stage or (T("starting") or "Starting..."))
+    local stageDisplay = UI_PROGRESS.normalizeProgressStage(progressState.stage or (T("starting") or "Starting..."))
     local baseStageText = tostring(stageDisplay or "")
         :gsub("%s*%([^%)]*%)", "")
         :gsub("%s*%[[^%]]*%]", "")
@@ -14642,7 +14645,7 @@ local function drawProgressWindow()
                     termHeaderG = 0.85 + accentG * 0.12
                     termHeaderB = 0.85 + accentB * 0.12
                     termHeaderA = 1
-                    termTextR, termTextG, termTextB = readableTerminalAccent(accentR, accentG, accentB)
+                    termTextR, termTextG, termTextB = UI_PROGRESS.readableTerminalAccent(accentR, accentG, accentB)
                 end
 
                 -- Match the LED/progress tint to the active track color when available.
@@ -14659,7 +14662,7 @@ local function drawProgressWindow()
             gfx.set(termBorderR, termBorderG, termBorderB, termBorderA)
             gfx.rect(displayX, displayY, displayW, displayH, 0)
             if SETTINGS.visualFX and not utilityMode then
-                drawTerminalFx(displayX, displayY, displayW, displayH, uiNow(), termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
+                UI_PROGRESS.drawTerminalFx(displayX, displayY, displayW, displayH, uiNow(), termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
             end
 
             -- Terminal header
@@ -14680,7 +14683,7 @@ local function drawProgressWindow()
                     local f = io.open(progressState.stdoutFile, "r")
                     if f then
                         for line in f:lines() do
-                            local formatted = formatProgressLine(line, 1)
+                            local formatted = UI_PROGRESS.formatProgressLine(line, 1)
                             table.insert(progressState.terminalLines, formatted or line)
                         end
                         f:close()
@@ -14791,7 +14794,7 @@ local function drawProgressWindow()
     end
     local mtTime = T("mt_time") or "Time"
     local mtCancel = T("mt_cancel") or "ESC=cancel"
-    local cancelBtnText = progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
+    local cancelBtnText = UI_PROGRESS.progressUiLabel("progress_cancel_button", T("cancel") or "Cancel")
 
     local contextItem = timeSelectionSourceItem or selectedItem
     local sourceTrackName, sourceItemName = HELPERS.getStemNamingContextForItem(contextItem, "Selection", "Selection")
@@ -14869,7 +14872,7 @@ local function drawProgressWindow()
     gfx.drawstr(cancelBtnText)
     if cancelHover then
         GUI.uiClickedThisFrame = true
-        tooltipText = progressUiLabel("progress_cancel_tooltip", progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
+        tooltipText = UI_PROGRESS.progressUiLabel("progress_cancel_tooltip", UI_PROGRESS.progressUiLabel("tooltip_cancel_processing", "Cancel separation"))
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not progressState.wasMouseDown then
             cancelClicked = true
@@ -15244,7 +15247,7 @@ function createStemTracks(item, stemPaths, itemPos, itemLen)
         if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end
     end
 
-    local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
+    local folderKind = isDrumKitWorkflowActive() and activeDrumKitFolderSuffix() or "Stems"
     local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
     local importedItems = {}
     local importedPaths = {}
@@ -15830,7 +15833,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 folderTrack = reaper.GetTrack(0, trackIdx)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderName(plannedTargets)) then
-                local folderLabel = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
+                local folderLabel = isDrumKitWorkflowActive() and activeDrumKitFolderSuffix() or "Stems"
                 reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - " .. folderLabel, true)
             end
             if not (isValidTrack(plannedFolderTrack) and shouldKeepPlannedFolderDepth(plannedTargets)) then
@@ -15943,7 +15946,7 @@ function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTrack, it
                 end
             end
         end
-        local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
+        local folderKind = isDrumKitWorkflowActive() and activeDrumKitFolderSuffix() or "Stems"
         local folderNames = HELPERS.buildStemOutputNames(sourceTrackName, sourceItemName, folderKind)
 
         local trackIdx = getInsertIndexForTrack(track)
@@ -16624,13 +16627,13 @@ function showResultWindow(selectedStems, message)
 end
 
 -- Helper: normalize item name for display/file
-local function normalizeItemName(name)
+function normalizeItemName(name)
     if not name or name == "" then return nil end
     return name:match("([^/\\]+)%.[^.]*$") or name
 end
 
 -- Helper: get item name fields
-local function getItemNameFields(item, fallbackTrackName)
+function getItemNameFields(item, fallbackTrackName)
     local take = reaper.GetActiveTake(item)
     local takeName = nil
     if take then
@@ -16655,7 +16658,7 @@ local function getItemNameFields(item, fallbackTrackName)
 end
 
 -- Helper: get selected audible items on track
-local function getSelectedAudibleItemsOnTrack(track, soloActive)
+function getSelectedAudibleItemsOnTrack(track, soloActive)
     local items = {}
     local numItems = reaper.CountTrackMediaItems(track)
     for j = 0, numItems - 1 do
@@ -19314,7 +19317,7 @@ _sep.processAllStemsResult = function()
             insertedTrackCount = insertedTrackCount + 1
             local folderTrack = reaper.GetTrack(0, trackIdx)
             targets.folderTrack = folderTrack
-            local folderLabel = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"
+            local folderLabel = isDrumKitWorkflowActive() and activeDrumKitFolderSuffix() or "Stems"
             reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - " .. folderLabel, true)
             reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
             HELPERS.applyTrackColorIfEnabled(folderTrack, rgbToReaperColor(180, 140, 200))
@@ -19897,8 +19900,10 @@ function runSeparationWorkflow()
     local runOptions = nil
     local workflowModeState = tostring(reaper.GetExtState(EXT_SECTION, "active_workflow_mode") or "")
     local workflowSourceState = tostring(reaper.GetExtState(EXT_SECTION, "active_workflow_source") or "")
-    local isDirectDKS = (workflowModeState == DKS_WORKFLOW.WORKFLOW_DRUMKIT)
-        and (workflowSourceState == DKS_WORKFLOW.SOURCE_DIRECT or DKS_WORKFLOW.isDirectPreset(workflowSourceState))
+    local isDrumKitWorkflow = (workflowModeState == DKS_WORKFLOW.WORKFLOW_DRUMKIT)
+        and DKS_WORKFLOW.isDrumKitSource(workflowSourceState)
+    local isDirectDKS = isDrumKitWorkflow and workflowSourceState == DKS_WORKFLOW.SOURCE_DIRECT
+    local isExtractDKS = isDrumKitWorkflow and workflowSourceState == DKS_WORKFLOW.SOURCE_EXTRACT
     if workflowModeState ~= "" then
         reaper.DeleteExtState(EXT_SECTION, "active_workflow_mode", false)
     end
@@ -19908,8 +19913,11 @@ function runSeparationWorkflow()
     if isDirectDKS then
         runOptions = DKS_WORKFLOW.buildDirectRunOptions()
         debugLog("Direct DKS mode active: skipping Demucs dependency guard")
+    elseif isExtractDKS then
+        runOptions = DKS_WORKFLOW.buildExtractRunOptions()
+        debugLog("Extract DKS mode active: stage1 uses normal runtime, stage2 uses DrumSep runtime")
     end
-    activateWorkflowStemSet(isDirectDKS)
+    activateWorkflowStemSet(isDrumKitWorkflow)
     setWorkflowContextForRun(runOptions)
 
     if OS == "Windows" then
@@ -20475,7 +20483,7 @@ function runSeparationWorkflow()
     -- Start separation with progress UI (async)
     writeTimingEvent(WORKFLOW_TEMP_DIR, "python_launch", "single", { mode = "single" })
     local workflowModel = SETTINGS.model
-    if runOptions and runOptions.requestedStage2Model then
+    if runOptions and runOptions.workflowSource == DKS_WORKFLOW.SOURCE_DIRECT and runOptions.requestedStage2Model then
         workflowModel = runOptions.requestedStage2Model
     end
     WORKFLOW.runSeparationWithProgress(WORKFLOW_TEMP_INPUT, WORKFLOW_TEMP_DIR, workflowModel, runOptions)
@@ -20506,6 +20514,9 @@ function checkQuickPreset()
             STEMS[4].selected = false
         elseif preset == "all" then
             applyPresetAll()
+        elseif preset == DKS_WORKFLOW.SOURCE_EXTRACT then
+            reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
+            reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_EXTRACT, false)
         elseif preset == DKS_WORKFLOW.WORKFLOW_DRUMKIT or DKS_WORKFLOW.isDirectPreset(preset) then
             reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
             reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)

@@ -8,9 +8,9 @@
 local EXT_SECTION = "STEMwerk"
 
 reaper.SetExtState(EXT_SECTION, "quick_run", "1", false)
-reaper.SetExtState(EXT_SECTION, "quick_preset", "drumkit", false)
+reaper.SetExtState(EXT_SECTION, "quick_preset", "dks_extract", false)
 reaper.SetExtState(EXT_SECTION, "active_workflow_mode", "drumkit", false)
-reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_direct", false)
+reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_extract", false)
 
 local info = debug.getinfo(1, "S")
 local script_path = info and info.source and info.source:match("@?(.*[/\\])") or ""

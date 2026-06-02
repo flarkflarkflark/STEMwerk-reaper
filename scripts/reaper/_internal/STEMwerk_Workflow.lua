@@ -120,8 +120,7 @@ end
 
 local function isDirectDrumKitRoute(runOptions)
     local workflowMode = tostring((runOptions and runOptions.workflowMode) or "")
-    local workflowSource = tostring((runOptions and runOptions.workflowSource) or "")
-    return workflowMode == "drumkit" and workflowSource == "dks_direct"
+    return workflowMode == "drumkit"
 end
 
 local function collectRuntimeDeviceIds()

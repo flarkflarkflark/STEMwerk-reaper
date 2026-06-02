@@ -1505,6 +1505,29 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
 
 
+def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
+
+    assert 'def _is_extract_dks_source(workflow_mode: Optional[str], workflow_source: Optional[str]) -> bool:' in script
+    assert 'return mode == "drumkit" and source == "dks_extract"' in script
+    assert "if _is_extract_dks_source(args.workflow_mode, args.workflow_source):" in script
+    assert 'stage1_root = output_root / "stage1_normal"' in script
+    assert 'stage2_root = output_root / "stage2_drumsep"' in script
+    assert 'stage1_result = stage1_sep.separate(args.input, str(stage1_root), stems=["drums"])' in script
+    assert 'drums_input = Path(stage1_stems.get("drums", stage1_root / "drums.wav")).resolve()' in script
+    assert "dks_extract_stage1_runtime=normal" in script
+    assert "dks_extract_stage1_device=" in script
+    assert "dks_extract_stage1_output=" in script
+    assert "dks_extract_stage2_runtime=drumsep" in script
+    assert "dks_extract_stage2_device=" in script
+    assert "dks_extract_stage2_requested_device=" in script
+    assert "print(json.dumps(final_stems))" in script
+    assert "workflow_source=dks_extract" not in support_script
+    assert '"dks_extract_stage1_runtime", "dks_extract_stage1_requested_device"' in support_script
+    assert '"dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_intermediate_dir"' in support_script
+
+
 def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, capsys):
     module = _load_audio_separator_process_module()
     missing_python = tmp_path / ".venv-drumsep" / "bin" / "python"
@@ -1863,11 +1886,11 @@ def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     assert 'drumsep_output_count_mismatch' in script
 
 
-def test_drumkit_wrapper_selects_integrated_mode_and_direct_source():
+def test_drumkit_wrapper_selects_integrated_mode_and_extract_source():
     wrapper = Path("scripts/reaper/STEMwerk_Drum_Kit_Split.lua").read_text()
-    assert 'reaper.SetExtState(EXT_SECTION, "quick_preset", "drumkit", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "quick_preset", "dks_extract", false)' in wrapper
     assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_mode", "drumkit", false)' in wrapper
-    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_direct", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_extract", false)' in wrapper
 
 
 def test_support_bundle_prefers_newest_runtime_run_over_stale_timing_summary():
@@ -1921,22 +1944,35 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert "Art-Ansicht" not in langs
 
 
-def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
+def test_drumkit_split_wrapper_selects_integrated_extract_route():
+    wrapper = Path("scripts/reaper/STEMwerk_Drum_Kit_Split.lua").read_text(encoding="utf-8")
+    workflow = Path("scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua").read_text(encoding="utf-8")
+
+    assert 'reaper.SetExtState(EXT_SECTION, "quick_preset", "dks_extract", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_mode", "drumkit", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_extract", false)' in wrapper
+    assert 'M.SOURCE_EXTRACT = "dks_extract"' in workflow
+    assert "function M.buildExtractRunOptions()" in workflow
+    assert "workflowSource = M.SOURCE_EXTRACT" in workflow
+    assert "requestedStage2Model = M.DIRECT_DKS_MODEL" in workflow
+
+
+def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
     progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text()
 
     assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"' in main_script
     assert 'local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Split") .. " (X)"' in main_script
-    assert 'local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'local stemsHeader = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
-    assert 'if drawToggleButton(col1X, presetY, colW, btnH, presetLabelEdks, _pa.edks == true, disabledColor, presetsBtnFontSize) then' in main_script
-    assert 'showExtractKitPlannedNotice()' in main_script
-    assert 'if type(showMessage) == "function" then' in main_script
-    assert 'if type(MESSAGES) == "table" and type(MESSAGES.showMessage) == "function" then' in main_script
+    assert 'if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end' in main_script
+    assert "showExtractKitPlannedNotice()" not in main_script
+    assert "local function selectExtractDrumKitWorkflow()" in main_script
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_EXTRACT, false)' in main_script
     assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)' in main_script
-    assert 'activateWorkflowStemSet(true)' in main_script
+    assert 'activateWorkflowStemSet(isDrumKitWorkflow)' in main_script
 
     assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
     assert 'workflow_drumkit_short_label = "Direct Kit"' in langs
@@ -1944,11 +1980,11 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'workflow_edks_short_label = "Drum Split"' in langs
     assert 'drum_stems_label = "Drum Stems:"' in langs
     assert 'tooltip_preset_drumkit = "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
-    assert 'tooltip_preset_edks = "Planned: extract drums from a full mix, then split the kit."' in langs
+    assert 'tooltip_preset_edks = "Extract drums from a full mix, then split the kit into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
     assert 'tooltip_preset_drumkit = "Splitst drum-only materiaal naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
-    assert 'tooltip_preset_edks = "Gepland: eerst drums uit een mix halen, daarna de drumkit splitsen."' in langs
+    assert 'tooltip_preset_edks = "Haal eerst drums uit een volledige mix en split daarna de kit naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
     assert 'tooltip_preset_drumkit = "Teilt Drum-Material in Kick, Snare, Toms, Hi-Hat, Ride und Crash."' in langs
-    assert 'tooltip_preset_edks = "Geplant: erst Drums aus einem Mix extrahieren, dann das Kit aufteilen."' in langs
+    assert 'tooltip_preset_edks = "Extrahiert zuerst Drums aus einem vollständigen Mix und teilt danach das Kit in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf."' in langs
     assert 'tooltip_stem_drumkit_kick = "Kick drum / bass drum"' in langs
     assert 'tooltip_stem_drumkit_snare = "Snare drum"' in langs
     assert 'tooltip_stem_drumkit_toms = "Toms"' in langs
@@ -1969,12 +2005,6 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'selected = "Ausgewählt:"' in langs
     assert 'delete_original = "Original löschen"' in langs
     assert 'tooltip_close = "STEMwerk schließen (ESC)"' in langs
-    assert 'edks_planned_title = "Drum Kit Split is planned"' in langs
-    assert 'edks_planned_title = "Drum Kit Split komt later"' in langs
-    assert 'edks_planned_title = "Drum Kit Split ist geplant"' in langs
-    assert 'edks_planned_message = "This two-stage workflow will first extract drums from a full mix, then split the kit. Use Direct Drum Kit for already-drum material."' in langs
-    assert 'edks_planned_message = "Deze tweetraps-workflow haalt eerst drums uit een volledige mix en splitst daarna de drumkit. Gebruik Direct Drum Kit voor materiaal dat al drums is."' in langs
-    assert 'edks_planned_message = "Dieser zweistufige Workflow extrahiert zuerst Drums aus einem vollständigen Mix und teilt danach das Kit auf. Verwende Direct Drum Kit für bereits isoliertes Drum-Material."' in langs
     assert 'progress_stage_splitting_drum_kit = "Splitting drum kit..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Drumkit splitsen..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Drumkit wird aufgeteilt..."' in langs
@@ -1994,16 +2024,18 @@ def test_main_ui_exposes_drumkit_preset_and_disabled_extract_kit_entry():
     assert 'footer_drum_tracks = "drumtracks"' in langs
     assert 'footer_drum_tracks = "Drum-Spuren"' in langs
     assert 'direct_drum_kit_folder_suffix = "Direct Drum Kit"' in langs
+    assert 'drum_kit_split_folder_suffix = "Drum Kit Split"' in langs
+    assert 'edks_complete_title = "Drum Kit Split completed successfully!"' in langs
     assert 'model_label_quality = "Qualität"' in langs
-    assert 'local displayName = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'local displayName = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and stem.name' in main_script
-    assert 'local tooltipKey = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'local tooltipKey = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")' in main_script
     assert 'trSafe("workflow_drumkit_label", "Direct Drum Kit") .. "\\n" .. trSafe("tooltip_preset_drumkit", "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash.")' in main_script
-    assert 'trSafe("workflow_edks_label", "Drum Kit Split") .. "\\n" .. trSafe("tooltip_preset_edks", "Planned: extract drums from a full mix, then split the kit.")' in main_script
+    assert 'trSafe("workflow_edks_label", "Drum Kit Split") .. "\\n" .. trSafe("tooltip_preset_edks", "Extract drums from a full mix, then split the kit into Kick, Snare, Toms, Hi-Hat, Ride and Crash.")' in main_script
     assert 'if model.id == "htdemucs"' in main_script
     assert 'modelDisplayName = trSafe("model_label_expanded", "Expanded")' in main_script
-    assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT and model.id == "htdemucs_6s" then' in main_script
+    assert 'if (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT) and model.id == "htdemucs_6s" then' in main_script
     assert 'descKey = "model_expanded_drumkit_desc"' in main_script
     assert "return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, rawColor, presetsBtnFontSize)" in main_script
     assert "local presetBottomLimit = footerRow4Y - S(6)" in main_script
@@ -2023,7 +2055,9 @@ def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_devic
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     workflow_script = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text()
 
-    assert 'local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"' in main_script
+    assert 'function activeDrumKitFolderSuffix()' in main_script
+    assert 'return trSafeValue("drum_kit_split_folder_suffix", "Drum Kit Split")' in main_script
+    assert 'return trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit")' in main_script
     assert 'sourceTrackName .. " - " .. folderLabel' in main_script
     assert "ui_device_selected_before_run=" in workflow_script
     assert "backend_device_arg=" in workflow_script
@@ -2047,10 +2081,14 @@ def test_single_track_workflow_uses_run_snapshot_device_and_resets_progress_devi
 def test_drumkit_ui_strings_use_safe_translation_resolution():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
     assert "function trSafeValue(key, fallback)" in script
-    assert 'local title = isDrumKitWorkflowActive() and trSafeValue("workflow_drumkit_label", "Direct Drum Kit") or "STEMwerk"' in script
+    assert 'function activeDrumKitWorkflowTitle()' in script
+    assert 'return trSafeValue("workflow_edks_label", "Drum Kit Split")' in script
+    assert 'return trSafeValue("workflow_drumkit_label", "Direct Drum Kit")' in script
     assert 'setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)' in script
-    assert 'local folderKind = isDrumKitWorkflowActive() and trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit") or "Stems"' in script
-    assert 'local title = trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")' in script
+    assert 'function activeDrumKitFolderSuffix()' in script
+    assert 'function activeDrumKitCompleteTitle()' in script
+    assert 'return trSafeValue("edks_complete_title", "Drum Kit Split completed successfully!")' in script
+    assert 'return trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")' in script
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", baseLoc)' in script
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))' in script
     assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")' in script
@@ -2100,7 +2138,7 @@ def test_direct_drumkit_tooltips_use_single_shortcut_and_route_scoped_expanded_c
     assert 'model_expanded_drumkit_desc = "Expanded DrumSep model for more detailed drum-kit splitting."' in langs
     assert 'model_expanded_drumkit_desc = "Uitgebreid DrumSep-model voor gedetailleerdere drumkit-splitsing."' in langs
     assert 'model_expanded_drumkit_desc = "Erweitertes DrumSep-Modell für detailliertere Drumkit-Trennung."' in langs
-    assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT and model.id == "htdemucs_6s" then' in main_script
+    assert 'if (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT) and model.id == "htdemucs_6s" then' in main_script
     assert 'descKey = "model_expanded_drumkit_desc"' in main_script
 
 
@@ -2129,9 +2167,9 @@ def test_drumkit_expanded_model_stays_route_scoped_and_does_not_force_normal_ste
 
     assert "local function activateWorkflowStemSet(isDirectDKS)" in main_script
     assert "STEMS = isDirectDKS and DRUMKIT_STEMS or STANDARD_STEMS" in main_script
-    assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT then' in main_script
+    assert 'if dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT then' in main_script
     assert 'modelDisplayName = trSafe("model_label_expanded", "Expanded")' in main_script
-    assert 'local stemsHeader = (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT)' in main_script
+    assert 'local stemsHeader = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
 
 
@@ -2139,12 +2177,12 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
 
-    assert "local function deriveResolvedRuntimeFooter()" in script
+    assert "function deriveResolvedRuntimeFooter(footerDeviceDetail)" in script
     assert "progressState._runtimeSelected" in script
     assert "progressState._normalizedDeviceRequest" in script
     assert "progressState._runtimeGpuCapable" in script
     assert "progressState._runtimeDeviceNames" in script
-    assert "local function shortRuntimeGpuName(name)" in script
+    assert "function shortRuntimeGpuName(name)" in script
     assert "local first = s:match(\"^([^|,;]+)\") or s" in script
     assert "first = first:gsub(\"^AMD Radeon%s+\", \"\")" in script
     assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s")' in script
