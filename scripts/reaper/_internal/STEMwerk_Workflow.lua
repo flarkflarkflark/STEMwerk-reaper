@@ -51,6 +51,48 @@ local function recordTimingEvent(eventName, fields)
     end
 end
 
+local function normalizeStemOutputKey(rawKey)
+    local key = tostring(rawKey or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if key == "" then return "" end
+    key = key:gsub("_", "-")
+    if key == "hihat" or key == "hihat" or key == "hh" then
+        return "hi-hat"
+    end
+    return key
+end
+
+local function collectStemPathsFromStdoutJson(stdoutFile)
+    if not stdoutFile or stdoutFile == "" then return {} end
+    local f = io.open(stdoutFile, "r")
+    if not f then return {} end
+    local text = f:read("*a") or ""
+    f:close()
+    if text == "" then return {} end
+
+    local lastJsonLine = nil
+    for line in tostring(text):gmatch("[^\r\n]+") do
+        local trimmed = tostring(line or ""):match("^%s*(.-)%s*$") or ""
+        if trimmed:sub(1, 1) == "{" and trimmed:sub(-1) == "}" and trimmed:find('":"', 1, true) then
+            lastJsonLine = trimmed
+        end
+    end
+    if not lastJsonLine then return {} end
+
+    local stems = {}
+    for rawKey, rawPath in lastJsonLine:gmatch('"([^"]+)"%s*:%s*"(.-)"') do
+        local key = normalizeStemOutputKey(rawKey)
+        local path = tostring(rawPath or ""):gsub('\\"', '"'):gsub("\\\\", "\\")
+        if key ~= "" and path ~= "" then
+            local probe = io.open(path, "rb")
+            if probe then
+                probe:close()
+                stems[key] = path
+            end
+        end
+    end
+    return stems
+end
+
 local function markSingleProgressMilestones(pct, stage)
     if not SW_TIMING then
         return
@@ -887,13 +929,39 @@ function WORKFLOW.finishSeparationCallback()
             end
         end
 
+        if next(stems) == nil then
+            local stdoutStems = collectStemPathsFromStdoutJson(C.progressState.stdoutFile)
+            if next(stdoutStems) then
+                stems = stdoutStems
+                local outputCount = 0
+                for _ in pairs(stems) do outputCount = outputCount + 1 end
+                if tostring(C.progressState.workflowSource or "") == "dks_extract" then
+                    debugLog("lua_dks_extract_outputs_detected=yes")
+                    debugLog("lua_dks_extract_output_count=" .. tostring(outputCount))
+                    append_diag_log("lua_dks_extract_outputs_detected=yes")
+                    append_diag_log("lua_dks_extract_output_count=" .. tostring(outputCount))
+                    SW_LOG.logExecResult("lua_dks_extract_outputs_detected=yes", nil, "lua_dks_extract_output_count=" .. tostring(outputCount))
+                end
+            end
+        end
+
         if next(stems) then
             debugLog("[LOG] Output detected for job (finishSeparationCallback)")
             persistWithExitCodeRetry(function()
                 -- Success - process stems
                 isProcessingActive = false  -- Reset guard so workflow can be restarted after result
                 debugLog("[LOG] Import start (processStemsResult)")
+                if tostring(C.progressState.workflowSource or "") == "dks_extract" then
+                    debugLog("lua_dks_extract_import_start")
+                    append_diag_log("lua_dks_extract_import_start")
+                    SW_LOG.logExecResult("lua_dks_extract_import_start", nil, "")
+                end
                 processStemsResult(stems)
+                if tostring(C.progressState.workflowSource or "") == "dks_extract" then
+                    debugLog("lua_dks_extract_import_end")
+                    append_diag_log("lua_dks_extract_import_end")
+                    SW_LOG.logExecResult("lua_dks_extract_import_end", nil, "")
+                end
                 debugLog("[LOG] Import end (processStemsResult)")
                 debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
                 C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })

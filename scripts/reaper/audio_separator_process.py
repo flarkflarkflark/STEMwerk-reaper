@@ -1878,7 +1878,7 @@ def main():
             final_stems: Dict[str, str] = {}
             for stem_name, stage2_path in helper_stems.items():
                 src = Path(stage2_path).resolve()
-                dst = output_root / f"{stem_name}.wav"
+                dst = output_root / src.name
                 if dst.exists():
                     dst.unlink()
                 shutil.move(str(src), str(dst))

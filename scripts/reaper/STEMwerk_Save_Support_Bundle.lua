@@ -688,6 +688,12 @@ local function shouldSkipSupportDirByName(name)
     if lower:match("^support%-bundle%-") then
         return true, "bundle-dir"
     end
+    if lower:match("^stemwerk[_%-]mdxc[_%-]matrix") then
+        return true, "dev-matrix"
+    end
+    if lower:match("^stemwerk%-slice%-") then
+        return true, "dev-slice"
+    end
     return false, ""
 end
 
@@ -1401,7 +1407,8 @@ local function collectLatestDksMarkers(cacheLogDir)
         "dks_extract_stage1_device", "dks_extract_stage1_device_name", "dks_extract_stage1_live_device_ids",
         "dks_extract_stage1_fallback_reason", "dks_extract_stage1_output", "dks_extract_stage2_runtime",
         "dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_intermediate_dir",
-        "dks_extract_stage2_dir", "separate_start", "separate_end",
+        "dks_extract_stage2_dir", "lua_dks_extract_outputs_detected", "lua_dks_extract_output_count",
+        "lua_dks_extract_import_start", "lua_dks_extract_import_end", "separate_start", "separate_end",
         "stem_write_start", "stem_write_end", "python_done", "drumsep_helper_start",
         "drumsep_helper_ok", "drumsep_helper_stdout", "drumsep_helper_stderr",
     })
@@ -3070,7 +3077,12 @@ local function collectTempInventory(bundleDir, copiedFiles)
         copiedFiles[#copiedFiles + 1] = copied[i]
     end
 
-    return inventoryLines, copied, tempBase, summary
+    return inventoryLines, copied, tempBase, summary, {
+        copiedCount = #copied,
+        copiedBytes = totals.copiedBytes or 0,
+        scannedFiles = totals.scannedFiles or 0,
+        scannedDirs = totals.scannedDirs or 0,
+    }
 end
 
 local function performBundleCollection()
@@ -3377,11 +3389,13 @@ local function performBundleCollection()
     appendLine(diagnostics, "")
 
     local tempInventoryStartedAt = phaseStart("collect_temp_inventory")
-    local tempInventory, _, tempBase, tempSummary = collectTempInventory(bundleDir, copiedFiles)
+    local tempInventory, _, tempBase, tempSummary, tempMeta = collectTempInventory(bundleDir, copiedFiles)
     phaseDone("collect_temp_inventory", tempInventoryStartedAt)
     appendLine(diagnostics, "Temp Folder Inventory")
     appendKey(diagnostics, "Temp base", tempBase)
     appendKey(diagnostics, "Temp inventory file", "temp_inventory.txt")
+    appendKey(diagnostics, "support_bundle_temp_logs_count", tostring((tempMeta and tempMeta.copiedCount) or 0))
+    appendKey(diagnostics, "support_bundle_temp_logs_bytes", tostring((tempMeta and tempMeta.copiedBytes) or 0))
     appendKey(diagnostics, "Recent separation_log.txt",
         persistentRunLogs.separation_log and "present (persistent)" or
         (tempSummary.separation and "present (temp only)" or "missing"))
