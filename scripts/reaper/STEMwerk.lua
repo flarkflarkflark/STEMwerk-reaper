@@ -8186,7 +8186,8 @@ local function drawMessageWindow()
     end
 
     -- === Message ===
-    gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+    local msgFontSize = PS(_isErrorMode and 13 or 14)
+    gfx.setfont(1, "Arial", msgFontSize, string.byte('b'))
 
     local r, g, b, pulseAlpha
     if _msgUtility then
@@ -8206,11 +8207,35 @@ local function drawMessageWindow()
     gfx.set(r, g, b, pulseAlpha)
 
     local msg = tostring(messageWindowState.message or T("select_audio") or "")
-    local msgMaxW = math.min(w - PS(70), PS(480))
+    local msgMaxW = math.min(w - PS(70), PS(_isErrorMode and 560 or 480))
+    local btnW = PS(70)
+    local btnH = PS(20)
+    local btnSpacing = PS(10)
+    local totalBtnsW = btnW * 2 + btnSpacing
+    local btnY = h - PS(40)
+    local footerTopY = _isErrorMode and (btnY - btnH - PS(18)) or (btnY - PS(12))
+    local msgTopY = PS(_isErrorMode and 190 or 210)
+    local msgLineGap = PS(_isErrorMode and 3 or 4)
     local msgLines = _wrapTextToWidth(msg, msgMaxW)
     if #msgLines == 0 then msgLines = { msg } end
-    local msgLineH = gfx.texth + PS(4)
-    local msgTopY = PS(210)
+    local msgLineH = gfx.texth + msgLineGap
+    local maxMsgLines = math.max(3, math.floor((footerTopY - msgTopY) / math.max(1, msgLineH)))
+    while _isErrorMode and #msgLines > maxMsgLines and msgFontSize > PS(11) do
+        msgFontSize = msgFontSize - 1
+        gfx.setfont(1, "Arial", msgFontSize, string.byte('b'))
+        msgLines = _wrapTextToWidth(msg, msgMaxW)
+        if #msgLines == 0 then msgLines = { msg } end
+        msgLineH = gfx.texth + msgLineGap
+        maxMsgLines = math.max(3, math.floor((footerTopY - msgTopY) / math.max(1, msgLineH)))
+    end
+    if _isErrorMode and #msgLines > maxMsgLines then
+        local clipped = {}
+        for i = 1, math.max(1, maxMsgLines - 1) do
+            clipped[#clipped + 1] = msgLines[i]
+        end
+        clipped[#clipped + 1] = "..."
+        msgLines = clipped
+    end
     local widestMsgW = 0
     for _, line in ipairs(msgLines) do
         widestMsgW = math.max(widestMsgW, gfx.measurestr(line))
@@ -8241,13 +8266,6 @@ local function drawMessageWindow()
         gfx.set(r, g, b, pulseAlpha * 0.5)
         gfx.line(underlineX, msgBottomY + PS(6), underlineX + underlineW, msgBottomY + PS(6))
     end
-
-    -- Shared button dimensions for consistency
-    local btnW = PS(70)
-    local btnH = PS(20)
-    local btnSpacing = PS(10)
-    local totalBtnsW = btnW * 2 + btnSpacing
-    local btnY = h - PS(40)
 
     if _isErrorMode then
         local bundleText = T("save_support_bundle") or "Save Support Bundle"
@@ -9903,8 +9921,80 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         return nvidia, other
     end
 
-    if RUNTIME_DEVICES then
-        for _, rd in ipairs(RUNTIME_DEVICES) do
+    local function isDirectDrumKitDeviceRoute()
+        local workflowMode = tostring(SETTINGS.workflowMode or "")
+        local workflowSource = tostring(dialogWorkflowSource or SETTINGS.workflowSource or "")
+        return workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+            and (workflowSource == DKS_WORKFLOW.SOURCE_DIRECT or DKS_WORKFLOW.isDirectPreset(workflowSource))
+    end
+
+    local function readEnvFile(path)
+        local kv = {}
+        local f = io.open(path, "r")
+        if not f then return nil end
+        for line in f:lines() do
+            local key, value = tostring(line or ""):match("^([A-Z0-9_]+)=(.*)$")
+            if key and key ~= "" then
+                kv[key] = value or ""
+            end
+        end
+        f:close()
+        return kv
+    end
+
+    local function buildDirectDksDeviceList()
+        local runtime = getRuntimePaths and getRuntimePaths() or nil
+        local stateDir = runtime and runtime.runtimeState or nil
+        if not stateDir or stateDir == "" then return nil end
+
+        local rocmState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {}
+        local cpuState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
+        local devices = {}
+        local function add(id, name, devType, descKey)
+            devices[#devices + 1] = {
+                id = id,
+                name = name,
+                fullName = name,
+                uiName = name,
+                type = devType,
+                descKey = descKey,
+                available = true,
+            }
+        end
+
+        local rocmReady = string.lower(tostring(rocmState.DRUMSEP_ROCM_RUNTIME_STATUS or "")) == "ok"
+        local rocmCudaAvailable = string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
+        local rocmDeviceNames = tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "")
+        local cpuReady = string.lower(tostring(cpuState.DRUMSEP_RUNTIME_STATUS or "")) == "ok"
+
+        if rocmReady or cpuReady then
+            add("auto", "Auto", "auto", "device_auto_desc")
+        end
+        if cpuReady or rocmReady then
+            add("cpu", "CPU", "cpu", "device_cpu_desc")
+        end
+        if rocmReady and rocmCudaAvailable then
+            local idx = 0
+            for rawName in rocmDeviceNames:gmatch("[^|]+") do
+                local trimmed = tostring(rawName):gsub("^%s+", ""):gsub("%s+$", "")
+                if trimmed ~= "" then
+                    add("cuda:" .. tostring(idx), trimmed, "cuda", "device_cuda_desc")
+                    idx = idx + 1
+                end
+            end
+            if idx == 0 then
+                add("cuda:0", "GPU 0", "cuda", "device_cuda_desc")
+            end
+        end
+
+        return (#devices > 0) and devices or nil
+    end
+
+    local directDksRoute = isDirectDrumKitDeviceRoute()
+    local runtimeDevicesForUi = directDksRoute and buildDirectDksDeviceList() or RUNTIME_DEVICES
+
+    if runtimeDevicesForUi then
+        for _, rd in ipairs(runtimeDevicesForUi) do
             if rd and rd.id then
                 local existing = seen[rd.id]
                 if existing then
@@ -9926,7 +10016,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         end
     end
 
-    if RUNTIME_DEVICES and RUNTIME_DEVICE_PROBE_DEBUG == "ok" then
+    if runtimeDevicesForUi and (directDksRoute or RUNTIME_DEVICE_PROBE_DEBUG == "ok") then
         local filtered = {}
         for _, d in ipairs(deviceList) do
             if d.available or d.id == "auto" or d.id == "cpu" then
@@ -9964,6 +10054,19 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         return nil
     end
 
+    local function listHasGpuDevice(list)
+        for _, d in ipairs(list or {}) do
+            local id = tostring(d.id or "")
+            local devType = tostring(d.type or "")
+            if devType == "cuda" or devType == "directml" or devType == "mps"
+                or id:match("^cuda:%d+$") or id:match("^directml:%d+$")
+                or id == "cuda" or id == "directml" or id == "mps" then
+                return true
+            end
+        end
+        return false
+    end
+
     -- Hide legacy alias devices (directml/cuda) when numbered devices exist.
     local hasDirectmlNumbered = hasNumberedDevice("directml")
     local hasCudaNumbered = hasNumberedDevice("cuda")
@@ -9980,6 +10083,27 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         deviceList = filtered
     end
 
+    if not directDksRoute and not listHasGpuDevice(deviceList) then
+        local cpuOnly = {}
+        for _, d in ipairs(deviceList) do
+            if tostring(d.id or "") == "cpu" then
+                cpuOnly[#cpuOnly + 1] = d
+            end
+        end
+        if #cpuOnly == 0 then
+            cpuOnly[1] = {
+                id = "cpu",
+                name = "CPU",
+                fullName = "CPU",
+                uiName = "CPU",
+                type = "cpu",
+                descKey = "device_cpu_desc",
+                available = true,
+            }
+        end
+        deviceList = cpuOnly
+    end
+
     if SETTINGS and SETTINGS.device then
         if SETTINGS.device == "directml" then
             local mapped = firstNumberedDeviceId("directml")
@@ -9994,6 +10118,18 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
                 if saveSettings then saveSettings() end
             end
         end
+    end
+
+    local selectedDeviceValid = false
+    for _, d in ipairs(deviceList) do
+        if tostring(SETTINGS.device or "") == tostring(d.id or "") then
+            selectedDeviceValid = true
+            break
+        end
+    end
+    if not selectedDeviceValid then
+        SETTINGS.device = directDksRoute and "auto" or "cpu"
+        if saveSettings then saveSettings() end
     end
 
     -- Load optional device map so placeholders and runtime devices can show friendly names.
@@ -10212,8 +10348,8 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     local function chosenDeviceLabel()
         local selId = SETTINGS.device or "auto"
         if selId == "auto" then
-            if RUNTIME_DEVICES then
-                for _, d in ipairs(RUNTIME_DEVICES) do
+            if runtimeDevicesForUi then
+                for _, d in ipairs(runtimeDevicesForUi) do
                     if d.id and not (d.id == "auto" or d.id == "cpu") then
                         return cleanDeviceLabel(d.fullName or d.name or d.id)
                     end
@@ -10312,10 +10448,12 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
 
     -- Device header tooltip: show accurate probe status depending on runtime results.
     local headerTip = nil
-    if RUNTIME_DEVICES and #RUNTIME_DEVICES > 0 then
+    if directDksRoute and runtimeDevicesForUi and #runtimeDevicesForUi > 0 then
+        headerTip = T("device_note_probe_completed") or "DrumSep runtime devices refreshed."
+    elseif runtimeDevicesForUi and #runtimeDevicesForUi > 0 then
         -- Check if any non-auto/cpu devices are present
         local hasGpu = false
-        for _, d in ipairs(RUNTIME_DEVICES) do
+        for _, d in ipairs(runtimeDevicesForUi) do
             if d.id and not (d.id == "auto" or d.id == "cpu") then hasGpu = true; break end
         end
         headerTip = hasGpu and T("device_note_probe_completed") or T("device_note_no_gpu")
@@ -12677,14 +12815,19 @@ showStemSelectionDialog = function()
     perfMark("showStemSelectionDialog(): gfx.init done (window visible)")
 
     reaper.defer(function()
-        local cacheOpts = nil
-        if OS == "Windows" and getTrustedWindowsRuntimeState and getTrustedWindowsRuntimeState() then
-            cacheOpts = { skipQuickBench = true }
-        end
-        if applyCachedRuntimeDevices(cacheOpts) then
-            perfMark("showStemSelectionDialog(): cached devices applied")
+        local probeStarted = startRuntimeDeviceProbeAsync(true)
+        if probeStarted then
+            perfMark("showStemSelectionDialog(): live device probe started")
         else
-            perfMark("showStemSelectionDialog(): cached devices unavailable")
+            local cacheOpts = nil
+            if OS == "Windows" and getTrustedWindowsRuntimeState and getTrustedWindowsRuntimeState() then
+                cacheOpts = { skipQuickBench = true }
+            end
+            if applyCachedRuntimeDevices(cacheOpts) then
+                perfMark("showStemSelectionDialog(): cached devices applied")
+            else
+                perfMark("showStemSelectionDialog(): cached devices unavailable")
+            end
         end
         -- Windows startup keeps device labels generic in the main dialog to
         -- avoid an extra cosmetic GPU-name probe during first paint.

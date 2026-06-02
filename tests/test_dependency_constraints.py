@@ -2481,3 +2481,38 @@ def test_audio_separator_runtime_diagnostics_include_cuda_visibility():
 
     assert 'print(f"STEMWERK_DIAG cuda_available={env.get(\'cuda_available\')}", file=sys.stderr)' in script
     assert 'print(f"STEMWERK_DIAG cuda_count={env.get(\'cuda_count\')}", file=sys.stderr)' in script
+
+
+def test_main_dialog_prefers_live_runtime_probe_and_only_falls_back_to_cached_devices():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local probeStarted = startRuntimeDeviceProbeAsync(true)' in script
+    assert 'perfMark("showStemSelectionDialog(): live device probe started")' in script
+    assert 'if applyCachedRuntimeDevices(cacheOpts) then' in script
+
+
+def test_device_column_uses_route_aware_runtime_sources_and_sanitizes_cpu_only_normal_mode():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local runtimeDevicesForUi = directDksRoute and buildDirectDksDeviceList() or RUNTIME_DEVICES' in script
+    assert 'stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env"' in script
+    assert 'rocmState.DRUMSEP_ROCM_DEVICE_NAMES' in script
+    assert 'if not directDksRoute and not listHasGpuDevice(deviceList) then' in script
+    assert 'SETTINGS.device = directDksRoute and "auto" or "cpu"' in script
+
+
+def test_cached_capability_devices_ignore_stale_raw_gpu_blocks_when_runtime_is_cpu_only():
+    script = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
+
+    assert 'local rawLooksStale = driftDetected' in script
+    assert 'or backend == "cpu"' in script
+    assert 'lines[#lines + 1] = "STEMWERK_DEVICE\\tauto\\tAuto\\tauto"' in script
+    assert 'lines[#lines + 1] = "STEMWERK_DEVICE\\tcpu\\tCPU\\tcpu"' in script
+
+
+def test_normal_runtime_cpu_only_message_distinguishes_direct_drumkit_runtime():
+    workflow = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
+
+    assert "live normal runtime reports CPU-only devices" in workflow
+    assert "Direct Drum Kit uses a separate DrumSep runtime" in workflow
+    assert "repair/rebuild the normal runtime" in workflow

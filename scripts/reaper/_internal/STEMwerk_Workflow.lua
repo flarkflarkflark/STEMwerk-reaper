@@ -171,11 +171,12 @@ local function preflightNormalWorkflowDeviceRoute(runOptions)
     if normalizedRequest ~= "" and normalizedRequest ~= "cpu" and not gpuAvailable then
         debugLog("normal_workflow_fallback_reason=live_runtime_cpu_only")
         local msg =
-            "Normal STEMwerk processing was stopped because the live runtime probe reports CPU-only devices.\n\n"
+            "Normal STEMwerk processing was stopped because the live normal runtime reports CPU-only devices.\n\n"
             .. "Requested device: " .. tostring(requestedUiDevice) .. "\n"
             .. "Live runtime devices: " .. (liveIdsText ~= "" and liveIdsText or "auto,cpu") .. "\n\n"
-            .. "This prevents a silent fallback to CPU.\n"
-            .. "Run STEMwerk-SETUP and repair/rebuild the normal runtime before processing."
+            .. "This prevents a silent fallback to CPU.\n\n"
+            .. "Direct Drum Kit uses a separate DrumSep runtime and can still show GPU devices independently.\n\n"
+            .. "If you want GPU processing for normal STEMwerk, run STEMwerk-SETUP and repair/rebuild the normal runtime."
         C.showMessage("Runtime Device Unavailable", msg, "error", false)
         return false
     end

@@ -672,27 +672,38 @@ end
 local function extractCapabilityDeviceOutput(cap)
     if not (cap and cap.raw) then return "" end
 
-    local deviceOut = cap.raw:match("DEVICES_OUTPUT_BEGIN\r?\n(.-)\r?\nDEVICES_OUTPUT_END")
+    local kv = cap.kv or {}
+    local backend = string.lower(tostring(kv.BACKEND or ""))
+    local verification = string.lower(tostring(kv.VERIFICATION or ""))
+    local driftDetected = string.lower(tostring(kv.RUNTIME_DRIFT_DETECTED or "")) == "yes"
+    local rawLooksStale = driftDetected
+        or backend == "cpu"
+        or verification == "runtime_probe_failed"
+        or verification == "probe_failed"
+
+    local deviceOut = (not rawLooksStale) and cap.raw:match("DEVICES_OUTPUT_BEGIN\r?\n(.-)\r?\nDEVICES_OUTPUT_END") or nil
     if deviceOut and deviceOut ~= "" then
         return deviceOut
     end
-    if cap.raw:find("STEMWERK_CUDA_DEVICE", 1, true)
+    if (not rawLooksStale)
+        and (cap.raw:find("STEMWERK_CUDA_DEVICE", 1, true)
         or cap.raw:find("STEMWERK_DML_DEVICE", 1, true)
         or cap.raw:find("STEMWERK_MPS_DEVICE", 1, true)
         or cap.raw:find("STEMWERK_DEVICE\t", 1, true)
-        or cap.raw:find("STEMWERK_ENV_JSON ", 1, true) then
+        or cap.raw:find("STEMWERK_ENV_JSON ", 1, true)) then
         return cap.raw
     end
 
-    local kv = cap.kv or {}
     local lines = {}
     local envJson = tostring(kv.ENV_JSON or "")
     local deviceNames = tostring(kv.DEVICE_NAMES or "")
-    local backend = tostring(kv.BACKEND or "")
 
     if envJson ~= "" then
         lines[#lines + 1] = "STEMWERK_ENV_JSON " .. envJson
     end
+
+    lines[#lines + 1] = "STEMWERK_DEVICE\tauto\tAuto\tauto"
+    lines[#lines + 1] = "STEMWERK_DEVICE\tcpu\tCPU\tcpu"
 
     local function addCsvDevices(prefix, idPrefix, fallbackLabel)
         local idx = 0
