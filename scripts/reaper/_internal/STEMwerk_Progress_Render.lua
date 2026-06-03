@@ -100,6 +100,7 @@ local function normalizeProgressStage(stage)
     stage = stage:gsub("%s*%b[]", "")
     stage = stage:gsub("%s*%b()", "")
     stage = stage:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    stage = stage:gsub("^[Ss]tage%s+%d+/%d+:%s*", "")
     local lower = stage:lower()
     if stage == "" then
         stage = progressUiLabel("progress_stage_processing", "Processing")
@@ -118,6 +119,8 @@ local function normalizeProgressStage(stage)
             key = "progress_stage_starting_separation"
         elseif flat == "preparing direct drum kit" then
             key = "progress_stage_preparing_direct_drum_kit"
+        elseif flat == "extracting drums" then
+            key = "progress_stage_extracting_drums"
         elseif flat == "stage 2 queued for drumsep" then
             key = "progress_stage_queued_drumsep"
         elseif flat == "starting drum kit runtime" then
@@ -150,7 +153,7 @@ local function localizeProgressStagePrefix(stageText)
         {"loading model",       progressUiLabel("progress_stage_loading_model",      "Loading model")},
         {"starting separation", progressUiLabel("progress_stage_starting_separation","Starting separation")},
         {"preparing direct drum kit", progressUiLabel("progress_stage_preparing_direct_drum_kit","Preparing Direct Drum Kit...")},
-        {"stage 2 queued for drumsep", progressUiLabel("progress_stage_queued_drumsep","Queued for Drum Kit engine...")},
+        {"stage 2 queued for drumsep", progressUiLabel("progress_stage_queued_drumsep","Queued for drum kit...")},
         {"starting drum kit runtime", progressUiLabel("progress_stage_starting_drum_kit_runtime","Starting Drum Kit runtime...")},
         {"splitting drum kit", progressUiLabel("progress_stage_splitting_drum_kit","Splitting drum kit...")},
         {"drumsep stage2 separating kit stems", progressUiLabel("progress_stage_splitting_drum_kit","Splitting drum kit...")},

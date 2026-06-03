@@ -2191,9 +2191,9 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_result_items_replaced = "%d %s replaced with drum stems as takes."' in langs
     assert 'drumkit_result_items_replaced = "%d %s vervangen door drumstems als takes."' in langs
     assert 'drumkit_result_items_replaced = "%d %s durch Drum-Stems als Takes ersetzt."' in langs
-    assert 'drumkit_result_item_muted = "Original item muted."' in langs
-    assert 'drumkit_result_item_muted = "Origineel item gedempt."' in langs
-    assert 'drumkit_result_item_muted = "Originalelement stumm geschaltet."' in langs
+    assert 'drumkit_result_item_muted = "Original source item muted."' in langs
+    assert 'drumkit_result_item_muted = "Origineel bronitem gedempt."' in langs
+    assert 'drumkit_result_item_muted = "Ursprüngliches Quellelement stummgeschaltet."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s added as takes (press T to switch)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s toegevoegd als takes (druk T om te wisselen)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s als Takes hinzugefügt (T zum Wechseln)."' in langs
@@ -2273,16 +2273,16 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'tooltip_close = "STEMwerk schließen (ESC)"' in langs
     assert 'progress_stage_splitting_drum_kit = "Splitting drum kit..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Drumkit splitsen..."' in langs
-    assert 'progress_stage_splitting_drum_kit = "Drumkit wird aufgeteilt..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Drumkit aufteilen..."' in langs
     assert 'progress_stage_preparing_direct_drum_kit = "Preparing Direct Drum Kit..."' in langs
     assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit voorbereiden..."' in langs
     assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit wird vorbereitet..."' in langs
     assert 'progress_stage_extracting_drums = "Extracting drums..."' in langs
     assert 'progress_stage_extracting_drums = "Drums extraheren..."' in langs
-    assert 'progress_stage_extracting_drums = "Drums werden extrahiert..."' in langs
-    assert 'progress_stage_queued_drumsep = "Queued for Drum Kit engine..."' in langs
-    assert 'progress_stage_queued_drumsep = "In wachtrij voor drumkit-engine..."' in langs
-    assert 'progress_stage_queued_drumsep = "In Warteschlange für Drum-Kit-Engine..."' in langs
+    assert 'progress_stage_extracting_drums = "Drums extrahieren..."' in langs
+    assert 'progress_stage_queued_drumsep = "Queued for drum kit..."' in langs
+    assert 'progress_stage_queued_drumsep = "In wachtrij voor drumkit..."' in langs
+    assert 'progress_stage_queued_drumsep = "In Warteschlange für Drumkit..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Starting Drum Kit runtime..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-runtime starten..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drum-Kit-Laufzeit wird gestartet..."' in langs
@@ -2295,6 +2295,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage2_serialized_caption = "Stage 2 serialized for stability"' in langs
     assert 'progress_stage2_serialized_caption = "Stap 2 serieel voor stabiliteit"' in langs
     assert 'progress_stage2_serialized_caption = "Stufe 2 seriell für Stabilität"' in langs
+    assert 'progress_dks_extract_route_summary = "Normal stems → drum kit"' in langs
+    assert 'progress_dks_extract_route_summary = "Normale stems → drumkit"' in langs
+    assert 'progress_dks_extract_route_summary = "Normale Stems → Drumkit"' in langs
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
@@ -2394,8 +2397,10 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'function buildProgressRouteSummary(deviceDetail)' in script
     assert 'function compactProgressDeviceToken(rawDevice, friendlyDetail)' in script
     assert 'return activeProcessingRouteBadge() .. " · " .. stageBadge,' in script
+    assert 'local routeBadge = drumKitMode and "" or activeProcessingRouteBadge()' in script
     assert 'if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then' in script
     assert 'stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)' not in script
+    assert 'progress_dks_extract_route_summary' in script
     assert 'local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)' in script
     assert 'inlineStageText = inlineStageText .. " [" .. tostring(footerDeviceDetail) .. "]"' not in script
     assert "function normalizeStemPathMap(stemPaths)" in script
@@ -2513,12 +2518,12 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "function shortRuntimeGpuName(name)" in script
     assert "local first = s:match(\"^([^|,;]+)\") or s" in script
     assert "first = first:gsub(\"^AMD Radeon%s+\", \"\")" in script
-    assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s")' in script
+    assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s")' in script
     assert 'trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert 'leftParts[#leftParts + 1] = string.format("%s: %s", mtSeg, "30")' in script
-    assert 'footer_device_auto_resolved_gpu = "Auto -> GPU/ROCm: %s"' in langs
+    assert 'footer_device_auto_resolved_gpu = "Auto → GPU/ROCm: %s"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU runtime"' in langs
     assert 'footer_device_gpu_runtime = "GPU/ROCm: %s"' in langs

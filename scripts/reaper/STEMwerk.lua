@@ -14000,7 +14000,7 @@ function compactRuntimeKindLabel(kind)
     if lower == "rocm" then return "ROCm" end
     if lower == "cpu" then return "CPU" end
     if lower == "normal" then return trSafeValue("progress_runtime_normal", "normal runtime") end
-    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "Drum Kit engine") end
+    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "drum kit") end
     return tostring(kind or "")
 end
 
@@ -14013,7 +14013,7 @@ function compactProgressDeviceToken(rawDevice, friendlyDetail)
     if lower:find("directml", 1, true) then return "DirectML" end
     if lower == "mps" then return "MPS" end
     if lower == "normal" then return trSafeValue("progress_runtime_normal", "normal runtime") end
-    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "Drum Kit engine") end
+    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "drum kit") end
     local friendly = tostring(friendlyDetail or "")
     if friendly ~= "" and not friendly:lower():match("^cuda:%d+") then
         return friendly
@@ -14027,28 +14027,15 @@ function buildProgressRouteSummary(deviceDetail)
         local stageBadge = stageIdx == 1
             and trSafeValue("progress_stage_label_1_of_2", "Stage 1/2")
             or trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
-        local stage1Device = compactProgressDeviceToken(progressState._stage1Device or "cpu", deviceDetail)
-        local stage2Device = compactProgressDeviceToken(progressState._stage2Device or progressState._runtimeSelected or "", deviceDetail)
-        local stage1Summary = string.format(
-            trSafeValue("progress_stage1_footer_summary", "Stage 1: %s"),
-            trSafeValue("progress_stage1_runtime_compact", "normal CPU"):gsub("CPU", stage1Device)
-        )
-        local stage2Compact = compactRuntimeKindLabel(progressState._stage2Runtime or "drumsep")
-        if stage2Device ~= "" then
-            stage2Compact = stage2Compact .. " " .. stage2Device
-        end
-        local stage2Summary = string.format(
-            trSafeValue("progress_stage2_footer_summary", "Stage 2: %s"),
-            stage2Compact
-        )
+        local routeSummary = trSafeValue("progress_dks_extract_route_summary", "Normal stems → drum kit")
         if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then
-            stage2Summary = stage2Summary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
+            routeSummary = routeSummary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end
         return activeProcessingRouteBadge() .. " · " .. stageBadge,
-            stage1Summary .. " -> " .. stage2Summary
+            routeSummary
     end
     if isDrumKitWorkflowActive() then
-        local directSummary = activeProcessingRouteBadge() .. " · " .. trSafeValue("progress_drumkit_engine", "Drum Kit engine")
+        local directSummary = activeProcessingRouteBadge()
         if deviceDetail and deviceDetail ~= "" then
             directSummary = directSummary .. " · " .. tostring(deviceDetail)
         end
@@ -14110,7 +14097,7 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
         local gpuLabel = shortRuntimeGpuName(deviceName)
         if gpuLabel == "" then gpuLabel = "ROCm" end
         if req == "auto" then
-            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), gpuLabel)
+            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s"), gpuLabel)
         end
         return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), gpuLabel)
     end
@@ -14124,7 +14111,7 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
         local short = shortRuntimeGpuName(deviceName)
         if short == "" then short = tostring(deviceName) end
         if req == "auto" then
-            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto -> GPU/ROCm: %s"), short)
+            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s"), short)
         end
         return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short)
     end
@@ -14618,7 +14605,7 @@ function drawProgressWindow()
         end
     end
 
-    local routeBadge = activeProcessingRouteBadge()
+    local routeBadge = drumKitMode and "" or activeProcessingRouteBadge()
     if routeBadge and routeBadge ~= "" then
         gfx.setfont(1, "Arial", PS(9), string.byte('b'))
         local routeBadgeW = gfx.measurestr(routeBadge) + PS(14)
