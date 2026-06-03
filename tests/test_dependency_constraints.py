@@ -2479,6 +2479,34 @@ def test_german_visual_and_help_copy_uses_umlauts_for_direct_dks_paths():
     assert "Was jeder Stem enthält" in langs
 
 
+def test_selected_items_take_precedence_over_unrelated_time_selection_for_no_audio_and_dispatch():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    monitor = script.split("function HELPERS.getSelectionMonitorState()", 1)[1].split("-- Message window state", 1)[0]
+    selected_items_branch = monitor.split("if selItemCount > 0 then", 1)[1].split("if selTrackCount > 0 then", 1)[0]
+    selected_tracks_branch = monitor.split("if selTrackCount > 0 then", 1)[1].split("if hasTimeSel then", 1)[0]
+    time_selection_branch = monitor.split("if hasTimeSel then", 1)[1]
+
+    assert 'if item and reaper.ValidatePtr(item, "MediaItem*") then' in selected_items_branch
+    assert "itemOverlapsTimeSelection(item)" not in selected_items_branch
+    assert 'anyAudibleItemOnTrack(track, false)' in selected_tracks_branch
+    assert 'anyAudibleItemOnTrack(track, true)' in time_selection_branch
+
+    footer = script.split("buildFooterLines = function()", 1)[1].split("local function previewOutputSummary()", 1)[0]
+    assert "local useTimeSel = hasTimeSel and rawSelTrackCount == 0 and rawSelItemCount == 0" in script
+    assert "local useTimeSel = hasTimeSel and selTrackCount == 0 and selItemCount == 0" in script
+    assert "local useTimeSel = hasTimeSelection() and selTrackCount == 0 and selItemCount == 0" in script
+    assert "HELPERS.hasExplicitOverlapSelection(currentTimeStart, currentTimeEnd)" not in footer
+
+    run_workflow = script.split("function runSeparationWorkflow()", 1)[1].split("-- Check for quick preset mode", 1)[0]
+    assert "local useTimeSel = hasTimeSel and selTrackCount == 0 and selItemCount == 0" in run_workflow
+    assert "HELPERS.hasExplicitOverlapSelection(ts0, ts1)" not in run_workflow
+
+    main_startup = script.split("-- Main", 1)[1]
+    assert 'if checkQuickPreset() then' in main_startup
+    assert "HELPERS.getSelectionMonitorState()" in script
+
+
 def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     log_script = Path("scripts/reaper/_internal/STEMwerk_Log.lua").read_text()
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()

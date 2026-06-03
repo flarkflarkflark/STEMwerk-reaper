@@ -2049,13 +2049,13 @@ function HELPERS.getSelectionMonitorState()
         return pos < timeSelEnd and itemEnd > timeSelStart
     end
 
-    local function anyAudibleItemOnTrack(track)
+    local function anyAudibleItemOnTrack(track, requireTimeOverlap)
         if not track or not reaper.ValidatePtr(track, "MediaTrack*") then return false, false end
         local anyOverlap = false
         local itemCount = reaper.CountTrackMediaItems(track) or 0
         for i = 0, itemCount - 1 do
             local item = reaper.GetTrackMediaItem(track, i)
-            if item and itemOverlapsTimeSelection(item) then
+            if item and ((not requireTimeOverlap) or itemOverlapsTimeSelection(item)) then
                 anyOverlap = true
                 if AUDIBILITY.isItemAudible(item, soloActive) then
                     return true, true
@@ -2066,17 +2066,17 @@ function HELPERS.getSelectionMonitorState()
     end
 
     if selItemCount > 0 then
-        local anySelectedOverlap = false
+        local anySelectedItem = false
         for i = 0, selItemCount - 1 do
             local item = reaper.GetSelectedMediaItem(0, i)
-            if item and itemOverlapsTimeSelection(item) then
-                anySelectedOverlap = true
+            if item and reaper.ValidatePtr(item, "MediaItem*") then
+                anySelectedItem = true
                 if AUDIBILITY.isItemAudible(item, soloActive) then
                     return { actionable = true, hasSource = true, reason = "selected_items_audible" }
                 end
             end
         end
-        if anySelectedOverlap then
+        if anySelectedItem then
             return { actionable = false, hasSource = true, reason = "selected_items_inaudible" }
         end
     end
@@ -2085,7 +2085,7 @@ function HELPERS.getSelectionMonitorState()
         local anyTrackOverlap = false
         for t = 0, selTrackCount - 1 do
             local track = reaper.GetSelectedTrack(0, t)
-            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track, false)
             if overlapOnTrack then anyTrackOverlap = true end
             if audibleOnTrack then
                 return { actionable = true, hasSource = true, reason = "selected_tracks_audible" }
@@ -2101,7 +2101,7 @@ function HELPERS.getSelectionMonitorState()
         local trackCount = reaper.CountTracks(0) or 0
         for t = 0, trackCount - 1 do
             local track = reaper.GetTrack(0, t)
-            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track)
+            local audibleOnTrack, overlapOnTrack = anyAudibleItemOnTrack(track, true)
             if overlapOnTrack then anyOverlap = true end
             if audibleOnTrack then
                 return { actionable = true, hasSource = true, reason = "time_selection_audible" }
@@ -11020,23 +11020,15 @@ buildFooterLines = function()
         local it = reaper.GetSelectedMediaItem(0, i)
         local tr = it and reaper.GetMediaItem_Track(it)
         if it and tr and AUDIBILITY.isTrackAudible(tr, soloActiveFooter) and AUDIBILITY.isItemAudible(it, soloActiveFooter) then
-            local inTimeSel = true
-            if hasTimeSel then
-                local ipos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
-                local iend = ipos + reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
-                inTimeSel = (ipos < currentTimeEnd and iend > currentTimeStart)
+            selItemCount = selItemCount + 1
+            selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
+            selItemTrackSet[tr] = true
+            local items = selectedItemsByTrack[tr]
+            if not items then
+                items = {}
+                selectedItemsByTrack[tr] = items
             end
-            if inTimeSel then
-                selItemCount = selItemCount + 1
-                selItemDur = selItemDur + (reaper.GetMediaItemInfo_Value(it, "D_LENGTH") or 0)
-                selItemTrackSet[tr] = true
-                local items = selectedItemsByTrack[tr]
-                if not items then
-                    items = {}
-                    selectedItemsByTrack[tr] = items
-                end
-                items[#items + 1] = it
-            end
+            items[#items + 1] = it
         end
     end
     local selItemTrackCount = 0
@@ -11063,7 +11055,7 @@ buildFooterLines = function()
         timeSelectionMode = false
     end
 
-    local useTimeSel = hasTimeSel and not HELPERS.hasExplicitOverlapSelection(currentTimeStart, currentTimeEnd)
+    local useTimeSel = hasTimeSel and rawSelTrackCount == 0 and rawSelItemCount == 0
     local timeSelResolved = HELPERS.getCachedTimeSelectionTargets(hasTimeSel, useTimeSel, rawSelTrackCount, rawSelItemCount)
     local timeSelItemCount = timeSelResolved and #timeSelResolved.items or 0
     local timeSelTrackCount = timeSelResolved and timeSelResolved.trackCount or 0
@@ -20688,7 +20680,7 @@ function runSeparationWorkflow()
 
     local selTrackCount = reaper.CountSelectedTracks(0) or 0
     local selItemCount = reaper.CountSelectedMediaItems(0) or 0
-    local useTimeSel = hasTimeSel and not HELPERS.hasExplicitOverlapSelection(ts0, ts1)
+    local useTimeSel = hasTimeSel and selTrackCount == 0 and selItemCount == 0
 
     -- Only use time selection when nothing else is explicitly selected.
     if useTimeSel then
