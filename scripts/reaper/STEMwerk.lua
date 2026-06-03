@@ -14031,7 +14031,11 @@ function buildProgressRouteSummary(deviceDetail)
         if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then
             routeSummary = routeSummary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end
-        return activeProcessingRouteBadge() .. " · " .. stageBadge,
+        local routeLeft = activeProcessingRouteBadge() .. " · " .. stageBadge
+        if deviceDetail and deviceDetail ~= "" then
+            routeLeft = routeLeft .. " · " .. tostring(deviceDetail)
+        end
+        return routeLeft,
             routeSummary
     end
     if isDrumKitWorkflowActive() then
@@ -15278,6 +15282,7 @@ WORKFLOW.configure({
     refreshRuntimeDevices         = refreshRuntimeDevices,
     recordTimingEvent             = writeTimingEvent,
     effectiveRunDevice            = effectiveRunDevice,
+    resolveStemSetForPaths        = resolveStemSetForPaths,
 })
 
 MESSAGES.configure({
@@ -16610,6 +16615,16 @@ function processStemsResult(stems)
             SW_LOG.logExecResult("timing:import_start mode=in_place_partial single=item_sub_selection", nil, "")
             count, mainItem = WORKFLOW.replaceInPlacePartial(selectedItem, stems, itemSubSelStart, itemSubSelEnd)
             SW_LOG.logExecResult("timing:import_end mode=in_place_partial single=item_sub_selection created=" .. tostring(count), nil, "")
+            if drumKitOutput and (tonumber(count or 0) or 0) == 0 then
+                SW_LOG.logExecResult("lua_dks_single_in_place_import_created=0", nil, "lua_dks_single_in_place_no_takes_reason=drum_output_map_not_imported")
+                resultMsg = "Drum Kit Split partially completed: no drum takes were imported."
+                resultData = {
+                    kind = "single",
+                    resultStatus = "partial",
+                    fallback = trSafeValue("dks_single_no_drum_takes", "No drum takes were imported."),
+                    drumKitCopy = true,
+                }
+            else
             local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
             if exploded > 0 then
                 resultMsg = "Selection replaced and takes exploded."
@@ -16625,10 +16640,21 @@ function processStemsResult(stems)
                 resultMsg = count == 1 and "Selection replaced with stem." or "Selection replaced with stems as takes (press T to switch)."
                 resultData = { kind = "single", count = count, mainKey = (count == 1) and "result_selection_replaced_single" or "result_selection_replaced_takes_hint" }
             end
+            end
         else
             SW_LOG.logExecResult("timing:import_start mode=in_place single=item_full", nil, "")
             count, mainItem = WORKFLOW.replaceInPlace(selectedItem, stems, itemPos, itemLen)
             SW_LOG.logExecResult("timing:import_end mode=in_place single=item_full created=" .. tostring(count), nil, "")
+            if drumKitOutput and (tonumber(count or 0) or 0) == 0 then
+                SW_LOG.logExecResult("lua_dks_single_in_place_import_created=0", nil, "lua_dks_single_in_place_no_takes_reason=drum_output_map_not_imported")
+                resultMsg = "Drum Kit Split partially completed: no drum takes were imported."
+                resultData = {
+                    kind = "single",
+                    resultStatus = "partial",
+                    fallback = trSafeValue("dks_single_no_drum_takes", "No drum takes were imported."),
+                    drumKitCopy = true,
+                }
+            else
             local exploded = explodeTakesFromItem(mainItem, SETTINGS.postProcessTakes)
             if exploded > 0 then
                 resultMsg = "Stems created and takes exploded."
@@ -16643,6 +16669,7 @@ function processStemsResult(stems)
                 end
                 resultMsg = count == 1 and "Stem replaced." or "Stems added as takes (press T to switch)."
                 resultData = { kind = "single", count = count, mainKey = (count == 1) and "result_stem_replaced" or "result_stems_added_takes_hint" }
+            end
             end
         end
     end

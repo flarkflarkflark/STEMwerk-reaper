@@ -1692,9 +1692,17 @@ def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers
     assert 'SW_LOG.logExecResult("lua_dks_extract_import_selected_count=" .. tostring(selectedImportCount), nil, "")' in main
     assert 'SW_LOG.logExecResult("lua_dks_extract_import_created=" .. tostring(importedCount), nil, "")' in main
     assert '"import_stem_key=" .. tostring(stemKey)' in main
+    assert "local function buildTakeImportStemEntries(stemPaths)" in workflow
+    assert "C.resolveStemSetForPaths(sourcePaths)" in workflow
+    assert "local stemEntries = buildTakeImportStemEntries(stemPaths)" in workflow
+    assert "return 0, item" in workflow
+    assert "resolveStemSetForPaths        = resolveStemSetForPaths" in main
+    assert 'SW_LOG.logExecResult("lua_dks_single_in_place_import_created=0", nil, "lua_dks_single_in_place_no_takes_reason=drum_output_map_not_imported")' in main
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
     assert '"lua_dks_extract_import_candidate_count",' in support_script
     assert '"lua_dks_extract_import_selected_count", "lua_dks_extract_import_created"' in support_script
+    assert '"lua_dks_single_in_place_import_created"' in support_script
+    assert '"lua_dks_single_in_place_no_takes_reason"' in support_script
 
 
 def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs():
@@ -2191,6 +2199,9 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_result_items_replaced = "%d %s replaced with drum takes."' in langs
     assert 'drumkit_result_items_replaced = "%d %s vervangen door drumtakes."' in langs
     assert 'drumkit_result_items_replaced = "%d %s durch Drum-Takes ersetzt."' in langs
+    assert 'dks_single_no_drum_takes = "No drum takes were imported."' in langs
+    assert 'dks_single_no_drum_takes = "Er zijn geen drumtakes geïmporteerd."' in langs
+    assert 'dks_single_no_drum_takes = "Es wurden keine Drum-Takes importiert."' in langs
     assert 'drumkit_result_item_muted = "Original source item muted."' in langs
     assert 'drumkit_result_item_muted = "Origineel bronitem gedempt."' in langs
     assert 'drumkit_result_item_muted = "Ursprüngliches Quellelement stummgeschaltet."' in langs
@@ -2399,7 +2410,8 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'function activeProcessingRouteBadge()' in script
     assert 'function buildProgressRouteSummary(deviceDetail)' in script
     assert 'function compactProgressDeviceToken(rawDevice, friendlyDetail)' in script
-    assert 'return activeProcessingRouteBadge() .. " · " .. stageBadge,' in script
+    assert 'local routeLeft = activeProcessingRouteBadge() .. " · " .. stageBadge' in script
+    assert 'routeLeft = routeLeft .. " · " .. tostring(deviceDetail)' in script
     assert 'local routeBadge = drumKitMode and "" or activeProcessingRouteBadge()' in script
     assert 'if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then' in script
     assert 'stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)' not in script

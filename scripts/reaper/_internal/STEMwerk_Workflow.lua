@@ -93,6 +93,28 @@ local function collectStemPathsFromStdoutJson(stdoutFile)
     return stems
 end
 
+local function buildTakeImportStemEntries(stemPaths)
+    local sourcePaths = stemPaths or {}
+    local stemSet = STEMS
+    if type(C.resolveStemSetForPaths) == "function" then
+        local resolved = C.resolveStemSetForPaths(sourcePaths)
+        if type(resolved) == "table" then
+            stemSet = resolved
+        end
+    end
+    local entries = {}
+    for _, stem in ipairs(stemSet or {}) do
+        if stem.selected then
+            local key = normalizeStemOutputKey(stem.name)
+            local stemPath = sourcePaths[key] or sourcePaths[tostring(stem.name or ""):lower()]
+            if stemPath then
+                entries[#entries + 1] = { stem = stem, path = stemPath }
+            end
+        end
+    end
+    return entries
+end
+
 local function markSingleProgressMilestones(pct, stage)
     if not SW_TIMING then
         return
@@ -1172,6 +1194,11 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
         return 0, nil
     end
 
+    local stemEntries = buildTakeImportStemEntries(stemPaths)
+    if #stemEntries == 0 then
+        return 0, item
+    end
+
     reaper.Undo_BeginBlock()
 
     -- We need to split the item at selection boundaries
@@ -1218,15 +1245,6 @@ function WORKFLOW.replaceInPlacePartial(item, stemPaths, selStart, selEnd, nameB
 
     -- Create stem items at the selection position
     local items = {}
-    local stemEntries = {}
-    for _, stem in ipairs(STEMS) do
-        if stem.selected then
-            local stemPath = stemPaths[stem.name:lower()]
-            if stemPath then
-                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
-            end
-        end
-    end
     local totalStems = #stemEntries
     local baseName = nameBase or getItemDisplayNameForTakes(item)
     local importedItems = {}
@@ -1303,19 +1321,15 @@ end
 function WORKFLOW.replaceInPlace(item, stemPaths, itemPos, itemLen, nameBase)
     local track = reaper.GetMediaItem_Track(item)
     local sourcePlaybackState = snapshotActiveTakePlaybackState(item)
+    local stemEntries = buildTakeImportStemEntries(stemPaths)
+    if #stemEntries == 0 then
+        return 0, item
+    end
+
     reaper.Undo_BeginBlock()
     reaper.DeleteTrackMediaItem(track, item)
 
     local items = {}
-    local stemEntries = {}
-    for _, stem in ipairs(STEMS) do
-        if stem.selected then
-            local stemPath = stemPaths[stem.name:lower()]
-            if stemPath then
-                stemEntries[#stemEntries + 1] = { stem = stem, path = stemPath }
-            end
-        end
-    end
     local totalStems = #stemEntries
     local baseName = nameBase or getItemDisplayNameForTakes(item)
     local importedPaths = {}
