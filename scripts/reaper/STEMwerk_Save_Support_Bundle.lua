@@ -3113,9 +3113,11 @@ local function performBundleCollection()
     end
 
     local phaseTimings = {}
+    local phaseTimingsWall = {}
     local timingsFile = joinPath(bundleDir, "support_bundle_timings.txt")
     local timingLines = {}
     local totalStartedAt = os.clock()
+    local totalWallStartedAt = os.time()
 
     local function flushTimings()
         writeFile(timingsFile, table.concat(timingLines, "\n") .. "\n", "wb")
@@ -3146,30 +3148,44 @@ local function performBundleCollection()
         end
         if not hasCreateZipEnd then
             timingLines[#timingLines + 1] = string.format(
-                "%s | create_zip | end | duration=%.3f",
+                "%s | create_zip | end | cpu_duration=%.3f wall_duration=%d",
                 os.date("%Y-%m-%d %H:%M:%S"),
-                tonumber(phaseTimings.create_zip) or 0
+                tonumber(phaseTimings.create_zip) or 0,
+                tonumber(phaseTimingsWall.create_zip) or 0
             )
         end
         if not hasTotalEnd then
             timingLines[#timingLines + 1] = string.format(
-                "%s | total | end | duration=%.3f",
+                "%s | total | end | cpu_duration=%.3f wall_duration=%d",
                 os.date("%Y-%m-%d %H:%M:%S"),
-                tonumber(phaseTimings.total) or 0
+                tonumber(phaseTimings.total) or 0,
+                tonumber(phaseTimingsWall.total) or 0
             )
         end
         flushTimings()
     end
 
     local function phaseStart(name)
-        timingEvent(name, "start", string.format("cpu_elapsed=%.3f", math.max(0, os.clock() - totalStartedAt)))
-        return os.clock()
+        timingEvent(
+            name,
+            "start",
+            string.format(
+                "cpu_elapsed=%.3f wall_elapsed=%d",
+                math.max(0, os.clock() - totalStartedAt),
+                math.max(0, os.time() - totalWallStartedAt)
+            )
+        )
+        return { cpu = os.clock(), wall = os.time() }
     end
 
     local function phaseDone(name, startedAt)
-        local elapsed = math.max(0, os.clock() - tonumber(startedAt or 0))
+        local cpuStarted = type(startedAt) == "table" and tonumber(startedAt.cpu) or tonumber(startedAt or 0)
+        local wallStarted = type(startedAt) == "table" and tonumber(startedAt.wall) or os.time()
+        local elapsed = math.max(0, os.clock() - tonumber(cpuStarted or 0))
+        local wallElapsed = math.max(0, os.time() - tonumber(wallStarted or os.time()))
         phaseTimings[name] = elapsed
-        timingEvent(name, "end", string.format("duration=%.3f", elapsed))
+        phaseTimingsWall[name] = wallElapsed
+        timingEvent(name, "end", string.format("cpu_duration=%.3f wall_duration=%d", elapsed, wallElapsed))
         return elapsed
     end
 
@@ -3486,6 +3502,8 @@ local function performBundleCollection()
     appendKey(diagnostics, "collect_probes", string.format("%.3f", phaseTimings.collect_probes or 0))
     appendKey(diagnostics, "create_zip", string.format("%.3f", phaseTimings.create_zip or 0))
     appendKey(diagnostics, "total", string.format("%.3f", phaseTimings.total or 0))
+    appendKey(diagnostics, "collect_drumsep_runtime_wall", tostring(phaseTimingsWall.collect_drumsep_runtime or 0))
+    appendKey(diagnostics, "total_wall_so_far", tostring(math.max(0, os.time() - totalWallStartedAt)))
     appendLine(diagnostics, "")
     appendLine(diagnostics, "Zip Scope")
     appendKey(diagnostics, "Zip source folder", bundleDir)
@@ -3500,7 +3518,8 @@ local function performBundleCollection()
     phaseDone("create_zip", zipStartedAt)
 
     phaseTimings.total = math.max(0, os.clock() - totalStartedAt)
-    timingEvent("total", "end", string.format("duration=%.3f", phaseTimings.total))
+    phaseTimingsWall.total = math.max(0, os.time() - totalWallStartedAt)
+    timingEvent("total", "end", string.format("cpu_duration=%.3f wall_duration=%d", phaseTimings.total, phaseTimingsWall.total))
     finalizeTimingsAfterZip()
     writeFile(
         joinPath(bundleDir, "support_bundle_result.txt"),
@@ -3512,6 +3531,7 @@ local function performBundleCollection()
             "zip_error=" .. tostring(zipError or ""),
             "create_zip_seconds=" .. string.format("%.3f", phaseTimings.create_zip or 0),
             "total_seconds=" .. string.format("%.3f", phaseTimings.total or 0),
+            "total_wall_seconds=" .. tostring(phaseTimingsWall.total or 0),
         }, "\n") .. "\n",
         "wb"
     )

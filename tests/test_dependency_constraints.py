@@ -1679,8 +1679,28 @@ def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs()
     assert 'local stdoutStems = collectStemPathsFromStdoutJson(job.stdoutFile)' in main
     assert 'local stemSetForJob = isDrumKitJob and DRUMKIT_STEMS or STEMS' in main
     assert 'SW_LOG.logExecResult("lua_dks_multi_stdout_json_ok=yes", nil, "lua_dks_multi_output_count=" .. tostring(stdoutCount))' in main
+    assert 'job.expectedOutputCount = expectedOutputCount' in main
+    assert 'job.detectedOutputCount = foundCount' in main
+    assert 'job.workerExitCode = SW_LOG.readExitCode(job.exitCodeFile)' in main
+    assert 'job.importedOutputCount = count' in main
+    assert 'local ok = expected > 0 and imported >= expected and detected >= expected and exitCode == 0' in main
+    assert 'multiTrackQueue.dksResultStatus = status' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_expected_total_outputs=" .. tostring(expected), nil, "")' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_successful_jobs=" .. tostring(dksSuccessfulJobs), nil, "")' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_failed_jobs=" .. tostring(dksFailedJobs), nil, "")' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_failed_job_indices=" .. tostring(multiTrackQueue.dksFailedJobIndices), nil, "")' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_partial_success=" .. (status == "partial" and "yes" or "no"), nil, "")' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_result_status=" .. tostring(status), nil, "")' in main
     assert 'SW_LOG.logExecResult("lua_dks_multi_import_total_created=" .. tostring(totalStemsCreated), nil, "")' in main
     assert 'lua_dks_multi_no_stems_reason=zero_imported_after_worker_completion' in main
+    assert 'resultData.resultStatus = multiTrackQueue.dksResultStatus or "success"' in main
+    assert 'trSafeValue("dks_multi_partial_takes", "%d of %d items processed; %d of %d drum takes created.")' in main
+    assert 'trSafeValue("dks_multi_partial_created", "%d of %d sources processed; %d of %d drum outputs created.")' in main
+
+    log_script = Path("scripts/reaper/_internal/STEMwerk_Log.lua").read_text(encoding="utf-8")
+    assert '"stage2_drumsep" .. sep .. "drumsep_helper_stdout.txt"' in log_script
+    assert '"stage2_drumsep" .. sep .. "drumsep_helper_stderr.txt"' in log_script
+    assert '"stage2_drumsep" .. sep .. "drumsep_helper_result.json"' in log_script
 
     assert '"lua_dks_multi_start", "lua_dks_multi_workflow_source", "lua_dks_multi_source_count",' in support_script
     assert '"lua_dks_multi_output_count", "lua_dks_multi_import_created", "lua_dks_multi_import_total_created",' in support_script
@@ -1699,6 +1719,10 @@ def test_support_bundle_excludes_dev_matrix_temp_dirs_and_reports_temp_log_budge
     assert 'local drumsepDiagnosticsStartedAt = phaseStart("collect_drumsep_runtime")' in script
     assert 'phaseDone("collect_drumsep_runtime", drumsepDiagnosticsStartedAt)' in script
     assert 'appendKey(diagnostics, "collect_drumsep_runtime", string.format("%.3f", phaseTimings.collect_drumsep_runtime or 0))' in script
+    assert 'local phaseTimingsWall = {}' in script
+    assert '"cpu_elapsed=%.3f wall_elapsed=%d"' in script
+    assert '"cpu_duration=%.3f wall_duration=%d"' in script
+    assert 'appendKey(diagnostics, "collect_drumsep_runtime_wall", tostring(phaseTimingsWall.collect_drumsep_runtime or 0))' in script
 
 
 def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, capsys):

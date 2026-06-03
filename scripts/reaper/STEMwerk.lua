@@ -8908,7 +8908,12 @@ function renderResultTitleArea(ctx)
     local iconY = PS(spacing.iconY or 60)
     local iconR = PS(spacing.iconRadius or 28)
 
-    if utilityMode then
+    local resultData = resultWindowState and resultWindowState.messageData or nil
+    local resultStatus = tostring((resultData and resultData.resultStatus) or "success")
+
+    if resultStatus == "partial" then
+        gfx.set(0.95, 0.62, 0.18, 1)
+    elseif utilityMode then
         local ur, ug, ub = utilityProgressColor()
         gfx.set(ur, ug, ub, 1)
     else
@@ -8937,7 +8942,14 @@ function renderResultTitleArea(ctx)
     local titleY = PS(spacing.titleY or 100)
 
     if drumKitCopy then
-        local title = activeDrumKitCompleteTitle()
+        local title
+        if resultStatus == "partial" then
+            title = isExtractDrumKitWorkflowActive()
+                and trSafeValue("edks_partial_title", "Drum Kit Split partially completed")
+                or trSafeValue("drumkit_partial_title", "Direct Drum Kit partially completed")
+        else
+            title = activeDrumKitCompleteTitle()
+        end
         local titleW = gfx.measurestr(title)
         local titleX = (w - titleW) / 2
         gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
@@ -9057,6 +9069,20 @@ function buildResultMessageLines()
         local srcCount = data.sourceCount or 0
         local sourceKind = data.sourceKind or "tracks"
         local drumKitCopy = drumKitCopyActive
+        if data.resultStatus == "partial" and drumKitCopy then
+            local line1 = string.format(
+                trSafeValue("dks_multi_partial_created", "%d of %d sources processed; %d of %d drum outputs created."),
+                data.successfulJobs or 0,
+                data.totalJobs or srcCount,
+                data.actualOutputs or stemsCreated,
+                data.expectedOutputs or stemsCreated
+            )
+            table.insert(lines, line1)
+            if data.failedJobIndices and data.failedJobIndices ~= "" then
+                table.insert(lines, string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), data.failedJobIndices))
+            end
+            return lines
+        end
         local stemWord = drumKitCopy
             and trPlural(stemsCreated, "drumkit_result_track_one", "drumkit_result_track_many", "drum track", "drum tracks")
             or trPlural(stemsCreated, "result_stem_track_one", "result_stem_track_many", "stem track", "stem tracks")
@@ -9082,11 +9108,25 @@ function buildResultMessageLines()
     elseif data.kind == "multi_in_place" then
         local itemCount = data.itemCount or 0
         local itemWord = trPlural(itemCount, "footer_item", "footer_items", "item", "items")
-        local line1 = string.format(T("result_items_replaced") or "%d %s replaced with stems as takes.", itemCount, itemWord)
+        local line1
+        if data.resultStatus == "partial" and drumKitCopyActive then
+            line1 = string.format(
+                trSafeValue("dks_multi_partial_takes", "%d of %d items processed; %d of %d drum takes created."),
+                data.successfulJobs or 0,
+                data.totalJobs or itemCount,
+                data.actualOutputs or 0,
+                data.expectedOutputs or 0
+            )
+        else
+            line1 = string.format(T("result_items_replaced") or "%d %s replaced with stems as takes.", itemCount, itemWord)
+        end
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
         table.insert(lines, line1)
+        if data.resultStatus == "partial" and drumKitCopyActive and data.failedJobIndices and data.failedJobIndices ~= "" then
+            table.insert(lines, string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), data.failedJobIndices))
+        end
         table.insert(lines, line2)
         if runtimeReason ~= "" then
             local reasonLabel = T("mode_reason_label") or "Reason"
@@ -19480,6 +19520,10 @@ _sep.processAllStemsResult = function()
     local sourceTracksWithStems = {} -- track ptr -> true (only count tracks that actually received stems)
     local sourceItemsWithStems = {} -- item ptr -> true (only count items that actually received stems)
     local trackNames = {}
+    local dksExpectedTotalOutputs = 0
+    local dksSuccessfulJobs = 0
+    local dksFailedJobs = 0
+    local dksFailedJobIndices = {}
 
     debugLog("=== processAllStemsResult: Creating stem tracks ===")
     debugLog("Number of jobs: " .. #multiTrackQueue.jobs)
@@ -19548,6 +19592,16 @@ _sep.processAllStemsResult = function()
         local isDrumKitJob = jobWorkflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
             and DKS_WORKFLOW.isDrumKitSource(jobWorkflowSource)
         local stemSetForJob = isDrumKitJob and DRUMKIT_STEMS or STEMS
+        local expectedOutputCount = 0
+        for _, stem in ipairs(stemSetForJob) do
+            if stem.selected and (not stem.sixStemOnly or is6Stem) then
+                expectedOutputCount = expectedOutputCount + 1
+            end
+        end
+        job.expectedOutputCount = expectedOutputCount
+        if isDrumKitJob then
+            dksExpectedTotalOutputs = dksExpectedTotalOutputs + expectedOutputCount
+        end
         if isDrumKitJob then
             local stdoutStems = collectStemPathsFromStdoutJson(job.stdoutFile)
             local stdoutCount = 0
@@ -19594,9 +19648,11 @@ _sep.processAllStemsResult = function()
             )
         end
         if isDrumKitJob then
+            job.detectedOutputCount = foundCount
+            job.workerExitCode = SW_LOG.readExitCode(job.exitCodeFile)
             SW_LOG.logExecResult(
                 "lua_dks_multi_job_index=" .. tostring(job.index)
-                    .. " lua_dks_multi_worker_exit_code=" .. tostring(SW_LOG.readExitCode(job.exitCodeFile) or "unknown"),
+                    .. " lua_dks_multi_worker_exit_code=" .. tostring(job.workerExitCode or "unknown"),
                 nil,
                 "lua_dks_multi_output_count=" .. tostring(foundCount)
             )
@@ -19814,6 +19870,7 @@ _sep.processAllStemsResult = function()
                 if (job.workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT)
                     and DKS_WORKFLOW.isDrumKitSource(job.workflowSource) then
                     SW_LOG.logExecResult("lua_dks_multi_import_created=" .. tostring(count), nil, "")
+                    job.importedOutputCount = count
                 end
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
@@ -19865,6 +19922,11 @@ _sep.processAllStemsResult = function()
                         end
                         totalStemsCreated = totalStemsCreated + count
                         if count > 0 then job.hadImportedStems = true end
+                        if (job.workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT)
+                            and DKS_WORKFLOW.isDrumKitSource(job.workflowSource) then
+                            SW_LOG.logExecResult("lua_dks_multi_import_created=" .. tostring(count), nil, "")
+                            job.importedOutputCount = count
+                        end
                     else
                         -- Bij time selection: split het item eerst bij de selectie grenzen
                         -- zodat we alleen het selectie-deel vervangen, niet het hele item
@@ -19926,6 +19988,11 @@ _sep.processAllStemsResult = function()
                     end
                     totalStemsCreated = totalStemsCreated + count
                     if count > 0 then job.hadImportedStems = true end
+                    if (job.workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT)
+                        and DKS_WORKFLOW.isDrumKitSource(job.workflowSource) then
+                        SW_LOG.logExecResult("lua_dks_multi_import_created=" .. tostring(count), nil, "")
+                        job.importedOutputCount = count
+                    end
                     end
                 else
                     debugLog("  ERROR: No valid source item for in-place replacement")
@@ -19947,6 +20014,32 @@ _sep.processAllStemsResult = function()
     for _ in pairs(sourceItemsWithStems) do sourceItemCountWithStems = sourceItemCountWithStems + 1 end
     debugLog("Total stems created: " .. totalStemsCreated)
     if multiTrackQueue.isDrumKitWorkflow then
+        for _, job in ipairs(multiTrackQueue.jobs or {}) do
+            local expected = tonumber(job.expectedOutputCount) or 0
+            local imported = tonumber(job.importedOutputCount) or 0
+            local detected = tonumber(job.detectedOutputCount) or 0
+            local exitCode = tonumber(job.workerExitCode)
+            local ok = expected > 0 and imported >= expected and detected >= expected and exitCode == 0
+            if ok then
+                dksSuccessfulJobs = dksSuccessfulJobs + 1
+            else
+                dksFailedJobs = dksFailedJobs + 1
+                dksFailedJobIndices[#dksFailedJobIndices + 1] = tostring(job.index or "?")
+            end
+        end
+        local expected = dksExpectedTotalOutputs
+        local status = (dksFailedJobs == 0 and totalStemsCreated >= expected) and "success" or ((totalStemsCreated > 0) and "partial" or "failed")
+        multiTrackQueue.dksResultStatus = status
+        multiTrackQueue.dksExpectedTotalOutputs = expected
+        multiTrackQueue.dksSuccessfulJobs = dksSuccessfulJobs
+        multiTrackQueue.dksFailedJobs = dksFailedJobs
+        multiTrackQueue.dksFailedJobIndices = table.concat(dksFailedJobIndices, ",")
+        SW_LOG.logExecResult("lua_dks_multi_expected_total_outputs=" .. tostring(expected), nil, "")
+        SW_LOG.logExecResult("lua_dks_multi_successful_jobs=" .. tostring(dksSuccessfulJobs), nil, "")
+        SW_LOG.logExecResult("lua_dks_multi_failed_jobs=" .. tostring(dksFailedJobs), nil, "")
+        SW_LOG.logExecResult("lua_dks_multi_failed_job_indices=" .. tostring(multiTrackQueue.dksFailedJobIndices), nil, "")
+        SW_LOG.logExecResult("lua_dks_multi_partial_success=" .. (status == "partial" and "yes" or "no"), nil, "")
+        SW_LOG.logExecResult("lua_dks_multi_result_status=" .. tostring(status), nil, "")
         SW_LOG.logExecResult("lua_dks_multi_import_total_created=" .. tostring(totalStemsCreated), nil, "")
     end
 
@@ -20029,6 +20122,19 @@ _sep.processAllStemsResult = function()
         isProcessingActive = false
         showMessage("Separation Failed", msg, "error", false)
         return
+    end
+
+    if multiTrackQueue.isDrumKitWorkflow and (multiTrackQueue.dksResultStatus == "partial" or multiTrackQueue.dksResultStatus == "failed") then
+        for _, job in ipairs(multiTrackQueue.jobs or {}) do
+            local expected = tonumber(job.expectedOutputCount) or 0
+            local imported = tonumber(job.importedOutputCount) or 0
+            local detected = tonumber(job.detectedOutputCount) or 0
+            local exitCode = tonumber(job.workerExitCode)
+            local ok = expected > 0 and imported >= expected and detected >= expected and exitCode == 0
+            if not ok and job.trackDir and job.trackDir ~= "" then
+                SW_LOG.preserveDiagnosticsForRun(job.trackDir, { reason = "partial_dks_multi", exitCode = job.workerExitCode })
+            end
+        end
     end
 
     -- Handle delete/mute options AFTER stems are created (so placement isn't disturbed)
@@ -20249,7 +20355,9 @@ _sep.processAllStemsResult = function()
             requestedParallel = effectiveRunRequestedParallel() and true or false,
         }
     else
-        local itemCount = #multiTrackQueue.jobs
+        local itemCount = (multiTrackQueue.isDrumKitWorkflow and multiTrackQueue.dksResultStatus == "success")
+            and (multiTrackQueue.dksSuccessfulJobs or #multiTrackQueue.jobs)
+            or #multiTrackQueue.jobs
         resultData = {
             kind = "multi_in_place",
             itemCount = itemCount,
@@ -20259,6 +20367,16 @@ _sep.processAllStemsResult = function()
             forceSequentialReason = multiTrackQueue.forceSequentialReason,
             requestedParallel = effectiveRunRequestedParallel() and true or false,
         }
+    end
+    if multiTrackQueue.isDrumKitWorkflow then
+        resultData.drumKitCopy = true
+        resultData.resultStatus = multiTrackQueue.dksResultStatus or "success"
+        resultData.expectedOutputs = multiTrackQueue.dksExpectedTotalOutputs or 0
+        resultData.actualOutputs = totalStemsCreated
+        resultData.successfulJobs = multiTrackQueue.dksSuccessfulJobs or 0
+        resultData.failedJobs = multiTrackQueue.dksFailedJobs or 0
+        resultData.totalJobs = #multiTrackQueue.jobs
+        resultData.failedJobIndices = multiTrackQueue.dksFailedJobIndices or ""
     end
     resultData.action = actionData
 
@@ -20289,7 +20407,7 @@ _sep.processAllStemsResult = function()
     -- Reset processing guard
     isProcessingActive = false
 
-    SW_TIMING.endRun("success", { total_audio = totalAudioDur, rtf = realtimeFactor })
+    SW_TIMING.endRun((multiTrackQueue.dksResultStatus == "partial") and "partial" or "success", { total_audio = totalAudioDur, rtf = realtimeFactor })
     SW_LOG.logExecResult("timing:finalize_end multi", nil, "")
     showResultWindow(selectedStemData, resultData)
 end

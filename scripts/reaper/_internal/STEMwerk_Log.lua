@@ -168,6 +168,13 @@ local function copyFileIfExists(src, dst)
     return true
 end
 
+local function ensureParentDirForPath(path)
+    local parent = tostring(path or ""):match("^(.*)[/\\]")
+    if parent and parent ~= "" then
+        SW_LOG.ensureDir(parent)
+    end
+end
+
 function SW_LOG.persistRunDiagnostics(outputDir, opts)
     if not outputDir or outputDir == "" then return nil end
     opts = opts or {}
@@ -192,6 +199,21 @@ function SW_LOG.persistRunDiagnostics(outputDir, opts)
         if not ok and opts.logMissing then
             SW_LOG.logExecResult("persistRunDiagnostics: missing " .. tostring(src), nil, "")
         end
+    end
+
+    local nestedTextFiles = {
+        "stage2_drumsep" .. sep .. "drumsep_helper_stdout.txt",
+        "stage2_drumsep" .. sep .. "drumsep_helper_stderr.txt",
+        "stage2_drumsep" .. sep .. "drumsep_helper_result.json",
+        "stage2_drumsep" .. sep .. "result.json",
+        "stage2_drumsep" .. sep .. "stdout.txt",
+        "stage2_drumsep" .. sep .. "stderr.txt",
+    }
+    for _, rel in ipairs(nestedTextFiles) do
+        local src = outputDir .. sep .. rel
+        local dst = jobDir .. sep .. rel
+        ensureParentDirForPath(dst)
+        copyFileIfExists(src, dst)
     end
 
     return jobDir
