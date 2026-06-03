@@ -1170,6 +1170,20 @@ def test_linux_managed_flow_installs_audio_separator_runtime_deps_after_torch():
     assert script.index('log_stage "Checking/installing audio_separator"') < script.index("Final verification")
 
 
+def test_linux_torch_stack_install_propagates_pip_failures_before_runtime_pins():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert "_pip_rc=1" in script
+    assert "_pip_rc=$?" in script
+    assert 'if [ "${_pip_rc}" -ne 0 ]; then' in script
+    assert 'log_step "${_mode} torch pip install failed with exit code ${_pip_rc}"' in script
+    assert 'return 1' in script[
+        script.index('if [ "${_pip_rc}" -ne 0 ]; then') :
+        script.index("enforce_runtime_python_pins")
+    ]
+    assert script.index('if [ "${_pip_rc}" -ne 0 ]; then') < script.index("enforce_runtime_python_pins")
+
+
 def test_linux_constraints_use_public_torch_versions_and_runtime_pins():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 

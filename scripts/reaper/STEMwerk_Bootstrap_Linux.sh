@@ -1011,26 +1011,34 @@ log_nvidia_packages() {
 install_linux_torch_stack() {
   _mode="$1"
   _index="${2:-}"
+  _pip_rc=1
   log_step "Uninstalling existing torch/vision/audio before ${_mode} torch install"
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
   case "${_mode}" in
     cpu)
       log_step "Torch source index: https://download.pytorch.org/whl/cpu (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
       eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url https://download.pytorch.org/whl/cpu $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+      _pip_rc=$?
       ;;
     rocm)
       log_step "Torch source index: ${_index} (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
       eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url \"${_index}\" $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+      _pip_rc=$?
       ;;
     cuda)
       log_step "Torch source index: default pip index (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
       eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+      _pip_rc=$?
       ;;
     *)
       return 1
       ;;
   esac
-	  enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
+  if [ "${_pip_rc}" -ne 0 ]; then
+    log_step "${_mode} torch pip install failed with exit code ${_pip_rc}"
+    return 1
+  fi
+  enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
 }
 
 assert_pinned_torch_stack() {
