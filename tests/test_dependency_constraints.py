@@ -1136,6 +1136,33 @@ def test_rebuild_venv_safety_allows_missing_target_under_safe_parent():
     assert 'return false, "target_mismatch", targetCanon, expectedCanon' in script
 
 
+def test_rebuild_venv_canonicalization_rejects_crash_text_as_path():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "function stemwerkSetupCanonicalOutputToPath(out)" in script
+    assert 'lower:find("terminate called", 1, true)' in script
+    assert 'lower:find("traceback", 1, true)' in script
+    assert 'lower:find("error", 1, true)' in script
+    assert 'return nil, "canonical_multiline_output"' in script
+    assert 'return nil, "canonical_not_absolute"' in script
+    assert "function stemwerkSetupDirectShellCapture(cmd)" in script
+    assert 'return nil, canonErr or "canonical_invalid_output"' in script
+
+
+def test_rebuild_venv_safety_reports_canonical_failure_without_using_raw_output_as_path():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "Could not verify runtime path safety. Rebuild was blocked." in script
+    assert '"Reason: " .. tostring(venvReason or "path_safety")' in script
+    assert '"Canonical target: " .. tostring(venvCanon or "(unresolved)")' in script
+    assert '"Canonical expected: " .. tostring(expectedVenvCanon or "(unresolved)")' in script
+    assert "terminate called without an active exception/.venv" not in script
+
+
 def test_command_path_noise_is_ignored_for_python_resolution():
     from pathlib import Path
 

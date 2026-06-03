@@ -4546,20 +4546,83 @@ local function normalizePathForSafety(path)
     return p
 end
 
+function stemwerkSetupCanonicalOutputToPath(out)
+    local text = tostring(out or "")
+    if text == "" then return nil, "canonical_empty" end
+    local lines = {}
+    for line in text:gmatch("[^\r\n]+") do
+        local trimmed = trim(line or "")
+        if trimmed ~= "" then
+            lines[#lines + 1] = trimmed
+        end
+    end
+    if #lines ~= 1 then
+        return nil, "canonical_multiline_output"
+    end
+    local line = lines[1]
+    local lower = line:lower()
+    if lower:find("terminate called", 1, true)
+        or lower:find("traceback", 1, true)
+        or lower:find("error", 1, true) then
+        return nil, "canonical_error_output"
+    end
+    local canon = normalizePathForSafety(line)
+    if canon == "" then
+        return nil, "canonical_empty"
+    end
+    if not isAbsolutePath(canon) then
+        return nil, "canonical_not_absolute"
+    end
+    return canon, nil
+end
+
+function stemwerkSetupDirectShellCapture(cmd)
+    if OS == "Windows" then return nil, "" end
+    local h = io.popen(cmd .. " 2>&1")
+    if not h then return nil, "" end
+    local content = h:read("*a") or ""
+    local ok, _, code = h:close()
+    local rc = 1
+    if ok == true then
+        rc = 0
+    elseif type(code) == "number" then
+        rc = code
+    end
+    return rc, content
+end
+
 local function canonicalizeDir(path)
     local raw = resolvePath(path or "")
     if raw == "" then return nil, "empty_path" end
     if not pathExists(raw) then return nil, "path_missing" end
     local cmd = 'cd ' .. quoteArg(raw) .. ' >/dev/null 2>&1 && pwd -P'
     local rc, out = execCapture(cmd, 4000)
-    if rc ~= 0 then
-        return nil, "canonical_resolution_failed"
+    if rc == 0 then
+        local canon, canonErr = stemwerkSetupCanonicalOutputToPath(out)
+        if canon then
+            return canon, nil
+        end
+        if OS ~= "Windows" then
+            local directRc, directOut = stemwerkSetupDirectShellCapture(cmd)
+            if directRc == 0 then
+                local directCanon = stemwerkSetupCanonicalOutputToPath(directOut)
+                if directCanon then
+                    return directCanon, nil
+                end
+            end
+        end
+        return nil, canonErr or "canonical_invalid_output"
     end
-    local canon = normalizePathForSafety(trim((out or ""):match("([^\r\n]+)") or ""))
-    if canon == "" then
-        return nil, "canonical_empty"
+    if OS ~= "Windows" then
+        local directRc, directOut = stemwerkSetupDirectShellCapture(cmd)
+        if directRc == 0 then
+            local directCanon = stemwerkSetupCanonicalOutputToPath(directOut)
+            if directCanon then
+                return directCanon, nil
+            end
+        end
     end
-    return canon, nil
+    return nil, "canonical_resolution_failed"
 end
 
 local function canonicalizeParentAndJoin(path)
@@ -5353,10 +5416,16 @@ startLinuxSetup = function(runtime, separatorScript, mode)
         if not venvOk then
             appendSetupLog(runtime, "Rebuild-venv blocked: " .. tostring(venvReason), false)
             appendDeleteAudit("Rebuild-venv blocked reason=" .. tostring(venvReason) .. " target=" .. tostring(venvCanon) .. " expected=" .. tostring(expectedVenvCanon))
+            local verifyMsg = ""
+            if tostring(venvReason or ""):match("^canonical_") then
+                verifyMsg = "Could not verify runtime path safety. Rebuild was blocked.\n\n"
+            end
             msgBox(
                 "STEMwerk Setup",
                 "Safety check blocked virtual environment rebuild.\n\n"
+                    .. verifyMsg
                     .. "Target: " .. tostring(runtime.venvDir) .. "\n"
+                    .. "Reason: " .. tostring(venvReason or "path_safety") .. "\n"
                     .. "Canonical target: " .. tostring(venvCanon or "(unresolved)") .. "\n"
                     .. "Canonical expected: " .. tostring(expectedVenvCanon or "(unresolved)") .. "\n\n"
                     .. "Nothing was deleted.",
