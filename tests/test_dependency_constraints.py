@@ -1608,6 +1608,13 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "dks_extract_stage2_runtime=drumsep" in script
     assert "dks_extract_stage2_device=" in script
     assert "dks_extract_stage2_requested_device=" in script
+    assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1" in script
+    assert "def _dks_extract_stage2_lock(output_root: Path):" in script
+    assert "with _dks_extract_stage2_lock(output_root):" in script
+    assert "lua_dks_extract_stage2_concurrency_cap=" in script
+    assert "lua_dks_extract_stage2_queue_wait_start" in script
+    assert "lua_dks_extract_stage2_queue_wait_end wait_seconds=" in script
+    assert "dks_extract_stage2_throttled=yes" in script
     assert 'dst = output_root / src.name' in script
     assert "_direct_dks_preflight_check(requested_stage2_model, model_cache_dir)" in script
     assert "requested_stage2_model = _resolve_requested_stage2_model(args)" in script
@@ -1701,12 +1708,23 @@ def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs()
     assert '"stage2_drumsep" .. sep .. "drumsep_helper_stdout.txt"' in log_script
     assert '"stage2_drumsep" .. sep .. "drumsep_helper_stderr.txt"' in log_script
     assert '"stage2_drumsep" .. sep .. "drumsep_helper_result.json"' in log_script
+    assert '"stage2_drumsep" .. sep .. "drumsep_result.json"' in log_script
+    assert 'reason == "partial_dks_multi"' in log_script
+    assert 'error_class = tostring(opts.errorClass or dksReason)' in log_script
+    assert 'lines[#lines + 1] = "failed_jobs: " .. tostring(opts.failedJobIndices)' in log_script
+    assert 'lines[#lines + 1] = "expected_outputs: " .. tostring(opts.expectedOutputs)' in log_script
+    assert 'lines[#lines + 1] = "created_outputs: " .. tostring(opts.createdOutputs)' in log_script
 
     assert '"lua_dks_multi_start", "lua_dks_multi_workflow_source", "lua_dks_multi_source_count",' in support_script
     assert '"lua_dks_multi_output_count", "lua_dks_multi_import_created", "lua_dks_multi_import_total_created",' in support_script
+    assert '"lua_dks_extract_stage2_concurrency_cap", "lua_dks_extract_stage2_queue_wait_start",' in support_script
+    assert '"lua_dks_extract_stage2_queue_wait_end", "dks_extract_stage2_throttled",' in support_script
     assert 'for i = 1, math.min(8, #runDirs) do' in support_script
     assert 'for i = 1, math.min(8, #tempRuns) do' in support_script
     assert 'local maxRunsToInclude = 8' in support_script
+    assert 'joinPath("stage2_drumsep", "drumsep_helper_stdout.txt")' in support_script
+    assert 'joinPath("stage2_drumsep", "drumsep_helper_stderr.txt")' in support_script
+    assert 'joinPath("stage2_drumsep", "drumsep_result.json")' in support_script
 
 
 def test_support_bundle_excludes_dev_matrix_temp_dirs_and_reports_temp_log_budget():
@@ -1723,6 +1741,12 @@ def test_support_bundle_excludes_dev_matrix_temp_dirs_and_reports_temp_log_budge
     assert '"cpu_elapsed=%.3f wall_elapsed=%d"' in script
     assert '"cpu_duration=%.3f wall_duration=%d"' in script
     assert 'appendKey(diagnostics, "collect_drumsep_runtime_wall", tostring(phaseTimingsWall.collect_drumsep_runtime or 0))' in script
+    assert 'appendKey(lines, "collect_drumsep_runtime_source", "cached")' in script
+    assert 'appendKey(lines, "collect_drumsep_runtime_live_probe", "skipped")' in script
+    assert 'local cpuProbe = nil' in script
+    assert 'local rocmProbe = nil' in script
+    assert 'kvAssignLast(entry, "error_reason", "partial_dks_multi")' in script
+    assert 'setRunResult(entry, "partial", 6)' in script
 
 
 def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, capsys):
@@ -2470,7 +2494,8 @@ def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     assert "STEMWERK_ERROR_HINT=" in log_script
     assert "STEMWERK_MODEL_CACHE_HINT=" in log_script
     assert 'local runSucceeded = tonumber(exitCode) == 0 and tostring(doneText):find("DONE", 1, true) ~= nil' in log_script
-    assert "if not runSucceeded then" in log_script
+    assert 'if reason == "partial_dks_multi" then' in log_script
+    assert "elseif not runSucceeded then" in log_script
     assert 'if failure and failure.reason and reason == "no_stems" then' in log_script
 
     assert 'key == "error_class" or key == "stemwerk_error_class"' in support_script

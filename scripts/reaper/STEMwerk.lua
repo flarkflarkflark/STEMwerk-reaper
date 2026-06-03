@@ -20132,7 +20132,14 @@ _sep.processAllStemsResult = function()
             local exitCode = tonumber(job.workerExitCode)
             local ok = expected > 0 and imported >= expected and detected >= expected and exitCode == 0
             if not ok and job.trackDir and job.trackDir ~= "" then
-                SW_LOG.preserveDiagnosticsForRun(job.trackDir, { reason = "partial_dks_multi", exitCode = job.workerExitCode })
+                SW_LOG.preserveDiagnosticsForRun(job.trackDir, {
+                    reason = "partial_dks_multi",
+                    exitCode = job.workerExitCode,
+                    errorClass = "drumsep_output_count_mismatch",
+                    failedJobIndices = multiTrackQueue.dksFailedJobIndices,
+                    expectedOutputs = multiTrackQueue.dksExpectedTotalOutputs,
+                    createdOutputs = totalStemsCreated,
+                })
             end
         end
     end

@@ -205,6 +205,7 @@ function SW_LOG.persistRunDiagnostics(outputDir, opts)
         "stage2_drumsep" .. sep .. "drumsep_helper_stdout.txt",
         "stage2_drumsep" .. sep .. "drumsep_helper_stderr.txt",
         "stage2_drumsep" .. sep .. "drumsep_helper_result.json",
+        "stage2_drumsep" .. sep .. "drumsep_result.json",
         "stage2_drumsep" .. sep .. "result.json",
         "stage2_drumsep" .. sep .. "stdout.txt",
         "stage2_drumsep" .. sep .. "stderr.txt",
@@ -389,7 +390,21 @@ function SW_LOG.preserveDiagnosticsForRun(outputDir, opts)
     local sepText = SW_LOG.readFileSnippet(outputDir .. sep .. "separation_log.txt", 128000) or ""
     local outText = SW_LOG.readFileSnippet(outputDir .. sep .. "stdout.txt", 128000) or ""
     local failure = nil
-    if not runSucceeded then
+    if reason == "partial_dks_multi" then
+        local lower = tostring(sepText .. "\n" .. outText):lower()
+        local dksReason = "partial_dks_multi"
+        if lower:find("drumsep_output_count_mismatch", 1, true) then
+            dksReason = "drumsep_output_count_mismatch"
+        elseif lower:find("error_reason=", 1, true) then
+            dksReason = tostring(sepText):match("error_reason=([%w_%-]+)") or dksReason
+        end
+        failure = {
+            error_class = tostring(opts.errorClass or dksReason),
+            error_hint = "One or more Drum Kit Split stage-2 jobs failed. Save this support bundle and retry with fewer parallel items.",
+            model_cache_hint = "",
+            reason = reason,
+        }
+    elseif not runSucceeded then
         failure = SW_LOG.classifyModelFailure(sepText, outText)
     end
     if failure and failure.reason and reason == "no_stems" then
@@ -422,6 +437,15 @@ function SW_LOG.preserveDiagnosticsForRun(outputDir, opts)
     end
     if exitCode ~= nil then
         lines[#lines + 1] = "exit_code: " .. tostring(exitCode)
+    end
+    if opts.failedJobIndices then
+        lines[#lines + 1] = "failed_jobs: " .. tostring(opts.failedJobIndices)
+    end
+    if opts.expectedOutputs then
+        lines[#lines + 1] = "expected_outputs: " .. tostring(opts.expectedOutputs)
+    end
+    if opts.createdOutputs then
+        lines[#lines + 1] = "created_outputs: " .. tostring(opts.createdOutputs)
     end
     local sf = io.open(logDir .. sep .. "run_summary.txt", "wb")
     if sf then

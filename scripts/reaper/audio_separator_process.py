@@ -42,6 +42,7 @@ DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
+DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -167,6 +168,48 @@ def _repository_root() -> Path:
 
 def _drumsep_helper_path() -> Path:
     return Path(__file__).resolve().parent / DRUMSEP_HELPER_RELATIVE
+
+
+@contextmanager
+def _dks_extract_stage2_lock(output_root: Path):
+    """Serialize DrumSep stage 2 for Drum Split multi runs to avoid ROCm contention."""
+    batch_root = output_root.parent if output_root.parent.name.startswith("STEMwerk_") else output_root
+    lock_path = batch_root / ".dks_extract_stage2.lock"
+    lock_fh = None
+    waited = False
+    wait_started = time.monotonic()
+    print(f"lua_dks_extract_stage2_concurrency_cap={DKS_EXTRACT_STAGE2_CONCURRENCY_CAP}", file=sys.stderr)
+    print("dks_extract_stage2_throttled=yes", file=sys.stderr)
+    print(f"dks_extract_stage2_lock_path={lock_path}", file=sys.stderr)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fh = lock_path.open("a+", encoding="utf-8")
+        try:
+            import fcntl  # POSIX only; Windows falls back to no lock.
+
+            print("lua_dks_extract_stage2_queue_wait_start", file=sys.stderr)
+            print("PROGRESS:50:Stage 2 queued for DrumSep...", flush=True)
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            waited = True
+            wait_seconds = max(0.0, time.monotonic() - wait_started)
+            print(f"lua_dks_extract_stage2_queue_wait_end wait_seconds={wait_seconds:.3f}", file=sys.stderr)
+        except ImportError:
+            print("lua_dks_extract_stage2_queue_wait_skipped=fcntl_unavailable", file=sys.stderr)
+        yield
+    finally:
+        if lock_fh is not None:
+            try:
+                if waited:
+                    import fcntl
+
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                    print("lua_dks_extract_stage2_lock_released=yes", file=sys.stderr)
+            except Exception:
+                pass
+            try:
+                lock_fh.close()
+            except Exception:
+                pass
 
 
 def _find_repo_download_checks_path() -> Optional[Path]:
@@ -1848,14 +1891,15 @@ def main():
             requested_stage2_model = requested_model or requested_stage2_model
             run_model = resolved_model or run_model
             emit_phase("stage2_separate")
-            helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
-                drums_input,
-                stage2_root,
-                model_cache_dir,
-                drumsep_python,
-                requested_stage2_model,
-                run_model,
-            )
+            with _dks_extract_stage2_lock(output_root):
+                helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
+                    drums_input,
+                    stage2_root,
+                    model_cache_dir,
+                    drumsep_python,
+                    requested_stage2_model,
+                    run_model,
+                )
             if not helper_ok:
                 stage = "stage2_separate"
                 if helper_reason == "drumsep_model_load_failed":

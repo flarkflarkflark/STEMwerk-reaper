@@ -1381,6 +1381,16 @@ local function appendDrumsepRuntimeBlock(lines, title, runtimePython, stateData,
         end
     else
         appendKey(lines, "probe_status", "not_run")
+        appendKey(lines, "diagnostic_source", "cached_state")
+        appendKey(lines, "audio_separator_version", trim(stateData.DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_AUDIO_SEPARATOR_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_AUDIO_SEPARATOR_VERSION or "") or "unknown")
+        appendKey(lines, "numpy_version", trim(stateData.DRUMSEP_ROCM_NUMPY_VERSION or stateData.DRUMSEP_NUMPY_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_NUMPY_VERSION or stateData.DRUMSEP_NUMPY_VERSION or "") or "unknown")
+        appendKey(lines, "torch_version", trim(stateData.DRUMSEP_ROCM_TORCH_VERSION or stateData.DRUMSEP_TORCH_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_TORCH_VERSION or stateData.DRUMSEP_TORCH_VERSION or "") or "unknown")
+        appendKey(lines, "torch.version.hip", trim(stateData.DRUMSEP_ROCM_TORCH_HIP or stateData.DRUMSEP_TORCH_HIP or "") ~= "" and trim(stateData.DRUMSEP_ROCM_TORCH_HIP or stateData.DRUMSEP_TORCH_HIP or "") or "unknown")
+        appendKey(lines, "torch.cuda.is_available", trim(stateData.DRUMSEP_ROCM_CUDA_AVAILABLE or stateData.DRUMSEP_CUDA_AVAILABLE or "") ~= "" and trim(stateData.DRUMSEP_ROCM_CUDA_AVAILABLE or stateData.DRUMSEP_CUDA_AVAILABLE or "") or "unknown")
+        appendKey(lines, "torch_device_names", trim(stateData.DRUMSEP_ROCM_DEVICE_NAMES or stateData.DRUMSEP_DEVICE_NAMES or "") ~= "" and trim(stateData.DRUMSEP_ROCM_DEVICE_NAMES or stateData.DRUMSEP_DEVICE_NAMES or "") or "unknown")
+        appendKey(lines, "onnx_version", trim(stateData.DRUMSEP_ROCM_ONNX_VERSION or stateData.DRUMSEP_ONNX_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_ONNX_VERSION or stateData.DRUMSEP_ONNX_VERSION or "") or "unknown")
+        appendKey(lines, "onnxruntime_version", trim(stateData.DRUMSEP_ROCM_ONNXRUNTIME_VERSION or stateData.DRUMSEP_ONNXRUNTIME_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_ONNXRUNTIME_VERSION or stateData.DRUMSEP_ONNXRUNTIME_VERSION or "") or "unknown")
+        appendKey(lines, "onnx2torch_version", trim(stateData.DRUMSEP_ROCM_ONNX2TORCH_VERSION or stateData.DRUMSEP_ONNX2TORCH_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_ONNX2TORCH_VERSION or stateData.DRUMSEP_ONNX2TORCH_VERSION or "") or "unknown")
     end
     appendKey(lines, "model_status", trim(stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) ~= "" and trim(stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) or "unknown")
     appendKey(lines, "model_file", sanitizePathValue(modelFile))
@@ -1408,6 +1418,8 @@ local function collectLatestDksMarkers(cacheLogDir)
         "dks_extract_stage1_fallback_reason", "dks_extract_stage1_output", "dks_extract_stage2_runtime",
         "dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_intermediate_dir",
         "dks_extract_stage2_dir", "lua_dks_extract_outputs_detected", "lua_dks_extract_output_count",
+        "lua_dks_extract_stage2_concurrency_cap", "lua_dks_extract_stage2_queue_wait_start",
+        "lua_dks_extract_stage2_queue_wait_end", "dks_extract_stage2_throttled",
         "lua_dks_extract_import_start", "lua_dks_extract_import_end", "lua_dks_extract_import_candidate_count",
         "lua_dks_extract_import_selected_count", "lua_dks_extract_import_created", "lua_result_probe_start",
         "lua_result_probe_workflow_source", "lua_result_probe_top_level_count", "lua_result_probe_stdout_json_attempt",
@@ -1439,9 +1451,13 @@ local function collectLatestDksMarkers(cacheLogDir)
         for i = 1, math.min(8, #runDirs) do
             local runDir = joinPath(runsRoot, runDirs[i])
             for _, jobName in ipairs(enumerateSubdirs(runDir)) do
-                addIfExists(joinPath(runDir, jobName, "stdout.txt"))
-                addIfExists(joinPath(runDir, jobName, "separation_log.txt"))
-                addIfExists(joinPath(runDir, jobName, "phase_events.jsonl"))
+                local jobDir = joinPath(runDir, jobName)
+                addIfExists(joinPath(jobDir, "stdout.txt"))
+                addIfExists(joinPath(jobDir, "separation_log.txt"))
+                addIfExists(joinPath(jobDir, "phase_events.jsonl"))
+                addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stdout.txt"))
+                addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stderr.txt"))
+                addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"))
             end
         end
     end
@@ -1468,6 +1484,9 @@ local function collectLatestDksMarkers(cacheLogDir)
                 addIfExists(joinPath(jobDir, "stdout.txt"))
                 addIfExists(joinPath(jobDir, "separation_log.txt"))
                 addIfExists(joinPath(jobDir, "phase_events.jsonl"))
+                addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stdout.txt"))
+                addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stderr.txt"))
+                addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"))
             end
         end
     end
@@ -1526,14 +1545,16 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
     local rocmStatePath = joinPath(runtimeStateDir, "drumsep_runtime_rocm.env")
     local cpuState = readEnvFile(cpuStatePath)
     local rocmState = readEnvFile(rocmStatePath)
-    local cpuProbe = buildDrumsepRuntimeProbe(cpuPy)
-    local rocmProbe = buildDrumsepRuntimeProbe(rocmPy)
+    local cpuProbe = nil
+    local rocmProbe = nil
 
     appendLine(lines, "DrumSep Runtime Diagnostics")
     appendKey(lines, "runtime_base", runtimeBase)
     appendKey(lines, "runtime_state_dir", runtimeStateDir)
     appendKey(lines, "runtime_logs_dir", runtimeLogDir)
     appendKey(lines, "model_cache_dir", modelDir)
+    appendKey(lines, "collect_drumsep_runtime_source", "cached")
+    appendKey(lines, "collect_drumsep_runtime_live_probe", "skipped")
     appendLine(lines, "")
 
     appendDrumsepRuntimeBlock(lines, "[CPU fallback runtime]", cpuPy, cpuState, cpuProbe, modelFile, modelYaml)
@@ -1820,6 +1841,15 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
         ["done.txt"] = true,
         ["run_bg.sh"] = true,
     }
+    local nestedAllowed = {
+        joinPath("stage2_drumsep", "drumsep_helper_stdout.txt"),
+        joinPath("stage2_drumsep", "drumsep_helper_stderr.txt"),
+        joinPath("stage2_drumsep", "drumsep_result.json"),
+        joinPath("stage2_drumsep", "drumsep_helper_result.json"),
+        joinPath("stage2_drumsep", "result.json"),
+        joinPath("stage2_drumsep", "stdout.txt"),
+        joinPath("stage2_drumsep", "stderr.txt"),
+    }
 
     local runDirNames = enumerateSubdirs(runsRoot)
     if #runDirNames == 0 then
@@ -1888,6 +1918,18 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
                     if ok then
                         copiedCount = copiedCount + 1
                         copiedFiles[#copiedFiles + 1] = "runtime_runs/" .. runName .. "/" .. jobName .. "/" .. fileName .. " (" .. mode .. ")"
+                    end
+                end
+            end
+            for _, rel in ipairs(nestedAllowed) do
+                local src = joinPath(jobSrc, rel)
+                if fileExists(src) then
+                    local dst = joinPath(jobDst, rel)
+                    ensureDir(dirname(dst))
+                    local ok, mode = copySupportTextFile(src, dst, 512 * 1024)
+                    if ok then
+                        copiedCount = copiedCount + 1
+                        copiedFiles[#copiedFiles + 1] = "runtime_runs/" .. runName .. "/" .. jobName .. "/" .. rel .. " (" .. mode .. ")"
                     end
                 end
             end
@@ -2085,7 +2127,10 @@ local function parseSupportRunText(entry, text)
                 end
             elseif key == "reason" or key == "error" or key == "failure_reason" then
                 if value ~= "" and value:lower() ~= "none" and value ~= "0" then
-                    if value:lower():find("user_cancel", 1, true) then
+                    if value:lower():find("partial_dks_multi", 1, true) then
+                        kvAssignLast(entry, "error_reason", "partial_dks_multi")
+                        setRunResult(entry, "partial", 6)
+                    elseif value:lower():find("user_cancel", 1, true) then
                         entry._sawUserCancel = (entry._sawUserCancel or 0) + 1
                         kvAssignLast(entry, "error_reason", "user_cancel")
                         setRunResult(entry, "cancelled", 5)
