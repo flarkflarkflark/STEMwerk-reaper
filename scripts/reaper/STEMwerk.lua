@@ -1113,6 +1113,38 @@ function normalizeStemPathMap(stemPaths)
     return normalized
 end
 
+local function collectStemPathsFromStdoutJson(stdoutFile)
+    if not stdoutFile or stdoutFile == "" then return {} end
+    local f = io.open(stdoutFile, "r")
+    if not f then return {} end
+    local text = f:read("*a") or ""
+    f:close()
+    if text == "" then return {} end
+
+    local lastJsonLine = nil
+    for line in tostring(text):gmatch("[^\r\n]+") do
+        local trimmed = tostring(line or ""):match("^%s*(.-)%s*$") or ""
+        if trimmed:sub(1, 1) == "{" and trimmed:sub(-1) == "}" and trimmed:find('"%s*:%s*"', 1) then
+            lastJsonLine = trimmed
+        end
+    end
+    if not lastJsonLine then return {} end
+
+    local stems = {}
+    for rawKey, rawPath in lastJsonLine:gmatch('"([^"]+)"%s*:%s*"(.-)"') do
+        local key = normalizeStemPathKey(rawKey:gsub("_", "-"))
+        local path = tostring(rawPath or ""):gsub('\\"', '"'):gsub("\\\\", "\\")
+        if key ~= "" and path ~= "" then
+            local probe = io.open(path, "rb")
+            if probe then
+                probe:close()
+                stems[key] = path
+            end
+        end
+    end
+    return stems
+end
+
 function stemPathMapLooksLikeDrumKit(stemPaths)
     local normalized = normalizeStemPathMap(stemPaths)
     return normalized["kick"] and normalized["snare"] and normalized["toms"]
@@ -14018,6 +14050,7 @@ function setWorkflowContextForRun(runOptions)
     runOptions = runOptions or {}
     progressState.workflowMode = tostring(runOptions.workflowMode or "")
     progressState.workflowSource = tostring(runOptions.workflowSource or "")
+    progressState.requestedStage2Model = tostring(runOptions.requestedStage2Model or "")
 end
 
 UI_PROGRESS.configure({
@@ -17090,6 +17123,11 @@ _sep.runSingleTrackSeparation = function(trackList)
     local hasTimeSel = (timeSelectionMode and timeSelectionStart and timeSelectionEnd and timeSelectionEnd > timeSelectionStart)
 
     local is6Stem = isEffectiveRun6Stem()
+    local workflowModeArg = tostring(progressState.workflowMode or "")
+    local workflowSourceArg = tostring(progressState.workflowSource or "")
+    local requestedStage2ModelArg = tostring(progressState.requestedStage2Model or "")
+    local isDrumKitMultiRun = workflowModeArg == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+        and DKS_WORKFLOW.isDrumKitSource(workflowSourceArg)
     local selectedStemCount = 0
     for _, stem in ipairs(STEMS) do
         if stem.selected and (not stem.sixStemOnly or is6Stem) then
@@ -17433,12 +17471,21 @@ _sep.runSingleTrackSeparation = function(trackList)
     end
 
     -- Jobs are already sorted by the sourcePlan
+    for _, job in ipairs(trackJobs) do
+        job.workflowMode = workflowModeArg
+        job.workflowSource = workflowSourceArg
+        job.requestedStage2Model = requestedStage2ModelArg
+    end
 
     -- Store jobs in queue for progress tracking
     multiTrackQueue.jobs = trackJobs
     multiTrackQueue.totalTracks = #trackJobs
     multiTrackQueue.completedCount = 0
     multiTrackQueue.baseTempDir = baseTempDir
+    multiTrackQueue.workflowMode = workflowModeArg
+    multiTrackQueue.workflowSource = workflowSourceArg
+    multiTrackQueue.requestedStage2Model = requestedStage2ModelArg
+    multiTrackQueue.isDrumKitWorkflow = isDrumKitMultiRun
     multiTrackQueue.active = true
     multiTrackQueue.selectedStemCount = selectedStemCount
     local expectedItemsTotal = 0
@@ -17457,6 +17504,14 @@ _sep.runSingleTrackSeparation = function(trackList)
         multiTrackQueue.detectedItemCount = expectedItemsTotal
     end
     multiTrackQueue.queuedItemCount = #trackJobs
+    if isDrumKitMultiRun then
+        SW_LOG.logExecResult("lua_dks_multi_start", nil, "")
+        SW_LOG.logExecResult("lua_dks_multi_workflow_source=" .. tostring(workflowSourceArg), nil, "")
+        SW_LOG.logExecResult("lua_dks_multi_source_count=" .. tostring(#trackJobs), nil, "")
+        debugLog("lua_dks_multi_start")
+        debugLog("lua_dks_multi_workflow_source=" .. tostring(workflowSourceArg))
+        debugLog("lua_dks_multi_source_count=" .. tostring(#trackJobs))
+    end
     -- Default: follow user's parallel/sequential preference.
     -- However, on Windows CPU-only (device=cpu/auto), parallel multi-job runs can be MUCH slower
     -- because each job loads the model separately and they compete for CPU/RAM/disk.
@@ -17593,6 +17648,13 @@ _sep.runSingleTrackSeparation = function(trackList)
     end
     if multiTrackQueue.sequentialMode and not multiTrackQueue.executionModeReason then
         multiTrackQueue.executionModeReason = multiTrackQueue.forceSequentialReason or "user_sequential"
+    end
+    if isDrumKitMultiRun then
+        SW_LOG.logExecResult(
+            "lua_dks_multi_mode=" .. (multiTrackQueue.sequentialMode and "sequential" or "parallel"),
+            nil,
+            ""
+        )
     end
     multiTrackQueue.currentJobIndex = 0
     multiTrackQueue.globalStartTime = os.time()  -- Track total elapsed time
@@ -17734,6 +17796,14 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     local requestedDeviceArg = effectiveRunDevice()
     local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)
     local modelArg = effectiveRunModel()
+    local workflowModeArg = tostring(job.workflowMode or multiTrackQueue.workflowMode or "")
+    local workflowSourceArg = tostring(job.workflowSource or multiTrackQueue.workflowSource or "")
+    local requestedStage2ModelArg = tostring(job.requestedStage2Model or multiTrackQueue.requestedStage2Model or "")
+    local isDrumKitJob = workflowModeArg == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+        and DKS_WORKFLOW.isDrumKitSource(workflowSourceArg)
+    if isDrumKitJob and workflowSourceArg == DKS_WORKFLOW.SOURCE_DIRECT and requestedStage2ModelArg ~= "" then
+        modelArg = requestedStage2ModelArg
+    end
     local pythonCmd = string.format(
         '%s -u %s %s %s --model %s --device %s',
         quoteArg(PYTHON_PATH),
@@ -17743,8 +17813,27 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         quoteArg(modelArg),
         quoteArg(deviceArg)
     )
+    if workflowModeArg ~= "" then
+        pythonCmd = pythonCmd .. " --workflow-mode " .. quoteArg(workflowModeArg)
+    end
+    if workflowSourceArg ~= "" then
+        pythonCmd = pythonCmd .. " --workflow-source " .. quoteArg(workflowSourceArg)
+    end
+    if requestedStage2ModelArg ~= "" then
+        pythonCmd = pythonCmd .. " --requested-stage2-model " .. quoteArg(requestedStage2ModelArg)
+    end
     job.lastCmd = pythonCmd
     SW_LOG.logExecResult("LAUNCH: " .. pythonCmd, nil, "")
+    if isDrumKitJob then
+        SW_LOG.logExecResult(
+            "lua_dks_multi_job_index=" .. tostring(job.index)
+                .. " lua_dks_multi_job_dir=" .. tostring(job.trackDir),
+            nil,
+            "lua_dks_multi_worker_args=workflow_mode=" .. tostring(workflowModeArg)
+                .. " workflow_source=" .. tostring(workflowSourceArg)
+                .. " requested_stage2_model=" .. tostring(requestedStage2ModelArg)
+        )
+    end
     writeTimingEvent(job, "python_launch", job.index, { mode = multiTrackQueue.sequentialMode and "sequential" or "parallel" })
     if tostring(deviceArg) ~= tostring(requestedDeviceArg) then
         debugLog("Job " .. tostring(job.index) .. " device=" .. tostring(requestedDeviceArg) .. " -> normalized to " .. tostring(deviceArg))
@@ -17766,6 +17855,9 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             local outD = escPS(job.trackDir)
             local m = escPS(modelArg)
             local dev = escPS(deviceArg)
+            local workflowMode = escPS(workflowModeArg)
+            local workflowSource = escPS(workflowSourceArg)
+            local requestedStage2Model = escPS(requestedStage2ModelArg)
             local stdoutF = escPS(stdoutFile)
             local stderrF = escPS(logFile)
             local pidF = escPS(pidFile)
@@ -17791,7 +17883,14 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
                 "$outq=$dq + $out + $dq;" ..
                 "$modelq=$dq + $model + $dq;" ..
                 "$devq=$dq + $dev + $dq;" ..
-                "$p = Start-Process -FilePath $py -ArgumentList @('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq) -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "';" ..
+                "$wm='" .. workflowMode .. "';" ..
+                "$ws='" .. workflowSource .. "';" ..
+                "$s2='" .. requestedStage2Model .. "';" ..
+                "$args=@('-u',$sepq,$inq,$outq,'--model',$modelq,'--device',$devq);" ..
+                "if ($wm -ne '') { $args += @('--workflow-mode',($dq + $wm + $dq)) };" ..
+                "if ($ws -ne '') { $args += @('--workflow-source',($dq + $ws + $dq)) };" ..
+                "if ($s2 -ne '') { $args += @('--requested-stage2-model',($dq + $s2 + $dq)) };" ..
+                "$p = Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "';" ..
                 " Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii;" ..
                 " Wait-Process -Id $p.Id;" ..
                 " $ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii;" ..
@@ -17813,13 +17912,16 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground (old behavior)
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s >%s 2>%s && echo DONE >%s',
+                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
                 quoteArg(job.trackDir),
                 quoteArg(modelArg),
                 quoteArg(deviceArg),
+                (workflowModeArg ~= "" and (" --workflow-mode " .. quoteArg(workflowModeArg)) or "")
+                    .. (workflowSourceArg ~= "" and (" --workflow-source " .. quoteArg(workflowSourceArg)) or "")
+                    .. (requestedStage2ModelArg ~= "" and (" --requested-stage2-model " .. quoteArg(requestedStage2ModelArg)) or ""),
                 quoteArg(stdoutFile),
                 quoteArg(logFile),
                 quoteArg(doneFile)
@@ -17852,6 +17954,9 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
               script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG\n")
               script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
               script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
+              script:write("WORKFLOW_MODE=" .. quoteArg(workflowModeArg) .. "\n")
+              script:write("WORKFLOW_SOURCE=" .. quoteArg(workflowSourceArg) .. "\n")
+              script:write("REQUESTED_STAGE2_MODEL=" .. quoteArg(requestedStage2ModelArg) .. "\n")
             script:write("STDOUT=" .. quoteArg(stdoutFile) .. "\n")
             script:write("STDERR=" .. quoteArg(logFile) .. "\n")
             script:write("DONE=" .. quoteArg(doneFile) .. "\n")
@@ -17870,7 +17975,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             script:write("  export LD_LIBRARY_PATH\n")
             script:write("fi\n")
             script:write("(\n")
-            script:write('  "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE" >"$STDOUT" 2>"$STDERR" &\n')
+            script:write('  set -- "$PY" -u "$SEP" "$IN" "$OUT" --model "$MODEL" --device "$DEVICE"\n')
+            script:write('  if [ -n "$WORKFLOW_MODE" ]; then set -- "$@" --workflow-mode "$WORKFLOW_MODE"; fi\n')
+            script:write('  if [ -n "$WORKFLOW_SOURCE" ]; then set -- "$@" --workflow-source "$WORKFLOW_SOURCE"; fi\n')
+            script:write('  if [ -n "$REQUESTED_STAGE2_MODEL" ]; then set -- "$@" --requested-stage2-model "$REQUESTED_STAGE2_MODEL"; fi\n')
+            script:write('  "$@" >"$STDOUT" 2>"$STDERR" &\n')
             script:write('  worker_pid=$!\n')
             script:write('  echo "$worker_pid" > "$PIDFILE"\n')
             script:write('  wait "$worker_pid"\n')
@@ -17891,13 +18000,16 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s >%s 2>%s && echo DONE >%s',
+                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
                 quoteArg(job.trackDir),
                 quoteArg(modelArg),
                 quoteArg(deviceArg),
+                (workflowModeArg ~= "" and (" --workflow-mode " .. quoteArg(workflowModeArg)) or "")
+                    .. (workflowSourceArg ~= "" and (" --workflow-source " .. quoteArg(workflowSourceArg)) or "")
+                    .. (requestedStage2ModelArg ~= "" and (" --requested-stage2-model " .. quoteArg(requestedStage2ModelArg)) or ""),
                 quoteArg(stdoutFile),
                 quoteArg(logFile),
                 quoteArg(doneFile)
@@ -19431,7 +19543,28 @@ _sep.processAllStemsResult = function()
         local stems = {}
         local selectedCount = 0
         local foundCount = 0
-        for _, stem in ipairs(STEMS) do
+        local jobWorkflowMode = tostring(job.workflowMode or multiTrackQueue.workflowMode or "")
+        local jobWorkflowSource = tostring(job.workflowSource or multiTrackQueue.workflowSource or "")
+        local isDrumKitJob = jobWorkflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+            and DKS_WORKFLOW.isDrumKitSource(jobWorkflowSource)
+        local stemSetForJob = isDrumKitJob and DRUMKIT_STEMS or STEMS
+        if isDrumKitJob then
+            local stdoutStems = collectStemPathsFromStdoutJson(job.stdoutFile)
+            local stdoutCount = 0
+            for key, path in pairs(stdoutStems) do
+                stems[key] = path
+                stdoutCount = stdoutCount + 1
+            end
+            if stdoutCount > 0 then
+                foundCount = stdoutCount
+                job.outputDetected = true
+                SW_LOG.logExecResult("lua_dks_multi_stdout_json_ok=yes", nil, "lua_dks_multi_output_count=" .. tostring(stdoutCount))
+                SW_LOG.logExecResult("lua_dks_multi_output_count=" .. tostring(stdoutCount), nil, "")
+            else
+                SW_LOG.logExecResult("lua_dks_multi_stdout_json_ok=no", nil, "")
+            end
+        end
+        for _, stem in ipairs(stemSetForJob) do
             -- Skip 6-stem-only stems if not using 6-stem model
             local stemApplies = stem.selected and (not stem.sixStemOnly or is6Stem)
             if stemApplies then
@@ -19440,8 +19573,11 @@ _sep.processAllStemsResult = function()
                 local f = io.open(stemPath, "r")
                 if f then
                     f:close()
-                    stems[stem.name:lower()] = stemPath
-                    foundCount = foundCount + 1
+                    local stemKey = normalizeStemPathKey(stem.name)
+                    if not stems[stemKey] then
+                        stems[stemKey] = stemPath
+                        foundCount = foundCount + 1
+                    end
                     debugLog("  Found stem: " .. stem.name:lower() .. " at " .. stemPath)
                 else
                     debugLog("  MISSING stem: " .. stem.name:lower() .. " at " .. stemPath)
@@ -19455,6 +19591,14 @@ _sep.processAllStemsResult = function()
                 "timing:output_detected job=" .. tostring(job.index) .. " found=" .. tostring(foundCount) .. " dir=" .. tostring(job.trackDir),
                 nil,
                 ""
+            )
+        end
+        if isDrumKitJob then
+            SW_LOG.logExecResult(
+                "lua_dks_multi_job_index=" .. tostring(job.index)
+                    .. " lua_dks_multi_worker_exit_code=" .. tostring(SW_LOG.readExitCode(job.exitCodeFile) or "unknown"),
+                nil,
+                "lua_dks_multi_output_count=" .. tostring(foundCount)
             )
         end
 
@@ -19667,6 +19811,10 @@ _sep.processAllStemsResult = function()
                     nil,
                     ""
                 )
+                if (job.workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT)
+                    and DKS_WORKFLOW.isDrumKitSource(job.workflowSource) then
+                    SW_LOG.logExecResult("lua_dks_multi_import_created=" .. tostring(count), nil, "")
+                end
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
                 if count > 0 then
@@ -19798,10 +19946,20 @@ _sep.processAllStemsResult = function()
     local sourceItemCountWithStems = 0
     for _ in pairs(sourceItemsWithStems) do sourceItemCountWithStems = sourceItemCountWithStems + 1 end
     debugLog("Total stems created: " .. totalStemsCreated)
+    if multiTrackQueue.isDrumKitWorkflow then
+        SW_LOG.logExecResult("lua_dks_multi_import_total_created=" .. tostring(totalStemsCreated), nil, "")
+    end
 
     -- If nothing was created, surface the Python log instead of silently returning to main().
     -- Also undo any mute/delete actions that may have been applied earlier in this function.
     if totalStemsCreated == 0 then
+        if multiTrackQueue.isDrumKitWorkflow then
+            SW_LOG.logExecResult(
+                "lua_dks_multi_no_stems_reason=zero_imported_after_worker_completion",
+                nil,
+                "lua_dks_multi_import_total_created=0"
+            )
+        end
         -- Preserve diagnostics for all jobs before surfacing the error.
         if multiTrackQueue.jobs then
             for _, job in ipairs(multiTrackQueue.jobs) do

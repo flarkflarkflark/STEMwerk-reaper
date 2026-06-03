@@ -1412,6 +1412,11 @@ local function collectLatestDksMarkers(cacheLogDir)
         "lua_dks_extract_import_selected_count", "lua_dks_extract_import_created", "lua_result_probe_start",
         "lua_result_probe_workflow_source", "lua_result_probe_top_level_count", "lua_result_probe_stdout_json_attempt",
         "lua_result_probe_stdout_json_ok", "lua_result_probe_stdout_json_count", "lua_no_stems_reason",
+        "lua_dks_multi_start", "lua_dks_multi_workflow_source", "lua_dks_multi_source_count",
+        "lua_dks_multi_mode", "lua_dks_multi_job_index", "lua_dks_multi_job_dir",
+        "lua_dks_multi_worker_args", "lua_dks_multi_worker_exit_code", "lua_dks_multi_stdout_json_ok",
+        "lua_dks_multi_output_count", "lua_dks_multi_import_created", "lua_dks_multi_import_total_created",
+        "lua_dks_multi_no_stems_reason",
         "separate_start", "separate_end",
         "stem_write_start", "stem_write_end", "python_done", "drumsep_helper_start",
         "drumsep_helper_ok", "drumsep_helper_stdout", "drumsep_helper_stderr",
@@ -1431,7 +1436,7 @@ local function collectLatestDksMarkers(cacheLogDir)
     if pathExists(runsRoot) then
         local runDirs = enumerateSubdirs(runsRoot)
         table.sort(runDirs, function(a, b) return tostring(a) > tostring(b) end)
-        for i = 1, math.min(2, #runDirs) do
+        for i = 1, math.min(8, #runDirs) do
             local runDir = joinPath(runsRoot, runDirs[i])
             for _, jobName in ipairs(enumerateSubdirs(runDir)) do
                 addIfExists(joinPath(runDir, jobName, "stdout.txt"))
@@ -1450,7 +1455,7 @@ local function collectLatestDksMarkers(cacheLogDir)
             end
         end
         table.sort(tempRuns, function(a, b) return tostring(a) > tostring(b) end)
-        for i = 1, math.min(2, #tempRuns) do
+        for i = 1, math.min(8, #tempRuns) do
             local runDir = joinPath(tempBase, tempRuns[i])
             addIfExists(joinPath(runDir, "stdout.txt"))
             addIfExists(joinPath(runDir, "stderr.txt"))
@@ -1458,6 +1463,12 @@ local function collectLatestDksMarkers(cacheLogDir)
             addIfExists(joinPath(runDir, "drumsep_helper_stdout.txt"))
             addIfExists(joinPath(runDir, "drumsep_helper_stderr.txt"))
             addIfExists(joinPath(runDir, "phase_events.jsonl"))
+            for _, jobName in ipairs(enumerateSubdirs(runDir)) do
+                local jobDir = joinPath(runDir, jobName)
+                addIfExists(joinPath(jobDir, "stdout.txt"))
+                addIfExists(joinPath(jobDir, "separation_log.txt"))
+                addIfExists(joinPath(jobDir, "phase_events.jsonl"))
+            end
         end
     end
 
@@ -1792,7 +1803,7 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
     local lines = {}
     local runsRoot = joinPath(cacheLogDir, "runs")
     local destRoot = joinPath(bundleDir, "runtime_runs")
-    local maxRunsToInclude = 5
+    local maxRunsToInclude = 8
     ensureDir(destRoot)
 
     if not pathExists(runsRoot) then
@@ -1807,6 +1818,7 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
         ["separation_log.txt"] = true,
         ["exit_code.txt"] = true,
         ["done.txt"] = true,
+        ["run_bg.sh"] = true,
     }
 
     local runDirNames = enumerateSubdirs(runsRoot)

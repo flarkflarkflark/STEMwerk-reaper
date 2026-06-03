@@ -362,9 +362,14 @@ function SW_LOG.preserveDiagnosticsForRun(outputDir, opts)
     if exitCode == nil then
         exitCode = SW_LOG.readExitCode(outputDir .. sep .. "exit_code.txt")
     end
+    local doneText = SW_LOG.readFileSnippet(outputDir .. sep .. "done.txt", 1024) or ""
+    local runSucceeded = tonumber(exitCode) == 0 and tostring(doneText):find("DONE", 1, true) ~= nil
     local sepText = SW_LOG.readFileSnippet(outputDir .. sep .. "separation_log.txt", 128000) or ""
     local outText = SW_LOG.readFileSnippet(outputDir .. sep .. "stdout.txt", 128000) or ""
-    local failure = SW_LOG.classifyModelFailure(sepText, outText)
+    local failure = nil
+    if not runSucceeded then
+        failure = SW_LOG.classifyModelFailure(sepText, outText)
+    end
     if failure and failure.reason and reason == "no_stems" then
         reason = tostring(failure.reason)
     end

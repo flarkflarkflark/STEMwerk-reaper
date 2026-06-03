@@ -1661,6 +1661,34 @@ def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers
     assert '"lua_dks_extract_import_selected_count", "lua_dks_extract_import_created"' in support_script
 
 
+def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs():
+    main = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
+
+    assert 'multiTrackQueue.workflowMode = workflowModeArg' in main
+    assert 'multiTrackQueue.workflowSource = workflowSourceArg' in main
+    assert 'multiTrackQueue.requestedStage2Model = requestedStage2ModelArg' in main
+    assert 'job.workflowMode = workflowModeArg' in main
+    assert 'job.workflowSource = workflowSourceArg' in main
+    assert 'job.requestedStage2Model = requestedStage2ModelArg' in main
+    assert 'pythonCmd = pythonCmd .. " --workflow-mode " .. quoteArg(workflowModeArg)' in main
+    assert 'pythonCmd = pythonCmd .. " --workflow-source " .. quoteArg(workflowSourceArg)' in main
+    assert 'pythonCmd = pythonCmd .. " --requested-stage2-model " .. quoteArg(requestedStage2ModelArg)' in main
+    assert 'script:write("WORKFLOW_MODE=" .. quoteArg(workflowModeArg) .. "\\n")' in main
+    assert 'script:write(\'  if [ -n "$WORKFLOW_SOURCE" ]; then set -- "$@" --workflow-source "$WORKFLOW_SOURCE"; fi\\n\')' in main
+    assert 'local stdoutStems = collectStemPathsFromStdoutJson(job.stdoutFile)' in main
+    assert 'local stemSetForJob = isDrumKitJob and DRUMKIT_STEMS or STEMS' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_stdout_json_ok=yes", nil, "lua_dks_multi_output_count=" .. tostring(stdoutCount))' in main
+    assert 'SW_LOG.logExecResult("lua_dks_multi_import_total_created=" .. tostring(totalStemsCreated), nil, "")' in main
+    assert 'lua_dks_multi_no_stems_reason=zero_imported_after_worker_completion' in main
+
+    assert '"lua_dks_multi_start", "lua_dks_multi_workflow_source", "lua_dks_multi_source_count",' in support_script
+    assert '"lua_dks_multi_output_count", "lua_dks_multi_import_created", "lua_dks_multi_import_total_created",' in support_script
+    assert 'for i = 1, math.min(8, #runDirs) do' in support_script
+    assert 'for i = 1, math.min(8, #tempRuns) do' in support_script
+    assert 'local maxRunsToInclude = 8' in support_script
+
+
 def test_support_bundle_excludes_dev_matrix_temp_dirs_and_reports_temp_log_budget():
     script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
 
@@ -2417,6 +2445,8 @@ def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     assert "STEMWERK_ERROR_CLASS=" in log_script
     assert "STEMWERK_ERROR_HINT=" in log_script
     assert "STEMWERK_MODEL_CACHE_HINT=" in log_script
+    assert 'local runSucceeded = tonumber(exitCode) == 0 and tostring(doneText):find("DONE", 1, true) ~= nil' in log_script
+    assert "if not runSucceeded then" in log_script
     assert 'if failure and failure.reason and reason == "no_stems" then' in log_script
 
     assert 'key == "error_class" or key == "stemwerk_error_class"' in support_script
