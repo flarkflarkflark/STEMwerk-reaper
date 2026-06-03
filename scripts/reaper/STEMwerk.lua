@@ -12484,7 +12484,7 @@ end
 -- Returns: ok(bool), ffmpegLogPath(string), exitCode(number|nil)
 local function runFfmpegExtract(sourceFile, offsetSec, durationSec, outputPath)
     local logPath = tostring(outputPath) .. ".ffmpeg.log"
-    local ffmpegBin = FFMPEG_PATH or "ffmpeg"
+    local ffmpegBin = FFMPEG_PATH or getExtStateValue("ffmpegPath") or "ffmpeg"
 
     local exitCode = nil
     if OS == "Windows" then
