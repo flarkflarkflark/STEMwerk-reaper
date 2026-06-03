@@ -2385,6 +2385,7 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'function buildProgressRouteSummary(deviceDetail)' in script
     assert 'return activeProcessingRouteBadge() .. " · " .. stageBadge,' in script
     assert 'local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)' in script
+    assert 'inlineStageText = inlineStageText .. " [" .. tostring(footerDeviceDetail) .. "]"' not in script
     assert "function normalizeStemPathMap(stemPaths)" in script
     assert "function resolveStemSetForPaths(stemPaths)" in script
     assert 'if stemPathMapLooksLikeDrumKit(stemPaths) then' in script

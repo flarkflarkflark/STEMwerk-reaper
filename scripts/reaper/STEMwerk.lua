@@ -14748,9 +14748,8 @@ function drawProgressWindow()
     if #richParts > 0 then
         inlineStageText = inlineStageText .. " (" .. table.concat(richParts, " | ") .. ")"
     end
-    if footerDeviceDetail and footerDeviceDetail ~= "" then
-        inlineStageText = inlineStageText .. " [" .. tostring(footerDeviceDetail) .. "]"
-    end
+    -- Keep device/runtime detail in the footer; the bar label shares space with
+    -- the centered percentage and must stay compact.
     if inlineStageText ~= "" then
         gfx.setfont(1, "Arial", PS(11))
         local stageTextW = math.max(PS(110), barW - PS(170))
