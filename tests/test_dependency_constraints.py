@@ -2266,6 +2266,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_extracting_drums = "Extracting drums..."' in langs
     assert 'progress_stage_extracting_drums = "Drums extraheren..."' in langs
     assert 'progress_stage_extracting_drums = "Drums werden extrahiert..."' in langs
+    assert 'progress_stage_queued_drumsep = "Queued for DrumSep..."' in langs
+    assert 'progress_stage_queued_drumsep = "In wachtrij voor DrumSep..."' in langs
+    assert 'progress_stage_queued_drumsep = "In Warteschlange für DrumSep..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Starting Drum Kit runtime..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-runtime starten..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-Runtime wird gestartet..."' in langs
@@ -2273,6 +2276,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_label_2_of_2 = "Stage 2/2"' in langs
     assert 'progress_stage_label_1_of_2 = "Stufe 1/2"' in langs
     assert 'progress_stage_label_2_of_2 = "Stufe 2/2"' in langs
+    assert 'progress_stage2_serialized_caption = "Stage 2 serialized for stability"' in langs
+    assert 'progress_stage2_serialized_caption = "Stage 2 geserialiseerd voor stabiliteit"' in langs
+    assert 'progress_stage2_serialized_caption = "Stufe 2 für Stabilität serialisiert"' in langs
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
@@ -2320,10 +2326,14 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'starting drum kit runtime' in progress_render
     assert 'writing drum tracks' in progress_render
     assert 'drumsep stage2 separating kit stems' in progress_render
+    assert 'stage 2 queued for drumsep' in progress_render
+    assert 'progress_stage_queued_drumsep' in progress_render
     assert 'progress_stage_splitting_drum_kit' in progress_render
     assert 'progress_stage_label_1_of_2' in progress_render
     assert 'progress_stage_label_2_of_2' in progress_render
     assert 'isExtractDrumKitProgress()' in progress_render
+    assert 'progress_stage2_serialized_caption' in main_script
+    assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' in main_script
 
 
 def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_device_breadcrumbs():
@@ -2489,10 +2499,14 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU runtime"' in langs
     assert 'footer_device_gpu_runtime = "GPU/ROCm: %s"' in langs
+    assert 'footer_device_cuda_runtime = "CUDA: %s"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU-runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU-runtime"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU-Runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU-Runtime"' in langs
+    assert 'rawLower:match("^cuda:%d+")' in script
+    assert 'rawDeviceName:lower():find("amd", 1, true)' in script
+    assert 'trSafeValue("footer_device_cuda_runtime", "CUDA: %s")' in script
 
 
 def test_sync_to_reaper_does_not_overwrite_script_local_i18n_with_repo_root_i18n():

@@ -13968,6 +13968,7 @@ function inferProgressStageIndex(stageText)
         return 1
     end
     if lower:find("stage 2", 1, true)
+        or lower:find("queued for drumsep", 1, true)
         or lower:find("starting drum kit runtime", 1, true)
         or lower:find("splitting drum kit", 1, true)
         or lower:find("writing drum tracks", 1, true)
@@ -14009,6 +14010,7 @@ function buildProgressRouteSummary(deviceDetail)
             trSafeValue("progress_stage2_footer_summary", "Stage 2: %s"),
             stage2Compact
         )
+        stage2Summary = stage2Summary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "serialized for stability")
         return activeProcessingRouteBadge() .. " · " .. stageBadge,
             stage1Summary .. " -> " .. stage2Summary
     end
@@ -14033,7 +14035,28 @@ function shortRuntimeGpuName(name)
 end
 
 function deriveResolvedRuntimeFooter(footerDeviceDetail)
+    local rawDetail = tostring(footerDeviceDetail or "")
+    local rawLower = rawDetail:lower()
+    local rawDeviceName = progressState._deviceName
+    if rawDeviceName then
+        rawDeviceName = tostring(rawDeviceName):gsub("^%s+", ""):gsub("%s+$", "")
+    end
     if not isDrumKitWorkflowActive() then
+        if rawLower:match("^cuda:%d+") or rawLower == "cuda" then
+            if rawDeviceName and rawDeviceName ~= "" then
+                local short = shortRuntimeGpuName(rawDeviceName)
+                if rawDeviceName:lower():find("amd", 1, true) then
+                    return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short ~= "" and short or rawDeviceName)
+                end
+                return string.format(trSafeValue("footer_device_cuda_runtime", "CUDA: %s"), short ~= "" and short or rawDeviceName)
+            end
+        elseif rawLower:find("directml", 1, true) then
+            return "DirectML"
+        elseif rawLower == "mps" then
+            return "MPS"
+        elseif rawLower == "cpu" then
+            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
+        end
         return footerDeviceDetail
     end
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
@@ -19198,7 +19221,13 @@ function drawMultiTrackProgressWindow()
                 gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
                 gfx.x = tBarX + tBarW + PS(8)
                 gfx.y = yPos + PS(2)
-                gfx.drawstr(string.format("%d%%", job.percent or 0))
+                local pctText = string.format("%d%%", job.percent or 0)
+                if isExtractDrumKitWorkflowActive()
+                    and inferProgressStageIndex(job.stage) == 2
+                    and (tonumber(job.percent or 0) or 0) <= 50 then
+                    pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
+                end
+                gfx.drawstr(pctText)
             end
         end
 
@@ -19334,6 +19363,9 @@ function drawMultiTrackProgressWindow()
             local etaSecs = math.floor(eta % 60)
             local etaFmt = trSafeProgress("mt_footer_eta_suffix", " | ETA %d:%02d")
             summaryLine2 = summaryLine2 .. string.format(etaFmt, etaMins, etaSecs)
+        end
+        if isExtractDrumKitWorkflowActive() then
+            summaryLine2 = summaryLine2 .. " · " .. trSafeProgress("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end
     end
 

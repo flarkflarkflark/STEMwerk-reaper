@@ -61,6 +61,7 @@ local function inferDrumKitStageIndex(stageText)
         return 1
     end
     if lower:find("stage 2", 1, true)
+        or lower:find("queued for drumsep", 1, true)
         or lower:find("starting drum kit runtime", 1, true)
         or lower:find("splitting drum kit", 1, true)
         or lower:find("writing drum tracks", 1, true)
@@ -117,6 +118,8 @@ local function normalizeProgressStage(stage)
             key = "progress_stage_starting_separation"
         elseif flat == "preparing direct drum kit" then
             key = "progress_stage_preparing_direct_drum_kit"
+        elseif flat == "stage 2 queued for drumsep" then
+            key = "progress_stage_queued_drumsep"
         elseif flat == "starting drum kit runtime" then
             key = "progress_stage_starting_drum_kit_runtime"
         elseif flat == "splitting drum kit" then
@@ -147,6 +150,7 @@ local function localizeProgressStagePrefix(stageText)
         {"loading model",       progressUiLabel("progress_stage_loading_model",      "Loading model")},
         {"starting separation", progressUiLabel("progress_stage_starting_separation","Starting separation")},
         {"preparing direct drum kit", progressUiLabel("progress_stage_preparing_direct_drum_kit","Preparing Direct Drum Kit...")},
+        {"stage 2 queued for drumsep", progressUiLabel("progress_stage_queued_drumsep","Queued for DrumSep...")},
         {"starting drum kit runtime", progressUiLabel("progress_stage_starting_drum_kit_runtime","Starting Drum Kit runtime...")},
         {"splitting drum kit", progressUiLabel("progress_stage_splitting_drum_kit","Splitting drum kit...")},
         {"drumsep stage2 separating kit stems", progressUiLabel("progress_stage_splitting_drum_kit","Splitting drum kit...")},
