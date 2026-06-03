@@ -2278,8 +2278,10 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         if not f then return false end
         local text = f:read("*a") or ""
         f:close()
+        local pinnedRuntimeOk = text:find("Pinned runtime assertion passed", 1, true) ~= nil
+            or text:find("Pinned torch assertion passed", 1, true) ~= nil
         return text:find("Runtime verification passed.", 1, true) ~= nil
-            and text:find("Pinned runtime assertion passed", 1, true) ~= nil
+            and pinnedRuntimeOk
     end
     local authoritativeBootstrapVerified = (
         trim(state.STATUS or "") == "ok"
@@ -5115,8 +5117,10 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         if not f then return false end
         local text = f:read("*a") or ""
         f:close()
+        local pinnedRuntimeOk = text:find("Pinned runtime assertion passed", 1, true) ~= nil
+            or text:find("Pinned torch assertion passed", 1, true) ~= nil
         return text:find("Runtime verification passed.", 1, true) ~= nil
-            and text:find("Pinned runtime assertion passed", 1, true) ~= nil
+            and pinnedRuntimeOk
     end
     local envTorchVersion = firstNonEmpty(envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
     local envTorchaudioVersion = firstNonEmpty(envJsonValue(envJson, "torchaudio_version"))

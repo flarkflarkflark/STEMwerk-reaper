@@ -734,6 +734,25 @@ def test_setup_runtime_drift_capabilities_cannot_report_ok():
     assert 'appendKey(diagnostics, "RUNTIME_DRIFT_DETECTED"' in support_bundle
 
 
+def test_device_refresh_has_module_scope_friendly_name_sanitizer():
+    script = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text()
+
+    assert "local function sanitizeFriendlyName(name)" in script
+    assert 'if not name then return "" end' in script
+    assert 'raw = tostring(name):gsub("%c", " ")' in script
+    assert script.index("local function sanitizeFriendlyName(name)") < script.index("function DEVICE_RUNTIME.refreshRuntimeDevices(force)")
+    assert 'local short = sanitizeFriendlyName(d.fullName or d.name)' in script
+
+
+def test_setup_authoritative_bootstrap_accepts_current_linux_torch_assertion_marker():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'text:find("Pinned runtime assertion passed", 1, true)' in script
+    assert 'text:find("Pinned torch assertion passed", 1, true)' in script
+    assert 'local pinnedRuntimeOk = text:find("Pinned runtime assertion passed", 1, true) ~= nil' in script
+    assert 'and pinnedRuntimeOk' in script
+
+
 def test_support_bundle_ignores_stale_capabilities_failed_verification_when_bootstrap_ok():
     support_bundle = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
 

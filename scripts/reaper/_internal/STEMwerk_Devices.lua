@@ -18,6 +18,37 @@ function DEVICE_RUNTIME.runtimeDeviceSafeList()
     }
 end
 
+local function sanitizeFriendlyName(name)
+    if not name then return "" end
+    local raw = tostring(name):gsub("%c", " ")
+    local lbl = raw
+    lbl = lbl:gsub("^%s+", "")
+    lbl = lbl:gsub("%(%s*[Tt][Mm]%s*%)", "")
+    lbl = lbl:gsub("%(%s*[Rr]%s*%)", "")
+    lbl = lbl:gsub("[Aa][Mm][Dd]%s*[Rr]adeon%s*", "")
+    lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*[Gg]e[Ff]orce%s*", "")
+    lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*", "")
+    lbl = lbl:gsub("[Ii][Nn][Tt][Ee][Ll]%s*", "")
+    lbl = lbl:gsub("%(%s*[Ee]xternal%s*%)", "eGPU")
+    lbl = lbl:gsub("%(%s*[Ii]nternal%s*%)", "iGPU")
+    lbl = lbl:gsub("%s*[Ll]aptop%s*[Gg]PU%s*$", "")
+    lbl = lbl:gsub("%s*[Gg]raphics%s*$", "")
+    lbl = lbl:gsub("%s*[Gg]PU%s*$", "")
+    lbl = lbl:gsub("%s+", " ")
+    lbl = lbl:gsub("^%s+", ""):gsub("%s+$", "")
+    if lbl == "" or lbl:match("^%(%s*[Tt][Mm]%s*%)$") or #lbl < 3 then
+        local fallback = raw
+        fallback = fallback:gsub("%(%s*[Tt][Mm]%s*%)", "")
+        fallback = fallback:gsub("%(%s*[Rr]%s*%)", "")
+        fallback = fallback:gsub("^%s+", ""):gsub("%s+$", "")
+        fallback = fallback:gsub("^[Aa][Mm][Dd]%s+", "")
+        fallback = fallback:gsub("^[Nn][Vv][Ii][Dd][Ii][Aa]%s+", "")
+        fallback = fallback:gsub("%s+", " ")
+        lbl = fallback ~= "" and fallback or raw
+    end
+    return lbl
+end
+
 local function parseDeviceListFromPythonOutput(out)
     if not out or out == "" then return nil, nil end
     local devices = {}
