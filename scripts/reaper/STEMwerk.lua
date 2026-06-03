@@ -17103,6 +17103,149 @@ _sep.buildSourceItemPlan = function(trackList, hasTimeSel, perItemMap, noTimeSel
     return plan, stats
 end
 
+_sep.SCHEDULER_POLICY = {
+    NORMAL_GPU_MAX_PARALLEL = 2,
+    NORMAL_DIRECTML_MAX_PARALLEL = 1,
+    NORMAL_MPS_MAX_PARALLEL = 1,
+    DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2,
+    DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 1,
+    DKS_DIRECT_CPU_MAX_PARALLEL = 1,
+    DKS_DIRECT_DIRECTML_MAX_PARALLEL = 1,
+    DKS_EXTRACT_STAGE2_MAX_PARALLEL = 1,
+}
+
+_sep.schedulerTotalAudioDuration = function(jobs)
+    local total = 0
+    for _, job in ipairs(jobs or {}) do
+        total = total + (tonumber(job.audioDuration or 0) or 0)
+    end
+    return total
+end
+
+_sep.schedulerHasLongWorkload = function(jobs, totalAudioDuration)
+    local total = tonumber(totalAudioDuration or 0) or 0
+    local count = #(jobs or {})
+    if count <= 1 and total >= 120 then
+        return true
+    end
+    for _, job in ipairs(jobs or {}) do
+        local dur = tonumber(job.audioDuration or 0) or 0
+        if dur >= 120 and not job.perItem then
+            return true
+        end
+    end
+    return false
+end
+
+_sep.classifySchedulerBackend = function(device, hasGpuBackends)
+    local dev = string.lower(tostring(device or "auto"))
+    if dev == "" then dev = "auto" end
+    if dev:find("directml", 1, true) then return "directml" end
+    if dev == "mps" or dev:find("mps", 1, true) then return "mps" end
+    if dev == "cpu" or dev:find("cpu", 1, true) then return "cpu" end
+    if dev:match("^cuda") or dev:find("rocm", 1, true) or dev:find("gpu", 1, true) then return "gpu" end
+    if dev == "auto" then
+        return hasGpuBackends and "gpu" or "cpu"
+    end
+    return "unknown"
+end
+
+_sep.resolveSchedulerConcurrencyPolicy = function(opts)
+    opts = opts or {}
+    local requestedParallel = opts.requestedParallel == true
+    local jobCount = math.max(0, math.floor(tonumber(opts.jobCount or 0) or 0))
+    local route = tostring(opts.route or "normal")
+    local stage = tostring(opts.stage or "single_stage")
+    local backend = tostring(opts.backend or "unknown")
+    local policy = {
+        route = route,
+        stage = stage,
+        backend = backend,
+        cap = nil,
+        sequentialMode = (not requestedParallel) or jobCount <= 1,
+        reason = requestedParallel and "user_parallel" or "user_sequential",
+    }
+
+    if not requestedParallel or jobCount <= 1 then
+        return policy
+    end
+
+    if backend == "directml" then
+        policy.sequentialMode = true
+        policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
+        policy.reason = "directml_multi_track"
+        return policy
+    end
+
+    if backend == "mps" then
+        policy.sequentialMode = true
+        policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL
+        policy.reason = "scheduler_mps_conservative"
+        return policy
+    end
+
+    if route == "dks_direct" then
+        if backend == "gpu" then
+            policy.sequentialMode = false
+            if opts.longWorkload then
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_LONG_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_direct_gpu_long_cap1"
+            else
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_SHORT_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_direct_gpu_cap2"
+            end
+        else
+            policy.sequentialMode = true
+            policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL
+            policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"
+        end
+        return policy
+    end
+
+    -- Drum Split stage 1 follows the normal STEMwerk policy. Stage 2 is serialized
+    -- in audio_separator_process.py via DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1.
+    if backend == "gpu" then
+        policy.sequentialMode = false
+        policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
+        policy.reason = (route == "dks_extract")
+            and "scheduler_dks_extract_stage1_normal_gpu_cap2"
+            or "scheduler_normal_gpu_cap2"
+        return policy
+    end
+
+    if backend == "cpu" then
+        local cpuCount = tonumber(opts.cpuCount or 0)
+        local ramGiB = tonumber(opts.ramGiB or 0)
+        local minCpuForParallel = 8
+        local minRamGiBForParallel = 8
+        local cpuOk = cpuCount and cpuCount >= minCpuForParallel
+        local ramOk = ramGiB and ramGiB >= minRamGiBForParallel
+        if cpuOk and ramOk then
+            local adaptiveCap = math.max(1, math.floor(cpuCount / 2))
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, adaptiveCap)
+            policy.reason = "cpu_threads_ok"
+        else
+            policy.sequentialMode = true
+            if not cpuCount or cpuCount <= 0 then
+                policy.reason = "cpu_threads_unknown"
+            elseif cpuCount < minCpuForParallel then
+                policy.reason = "cpu_threads_low"
+            elseif not ramGiB or ramGiB <= 0 then
+                policy.reason = "cpu_ram_unknown"
+            else
+                policy.reason = "cpu_ram_low"
+            end
+        end
+        return policy
+    end
+
+    policy.sequentialMode = true
+    policy.cap = 1
+    policy.reason = "scheduler_unknown_backend_conservative"
+    return policy
+end
+
 -- Run multi-track separation (parallel or sequential based on setting)
 _sep.runSingleTrackSeparation = function(trackList)
     refreshPythonPathFromExtState()
@@ -17544,9 +17687,8 @@ _sep.runSingleTrackSeparation = function(trackList)
         debugLog("lua_dks_multi_workflow_source=" .. tostring(workflowSourceArg))
         debugLog("lua_dks_multi_source_count=" .. tostring(#trackJobs))
     end
-    -- Default: follow user's parallel/sequential preference.
-    -- However, on Windows CPU-only (device=cpu/auto), parallel multi-job runs can be MUCH slower
-    -- because each job loads the model separately and they compete for CPU/RAM/disk.
+    -- Default: follow user's parallel/sequential preference, bounded by the
+    -- route/backend scheduler policy documented in _sep.SCHEDULER_POLICY above.
     local requestedParallel = effectiveRunRequestedParallel()
     multiTrackQueue.requestedParallel = requestedParallel and true or false
     multiTrackQueue.sequentialMode = not requestedParallel
@@ -17560,133 +17702,139 @@ _sep.runSingleTrackSeparation = function(trackList)
             break
         end
     end
-    if requestedParallel and #trackJobs > 1 then
-        local function hasRuntimeGpuBackends()
-            local list = RUNTIME_DEVICES or DEVICES or {}
-            for _, d in ipairs(list) do
-                local id = string.lower(tostring(d.id or ""))
-                local typ = string.lower(tostring(d.type or ""))
-                if typ == "cuda" or typ == "directml" or typ == "mps" then return true end
-                if id:match("^cuda:") or id:match("^directml:") or id == "mps" then return true end
-            end
-            return false
+
+    local function hasRuntimeGpuBackends()
+        local list = RUNTIME_DEVICES or DEVICES or {}
+        for _, d in ipairs(list) do
+            local id = string.lower(tostring(d.id or ""))
+            local typ = string.lower(tostring(d.type or ""))
+            if typ == "cuda" or typ == "directml" or typ == "mps" then return true end
+            if id:match("^cuda:") or id:match("^directml:") or id == "mps" then return true end
         end
-        local function hasRuntimeBackendType(kind)
-            local needle = string.lower(tostring(kind or ""))
-            local list = RUNTIME_DEVICES or DEVICES or {}
-            for _, d in ipairs(list) do
-                local id = string.lower(tostring(d.id or ""))
-                local typ = string.lower(tostring(d.type or ""))
-                if typ == needle then return true end
-                if needle == "directml" and id:match("^directml:") then return true end
-                if needle == "cuda" and id:match("^cuda:") then return true end
-                if needle == "mps" and id == "mps" then return true end
-            end
-            return false
+        return false
+    end
+    local function hasRuntimeBackendType(kind)
+        local needle = string.lower(tostring(kind or ""))
+        local list = RUNTIME_DEVICES or DEVICES or {}
+        for _, d in ipairs(list) do
+            local id = string.lower(tostring(d.id or ""))
+            local typ = string.lower(tostring(d.type or ""))
+            if typ == needle then return true end
+            if needle == "directml" and id:match("^directml:") then return true end
+            if needle == "cuda" and id:match("^cuda:") then return true end
+            if needle == "mps" and id == "mps" then return true end
         end
-        local function detectLogicalCpuCount()
-            local envCount = tonumber(os.getenv("NUMBER_OF_PROCESSORS") or "")
-            if envCount and envCount > 0 then return math.floor(envCount) end
-            local h = io.popen("getconf _NPROCESSORS_ONLN 2>/dev/null")
-            if h then
-                local out = tonumber((h:read("*a") or ""):match("%d+"))
-                h:close()
-                if out and out > 0 then return math.floor(out) end
-            end
-            return nil
+        return false
+    end
+    local function detectLogicalCpuCount()
+        local envCount = tonumber(os.getenv("NUMBER_OF_PROCESSORS") or "")
+        if envCount and envCount > 0 then return math.floor(envCount) end
+        local h = io.popen("getconf _NPROCESSORS_ONLN 2>/dev/null")
+        if h then
+            local out = tonumber((h:read("*a") or ""):match("%d+"))
+            h:close()
+            if out and out > 0 then return math.floor(out) end
         end
-        local function detectSystemRamGiB()
-            if OS == "Linux" then
-                local f = io.open("/proc/meminfo", "r")
-                if f then
-                    local txt = f:read("*a") or ""
-                    f:close()
-                    local kb = tonumber((txt:match("MemTotal:%s*(%d+)") or ""))
-                    if kb and kb > 0 then return kb / (1024 * 1024) end
-                end
-            elseif OS == "macOS" then
-                local h = io.popen("sysctl -n hw.memsize 2>/dev/null")
-                if h then
-                    local bytes = tonumber((h:read("*a") or ""):match("%d+"))
-                    h:close()
-                    if bytes and bytes > 0 then return bytes / (1024 * 1024 * 1024) end
-                end
-            elseif OS == "Windows" then
-                local kb = tonumber(os.getenv("TOTALPHYSICALMEMORYKB") or "")
+        return nil
+    end
+    local function detectSystemRamGiB()
+        if OS == "Linux" then
+            local f = io.open("/proc/meminfo", "r")
+            if f then
+                local txt = f:read("*a") or ""
+                f:close()
+                local kb = tonumber((txt:match("MemTotal:%s*(%d+)") or ""))
                 if kb and kb > 0 then return kb / (1024 * 1024) end
             end
-            return nil
-        end
-
-        local dev = string.lower(effectiveRunDevice())
-        local explicitDirectml = dev:find("directml", 1, true) ~= nil
-        local directmlMultiJob = explicitDirectml
-
-        -- DirectML multi-job runs are not stable enough yet across Windows GPU stacks.
-        -- Run them sequentially so time-selection/multi-track jobs do not silently drop outputs
-        -- after the first successful item/track. Do not apply this to AUTO:
-        -- AUTO may legitimately choose CUDA on mixed-GPU Windows systems.
-        if not multiTrackQueue.sequentialMode and directmlMultiJob then
-            multiTrackQueue.sequentialMode = true
-            multiTrackQueue.forceSequentialReason = "directml_multi_track"
-            debugLog("Forcing sequential multi-track processing (directml_multi_track)")
-        end
-
-        -- Respect user's Parallel choice even on CPU.
-        -- Only force sequential if device is "auto" AND we know for sure there is no GPU.
-        if not multiTrackQueue.sequentialMode and dev == "auto" and not hasRuntimeGpuBackends() then
-            dev = "cpu"
-        end
-
-        -- Adaptive CPU execution mode:
-        -- allow parallel on capable multi-core systems, otherwise stay sequential.
-        if not multiTrackQueue.sequentialMode and dev == "cpu" then
-            local cpuCount = detectLogicalCpuCount()
-            local ramGiB = detectSystemRamGiB()
-            local minCpuForParallel = 8
-            local minRamGiBForParallel = 8
-            local cpuOk = cpuCount and cpuCount >= minCpuForParallel
-            local ramOk = ramGiB and ramGiB >= minRamGiBForParallel
-            if cpuOk and ramOk then
-                local adaptiveCap = math.max(1, math.floor(cpuCount / 2))
-                multiTrackQueue.parallelJobLimit = math.min(#trackJobs, adaptiveCap)
-                multiTrackQueue.executionModeReason = "cpu_threads_ok"
-                debugLog(
-                    "Adaptive CPU parallel enabled: cores=" .. tostring(cpuCount)
-                        .. " ramGiB=" .. string.format("%.1f", ramGiB)
-                        .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit)
-                )
-            else
-                multiTrackQueue.sequentialMode = true
-                if not cpuCount then
-                    multiTrackQueue.forceSequentialReason = "cpu_threads_unknown"
-                    multiTrackQueue.executionModeReason = "cpu_threads_unknown"
-                elseif cpuCount < minCpuForParallel then
-                    multiTrackQueue.forceSequentialReason = "cpu_threads_low"
-                    multiTrackQueue.executionModeReason = "cpu_threads_low"
-                elseif not ramGiB then
-                    multiTrackQueue.forceSequentialReason = "cpu_ram_unknown"
-                    multiTrackQueue.executionModeReason = "cpu_ram_unknown"
-                else
-                    multiTrackQueue.forceSequentialReason = "cpu_ram_low"
-                    multiTrackQueue.executionModeReason = "cpu_ram_low"
-                end
-                debugLog(
-                    "Adaptive CPU sequential fallback (" .. tostring(multiTrackQueue.forceSequentialReason)
-                        .. "): cores=" .. tostring(cpuCount) .. " ramGiB=" .. tostring(ramGiB)
-                )
+        elseif OS == "macOS" then
+            local h = io.popen("sysctl -n hw.memsize 2>/dev/null")
+            if h then
+                local bytes = tonumber((h:read("*a") or ""):match("%d+"))
+                h:close()
+                if bytes and bytes > 0 then return bytes / (1024 * 1024 * 1024) end
             end
+        elseif OS == "Windows" then
+            local kb = tonumber(os.getenv("TOTALPHYSICALMEMORYKB") or "")
+            if kb and kb > 0 then return kb / (1024 * 1024) end
         end
+        return nil
+    end
+
+    local schedulerRoute = "normal"
+    local schedulerStage = "single_stage"
+    if isDrumKitMultiRun and workflowSourceArg == "dks_direct" then
+        schedulerRoute = "dks_direct"
+    elseif isDrumKitMultiRun and workflowSourceArg == "dks_extract" then
+        schedulerRoute = "dks_extract"
+        schedulerStage = "stage1_normal"
+    end
+    local totalAudioDurationForPolicy = _sep.schedulerTotalAudioDuration(trackJobs)
+    local schedulerBackend = _sep.classifySchedulerBackend(effectiveRunDevice(), hasRuntimeGpuBackends())
+    if string.lower(tostring(effectiveRunDevice() or "")) == "auto"
+        and schedulerBackend == "gpu"
+        and hasRuntimeBackendType("mps")
+        and not hasRuntimeBackendType("cuda")
+        and not hasRuntimeBackendType("directml") then
+        schedulerBackend = "mps"
+    end
+    if schedulerBackend == "unknown" and hasRuntimeBackendType("cuda") then
+        schedulerBackend = "gpu"
+    end
+    local schedulerPolicy = _sep.resolveSchedulerConcurrencyPolicy({
+        route = schedulerRoute,
+        stage = schedulerStage,
+        backend = schedulerBackend,
+        requestedParallel = requestedParallel,
+        jobCount = #trackJobs,
+        cpuCount = detectLogicalCpuCount(),
+        ramGiB = detectSystemRamGiB(),
+        longWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy),
+    })
+
+    multiTrackQueue.schedulerPolicyRoute = schedulerPolicy.route
+    multiTrackQueue.schedulerPolicyStage = schedulerPolicy.stage
+    multiTrackQueue.schedulerPolicyBackend = schedulerPolicy.backend
+    multiTrackQueue.schedulerPolicyReason = schedulerPolicy.reason
+    multiTrackQueue.schedulerPolicyCap = schedulerPolicy.cap
+    multiTrackQueue.schedulerPolicyLongWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy)
+    multiTrackQueue.sequentialMode = schedulerPolicy.sequentialMode and true or false
+    multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil
+    multiTrackQueue.executionModeReason = schedulerPolicy.reason or multiTrackQueue.executionModeReason
+    if multiTrackQueue.sequentialMode then
+        multiTrackQueue.forceSequentialReason = schedulerPolicy.reason
+    end
+    if multiTrackQueue.executionModeReason == "cpu_threads_ok" then
+        debugLog(
+            "Adaptive CPU parallel enabled: cores=" .. tostring(detectLogicalCpuCount())
+                .. " ramGiB=" .. tostring(detectSystemRamGiB())
+                .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit)
+        )
+    elseif multiTrackQueue.sequentialMode and tostring(multiTrackQueue.executionModeReason or ""):match("^cpu_") then
+        debugLog("Adaptive CPU sequential fallback (" .. tostring(multiTrackQueue.executionModeReason) .. ")")
+    elseif multiTrackQueue.sequentialMode and multiTrackQueue.executionModeReason == "directml_multi_track" then
+        debugLog("Forcing sequential multi-track processing (directml_multi_track)")
     end
     if multiTrackQueue.sequentialMode and not multiTrackQueue.executionModeReason then
         multiTrackQueue.executionModeReason = multiTrackQueue.forceSequentialReason or "user_sequential"
     end
+    SW_LOG.logExecResult(
+        "scheduler_policy_route=" .. tostring(multiTrackQueue.schedulerPolicyRoute),
+        nil,
+        "scheduler_policy_stage=" .. tostring(multiTrackQueue.schedulerPolicyStage)
+            .. "\nscheduler_policy_backend=" .. tostring(multiTrackQueue.schedulerPolicyBackend)
+            .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
+            .. "\nscheduler_policy_reason=" .. tostring(multiTrackQueue.schedulerPolicyReason or "none")
+            .. "\nscheduler_policy_long_workload=" .. tostring(multiTrackQueue.schedulerPolicyLongWorkload and "yes" or "no")
+    )
     if isDrumKitMultiRun then
         SW_LOG.logExecResult(
             "lua_dks_multi_mode=" .. (multiTrackQueue.sequentialMode and "sequential" or "parallel"),
             nil,
             ""
         )
+        SW_LOG.logExecResult("lua_dks_scheduler_policy_route=" .. tostring(multiTrackQueue.schedulerPolicyRoute), nil, "")
+        SW_LOG.logExecResult("lua_dks_scheduler_policy_stage=" .. tostring(multiTrackQueue.schedulerPolicyStage), nil, "")
+        SW_LOG.logExecResult("lua_dks_scheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none"), nil, "")
     end
     multiTrackQueue.currentJobIndex = 0
     multiTrackQueue.globalStartTime = os.time()  -- Track total elapsed time

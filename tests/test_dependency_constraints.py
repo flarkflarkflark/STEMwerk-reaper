@@ -601,23 +601,52 @@ def test_helpers_module_defines_local_file_exists_and_does_not_use_global_fileEx
 def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
+    assert "_sep.SCHEDULER_POLICY = {" in script
+    assert "_sep.resolveSchedulerConcurrencyPolicy = function(opts)" in script
     assert "local function detectLogicalCpuCount()" in script
     assert 'local h = io.popen("getconf _NPROCESSORS_ONLN 2>/dev/null")' in script
     assert "local function detectSystemRamGiB()" in script
     assert 'if OS == "Linux" then' in script
-    assert 'if not multiTrackQueue.sequentialMode and dev == "cpu" then' in script
     assert "local minCpuForParallel = 8" in script
     assert "local minRamGiBForParallel = 8" in script
-    assert 'multiTrackQueue.executionModeReason = "cpu_threads_ok"' in script
-    assert 'multiTrackQueue.forceSequentialReason = "cpu_threads_low"' in script
-    assert 'multiTrackQueue.forceSequentialReason = "cpu_threads_unknown"' in script
-    assert 'multiTrackQueue.forceSequentialReason = "cpu_ram_low"' in script
-    assert 'multiTrackQueue.forceSequentialReason = "cpu_ram_unknown"' in script
-    assert 'multiTrackQueue.parallelJobLimit = math.min(#trackJobs, adaptiveCap)' in script
-    assert 'if not multiTrackQueue.sequentialMode and directmlMultiJob then' in script
-    assert 'multiTrackQueue.forceSequentialReason = "directml_multi_track"' in script
+    assert 'policy.reason = "cpu_threads_ok"' in script
+    assert 'policy.reason = "cpu_threads_low"' in script
+    assert 'policy.reason = "cpu_threads_unknown"' in script
+    assert 'policy.reason = "cpu_ram_low"' in script
+    assert 'policy.reason = "cpu_ram_unknown"' in script
+    assert 'policy.cap = math.min(jobCount, adaptiveCap)' in script
+    assert 'policy.reason = "directml_multi_track"' in script
     assert 'timing:workers_launched count=' in script
     assert ' .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none")' in script
+
+
+def test_scheduler_policy_route_backend_defaults_are_explicit():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "NORMAL_GPU_MAX_PARALLEL = 2" in script
+    assert "NORMAL_DIRECTML_MAX_PARALLEL = 1" in script
+    assert "NORMAL_MPS_MAX_PARALLEL = 1" in script
+    assert "DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2" in script
+    assert "DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 1" in script
+    assert "DKS_DIRECT_CPU_MAX_PARALLEL = 1" in script
+    assert "DKS_EXTRACT_STAGE2_MAX_PARALLEL = 1" in script
+    assert 'if route == "dks_direct" then' in script
+    assert 'schedulerRoute = "dks_direct"' in script
+    assert 'schedulerRoute = "dks_extract"' in script
+    assert 'schedulerStage = "stage1_normal"' in script
+    assert 'and hasRuntimeBackendType("mps")' in script
+    assert 'schedulerBackend = "mps"' in script
+    assert 'policy.reason = "scheduler_dks_direct_gpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap1"' in script
+    assert 'policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"' in script
+    assert '"scheduler_dks_extract_stage1_normal_gpu_cap2"' in script
+    assert '"scheduler_normal_gpu_cap2"' in script
+    assert 'policy.reason = "scheduler_mps_conservative"' in script
+    assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
+    assert 'scheduler_policy_route=' in script
+    assert 'scheduler_policy_backend=' in script
+    assert 'scheduler_policy_cap=' in script
+    assert 'lua_dks_scheduler_policy_route=' in script
 
 
 def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
@@ -1717,6 +1746,8 @@ def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs()
 
     assert '"lua_dks_multi_start", "lua_dks_multi_workflow_source", "lua_dks_multi_source_count",' in support_script
     assert '"lua_dks_multi_output_count", "lua_dks_multi_import_created", "lua_dks_multi_import_total_created",' in support_script
+    assert '"scheduler_policy_route", "scheduler_policy_stage", "scheduler_policy_backend",' in support_script
+    assert '"lua_dks_scheduler_policy_route", "lua_dks_scheduler_policy_stage", "lua_dks_scheduler_policy_cap",' in support_script
     assert '"lua_dks_extract_stage2_concurrency_cap", "lua_dks_extract_stage2_queue_wait_start",' in support_script
     assert '"lua_dks_extract_stage2_queue_wait_end", "dks_extract_stage2_throttled",' in support_script
     assert 'for i = 1, math.min(8, #runDirs) do' in support_script
