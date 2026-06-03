@@ -6261,8 +6261,8 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
         { id = "open-runtime", label = "Open runtime folder", sub = "Open runtime base", accent = { 0.35, 0.56, 0.82 } },
     }
     if OS ~= "Windows" then
-        choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional DrumSep venv", accent = { 0.22, 0.62, 0.70 } }
-        choices[#choices + 1] = { id = "drumsep-rocm-runtime", label = "Drum Kit Split ROCm runtime", sub = "Install/repair optional DrumSep ROCm venv", accent = { 0.16, 0.56, 0.78 } }
+        choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
+        choices[#choices + 1] = { id = "drumsep-rocm-runtime", label = "Drum Kit Split ROCm runtime", sub = "Install/repair optional Drum Kit ROCm runtime", accent = { 0.16, 0.56, 0.78 } }
         choices[#choices + 1] = { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } }
         choices[#choices + 1] = { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } }
     end

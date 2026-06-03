@@ -2165,6 +2165,8 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert "drumsep_install.log" in script
     assert "drumsep_rocm_install.log" in script
     assert script.index('writeFile(joinPath(bundleDir, "diagnostics.txt"') < script.index('local zipStartedAt = phaseStart("create_zip")')
+    assert "local function updateZipTimingFile(" in script
+    assert "updateZipTimingFile(zipPath, bundleDir, timingsFile, detectedPythonPath)" in script
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
@@ -2183,6 +2185,12 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_result_track_many = "drum tracks"' in langs
     assert 'drumkit_result_track_many = "drumtracks"' in langs
     assert 'drumkit_result_track_many = "Drum-Tracks"' in langs
+    assert 'drumkit_result_multi_created = "%d %s created from %d %s."' in langs
+    assert 'drumkit_result_multi_created = "%d %s gemaakt van %d %s."' in langs
+    assert 'drumkit_result_multi_created = "%d %s aus %d %s erstellt."' in langs
+    assert 'drumkit_result_items_replaced = "%d %s replaced with drum stems as takes."' in langs
+    assert 'drumkit_result_items_replaced = "%d %s vervangen door drumstems als takes."' in langs
+    assert 'drumkit_result_items_replaced = "%d %s durch Drum-Stems als Takes ersetzt."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s added as takes (press T to switch)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s toegevoegd als takes (druk T om te wisselen)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s als Takes hinzugefügt (T zum Wechseln)."' in langs
@@ -2250,9 +2258,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'drum_stems_label = "Drumstems:"' in langs
     assert 'drum_stems_label = "Drum-Stems:"' in langs
     assert 'model_label_expanded = "Expanded"' in langs
-    assert 'model_expanded_drumkit_desc = "Expanded DrumSep model for more detailed drum-kit splitting."' in langs
-    assert 'model_expanded_drumkit_desc = "Uitgebreid DrumSep-model voor gedetailleerdere drumkit-splitsing."' in langs
-    assert 'model_expanded_drumkit_desc = "Erweitertes DrumSep-Modell für detailliertere Drumkit-Trennung."' in langs
+    assert 'model_expanded_drumkit_desc = "Expanded Drum Kit model for more detailed drum-kit splitting."' in langs
+    assert 'model_expanded_drumkit_desc = "Uitgebreid Drum Kit-model voor gedetailleerdere drumkit-splitsing."' in langs
+    assert 'model_expanded_drumkit_desc = "Erweitertes Drum-Kit-Modell für detailliertere Drumkit-Trennung."' in langs
     assert 'device = "Gerät:"' in langs
     assert 'selected = "Ausgewählt:"' in langs
     assert 'delete_original = "Original löschen"' in langs
@@ -2266,19 +2274,21 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_extracting_drums = "Extracting drums..."' in langs
     assert 'progress_stage_extracting_drums = "Drums extraheren..."' in langs
     assert 'progress_stage_extracting_drums = "Drums werden extrahiert..."' in langs
-    assert 'progress_stage_queued_drumsep = "Queued for DrumSep..."' in langs
-    assert 'progress_stage_queued_drumsep = "In wachtrij voor DrumSep..."' in langs
-    assert 'progress_stage_queued_drumsep = "In Warteschlange für DrumSep..."' in langs
+    assert 'progress_stage_queued_drumsep = "Queued for Drum Kit engine..."' in langs
+    assert 'progress_stage_queued_drumsep = "In wachtrij voor drumkit-engine..."' in langs
+    assert 'progress_stage_queued_drumsep = "In Warteschlange für Drum-Kit-Engine..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Starting Drum Kit runtime..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-runtime starten..."' in langs
-    assert 'progress_stage_starting_drum_kit_runtime = "Drumkit-Runtime wird gestartet..."' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Drum-Kit-Laufzeit wird gestartet..."' in langs
     assert 'progress_stage_label_1_of_2 = "Stage 1/2"' in langs
     assert 'progress_stage_label_2_of_2 = "Stage 2/2"' in langs
-    assert 'progress_stage_label_1_of_2 = "Stufe 1/2"' in langs
-    assert 'progress_stage_label_2_of_2 = "Stufe 2/2"' in langs
-    assert 'progress_stage2_serialized_caption = "Stage 2 serialized for stability"' in langs
-    assert 'progress_stage2_serialized_caption = "Stage 2 geserialiseerd voor stabiliteit"' in langs
-    assert 'progress_stage2_serialized_caption = "Stufe 2 für Stabilität serialisiert"' in langs
+    assert 'progress_stage_label_1_of_2 = "Stap 1/2"' in langs
+    assert 'progress_stage_label_2_of_2 = "Stap 2/2"' in langs
+    assert 'progress_stage_label_1_of_2 = "Schritt 1/2"' in langs
+    assert 'progress_stage_label_2_of_2 = "Schritt 2/2"' in langs
+    assert 'progress_stage2_serialized_caption = "Stage 2 is serialized for stability"' in langs
+    assert 'progress_stage2_serialized_caption = "Stap 2 wordt voor stabiliteit na elkaar uitgevoerd"' in langs
+    assert 'progress_stage2_serialized_caption = "Schritt 2 wird für Stabilität nacheinander ausgeführt"' in langs
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
@@ -2440,9 +2450,9 @@ def test_direct_drumkit_tooltips_use_single_shortcut_and_route_scoped_expanded_c
     assert 'model_6stem_desc = "htdemucs_6s - Adds Guitar & Piano separation"' in langs
     assert 'model_6stem_desc = "htdemucs_6s - Voegt Gitaar & Piano separatie toe"' in langs
     assert 'model_6stem_desc = "htdemucs_6s - Fügt Gitarre & Klavier Trennung hinzu"' in langs
-    assert 'model_expanded_drumkit_desc = "Expanded DrumSep model for more detailed drum-kit splitting."' in langs
-    assert 'model_expanded_drumkit_desc = "Uitgebreid DrumSep-model voor gedetailleerdere drumkit-splitsing."' in langs
-    assert 'model_expanded_drumkit_desc = "Erweitertes DrumSep-Modell für detailliertere Drumkit-Trennung."' in langs
+    assert 'model_expanded_drumkit_desc = "Expanded Drum Kit model for more detailed drum-kit splitting."' in langs
+    assert 'model_expanded_drumkit_desc = "Uitgebreid Drum Kit-model voor gedetailleerdere drumkit-splitsing."' in langs
+    assert 'model_expanded_drumkit_desc = "Erweitertes Drum-Kit-Modell für detailliertere Drumkit-Trennung."' in langs
     assert 'if (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT) and model.id == "htdemucs_6s" then' in main_script
     assert 'descKey = "model_expanded_drumkit_desc"' in main_script
 
@@ -2892,5 +2902,5 @@ def test_normal_runtime_cpu_only_message_distinguishes_direct_drumkit_runtime():
     workflow = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
 
     assert "live normal runtime reports CPU-only devices" in workflow
-    assert "Direct Drum Kit uses a separate DrumSep runtime" in workflow
+    assert "Direct Drum Kit uses a separate Drum Kit runtime" in workflow
     assert "repair/rebuild the normal runtime" in workflow

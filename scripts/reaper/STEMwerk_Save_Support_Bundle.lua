@@ -1721,6 +1721,39 @@ local function createZipArchive(bundleParent, bundleDir, bundleName, pythonPath)
     return false, "", table.concat(errors, " | "), ""
 end
 
+local function updateZipTimingFile(zipPath, bundleDir, timingPath, pythonPath)
+    if trim(pythonPath) == "" or not fileExists(pythonPath) then
+        return false, "python_unavailable"
+    end
+    if not fileExists(zipPath) or not fileExists(timingPath) then
+        return false, "zip_or_timing_missing"
+    end
+    local bundleParent = tostring(bundleDir or ""):match("^(.*)[/\\][^/\\]+$") or ""
+    local scriptPath = joinPath(bundleParent, "_support_bundle_zip_update_" .. tostring(os.time()) .. ".py")
+    local script = table.concat({
+        "import os",
+        "import sys",
+        "import zipfile",
+        "",
+        "zip_path = os.path.abspath(sys.argv[1])",
+        "bundle_dir = os.path.abspath(sys.argv[2])",
+        "timing_path = os.path.abspath(sys.argv[3])",
+        "parent = os.path.dirname(bundle_dir)",
+        "arcname = os.path.relpath(timing_path, parent)",
+        "with zipfile.ZipFile(zip_path, 'a', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:",
+        "    zf.write(timing_path, arcname)",
+    }, "\n")
+    if not writeFile(scriptPath, script, "wb") then
+        return false, "helper_write_failed"
+    end
+    local rc, out = execCommand(pythonPath, {scriptPath, zipPath, bundleDir, timingPath}, 30000)
+    if fileExists(scriptPath) then os.remove(scriptPath) end
+    if rc == 0 then
+        return true, ""
+    end
+    return false, trim(out) ~= "" and trim(out) or ("zip_update_failed_rc_" .. tostring(rc))
+end
+
 local function classifyFileForBundle(name)
     local lower = tostring(name or ""):lower()
     local textExt = {
@@ -3569,6 +3602,9 @@ local function performBundleCollection()
     phaseTimingsWall.total = math.max(0, os.time() - totalWallStartedAt)
     timingEvent("total", "end", string.format("cpu_duration=%.3f wall_duration=%d", phaseTimings.total, phaseTimingsWall.total))
     finalizeTimingsAfterZip()
+    if zipOk and zipPath and zipPath ~= "" then
+        updateZipTimingFile(zipPath, bundleDir, timingsFile, detectedPythonPath)
+    end
     writeFile(
         joinPath(bundleDir, "support_bundle_result.txt"),
         table.concat({

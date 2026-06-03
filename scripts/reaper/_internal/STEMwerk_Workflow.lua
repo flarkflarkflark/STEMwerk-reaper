@@ -216,7 +216,7 @@ local function preflightNormalWorkflowDeviceRoute(runOptions)
             .. "Requested device: " .. tostring(requestedUiDevice) .. "\n"
             .. "Live runtime devices: " .. (liveIdsText ~= "" and liveIdsText or "auto,cpu") .. "\n\n"
             .. "This prevents a silent fallback to CPU.\n\n"
-            .. "Direct Drum Kit uses a separate DrumSep runtime and can still show GPU devices independently.\n\n"
+            .. "Direct Drum Kit uses a separate Drum Kit runtime and can still show GPU devices independently.\n\n"
             .. "If you want GPU processing for normal STEMwerk, run STEMwerk-SETUP and repair/rebuild the normal runtime."
         C.showMessage("Runtime Device Unavailable", msg, "error", false)
         return false

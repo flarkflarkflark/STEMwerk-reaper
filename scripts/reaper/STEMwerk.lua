@@ -1555,7 +1555,7 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             .. (resolved ~= "" and ("\nResolved model: " .. tostring(resolved)) or "")
             .. "\nerror_stage=stage2_preflight\n"
             .. "error_reason=" .. tostring(reason)
-            .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this DrumSep model.\n"
+            .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this Drum Kit model.\n"
             .. "Update/repair the STEMwerk runtime model catalog, then retry."
             .. "\n\nExit code: " .. tostring(exitCode or "unknown")
             .. "\nCommand: " .. tostring(cmdLine or "unknown")
@@ -1625,7 +1625,7 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             .. (resolved ~= "" and ("\nResolved model: " .. tostring(resolved)) or "")
             .. "\nerror_stage=stage2_model_load\n"
             .. "error_reason=drumsep_model_runtime_unsupported"
-            .. "\n\nThis DrumSep MDXC model is not compatible with the current audio-separator runtime.\n"
+            .. "\n\nThis Drum Kit model is not compatible with the current audio-separator runtime.\n"
             .. "Use a runtime/model combination that supports this MDXC config."
             .. "\n\nExit code: " .. tostring(exitCode or "unknown")
             .. "\nCommand: " .. tostring(cmdLine or "unknown")
@@ -1647,7 +1647,7 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
             .. "Requested model: " .. tostring(requested)
             .. "\nerror_stage=stage2_preflight\n"
             .. "error_reason=drumsep_model_missing"
-            .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this DrumSep model.\n"
+            .. "\n\nThe current audio-separator model catalog/runtime cannot resolve this Drum Kit model.\n"
             .. "Update/repair the STEMwerk runtime model catalog, then retry."
             .. "\n\nExit code: " .. tostring(exitCode or "unknown")
             .. "\nCommand: " .. tostring(cmdLine or "unknown")
@@ -9094,7 +9094,9 @@ function buildResultMessageLines()
         else
             srcWord = trPlural(srcCount, "result_source_track_one", "result_source_track_many", "source track", "source tracks")
         end
-        local line1 = string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, srcCount, srcWord)
+        local line1 = drumKitCopy
+            and string.format(T("drumkit_result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, srcCount, srcWord)
+            or string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, srcCount, srcWord)
 
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
@@ -9118,7 +9120,11 @@ function buildResultMessageLines()
                 data.expectedOutputs or 0
             )
         else
-            line1 = string.format(T("result_items_replaced") or "%d %s replaced with stems as takes.", itemCount, itemWord)
+            if drumKitCopyActive then
+                line1 = string.format(T("drumkit_result_items_replaced") or "%d %s replaced with drum stems as takes.", itemCount, itemWord)
+            else
+                line1 = string.format(T("result_items_replaced") or "%d %s replaced with stems as takes.", itemCount, itemWord)
+            end
         end
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
@@ -9153,7 +9159,9 @@ function buildResultMessageLines()
                 local srcWord = drumKitCopy
                     and trPlural(sourceCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many", "source item", "source items")
                     or trPlural(sourceCount, "result_source_item_one", "result_source_item_many", "source item", "source items")
-                line1 = string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, sourceCount, srcWord)
+                line1 = drumKitCopy
+                    and string.format(T("drumkit_result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, sourceCount, srcWord)
+                    or string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, sourceCount, srcWord)
             end
         elseif data.mainKey then
             if data.mainKey == "result_time_selection_created" or data.mainKey == "result_stems_created_generic" then
@@ -10586,7 +10594,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     -- Device header tooltip: show accurate probe status depending on runtime results.
     local headerTip = nil
     if directDksRoute and runtimeDevicesForUi and #runtimeDevicesForUi > 0 then
-        headerTip = T("device_note_probe_completed") or "DrumSep runtime devices refreshed."
+        headerTip = T("device_note_probe_completed") or "Drum Kit runtime devices refreshed."
     elseif runtimeDevicesForUi and #runtimeDevicesForUi > 0 then
         -- Check if any non-auto/cpu devices are present
         local hasGpu = false
@@ -13984,7 +13992,7 @@ function compactRuntimeKindLabel(kind)
     if lower == "rocm" then return "ROCm" end
     if lower == "cpu" then return "CPU" end
     if lower == "normal" then return trSafeValue("progress_runtime_normal", "normal runtime") end
-    if lower == "drumsep" then return "DrumSep" end
+    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "Drum Kit engine") end
     return tostring(kind or "")
 end
 
@@ -14015,7 +14023,7 @@ function buildProgressRouteSummary(deviceDetail)
             stage1Summary .. " -> " .. stage2Summary
     end
     if isDrumKitWorkflowActive() then
-        local directSummary = activeProcessingRouteBadge() .. " · DrumSep"
+        local directSummary = activeProcessingRouteBadge() .. " · " .. trSafeValue("progress_drumkit_engine", "Drum Kit engine")
         if deviceDetail and deviceDetail ~= "" then
             directSummary = directSummary .. " · " .. tostring(deviceDetail)
         end
@@ -14927,9 +14935,7 @@ function drawProgressWindow()
             -- Terminal border (green)
             gfx.set(termBorderR, termBorderG, termBorderB, termBorderA)
             gfx.rect(displayX, displayY, displayW, displayH, 0)
-            if SETTINGS.visualFX and not utilityMode then
-                UI_PROGRESS.drawTerminalFx(displayX, displayY, displayW, displayH, uiNow(), termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
-            end
+            -- Keep the processing output view sober/readable; visual FX remain in the progress/art view.
 
             -- Terminal header
             gfx.set(termHeaderR, termHeaderG, termHeaderB, termHeaderA)
@@ -14938,7 +14944,7 @@ function drawProgressWindow()
             gfx.setfont(1, "Courier", PS(10), string.byte('b'))
             gfx.x = displayX + PS(5)
             gfx.y = displayY + PS(3)
-            gfx.drawstr(isDrumKitWorkflowActive() and "DRUMSEP OUTPUT" or (T("terminal_output_title") or "DEMUCS OUTPUT"))
+            gfx.drawstr(isDrumKitWorkflowActive() and trSafeValue("terminal_drumkit_output_title", "Drum Kit output") or (T("terminal_output_title") or "Processing output"))
 
             -- Read latest terminal output from stdout file
             local now = uiNow()
@@ -18909,9 +18915,7 @@ function drawMultiTrackProgressWindow()
 
         gfx.set(termBorderR, termBorderG, termBorderB, termBorderA)
         gfx.rect(displayX, displayY, displayW, displayH, 0)
-        if SETTINGS.visualFX and not utilityMode then
-            drawTerminalFx(displayX, displayY, displayW, displayH, termNow, termBorderR, termBorderG, termBorderB, termProgR, termProgG, termProgB)
-        end
+        -- Keep the processing output view sober/readable; visual FX remain in the progress/art view.
 
         gfx.set(termHeaderR, termHeaderG, termHeaderB, termHeaderA)
         gfx.rect(displayX, displayY, displayW, PS(18), 1)
@@ -18919,7 +18923,7 @@ function drawMultiTrackProgressWindow()
         gfx.setfont(1, "Courier", PS(10), string.byte('b'))
         gfx.x = displayX + PS(5)
         gfx.y = displayY + PS(3)
-        gfx.drawstr(isDrumKitWorkflowActive() and "DRUMSEP OUTPUT" or (T("terminal_output_title") or "DEMUCS OUTPUT"))
+        gfx.drawstr(isDrumKitWorkflowActive() and trSafeValue("terminal_drumkit_output_title", "Drum Kit output") or (T("terminal_output_title") or "Processing output"))
 
         local function tailFileLines(filePath, maxLines)
             if not filePath or filePath == "" then return {} end
@@ -19365,7 +19369,7 @@ function drawMultiTrackProgressWindow()
             summaryLine2 = summaryLine2 .. string.format(etaFmt, etaMins, etaSecs)
         end
         if isExtractDrumKitWorkflowActive() then
-            summaryLine2 = summaryLine2 .. " · " .. trSafeProgress("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
+            summaryLine2 = summaryLine2 .. " · " .. trSafeProgress("progress_stage2_serialized_caption", "Stage 2 is serialized for stability")
         end
     end
 
