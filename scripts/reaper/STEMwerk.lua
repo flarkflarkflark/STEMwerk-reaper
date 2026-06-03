@@ -9121,7 +9121,7 @@ function buildResultMessageLines()
             )
         else
             if drumKitCopyActive then
-                line1 = string.format(T("drumkit_result_items_replaced") or "%d %s replaced with drum stems as takes.", itemCount, itemWord)
+                line1 = string.format(T("drumkit_result_items_replaced") or "%d %s replaced with drum takes.", itemCount, itemWord)
             else
                 line1 = string.format(T("result_items_replaced") or "%d %s replaced with stems as takes.", itemCount, itemWord)
             end
@@ -17939,7 +17939,9 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     local execLogPath = job.execLogPath or SW_LOG.getLogPath()
     local jobTag = "item_" .. tostring(job.index or 0)
     job.percent = 0
-    job.stage = T("progress_starting_backend") or "Starting backend..."
+    job.stage = isDrumKitWorkflowActive()
+        and trSafeValue("progress_stage_starting_drum_kit_runtime", "Preparing drum kit...")
+        or (T("progress_starting_backend") or "Starting backend...")
     job.startTime = os.time()
     SW_TIMING.beginJob(job.index, { track = job.trackName, audio_dur = job.audioDuration, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "", mode = multiTrackQueue.sequentialMode and "sequential" or "parallel" })
     multiTrackQueue.currentIndex = tonumber(job.index) or 0
@@ -18381,7 +18383,7 @@ function drawMultiTrackProgressWindow()
     local readableTerminalAccent  = UI_PROGRESS.readableTerminalAccent
     local drawTerminalFx          = UI_PROGRESS.drawTerminalFx
     local formatProgressLine      = UI_PROGRESS.formatProgressLine
-    local localizeProgressStagePrefix = UI_PROGRESS.localizeProgressStagePrefix
+    local normalizeProgressStage  = UI_PROGRESS.normalizeProgressStage
     local getOverallProgress      = _sep.getOverallProgress
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     local w, h = gfx.w, gfx.h
@@ -19206,7 +19208,7 @@ function drawMultiTrackProgressWindow()
             -- Stage text inside progress bar
             if not job.done and job.stage and job.stage ~= "" then
                 gfx.setfont(1, "Arial", PS(9))
-                local stageText = localizeProgressStagePrefix(job.stage)
+                local stageText = normalizeProgressStage(job.stage)
                 if stageText == "Waiting.." or stageText == "Waiting..." then
                     stageText = T("waiting") or stageText
                 elseif stageText == "Starting.." or stageText == "Starting..." then
