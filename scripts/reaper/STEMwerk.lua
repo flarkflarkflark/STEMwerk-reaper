@@ -9189,7 +9189,15 @@ function buildResultMessageLines()
         end
         table.insert(lines, line1)
         if data.actionKey then
-            table.insert(lines, T(data.actionKey) or "")
+            local actionKey = data.actionKey
+            if drumKitCopyActive and actionKey == "result_item_muted" then
+                actionKey = "drumkit_result_item_muted"
+            elseif drumKitCopyActive and actionKey == "result_track_muted" then
+                actionKey = "drumkit_result_track_muted"
+            elseif drumKitCopyActive and actionKey == "result_selection_muted" then
+                actionKey = "drumkit_result_selection_muted"
+            end
+            table.insert(lines, T(actionKey) or "")
         end
         local speed = tonumber(data.realtimeFactor or 0) or 0
         if speed > 0 then
@@ -13996,29 +14004,46 @@ function compactRuntimeKindLabel(kind)
     return tostring(kind or "")
 end
 
+function compactProgressDeviceToken(rawDevice, friendlyDetail)
+    local raw = tostring(rawDevice or "")
+    local lower = raw:lower()
+    if lower == "" then return "" end
+    if lower == "cpu" then return "CPU" end
+    if lower:match("^cuda:%d+") or lower == "cuda" or lower == "rocm" then return "GPU" end
+    if lower:find("directml", 1, true) then return "DirectML" end
+    if lower == "mps" then return "MPS" end
+    if lower == "normal" then return trSafeValue("progress_runtime_normal", "normal runtime") end
+    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "Drum Kit engine") end
+    local friendly = tostring(friendlyDetail or "")
+    if friendly ~= "" and not friendly:lower():match("^cuda:%d+") then
+        return friendly
+    end
+    return raw
+end
+
 function buildProgressRouteSummary(deviceDetail)
     if isExtractDrumKitWorkflowActive() then
         local stageIdx = inferProgressStageIndex(progressState.stage)
         local stageBadge = stageIdx == 1
             and trSafeValue("progress_stage_label_1_of_2", "Stage 1/2")
             or trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
-        local stage1Device = compactRuntimeKindLabel(progressState._stage1Device or "cpu")
-        local stage2Device = compactRuntimeKindLabel(progressState._stage2Device or progressState._runtimeSelected or "")
+        local stage1Device = compactProgressDeviceToken(progressState._stage1Device or "cpu", deviceDetail)
+        local stage2Device = compactProgressDeviceToken(progressState._stage2Device or progressState._runtimeSelected or "", deviceDetail)
         local stage1Summary = string.format(
             trSafeValue("progress_stage1_footer_summary", "Stage 1: %s"),
             trSafeValue("progress_stage1_runtime_compact", "normal CPU"):gsub("CPU", stage1Device)
         )
         local stage2Compact = compactRuntimeKindLabel(progressState._stage2Runtime or "drumsep")
-        if deviceDetail and deviceDetail ~= "" then
-            stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)
-        elseif stage2Device ~= "" then
+        if stage2Device ~= "" then
             stage2Compact = stage2Compact .. " " .. stage2Device
         end
         local stage2Summary = string.format(
             trSafeValue("progress_stage2_footer_summary", "Stage 2: %s"),
             stage2Compact
         )
-        stage2Summary = stage2Summary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "serialized for stability")
+        if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then
+            stage2Summary = stage2Summary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
+        end
         return activeProcessingRouteBadge() .. " · " .. stageBadge,
             stage1Summary .. " -> " .. stage2Summary
     end
@@ -14781,9 +14806,9 @@ function drawProgressWindow()
     if nerdHover then
         GUI.uiClickedThisFrame = true
         if utilityMode then
-            tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = progressState.showTerminal and trSafeValue("tooltip_terminal_close_output", "Close output") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         elseif progressState.showTerminal then
-            tooltipText = trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")
+            tooltipText = trSafeValue("tooltip_terminal_close_output", "Close output")
         else
             tooltipText = T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output"
         end
@@ -18739,9 +18764,9 @@ function drawMultiTrackProgressWindow()
 
     if nerdHover then
         if utilityMode then
-            tooltipText = multiTrackQueue.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = multiTrackQueue.showTerminal and trSafeValue("tooltip_terminal_close_output", "Close output") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         else
-            tooltipText = multiTrackQueue.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
+            tooltipText = multiTrackQueue.showTerminal and trSafeValue("tooltip_terminal_close_output", "Close output") or (T("tooltip_nerd_mode_show") or "Nerd Mode: Show terminal output")
         end
         tooltipX, tooltipY = mx + PS(10), my + PS(15)
         if mouseDown and not multiTrackQueue.wasMouseDown then
@@ -19368,7 +19393,7 @@ function drawMultiTrackProgressWindow()
             summaryLine2 = summaryLine2 .. string.format(etaFmt, etaMins, etaSecs)
         end
         if isExtractDrumKitWorkflowActive() then
-            summaryLine2 = summaryLine2 .. " · " .. trSafeProgress("progress_stage2_serialized_caption", "Stage 2 is serialized for stability")
+            summaryLine2 = summaryLine2 .. " · " .. trSafeProgress("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end
     end
 

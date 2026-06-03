@@ -2191,6 +2191,9 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_result_items_replaced = "%d %s replaced with drum stems as takes."' in langs
     assert 'drumkit_result_items_replaced = "%d %s vervangen door drumstems als takes."' in langs
     assert 'drumkit_result_items_replaced = "%d %s durch Drum-Stems als Takes ersetzt."' in langs
+    assert 'drumkit_result_item_muted = "Original item muted."' in langs
+    assert 'drumkit_result_item_muted = "Origineel item gedempt."' in langs
+    assert 'drumkit_result_item_muted = "Originalelement stumm geschaltet."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s added as takes (press T to switch)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s toegevoegd als takes (druk T om te wisselen)."' in langs
     assert 'drumkit_result_added_takes_hint = "%d %s als Takes hinzugefügt (T zum Wechseln)."' in langs
@@ -2201,6 +2204,9 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert "terminal_hint_return_to_art = \"Klik >_ om terug te gaan naar voortgang\"" in langs
     assert "terminal_hint_return_to_art = \"Klick >_ für Fortschritt\"" in langs
     assert "terminal_hint_return_to_art = \"Click >_ to return to progress\"" in langs
+    assert 'tooltip_terminal_close_output = "Close output"' in langs
+    assert 'tooltip_terminal_close_output = "Sluit uitvoer"' in langs
+    assert 'tooltip_terminal_close_output = "Ausgabe schließen"' in langs
     assert "Art-Ansicht" not in langs
 
 
@@ -2284,17 +2290,20 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_label_2_of_2 = "Stage 2/2"' in langs
     assert 'progress_stage_label_1_of_2 = "Stap 1/2"' in langs
     assert 'progress_stage_label_2_of_2 = "Stap 2/2"' in langs
-    assert 'progress_stage_label_1_of_2 = "Schritt 1/2"' in langs
-    assert 'progress_stage_label_2_of_2 = "Schritt 2/2"' in langs
-    assert 'progress_stage2_serialized_caption = "Stage 2 is serialized for stability"' in langs
-    assert 'progress_stage2_serialized_caption = "Stap 2 wordt voor stabiliteit na elkaar uitgevoerd"' in langs
-    assert 'progress_stage2_serialized_caption = "Schritt 2 wird für Stabilität nacheinander ausgeführt"' in langs
+    assert 'progress_stage_label_1_of_2 = "Stufe 1/2"' in langs
+    assert 'progress_stage_label_2_of_2 = "Stufe 2/2"' in langs
+    assert 'progress_stage2_serialized_caption = "Stage 2 serialized for stability"' in langs
+    assert 'progress_stage2_serialized_caption = "Stap 2 serieel voor stabiliteit"' in langs
+    assert 'progress_stage2_serialized_caption = "Stufe 2 seriell für Stabilität"' in langs
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
     assert 'tooltip_nerd_mode_hide = "Back to progress view"' in langs
     assert 'tooltip_nerd_mode_hide = "Terug naar voortgang"' in langs
     assert 'tooltip_nerd_mode_hide = "Zurück zur Fortschrittsansicht"' in langs
+    assert 'tooltip_terminal_close_output = "Close output"' in langs
+    assert 'tooltip_terminal_close_output = "Sluit uitvoer"' in langs
+    assert 'tooltip_terminal_close_output = "Ausgabe schließen"' in langs
     assert 'footer_drum_tracks = "drum tracks"' in langs
     assert 'footer_drum_tracks = "drumtracks"' in langs
     assert 'footer_drum_tracks = "Drum-Spuren"' in langs
@@ -2383,7 +2392,10 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert "function trSafeValue(key, fallback)" in script
     assert 'function activeProcessingRouteBadge()' in script
     assert 'function buildProgressRouteSummary(deviceDetail)' in script
+    assert 'function compactProgressDeviceToken(rawDevice, friendlyDetail)' in script
     assert 'return activeProcessingRouteBadge() .. " · " .. stageBadge,' in script
+    assert 'if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then' in script
+    assert 'stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)' not in script
     assert 'local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)' in script
     assert 'inlineStageText = inlineStageText .. " [" .. tostring(footerDeviceDetail) .. "]"' not in script
     assert "function normalizeStemPathMap(stemPaths)" in script
@@ -2406,7 +2418,7 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'local footerStemSet = drumKitFooterMode and DRUMKIT_STEMS or STEMS' in script
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", baseLoc)' in script
     assert 'locLine = trFmt("footer_line_location_simple", "Location: %s", trSafe("in_place", "In-place"))' in script
-    assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_nerd_mode_hide", "Back to progress view")' in script
+    assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_terminal_close_output", "Close output")' in script
     assert 'textStr = textStr:gsub("%s*%[" .. shortcutEsc .. "%]%s*$", "")' in script
     assert 'footer_drum_stem_folder = "drum-map"' in langs
 
