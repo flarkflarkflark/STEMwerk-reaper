@@ -744,6 +744,23 @@ def test_device_refresh_has_module_scope_friendly_name_sanitizer():
     assert 'local short = sanitizeFriendlyName(d.fullName or d.name)' in script
 
 
+def test_early_stem_resolver_uses_safe_drumkit_route_helper_before_progress_init():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "local function safeDrumKitWorkflowActive()" in script
+    assert 'mode = tostring(progressState.workflowMode or "")' in script
+    assert 'mode = tostring(SETTINGS.workflowMode or "")' in script
+    assert 'source = tostring(SETTINGS.workflowSource or "")' in script
+    assert 'source == directSource or source == extractSource' in script
+    resolver = script[
+        script.index("function resolveStemSetForPaths(stemPaths)") :
+        script.index("-- Available processing devices")
+    ]
+    assert "safeDrumKitWorkflowActive()" in resolver
+    assert "isDrumKitWorkflowActive()" not in resolver
+    assert "isDrumKitWorkflowActive = function()\n    return safeDrumKitWorkflowActive()" in script
+
+
 def test_setup_authoritative_bootstrap_accepts_current_linux_torch_assertion_marker():
     script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 

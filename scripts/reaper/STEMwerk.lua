@@ -1119,11 +1119,46 @@ function stemPathMapLooksLikeDrumKit(stemPaths)
         and normalized["hi-hat"] and normalized["ride"] and normalized["crash"]
 end
 
+local function safeDrumKitWorkflowActive()
+    local drumkitMode = (DKS_WORKFLOW and DKS_WORKFLOW.WORKFLOW_DRUMKIT) or "drumkit"
+    local directSource = (DKS_WORKFLOW and DKS_WORKFLOW.SOURCE_DIRECT) or "dks_direct"
+    local extractSource = (DKS_WORKFLOW and DKS_WORKFLOW.SOURCE_EXTRACT) or "dks_extract"
+    local mode = ""
+    local source = ""
+
+    if type(progressState) == "table" then
+        mode = tostring(progressState.workflowMode or "")
+        source = tostring(progressState.workflowSource or "")
+    end
+    if mode == "" and type(SETTINGS) == "table" then
+        mode = tostring(SETTINGS.workflowMode or "")
+    end
+    if source == "" and type(SETTINGS) == "table" then
+        source = tostring(SETTINGS.workflowSource or "")
+    end
+    if (mode == "" or source == "") and reaper and reaper.GetExtState then
+        if mode == "" then
+            mode = tostring(reaper.GetExtState(EXT_SECTION, "active_workflow_mode") or "")
+            if mode == "" then
+                mode = tostring(reaper.GetExtState(EXT_SECTION, "workflow_mode") or "")
+            end
+        end
+        if source == "" then
+            source = tostring(reaper.GetExtState(EXT_SECTION, "active_workflow_source") or "")
+            if source == "" then
+                source = tostring(reaper.GetExtState(EXT_SECTION, "workflow_source") or "")
+            end
+        end
+    end
+
+    return mode == drumkitMode or source == directSource or source == extractSource
+end
+
 function resolveStemSetForPaths(stemPaths)
     if stemPathMapLooksLikeDrumKit(stemPaths) then
         return DRUMKIT_STEMS, true
     end
-    if isDrumKitWorkflowActive() then
+    if safeDrumKitWorkflowActive() then
         return DRUMKIT_STEMS, true
     end
     return STANDARD_STEMS, false
@@ -13825,7 +13860,7 @@ local progressState = {
 }
 
 isDrumKitWorkflowActive = function()
-    return tostring(progressState.workflowMode or "") == DKS_WORKFLOW.WORKFLOW_DRUMKIT
+    return safeDrumKitWorkflowActive()
 end
 
 function isExtractDrumKitWorkflowActive()
