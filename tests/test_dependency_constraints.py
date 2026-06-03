@@ -2409,9 +2409,12 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert "function trSafeValue(key, fallback)" in script
     assert 'function activeProcessingRouteBadge()' in script
     assert 'function buildProgressRouteSummary(deviceDetail)' in script
+    assert 'function buildDksFooterDeviceIntent(deviceDetail)' in script
     assert 'function compactProgressDeviceToken(rawDevice, friendlyDetail)' in script
     assert 'local routeLeft = activeProcessingRouteBadge() .. " · " .. stageBadge' in script
-    assert 'routeLeft = routeLeft .. " · " .. tostring(deviceDetail)' in script
+    assert 'routeLeft = routeLeft .. " · " .. deviceIntent' in script
+    assert 'routeLeft = routeLeft .. " · " .. tostring(deviceDetail)' not in script
+    assert 'directSummary = directSummary .. " · " .. deviceIntent' in script
     assert 'local routeBadge = drumKitMode and "" or activeProcessingRouteBadge()' in script
     assert 'if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then' in script
     assert 'stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)' not in script
@@ -2531,15 +2534,22 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "progressState._runtimeGpuCapable" in script
     assert "progressState._runtimeDeviceNames" in script
     assert "function shortRuntimeGpuName(name)" in script
+    assert "function buildDksFooterDeviceIntent(deviceDetail)" in script
     assert "local first = s:match(\"^([^|,;]+)\") or s" in script
     assert "first = first:gsub(\"^AMD Radeon%s+\", \"\")" in script
     assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s")' in script
+    assert 'trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")' in script
+    assert 'trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")' in script
+    assert 'trSafeValue("footer_device_gpu_intent", "GPU")' in script
     assert 'trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert 'leftParts[#leftParts + 1] = string.format("%s: %s", mtSeg, "30")' in script
     assert 'footer_device_auto_resolved_gpu = "Auto → GPU/ROCm: %s"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU runtime"' in langs
+    assert 'footer_device_auto_gpu_intent = "Auto [GPU]"' in langs
+    assert 'footer_device_auto_cpu_intent = "Auto [CPU]"' in langs
+    assert 'footer_device_gpu_intent = "GPU"' in langs
     assert 'footer_device_cpu_runtime = "CPU runtime"' in langs
     assert 'footer_device_gpu_runtime = "GPU/ROCm: %s"' in langs
     assert 'footer_device_cuda_runtime = "CUDA: %s"' in langs
@@ -2548,8 +2558,14 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU-Runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU-Runtime"' in langs
     assert 'rawLower:match("^cuda:%d+")' in script
+    assert 'return trSafeValue("footer_device_gpu_intent", "GPU")' in script
     assert 'rawDeviceName:lower():find("amd", 1, true)' in script
+
     assert 'trSafeValue("footer_device_cuda_runtime", "CUDA: %s")' in script
+    assert 'local raw = tostring(rawDevice or ""):gsub("^%s+", ""):gsub("%s+$", "")' in script
+    assert 'if lower:match("^cuda:%d+") then return "GPU" end' in script
+    assert 'return compactProgressDeviceToken(rawDetail)' in script
+    assert 'compactProgressDeviceToken(deviceDetail, deviceDetail)' in script
 
 
 def test_sync_to_reaper_does_not_overwrite_script_local_i18n_with_repo_root_i18n():

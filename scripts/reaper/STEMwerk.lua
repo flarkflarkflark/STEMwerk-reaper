@@ -14005,7 +14005,7 @@ function compactRuntimeKindLabel(kind)
 end
 
 function compactProgressDeviceToken(rawDevice, friendlyDetail)
-    local raw = tostring(rawDevice or "")
+    local raw = tostring(rawDevice or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local lower = raw:lower()
     if lower == "" then return "" end
     if lower == "cpu" then return "CPU" end
@@ -14018,7 +14018,45 @@ function compactProgressDeviceToken(rawDevice, friendlyDetail)
     if friendly ~= "" and not friendly:lower():match("^cuda:%d+") then
         return friendly
     end
+    -- Prevent leakage of raw backend IDs like cuda:0 if no friendly detail was found
+    if lower:match("^cuda:%d+") then return "GPU" end
     return raw
+end
+
+function buildDksFooterDeviceIntent(deviceDetail)
+    local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
+    local runtimeSel = tostring(progressState._runtimeSelected or ""):lower()
+    local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
+    local detail = tostring(deviceDetail or ""):lower()
+
+    local gpuRequested = req == "gpu" or req == "cuda" or req == "rocm" or req:match("^cuda:%d+")
+    local gpuResolved = runtimeSel == "rocm" or runtimeSel == "cuda" or gpuCap == "yes"
+        or detail:find("gpu", 1, true) ~= nil
+        or detail:find("rocm", 1, true) ~= nil
+        or detail:find("cuda", 1, true) ~= nil
+
+    if req == "cpu" or runtimeSel == "cpu" and req ~= "auto" then
+        return "CPU"
+    end
+    if req == "auto" then
+        if gpuResolved then
+            return trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")
+        end
+        if runtimeSel == "cpu" or detail:find("cpu", 1, true) ~= nil then
+            return trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")
+        end
+        return trSafeValue("footer_device_auto_intent", "Auto")
+    end
+    if req:find("directml", 1, true) or detail:find("directml", 1, true) then
+        return "DirectML"
+    end
+    if req == "mps" or detail == "mps" then
+        return "MPS"
+    end
+    if gpuRequested or gpuResolved then
+        return trSafeValue("footer_device_gpu_intent", "GPU")
+    end
+    return trSafeValue("footer_device_auto_intent", "Auto")
 end
 
 function buildProgressRouteSummary(deviceDetail)
@@ -14032,20 +14070,25 @@ function buildProgressRouteSummary(deviceDetail)
             routeSummary = routeSummary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end
         local routeLeft = activeProcessingRouteBadge() .. " · " .. stageBadge
-        if deviceDetail and deviceDetail ~= "" then
-            routeLeft = routeLeft .. " · " .. tostring(deviceDetail)
+        local deviceIntent = buildDksFooterDeviceIntent(deviceDetail)
+        if deviceIntent ~= "" then
+            routeLeft = routeLeft .. " · " .. deviceIntent
         end
-        return routeLeft,
-            routeSummary
+        if deviceDetail and deviceDetail ~= "" then
+            local displayDetail = compactProgressDeviceToken(deviceDetail, deviceDetail)
+            routeSummary = routeSummary .. " · " .. tostring(displayDetail)
+        end
+        return routeLeft, routeSummary
     end
     if isDrumKitWorkflowActive() then
         local directSummary = activeProcessingRouteBadge()
-        if deviceDetail and deviceDetail ~= "" then
-            directSummary = directSummary .. " · " .. tostring(deviceDetail)
+        local deviceIntent = buildDksFooterDeviceIntent(deviceDetail)
+        if deviceIntent ~= "" then
+            directSummary = directSummary .. " · " .. deviceIntent
         end
-        return directSummary, deviceDetail
+        return directSummary, compactProgressDeviceToken(deviceDetail, deviceDetail)
     end
-    return nil, deviceDetail
+    return nil, compactProgressDeviceToken(deviceDetail, deviceDetail)
 end
 
 function shortRuntimeGpuName(name)
@@ -14059,7 +14102,7 @@ function shortRuntimeGpuName(name)
 end
 
 function deriveResolvedRuntimeFooter(footerDeviceDetail)
-    local rawDetail = tostring(footerDeviceDetail or "")
+    local rawDetail = tostring(footerDeviceDetail or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local rawLower = rawDetail:lower()
     local rawDeviceName = progressState._deviceName
     if rawDeviceName then
@@ -14081,7 +14124,7 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
         elseif rawLower == "cpu" then
             return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
         end
-        return footerDeviceDetail
+        return compactProgressDeviceToken(rawDetail)
     end
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
     local runtimeSel = tostring(progressState._runtimeSelected or ""):lower()
@@ -14122,7 +14165,21 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
     if req == "cpu" then
         return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
     end
-    return footerDeviceDetail
+    if rawLower:match("^cuda:%d+") or rawLower == "cuda" or rawLower == "rocm" then
+        if deviceName and deviceName ~= "" then
+            local short = shortRuntimeGpuName(deviceName)
+            if short == "" then short = tostring(deviceName) end
+            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short)
+        end
+        return trSafeValue("footer_device_gpu_intent", "GPU")
+    end
+    if rawLower:find("directml", 1, true) then
+        return "DirectML"
+    end
+    if rawLower == "mps" then
+        return "MPS"
+    end
+    return compactProgressDeviceToken(rawDetail)
 end
 
 function setWorkflowContextForRun(runOptions)
