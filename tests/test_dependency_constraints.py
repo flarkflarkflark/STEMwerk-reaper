@@ -1579,6 +1579,9 @@ def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers
     assert 'SW_LOG.logExecResult("lua_dks_extract_import_selected_count=" .. tostring(selectedImportCount), nil, "")' in main
     assert 'SW_LOG.logExecResult("lua_dks_extract_import_created=" .. tostring(importedCount), nil, "")' in main
     assert '"import_stem_key=" .. tostring(stemKey)' in main
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
+    assert '"lua_dks_extract_import_candidate_count",' in support_script
+    assert '"lua_dks_extract_import_selected_count", "lua_dks_extract_import_created"' in support_script
 
 
 def test_support_bundle_excludes_dev_matrix_temp_dirs_and_reports_temp_log_budget():
