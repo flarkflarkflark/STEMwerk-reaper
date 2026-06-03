@@ -14029,17 +14029,18 @@ function buildDksFooterDeviceIntent(deviceDetail)
     local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
     local detail = tostring(deviceDetail or ""):lower()
 
-    local gpuRequested = req == "gpu" or req == "cuda" or req == "rocm" or req:match("^cuda:%d+")
+    local gpuRequested = req == "gpu" or req == "cuda" or req == "rocm" or req:match("^cuda:%d+") or req:find("directml", 1, true)
     local gpuResolved = runtimeSel == "rocm" or runtimeSel == "cuda" or gpuCap == "yes"
         or detail:find("gpu", 1, true) ~= nil
         or detail:find("rocm", 1, true) ~= nil
         or detail:find("cuda", 1, true) ~= nil
+        or detail:find("directml", 1, true) ~= nil
 
     if req == "cpu" or runtimeSel == "cpu" and req ~= "auto" then
         return "CPU"
     end
     if req == "auto" then
-        if gpuResolved then
+        if gpuResolved or gpuRequested then
             return trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")
         end
         if runtimeSel == "cpu" or detail:find("cpu", 1, true) ~= nil then

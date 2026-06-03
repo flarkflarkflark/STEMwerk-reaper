@@ -2541,6 +2541,10 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")' in script
     assert 'trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")' in script
     assert 'trSafeValue("footer_device_gpu_intent", "GPU")' in script
+    assert "gpuRequested or gpuResolved" in script
+    assert "trSafeValue(\"footer_device_auto_gpu_intent\", \"Auto [GPU]\")" in script
+    assert "or req:find(\"directml\", 1, true)" in script
+
     assert 'trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert "if not isDrumKitWorkflowActive() then" in script
