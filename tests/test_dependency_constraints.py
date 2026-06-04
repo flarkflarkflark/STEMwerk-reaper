@@ -2297,9 +2297,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_starting_drum_kit_runtime = "Preparing drum kit..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit voorbereiden..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Drumkit vorbereiten..."' in langs
-    assert 'mt_parallel_cap = "parallel cap %d"' in langs
-    assert 'mt_parallel_cap = "parallel-limiet %d"' in langs
-    assert 'mt_parallel_cap = "Parallel-Limit %d"' in langs
+    assert 'mt_parallel_cap = "cap %d"' in langs
+    assert 'mt_parallel_cap = "limiet %d"' in langs
+    assert 'mt_parallel_cap = "Limit %d"' in langs
     assert 'progress_stage_label_1_of_2 = "Stage 1/2"' in langs
     assert 'progress_stage_label_2_of_2 = "Stage 2/2"' in langs
     assert 'progress_stage_label_1_of_2 = "Stap 1/2"' in langs
@@ -2530,6 +2530,8 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
 
     assert "function deriveResolvedRuntimeFooter(footerDeviceDetail)" in script
     assert "progressState._runtimeSelected" in script
+    assert "progressState._stage2Device" in script
+    assert "progressState._stage1Device" in script
     assert "progressState._normalizedDeviceRequest" in script
     assert "progressState._runtimeGpuCapable" in script
     assert "progressState._runtimeDeviceNames" in script

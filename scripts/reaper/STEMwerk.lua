@@ -14025,12 +14025,12 @@ end
 
 function buildDksFooterDeviceIntent(deviceDetail)
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
-    local runtimeSel = tostring(progressState._runtimeSelected or ""):lower()
+    local runtimeSel = tostring(progressState._runtimeSelected or progressState._stage2Device or progressState._stage1Device or ""):lower()
     local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
     local detail = tostring(deviceDetail or ""):lower()
 
     local gpuRequested = req == "gpu" or req == "cuda" or req == "rocm" or req:match("^cuda:%d+") or req:find("directml", 1, true)
-    local gpuResolved = runtimeSel == "rocm" or runtimeSel == "cuda" or gpuCap == "yes"
+    local gpuResolved = runtimeSel == "rocm" or runtimeSel == "cuda" or runtimeSel:match("^cuda:%d+") or gpuCap == "yes"
         or detail:find("gpu", 1, true) ~= nil
         or detail:find("rocm", 1, true) ~= nil
         or detail:find("cuda", 1, true) ~= nil
@@ -14128,7 +14128,7 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
         return compactProgressDeviceToken(rawDetail)
     end
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
-    local runtimeSel = tostring(progressState._runtimeSelected or ""):lower()
+    local runtimeSel = tostring(progressState._runtimeSelected or progressState._stage2Device or progressState._stage1Device or ""):lower()
     local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
     local deviceName = progressState._deviceName
     if (not deviceName or deviceName == "") and progressState._runtimeDeviceNames and progressState._runtimeDeviceNames ~= "" then
@@ -14148,6 +14148,14 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
             return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s"), gpuLabel)
         end
         return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), gpuLabel)
+    end
+    if runtimeSel == "cuda" or runtimeSel:match("^cuda:%d+") then
+        local gpuLabel = shortRuntimeGpuName(deviceName)
+        if gpuLabel == "" then gpuLabel = "CUDA" end
+        if req == "auto" then
+            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s"), gpuLabel)
+        end
+        return string.format(trSafeValue("footer_device_cuda_runtime", "CUDA: %s"), gpuLabel)
     end
     if runtimeSel == "cpu" then
         if req == "auto" then
