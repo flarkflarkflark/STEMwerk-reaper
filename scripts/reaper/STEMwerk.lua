@@ -11875,8 +11875,8 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
-    local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"
-    local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Split") .. " (X)"
+    local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Drum Kit") .. " (Z)"
+    local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Kit Split") .. " (X)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
@@ -13970,10 +13970,10 @@ end
 
 function activeProcessingRouteBadge()
     if isExtractDrumKitWorkflowActive() then
-        return trSafeValue("workflow_edks_short_label", "Drum Split")
+        return trSafeValue("workflow_edks_short_label", "Drum Kit Split")
     end
     if isDrumKitWorkflowActive() then
-        return trSafeValue("workflow_drumkit_short_label", "Direct Kit")
+        return trSafeValue("workflow_drumkit_short_label", "Direct Drum Kit")
     end
     return trSafeValue("route_badge_normal", "Normal STEMwerk")
 end
@@ -14066,7 +14066,7 @@ function buildProgressRouteSummary(deviceDetail)
         local stageBadge = stageIdx == 1
             and trSafeValue("progress_stage_label_1_of_2", "Stage 1/2")
             or trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
-        local routeSummary = trSafeValue("progress_dks_extract_route_summary", "Normal stems → drum kit")
+        local routeSummary = trSafeValue("progress_dks_extract_route_summary", "Normal stems → Drum Kit")
         if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then
             routeSummary = routeSummary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end

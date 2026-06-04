@@ -2239,8 +2239,8 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
     progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text()
 
-    assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"' in main_script
-    assert 'local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Split") .. " (X)"' in main_script
+    assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Drum Kit") .. " (Z)"' in main_script
+    assert 'local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Kit Split") .. " (X)"' in main_script
     assert 'local stemsHeader = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
@@ -2252,9 +2252,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'activateWorkflowStemSet(isDrumKitWorkflow)' in main_script
 
     assert 'workflow_drumkit_label = "Direct Drum Kit"' in langs
-    assert 'workflow_drumkit_short_label = "Direct Kit"' in langs
+    assert 'workflow_drumkit_short_label = "Direct Drum Kit"' in langs
     assert 'workflow_edks_label = "Drum Kit Split"' in langs
-    assert 'workflow_edks_short_label = "Drum Split"' in langs
+    assert 'workflow_edks_short_label = "Drum Kit Split"' in langs
     assert 'drum_stems_label = "Drum Stems:"' in langs
     assert 'tooltip_preset_drumkit = "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
     assert 'tooltip_preset_edks = "Extract drums from a full mix, then split the kit into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
@@ -2282,12 +2282,12 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'selected = "Ausgewählt:"' in langs
     assert 'delete_original = "Original löschen"' in langs
     assert 'tooltip_close = "STEMwerk schließen (ESC)"' in langs
-    assert 'progress_stage_splitting_drum_kit = "Splitting drum kit..."' in langs
-    assert 'progress_stage_splitting_drum_kit = "Drumkit splitsen..."' in langs
-    assert 'progress_stage_splitting_drum_kit = "Drumkit aufteilen..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Preparing Direct Drum Kit..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit voorbereiden..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit wird vorbereitet..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Creating Drum Kit Split..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Drum Kit Split maken..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Drum Kit Split erstellen..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Creating Direct Drum Kit..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit maken..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit erstellen..."' in langs
     assert 'progress_stage_extracting_drums = "Extracting drums..."' in langs
     assert 'progress_stage_extracting_drums = "Drums extraheren..."' in langs
     assert 'progress_stage_extracting_drums = "Drums extrahieren..."' in langs
@@ -2309,9 +2309,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage2_serialized_caption = "Stage 2 serialized for stability"' in langs
     assert 'progress_stage2_serialized_caption = "Stap 2 serieel voor stabiliteit"' in langs
     assert 'progress_stage2_serialized_caption = "Stufe 2 seriell für Stabilität"' in langs
-    assert 'progress_dks_extract_route_summary = "Normal stems → drum kit"' in langs
-    assert 'progress_dks_extract_route_summary = "Normale stems → drumkit"' in langs
-    assert 'progress_dks_extract_route_summary = "Normale Stems → Drumkit"' in langs
+    assert 'progress_dks_extract_route_summary = "Normal stems → Drum Kit"' in langs
+    assert 'progress_dks_extract_route_summary = "Normale stems → Drum Kit"' in langs
+    assert 'progress_dks_extract_route_summary = "Normale Stems → Drum Kit"' in langs
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
@@ -2427,8 +2427,8 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'function activeDrumKitWorkflowTitle()' in script
     assert 'return trSafeValue("workflow_edks_label", "Drum Kit Split")' in script
     assert 'return trSafeValue("workflow_drumkit_label", "Direct Drum Kit")' in script
-    assert 'return trSafeValue("workflow_edks_short_label", "Drum Split")' in script
-    assert 'return trSafeValue("workflow_drumkit_short_label", "Direct Kit")' in script
+    assert 'return trSafeValue("workflow_edks_short_label", "Drum Kit Split")' in script
+    assert 'return trSafeValue("workflow_drumkit_short_label", "Direct Drum Kit")' in script
     assert 'return trSafeValue("route_badge_normal", "Normal STEMwerk")' in script
     assert 'setTooltipWithShortcut(col2X, stemY, colW, btnH, trSafe(tooltipKey, displayName .. " [" .. stem.key .. "]"), stem.key, stem.color)' in script
     assert 'function activeDrumKitFolderSuffix()' in script
