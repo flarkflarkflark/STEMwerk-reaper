@@ -12055,8 +12055,10 @@ function renderMainColumns(ctx)
         presetLabels[#presetLabels + 1] = presetLabelPiano
         presetLabels[#presetLabels + 1] = presetLabelGuitar
     end
-    -- In REAPER Native mode, use 72% font size on all buttons for calmer/denser labels.
-    local _ubfs = utilityMode and math.max(S(8), math.floor(S(13) * 0.72 + 0.5)) or S(13)
+    -- Keep Native mode unchanged, but slightly relax Visual-mode button labels so long text fits more cleanly.
+    local _ubfs = utilityMode
+        and math.max(S(8), math.floor(S(13) * 0.72 + 0.5))
+        or math.max(S(11), math.floor(S(13) * 0.92 + 0.5))
 
     local presetsBtnFontSize = _ubfs
 
@@ -12706,7 +12708,9 @@ function renderFooter(ctx)
     drawGlossyPill(stemBtnX, footerRow4Y, stemBtnW, btnH, stemBtnColor[1], stemBtnColor[2], stemBtnColor[3])
 
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
-    local _fbf = utilityMode and math.max(S(9), math.floor(S(13) * 0.82 + 0.5)) or S(13)
+    local _fbf = utilityMode
+        and math.max(S(9), math.floor(S(13) * 0.82 + 0.5))
+        or math.max(S(11), math.floor(S(13) * 0.92 + 0.5))
     gfx.setfont(1, "Arial", _fbf, string.byte('b'))
     local textY = footerRow4Y + (btnH - gfx.texth) / 2
 
