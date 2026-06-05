@@ -75,6 +75,23 @@ def _is_extract_dks_source(workflow_mode: Optional[str], workflow_source: Option
     return mode == "drumkit" and source == "dks_extract"
 
 
+def _resolve_normal_workflow_backend(selected_device: Optional[str]) -> str:
+    device = str(selected_device or "").strip().lower()
+    if device.startswith("cuda:") or device == "cuda":
+        return "gpu"
+    if device.startswith("directml:") or device == "directml":
+        return "gpu"
+    if device == "mps":
+        return "gpu"
+    if device == "rocm":
+        return "gpu"
+    if device == "cpu":
+        return "cpu"
+    if device == "auto":
+        return "unknown"
+    return "unknown"
+
+
 def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
     raw = str(os.environ.get("STEMWERK_BENCH_DKS_STAGE2_CAP") or "").strip()
     if raw == "":
@@ -2747,6 +2764,18 @@ def main():
     print(f"normal_workflow_backend_seen_device_resolved={resolved_device}", file=sys.stderr)
     print(f"normal_workflow_backend_preview_device={preview_device_id}", file=sys.stderr)
     print(f"normal_workflow_backend_preview_name={preview_device_name}", file=sys.stderr)
+    workflow_mode = str(args.workflow_mode or "stems").strip() or "stems"
+    workflow_source = str(args.workflow_source or "normal").strip() or "normal"
+    route = "normal"
+    stage = "single_stage"
+    backend = _resolve_normal_workflow_backend(resolved_device)
+    print(f"workflow_source={workflow_source}", file=sys.stderr)
+    print(f"workflow_mode={workflow_mode}", file=sys.stderr)
+    print(f"route={route}", file=sys.stderr)
+    print(f"stage={stage}", file=sys.stderr)
+    print(f"model_name={run_model}", file=sys.stderr)
+    print(f"device={resolved_device}", file=sys.stderr)
+    print(f"backend={backend}", file=sys.stderr)
     if str(device_preference or "auto").strip().lower() != "cpu" and str(preview_device_id) == "cpu":
         print("normal_workflow_backend_fallback_reason=live_runtime_cpu_only", file=sys.stderr)
         print(

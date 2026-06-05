@@ -18079,10 +18079,24 @@ _sep.runSingleTrackSeparation = function(trackList)
     if multiTrackQueue.sequentialMode and not multiTrackQueue.executionModeReason then
         multiTrackQueue.executionModeReason = multiTrackQueue.forceSequentialReason or "user_sequential"
     end
+    local benchmarkWorkflowSource = tostring(multiTrackQueue.workflowSource or workflowSourceArg or "")
+    local benchmarkWorkflowMode = tostring(multiTrackQueue.workflowMode or workflowModeArg or "")
+    local benchmarkRoute = tostring(multiTrackQueue.schedulerPolicyRoute or schedulerRoute or "")
+    local benchmarkStage = tostring(multiTrackQueue.schedulerPolicyStage or schedulerStage or "")
+    local benchmarkModelName = tostring(effectiveRunModel() or (SETTINGS and SETTINGS.model) or "")
+    local benchmarkDevice = tostring(effectiveRunDevice() or (SETTINGS and SETTINGS.device) or "")
+    local benchmarkBackend = tostring(multiTrackQueue.schedulerPolicyBackend or schedulerBackend or "")
     SW_LOG.logExecResult(
         "scheduler_policy_route=" .. tostring(multiTrackQueue.schedulerPolicyRoute),
         nil,
-        "scheduler_policy_stage=" .. tostring(multiTrackQueue.schedulerPolicyStage)
+        "route=" .. benchmarkRoute
+            .. "\nstage=" .. benchmarkStage
+            .. "\nworkflow_source=" .. benchmarkWorkflowSource
+            .. "\nworkflow_mode=" .. benchmarkWorkflowMode
+            .. "\nmodel_name=" .. benchmarkModelName
+            .. "\ndevice=" .. benchmarkDevice
+            .. "\nbackend=" .. benchmarkBackend
+            .. "\nscheduler_policy_stage=" .. tostring(multiTrackQueue.schedulerPolicyStage)
             .. "\nscheduler_policy_backend=" .. tostring(multiTrackQueue.schedulerPolicyBackend)
             .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
             .. "\nscheduler_policy_reason=" .. tostring(multiTrackQueue.schedulerPolicyReason or "none")
@@ -18110,12 +18124,17 @@ _sep.runSingleTrackSeparation = function(trackList)
         SW_LOG.writeRunRootArtifact(
             trackJobs[1].trackDir,
             "benchmark_scheduler_summary.txt",
-            "bench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw) .. "\n"
+            "route=" .. benchmarkRoute .. "\n"
+                .. "stage=" .. benchmarkStage .. "\n"
+                .. "workflow_source=" .. benchmarkWorkflowSource .. "\n"
+                .. "workflow_mode=" .. benchmarkWorkflowMode .. "\n"
+                .. "model_name=" .. benchmarkModelName .. "\n"
+                .. "device=" .. benchmarkDevice .. "\n"
+                .. "backend=" .. benchmarkBackend .. "\n"
+                .. "bench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw) .. "\n"
                 .. "bench_gpu_cap_applied=" .. tostring(benchmarkGpuCapApplied or "none") .. "\n"
                 .. "effective_parallel_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") .. "\n"
                 .. "scheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") .. "\n"
-                .. "workflow_source=" .. tostring(multiTrackQueue.workflowSource or workflowSourceArg or "") .. "\n"
-                .. "workflow_mode=" .. tostring(multiTrackQueue.workflowMode or workflowModeArg or "") .. "\n"
                 .. "parallelJobLimit=" .. tostring(multiTrackQueue.parallelJobLimit or "none") .. "\n"
         )
     end
@@ -20894,6 +20913,11 @@ function runSeparationWorkflow()
     elseif isExtractDKS then
         runOptions = DKS_WORKFLOW.buildExtractRunOptions()
         debugLog("Extract DKS mode active: stage1 uses normal runtime, stage2 uses DrumSep runtime")
+    else
+        runOptions = {
+            workflowMode = "stems",
+            workflowSource = "normal",
+        }
     end
     activateWorkflowStemSet(isDrumKitWorkflow)
     setWorkflowContextForRun(runOptions)

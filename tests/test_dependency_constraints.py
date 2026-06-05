@@ -648,6 +648,20 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert "bench_gpu_cap_requested=" in script
     assert "bench_gpu_cap_applied=" in script
     assert "bench_gpu_cap_ignored_reason=" in script
+    assert 'runOptions = {' in script
+    assert 'workflowMode = "stems"' in script
+    assert 'workflowSource = "normal"' in script
+    assert 'local benchmarkWorkflowSource = tostring(multiTrackQueue.workflowSource or workflowSourceArg or "")' in script
+    assert 'local benchmarkWorkflowMode = tostring(multiTrackQueue.workflowMode or workflowModeArg or "")' in script
+    assert 'local benchmarkRoute = tostring(multiTrackQueue.schedulerPolicyRoute or schedulerRoute or "")' in script
+    assert 'local benchmarkStage = tostring(multiTrackQueue.schedulerPolicyStage or schedulerStage or "")' in script
+    assert 'local benchmarkModelName = tostring(effectiveRunModel() or (SETTINGS and SETTINGS.model) or "")' in script
+    assert 'local benchmarkDevice = tostring(effectiveRunDevice() or (SETTINGS and SETTINGS.device) or "")' in script
+    assert 'local benchmarkBackend = tostring(multiTrackQueue.schedulerPolicyBackend or schedulerBackend or "")' in script
+    assert 'route=" .. benchmarkRoute' in script
+    assert 'stage=" .. benchmarkStage' in script
+    assert 'model_name=" .. benchmarkModelName' in script
+    assert 'backend=" .. benchmarkBackend' in script
     assert 'local f = io.open(logFile, "a")' in script
     assert "appendBenchmarkGpuCapDiagnostics(logFile)" in script
     assert "_sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)" in script
@@ -663,6 +677,10 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert 'SW_LOG.writeRunRootArtifact(' in script
     assert '"benchmark_scheduler_summary.txt"' in script
     assert '"parallelJobLimit=" .. tostring(multiTrackQueue.parallelJobLimit or "none")' in script
+    assert 'setWorkflowContextForRun(runOptions)' in script
+    assert 'workflow_source=" .. benchmarkWorkflowSource' in script
+    assert 'workflow_mode=" .. benchmarkWorkflowMode' in script
+    assert 'device=" .. benchmarkDevice' in script
 
 
 def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
@@ -767,6 +785,34 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'scheduler_policy_backend=' in script
     assert 'scheduler_policy_cap=' in script
     assert 'lua_dks_scheduler_policy_route=' in script
+
+
+def test_normal_workflow_provenance_is_explicit_in_lua_summary_and_python_stderr():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    py_script = Path("scripts/reaper/audio_separator_process.py").read_text()
+
+    assert 'runOptions = {' in main_script
+    assert 'workflowMode = "stems"' in main_script
+    assert 'workflowSource = "normal"' in main_script
+    assert 'local schedulerRoute = "normal"' in main_script
+    assert 'local schedulerStage = "single_stage"' in main_script
+    assert 'route=" .. benchmarkRoute' in main_script
+    assert 'stage=" .. benchmarkStage' in main_script
+    assert 'model_name=' in main_script
+    assert 'device=' in main_script
+    assert 'backend=' in main_script
+    assert 'workflow_source=" .. benchmarkWorkflowSource' in main_script
+    assert 'workflow_mode=" .. benchmarkWorkflowMode' in main_script
+    assert 'model_name=" .. benchmarkModelName' in main_script
+    assert 'backend=" .. benchmarkBackend' in main_script
+    assert 'def _resolve_normal_workflow_backend(selected_device: Optional[str]) -> str:' in py_script
+    assert 'print(f"workflow_source={workflow_source}", file=sys.stderr)' in py_script
+    assert 'print(f"workflow_mode={workflow_mode}", file=sys.stderr)' in py_script
+    assert 'print(f"route={route}", file=sys.stderr)' in py_script
+    assert 'print(f"stage={stage}", file=sys.stderr)' in py_script
+    assert 'print(f"model_name={run_model}", file=sys.stderr)' in py_script
+    assert 'print(f"device={resolved_device}", file=sys.stderr)' in py_script
+    assert 'print(f"backend={backend}", file=sys.stderr)' in py_script
 
 
 def test_setup_capabilities_do_not_mark_imports_ok_without_runtime():
