@@ -647,6 +647,31 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert "effective_parallel_cap=" in script
 
 
+def test_dev_prepare_benchmark_state_helper_selects_items_and_sets_safe_extstate():
+    script = Path("scripts/reaper/STEMwerk_Dev_Prepare_Benchmark_State.lua").read_text()
+
+    assert 'local PREP_SECTION = "STEMwerkDevBenchmarkPrep"' in script
+    assert "REQUESTED_ITEM_COUNT = 8" in script
+    assert "local function readTimeSelection()" in script
+    assert "local function collectTimeSelectionItems(items, startTime, endTime)" in script
+    assert "local function selectExactItems(items)" in script
+    assert 'workflow_source = "dks_direct"' in script
+    assert 'workflow_mode = "drumkit"' in script
+    assert 'device = "auto"' in script
+    assert 'active_workflow_source = "dks_direct"' in script
+    assert 'active_workflow_mode = "drumkit"' in script
+    assert 'quick_run = "1"' in script
+    assert 'quick_preset = "dks_direct"' in script
+    assert 'prep_ok = "0"' in script
+    assert 'selection_source = "failed"' in script
+    assert "insufficient_media_items" in script
+    assert "time_selection" in script
+    assert "project_first_items" in script
+    assert "SetMediaItemSelected" in script
+    assert "SelectAllMediaItems" in script
+    assert "UpdateArrange" in script
+
+
 def test_scheduler_policy_route_backend_defaults_are_explicit():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 

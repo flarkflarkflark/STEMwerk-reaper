@@ -153,6 +153,38 @@ Use this dev/test-only Action List script when you need a project snapshot witho
    - `last_error`
    - `snapshot_ok`
 
+## Benchmark State Prep Helper
+
+Use this dev/test-only Action List script before an unattended cap 2 vs cap 4 run:
+
+1. Run `Custom: STEMwerk_Dev_Prepare_Benchmark_State.lua`
+2. The helper selects exactly 8 media items if available.
+3. It prefers items inside the current time selection when that yields at least 8 items.
+4. Otherwise it falls back to the first 8 media items in the project.
+5. If fewer than 8 media items are available, it fails without changing selection.
+6. It sets the workflow ExtState for direct drum-kit benchmark routing:
+   - `workflow_source = dks_direct`
+   - `workflow_mode = drumkit`
+   - `device = auto`
+   - `active_workflow_source = dks_direct`
+   - `active_workflow_mode = drumkit`
+   - `quick_run = 1`
+   - `quick_preset = dks_direct`
+7. Read ExtState section `STEMwerkDevBenchmarkPrep`
+8. Inspect keys:
+   - `prep_ok`
+   - `requested_item_count`
+   - `selected_media_item_count`
+   - `selection_source`
+   - `time_selection_start`
+   - `time_selection_end`
+   - `workflow_source_set`
+   - `workflow_mode_set`
+   - `device_set`
+   - `last_error`
+
+This helper is benchmark-only and does not create, remove, or save any audio content.
+
 ## Future Extension
 
 - If we later need a richer benchmark snapshot, add a second helper that records only additional read-only fields.
