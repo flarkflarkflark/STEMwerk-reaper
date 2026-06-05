@@ -153,37 +153,68 @@ Use this dev/test-only Action List script when you need a project snapshot witho
    - `last_error`
    - `snapshot_ok`
 
-## Benchmark State Prep Helper
+## Benchmark Request Flow
 
-Use this dev/test-only Action List script before an unattended cap 2 vs cap 4 run:
+Use the registered snapshot helper as the fixed dispatcher for benchmark prep and snapshot capture.
 
-1. Run `Custom: STEMwerk_Dev_Prepare_Benchmark_State.lua`
-2. The helper selects exactly 8 media items if available.
-3. It prefers items inside the current time selection when that yields at least 8 items.
-4. Otherwise it falls back to the first 8 media items in the project.
-5. If fewer than 8 media items are available, it fails without changing selection.
-6. It sets the workflow ExtState for direct drum-kit benchmark routing:
-   - `workflow_source = dks_direct`
-   - `workflow_mode = drumkit`
-   - `device = auto`
-   - `active_workflow_source = dks_direct`
-   - `active_workflow_mode = drumkit`
-   - `quick_run = 1`
-   - `quick_preset = dks_direct`
-7. Read ExtState section `STEMwerkDevBenchmarkPrep`
-8. Inspect keys:
-   - `prep_ok`
-   - `requested_item_count`
-   - `selected_media_item_count`
-   - `selection_source`
-   - `time_selection_start`
-   - `time_selection_end`
-   - `workflow_source_set`
-   - `workflow_mode_set`
-   - `device_set`
-   - `last_error`
+Registered action:
 
-This helper is benchmark-only and does not create, remove, or save any audio content.
+- `Custom: STEMwerk_Dev_Project_State_Snapshot.lua`
+- command id: `_RS6591f55c0e89376ce59cc3be252bf722305ed9e0`
+- numeric id observed in this REAPER session: `71254`
+
+Before running it, set the MCP request ExtState:
+
+1. Set `STEMwerkDevMCP/request = prepare_benchmark_state`
+2. Set `STEMwerkDevMCP/requested_item_count = 8`
+3. Set `STEMwerkDevMCP/workflow_source = dks_direct`
+4. Set `STEMwerkDevMCP/workflow_mode = drumkit`
+5. Set `STEMwerkDevMCP/device = auto`
+6. Run `Custom: STEMwerk_Dev_Project_State_Snapshot.lua` or command id `71254`
+
+After the run, read:
+
+- `STEMwerkDevBenchmarkPrep/*`
+- `STEMwerkDevSnapshot/*`
+- `STEMwerkDevMCP/request_handled`
+
+The dispatcher handles the benchmark prep only when the request key is set to `prepare_benchmark_state`.
+Without that explicit request, it stays a read-only snapshot helper.
+
+The compatibility script `Custom: STEMwerk_Dev_Prepare_Benchmark_State.lua` remains on disk for manual use, but MCP does not need to discover or invoke it.
+
+## Benchmark Prep Result
+
+When `STEMwerkDevMCP/request = prepare_benchmark_state`, the dispatcher writes `STEMwerkDevBenchmarkPrep` with:
+
+- `prep_ok`
+- `requested_item_count`
+- `selected_media_item_count`
+- `selection_source`
+- `time_selection_start`
+- `time_selection_end`
+- `workflow_source_set`
+- `workflow_mode_set`
+- `device_set`
+- `last_error`
+
+Selection rules:
+
+- Prefer items in the current time selection if that yields at least 8 media items.
+- Otherwise fall back to the first 8 media items in the project.
+- If fewer than 8 media items are available, fail without changing selection.
+
+Applied workflow ExtState:
+
+- `workflow_source = dks_direct`
+- `workflow_mode = drumkit`
+- `device = auto`
+- `active_workflow_source = dks_direct`
+- `active_workflow_mode = drumkit`
+- `quick_run = 1`
+- `quick_preset = dks_direct`
+
+This request path is benchmark-only and does not create, remove, or save any audio content.
 
 ## Future Extension
 

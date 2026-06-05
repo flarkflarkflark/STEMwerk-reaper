@@ -647,29 +647,67 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert "effective_parallel_cap=" in script
 
 
-def test_dev_prepare_benchmark_state_helper_selects_items_and_sets_safe_extstate():
+def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
+    script = Path("scripts/reaper/STEMwerk_Dev_Project_State_Snapshot.lua").read_text()
+
+    assert 'local MCP_SECTION = "STEMwerkDevMCP"' in script
+    assert 'local SNAPSHOT_SECTION = "STEMwerkDevSnapshot"' in script
+    assert 'local PREP_SECTION = "STEMwerkDevBenchmarkPrep"' in script
+    assert 'local REQUEST_PREPARE_BENCHMARK_STATE = "prepare_benchmark_state"' in script
+    assert "local function readBenchmarkRequest()" in script
+    assert "if request ~= REQUEST_PREPARE_BENCHMARK_STATE then" in script
+    assert "local function runBenchmarkPrep(requestState)" in script
+    assert "local function selectExactItems(items, expectedCount)" in script
+    assert "selection_mismatch: expected=%d actual=%d" in script
+    assert "insufficient_media_items" in script
+    assert "writePrepResult(fields)" in script
+    assert "clearBenchmarkRequest(requestState.request)" in script
+    assert "writeSnapshot(snapshot)" in script
+    assert "snapshot_ok = \"1\"" in script
+    assert "snapshot_ok = \"0\"" in script
+    assert "prep_ok" in script
+    assert "requested_item_count" in script
+    assert "selected_media_item_count" in script
+    assert "selection_source" in script
+    assert "time_selection_start" in script
+    assert "time_selection_end" in script
+    assert "workflow_source_set" in script
+    assert "workflow_mode_set" in script
+    assert "device_set" in script
+    assert "last_error" in script
+    assert 'workflow_source = requestState.workflow_source' in script
+    assert 'quick_preset = requestState.workflow_source' in script
+    assert "Main_OnCommand" not in script
+    assert "separation" not in script.lower()
+
+
+def test_dev_prepare_benchmark_state_helper_is_compatibility_wrapper_for_snapshot_dispatcher():
     script = Path("scripts/reaper/STEMwerk_Dev_Prepare_Benchmark_State.lua").read_text()
 
-    assert 'local PREP_SECTION = "STEMwerkDevBenchmarkPrep"' in script
-    assert "REQUESTED_ITEM_COUNT = 8" in script
-    assert "local function readTimeSelection()" in script
-    assert "local function collectTimeSelectionItems(items, startTime, endTime)" in script
-    assert "local function selectExactItems(items)" in script
-    assert 'workflow_source = "dks_direct"' in script
-    assert 'workflow_mode = "drumkit"' in script
-    assert 'device = "auto"' in script
-    assert 'active_workflow_source = "dks_direct"' in script
-    assert 'active_workflow_mode = "drumkit"' in script
-    assert 'quick_run = "1"' in script
-    assert 'quick_preset = "dks_direct"' in script
-    assert 'prep_ok = "0"' in script
-    assert 'selection_source = "failed"' in script
-    assert "insufficient_media_items" in script
-    assert "time_selection" in script
-    assert "project_first_items" in script
-    assert "SetMediaItemSelected" in script
-    assert "SelectAllMediaItems" in script
-    assert "UpdateArrange" in script
+    assert 'local MCP_SECTION = "STEMwerkDevMCP"' in script
+    assert 'local SNAPSHOT_COMMAND_ID = 71254' in script
+    assert 'setTransientExtState("request", "prepare_benchmark_state")' in script
+    assert 'setTransientExtState("requested_item_count", "8")' in script
+    assert 'setTransientExtState("workflow_source", "dks_direct")' in script
+    assert 'setTransientExtState("workflow_mode", "drumkit")' in script
+    assert 'setTransientExtState("device", "auto")' in script
+    assert "reaper.Main_OnCommand(SNAPSHOT_COMMAND_ID, 0)" in script
+
+
+def test_reaper_mcp_benchmark_runbook_documents_fixed_dispatcher_and_request_flow():
+    doc = Path("docs/dev/STEMwerk_23_REAPER_MCP_Smoke_Benchmark.md").read_text()
+
+    assert "Custom: STEMwerk_Dev_Project_State_Snapshot.lua" in doc
+    assert "_RS6591f55c0e89376ce59cc3be252bf722305ed9e0" in doc
+    assert "71254" in doc
+    assert "STEMwerkDevMCP/request = prepare_benchmark_state" in doc
+    assert "STEMwerkDevMCP/requested_item_count = 8" in doc
+    assert "STEMwerkDevMCP/workflow_source = dks_direct" in doc
+    assert "STEMwerkDevMCP/workflow_mode = drumkit" in doc
+    assert "STEMwerkDevMCP/device = auto" in doc
+    assert "STEMwerkDevBenchmarkPrep/*" in doc
+    assert "STEMwerkDevSnapshot/*" in doc
+    assert "STEMwerkDevMCP/request_handled" in doc
 
 
 def test_scheduler_policy_route_backend_defaults_are_explicit():
