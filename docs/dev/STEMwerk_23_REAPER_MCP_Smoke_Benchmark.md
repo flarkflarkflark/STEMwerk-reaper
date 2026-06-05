@@ -267,9 +267,67 @@ Current policy slice under development:
 
 Validation status:
 
-- code and regression coverage only in this slice
-- live CPU normal-stems smoke is still required before treating CPU cap2 as fully validated
+- live-validated on the same 8-item normal-stems source set used for the CPU comparison below
 - do not confuse this CPU slice with the separate GPU normal-stems `cap4` default candidate
+
+### CPU sequential vs cap2 validation
+
+All six CPU runs below were clean:
+
+- `route=normal`
+- `stage=single_stage`
+- `workflow_source=normal`
+- `workflow_mode=stems`
+- `device=cpu`
+- `backend=cpu`
+- `8/8 exit_code=0`
+- no partial/fail/OOM markers
+
+Policy markers:
+
+- cap2 runs:
+  - `scheduler_policy_cap=2`
+  - `effective_parallel_cap=2`
+- sequential runs:
+  - `scheduler_policy_cap=none`
+  - `effective_parallel_cap=none`
+
+Observed CPU wall times on the same 8-item test set:
+
+| Model | Sequential run | Sequential wall | Cap2 run | Cap2 wall | Cap2 gain |
+| --- | --- | --- | --- | --- | --- |
+| `htdemucs` | `STEMwerk_1780661988_47996604_8` | `57.436s` | `STEMwerk_1780661328_47336132_2` | `36.769s` | `20.667s` faster, about `36.0%` less time |
+| `htdemucs_ft` | `STEMwerk_1780662085_48093319_10` | `110.573s` | `STEMwerk_1780661677_47685071_4` | `88.456s` | `22.117s` faster, about `20.0%` less time |
+| `htdemucs_6s` | `STEMwerk_1780662219_48227727_12` | `65.159s` | `STEMwerk_1780661890_47898606_6` | `35.930s` | `29.229s` faster, about `44.9%` less time |
+
+Model-correct outputs remained intact:
+
+- `htdemucs`: 4 stems
+- `htdemucs_ft`: 4 stems
+- `htdemucs_6s`: 6 stems
+
+Interpretation:
+
+- `cap2` is faster than sequential on all three normal-stems CPU models in this 8-item test set
+- there is no evidence here that sequential is safer or more stable than `cap2`
+- `cap2` is therefore the best-supported CPU default candidate within this slice
+- do not mix CPU `cap4` exploration into this policy decision; treat it as a separate future experiment if needed
+
+Resource-sampling caveat:
+
+- despite launching REAPER with `STEMWERK_BENCH_RESOURCE_SAMPLING=1`, these CPU runs did not persist `resource_summary` or `resource_samples` artifacts
+- treat these results as correctness, policy-application, and wall-time evidence only
+- do not draw hard CPU thermals or efficiency conclusions from this set alone
+
+## UI polish TODO
+
+Later GUI polish should include:
+
+- replace status text `AI model laden` with the more neutral `Model laden`
+- show method or backend in the Multi-Track footer, for example `CPU`, `GPU`, `ROCm`, `CUDA`, `DirectML`, or `MPS`
+- make ETA display more consistent across the other progress windows
+
+This is documentation only for now and is not part of the CPU cap2 policy slice.
 
 ## Safe MCP Calls To Use
 

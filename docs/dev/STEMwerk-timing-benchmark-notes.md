@@ -55,25 +55,7 @@ It prints a per-job table and a run summary with overlap/wallclock indicators.
 
 ## CPU parallel audit
 
-Local CPU audit (explicit `device=cpu`, 8 jobs, same source set) showed:
-
-- Normal UI sequential: `74.476s`, overlap `1`, success `8/0`.
-- Normal UI parallel unlimited: `77.989s`, overlap `8`, success `8/0`.
-- Toolbar `All Stems` parallel unlimited: `84.170s`, overlap `8`, success `8/0`.
-
-Findings:
-
-- CPU parallel technically works in both normal UI and toolbar quick-preset flow.
-- `All Stems` quick mode appears to use the same `runSeparationWorkflow` concurrency path as normal UI.
-- No evidence that toolbar mode bypasses concurrency guards.
-- In this local benchmark, explicit CPU parallel is slower than CPU sequential and shows stronger contention.
-- Existing `auto_no_gpu` sequential fallback (for `device=auto` without GPU backend) remains justified.
-
-Recommendation:
-
-- Keep CPU auto fallback sequential for now.
-- Keep internal parallel limiter default `nil`.
-- Treat CPU+GPU hybrid scheduling as future research only; do not implement until mixed CPU/GPU benchmarks justify it.
+Older exploratory local runs had suggested that unconstrained CPU parallelism could be slower than sequential. Those observations are now superseded for the current narrow policy slice by the live `cap2` validation below.
 
 ## Manual DKS integration benchmark
 
@@ -185,6 +167,55 @@ This slice is intentionally narrow:
 
 Status:
 
-- implemented as a code and regression slice only
-- still needs a live CPU normal-stems smoke before it should be treated as validated policy
+- implemented as a code, regression, and live benchmark slice
+- live-validated on `htdemucs`, `htdemucs_ft`, and `htdemucs_6s`
 - should not be conflated with the separate GPU recommendation of `cap4` as the default candidate
+
+### Sequential vs cap2 live comparison
+
+All six comparison runs were clean:
+
+- `route=normal`
+- `stage=single_stage`
+- `workflow_source=normal`
+- `workflow_mode=stems`
+- `device=cpu`
+- `backend=cpu`
+- `8/8 exit_code=0`
+- no partial/fail/OOM markers
+
+Policy markers:
+
+- cap2 runs logged `scheduler_policy_cap=2` and `effective_parallel_cap=2`
+- sequential runs logged `scheduler_policy_cap=none` and `effective_parallel_cap=none`
+
+Observed wall times:
+
+| Model | Sequential wall | Cap2 wall | Cap2 gain |
+| --- | --- | --- | --- |
+| `htdemucs` | `57.436s` | `36.769s` | `20.667s` faster, about `36.0%` less time |
+| `htdemucs_ft` | `110.573s` | `88.456s` | `22.117s` faster, about `20.0%` less time |
+| `htdemucs_6s` | `65.159s` | `35.930s` | `29.229s` faster, about `44.9%` less time |
+
+Interpretation:
+
+- `cap2` beats sequential on all three normal-stems CPU models in this 8-item test set
+- there is no evidence here that sequential is more stable or safer than `cap2`
+- `cap2` is therefore the best-supported CPU default candidate within this slice
+- CPU `cap4` should not be mixed into this conclusion; treat it as a separate experimental slice if pursued later
+
+Resource-sampling caveat:
+
+- these CPU runs did not persist `resource_summary` or `resource_samples` artifacts, despite the launch env carrying `STEMWERK_BENCH_RESOURCE_SAMPLING=1`
+- use this comparison for correctness, policy markers, and wall time only
+- do not draw hard thermal or efficiency conclusions from this specific CPU dataset
+
+## UI polish TODO
+
+Future GUI polish notes:
+
+- replace status text `AI model laden` with `Model laden`
+- show method or backend in the Multi-Track footer, for example `CPU`, `GPU`, `ROCm`, `CUDA`, `DirectML`, or `MPS`
+- make ETA display more consistent across the other progress windows
+
+This TODO is intentionally out of scope for the current policy slice.
