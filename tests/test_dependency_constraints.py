@@ -1880,6 +1880,117 @@ def test_benchmark_resource_sampler_code_path_exposes_expected_files_and_gracefu
     assert "not found" in detail
 
 
+def test_rocm_smi_parser_handles_current_rx9070_concise_output():
+    module = _load_audio_separator_process_module()
+    metrics = module._parse_rocm_smi_metrics_text(
+        """
+============================ ROCm System Management Interface ============================
+====================================== Temperature =======================================
+GPU[0]        : Temperature (Sensor edge) (C): 55.0
+GPU[0]        : Temperature (Sensor junction) (C): 58.0
+GPU[1]        : Temperature (Sensor edge) (C): 74.0
+==========================================================================================
+=================================== Power Consumption ====================================
+GPU[0]        : Average Graphics Package Power (W): 40.0
+GPU[1]        : Current Socket Graphics Package Power (W): 44.179
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]        : GPU use (%): 1
+GPU[1]        : GPU use (%): 0
+==========================================================================================
+=================================== Current Memory Use ===================================
+GPU[0]        : GPU Memory Allocated (VRAM%): 28
+GPU[1]        : GPU Memory Allocated (VRAM%): 15
+==========================================================================================
+================================== Memory Usage (Bytes) ==================================
+GPU[0]        : VRAM Total Memory (B): 17095983104
+GPU[0]        : VRAM Total Used Memory (B): 4930617344
+GPU[1]        : VRAM Total Memory (B): 536870912
+GPU[1]        : VRAM Total Used Memory (B): 80547840
+==========================================================================================
+""",
+        """
+GPU[0]        : Card Series:         AMD Radeon RX 9070
+GPU[1]        : Card Series:         AMD Radeon 780M Graphics
+""",
+    )
+
+    assert metrics["gpu_name"] == "AMD Radeon RX 9070"
+    assert metrics["gpu_util_percent"] == 1.0
+    assert metrics["gpu_temp_c"] == 58.0
+    assert metrics["gpu_power_w"] == 40.0
+    assert metrics["gpu_vram_total_mb"] == pytest.approx(16304.0, rel=0.001)
+    assert metrics["gpu_vram_used_mb"] == pytest.approx(4702.203125, rel=0.001)
+
+
+def test_rocm_smi_parser_keeps_partial_metrics_without_failing_summary():
+    module = _load_audio_separator_process_module()
+    metrics = module._parse_rocm_smi_metrics_text(
+        """
+GPU[0]        : GPU use (%): 87
+GPU[0]        : Temperature (Sensor edge) (C): 61.5
+""",
+        "",
+    )
+
+    assert metrics["gpu_util_percent"] == 87.0
+    assert metrics["gpu_temp_c"] == 61.5
+    assert metrics["gpu_vram_used_mb"] is None
+    assert metrics["gpu_vram_total_mb"] is None
+
+
+def test_collect_rocm_smi_metrics_handles_command_failure_gracefully(monkeypatch):
+    module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/opt/rocm/bin/rocm-smi")
+    monkeypatch.setattr(module, "_run_command_capture_text", lambda cmd, timeout=10: (2, "permission denied"))
+
+    metrics, available, reason, detail = module._collect_rocm_smi_metrics()
+
+    assert metrics == {}
+    assert available is False
+    assert reason == "rocm-smi_failed"
+    assert "permission denied" in detail
+
+
+def test_benchmark_resource_sampler_summary_keeps_cpu_ram_and_adds_rocm_gpu_fields(tmp_path):
+    module = _load_audio_separator_process_module()
+    sampler = module.BenchmarkResourceSampler(tmp_path)
+    sampler.resource_sampling_available = True
+    sampler.resource_sampling_reason = ""
+    sampler.gpu_backend = "rocm-smi"
+    sampler.sample_index = 3
+    sampler.started_at = 0.0
+    sampler.ended_at = 1.0
+
+    sampler._update_summary(
+        {
+            "gpu_util_percent": 82.0,
+            "gpu_vram_used_mb": 4096.0,
+            "gpu_vram_total_mb": 16304.0,
+            "gpu_temp_c": 67.0,
+            "gpu_power_w": 123.4,
+            "gpu_name": "AMD Radeon RX 9070",
+            "cpu_util_percent": 44.0,
+            "system_ram_used_mb": 24576.0,
+            "process_rss_mb": 512.0,
+        }
+    )
+    payload = sampler._summary_payload()
+
+    assert payload["resource_sampling_available"] == "yes"
+    assert payload["gpu_backend"] == "rocm-smi"
+    assert payload["gpu_util_peak_percent"] == 82.0
+    assert payload["gpu_util_avg_percent"] == 82.0
+    assert payload["vram_peak_mb"] == 4096.0
+    assert payload["vram_total_mb"] == 16304.0
+    assert payload["gpu_temp_peak_c"] == 67.0
+    assert payload["gpu_power_peak_w"] == 123.4
+    assert payload["gpu_name"] == "AMD Radeon RX 9070"
+    assert payload["system_ram_peak_mb"] == 24576.0
+    assert payload["cpu_avg_percent"] == 44.0
+    assert payload["process_rss_peak_mb"] == 512.0
+
+
 def test_drumkit_extract_stage2_uses_requested_drumsep_model_not_stage1_demucs_model():
     script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
 

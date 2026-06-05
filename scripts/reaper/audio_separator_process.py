@@ -289,50 +289,138 @@ def _run_command_capture_text(cmd: list[str], timeout: int = 10) -> tuple[int, s
         return 1, f"{type(exc).__name__}: {exc}"
 
 
-def _collect_rocm_smi_metrics() -> tuple[Dict[str, Optional[float]], bool, str, str]:
-    if not shutil.which("rocm-smi"):
-        return {}, False, "rocm-smi_missing", "rocm-smi not found"
+def _parse_rocm_smi_gpu_line(line: str) -> tuple[Optional[int], str]:
+    match = re.match(r"^\s*GPU\[(\d+)\]\s*:\s*(.+?)\s*$", line)
+    if not match:
+        return None, ""
+    return int(match.group(1)), match.group(2).strip()
 
-    rc, text = _run_command_capture_text(["rocm-smi", "--showuse", "--showmemuse", "--showtemp", "--showpower"], timeout=12)
-    if rc != 0 or not text:
-        return {}, False, "rocm-smi_failed", text[:500] or f"rocm-smi exit {rc}"
 
-    metrics: Dict[str, Optional[float]] = {
-        "gpu_util_percent": None,
-        "gpu_vram_used_mb": None,
-        "gpu_vram_total_mb": None,
-        "gpu_temp_c": None,
-        "gpu_power_w": None,
-    }
+def _parse_rocm_smi_product_names(text: str) -> Dict[int, str]:
+    product_names: Dict[int, str] = {}
     for line in text.splitlines():
-        lower = line.lower()
-        if metrics["gpu_util_percent"] is None and ("gpu use" in lower or "gpu utilization" in lower or "utilization" in lower):
-            value = _first_number(line, r"(-?\d+(?:\.\d+)?)\s*%")
+        gpu_index, payload = _parse_rocm_smi_gpu_line(line)
+        if gpu_index is None:
+            continue
+        if "card series" not in payload.lower():
+            continue
+        parts = payload.rsplit(":", 1)
+        if len(parts) != 2:
+            continue
+        gpu_name = parts[1].strip()
+        if gpu_name:
+            product_names[gpu_index] = gpu_name
+    return product_names
+
+
+def _parse_rocm_smi_metrics_text(text: str, product_text: str = "") -> Dict[str, Optional[float] | str]:
+    per_gpu: Dict[int, Dict[str, Optional[float] | str]] = {}
+    product_names = _parse_rocm_smi_product_names(product_text)
+
+    def _gpu_metrics(index: int) -> Dict[str, Optional[float] | str]:
+        metrics = per_gpu.setdefault(
+            index,
+            {
+                "gpu_util_percent": None,
+                "gpu_vram_used_mb": None,
+                "gpu_vram_total_mb": None,
+                "gpu_vram_percent": None,
+                "gpu_temp_c": None,
+                "gpu_power_w": None,
+                "gpu_name": product_names.get(index, ""),
+            },
+        )
+        if not metrics.get("gpu_name") and index in product_names:
+            metrics["gpu_name"] = product_names[index]
+        return metrics
+
+    for line in text.splitlines():
+        gpu_index, payload = _parse_rocm_smi_gpu_line(line)
+        if gpu_index is None:
+            continue
+        metrics = _gpu_metrics(gpu_index)
+        lowered = payload.lower()
+        value_text = payload.rsplit(":", 1)[-1].strip()
+
+        if "gpu use (%)" in lowered or "gpu utilization" in lowered:
+            value = _first_number(value_text, r"(-?\d+(?:\.\d+)?)")
             if value is not None:
                 metrics["gpu_util_percent"] = value
-        if metrics["gpu_vram_used_mb"] is None and ("vram" in lower or "memory" in lower) and ("used" in lower or "usage" in lower):
-            value = _extract_metric_from_line(line, ("vram", "memory"))
+        elif "vram total used memory" in lowered:
+            value = _first_number(value_text, r"(-?\d+(?:\.\d+)?)")
             if value is not None:
-                metrics["gpu_vram_used_mb"] = value
-        if metrics["gpu_vram_total_mb"] is None and ("vram" in lower or "memory" in lower) and ("total" in lower or "available" in lower):
-            value = _extract_metric_from_line(line, ("vram", "memory"))
+                metrics["gpu_vram_used_mb"] = value / (1024.0 * 1024.0)
+        elif "vram total memory" in lowered:
+            value = _first_number(value_text, r"(-?\d+(?:\.\d+)?)")
             if value is not None:
-                metrics["gpu_vram_total_mb"] = value
-        if metrics["gpu_temp_c"] is None and ("temp" in lower or "temperature" in lower):
-            value = _first_number(line, r"(-?\d+(?:\.\d+)?)\s*[cC]")
+                metrics["gpu_vram_total_mb"] = value / (1024.0 * 1024.0)
+        elif "gpu memory allocated (vram%)" in lowered:
+            value = _first_number(value_text, r"(-?\d+(?:\.\d+)?)")
             if value is not None:
-                metrics["gpu_temp_c"] = value
-        if metrics["gpu_power_w"] is None and ("power" in lower or "watts" in lower):
-            value = _first_number(line, r"(-?\d+(?:\.\d+)?)\s*[wW]")
+                metrics["gpu_vram_percent"] = value
+        elif "temperature" in lowered:
+            value = _first_number(value_text, r"(-?\d+(?:\.\d+)?)")
+            if value is not None:
+                current = metrics.get("gpu_temp_c")
+                metrics["gpu_temp_c"] = value if current is None else max(float(current), value)
+        elif "power" in lowered:
+            value = _first_number(value_text, r"(-?\d+(?:\.\d+)?)")
             if value is not None:
                 metrics["gpu_power_w"] = value
 
-    if metrics["gpu_vram_used_mb"] is None and metrics["gpu_vram_total_mb"] is None and metrics["gpu_util_percent"] is None:
+    for metrics in per_gpu.values():
+        if metrics.get("gpu_vram_used_mb") is None and metrics.get("gpu_vram_total_mb") is not None and metrics.get("gpu_vram_percent") is not None:
+            metrics["gpu_vram_used_mb"] = float(metrics["gpu_vram_total_mb"]) * float(metrics["gpu_vram_percent"]) / 100.0
+
+    if not per_gpu:
+        return {
+            "gpu_util_percent": None,
+            "gpu_vram_used_mb": None,
+            "gpu_vram_total_mb": None,
+            "gpu_temp_c": None,
+            "gpu_power_w": None,
+            "gpu_name": "",
+        }
+
+    def _select_gpu_key(item: tuple[int, Dict[str, Optional[float] | str]]) -> tuple[float, float, float, float]:
+        _, metrics = item
+        total = float(metrics.get("gpu_vram_total_mb") or 0.0)
+        used = float(metrics.get("gpu_vram_used_mb") or 0.0)
+        util = float(metrics.get("gpu_util_percent") or 0.0)
+        power = float(metrics.get("gpu_power_w") or 0.0)
+        return total, used, util, power
+
+    _, selected = max(per_gpu.items(), key=_select_gpu_key)
+    return {
+        "gpu_util_percent": selected.get("gpu_util_percent"),
+        "gpu_vram_used_mb": selected.get("gpu_vram_used_mb"),
+        "gpu_vram_total_mb": selected.get("gpu_vram_total_mb"),
+        "gpu_temp_c": selected.get("gpu_temp_c"),
+        "gpu_power_w": selected.get("gpu_power_w"),
+        "gpu_name": str(selected.get("gpu_name") or ""),
+    }
+
+
+def _collect_rocm_smi_metrics() -> tuple[Dict[str, Any], bool, str, str]:
+    if not shutil.which("rocm-smi"):
+        return {}, False, "rocm-smi_missing", "rocm-smi not found"
+
+    rc, text = _run_command_capture_text(
+        ["rocm-smi", "--showuse", "--showmemuse", "--showmeminfo", "vram", "--showtemp", "--showpower"],
+        timeout=12,
+    )
+    if rc != 0 or not text:
+        return {}, False, "rocm-smi_failed", text[:500] or f"rocm-smi exit {rc}"
+
+    _, product_text = _run_command_capture_text(["rocm-smi", "--showproductname"], timeout=8)
+    metrics = _parse_rocm_smi_metrics_text(text, product_text)
+
+    if metrics.get("gpu_vram_used_mb") is None and metrics.get("gpu_vram_total_mb") is None and metrics.get("gpu_util_percent") is None:
         return metrics, False, "rocm-smi_parse_failed", text[:500] or "no parseable metrics"
     return metrics, True, "", text[:500]
 
 
-def _collect_nvidia_smi_metrics() -> tuple[Dict[str, Optional[float]], bool, str, str]:
+def _collect_nvidia_smi_metrics() -> tuple[Dict[str, Any], bool, str, str]:
     if not shutil.which("nvidia-smi"):
         return {}, False, "nvidia-smi_missing", "nvidia-smi not found"
     rc, text = _run_command_capture_text(
@@ -402,10 +490,12 @@ class BenchmarkResourceSampler:
         self._gpu_util_count = 0
         self._gpu_util_peak = None
         self._vram_peak = None
+        self._vram_total = None
         self._system_ram_peak = None
         self._gpu_temp_peak = None
         self._gpu_power_peak = None
         self._process_rss_peak = None
+        self._gpu_name = ""
 
     def start(self) -> None:
         try:
@@ -479,6 +569,7 @@ class BenchmarkResourceSampler:
             "gpu_vram_total_mb": None,
             "gpu_temp_c": None,
             "gpu_power_w": None,
+            "gpu_name": "",
             "cpu_util_percent": None,
             "system_ram_used_mb": None,
             "system_ram_total_mb": None,
@@ -538,12 +629,16 @@ class BenchmarkResourceSampler:
 
         self._gpu_util_peak = _peak(self._gpu_util_peak, sample.get("gpu_util_percent"))
         self._vram_peak = _peak(self._vram_peak, sample.get("gpu_vram_used_mb"))
+        self._vram_total = _peak(self._vram_total, sample.get("gpu_vram_total_mb"))
         self._system_ram_peak = _peak(self._system_ram_peak, sample.get("system_ram_used_mb"))
         self._gpu_temp_peak = _peak(self._gpu_temp_peak, sample.get("gpu_temp_c"))
         self._gpu_power_peak = _peak(self._gpu_power_peak, sample.get("gpu_power_w"))
         self._process_rss_peak = _peak(self._process_rss_peak, sample.get("process_rss_mb"))
         self._gpu_util_sum, self._gpu_util_count = _sum_count(self._gpu_util_sum, self._gpu_util_count, sample.get("gpu_util_percent"))
         self._cpu_util_sum, self._cpu_util_count = _sum_count(self._cpu_util_sum, self._cpu_util_count, sample.get("cpu_util_percent"))
+        gpu_name = str(sample.get("gpu_name") or "").strip()
+        if gpu_name:
+            self._gpu_name = gpu_name
 
     def _write_sample(self, sample: Dict[str, Any]) -> None:
         if self._jsonl_fh is None:
@@ -583,8 +678,10 @@ class BenchmarkResourceSampler:
             "gpu_util_peak_percent": self._gpu_util_peak,
             "gpu_util_avg_percent": gpu_util_avg,
             "vram_peak_mb": self._vram_peak,
+            "vram_total_mb": self._vram_total,
             "gpu_temp_peak_c": self._gpu_temp_peak,
             "gpu_power_peak_w": self._gpu_power_peak,
+            "gpu_name": self._gpu_name,
             "system_ram_peak_mb": self._system_ram_peak,
             "cpu_avg_percent": cpu_util_avg,
             "process_rss_peak_mb": self._process_rss_peak,
@@ -610,8 +707,10 @@ class BenchmarkResourceSampler:
                 f"gpu_util_peak_percent={payload['gpu_util_peak_percent']}",
                 f"gpu_util_avg_percent={payload['gpu_util_avg_percent']}",
                 f"vram_peak_mb={payload['vram_peak_mb']}",
+                f"vram_total_mb={payload['vram_total_mb']}",
                 f"gpu_temp_peak_c={payload['gpu_temp_peak_c']}",
                 f"gpu_power_peak_w={payload['gpu_power_peak_w']}",
+                f"gpu_name={payload['gpu_name']}",
                 f"system_ram_peak_mb={payload['system_ram_peak_mb']}",
                 f"cpu_avg_percent={payload['cpu_avg_percent']}",
                 f"process_rss_peak_mb={payload['process_rss_peak_mb']}",

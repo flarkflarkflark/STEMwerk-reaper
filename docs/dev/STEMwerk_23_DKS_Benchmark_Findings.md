@@ -137,7 +137,7 @@ Interpretation:
 
 ## Resource Sampling Caveat
 
-Benchmark resource persistence is now working for these runs, but GPU/VRAM analysis is still incomplete on this machine.
+These benchmark runs were captured before the ROCm resource parser was updated for the current RX 9070 `rocm-smi` concise output.
 
 Observed marker state:
 
@@ -147,8 +147,9 @@ Observed marker state:
 Implication:
 
 - CPU and system RAM trends are useful
-- GPU utilization and VRAM pressure are still unknown
+- GPU utilization and VRAM pressure are still unknown for these specific stored runs
 - cap4 should not be treated as a safe new default until those GPU-side metrics are trustworthy
+- new runs after the parser fix should populate GPU utilization, VRAM total and used, GPU temperature, GPU power, and GPU name when `rocm-smi` returns those fields
 
 ## Preliminary Policy Hypothesis
 
@@ -170,7 +171,7 @@ This is a benchmark interpretation only. It is not a default-policy recommendati
 ## Next Steps
 
 - repeat the stage2 cap4 run once to check stability of the `128s` result
-- fix the `rocm-smi` parsing path so GPU and VRAM metrics become trustworthy
+- rerun one benchmark after the `rocm-smi` parser fix to confirm GPU and VRAM metrics now populate in persisted summaries
 - benchmark normal stems cap2 vs cap4 on the same machine
 - benchmark Z / Direct Drum Kit cap2 vs cap4 with at least one repeat
 - test the same X stage2 cap matrix on other GPUs and platforms before any default policy change
