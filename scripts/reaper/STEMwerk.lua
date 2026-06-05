@@ -1054,6 +1054,7 @@ local function sanitizeFriendlyName(name)
     lbl = lbl:gsub("%s*[Ll]aptop%s*[Gg]PU%s*$", "")
     lbl = lbl:gsub("%s*[Gg]raphics%s*$", "")
     lbl = lbl:gsub("%s*[Gg]PU%s*$", "")
+    lbl = lbl:gsub("([Rr][Xx])(%d%d%d%d+)", "%1 %2")
     lbl = lbl:gsub("%s+", " ")
     lbl = lbl:gsub("^%s+", ""):gsub("%s+$", "")
     if lbl == "" or lbl:match("^%(%s*[Tt][Mm]%s*%)$") or #lbl < 3 then
@@ -1067,6 +1068,18 @@ local function sanitizeFriendlyName(name)
         lbl = fallback ~= "" and fallback or raw
     end
     return lbl
+end
+
+function normalizeUserFacingDeviceLabel(name)
+    local raw = tostring(name or "")
+    raw = raw:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if raw == "" then return "" end
+    local friendly = sanitizeFriendlyName(raw)
+    friendly = tostring(friendly or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if friendly ~= "" then
+        return friendly
+    end
+    return raw
 end
 
 -- Stem configuration (with selection state)
@@ -1487,6 +1500,7 @@ postProcessCandidates = {}
 
 -- Forward declaration for run-config helpers (actual table is initialized later).
 local multiTrackQueue
+local progressState
 
 -- Run configuration snapshot: keeps model/device/mode stable for one workflow run.
 local ACTIVE_RUN_CONFIG = nil
@@ -8946,7 +8960,7 @@ function renderResultTitleArea(ctx)
         if resultStatus == "partial" then
             title = isExtractDrumKitWorkflowActive()
                 and trSafeValue("edks_partial_title", "Drum Kit Split partially completed")
-                or trSafeValue("drumkit_partial_title", "Direct Drum Kit partially completed")
+                or trSafeValue("drumkit_partial_title", "Direct Kit partially completed")
         else
             title = activeDrumKitCompleteTitle()
         end
@@ -9043,20 +9057,119 @@ function renderResultMessageBox(ctx)
     end
 end
 
+function attachResultRuntimeMetadata(data)
+    if type(data) ~= "table" then return data end
+
+    local state = type(progressState) == "table" and progressState or nil
+
+    if not data.deviceRequest or data.deviceRequest == "" then
+        data.deviceRequest = tostring((state and state._normalizedDeviceRequest) or (SETTINGS and SETTINGS.device) or "")
+    end
+    if not data.runtimeSelected or data.runtimeSelected == "" then
+        data.runtimeSelected = tostring((state and (state._runtimeSelected or state._stage2Device or state._stage1Device)) or "")
+    end
+    if not data.backend or data.backend == "" then
+        if multiTrackQueue and multiTrackQueue.schedulerPolicyBackend and multiTrackQueue.schedulerPolicyBackend ~= "" then
+            data.backend = tostring(multiTrackQueue.schedulerPolicyBackend)
+        else
+            local selected = tostring(data.runtimeSelected or ""):lower()
+            local requested = tostring(data.deviceRequest or ""):lower()
+            if selected == "cpu" or requested == "cpu" then
+                data.backend = "cpu"
+            elseif selected:find("directml", 1, true) or requested:find("directml", 1, true) then
+                data.backend = "directml"
+            elseif selected == "mps" or requested == "mps" then
+                data.backend = "mps"
+            elseif selected == "rocm" or selected == "cuda" or selected:match("^cuda:%d+") or requested == "gpu" or requested == "rocm" or requested == "cuda" or requested:match("^cuda:%d+") then
+                data.backend = "gpu"
+            end
+        end
+    end
+
+    return data
+end
+
+function sanitizeUserFacingMethodLabel(candidate)
+    local lower = tostring(candidate or ""):lower()
+    if lower == "" then return "" end
+    if lower == "cpu" or lower:find("cpu", 1, true) or lower:find("unknown_cap1", 1, true) or lower == "backend_not_gpu" or lower == "auto_no_gpu" then return "CPU" end
+    if lower == "directml" or lower:find("directml", 1, true) then return "DirectML" end
+    if lower == "mps" or lower:find("mps", 1, true) then return "MPS" end
+    if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then return "ROCm" end
+    if lower == "cuda" or lower:match("^cuda:%d+$") then return "CUDA" end
+    if lower == "gpu" or lower:find("gpu", 1, true) then return "GPU" end
+    return ""
+end
+
+function resolveResultMethodLabel(data)
+    local backend = tostring((data and data.backend) or ""):lower()
+    local deviceRequest = tostring((data and data.deviceRequest) or ""):lower()
+    local runtimeSelected = tostring((data and data.runtimeSelected) or ""):lower()
+
+    if backend == "directml" or deviceRequest:find("directml", 1, true) or runtimeSelected:find("directml", 1, true) then
+        return sanitizeUserFacingMethodLabel("directml")
+    end
+    if backend == "mps" or deviceRequest == "mps" or runtimeSelected == "mps" then
+        return sanitizeUserFacingMethodLabel("mps")
+    end
+    if runtimeSelected == "rocm" or deviceRequest == "rocm" then
+        return sanitizeUserFacingMethodLabel("rocm")
+    end
+    if runtimeSelected == "cuda" or runtimeSelected:match("^cuda:%d+") or deviceRequest == "cuda" or deviceRequest:match("^cuda:%d+") then
+        return sanitizeUserFacingMethodLabel("cuda")
+    end
+    if backend == "cpu" or runtimeSelected == "cpu" or deviceRequest == "cpu" then
+        return sanitizeUserFacingMethodLabel("cpu")
+    end
+    if backend == "gpu" or deviceRequest == "gpu" then
+        return sanitizeUserFacingMethodLabel("gpu")
+    end
+    return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")
+end
+
 function buildResultMessageLines()
     local data = resultWindowState and resultWindowState.messageData or nil
     if not data then
         local msgLines = {}
         local msg = (resultWindowState and resultWindowState.message) or ""
+        local function isRawResultBackendToken(line)
+            local lower = tostring(line or ""):lower()
+            if lower == "" then return false end
+            return lower:find("scheduler_", 1, true)
+                or lower:find("backend_not_gpu", 1, true)
+                or lower:find("directml_fixed_cap", 1, true)
+                or lower:find("mps_fixed_cap", 1, true)
+                or lower:find("cap8_normal_gpu_only", 1, true)
+                or lower:find("_reason", 1, true)
+                or lower:find("_cap", 1, true)
+        end
         for line in (msg .. "\n"):gmatch("([^\n]*)\n") do
-            table.insert(msgLines, line)
+            local trimmed = tostring(line or ""):match("^%s*(.-)%s*$") or ""
+            local lower = trimmed:lower()
+            local isBackendLine = lower:match("^backend%s*:")
+            if not isBackendLine and not isRawResultBackendToken(trimmed) then
+                table.insert(msgLines, line)
+            end
         end
         return msgLines
     end
 
+    data = attachResultRuntimeMetadata(data)
+
     -- Dynamic (retranslatable) message
     local lines = {}
     local timeStr = string.format("%d:%02d", math.floor((data.totalTimeSec or 0) / 60), (data.totalTimeSec or 0) % 60)
+    local function buildInlineActionText(action)
+        if type(action) ~= "table" or not action.key then return "" end
+        if action.kind == "items" then
+            local itemWord = trPlural(action.count or 0, "footer_item", "footer_items", "item", "items")
+            return string.format(T(action.key) or "", action.count or 0, itemWord)
+        elseif action.kind == "tracks" then
+            local trWord = trPlural(action.count or 0, "footer_track", "footer_tracks", "track", "tracks")
+            return string.format(T(action.key) or "", action.count or 0, trWord)
+        end
+        return ""
+    end
 
     local selectedStems = resultWindowState and resultWindowState.selectedStems or {}
     local drumKitCopyActive = data.drumKitCopy
@@ -9097,10 +9210,18 @@ function buildResultMessageLines()
         local line1 = drumKitCopy
             and string.format(T("drumkit_result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, srcCount, srcWord)
             or string.format(T("result_multi_created") or "%d %s created from %d %s.", stemsCreated, stemWord, srcCount, srcWord)
+        local actionText = buildInlineActionText(data.action)
+        if actionText ~= "" then
+            line1 = line1 .. " | " .. actionText
+        end
 
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
+        local methodLabel = resolveResultMethodLabel(data)
+        if methodLabel ~= "" then
+            line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+        end
         table.insert(lines, line1)
         table.insert(lines, line2)
         if runtimeReason ~= "" then
@@ -9126,13 +9247,21 @@ function buildResultMessageLines()
                 line1 = string.format(T("result_items_replaced") or "%d %s replaced with stems as takes.", itemCount, itemWord)
             end
         end
+        local actionText = buildInlineActionText(data.action)
+        if actionText ~= "" then
+            line1 = line1 .. " | " .. actionText
+        end
         local speedStr = string.format("%.2fx", data.realtimeFactor or 0)
         local runtimeMode, _, runtimeReason = getRuntimeModeLabel(data)
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
-        table.insert(lines, line1)
         if data.resultStatus == "partial" and drumKitCopyActive and data.failedJobIndices and data.failedJobIndices ~= "" then
             table.insert(lines, string.format(trSafeValue("dks_multi_failed_jobs", "Failed jobs: %s"), data.failedJobIndices))
         end
+        local methodLabel = resolveResultMethodLabel(data)
+        if methodLabel ~= "" then
+            line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+        end
+        table.insert(lines, line1)
         table.insert(lines, line2)
         if runtimeReason ~= "" then
             local reasonLabel = T("mode_reason_label") or "Reason"
@@ -9206,9 +9335,13 @@ function buildResultMessageLines()
         else
             table.insert(lines, string.format(T("result_time_line") or "Time: %s", timeStr))
         end
+        local methodLabel = resolveResultMethodLabel(data)
+        if methodLabel ~= "" then
+            table.insert(lines, string.format(T("result_method_line") or "Method: %s", methodLabel))
+        end
     end
 
-    if data.action then
+    if data.action and data.kind == "single" then
         local a = data.action
         if a.kind == "items" then
             local itemWord = trPlural(a.count or 0, "footer_item", "footer_items", "item", "items")
@@ -10104,11 +10237,12 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local cpuState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
         local devices = {}
         local function add(id, name, devType, descKey)
+            local uiLabel = normalizeUserFacingDeviceLabel(name)
             devices[#devices + 1] = {
                 id = id,
-                name = name,
-                fullName = name,
-                uiName = name,
+                name = uiLabel ~= "" and uiLabel or name,
+                fullName = uiLabel ~= "" and uiLabel or name,
+                uiName = uiLabel ~= "" and uiLabel or name,
                 type = devType,
                 descKey = descKey,
                 available = true,
@@ -10143,6 +10277,32 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         return (#devices > 0) and devices or nil
     end
 
+    local function isIntegratedAmdGraphicsName(name)
+        local lower = tostring(name or ""):lower()
+        if lower == "" then return false end
+        if lower:find("780m graphics", 1, true) then return true end
+        if lower:find("760m graphics", 1, true) then return true end
+        if lower:find("graphics", 1, true) and lower:find("radeon", 1, true) and not lower:find("rx", 1, true) then
+            return true
+        end
+        return false
+    end
+
+    local function shouldHideDksDeviceOption(dev, list, isDksRoute)
+        if not isDksRoute or OS ~= "Linux" or not dev then return false end
+        local id = tostring(dev.id or "")
+        if not id:match("^cuda:%d+$") then return false end
+        if not isIntegratedAmdGraphicsName(dev.fullName or dev.name or "") then return false end
+        for _, candidate in ipairs(list or {}) do
+            local cid = tostring(candidate.id or "")
+            local cname = tostring(candidate.fullName or candidate.name or "")
+            if candidate ~= dev and cid:match("^cuda:%d+$") and not isIntegratedAmdGraphicsName(cname) then
+                return true
+            end
+        end
+        return false
+    end
+
     local directDksRoute = isDirectDrumKitDeviceRoute()
     local runtimeDevicesForUi = directDksRoute and buildDirectDksDeviceList() or RUNTIME_DEVICES
 
@@ -10173,6 +10333,16 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local filtered = {}
         for _, d in ipairs(deviceList) do
             if d.available or d.id == "auto" or d.id == "cpu" then
+                filtered[#filtered + 1] = d
+            end
+        end
+        deviceList = filtered
+    end
+
+    if directDksRoute then
+        local filtered = {}
+        for _, d in ipairs(deviceList) do
+            if not shouldHideDksDeviceOption(d, deviceList, directDksRoute) then
                 filtered[#filtered + 1] = d
             end
         end
@@ -10492,10 +10662,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     }
 
     local function cleanDeviceLabel(name)
-        if not name or name == "" then return "" end
-        local lbl = tostring(name)
-        lbl = lbl:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-        return lbl
+        return normalizeUserFacingDeviceLabel(name)
     end
 
     local function chosenDeviceLabel()
@@ -10800,8 +10967,10 @@ getRuntimeModeLabel = function(queue)
             reason = T("mode_reason_directml_multi_track") or "DirectML multi-track stability mode"
         elseif reasonCode == "auto_no_gpu" then
             reason = T("mode_reason_auto_no_gpu") or "auto device, no GPU"
+        elseif sanitizeUserFacingMethodLabel(reasonCode) ~= "" then
+            reason = ""
         elseif reasonCode ~= "" then
-            reason = tostring(reasonCode)
+            reason = ""
         else
             reason = T("mode_fallback") or "fallback"
         end
@@ -11815,10 +11984,8 @@ function renderProcessingHeader(ctx)
         tempR = THEME.accent[1] * 255
         tempG = THEME.accent[2] * 255
         tempB = THEME.accent[3] * 255
-    elseif _procUtility then
-        tempR, tempG, tempB = 179, 51, 51
     else
-        tempR, tempG, tempB = 255, 120, 120
+        tempR, tempG, tempB = 179, 51, 51
     end
     if drawCheckbox(x, y, true, tempLabel, tempR, tempG, tempB, w, btnFont) then
         SETTINGS.keepTempFiles = not SETTINGS.keepTempFiles
@@ -11933,7 +12100,7 @@ function renderMainColumns(ctx)
     local presetY = presetStartY
     gfx.setfont(1, "Arial", S(13))
 
-    local _utilDanger = utilityMode and {179, 51, 51} or {255, 120, 120}
+    local _utilDanger = {179, 51, 51}
     local _pa = {}
     do
         local workflowMode = tostring(SETTINGS.workflowMode or "")
@@ -11965,11 +12132,11 @@ function renderMainColumns(ctx)
             _pa.piano = false
         end
     end
-    local function drawPresetBtn(py, label, rawColor, isActive)
-        if utilityMode then
-            return drawRadio(col1X, py, isActive, label, nil, colW, nil, nil, presetsBtnFontSize)
+    local function drawPresetBtn(py, label, rawColor, isActive, preferStemColor)
+        if not utilityMode and preferStemColor then
+            return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, rawColor, presetsBtnFontSize)
         end
-        return drawToggleButton(col1X, py, colW, btnH, label, isActive == true, rawColor, presetsBtnFontSize)
+        return drawRadio(col1X, py, isActive, label, nil, colW, nil, nil, presetsBtnFontSize)
     end
     if drawPresetBtn(presetY, presetLabelKaraoke, {80, 80, 90}, _pa.karaoke) then clearDialogWorkflowSelection(); applyPresetKaraoke() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_karaoke"), "K", {255, 200, 100})
@@ -11982,7 +12149,7 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("workflow_drumkit_label", "Direct Drum Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "Split already-drum material into Kick, Snare, Toms, Hi-Hat, Ride and Crash."),
+        trSafe("workflow_drumkit_label", "Direct Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "Direct drum-kit separation: Kick, Snare, Toms, Hi-Hat, Ride, Crash."),
         "Z", {170, 150, 240}
     )
     presetY = presetY + presetStep
@@ -11990,29 +12157,29 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("workflow_edks_label", "Drum Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Extract drums from a full mix, then split the kit into Kick, Snare, Toms, Hi-Hat, Ride and Crash."),
+        trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Two-stage drum-kit split for more detailed drum separation."),
         "X", {150, 132, 228}
     )
     presetY = presetY + presetSectionGap
 
-    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals) then clearDialogWorkflowSelection(); applyPresetVocalsOnly() end
+    if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals, true) then clearDialogWorkflowSelection(); applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
     presetY = presetY + presetStep
-    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums) then clearDialogWorkflowSelection(); applyPresetDrumsOnly() end
+    if drawPresetBtn(presetY, presetLabelDrums, {100, 200, 255}, _pa.drums, true) then clearDialogWorkflowSelection(); applyPresetDrumsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_drums"), "D", {100, 200, 255})
     presetY = presetY + presetStep
-    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass) then clearDialogWorkflowSelection(); applyPresetBassOnly() end
+    if drawPresetBtn(presetY, presetLabelBass, {150, 100, 255}, _pa.bass, true) then clearDialogWorkflowSelection(); applyPresetBassOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_bass"), "B", {150, 100, 255})
     presetY = presetY + presetStep
-    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other) then clearDialogWorkflowSelection(); applyPresetOtherOnly() end
+    if drawPresetBtn(presetY, presetLabelOther, {100, 255, 150}, _pa.other, true) then clearDialogWorkflowSelection(); applyPresetOtherOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_other"), "O", {100, 255, 150})
     presetY = presetY + presetStep
 
     if is6Stem then
-        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar) then clearDialogWorkflowSelection(); applyPresetGuitarOnly() end
+        if drawPresetBtn(presetY, presetLabelGuitar, {255, 180, 100}, _pa.guitar, true) then clearDialogWorkflowSelection(); applyPresetGuitarOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_guitar"), "G", {255, 180, 100})
         presetY = presetY + presetStep
-        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano) then clearDialogWorkflowSelection(); applyPresetPianoOnly() end
+        if drawPresetBtn(presetY, presetLabelPiano, {255, 120, 200}, _pa.piano, true) then clearDialogWorkflowSelection(); applyPresetPianoOnly() end
         setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_piano"), "P", {255, 120, 200})
         presetY = presetY + presetStep
     end
@@ -12075,8 +12242,13 @@ function renderMainColumns(ctx)
     end
 
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    drawColumnHeader(T("model"), col3X, modelColW, mainHeaderFont, contentTop)
-    setTooltip(col3X, contentTop, modelColW, S(16), T("tooltip_section_model") or "Choose speed/quality and stem model.")
+    local drumModeActive = dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT
+    local modelHeaderKey = drumModeActive and "drum_mode" or "model"
+    local modelHeaderFallback = drumModeActive and "Mode:" or "Model:"
+    local modelHeaderTipKey = drumModeActive and "tooltip_section_drum_mode" or "tooltip_section_model"
+    local modelHeaderTipFallback = drumModeActive and "Choose drum-kit mode and detail level." or "Choose speed/quality and stem model."
+    drawColumnHeader(T(modelHeaderKey) or modelHeaderFallback, col3X, modelColW, mainHeaderFont, contentTop)
+    setTooltip(col3X, contentTop, modelColW, S(16), T(modelHeaderTipKey) or modelHeaderTipFallback)
     gfx.setfont(1, "Arial", S(13))
 
     local modelBoxW = modelColW
@@ -13914,7 +14086,7 @@ function renderSingleItemToWav(item, outputPath)
 end
 
 -- Progress window state
-local progressState = {
+progressState = {
     running = false,
     windowOpen = false,
     outputDir = nil,
@@ -13949,9 +14121,9 @@ end
 
 function activeDrumKitWorkflowTitle()
     if isExtractDrumKitWorkflowActive() then
-        return trSafeValue("workflow_edks_label", "Drum Kit Split")
+        return trSafeValue("workflow_edks_label", "Kit Split")
     end
-    return trSafeValue("workflow_drumkit_label", "Direct Drum Kit")
+    return trSafeValue("workflow_drumkit_label", "Direct Kit")
 end
 
 function activeDrumKitFolderSuffix()
@@ -13963,17 +14135,17 @@ end
 
 function activeDrumKitCompleteTitle()
     if isExtractDrumKitWorkflowActive() then
-        return trSafeValue("edks_complete_title", "Drum Kit Split completed successfully!")
+        return trSafeValue("edks_complete_title", "Kit Split completed successfully!")
     end
-    return trSafeValue("drumkit_complete_title", "Direct Drum Kit completed successfully!")
+    return trSafeValue("drumkit_complete_title", "Direct Kit completed successfully!")
 end
 
 function activeProcessingRouteBadge()
     if isExtractDrumKitWorkflowActive() then
-        return trSafeValue("workflow_edks_short_label", "Drum Kit Split")
+        return trSafeValue("workflow_edks_short_label", "Kit Split")
     end
     if isDrumKitWorkflowActive() then
-        return trSafeValue("workflow_drumkit_short_label", "Direct Drum Kit")
+        return trSafeValue("workflow_drumkit_short_label", "Direct Kit")
     end
     return trSafeValue("route_badge_normal", "Normal STEMwerk")
 end
@@ -14093,12 +14265,10 @@ function buildProgressRouteSummary(deviceDetail)
 end
 
 function shortRuntimeGpuName(name)
-    local s = tostring(name or "")
-    s = s:gsub("^%s+", ""):gsub("%s+$", "")
+    local s = normalizeUserFacingDeviceLabel(name)
     if s == "" then return "" end
     local first = s:match("^([^|,;]+)") or s
     first = first:gsub("^%s+", ""):gsub("%s+$", "")
-    first = first:gsub("^AMD Radeon%s+", "")
     return first
 end
 
@@ -14189,6 +14359,47 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
         return "MPS"
     end
     return compactProgressDeviceToken(rawDetail)
+end
+
+function deriveMultiTrackRuntimeFooter(job)
+    local jobStage = job and tostring(job.stage or "") or ""
+    local footerDeviceDetail = jobStage:match("%[([^%]]+)%]") or ""
+    local compactDetail = compactProgressDeviceToken(footerDeviceDetail, footerDeviceDetail)
+    local backend = tostring((multiTrackQueue and multiTrackQueue.schedulerPolicyBackend) or ""):lower()
+    local requestedDevice = tostring(effectiveRunDevice() or ""):lower()
+
+    if backend == "directml" then
+        return "DirectML"
+    end
+    if backend == "mps" then
+        return "MPS"
+    end
+    if backend == "cpu" then
+        return compactDetail ~= "" and compactDetail or "CPU"
+    end
+    if backend == "gpu" then
+        if requestedDevice:find("directml", 1, true) then
+            return "DirectML"
+        end
+        if requestedDevice == "mps" then
+            return "MPS"
+        end
+        if requestedDevice == "rocm" then
+            return "ROCm"
+        end
+        if requestedDevice == "cuda" or requestedDevice:match("^cuda:%d+") then
+            return "CUDA"
+        end
+        if compactDetail ~= "" and compactDetail ~= "GPU" then
+            return compactDetail
+        end
+        return "GPU"
+    end
+
+    if compactDetail ~= "" then
+        return compactDetail
+    end
+    return ""
 end
 
 function setWorkflowContextForRun(runOptions)
@@ -19647,8 +19858,7 @@ function drawMultiTrackProgressWindow()
         if eta > 0 then
             local etaMins = math.floor(eta / 60)
             local etaSecs = math.floor(eta % 60)
-            local etaFmt = trSafeProgress("mt_footer_eta_suffix", " | ETA %d:%02d")
-            summaryLine2 = summaryLine2 .. string.format(etaFmt, etaMins, etaSecs)
+            summaryLine2 = summaryLine2 .. string.format(" | %s %d:%02d", tostring(T("eta_label") or "ETA:"), etaMins, etaSecs)
         end
         if isExtractDrumKitWorkflowActive() then
             summaryLine2 = summaryLine2 .. " · " .. trSafeProgress("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
@@ -19686,8 +19896,7 @@ function drawMultiTrackProgressWindow()
     if eta and eta > 0 then
         local etaMins = math.floor(eta / 60)
         local etaSecs = math.floor(eta % 60)
-        local etaLabel = T("eta_label") or "ETA:"
-        etaText = string.format(" | %s ±%d:%02d", tostring(etaLabel), etaMins, etaSecs)
+        etaText = string.format(" | %s %d:%02d", tostring(T("eta_label") or "ETA:"), etaMins, etaSecs)
     end
 
     local runModel = effectiveRunModel()
@@ -19711,6 +19920,9 @@ function drawMultiTrackProgressWindow()
         modelDisplay,
         modeDisplay,
     }
+    if deriveMultiTrackRuntimeFooter(activeJob) ~= "" then
+        leftParts[#leftParts + 1] = deriveMultiTrackRuntimeFooter(activeJob)
+    end
     local rightParts = {}
     if activeJob then
         local jobElapsed = os.time() - (activeJob.startTime or os.time())
