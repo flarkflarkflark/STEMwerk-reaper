@@ -1,6 +1,7 @@
 # STEMwerk 2.3 REAPER MCP Smoke / Benchmark Prep
 
 This note captures the safe REAPER MCP surface available from Codex CLI and a minimal protocol for STEMwerk 2.3 smoke and cap 2 vs cap 4 benchmarking.
+It also documents the normal stems benchmark matrix for GPU cap 2 / 4 / 8.
 
 ## Verified MCP Surface
 
@@ -73,14 +74,17 @@ Capture these before and after a manual run:
 - Use the same STEMwerk workflow source for both runs.
 - Run one cap 2 trial and one cap 4 trial on the same project state.
 - Set `STEMWERK_BENCH_GPU_CAP=2` for the baseline run and `STEMWERK_BENCH_GPU_CAP=4` for the benchmark run.
+- `STEMWERK_BENCH_GPU_CAP=8` is available for normal GPU separation as an experimental high-throughput benchmark only.
 - Use only GPU-parallel routes where the default scheduler already allows cap 2:
   - normal GPU separation
   - Z / Direct Drum Kit short / multi
   - X / Drum Kit Split stage 1
+- Cap 8 is benchmark-only and must stay limited to normal GPU separation until repeated clean runs confirm it.
 - Do not use the override for:
   - DirectML
   - MPS
   - CPU-only runs
+  - Z / Direct Drum Kit cap 8
   - X / Drum Kit Split stage 2
 - X stage 2 remains serialized at cap 1.
 - Record a before snapshot, start the run, then record an after snapshot.
@@ -102,6 +106,7 @@ Capture these before and after a manual run:
 - Set the benchmark env var in the REAPER launch environment:
   - `STEMWERK_BENCH_GPU_CAP=2`
   - `STEMWERK_BENCH_GPU_CAP=4`
+  - `STEMWERK_BENCH_GPU_CAP=8` for experimental normal-stems GPU runs only
 - For X / Drum Kit Split Stage 2, also set:
   - `STEMWERK_BENCH_DKS_STAGE2_CAP=1`
   - `STEMWERK_BENCH_DKS_STAGE2_CAP=2`
@@ -144,6 +149,62 @@ PASS criteria for X:
 - no missing stage2 DrumSep logs
 - no stale success when outputs are missing
 - support/log markers present
+
+## Normal Stems Benchmark Matrix (GPU cap 2 / 4 / 8)
+
+Normal stems benchmark matrix (GPU cap 2 / 4 / 8):
+
+Use the same 8 short items, `Auto`, and GPU-capable runtime for all runs.
+
+Run all 9 combinations:
+
+1. `htdemucs` / cap 2
+2. `htdemucs` / cap 4
+3. `htdemucs` / cap 8
+4. `htdemucs_ft` / cap 2
+5. `htdemucs_ft` / cap 4
+6. `htdemucs_ft` / cap 8
+7. `htdemucs_6s` / cap 2
+8. `htdemucs_6s` / cap 4
+9. `htdemucs_6s` / cap 8
+
+Per run, capture:
+
+- selected model
+- workflow source for normal stems
+- selected stems
+- `bench_gpu_cap_requested`
+- `bench_gpu_cap_applied`
+- `effective_parallel_cap`
+- `scheduler_policy_cap`
+- item count
+- exit codes
+- output count
+- wall time
+- realtime factor
+- `benchmark_resource_summary` fields:
+  - `gpu_name`
+  - `gpu_util_peak_percent`
+  - `gpu_util_avg_percent`
+  - `vram_peak_mb`
+  - `vram_total_mb`
+  - `gpu_temp_peak_c`
+  - `gpu_power_peak_w`
+  - `cpu_avg_percent`
+  - `system_ram_peak_mb`
+
+Stop the matrix early if any run shows:
+
+- non-zero exit code
+- missing outputs
+- partial or fail markers
+- VRAM close to full
+- OOM, killed worker, or helper/runtime errors
+
+Interpretation guardrail:
+
+- cap 8 is experimental high-throughput benchmark only
+- cap 8 is not a default candidate until repeated clean runs stay stable
 
 ## Safe MCP Calls To Use
 

@@ -625,18 +625,25 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
 
     assert "STEMWERK_BENCH_GPU_CAP" in script
     assert "local function readBenchmarkGpuCapRequest()" in script
+    assert "if requested == 2 or requested == 4 or requested == 8 then" in script
     assert "local function appendBenchmarkGpuCapDiagnostics(logFile)" in script
     assert "local function benchmarkGpuCapIgnoredReasonForPolicy(policy)" in script
     assert "benchmarkGpuCapRequested" in script
     assert "benchmarkGpuCapApplied" in script
     assert "benchmarkGpuCapIgnoredReason" in script
     assert "if benchmarkGpuCapRequested and benchmarkGpuCapEligible then" in script
+    assert "local requestedBenchmarkCap = math.floor(tonumber(benchmarkGpuCapRequested or 0) or 0)" in script
+    assert "local routeAllowsBenchmarkCap = requestedBenchmarkCap <= 4" in script
     assert "and not benchmarkGpuCapRequested" in script
     assert 'schedulerPolicy.backend == "gpu"' in script
     assert "schedulerPolicy.cap >= 2" in script
     assert "directml_fixed_cap1" in script
     assert "mps_fixed_cap1" in script
     assert "dks_direct_long_cap1" in script
+    assert "cap8_normal_gpu_only" in script
+    assert 'requestedBenchmarkCap == 8' in script
+    assert 'and schedulerPolicy.route == "normal"' in script
+    assert 'and (schedulerPolicy.stage == "" or schedulerPolicy.stage == "single_stage")' in script
     assert "not_gpu_parallel_eligible" in script
     assert "bench_gpu_cap_requested=" in script
     assert "bench_gpu_cap_applied=" in script
@@ -727,6 +734,9 @@ def test_reaper_mcp_benchmark_runbook_documents_fixed_dispatcher_and_request_flo
     assert "bench_dks_stage2_cap_requested=" in doc
     assert "bench_dks_stage2_cap_applied=" in doc
     assert "bench_dks_stage2_cap_ignored_reason=" in doc
+    assert "Normal stems benchmark matrix (GPU cap 2 / 4 / 8)" in doc
+    assert "STEMWERK_BENCH_GPU_CAP=8" in doc
+    assert "experimental high-throughput benchmark only" in doc
 
 
 def test_scheduler_policy_route_backend_defaults_are_explicit():
@@ -752,6 +762,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert '"scheduler_normal_gpu_cap2"' in script
     assert 'policy.reason = "scheduler_mps_conservative"' in script
     assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
+    assert 'benchmarkGpuCapIgnoredReason = requestedBenchmarkCap == 8 and "cap8_normal_gpu_only" or "invalid_request"' in script
     assert 'scheduler_policy_route=' in script
     assert 'scheduler_policy_backend=' in script
     assert 'scheduler_policy_cap=' in script

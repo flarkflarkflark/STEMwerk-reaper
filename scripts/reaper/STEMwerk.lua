@@ -17386,7 +17386,7 @@ local function readBenchmarkGpuCapRequest()
         return nil, "unset"
     end
     local requested = tonumber(raw)
-    if requested == 2 or requested == 4 then
+    if requested == 2 or requested == 4 or requested == 8 then
         return requested, raw
     end
     return nil, raw
@@ -18026,11 +18026,25 @@ _sep.runSingleTrackSeparation = function(trackList)
         and schedulerPolicy.cap >= 2
     multiTrackQueue.benchmarkGpuCapRaw = benchmarkGpuCapRaw
     if benchmarkGpuCapRequested and benchmarkGpuCapEligible then
-        benchmarkGpuCapApplied = math.max(1, math.min(#trackJobs, math.floor(benchmarkGpuCapRequested)))
-        schedulerPolicy.cap = benchmarkGpuCapApplied
-        benchmarkGpuCapIgnoredReason = ""
+        local requestedBenchmarkCap = math.floor(tonumber(benchmarkGpuCapRequested or 0) or 0)
+        local routeAllowsBenchmarkCap = requestedBenchmarkCap <= 4
+            or (
+                requestedBenchmarkCap == 8
+                and schedulerPolicy.route == "normal"
+                and (schedulerPolicy.stage == "" or schedulerPolicy.stage == "single_stage")
+            )
+        if routeAllowsBenchmarkCap then
+            benchmarkGpuCapApplied = math.max(1, math.min(#trackJobs, math.floor(benchmarkGpuCapRequested)))
+            schedulerPolicy.cap = benchmarkGpuCapApplied
+            benchmarkGpuCapIgnoredReason = ""
+        else
+            benchmarkGpuCapIgnoredReason = requestedBenchmarkCap == 8 and "cap8_normal_gpu_only" or "invalid_request"
+        end
     elseif benchmarkGpuCapRequested then
         benchmarkGpuCapIgnoredReason = benchmarkGpuCapIgnoredReasonForPolicy(schedulerPolicy)
+        if benchmarkGpuCapIgnoredReason == "" and benchmarkGpuCapRequested == 8 then
+            benchmarkGpuCapIgnoredReason = "cap8_normal_gpu_only"
+        end
         if benchmarkGpuCapIgnoredReason == "" then
             benchmarkGpuCapIgnoredReason = "not_gpu_parallel_eligible"
         end
