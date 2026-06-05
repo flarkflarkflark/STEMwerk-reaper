@@ -2574,6 +2574,19 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'compactProgressDeviceToken(deviceDetail, deviceDetail)' in script
 
 
+def test_drumkit_visible_progress_and_support_summary_hide_raw_cuda_devices():
+    py_script = Path("scripts/reaper/audio_separator_process.py").read_text()
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'print("PROGRESS:1:Extracting drums...", flush=True)' in py_script
+    assert 'emit_progress(bounded, "Extracting drums...")' in py_script
+    assert 'Extracting drums [{stage1_runtime_device}]' not in py_script
+    assert 'lines[#lines + 1] = "device: " .. tostring(entry.device or "unknown")' in support_script
+    assert 'lines[#lines + 1] = "friendly_device: " .. tostring(entry.friendly_device or "unknown")' in support_script
+    assert "local function friendlyDeviceLabel(rawDevice, runtimeState, entry)" in support_script
+    assert 'return "Auto [GPU]"' in support_script
+
+
 def test_sync_to_reaper_does_not_overwrite_script_local_i18n_with_repo_root_i18n():
     sync_script = Path("scripts/reaper/sync_to_reaper.sh").read_text()
     assert '"${src_dir}/"' in sync_script

@@ -874,6 +874,54 @@ local function boolLabel(value)
     return value and "true" or "false"
 end
 
+local function shortRuntimeGpuName(name)
+    local s = trim(name)
+    if s == "" then return "" end
+    local first = s:match("^([^|,;]+)") or s
+    first = trim(first)
+    first = first:gsub("^AMD Radeon%s+", "")
+    local lower = first:lower()
+    if lower:find("rx9070", 1, true) or lower:find("gfx1201", 1, true) then
+        return "RX 9070"
+    end
+    return first
+end
+
+local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
+    local raw = trim(rawDevice)
+    local lower = raw:lower()
+    local state = runtimeState or {}
+    if lower == "" then return "unknown" end
+    if lower == "cpu" then return "CPU runtime" end
+    if lower:find("directml", 1, true) then return "DirectML" end
+    if lower == "mps" then return "MPS" end
+    if lower:match("^cuda:%d+") or lower == "cuda" or lower == "rocm" then
+        local candidates = {
+            trim(state.ROCM_DETECTED_DEVICES or ""),
+            trim(state.DRUMSEP_ROCM_DEVICE_NAMES or ""),
+            trim(state.DRUMSEP_DEVICE_NAMES or ""),
+            trim(state.ROCM_SELECTED_DEVICE or ""),
+        }
+        for _, candidate in ipairs(candidates) do
+            if candidate ~= "" then
+                local short = shortRuntimeGpuName(candidate)
+                if short ~= "" then
+                    return "GPU/ROCm: " .. short
+                end
+            end
+        end
+        local entryName = trim((entry and (entry.device_name or entry.deviceName)) or "")
+        if entryName ~= "" then
+            local short = shortRuntimeGpuName(entryName)
+            if short ~= "" then
+                return "GPU/ROCm: " .. short
+            end
+        end
+        return "Auto [GPU]"
+    end
+    return raw
+end
+
 local function extBool(key)
     return trim(extStateValue(key)) == "1"
 end
@@ -2750,7 +2798,6 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             _positiveHints = 0,
             _resultPriority = 0,
         }
-
         local stat = {
             minTime = nil,
             maxTime = nil,
@@ -2899,6 +2946,11 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         end
     end
 
+    for i = 1, #out do
+        local entry = out[i]
+        entry.friendly_device = friendlyDeviceLabel(entry.device, runtimeState, entry)
+    end
+
     local lines = {}
     if #out == 0 then
         lines[#lines + 1] = "No recent processing summary available. See runtime_logs/run_stemwerk.log and runtime_runs/."
@@ -2916,6 +2968,7 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "backend: " .. tostring(entry.backend or "unknown")
         lines[#lines + 1] = "profile: " .. tostring(entry.profile or "unknown")
         lines[#lines + 1] = "device: " .. tostring(entry.device or "unknown")
+        lines[#lines + 1] = "friendly_device: " .. tostring(entry.friendly_device or "unknown")
         lines[#lines + 1] = "mode: " .. tostring(entry.mode or "unknown")
         lines[#lines + 1] = "jobs: " .. tostring(entry.jobs or "unknown")
         lines[#lines + 1] = "items: " .. tostring(entry.items or "unknown")

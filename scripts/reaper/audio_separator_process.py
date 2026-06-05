@@ -1817,7 +1817,7 @@ def main():
             stage1_fallback_reason = "live_runtime_cpu_only"
             print(f"dks_extract_stage1_fallback_reason={stage1_fallback_reason}", file=sys.stderr)
         try:
-            print("PROGRESS:1:Extracting drums [Stage 1]...", flush=True)
+            print("PROGRESS:1:Extracting drums...", flush=True)
             emit_phase("stage1_parent_start")
             runtime_env = _emit_runtime_diagnostics(stage1_preview_device or stage1_resolved)
             _enable_mps_runtime_fallback(stage1_requested, stage1_resolved)
@@ -1829,7 +1829,7 @@ def main():
 
             def stage1_progress(pct: float, _msg: str):
                 bounded = max(1, min(48, int(float(pct or 0) * 0.48)))
-                emit_progress(bounded, f"Extracting drums [{stage1_runtime_device}]...")
+                emit_progress(bounded, "Extracting drums...")
 
             stage1_sep.on_progress = stage1_progress
             with _working_directory(stage1_root):
