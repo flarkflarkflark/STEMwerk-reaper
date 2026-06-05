@@ -17392,6 +17392,39 @@ local function readBenchmarkGpuCapRequest()
     return nil, raw
 end
 
+local function appendBenchmarkGpuCapDiagnostics(logFile)
+    if not logFile or logFile == "" then
+        return
+    end
+
+    local requested = multiTrackQueue and (multiTrackQueue.benchmarkGpuCapRequested or multiTrackQueue.benchmarkGpuCapRaw) or nil
+    local raw = multiTrackQueue and multiTrackQueue.benchmarkGpuCapRaw or nil
+    if raw == nil or raw == "" or raw == "unset" then
+        return
+    end
+
+    local f = io.open(logFile, "a")
+    if not f then
+        return
+    end
+
+    local schedulerCap = multiTrackQueue and (multiTrackQueue.schedulerPolicyCap or multiTrackQueue.parallelJobLimit or "none") or "none"
+    local effectiveCap = multiTrackQueue and (multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") or "none"
+    f:write("bench_gpu_cap_requested=" .. tostring(requested or raw or "unset") .. "\n")
+    f:write("bench_gpu_cap_applied=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkGpuCapApplied or "none") .. "\n")
+    f:write("bench_gpu_cap_ignored_reason=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkGpuCapIgnoredReason or "") .. "\n")
+    f:write("effective_parallel_cap=" .. tostring(effectiveCap) .. "\n")
+    f:write("scheduler_policy_cap=" .. tostring(schedulerCap) .. "\n")
+    f:write("lua_dks_scheduler_policy_cap=" .. tostring(multiTrackQueue and (multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") or "none") .. "\n")
+    f:write("workflow_source=" .. tostring(multiTrackQueue and multiTrackQueue.workflowSource or "") .. "\n")
+    f:write("route=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyRoute or "") .. "\n")
+    f:write("stage=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyStage or "") .. "\n")
+    f:write("device=" .. tostring(effectiveRunDevice() or "") .. "\n")
+    f:write("backend=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyBackend or "") .. "\n")
+    f:write("\n")
+    f:close()
+end
+
 local function benchmarkGpuCapIgnoredReasonForPolicy(policy)
     local backend = tostring(policy and policy.backend or "")
     local route = tostring(policy and policy.route or "")
@@ -17970,6 +18003,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         and schedulerPolicy.backend == "gpu"
         and type(schedulerPolicy.cap) == "number"
         and schedulerPolicy.cap >= 2
+    multiTrackQueue.benchmarkGpuCapRaw = benchmarkGpuCapRaw
     if benchmarkGpuCapRequested and benchmarkGpuCapEligible then
         benchmarkGpuCapApplied = math.max(1, math.min(#trackJobs, math.floor(benchmarkGpuCapRequested)))
         schedulerPolicy.cap = benchmarkGpuCapApplied
@@ -18179,6 +18213,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     if sf then sf:close() end
     local lf = io.open(logFile, "w")
     if lf then lf:close() end
+    appendBenchmarkGpuCapDiagnostics(logFile)
 
     local requestedDeviceArg = effectiveRunDevice()
     local deviceArg = normalizeRequestedDeviceForRuntime(requestedDeviceArg)

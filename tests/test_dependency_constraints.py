@@ -625,6 +625,7 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
 
     assert "STEMWERK_BENCH_GPU_CAP" in script
     assert "local function readBenchmarkGpuCapRequest()" in script
+    assert "local function appendBenchmarkGpuCapDiagnostics(logFile)" in script
     assert "local function benchmarkGpuCapIgnoredReasonForPolicy(policy)" in script
     assert "benchmarkGpuCapRequested" in script
     assert "benchmarkGpuCapApplied" in script
@@ -640,11 +641,15 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert "bench_gpu_cap_requested=" in script
     assert "bench_gpu_cap_applied=" in script
     assert "bench_gpu_cap_ignored_reason=" in script
+    assert 'local f = io.open(logFile, "a")' in script
+    assert "appendBenchmarkGpuCapDiagnostics(logFile)" in script
     assert "workflow_source=" in script
+    assert "route=" in script
     assert "stage=" in script
     assert "device=" in script
     assert "backend=" in script
     assert "effective_parallel_cap=" in script
+    assert "lua_dks_scheduler_policy_cap=" in script
 
 
 def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
