@@ -166,3 +166,25 @@ Telemetry note:
 
 - the sampler selects the discrete RX 9070 rather than the integrated 780M
 - `gpu_temp_peak_c` is the maximum observed temperature during the run, not the final temperature shown after cooldown
+
+## Experimental CPU normal-stems cap2 slice
+
+Separate from the RX 9070 GPU findings above, the current policy candidate for normal stems on `backend=cpu` is:
+
+- `route=normal`
+- `stage=single_stage`
+- `scheduler_policy_cap=2`
+- `effective_parallel_cap=2`
+
+This slice is intentionally narrow:
+
+- no GPU policy change here
+- no DirectML change
+- no MPS change
+- no DKS route change
+
+Status:
+
+- implemented as a code and regression slice only
+- still needs a live CPU normal-stems smoke before it should be treated as validated policy
+- should not be conflated with the separate GPU recommendation of `cap4` as the default candidate

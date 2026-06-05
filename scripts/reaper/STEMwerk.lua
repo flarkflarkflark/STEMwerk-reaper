@@ -17238,6 +17238,7 @@ end
 
 _sep.SCHEDULER_POLICY = {
     NORMAL_GPU_MAX_PARALLEL = 2,
+    NORMAL_CPU_MAX_PARALLEL = 2,
     NORMAL_DIRECTML_MAX_PARALLEL = 1,
     NORMAL_MPS_MAX_PARALLEL = 1,
     DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2,
@@ -17356,8 +17357,8 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
         if cpuOk and ramOk then
             local adaptiveCap = math.max(1, math.floor(cpuCount / 2))
             policy.sequentialMode = false
-            policy.cap = math.min(jobCount, adaptiveCap)
-            policy.reason = "cpu_threads_ok"
+            policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))
+            policy.reason = "scheduler_normal_cpu_cap2"
         else
             policy.sequentialMode = true
             if not cpuCount or cpuCount <= 0 then

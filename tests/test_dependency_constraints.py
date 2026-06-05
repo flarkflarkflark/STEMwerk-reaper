@@ -603,18 +603,19 @@ def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
 
     assert "_sep.SCHEDULER_POLICY = {" in script
     assert "_sep.resolveSchedulerConcurrencyPolicy = function(opts)" in script
+    assert "NORMAL_CPU_MAX_PARALLEL = 2" in script
     assert "local function detectLogicalCpuCount()" in script
     assert 'local h = io.popen("getconf _NPROCESSORS_ONLN 2>/dev/null")' in script
     assert "local function detectSystemRamGiB()" in script
     assert 'if OS == "Linux" then' in script
     assert "local minCpuForParallel = 8" in script
     assert "local minRamGiBForParallel = 8" in script
-    assert 'policy.reason = "cpu_threads_ok"' in script
+    assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
     assert 'policy.reason = "cpu_threads_low"' in script
     assert 'policy.reason = "cpu_threads_unknown"' in script
     assert 'policy.reason = "cpu_ram_low"' in script
     assert 'policy.reason = "cpu_ram_unknown"' in script
-    assert 'policy.cap = math.min(jobCount, adaptiveCap)' in script
+    assert 'policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))' in script
     assert 'policy.reason = "directml_multi_track"' in script
     assert 'timing:workers_launched count=' in script
     assert ' .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none")' in script
@@ -761,6 +762,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
     assert "NORMAL_GPU_MAX_PARALLEL = 2" in script
+    assert "NORMAL_CPU_MAX_PARALLEL = 2" in script
     assert "NORMAL_DIRECTML_MAX_PARALLEL = 1" in script
     assert "NORMAL_MPS_MAX_PARALLEL = 1" in script
     assert "DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2" in script
@@ -778,6 +780,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"' in script
     assert '"scheduler_dks_extract_stage1_normal_gpu_cap2"' in script
     assert '"scheduler_normal_gpu_cap2"' in script
+    assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_mps_conservative"' in script
     assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
     assert 'benchmarkGpuCapIgnoredReason = requestedBenchmarkCap == 8 and "cap8_normal_gpu_only" or "invalid_request"' in script
@@ -785,6 +788,24 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'scheduler_policy_backend=' in script
     assert 'scheduler_policy_cap=' in script
     assert 'lua_dks_scheduler_policy_route=' in script
+
+
+def test_normal_cpu_policy_cap2_slice_keeps_other_backend_caps_unchanged():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert 'if backend == "cpu" then' in script
+    assert 'policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))' in script
+    assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
+    assert 'if backend == "directml" then' in script
+    assert 'policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL' in script
+    assert 'if backend == "mps" then' in script
+    assert 'policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL' in script
+    assert 'if route == "dks_direct" then' in script
+    assert 'policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL' in script
+    assert 'policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"' in script
+    assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
+    assert 'schedulerPolicy.backend == "gpu"' in script
+    assert "not_gpu_parallel_eligible" in script
 
 
 def test_normal_workflow_provenance_is_explicit_in_lua_summary_and_python_stderr():

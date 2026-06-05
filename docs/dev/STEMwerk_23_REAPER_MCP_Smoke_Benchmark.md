@@ -257,6 +257,20 @@ Telemetry note:
 - resource sampling measures the discrete RX 9070, not the integrated `780M`
 - `gpu_temp_peak_c` is the peak seen during the run, not the final on-screen temperature after cooldown
 
+## Experimental CPU slice
+
+Current policy slice under development:
+
+- normal stems on `backend=cpu`, `route=normal`, `stage=single_stage` now targets `scheduler_policy_cap=2`
+- this slice does not change GPU policy, DirectML policy, MPS policy, or any DKS route
+- benchmark env overrides stay GPU-only and should not raise CPU beyond the normal CPU policy cap
+
+Validation status:
+
+- code and regression coverage only in this slice
+- live CPU normal-stems smoke is still required before treating CPU cap2 as fully validated
+- do not confuse this CPU slice with the separate GPU normal-stems `cap4` default candidate
+
 ## Safe MCP Calls To Use
 
 - `dsl_list_actions(section="Main", filter="STEMwerk")`
