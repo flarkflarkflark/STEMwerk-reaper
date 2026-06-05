@@ -620,6 +620,33 @@ def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
     assert ' .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none")' in script
 
 
+def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logged():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "STEMWERK_BENCH_GPU_CAP" in script
+    assert "local function readBenchmarkGpuCapRequest()" in script
+    assert "local function benchmarkGpuCapIgnoredReasonForPolicy(policy)" in script
+    assert "benchmarkGpuCapRequested" in script
+    assert "benchmarkGpuCapApplied" in script
+    assert "benchmarkGpuCapIgnoredReason" in script
+    assert "if benchmarkGpuCapRequested and benchmarkGpuCapEligible then" in script
+    assert "and not benchmarkGpuCapRequested" in script
+    assert 'schedulerPolicy.backend == "gpu"' in script
+    assert "schedulerPolicy.cap >= 2" in script
+    assert "directml_fixed_cap1" in script
+    assert "mps_fixed_cap1" in script
+    assert "dks_direct_long_cap1" in script
+    assert "not_gpu_parallel_eligible" in script
+    assert "bench_gpu_cap_requested=" in script
+    assert "bench_gpu_cap_applied=" in script
+    assert "bench_gpu_cap_ignored_reason=" in script
+    assert "workflow_source=" in script
+    assert "stage=" in script
+    assert "device=" in script
+    assert "backend=" in script
+    assert "effective_parallel_cap=" in script
+
+
 def test_scheduler_policy_route_backend_defaults_are_explicit():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 

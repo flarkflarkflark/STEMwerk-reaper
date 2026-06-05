@@ -72,6 +72,17 @@ Capture these before and after a manual run:
 - Keep the project, input material, and REAPER version fixed across runs.
 - Use the same STEMwerk workflow source for both runs.
 - Run one cap 2 trial and one cap 4 trial on the same project state.
+- Set `STEMWERK_BENCH_GPU_CAP=2` for the baseline run and `STEMWERK_BENCH_GPU_CAP=4` for the benchmark run.
+- Use only GPU-parallel routes where the default scheduler already allows cap 2:
+  - normal GPU separation
+  - Z / Direct Drum Kit short / multi
+  - X / Drum Kit Split stage 1
+- Do not use the override for:
+  - DirectML
+  - MPS
+  - CPU-only runs
+  - X / Drum Kit Split stage 2
+- X stage 2 remains serialized at cap 1.
 - Record a before snapshot, start the run, then record an after snapshot.
 - Collect the support bundle and timing files for both runs.
 - Compare:
@@ -88,8 +99,24 @@ Capture these before and after a manual run:
   - direct DKS
   - extract DKS
   - normal separation
+- Set the benchmark env var in the REAPER launch environment:
+  - `STEMWERK_BENCH_GPU_CAP=2`
+  - `STEMWERK_BENCH_GPU_CAP=4`
 - Capture the support bundle after completion.
-- Compare cap 2 and cap 4 results manually until a project-state helper exists.
+- Compare cap 2 and cap 4 results with the project-state helper and the support bundle markers.
+
+## Benchmark Markers
+
+When the override is active, check the support bundle logs for:
+
+- `bench_gpu_cap_requested=`
+- `bench_gpu_cap_applied=`
+- `bench_gpu_cap_ignored_reason=`
+- `workflow_source=`
+- `stage=`
+- `device=`
+- `backend=`
+- `effective_parallel_cap=`
 
 ## Safe MCP Calls To Use
 

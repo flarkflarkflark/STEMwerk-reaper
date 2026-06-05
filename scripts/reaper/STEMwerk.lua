@@ -17379,6 +17379,45 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     return policy
 end
 
+local function readBenchmarkGpuCapRequest()
+    local raw = tostring(os.getenv("STEMWERK_BENCH_GPU_CAP") or "")
+    raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
+    if raw == "" then
+        return nil, "unset"
+    end
+    local requested = tonumber(raw)
+    if requested == 2 or requested == 4 then
+        return requested, raw
+    end
+    return nil, raw
+end
+
+local function benchmarkGpuCapIgnoredReasonForPolicy(policy)
+    local backend = tostring(policy and policy.backend or "")
+    local route = tostring(policy and policy.route or "")
+    local stage = tostring(policy and policy.stage or "")
+    local reason = tostring(policy and policy.reason or "")
+    if backend == "directml" then
+        return "directml_fixed_cap1"
+    end
+    if backend == "mps" then
+        return "mps_fixed_cap1"
+    end
+    if backend ~= "gpu" then
+        return backend == "" and "backend_unknown" or "backend_not_gpu"
+    end
+    if route == "dks_direct" and reason == "scheduler_dks_direct_gpu_long_cap1" then
+        return "dks_direct_long_cap1"
+    end
+    if route == "dks_extract" and stage == "stage2" then
+        return "dks_extract_stage2_serialized"
+    end
+    if stage ~= "" and stage ~= "single_stage" and stage ~= "stage1_normal" then
+        return "stage_not_benchmark_eligible"
+    end
+    return ""
+end
+
 -- Run multi-track separation (parallel or sequential based on setting)
 _sep.runSingleTrackSeparation = function(trackList)
     refreshPythonPathFromExtState()
@@ -17924,6 +17963,24 @@ _sep.runSingleTrackSeparation = function(trackList)
         longWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy),
     })
 
+    local benchmarkGpuCapRequested, benchmarkGpuCapRaw = readBenchmarkGpuCapRequest()
+    local benchmarkGpuCapApplied = schedulerPolicy.cap
+    local benchmarkGpuCapIgnoredReason = benchmarkGpuCapRequested and "" or (benchmarkGpuCapRaw == "unset" and "not_requested" or "invalid_request")
+    local benchmarkGpuCapEligible = schedulerPolicy.sequentialMode == false
+        and schedulerPolicy.backend == "gpu"
+        and type(schedulerPolicy.cap) == "number"
+        and schedulerPolicy.cap >= 2
+    if benchmarkGpuCapRequested and benchmarkGpuCapEligible then
+        benchmarkGpuCapApplied = math.max(1, math.min(#trackJobs, math.floor(benchmarkGpuCapRequested)))
+        schedulerPolicy.cap = benchmarkGpuCapApplied
+        benchmarkGpuCapIgnoredReason = ""
+    elseif benchmarkGpuCapRequested then
+        benchmarkGpuCapIgnoredReason = benchmarkGpuCapIgnoredReasonForPolicy(schedulerPolicy)
+        if benchmarkGpuCapIgnoredReason == "" then
+            benchmarkGpuCapIgnoredReason = "not_gpu_parallel_eligible"
+        end
+    end
+
     multiTrackQueue.schedulerPolicyRoute = schedulerPolicy.route
     multiTrackQueue.schedulerPolicyStage = schedulerPolicy.stage
     multiTrackQueue.schedulerPolicyBackend = schedulerPolicy.backend
@@ -17932,6 +17989,9 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.schedulerPolicyLongWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy)
     multiTrackQueue.sequentialMode = schedulerPolicy.sequentialMode and true or false
     multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil
+    multiTrackQueue.benchmarkGpuCapRequested = benchmarkGpuCapRequested
+    multiTrackQueue.benchmarkGpuCapApplied = benchmarkGpuCapApplied
+    multiTrackQueue.benchmarkGpuCapIgnoredReason = benchmarkGpuCapIgnoredReason
     multiTrackQueue.executionModeReason = schedulerPolicy.reason or multiTrackQueue.executionModeReason
     if multiTrackQueue.sequentialMode then
         multiTrackQueue.forceSequentialReason = schedulerPolicy.reason
@@ -17958,6 +18018,14 @@ _sep.runSingleTrackSeparation = function(trackList)
             .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
             .. "\nscheduler_policy_reason=" .. tostring(multiTrackQueue.schedulerPolicyReason or "none")
             .. "\nscheduler_policy_long_workload=" .. tostring(multiTrackQueue.schedulerPolicyLongWorkload and "yes" or "no")
+            .. "\nbench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw)
+            .. "\nbench_gpu_cap_applied=" .. tostring(benchmarkGpuCapApplied or "none")
+            .. "\nbench_gpu_cap_ignored_reason=" .. tostring(benchmarkGpuCapIgnoredReason or "")
+            .. "\nworkflow_source=" .. tostring(multiTrackQueue.workflowSource or workflowSourceArg or "")
+            .. "\nstage=" .. tostring(multiTrackQueue.schedulerPolicyStage or "")
+            .. "\ndevice=" .. tostring(effectiveRunDevice() or "")
+            .. "\nbackend=" .. tostring(multiTrackQueue.schedulerPolicyBackend or "")
+            .. "\neffective_parallel_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
     )
     if isDrumKitMultiRun then
         SW_LOG.logExecResult(
@@ -17974,7 +18042,11 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.totalAudioDuration = 0  -- Will be updated when jobs start
     SW_TIMING.beginRun({ mode = multiTrackQueue.sequentialMode and "sequential" or "parallel", job_count = #trackJobs, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
 
-    if not multiTrackQueue.sequentialMode and type(INTERNAL_PARALLEL_JOB_LIMIT) == "number" and INTERNAL_PARALLEL_JOB_LIMIT > 0 then
+    if not multiTrackQueue.sequentialMode
+        and type(INTERNAL_PARALLEL_JOB_LIMIT) == "number"
+        and INTERNAL_PARALLEL_JOB_LIMIT > 0
+        and not benchmarkGpuCapRequested
+    then
         multiTrackQueue.parallelJobLimit = math.max(1, math.floor(INTERNAL_PARALLEL_JOB_LIMIT))
     end
 
