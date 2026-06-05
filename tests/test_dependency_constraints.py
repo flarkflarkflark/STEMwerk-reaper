@@ -712,10 +712,15 @@ def test_reaper_mcp_benchmark_runbook_documents_fixed_dispatcher_and_request_flo
     assert "STEMwerk/dev_mcp_workflow_source = dks_direct" in doc
     assert "STEMwerk/dev_mcp_workflow_mode = drumkit" in doc
     assert "STEMwerk/dev_mcp_device = auto" in doc
+    assert "STEMWERK_BENCH_DKS_STAGE2_CAP=2" in doc
+    assert "STEMWERK_BENCH_DKS_STAGE2_CAP=4" in doc
     assert "STEMwerkDevBenchmarkPrep/*" in doc
     assert "STEMwerkDevSnapshot/*" in doc
     assert "STEMwerk/dev_mcp_request_handled" in doc
     assert "STEMwerkDevMCP" in doc
+    assert "bench_dks_stage2_cap_requested=" in doc
+    assert "bench_dks_stage2_cap_applied=" in doc
+    assert "bench_dks_stage2_cap_ignored_reason=" in doc
 
 
 def test_scheduler_policy_route_backend_defaults_are_explicit():
@@ -1719,6 +1724,7 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
 
 def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+    helper_script = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py").read_text(encoding="utf-8")
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
 
     assert 'def _is_extract_dks_source(workflow_mode: Optional[str], workflow_source: Optional[str]) -> bool:' in script
@@ -1734,7 +1740,13 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "dks_extract_stage1_output=" in script
     assert "dks_extract_stage2_runtime=drumsep" in script
     assert "dks_extract_stage2_device=" in script
+    assert "dks_extract_stage2_backend=" in script
     assert "dks_extract_stage2_requested_device=" in script
+    assert "STEMWERK_BENCH_DKS_STAGE2_CAP" in script
+    assert "bench_dks_stage2_cap_requested=" in script
+    assert "bench_dks_stage2_cap_applied=" in script
+    assert "bench_dks_stage2_cap_ignored_reason=" in script
+    assert "dks_extract_stage2_effective_cap=" in script
     assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1" in script
     assert "def _dks_extract_stage2_lock(output_root: Path):" in script
     assert "with _dks_extract_stage2_lock(output_root):" in script
@@ -1742,6 +1754,9 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "lua_dks_extract_stage2_queue_wait_start" in script
     assert "lua_dks_extract_stage2_queue_wait_end wait_seconds=" in script
     assert "dks_extract_stage2_throttled=yes" in script
+    assert "expected_drum_outputs=" in helper_script
+    assert "actual_drum_outputs=" in helper_script
+    assert "output_count_mismatch=yes" in helper_script
     assert 'dst = output_root / src.name' in script
     assert "_direct_dks_preflight_check(requested_stage2_model, model_cache_dir)" in script
     assert "requested_stage2_model = _resolve_requested_stage2_model(args)" in script
@@ -1749,8 +1764,72 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "print(json.dumps(final_stems))" in script
     assert "workflow_source=dks_extract" not in support_script
     assert '"dks_extract_stage1_runtime", "dks_extract_stage1_requested_device"' in support_script
-    assert '"dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_intermediate_dir"' in support_script
+    assert '"dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_stage2_backend"' in support_script
+    assert '"dks_extract_stage2_effective_cap", "bench_dks_stage2_cap_requested", "bench_dks_stage2_cap_applied",' in support_script
+    assert '"bench_dks_stage2_cap_ignored_reason", "dks_extract_intermediate_dir"' in support_script
     assert '"lua_dks_extract_outputs_detected", "lua_dks_extract_output_count"' in support_script
+    assert '"expected_drum_outputs", "actual_drum_outputs", "output_count_mismatch"' in support_script
+
+
+def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_respects_backend_safety(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
+    assert module._read_benchmark_dks_stage2_cap_request() == (None, "unset")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "unset", 1, "not_requested")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "2")
+    assert module._read_benchmark_dks_stage2_cap_request() == (2, "2")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (2, "2", 2, "")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("cpu") == (2, "2", 1, "backend_not_rocm_cuda")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "4")
+    assert module._read_benchmark_dks_stage2_cap_request() == (4, "4")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("cuda") == (4, "4", 4, "")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "8")
+    assert module._read_benchmark_dks_stage2_cap_request() == (None, "8")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "8", 1, "invalid_request")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "1")
+    assert module._read_benchmark_dks_stage2_cap_request() == (1, "1")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("cpu") == (1, "1", 1, "")
+
+
+def test_benchmark_resource_sampler_code_path_exposes_expected_files_and_graceful_rocm_fallback(monkeypatch):
+    script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
+    module = _load_audio_separator_process_module()
+
+    assert "class BenchmarkResourceSampler" in script
+    assert "benchmark_resource_samples.jsonl" in script
+    assert "benchmark_resource_summary.json" in script
+    assert "benchmark_resource_summary.txt" in script
+    assert "_benchmark_resource_sampling_requested()" in script
+    assert "resource_sampling_available" in script
+    assert "resource_sampling_reason" in script
+    assert "_collect_rocm_smi_metrics()" in script
+    assert "_collect_nvidia_smi_metrics()" in script
+    assert '"rocm-smi_missing"' in script
+    assert '"benchmark_resource_samples.jsonl"] = true' in support_script
+    assert '"benchmark_resource_summary.json"] = true' in support_script
+    assert '"benchmark_resource_summary.txt"] = true' in support_script
+
+    monkeypatch.delenv("STEMWERK_BENCH_GPU_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_RESOURCE_SAMPLING", raising=False)
+    assert module._benchmark_resource_sampling_requested() is False
+    monkeypatch.setenv("STEMWERK_BENCH_GPU_CAP", "4")
+    assert module._benchmark_resource_sampling_requested() is True
+    monkeypatch.delenv("STEMWERK_BENCH_GPU_CAP", raising=False)
+    monkeypatch.setenv("STEMWERK_BENCH_RESOURCE_SAMPLING", "1")
+    assert module._benchmark_resource_sampling_requested() is True
+
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+    metrics, available, reason, detail = module._collect_rocm_smi_metrics()
+    assert available is False
+    assert reason == "rocm-smi_missing"
+    assert metrics == {}
+    assert "not found" in detail
 
 
 def test_drumkit_extract_stage2_uses_requested_drumsep_model_not_stage1_demucs_model():
@@ -2223,6 +2302,9 @@ def test_drumsep_helper_wrong_output_count_schema(tmp_path):
     assert payload["ok"] is False
     assert payload["error_stage"] == "stage2_output_validation"
     assert payload["error_reason"] == "drumsep_output_count_mismatch"
+    assert payload["expected_drum_outputs"] == 6
+    assert payload["actual_drum_outputs"] == 1
+    assert payload["output_count_mismatch"] is True
 
 
 def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():

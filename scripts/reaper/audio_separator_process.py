@@ -20,6 +20,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 import sys
 import time
 import urllib.request
@@ -43,6 +44,7 @@ DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1
+DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -71,6 +73,536 @@ def _is_extract_dks_source(workflow_mode: Optional[str], workflow_source: Option
     mode = str(workflow_mode or "").strip().lower()
     source = str(workflow_source or "").strip().lower()
     return mode == "drumkit" and source == "dks_extract"
+
+
+def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
+    raw = str(os.environ.get("STEMWERK_BENCH_DKS_STAGE2_CAP") or "").strip()
+    if raw == "":
+        return None, "unset"
+    try:
+        requested = int(raw)
+    except ValueError:
+        return None, raw
+    if requested in DKS_EXTRACT_STAGE2_BENCHMARK_CAPS:
+        return requested, raw
+    return None, raw
+
+
+def _detect_dks_extract_stage2_backend() -> str:
+    executable = str(sys.executable or "").lower()
+    if "rocm" in executable:
+        return "rocm"
+    if "cuda" in executable:
+        return "cuda"
+    if "directml" in executable:
+        return "directml"
+    if "mps" in executable:
+        return "mps"
+    return "cpu"
+
+
+def _resolve_dks_extract_stage2_benchmark_cap(stage2_backend: str) -> tuple[Optional[int], str, int, str]:
+    requested_cap, raw_cap = _read_benchmark_dks_stage2_cap_request()
+    applied_cap = DKS_EXTRACT_STAGE2_CONCURRENCY_CAP
+    ignored_reason = ""
+
+    if requested_cap is None:
+        if raw_cap == "unset":
+            ignored_reason = "not_requested"
+        else:
+            ignored_reason = "invalid_request"
+        return requested_cap, raw_cap, applied_cap, ignored_reason
+
+    if requested_cap == 1:
+        return requested_cap, raw_cap, 1, ""
+
+    if stage2_backend not in {"rocm", "cuda"}:
+        return requested_cap, raw_cap, 1, "backend_not_rocm_cuda"
+
+    if os.name != "posix":
+        return requested_cap, raw_cap, 1, "fcntl_unavailable"
+
+    return requested_cap, raw_cap, requested_cap, ""
+
+
+def _benchmark_resource_sampling_requested() -> bool:
+    gpu_cap = str(os.environ.get("STEMWERK_BENCH_GPU_CAP") or "").strip()
+    sampling = str(os.environ.get("STEMWERK_BENCH_RESOURCE_SAMPLING") or "").strip().lower()
+    return gpu_cap != "" or sampling in {"1", "true", "yes", "on"}
+
+
+def _read_linux_cpu_times() -> Optional[tuple[int, int]]:
+    try:
+        with open("/proc/stat", "r", encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline().strip()
+    except Exception:
+        return None
+    parts = first_line.split()
+    if not parts or parts[0] != "cpu" or len(parts) < 5:
+        return None
+    values: list[int] = []
+    for raw in parts[1:]:
+        try:
+            values.append(int(raw))
+        except Exception:
+            values.append(0)
+    total = sum(values)
+    idle = values[3] if len(values) > 3 else 0
+    idle += values[4] if len(values) > 4 else 0
+    return total, idle
+
+
+def _read_linux_meminfo() -> Optional[tuple[float, float]]:
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+    except Exception:
+        return None
+    total_kb = None
+    available_kb = None
+    for line in text.splitlines():
+        if line.startswith("MemTotal:"):
+            try:
+                total_kb = float(re.findall(r"\d+", line)[0])
+            except Exception:
+                pass
+        elif line.startswith("MemAvailable:"):
+            try:
+                available_kb = float(re.findall(r"\d+", line)[0])
+            except Exception:
+                pass
+        if total_kb is not None and available_kb is not None:
+            break
+    if not total_kb or available_kb is None:
+        return None
+    used_mb = max(0.0, (total_kb - available_kb) / 1024.0)
+    total_mb = total_kb / 1024.0
+    return used_mb, total_mb
+
+
+def _read_process_rss_mb() -> Optional[float]:
+    page_size = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+    candidates = ["/proc/self/statm", "/proc/self/status"]
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                text = fh.read()
+        except Exception:
+            continue
+        if path.endswith("statm"):
+            parts = text.split()
+            if len(parts) >= 2:
+                try:
+                    rss_pages = float(parts[1])
+                    return rss_pages * float(page_size) / (1024.0 * 1024.0)
+                except Exception:
+                    pass
+        else:
+            match = re.search(r"VmRSS:\s*(\d+)\s*kB", text)
+            if match:
+                return float(match.group(1)) / 1024.0
+    return None
+
+
+def _bytes_to_mb(value: float) -> float:
+    return float(value) / (1024.0 * 1024.0)
+
+
+def _value_to_mb(raw_value: float, unit: str, line: str) -> float:
+    unit_l = unit.lower()
+    if unit_l in {"b", "byte", "bytes"}:
+        return _bytes_to_mb(raw_value)
+    if unit_l in {"kb", "kib"}:
+        return raw_value / 1024.0
+    if unit_l in {"mb", "mib"}:
+        return raw_value
+    if unit_l in {"gb", "gib"}:
+        return raw_value * 1024.0
+    if unit_l in {"tb", "tib"}:
+        return raw_value * 1024.0 * 1024.0
+    lowered = line.lower()
+    if "memory" in lowered or "vram" in lowered or "ram" in lowered:
+        if "(b)" in lowered or " bytes" in lowered or "byte" in lowered:
+            return _bytes_to_mb(raw_value)
+    return raw_value
+
+
+def _first_number(text: str, pattern: str) -> Optional[float]:
+    match = re.search(pattern, text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except Exception:
+        return None
+
+
+def _extract_metric_from_line(line: str, key_patterns: tuple[str, ...]) -> Optional[float]:
+    lowered = line.lower()
+    if not any(pattern in lowered for pattern in key_patterns):
+        return None
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*(tb|tib|gb|gib|mb|mib|kb|kib|b|c|w|%)?", line, re.IGNORECASE)
+    if not match:
+        return None
+    raw_value = float(match.group(1))
+    unit = match.group(2) or ""
+    return _value_to_mb(raw_value, unit, line) if unit.lower() not in {"c", "w", "%"} else raw_value
+
+
+def _run_command_capture_text(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
+    try:
+        completed = subprocess.run(
+            cmd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            env=_clean_env(),
+            **_windows_no_window_kwargs(),
+        )
+        text = "\n".join(part for part in (completed.stdout or "", completed.stderr or "") if part)
+        return completed.returncode, text.strip()
+    except Exception as exc:
+        return 1, f"{type(exc).__name__}: {exc}"
+
+
+def _collect_rocm_smi_metrics() -> tuple[Dict[str, Optional[float]], bool, str, str]:
+    if not shutil.which("rocm-smi"):
+        return {}, False, "rocm-smi_missing", "rocm-smi not found"
+
+    rc, text = _run_command_capture_text(["rocm-smi", "--showuse", "--showmemuse", "--showtemp", "--showpower"], timeout=12)
+    if rc != 0 or not text:
+        return {}, False, "rocm-smi_failed", text[:500] or f"rocm-smi exit {rc}"
+
+    metrics: Dict[str, Optional[float]] = {
+        "gpu_util_percent": None,
+        "gpu_vram_used_mb": None,
+        "gpu_vram_total_mb": None,
+        "gpu_temp_c": None,
+        "gpu_power_w": None,
+    }
+    for line in text.splitlines():
+        lower = line.lower()
+        if metrics["gpu_util_percent"] is None and ("gpu use" in lower or "gpu utilization" in lower or "utilization" in lower):
+            value = _first_number(line, r"(-?\d+(?:\.\d+)?)\s*%")
+            if value is not None:
+                metrics["gpu_util_percent"] = value
+        if metrics["gpu_vram_used_mb"] is None and ("vram" in lower or "memory" in lower) and ("used" in lower or "usage" in lower):
+            value = _extract_metric_from_line(line, ("vram", "memory"))
+            if value is not None:
+                metrics["gpu_vram_used_mb"] = value
+        if metrics["gpu_vram_total_mb"] is None and ("vram" in lower or "memory" in lower) and ("total" in lower or "available" in lower):
+            value = _extract_metric_from_line(line, ("vram", "memory"))
+            if value is not None:
+                metrics["gpu_vram_total_mb"] = value
+        if metrics["gpu_temp_c"] is None and ("temp" in lower or "temperature" in lower):
+            value = _first_number(line, r"(-?\d+(?:\.\d+)?)\s*[cC]")
+            if value is not None:
+                metrics["gpu_temp_c"] = value
+        if metrics["gpu_power_w"] is None and ("power" in lower or "watts" in lower):
+            value = _first_number(line, r"(-?\d+(?:\.\d+)?)\s*[wW]")
+            if value is not None:
+                metrics["gpu_power_w"] = value
+
+    if metrics["gpu_vram_used_mb"] is None and metrics["gpu_vram_total_mb"] is None and metrics["gpu_util_percent"] is None:
+        return metrics, False, "rocm-smi_parse_failed", text[:500] or "no parseable metrics"
+    return metrics, True, "", text[:500]
+
+
+def _collect_nvidia_smi_metrics() -> tuple[Dict[str, Optional[float]], bool, str, str]:
+    if not shutil.which("nvidia-smi"):
+        return {}, False, "nvidia-smi_missing", "nvidia-smi not found"
+    rc, text = _run_command_capture_text(
+        [
+            "nvidia-smi",
+            "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
+            "--format=csv,noheader,nounits",
+        ],
+        timeout=8,
+    )
+    if rc != 0 or not text:
+        return {}, False, "nvidia-smi_failed", text[:500] or f"nvidia-smi exit {rc}"
+    first_row = text.splitlines()[0] if text.splitlines() else ""
+    parts = [p.strip() for p in first_row.split(",")]
+    if len(parts) < 5:
+        return {}, False, "nvidia-smi_parse_failed", first_row[:500]
+    metrics: Dict[str, Optional[float]] = {
+        "gpu_util_percent": None,
+        "gpu_vram_used_mb": None,
+        "gpu_vram_total_mb": None,
+        "gpu_temp_c": None,
+        "gpu_power_w": None,
+    }
+    try:
+        metrics["gpu_util_percent"] = float(parts[0])
+    except Exception:
+        pass
+    try:
+        metrics["gpu_vram_used_mb"] = float(parts[1])
+    except Exception:
+        pass
+    try:
+        metrics["gpu_vram_total_mb"] = float(parts[2])
+    except Exception:
+        pass
+    try:
+        metrics["gpu_temp_c"] = float(parts[3])
+    except Exception:
+        pass
+    try:
+        metrics["gpu_power_w"] = float(parts[4])
+    except Exception:
+        pass
+    return metrics, True, "", first_row[:500]
+
+
+class BenchmarkResourceSampler:
+    def __init__(self, output_dir: Path):
+        self.output_dir = output_dir
+        self.samples_path = output_dir / "benchmark_resource_samples.jsonl"
+        self.summary_json_path = output_dir / "benchmark_resource_summary.json"
+        self.summary_txt_path = output_dir / "benchmark_resource_summary.txt"
+        self.interval_seconds = 1.0
+        self.stop_event = threading.Event()
+        self.thread: Optional[threading.Thread] = None
+        self.sample_index = 0
+        self.started_at = time.time()
+        self.ended_at = None
+        self.resource_sampling_available = False
+        self.resource_sampling_reason = "unknown"
+        self.gpu_backend = "unknown"
+        self._jsonl_fh = None
+        self._cpu_last: Optional[tuple[int, int]] = None
+        self._cpu_util_sum = 0.0
+        self._cpu_util_count = 0
+        self._gpu_util_sum = 0.0
+        self._gpu_util_count = 0
+        self._gpu_util_peak = None
+        self._vram_peak = None
+        self._system_ram_peak = None
+        self._gpu_temp_peak = None
+        self._gpu_power_peak = None
+        self._process_rss_peak = None
+
+    def start(self) -> None:
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self._jsonl_fh = self.samples_path.open("w", encoding="utf-8", buffering=1)
+            self.gpu_backend = self._detect_backend()
+            if sys.platform.startswith("linux"):
+                if self.gpu_backend == "rocm-smi":
+                    self.resource_sampling_reason = "benchmark_active"
+                elif self.gpu_backend == "nvidia-smi":
+                    self.resource_sampling_reason = "benchmark_active_nvidia"
+                else:
+                    self.resource_sampling_reason = "rocm-smi_missing"
+            elif self.gpu_backend == "nvidia-smi":
+                self.resource_sampling_reason = "benchmark_active_nvidia"
+            else:
+                self.resource_sampling_reason = f"{self.gpu_backend}_unsupported"
+            first_sample = self._collect_sample()
+            self._update_summary(first_sample)
+            self._write_sample(first_sample)
+            self.sample_index += 1
+            self.thread = threading.Thread(target=self._run, name="stemwerk-resource-sampler", daemon=True)
+            self.thread.start()
+        except Exception as exc:
+            self.resource_sampling_available = False
+            self.resource_sampling_reason = f"sampler_start_failed:{type(exc).__name__}"
+            self._close_files()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=10)
+        self.ended_at = time.time()
+        self._write_summary_files()
+        self._close_files()
+
+    def _close_files(self) -> None:
+        if self._jsonl_fh is not None:
+            try:
+                self._jsonl_fh.close()
+            except Exception:
+                pass
+            self._jsonl_fh = None
+
+    def _detect_backend(self) -> str:
+        if sys.platform.startswith("linux"):
+            if shutil.which("rocm-smi"):
+                return "rocm-smi"
+            if shutil.which("nvidia-smi"):
+                return "nvidia-smi"
+            return "linux-unknown"
+        if sys.platform == "darwin":
+            if shutil.which("nvidia-smi"):
+                return "nvidia-smi"
+            return "macos-unknown"
+        if os.name == "nt":
+            if shutil.which("nvidia-smi"):
+                return "nvidia-smi"
+            return "windows-unknown"
+        return "unknown"
+
+    def _collect_sample(self) -> Dict[str, Any]:
+        sample: Dict[str, Any] = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+            "sample_index": self.sample_index,
+            "gpu_backend": self.gpu_backend,
+            "resource_sampling_available": "no" if not self.resource_sampling_available else "yes",
+            "resource_sampling_reason": self.resource_sampling_reason,
+            "gpu_util_percent": None,
+            "gpu_vram_used_mb": None,
+            "gpu_vram_total_mb": None,
+            "gpu_temp_c": None,
+            "gpu_power_w": None,
+            "cpu_util_percent": None,
+            "system_ram_used_mb": None,
+            "system_ram_total_mb": None,
+            "process_rss_mb": _read_process_rss_mb(),
+        }
+        if sys.platform.startswith("linux"):
+            meminfo = _read_linux_meminfo()
+            if meminfo is not None:
+                sample["system_ram_used_mb"], sample["system_ram_total_mb"] = meminfo
+            cpu_times = _read_linux_cpu_times()
+            if cpu_times is not None and self._cpu_last is not None:
+                total_now, idle_now = cpu_times
+                total_prev, idle_prev = self._cpu_last
+                delta_total = total_now - total_prev
+                delta_idle = idle_now - idle_prev
+                if delta_total > 0:
+                    sample["cpu_util_percent"] = max(0.0, min(100.0, 100.0 * (1.0 - (float(delta_idle) / float(delta_total)))))
+            self._cpu_last = cpu_times
+
+            gpu_metrics = {}
+            gpu_available = False
+            gpu_reason = ""
+            if self.gpu_backend == "rocm-smi":
+                gpu_metrics, gpu_available, gpu_reason, _ = _collect_rocm_smi_metrics()
+            elif self.gpu_backend == "nvidia-smi":
+                gpu_metrics, gpu_available, gpu_reason, _ = _collect_nvidia_smi_metrics()
+            if gpu_metrics:
+                sample.update(gpu_metrics)
+            if gpu_available:
+                self.resource_sampling_available = True
+                self.resource_sampling_reason = ""
+            elif not self.resource_sampling_available and gpu_reason:
+                self.resource_sampling_reason = gpu_reason
+        else:
+            if sys.platform.startswith("linux") and self.gpu_backend == "linux-unknown":
+                self.resource_sampling_reason = "rocm-smi_missing"
+            else:
+                self.resource_sampling_reason = f"{self.gpu_backend}_unsupported"
+        return sample
+
+    def _update_summary(self, sample: Dict[str, Any]) -> None:
+        def _peak(current: Optional[float], new_value: Any) -> Optional[float]:
+            try:
+                value = float(new_value)
+            except Exception:
+                return current
+            if current is None or value > current:
+                return value
+            return current
+
+        def _sum_count(sum_value: float, count: int, new_value: Any) -> tuple[float, int]:
+            try:
+                value = float(new_value)
+            except Exception:
+                return sum_value, count
+            return sum_value + value, count + 1
+
+        self._gpu_util_peak = _peak(self._gpu_util_peak, sample.get("gpu_util_percent"))
+        self._vram_peak = _peak(self._vram_peak, sample.get("gpu_vram_used_mb"))
+        self._system_ram_peak = _peak(self._system_ram_peak, sample.get("system_ram_used_mb"))
+        self._gpu_temp_peak = _peak(self._gpu_temp_peak, sample.get("gpu_temp_c"))
+        self._gpu_power_peak = _peak(self._gpu_power_peak, sample.get("gpu_power_w"))
+        self._process_rss_peak = _peak(self._process_rss_peak, sample.get("process_rss_mb"))
+        self._gpu_util_sum, self._gpu_util_count = _sum_count(self._gpu_util_sum, self._gpu_util_count, sample.get("gpu_util_percent"))
+        self._cpu_util_sum, self._cpu_util_count = _sum_count(self._cpu_util_sum, self._cpu_util_count, sample.get("cpu_util_percent"))
+
+    def _write_sample(self, sample: Dict[str, Any]) -> None:
+        if self._jsonl_fh is None:
+            return
+        try:
+            self._jsonl_fh.write(json.dumps(sample, sort_keys=True) + "\n")
+        except Exception:
+            pass
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                sample = self._collect_sample()
+                self._update_summary(sample)
+                self._write_sample(sample)
+                self.sample_index += 1
+            except Exception as exc:
+                if not self.resource_sampling_reason or self.resource_sampling_reason == "benchmark_active":
+                    self.resource_sampling_reason = f"sample_failed:{type(exc).__name__}"
+            if self.stop_event.wait(self.interval_seconds):
+                break
+
+    def _summary_payload(self) -> Dict[str, Any]:
+        gpu_util_avg = (self._gpu_util_sum / self._gpu_util_count) if self._gpu_util_count else None
+        cpu_util_avg = (self._cpu_util_sum / self._cpu_util_count) if self._cpu_util_count else None
+        available = "yes" if self.resource_sampling_available else "no"
+        reason = "" if self.resource_sampling_available else self.resource_sampling_reason
+        return {
+            "resource_sampling_available": available,
+            "resource_sampling_reason": reason,
+            "gpu_backend": self.gpu_backend,
+            "sample_count": self.sample_index,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(self.started_at)),
+            "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(self.ended_at or time.time())),
+            "interval_seconds": self.interval_seconds,
+            "samples_path": str(self.samples_path),
+            "gpu_util_peak_percent": self._gpu_util_peak,
+            "gpu_util_avg_percent": gpu_util_avg,
+            "vram_peak_mb": self._vram_peak,
+            "gpu_temp_peak_c": self._gpu_temp_peak,
+            "gpu_power_peak_w": self._gpu_power_peak,
+            "system_ram_peak_mb": self._system_ram_peak,
+            "cpu_avg_percent": cpu_util_avg,
+            "process_rss_peak_mb": self._process_rss_peak,
+        }
+
+    def _write_summary_files(self) -> None:
+        if not self.output_dir:
+            return
+        payload = self._summary_payload()
+        try:
+            self.summary_json_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            lines = [
+                f"resource_sampling_available={payload['resource_sampling_available']}",
+                f"resource_sampling_reason={payload['resource_sampling_reason']}",
+                f"gpu_backend={payload['gpu_backend']}",
+                f"sample_count={payload['sample_count']}",
+                f"started_at={payload['started_at']}",
+                f"ended_at={payload['ended_at']}",
+                f"interval_seconds={payload['interval_seconds']}",
+                f"gpu_util_peak_percent={payload['gpu_util_peak_percent']}",
+                f"gpu_util_avg_percent={payload['gpu_util_avg_percent']}",
+                f"vram_peak_mb={payload['vram_peak_mb']}",
+                f"gpu_temp_peak_c={payload['gpu_temp_peak_c']}",
+                f"gpu_power_peak_w={payload['gpu_power_peak_w']}",
+                f"system_ram_peak_mb={payload['system_ram_peak_mb']}",
+                f"cpu_avg_percent={payload['cpu_avg_percent']}",
+                f"process_rss_peak_mb={payload['process_rss_peak_mb']}",
+                f"samples_path={payload['samples_path']}",
+            ]
+            self.summary_txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _finish_benchmark_run(sampler: Optional[BenchmarkResourceSampler], code: int) -> int:
+    if sampler is not None:
+        sampler.stop()
+    return code
 
 
 def _resolve_run_model(args: argparse.Namespace) -> str:
@@ -173,12 +705,22 @@ def _drumsep_helper_path() -> Path:
 @contextmanager
 def _dks_extract_stage2_lock(output_root: Path):
     """Serialize DrumSep stage 2 for Drum Split multi runs to avoid ROCm contention."""
+    stage2_backend = _detect_dks_extract_stage2_backend()
+    requested_cap, raw_cap, effective_cap, ignored_reason = _resolve_dks_extract_stage2_benchmark_cap(stage2_backend)
     batch_root = output_root.parent if output_root.parent.name.startswith("STEMwerk_") else output_root
     lock_path = batch_root / ".dks_extract_stage2.lock"
     lock_fh = None
+    acquired_slot = None
     waited = False
     wait_started = time.monotonic()
-    print(f"lua_dks_extract_stage2_concurrency_cap={DKS_EXTRACT_STAGE2_CONCURRENCY_CAP}", file=sys.stderr)
+    print(f"bench_dks_stage2_cap_requested={requested_cap if requested_cap is not None else raw_cap}", file=sys.stderr)
+    print(f"bench_dks_stage2_cap_applied={effective_cap}", file=sys.stderr)
+    print(f"bench_dks_stage2_cap_ignored_reason={ignored_reason}", file=sys.stderr)
+    print(f"dks_extract_stage2_effective_cap={effective_cap}", file=sys.stderr)
+    print(f"dks_extract_stage2_backend={stage2_backend}", file=sys.stderr)
+    print(f"dks_extract_stage2_device={stage2_backend}", file=sys.stderr)
+    print("dks_extract_stage2_runtime=drumsep", file=sys.stderr)
+    print(f"lua_dks_extract_stage2_concurrency_cap={effective_cap}", file=sys.stderr)
     print("dks_extract_stage2_throttled=yes", file=sys.stderr)
     print(f"dks_extract_stage2_lock_path={lock_path}", file=sys.stderr)
     try:
@@ -187,19 +729,47 @@ def _dks_extract_stage2_lock(output_root: Path):
         try:
             import fcntl  # POSIX only; Windows falls back to no lock.
 
-            print("lua_dks_extract_stage2_queue_wait_start", file=sys.stderr)
-            print("PROGRESS:50:Stage 2 queued for DrumSep...", flush=True)
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-            waited = True
-            wait_seconds = max(0.0, time.monotonic() - wait_started)
-            print(f"lua_dks_extract_stage2_queue_wait_end wait_seconds={wait_seconds:.3f}", file=sys.stderr)
+            if effective_cap <= 1:
+                print("lua_dks_extract_stage2_queue_wait_start", file=sys.stderr)
+                print("PROGRESS:50:Stage 2 queued for DrumSep...", flush=True)
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                acquired_slot = 0
+                waited = True
+                wait_seconds = max(0.0, time.monotonic() - wait_started)
+                print(f"lua_dks_extract_stage2_queue_wait_end wait_seconds={wait_seconds:.3f}", file=sys.stderr)
+            else:
+                slot_count = max(1, int(effective_cap))
+                slot_handles = []
+                while acquired_slot is None:
+                    for slot_index in range(slot_count):
+                        slot_path = Path(f"{lock_path}.{slot_index}")
+                        slot_fh = slot_path.open("a+", encoding="utf-8")
+                        try:
+                            fcntl.flock(slot_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            acquired_slot = slot_index
+                            lock_fh.close()
+                            lock_fh = slot_fh
+                            break
+                        except BlockingIOError:
+                            slot_fh.close()
+                            continue
+                    if acquired_slot is not None:
+                        break
+                    if not waited:
+                        print("lua_dks_extract_stage2_queue_wait_start", file=sys.stderr)
+                        print("PROGRESS:50:Stage 2 queued for DrumSep...", flush=True)
+                        waited = True
+                    time.sleep(0.5)
+                if waited:
+                    wait_seconds = max(0.0, time.monotonic() - wait_started)
+                    print(f"lua_dks_extract_stage2_queue_wait_end wait_seconds={wait_seconds:.3f}", file=sys.stderr)
         except ImportError:
             print("lua_dks_extract_stage2_queue_wait_skipped=fcntl_unavailable", file=sys.stderr)
         yield
     finally:
         if lock_fh is not None:
             try:
-                if waited:
+                if acquired_slot is not None:
                     import fcntl
 
                     fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
@@ -1779,6 +2349,11 @@ def main():
         print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
         return 1
 
+    benchmark_sampler = None
+    if _benchmark_resource_sampling_requested():
+        benchmark_sampler = BenchmarkResourceSampler(Path(args.output_dir).resolve())
+        benchmark_sampler.start()
+
     device_preference = args.device
     if device_preference in skip_devices:
         print(f"WARNING: Device '{device_preference}' skipped; using auto", file=sys.stderr)
@@ -1842,7 +2417,7 @@ def main():
                 print("error_stage=stage1_parent", file=sys.stderr)
                 print("error_reason=missing_drums_intermediate", file=sys.stderr)
                 print(f"dks_extract_stage1_output={drums_input}", file=sys.stderr)
-                return 1
+                return _finish_benchmark_run(benchmark_sampler, 1)
             print(f"dks_extract_stage1_output={drums_input}", file=sys.stderr)
             emit_phase("stage1_parent_end")
 
@@ -1851,6 +2426,7 @@ def main():
             print(f"timing_utc={_ts()} drumsep_runtime_select_start", file=sys.stderr)
             drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
             print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
+            print(f"dks_extract_stage2_backend={runtime_kind}", file=sys.stderr)
             if drumsep_python is None:
                 reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
                 runtime_path = _drumsep_rocm_runtime_python_path()
@@ -1859,7 +2435,7 @@ def main():
                 emit_phase("python_error")
                 if write_done:
                     write_done("ERROR")
-                return 1
+                return _finish_benchmark_run(benchmark_sampler, 1)
             versions = runtime_info.get("versions") if isinstance(runtime_info.get("versions"), dict) else {}
             device_names = runtime_info.get("device_names") if isinstance(runtime_info.get("device_names"), list) else []
             fallback_reason = str(runtime_info.get("fallback_reason") or "")
@@ -1887,7 +2463,7 @@ def main():
                 emit_phase("python_error")
                 if write_done:
                     write_done("ERROR")
-                return 1
+                return _finish_benchmark_run(benchmark_sampler, 1)
             requested_stage2_model = requested_model or requested_stage2_model
             run_model = resolved_model or run_model
             emit_phase("stage2_separate")
@@ -1916,7 +2492,7 @@ def main():
                 emit_phase("python_error")
                 if write_done:
                     write_done("ERROR")
-                return 1
+                return _finish_benchmark_run(benchmark_sampler, 1)
             emit_phase("stem_write_start")
             print("PROGRESS:95:Writing drum tracks...", flush=True)
             final_stems: Dict[str, str] = {}
@@ -1932,7 +2508,7 @@ def main():
             emit_phase("python_done")
             if write_done:
                 write_done("DONE")
-            return 0
+            return _finish_benchmark_run(benchmark_sampler, 0)
         except Exception as exc:
             import traceback
 
@@ -1942,7 +2518,7 @@ def main():
             emit_phase("python_error")
             if write_done:
                 write_done("ERROR")
-            return 1
+            return _finish_benchmark_run(benchmark_sampler, 1)
 
     if _is_direct_dks_source(args.workflow_mode, args.workflow_source):
         emit_phase("stage2_preflight")
@@ -1963,7 +2539,7 @@ def main():
             emit_phase("python_error")
             if write_done:
                 write_done("ERROR")
-            return 1
+            return _finish_benchmark_run(benchmark_sampler, 1)
         versions = runtime_info.get("versions") if isinstance(runtime_info.get("versions"), dict) else {}
         device_names = runtime_info.get("device_names") if isinstance(runtime_info.get("device_names"), list) else []
         fallback_reason = str(runtime_info.get("fallback_reason") or "")
@@ -1993,7 +2569,7 @@ def main():
                 emit_phase("python_error")
                 if write_done:
                     write_done("ERROR")
-                return 1
+                return _finish_benchmark_run(benchmark_sampler, 1)
             requested_stage2_model = requested_model or requested_stage2_model
             run_model = resolved_model or run_model
         except Exception as exc:
@@ -2001,7 +2577,7 @@ def main():
             emit_phase("python_error")
             if write_done:
                 write_done("ERROR")
-            return 1
+            return _finish_benchmark_run(benchmark_sampler, 1)
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         emit_phase("separate_start")
@@ -2030,7 +2606,7 @@ def main():
             emit_phase("python_error")
             if write_done:
                 write_done("ERROR")
-            return 1
+            return _finish_benchmark_run(benchmark_sampler, 1)
         emit_phase("separate_end")
         emit_phase("stem_write_start")
         print("PROGRESS:95:Writing drum tracks...", flush=True)
@@ -2039,7 +2615,7 @@ def main():
         emit_phase("python_done")
         if write_done:
             write_done("DONE")
-        return 0
+        return _finish_benchmark_run(benchmark_sampler, 0)
 
     requested_device, resolved_device, preview_text, live_device_ids = _resolve_normal_runtime_device(device_preference)
     preview_device_id, _sep, preview_device_name = preview_text.partition("|")
@@ -2107,7 +2683,7 @@ def main():
             emit_phase("python_error")
             if write_done:
                 write_done("ERROR")
-            return 1
+            return _finish_benchmark_run(benchmark_sampler, 1)
         model_failure = _classify_model_failure_text(f"{exc}\n{traceback_text}")
         if model_failure:
             print(f"STEMWERK_ERROR_CLASS={model_failure['error_class']}", file=sys.stderr)
@@ -2134,7 +2710,7 @@ def main():
         emit_phase("python_error")
         if write_done:
             write_done("ERROR")
-        return 1
+        return _finish_benchmark_run(benchmark_sampler, 1)
 
 
 if __name__ == "__main__":

@@ -102,6 +102,10 @@ Capture these before and after a manual run:
 - Set the benchmark env var in the REAPER launch environment:
   - `STEMWERK_BENCH_GPU_CAP=2`
   - `STEMWERK_BENCH_GPU_CAP=4`
+- For X / Drum Kit Split Stage 2, also set:
+  - `STEMWERK_BENCH_DKS_STAGE2_CAP=1`
+  - `STEMWERK_BENCH_DKS_STAGE2_CAP=2`
+  - `STEMWERK_BENCH_DKS_STAGE2_CAP=4`
 - Capture the support bundle after completion.
 - Compare cap 2 and cap 4 results with the project-state helper and the support bundle markers.
 
@@ -112,11 +116,34 @@ When the override is active, check the support bundle logs for:
 - `bench_gpu_cap_requested=`
 - `bench_gpu_cap_applied=`
 - `bench_gpu_cap_ignored_reason=`
+- `bench_dks_stage2_cap_requested=`
+- `bench_dks_stage2_cap_applied=`
+- `bench_dks_stage2_cap_ignored_reason=`
 - `workflow_source=`
 - `stage=`
 - `device=`
 - `backend=`
 - `effective_parallel_cap=`
+
+## X Benchmark Matrix
+
+Run X / Drum Kit Split with 8 short items and compare these 4 subruns:
+
+1. A. `STEMWERK_BENCH_GPU_CAP=2`, `STEMWERK_BENCH_DKS_STAGE2_CAP` unset or `1`
+2. B. `STEMWERK_BENCH_GPU_CAP=4`, `STEMWERK_BENCH_DKS_STAGE2_CAP` unset or `1`
+3. C. `STEMWERK_BENCH_GPU_CAP=4`, `STEMWERK_BENCH_DKS_STAGE2_CAP=2`
+4. D. `STEMWERK_BENCH_GPU_CAP=4`, `STEMWERK_BENCH_DKS_STAGE2_CAP=4`, only if C is clean
+
+PASS criteria for X:
+
+- 8 item-subruns
+- all exit codes 0
+- expected outputs 48/48
+- no `partial_dks_multi`
+- no `drumsep_output_count_mismatch`
+- no missing stage2 DrumSep logs
+- no stale success when outputs are missing
+- support/log markers present
 
 ## Safe MCP Calls To Use
 

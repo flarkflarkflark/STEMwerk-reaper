@@ -108,6 +108,13 @@ def _error_payload(reason: str, stage: str, message: str, **extra: Any) -> dict[
     return payload
 
 
+def _emit_output_count_markers(expected_count: int, actual_count: int, mismatch: bool) -> None:
+    print(f"expected_drum_outputs={expected_count}", file=sys.stderr)
+    print(f"actual_drum_outputs={actual_count}", file=sys.stderr)
+    if mismatch:
+        print("output_count_mismatch=yes", file=sys.stderr)
+
+
 def run(args: argparse.Namespace) -> int:
     input_path = Path(args.input).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -164,22 +171,39 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     stems, raw_paths = normalize_outputs(output_dir, raw_outputs, before)
+    expected_count = len(EXPECTED_STEMS)
+    actual_count = len(stems)
     missing = [name for name in EXPECTED_STEMS if name not in stems]
     if missing or len(stems) != len(EXPECTED_STEMS):
+        _emit_output_count_markers(expected_count, actual_count, True)
         write_result(
             result_json,
             _error_payload(
                 "drumsep_output_count_mismatch",
                 "stage2_output_validation",
-                f"expected {len(EXPECTED_STEMS)} stems, got {len(stems)}",
+                f"expected {expected_count} stems, got {actual_count}",
                 stems=stems,
                 missing=missing,
                 raw_outputs=raw_paths,
+                expected_drum_outputs=expected_count,
+                actual_drum_outputs=actual_count,
+                output_count_mismatch=True,
             ),
         )
         return 1
 
-    write_result(result_json, {"ok": True, "stems": stems, "raw_outputs": raw_paths})
+    _emit_output_count_markers(expected_count, actual_count, False)
+    write_result(
+        result_json,
+        {
+            "ok": True,
+            "stems": stems,
+            "raw_outputs": raw_paths,
+            "expected_drum_outputs": expected_count,
+            "actual_drum_outputs": actual_count,
+            "output_count_mismatch": False,
+        },
+    )
     print("drumsep_helper_ok=true", file=sys.stderr)
     return 0
 
