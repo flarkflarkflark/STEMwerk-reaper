@@ -165,23 +165,24 @@ Registered action:
 
 Before running it, set the MCP request ExtState:
 
-1. Set `STEMwerkDevMCP/request = prepare_benchmark_state`
-2. Set `STEMwerkDevMCP/requested_item_count = 8`
-3. Set `STEMwerkDevMCP/workflow_source = dks_direct`
-4. Set `STEMwerkDevMCP/workflow_mode = drumkit`
-5. Set `STEMwerkDevMCP/device = auto`
+1. Set `STEMwerk/dev_mcp_request = prepare_benchmark_state`
+2. Set `STEMwerk/dev_mcp_requested_item_count = 8`
+3. Set `STEMwerk/dev_mcp_workflow_source = dks_direct`
+4. Set `STEMwerk/dev_mcp_workflow_mode = drumkit`
+5. Set `STEMwerk/dev_mcp_device = auto`
 6. Run `Custom: STEMwerk_Dev_Project_State_Snapshot.lua` or command id `71254`
 
 After the run, read:
 
 - `STEMwerkDevBenchmarkPrep/*`
 - `STEMwerkDevSnapshot/*`
-- `STEMwerkDevMCP/request_handled`
+- `STEMwerk/dev_mcp_request_handled`
 
 The dispatcher handles the benchmark prep only when the request key is set to `prepare_benchmark_state`.
 Without that explicit request, it stays a read-only snapshot helper.
 
 The compatibility script `Custom: STEMwerk_Dev_Prepare_Benchmark_State.lua` remains on disk for manual use, but MCP does not need to discover or invoke it.
+`STEMwerkDevMCP` is no longer used because the bridge write allowlist blocks that section.
 
 ## Benchmark Prep Result
 

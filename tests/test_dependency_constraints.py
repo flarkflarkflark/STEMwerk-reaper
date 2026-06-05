@@ -650,11 +650,13 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
 def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
     script = Path("scripts/reaper/STEMwerk_Dev_Project_State_Snapshot.lua").read_text()
 
-    assert 'local MCP_SECTION = "STEMwerkDevMCP"' in script
+    assert 'local MCP_SECTION = "STEMwerk"' in script
     assert 'local SNAPSHOT_SECTION = "STEMwerkDevSnapshot"' in script
     assert 'local PREP_SECTION = "STEMwerkDevBenchmarkPrep"' in script
+    assert 'local LEGACY_MCP_SECTION = "STEMwerkDevMCP"' in script
     assert 'local REQUEST_PREPARE_BENCHMARK_STATE = "prepare_benchmark_state"' in script
     assert "local function readBenchmarkRequest()" in script
+    assert "local function getMcpExtState(key)" in script
     assert "if request ~= REQUEST_PREPARE_BENCHMARK_STATE then" in script
     assert "local function runBenchmarkPrep(requestState)" in script
     assert "local function selectExactItems(items, expectedCount)" in script
@@ -684,13 +686,13 @@ def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_de
 def test_dev_prepare_benchmark_state_helper_is_compatibility_wrapper_for_snapshot_dispatcher():
     script = Path("scripts/reaper/STEMwerk_Dev_Prepare_Benchmark_State.lua").read_text()
 
-    assert 'local MCP_SECTION = "STEMwerkDevMCP"' in script
+    assert 'local MCP_SECTION = "STEMwerk"' in script
     assert 'local SNAPSHOT_COMMAND_ID = 71254' in script
-    assert 'setTransientExtState("request", "prepare_benchmark_state")' in script
-    assert 'setTransientExtState("requested_item_count", "8")' in script
-    assert 'setTransientExtState("workflow_source", "dks_direct")' in script
-    assert 'setTransientExtState("workflow_mode", "drumkit")' in script
-    assert 'setTransientExtState("device", "auto")' in script
+    assert 'setTransientExtState("dev_mcp_request", "prepare_benchmark_state")' in script
+    assert 'setTransientExtState("dev_mcp_requested_item_count", "8")' in script
+    assert 'setTransientExtState("dev_mcp_workflow_source", "dks_direct")' in script
+    assert 'setTransientExtState("dev_mcp_workflow_mode", "drumkit")' in script
+    assert 'setTransientExtState("dev_mcp_device", "auto")' in script
     assert "reaper.Main_OnCommand(SNAPSHOT_COMMAND_ID, 0)" in script
 
 
@@ -700,14 +702,15 @@ def test_reaper_mcp_benchmark_runbook_documents_fixed_dispatcher_and_request_flo
     assert "Custom: STEMwerk_Dev_Project_State_Snapshot.lua" in doc
     assert "_RS6591f55c0e89376ce59cc3be252bf722305ed9e0" in doc
     assert "71254" in doc
-    assert "STEMwerkDevMCP/request = prepare_benchmark_state" in doc
-    assert "STEMwerkDevMCP/requested_item_count = 8" in doc
-    assert "STEMwerkDevMCP/workflow_source = dks_direct" in doc
-    assert "STEMwerkDevMCP/workflow_mode = drumkit" in doc
-    assert "STEMwerkDevMCP/device = auto" in doc
+    assert "STEMwerk/dev_mcp_request = prepare_benchmark_state" in doc
+    assert "STEMwerk/dev_mcp_requested_item_count = 8" in doc
+    assert "STEMwerk/dev_mcp_workflow_source = dks_direct" in doc
+    assert "STEMwerk/dev_mcp_workflow_mode = drumkit" in doc
+    assert "STEMwerk/dev_mcp_device = auto" in doc
     assert "STEMwerkDevBenchmarkPrep/*" in doc
     assert "STEMwerkDevSnapshot/*" in doc
-    assert "STEMwerkDevMCP/request_handled" in doc
+    assert "STEMwerk/dev_mcp_request_handled" in doc
+    assert "STEMwerkDevMCP" in doc
 
 
 def test_scheduler_policy_route_backend_defaults_are_explicit():

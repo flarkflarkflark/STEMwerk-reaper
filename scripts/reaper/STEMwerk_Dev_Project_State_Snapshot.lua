@@ -1,14 +1,15 @@
 -- STEMwerk: Dev Project State Snapshot
 -- dev/test helper for MCP smoke/benchmark automation
 -- Default behavior: read-only snapshot to ExtState.
--- Explicit request flow: when STEMwerkDevMCP/request == prepare_benchmark_state,
+-- Explicit request flow: when STEMwerk/dev_mcp_request == prepare_benchmark_state,
 -- this helper also prepares benchmark state before writing the snapshot.
 
-local MCP_SECTION = "STEMwerkDevMCP"
+local MCP_SECTION = "STEMwerk"
 local SNAPSHOT_SECTION = "STEMwerkDevSnapshot"
 local PREP_SECTION = "STEMwerkDevBenchmarkPrep"
 local REQUEST_PREPARE_BENCHMARK_STATE = "prepare_benchmark_state"
 local DEFAULT_REQUESTED_ITEM_COUNT = 8
+local LEGACY_MCP_SECTION = "STEMwerkDevMCP"
 
 if not reaper then
     return
@@ -42,8 +43,16 @@ local function getExtState(section, key)
     return trim(reaper.GetExtState(section, key))
 end
 
+local function getMcpExtState(key)
+    local value = getExtState(MCP_SECTION, key)
+    if value ~= "" then
+        return value
+    end
+    return getExtState(LEGACY_MCP_SECTION, key)
+end
+
 local function readRequestedItemCount()
-    local requested = tonumber(getExtState(MCP_SECTION, "requested_item_count"))
+    local requested = tonumber(getMcpExtState("dev_mcp_requested_item_count"))
     if type(requested) ~= "number" or requested < 1 then
         return DEFAULT_REQUESTED_ITEM_COUNT
     end
@@ -51,7 +60,7 @@ local function readRequestedItemCount()
 end
 
 local function readBenchmarkRequest()
-    local request = getExtState(MCP_SECTION, "request")
+    local request = getMcpExtState("dev_mcp_request")
     if request ~= REQUEST_PREPARE_BENCHMARK_STATE then
         return nil
     end
@@ -59,9 +68,9 @@ local function readBenchmarkRequest()
     local requestState = {
         request = request,
         requested_item_count = readRequestedItemCount(),
-        workflow_source = getExtState(MCP_SECTION, "workflow_source"),
-        workflow_mode = getExtState(MCP_SECTION, "workflow_mode"),
-        device = getExtState(MCP_SECTION, "device"),
+        workflow_source = getMcpExtState("dev_mcp_workflow_source"),
+        workflow_mode = getMcpExtState("dev_mcp_workflow_mode"),
+        device = getMcpExtState("dev_mcp_device"),
     }
 
     if requestState.workflow_source == "" then
@@ -311,8 +320,10 @@ local function writePrepResult(fields)
 end
 
 local function clearBenchmarkRequest(request)
-    safeSet(MCP_SECTION, "request_handled", request or "", false)
-    safeSet(MCP_SECTION, "request", "", false)
+    safeSet(MCP_SECTION, "dev_mcp_request_handled", request or "", false)
+    safeSet(MCP_SECTION, "dev_mcp_request", "", false)
+    safeSet(LEGACY_MCP_SECTION, "request_handled", request or "", false)
+    safeSet(LEGACY_MCP_SECTION, "request", "", false)
 end
 
 local function applyWorkflowExtState(values)
