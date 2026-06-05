@@ -206,6 +206,57 @@ Interpretation guardrail:
 - cap 8 is experimental high-throughput benchmark only
 - cap 8 is not a default candidate until repeated clean runs stay stable
 
+### RX 9070 / ROCm results
+
+Captured on Linux with the discrete `AMD Radeon RX 9070` ROCm/CUDA path (`GPU 0`).
+All runs below were strict PASS with correct provenance and cap markers:
+
+- `workflow_source=normal`
+- `workflow_mode=stems`
+- `route=normal`
+- `stage=single_stage`
+- `device=auto` in the root scheduler summary
+- `backend=gpu`
+- requested/applied/effective/scheduler cap matched the requested `2`, `4`, or `8`
+- `8/8` exit codes `0`
+- `8/8` non-empty `stdout.txt` JSON stem outputs
+- `resource_sampling_available=yes`
+- no partial/fail/OOM markers
+
+Observed matrix:
+
+| Model | Cap | Result | Wall time | VRAM peak | Temp peak | Power peak |
+| --- | --- | --- | --- | --- | --- | --- |
+| `htdemucs` | `2` | PASS | `40.997s` | `5315 MB` | `71 C` | `262 W` |
+| `htdemucs` | `4` | PASS | `25.490s` | `7636 MB` | `76 C` | `226 W` |
+| `htdemucs` | `8` | PASS | `27.262s` | `10474 MB` | `79 C` | `292 W` |
+| `htdemucs_ft` | `2` | PASS | `50.520s` | `6298 MB` | `75 C` | `229 W` |
+| `htdemucs_ft` | `4` | PASS | `34.254s` | `9442 MB` | `80 C` | `268 W` |
+| `htdemucs_ft` | `8` | PASS | `49.015s` | `15959 MB / 16304 MB` | `80 C` | `294 W` |
+| `htdemucs_6s` | `2` | PASS | `43.490s` | `5127 MB` | `72 C` | `223 W` |
+| `htdemucs_6s` | `4` | PASS | `25.110s` | `7292 MB` | `70 C` | `177 W` |
+| `htdemucs_6s` | `8` | PASS | `26.195s` | `11048 MB` | `79 C` | `279 W` |
+
+Interpretation:
+
+- cap scaling works correctly; all strict cap markers matched the requested cap.
+- GPU backend stayed stable on RX 9070; worker device resolved to `cuda:0`.
+- `cap4` is the strongest throughput/safety balance for normal stems on this machine.
+- `cap8` is valid but not consistently faster than `cap4` and uses much more VRAM and power.
+- `htdemucs_ft cap8` is near-limit at about `15.96 GB / 16.30 GB` VRAM and should remain benchmark or advanced-only.
+- `htdemucs_6s` correctly emits 6 outputs (`vocals`, `drums`, `bass`, `other`, `guitar`, `piano`); this is expected model behavior, not an anomaly.
+
+Current policy candidate for normal stems on ROCm/CUDA discrete AMD GPU:
+
+- `cap4`: default candidate
+- `cap2`: low-pressure fallback
+- `cap8`: benchmark, advanced, or stress-only
+
+Telemetry note:
+
+- resource sampling measures the discrete RX 9070, not the integrated `780M`
+- `gpu_temp_peak_c` is the peak seen during the run, not the final on-screen temperature after cooldown
+
 ## Safe MCP Calls To Use
 
 - `dsl_list_actions(section="Main", filter="STEMwerk")`

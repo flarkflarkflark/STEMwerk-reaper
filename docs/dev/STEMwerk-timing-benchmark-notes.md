@@ -107,3 +107,62 @@ Interpretation:
 - CPU whole-track DKS should keep conservative concurrency defaults.
 - X stage 2 DrumSep serialization remains justified based on earlier parallel stage-2 output-loss observations and this long-track runtime cost.
 - Long-track GPU DKS works on RX 9070, but DKS concurrency policy should remain conservative until more systems are measured.
+
+## Normal stems benchmark matrix on RX 9070
+
+Read-only REAPER benchmark matrix captured on Linux with:
+
+- CPU: AMD Ryzen 7 7840HS
+- GPU: discrete `AMD Radeon RX 9070` via ROCm/CUDA (`GPU 0`)
+- Material: 8 short items
+- Route: normal stems
+- Device request: `Auto`
+- Resource sampling: enabled
+
+Strict PASS gate for every run:
+
+- `workflow_source=normal`
+- `workflow_mode=stems`
+- `route=normal`
+- `stage=single_stage`
+- `backend=gpu`
+- root summary `device=auto`
+- requested/applied/effective/scheduler cap all match
+- `8/8 exit_code=0`
+- `8/8` non-empty `stdout.txt` JSON stem outputs
+- `resource_sampling_available=yes`
+- no partial/fail/OOM markers
+
+Results:
+
+| Model | Cap | Result | Wall | VRAM peak | Temp peak | Power peak |
+| --- | --- | --- | --- | --- | --- | --- |
+| `htdemucs` | `2` | PASS | `40.997s` | `5315 MB` | `71 C` | `262 W` |
+| `htdemucs` | `4` | PASS | `25.490s` | `7636 MB` | `76 C` | `226 W` |
+| `htdemucs` | `8` | PASS | `27.262s` | `10474 MB` | `79 C` | `292 W` |
+| `htdemucs_ft` | `2` | PASS | `50.520s` | `6298 MB` | `75 C` | `229 W` |
+| `htdemucs_ft` | `4` | PASS | `34.254s` | `9442 MB` | `80 C` | `268 W` |
+| `htdemucs_ft` | `8` | PASS | `49.015s` | `15959 MB / 16304 MB` | `80 C` | `294 W` |
+| `htdemucs_6s` | `2` | PASS | `43.490s` | `5127 MB` | `72 C` | `223 W` |
+| `htdemucs_6s` | `4` | PASS | `25.110s` | `7292 MB` | `70 C` | `177 W` |
+| `htdemucs_6s` | `8` | PASS | `26.195s` | `11048 MB` | `79 C` | `279 W` |
+
+Interpretation:
+
+- cap scaling is functionally correct for all three models on RX 9070
+- worker device resolves to `cuda:0`, while the root scheduler summary keeps `device=auto`
+- `cap4` is the best current throughput/safety balance for normal stems
+- `cap8` is valid, but it does not consistently outperform `cap4` and drives much higher VRAM and power demand
+- `htdemucs_ft cap8` is the near-limit case at about `15.96 GB / 16.30 GB` VRAM
+- `htdemucs_6s` correctly emits 6 outputs and should not be judged by 4-stem expectations
+
+Provisional policy recommendation for normal stems on discrete AMD ROCm/CUDA GPU:
+
+- `cap4` as the default candidate
+- `cap2` as the low-pressure fallback
+- `cap8` as benchmark, advanced, or stress-only
+
+Telemetry note:
+
+- the sampler selects the discrete RX 9070 rather than the integrated 780M
+- `gpu_temp_peak_c` is the maximum observed temperature during the run, not the final temperature shown after cooldown
