@@ -175,6 +175,26 @@ local function ensureParentDirForPath(path)
     end
 end
 
+function SW_LOG.writeRunRootArtifact(outputDir, relativePath, content)
+    if not outputDir or outputDir == "" or not relativePath or relativePath == "" then
+        return nil
+    end
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    local runId = deriveRunAndJobNames(outputDir)
+    if not runId or runId == "" then
+        return nil
+    end
+    local dst = SW_LOG.getRunsLogDir() .. sep .. runId .. sep .. relativePath
+    ensureParentDirForPath(dst)
+    local out = io.open(dst, "wb")
+    if not out then
+        return nil
+    end
+    out:write(tostring(content or ""))
+    out:close()
+    return dst
+end
+
 function SW_LOG.persistRunDiagnostics(outputDir, opts)
     if not outputDir or outputDir == "" then return nil end
     opts = opts or {}
@@ -191,6 +211,9 @@ function SW_LOG.persistRunDiagnostics(outputDir, opts)
         "separation_log.txt",
         "exit_code.txt",
         "done.txt",
+        "benchmark_resource_samples.jsonl",
+        "benchmark_resource_summary.json",
+        "benchmark_resource_summary.txt",
     }
     for _, name in ipairs(allowed) do
         local src = outputDir .. sep .. name

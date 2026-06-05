@@ -17425,6 +17425,27 @@ local function appendBenchmarkGpuCapDiagnostics(logFile)
     f:close()
 end
 
+_sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
+    local _, raw = readBenchmarkGpuCapRequest()
+    if raw == nil or raw == "" or raw == "unset" then
+        return
+    end
+    if not logFile or logFile == "" then
+        return
+    end
+
+    local existing = io.open(logFile, "r")
+    if existing then
+        local content = existing:read("*a") or ""
+        existing:close()
+        if content:find("bench_gpu_cap_requested=", 1, true) then
+            return
+        end
+    end
+
+    appendBenchmarkGpuCapDiagnostics(logFile)
+end
+
 local function benchmarkGpuCapIgnoredReasonForPolicy(policy)
     local backend = tostring(policy and policy.backend or "")
     local route = tostring(policy and policy.route or "")
@@ -18071,6 +18092,19 @@ _sep.runSingleTrackSeparation = function(trackList)
         SW_LOG.logExecResult("lua_dks_scheduler_policy_stage=" .. tostring(multiTrackQueue.schedulerPolicyStage), nil, "")
         SW_LOG.logExecResult("lua_dks_scheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none"), nil, "")
     end
+    if #trackJobs > 0 then
+        SW_LOG.writeRunRootArtifact(
+            trackJobs[1].trackDir,
+            "benchmark_scheduler_summary.txt",
+            "bench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw) .. "\n"
+                .. "bench_gpu_cap_applied=" .. tostring(benchmarkGpuCapApplied or "none") .. "\n"
+                .. "effective_parallel_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") .. "\n"
+                .. "scheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") .. "\n"
+                .. "workflow_source=" .. tostring(multiTrackQueue.workflowSource or workflowSourceArg or "") .. "\n"
+                .. "workflow_mode=" .. tostring(multiTrackQueue.workflowMode or workflowModeArg or "") .. "\n"
+                .. "parallelJobLimit=" .. tostring(multiTrackQueue.parallelJobLimit or "none") .. "\n"
+        )
+    end
     multiTrackQueue.currentJobIndex = 0
     multiTrackQueue.globalStartTime = os.time()  -- Track total elapsed time
     multiTrackQueue.totalAudioDuration = 0  -- Will be updated when jobs start
@@ -18493,6 +18527,7 @@ _sep.updateAllJobsProgress = function()
             if doneFile then
                 doneFile:close()
                 if not job.done then
+                    _sep.ensureBenchmarkGpuCapDiagnosticsPersisted(job.logFile)
                     SW_LOG.persistRunDiagnostics(job.trackDir)
                     job.done = true
                     job.stage = "Waiting for import"
@@ -19871,6 +19906,7 @@ _sep.processAllStemsResult = function()
     reaper.Undo_BeginBlock()
     for _, job in ipairs(multiTrackQueue.jobs or {}) do
         if job and job.trackDir and job.trackDir ~= "" then
+            _sep.ensureBenchmarkGpuCapDiagnosticsPersisted(job.logFile)
             SW_LOG.persistRunDiagnostics(job.trackDir)
         end
     end

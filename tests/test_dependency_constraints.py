@@ -643,6 +643,9 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert "bench_gpu_cap_ignored_reason=" in script
     assert 'local f = io.open(logFile, "a")' in script
     assert "appendBenchmarkGpuCapDiagnostics(logFile)" in script
+    assert "_sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)" in script
+    assert 'if content:find("bench_gpu_cap_requested=", 1, true) then' in script
+    assert "_sep.ensureBenchmarkGpuCapDiagnosticsPersisted(job.logFile)" in script
     assert "workflow_source=" in script
     assert "route=" in script
     assert "stage=" in script
@@ -650,6 +653,9 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert "backend=" in script
     assert "effective_parallel_cap=" in script
     assert "lua_dks_scheduler_policy_cap=" in script
+    assert 'SW_LOG.writeRunRootArtifact(' in script
+    assert '"benchmark_scheduler_summary.txt"' in script
+    assert '"parallelJobLimit=" .. tostring(multiTrackQueue.parallelJobLimit or "none")' in script
 
 
 def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
@@ -1923,6 +1929,10 @@ def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs()
     assert '"stage2_drumsep" .. sep .. "drumsep_helper_stderr.txt"' in log_script
     assert '"stage2_drumsep" .. sep .. "drumsep_helper_result.json"' in log_script
     assert '"stage2_drumsep" .. sep .. "drumsep_result.json"' in log_script
+    assert '"benchmark_resource_samples.jsonl"' in log_script
+    assert '"benchmark_resource_summary.json"' in log_script
+    assert '"benchmark_resource_summary.txt"' in log_script
+    assert "function SW_LOG.writeRunRootArtifact(outputDir, relativePath, content)" in log_script
     assert 'reason == "partial_dks_multi"' in log_script
     assert 'error_class = tostring(opts.errorClass or dksReason)' in log_script
     assert 'lines[#lines + 1] = "failed_jobs: " .. tostring(opts.failedJobIndices)' in log_script
