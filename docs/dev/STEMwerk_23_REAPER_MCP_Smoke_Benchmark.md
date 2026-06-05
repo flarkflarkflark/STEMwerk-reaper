@@ -103,8 +103,31 @@ Capture these before and after a manual run:
 - `dsl_get_extstate(section="STEMwerk", key="selected_model")`
 - `dsl_get_extstate(section="STEMwerk", key="backend")`
 
-## Optional Next Step
+## Project State Snapshot Helper
 
-- Add a tiny REAPER helper action that writes a project-state snapshot to ExtState or a temp file.
+Use this dev/test-only Action List script when you need a project snapshot without changing the project:
+
+1. Run `Custom: STEMwerk_Dev_Project_State_Snapshot.lua`
+2. Read ExtState section `STEMwerkDevSnapshot`
+3. Inspect keys:
+   - `timestamp`
+   - `track_count`
+   - `selected_track_count`
+   - `media_item_count`
+   - `selected_media_item_count`
+   - `take_count_total`
+   - `selected_take_count`
+   - `time_selection_start`
+   - `time_selection_end`
+   - `time_selection_length`
+   - `project_dirty`
+   - `project_path`
+   - `project_name`
+   - `last_error`
+   - `snapshot_ok`
+
+## Future Extension
+
+- If we later need a richer benchmark snapshot, add a second helper that records only additional read-only fields.
 - Keep it read-only and benchmark-oriented.
 - Do not change scheduler policy, backend routing, import routing, or UI copy.
