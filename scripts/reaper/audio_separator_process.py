@@ -88,8 +88,31 @@ def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
     return None, raw
 
 
-def _detect_dks_extract_stage2_backend() -> str:
-    executable = str(sys.executable or "").lower()
+def _detect_dks_extract_stage2_backend(
+    selected_backend: str = "",
+    runtime_info: Optional[Dict[str, Any]] = None,
+    python_path: Optional[Path] = None,
+) -> str:
+    backend = str(selected_backend or "").strip().lower()
+    if backend in {"rocm", "cuda", "directml", "mps", "cpu"}:
+        return backend
+
+    info = runtime_info if isinstance(runtime_info, dict) else {}
+    info_kind = str(info.get("kind") or "").strip().lower()
+    if info_kind in {"rocm", "cuda", "directml", "mps", "cpu"}:
+        return info_kind
+
+    versions = info.get("versions") if isinstance(info.get("versions"), dict) else {}
+    torch_version = str(versions.get("torch") or "").strip().lower()
+    torch_hip = str(info.get("torch_hip") or "").strip()
+    torch_cuda_available = bool(info.get("torch_cuda_available"))
+
+    if torch_hip or "+rocm" in torch_version or "rocm" in torch_version:
+        return "rocm"
+    if torch_cuda_available and ("+cu" in torch_version or "cuda" in torch_version):
+        return "cuda"
+
+    executable = str((python_path or sys.executable) or "").lower()
     if "rocm" in executable:
         return "rocm"
     if "cuda" in executable:
@@ -703,9 +726,9 @@ def _drumsep_helper_path() -> Path:
 
 
 @contextmanager
-def _dks_extract_stage2_lock(output_root: Path):
+def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):
     """Serialize DrumSep stage 2 for Drum Split multi runs to avoid ROCm contention."""
-    stage2_backend = _detect_dks_extract_stage2_backend()
+    stage2_backend = _detect_dks_extract_stage2_backend(stage2_backend)
     requested_cap, raw_cap, effective_cap, ignored_reason = _resolve_dks_extract_stage2_benchmark_cap(stage2_backend)
     batch_root = output_root.parent if output_root.parent.name.startswith("STEMwerk_") else output_root
     lock_path = batch_root / ".dks_extract_stage2.lock"
@@ -2467,7 +2490,8 @@ def main():
             requested_stage2_model = requested_model or requested_stage2_model
             run_model = resolved_model or run_model
             emit_phase("stage2_separate")
-            with _dks_extract_stage2_lock(output_root):
+            stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)
+            with _dks_extract_stage2_lock(output_root, stage2_backend):
                 helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
                     drums_input,
                     stage2_root,

@@ -1754,8 +1754,9 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "bench_dks_stage2_cap_ignored_reason=" in script
     assert "dks_extract_stage2_effective_cap=" in script
     assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1" in script
-    assert "def _dks_extract_stage2_lock(output_root: Path):" in script
-    assert "with _dks_extract_stage2_lock(output_root):" in script
+    assert 'def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):' in script
+    assert "stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)" in script
+    assert "with _dks_extract_stage2_lock(output_root, stage2_backend):" in script
     assert "lua_dks_extract_stage2_concurrency_cap=" in script
     assert "lua_dks_extract_stage2_queue_wait_start" in script
     assert "lua_dks_extract_stage2_queue_wait_end wait_seconds=" in script
@@ -1800,6 +1801,47 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "1")
     assert module._read_benchmark_dks_stage2_cap_request() == (1, "1")
     assert module._resolve_dks_extract_stage2_benchmark_cap("cpu") == (1, "1", 1, "")
+
+
+def test_drumkit_stage2_backend_detection_prefers_selected_runtime_markers_over_parent_executable():
+    module = _load_audio_separator_process_module()
+
+    assert module._detect_dks_extract_stage2_backend(
+        "rocm",
+        {"kind": "cpu", "versions": {"torch": "2.12.0+cu130"}, "torch_hip": ""},
+    ) == "rocm"
+    assert module._detect_dks_extract_stage2_backend(
+        "",
+        {"kind": "rocm", "versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4"},
+    ) == "rocm"
+    assert module._detect_dks_extract_stage2_backend(
+        "",
+        {"versions": {"torch": "2.12.0+cu130"}, "torch_cuda_available": True, "torch_hip": ""},
+    ) == "cuda"
+    assert module._detect_dks_extract_stage2_backend(
+        "",
+        {"kind": "cpu", "versions": {"torch": "2.12.0+cpu"}, "torch_cuda_available": False, "torch_hip": ""},
+    ) == "cpu"
+
+
+def test_dks_extract_stage2_lock_uses_explicit_runtime_backend_for_benchmark_cap(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "2")
+
+    with module._dks_extract_stage2_lock(tmp_path, "rocm"):
+        pass
+    captured = capsys.readouterr()
+    assert "bench_dks_stage2_cap_requested=2" in captured.err
+    assert "bench_dks_stage2_cap_applied=2" in captured.err
+    assert "bench_dks_stage2_cap_ignored_reason=" in captured.err
+    assert "dks_extract_stage2_backend=rocm" in captured.err
+
+    with module._dks_extract_stage2_lock(tmp_path, "cpu"):
+        pass
+    captured = capsys.readouterr()
+    assert "bench_dks_stage2_cap_applied=1" in captured.err
+    assert "bench_dks_stage2_cap_ignored_reason=backend_not_rocm_cuda" in captured.err
+    assert "dks_extract_stage2_backend=cpu" in captured.err
 
 
 def test_benchmark_resource_sampler_code_path_exposes_expected_files_and_graceful_rocm_fallback(monkeypatch):
