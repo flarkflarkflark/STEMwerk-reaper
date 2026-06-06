@@ -5348,8 +5348,8 @@ local function drawUtilityNativeHelpWindow()
                     addHead(l, tr("help_native_steps", "Steps"))
                     addLine(l, "  1. " .. tr("help_native_step_select_audio", "Select audio"))
                     addLine(l, "     " .. tr("help_native_step_select_audio_desc", "Tracks, items, or time selection"))
-                    addLine(l, "  2. " .. tr("help_native_step_choose_model", "Choose model and stems"))
-                    addLine(l, "     " .. tr("help_native_step_choose_model_desc", "Fast / Quality / 6-Stem"))
+                    addLine(l, "  2. " .. tr("help_native_step_choose_model", "Choose Mode and stems"))
+                    addLine(l, "     " .. tr("help_native_step_choose_model_desc", "Fast / Quality / Expanded"))
                     addLine(l, "  3. " .. tr("help_native_step_set_output", "Set output"))
                     addLine(l, "     " .. tr("help_native_step_set_output_desc", "New tracks or in-place takes"))
                     addLine(l, "  4. " .. tr("help_native_step_click_run", "Click Run"))
@@ -5390,10 +5390,19 @@ local function drawUtilityNativeHelpWindow()
                 end,
                 right = function()
                     local l = {}
-                    addHead(l, tr("help_native_models", "Models"))
-                    addLine(l, "  htdemucs     Fast")
-                    addLine(l, "  htdemucs_ft  Quality")
-                    addLine(l, "  htdemucs_6s  6-Stem")
+                    addHead(l, tr("help_native_models", "Mode"))
+                    addLine(l, "  Fast        " .. tr("help_native_mode_fast_desc", "Quicker pass for fast turnaround"))
+                    addLine(l, "  Quality     " .. tr("help_native_mode_quality_desc", "Balanced detail for most work"))
+                    addLine(l, "  Expanded    " .. tr("help_native_mode_expanded_desc", "More detail where available"))
+                    addLine(l, "")
+                    addHead(l, tr("help_native_drum_routes", "Drum routes"))
+                    addLine(l, "  Direct Kit  " .. tr("help_native_direct_kit_desc", "Direct drum-kit split"))
+                    addLine(l, "  Kit Split   " .. tr("help_native_kit_split_desc", "Two-step drum workflow"))
+                    addLine(l, "")
+                    addHead(l, tr("help_native_method", "Method"))
+                    addLine(l, "  Auto        " .. tr("help_native_method_auto_desc", "Picks the best safe method"))
+                    addLine(l, "  CPU         " .. tr("help_native_method_cpu_desc", "Broadly compatible"))
+                    addLine(l, "  GPU         " .. tr("help_native_method_gpu_desc", "Can be faster when supported"))
                     addLine(l, "")
                     addHead(l, tr("help_native_output", "Output"))
                     addLine(l, "  " .. tr("new_tracks", "New tracks"))
@@ -5473,8 +5482,10 @@ local function drawUtilityNativeHelpWindow()
                     addHead(l, tr("help_native_separation", "Separation"))
                     addLine(l, "  " .. tr("help_native_about_4stem", "4-stem: Vocals, Drums, Bass, Other"))
                     addLine(l, "  " .. tr("help_native_about_6stem", "6-stem: adds Guitar, Piano"))
-                    addLine(l, "  " .. tr("help_native_about_models", "Fast / Quality / 6-Stem models"))
+                    addLine(l, "  " .. tr("help_native_about_models", "Fast / Quality / Expanded modes"))
                     addLine(l, "  " .. tr("help_native_about_output", "New tracks or in-place output"))
+                    addLine(l, "  " .. tr("help_native_about_parallel", "Parallel runs multiple tasks where safe"))
+                    addLine(l, "  " .. tr("help_native_about_limits", "CPU and GPU are limited conservatively"))
                     return l
                 end,
                 right = function()
@@ -8959,7 +8970,7 @@ function renderResultTitleArea(ctx)
         local title
         if resultStatus == "partial" then
             title = isExtractDrumKitWorkflowActive()
-                and trSafeValue("edks_partial_title", "Drum Kit Split partially completed")
+                and trSafeValue("edks_partial_title", "Kit Split partially completed")
                 or trSafeValue("drumkit_partial_title", "Direct Kit partially completed")
         else
             title = activeDrumKitCompleteTitle()
@@ -12042,8 +12053,8 @@ function renderMainColumns(ctx)
 
     local presetLabelKaraoke = (T("karaoke") or "Karaoke") .. " (K)"
     local presetLabelAll     = (T("all_stems") or "All")    .. " (A)"
-    local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Drum Kit") .. " (Z)"
-    local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Kit Split") .. " (X)"
+    local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"
+    local presetLabelEdks    = trSafe("workflow_edks_short_label", "Kit Split") .. " (X)"
     local presetLabelVocals  = (T("vocals") or "Vocals")    .. " (V)"
     local presetLabelDrums   = (T("drums") or "Drums")      .. " (D)"
     local presetLabelBass    = (T("bass") or "Bass")        .. " (B)"
@@ -14132,9 +14143,9 @@ end
 
 function activeDrumKitFolderSuffix()
     if isExtractDrumKitWorkflowActive() then
-        return trSafeValue("drum_kit_split_folder_suffix", "Drum Kit Split")
+        return trSafeValue("drum_kit_split_folder_suffix", "Kit Split")
     end
-    return trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit")
+    return trSafeValue("direct_drum_kit_folder_suffix", "Direct Kit")
 end
 
 function activeDrumKitCompleteTitle()
@@ -16898,7 +16909,7 @@ function processStemsResult(stems)
             SW_LOG.logExecResult("timing:import_end mode=in_place_partial single=item_sub_selection created=" .. tostring(count), nil, "")
             if drumKitOutput and (tonumber(count or 0) or 0) == 0 then
                 SW_LOG.logExecResult("lua_dks_single_in_place_import_created=0", nil, "lua_dks_single_in_place_no_takes_reason=drum_output_map_not_imported")
-                resultMsg = "Drum Kit Split partially completed: no drum takes were imported."
+                resultMsg = "Kit Split partially completed: no drum takes were imported."
                 resultData = {
                     kind = "single",
                     resultStatus = "partial",
@@ -16928,7 +16939,7 @@ function processStemsResult(stems)
             SW_LOG.logExecResult("timing:import_end mode=in_place single=item_full created=" .. tostring(count), nil, "")
             if drumKitOutput and (tonumber(count or 0) or 0) == 0 then
                 SW_LOG.logExecResult("lua_dks_single_in_place_import_created=0", nil, "lua_dks_single_in_place_no_takes_reason=drum_output_map_not_imported")
-                resultMsg = "Drum Kit Split partially completed: no drum takes were imported."
+                resultMsg = "Kit Split partially completed: no drum takes were imported."
                 resultData = {
                     kind = "single",
                     resultStatus = "partial",
