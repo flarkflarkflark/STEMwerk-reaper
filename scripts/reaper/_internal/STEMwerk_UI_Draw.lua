@@ -721,6 +721,7 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
     local _radioUtilDark = not _radioUtilLight
         and type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
         and not (type(isThemeLightMode) == "function" and isThemeLightMode())
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     if selected then
         local mult = hover and 1.2 or 1.0
         baseR, baseG, baseB, baseA = r / 255 * mult, g / 255 * mult, b / 255 * mult, 1
@@ -739,10 +740,20 @@ function M.drawRadio(x, y, selected, label, color, fixedW, attentionMult, icon, 
         end
     end
     drawGlossyRect(x, y, boxW, boxH, baseR, baseG, baseB, baseA)
+    if selected and not utilityMode then
+        local borderR = math.min(1, baseR * 0.55 + 0.45)
+        local borderG = math.min(1, baseG * 0.55 + 0.45)
+        local borderB = math.min(1, baseB * 0.55 + 0.45)
+        gfx.set(borderR, borderG, borderB, hover and 1 or 0.92)
+        gfx.rect(x, y, boxW, boxH, 0)
+        if boxW > 4 and boxH > 4 then
+            gfx.set(1, 1, 1, hover and 0.22 or 0.16)
+            gfx.rect(x + 1, y + 1, boxW - 2, boxH - 2, 0)
+        end
+    end
 
     local textAlpha = selected and 1 or (hover and 0.95 or 0.85)
     local baseFontSize = fontSizeOverride or S(13)
-    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     local hardMin = utilityMode and S(8) or S(10)
     local minFontSize = lockFontSize and baseFontSize or math.max(hardMin, math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
@@ -897,26 +908,48 @@ function M.drawToggleButton(x, y, w, h, label, selected, color, fontSizeOverride
     local baseR
     local baseG
     local baseB
+    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
+    local selectedBorder = nil
     if selected then
         local mult = hover and 1.2 or 1.0
         if color then
-            baseR = (color[1] or 0) / 255 * mult
-            baseG = (color[2] or 0) / 255 * mult
-            baseB = (color[3] or 0) / 255 * mult
+            local rawR = (color[1] or 0) / 255
+            local rawG = (color[2] or 0) / 255
+            local rawB = (color[3] or 0) / 255
+            local vividMix = utilityMode and 0.18 or 0.32
+            baseR = math.min(1, (rawR * (1 - vividMix) + THEME.buttonPrimary[1] * vividMix) * mult)
+            baseG = math.min(1, (rawG * (1 - vividMix) + THEME.buttonPrimary[2] * vividMix) * mult)
+            baseB = math.min(1, (rawB * (1 - vividMix) + THEME.buttonPrimary[3] * vividMix) * mult)
+            selectedBorder = { math.min(1, rawR * 0.55 + 0.45), math.min(1, rawG * 0.55 + 0.45), math.min(1, rawB * 0.55 + 0.45) }
         else
             baseR = THEME.buttonPrimary[1] * mult
             baseG = THEME.buttonPrimary[2] * mult
             baseB = THEME.buttonPrimary[3] * mult
+            selectedBorder = { math.min(1, baseR * 0.55 + 0.45), math.min(1, baseG * 0.55 + 0.45), math.min(1, baseB * 0.55 + 0.45) }
         end
     else
-        local brightness = hover and 0.35 or 0.25
-        baseR, baseG, baseB = brightness, brightness, brightness
+        if utilityMode and type(isThemeLightMode) == "function" and isThemeLightMode() then
+            local btn = THEME.button or {0.75, 0.75, 0.75}
+            local mult = hover and 1.08 or 1.0
+            baseR, baseG, baseB = math.min(1, btn[1] * mult), math.min(1, btn[2] * mult), math.min(1, btn[3] * mult)
+        else
+            local brightness = hover and 0.35 or 0.25
+            baseR, baseG, baseB = brightness, brightness, brightness
+        end
     end
     drawGlossyRect(x, y, w, h, baseR, baseG, baseB, 1)
+    if selected and not utilityMode then
+        local border = selectedBorder or { math.min(1, baseR * 0.55 + 0.45), math.min(1, baseG * 0.55 + 0.45), math.min(1, baseB * 0.55 + 0.45) }
+        gfx.set(border[1], border[2], border[3], hover and 1 or 0.92)
+        gfx.rect(x, y, w, h, 0)
+        if w > 4 and h > 4 then
+            gfx.set(1, 1, 1, hover and 0.22 or 0.16)
+            gfx.rect(x + 1, y + 1, w - 2, h - 2, 0)
+        end
+    end
 
     local textAlpha = selected and 1 or (hover and 0.9 or 0.75)
     local baseFontSize = fontSizeOverride or S(13)
-    local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     local hardMin = utilityMode and S(8) or S(10)
     local minFontSize = math.max(hardMin, math.floor(baseFontSize * 0.86 + 0.5))
     local padding = S(4)
