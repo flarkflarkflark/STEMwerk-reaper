@@ -666,7 +666,7 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert 'local f = io.open(logFile, "a")' in script
     assert "appendBenchmarkGpuCapDiagnostics(logFile)" in script
     assert "_sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)" in script
-    assert 'if content:find("bench_gpu_cap_requested=", 1, true) then' in script
+    assert 'local hasGpu = content:find("bench_gpu_cap_requested=", 1, true) ~= nil' in script
     assert "_sep.ensureBenchmarkGpuCapDiagnosticsPersisted(job.logFile)" in script
     assert "workflow_source=" in script
     assert "route=" in script
@@ -682,6 +682,52 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert 'workflow_source=" .. benchmarkWorkflowSource' in script
     assert 'workflow_mode=" .. benchmarkWorkflowMode' in script
     assert 'device=" .. benchmarkDevice' in script
+
+
+def test_runtime_scheduler_benchmark_cpu_cap_override_is_cpu_only_stage_aware_and_logged():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "STEMWERK_BENCH_CPU_CAP" in script
+    assert "STEMWERK_BENCH_DKS_STAGE1_CPU_CAP" in script
+    assert "function readBenchmarkCpuCapRequest(envName)" in script
+    assert "function readBenchmarkCpuCapRequestForPolicy(route, stage)" in script
+    assert 'if policyRoute == "dks_extract" and policyStage == "stage1_normal" then' in script
+    assert 'return stageRequested, stageRaw, "STEMWERK_BENCH_DKS_STAGE1_CPU_CAP"' in script
+    assert 'return globalRequested, globalRaw, "STEMWERK_BENCH_CPU_CAP"' in script
+    assert "function benchmarkCpuCapIgnoredReasonForPolicy(policy, cpuCount, ramGiB, requestedParallel)" in script
+    assert 'return "parallel_not_requested"' in script
+    assert 'return backend == "" and "backend_unknown" or "backend_not_cpu"' in script
+    assert 'return "directml_fixed_cap1"' in script
+    assert 'return "mps_fixed_cap1"' in script
+    assert "function applyBenchmarkCpuCapToPolicy(policy, opts)" in script
+    assert 'return requestedCap, rawCap, appliedCap, "invalid_request", envName' not in script
+    assert 'if requestedCap == 4 then' in script
+    assert 'return requestedCap, rawCap, appliedCap, "cpu_threads_unknown_for_cap4", envName' in script
+    assert 'return requestedCap, rawCap, appliedCap, "cpu_threads_low_for_cap4", envName' in script
+    assert 'return requestedCap, rawCap, appliedCap, "cpu_ram_unknown_for_cap4", envName' in script
+    assert 'return requestedCap, rawCap, appliedCap, "cpu_ram_low_for_cap4", envName' in script
+    assert 'policy.reason = "bench_cpu_cap" .. tostring(requestedCap)' in script
+    assert "benchmarkCpuCapRequested" in script
+    assert "benchmarkCpuCapApplied" in script
+    assert "benchmarkCpuCapIgnoredReason" in script
+    assert "benchmarkCpuCapEnv" in script
+    assert "bench_cpu_cap_requested=" in script
+    assert "bench_cpu_cap_applied=" in script
+    assert "bench_cpu_cap_ignored_reason=" in script
+    assert "workflow_mode=" in script
+    assert 'and not benchmarkCpuCapRequested' in script
+    assert "_sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)" in script
+    assert 'local hasCpu = content:find("bench_cpu_cap_requested=", 1, true) ~= nil' in script
+
+
+def test_scheduler_policy_cpu_override_slice_keeps_default_normal_cpu_cap2_without_env():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"' in script
+    assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
+    assert 'local benchmarkCpuCapRequested, benchmarkCpuCapRaw, benchmarkCpuCapApplied, benchmarkCpuCapIgnoredReason, benchmarkCpuCapEnv =' in script
+    assert "applyBenchmarkCpuCapToPolicy(schedulerPolicy" in script
 
 
 def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
@@ -1881,6 +1927,46 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
     assert module._resolve_dks_extract_stage2_benchmark_cap("cpu") == (1, "1", 1, "")
 
 
+def test_drumkit_stage2_cpu_benchmark_cap_parser_accepts_stage_override_and_global_fallback(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    monkeypatch.delenv("STEMWERK_BENCH_CPU_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP", raising=False)
+    assert module._read_benchmark_dks_stage2_cpu_cap_request() == (None, "unset", "STEMWERK_BENCH_CPU_CAP")
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (None, "unset", 1, "not_requested", "STEMWERK_BENCH_CPU_CAP")
+
+    monkeypatch.setenv("STEMWERK_BENCH_CPU_CAP", "2")
+    assert module._read_benchmark_dks_stage2_cpu_cap_request() == (2, "2", "STEMWERK_BENCH_CPU_CAP")
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (2, "2", 2, "", "STEMWERK_BENCH_CPU_CAP")
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("rocm") == (2, "2", 1, "backend_not_cpu", "STEMWERK_BENCH_CPU_CAP")
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("directml") == (2, "2", 1, "directml_fixed_cap1", "STEMWERK_BENCH_CPU_CAP")
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("mps") == (2, "2", 1, "mps_fixed_cap1", "STEMWERK_BENCH_CPU_CAP")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP", "4")
+    monkeypatch.setattr(module, "_benchmark_cpu_count", lambda: 8)
+    monkeypatch.setattr(module, "_benchmark_ram_gib", lambda: 16.0)
+    assert module._read_benchmark_dks_stage2_cpu_cap_request() == (4, "4", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (4, "4", 4, "", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+
+    monkeypatch.setattr(module, "_benchmark_cpu_count", lambda: None)
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (4, "4", 1, "cpu_threads_unknown_for_cap4", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+
+    monkeypatch.setattr(module, "_benchmark_cpu_count", lambda: 4)
+    monkeypatch.setattr(module, "_benchmark_ram_gib", lambda: 16.0)
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (4, "4", 1, "cpu_threads_low_for_cap4", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+
+    monkeypatch.setattr(module, "_benchmark_cpu_count", lambda: 8)
+    monkeypatch.setattr(module, "_benchmark_ram_gib", lambda: None)
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (4, "4", 1, "cpu_ram_unknown_for_cap4", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+
+    monkeypatch.setattr(module, "_benchmark_ram_gib", lambda: 4.0)
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (4, "4", 1, "cpu_ram_low_for_cap4", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP", "3")
+    assert module._read_benchmark_dks_stage2_cpu_cap_request() == (None, "3", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+    assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (None, "3", 1, "invalid_request", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+
+
 def test_drumkit_stage2_backend_detection_prefers_selected_runtime_markers_over_parent_executable():
     module = _load_audio_separator_process_module()
 
@@ -1905,6 +1991,8 @@ def test_drumkit_stage2_backend_detection_prefers_selected_runtime_markers_over_
 def test_dks_extract_stage2_lock_uses_explicit_runtime_backend_for_benchmark_cap(monkeypatch, tmp_path, capsys):
     module = _load_audio_separator_process_module()
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "2")
+    monkeypatch.delenv("STEMWERK_BENCH_CPU_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP", raising=False)
 
     with module._dks_extract_stage2_lock(tmp_path, "rocm"):
         pass
@@ -1912,6 +2000,8 @@ def test_dks_extract_stage2_lock_uses_explicit_runtime_backend_for_benchmark_cap
     assert "bench_dks_stage2_cap_requested=2" in captured.err
     assert "bench_dks_stage2_cap_applied=2" in captured.err
     assert "bench_dks_stage2_cap_ignored_reason=" in captured.err
+    assert "bench_cpu_cap_requested=unset" in captured.err
+    assert "bench_cpu_cap_applied=1" in captured.err
     assert "dks_extract_stage2_backend=rocm" in captured.err
 
     with module._dks_extract_stage2_lock(tmp_path, "cpu"):
@@ -1919,7 +2009,25 @@ def test_dks_extract_stage2_lock_uses_explicit_runtime_backend_for_benchmark_cap
     captured = capsys.readouterr()
     assert "bench_dks_stage2_cap_applied=1" in captured.err
     assert "bench_dks_stage2_cap_ignored_reason=backend_not_rocm_cuda" in captured.err
+    assert "bench_cpu_cap_requested=unset" in captured.err
     assert "dks_extract_stage2_backend=cpu" in captured.err
+
+
+def test_dks_extract_stage2_lock_prefers_cpu_benchmark_cap_for_cpu_backend(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
+    monkeypatch.setenv("STEMWERK_BENCH_CPU_CAP", "2")
+    monkeypatch.setattr(module, "_benchmark_cpu_count", lambda: 8)
+    monkeypatch.setattr(module, "_benchmark_ram_gib", lambda: 16.0)
+
+    with module._dks_extract_stage2_lock(tmp_path, "cpu"):
+        pass
+    captured = capsys.readouterr()
+    assert "bench_cpu_cap_requested=2" in captured.err
+    assert "bench_cpu_cap_applied=2" in captured.err
+    assert "bench_cpu_cap_ignored_reason=" in captured.err
+    assert "dks_extract_stage2_effective_cap=2" in captured.err
+    assert "lua_dks_extract_stage2_concurrency_cap=2" in captured.err
 
 
 def test_benchmark_resource_sampler_code_path_exposes_expected_files_and_graceful_rocm_fallback(monkeypatch):

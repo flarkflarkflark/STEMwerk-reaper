@@ -45,6 +45,7 @@ DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1
 DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
+BENCHMARK_CPU_CAPS = {1, 2, 4}
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -105,6 +106,27 @@ def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
     return None, raw
 
 
+def _read_benchmark_cpu_cap_request(env_name: str) -> tuple[Optional[int], str]:
+    raw = str(os.environ.get(env_name) or "").strip()
+    if raw == "":
+        return None, "unset"
+    try:
+        requested = int(raw)
+    except ValueError:
+        return None, raw
+    if requested in BENCHMARK_CPU_CAPS:
+        return requested, raw
+    return None, raw
+
+
+def _read_benchmark_dks_stage2_cpu_cap_request() -> tuple[Optional[int], str, str]:
+    requested, raw = _read_benchmark_cpu_cap_request("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
+    if raw != "unset":
+        return requested, raw, "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP"
+    requested, raw = _read_benchmark_cpu_cap_request("STEMWERK_BENCH_CPU_CAP")
+    return requested, raw, "STEMWERK_BENCH_CPU_CAP"
+
+
 def _detect_dks_extract_stage2_backend(
     selected_backend: str = "",
     runtime_info: Optional[Dict[str, Any]] = None,
@@ -163,6 +185,83 @@ def _resolve_dks_extract_stage2_benchmark_cap(stage2_backend: str) -> tuple[Opti
         return requested_cap, raw_cap, 1, "fcntl_unavailable"
 
     return requested_cap, raw_cap, requested_cap, ""
+
+
+def _benchmark_cpu_count() -> Optional[int]:
+    try:
+        cpu_count = os.cpu_count()
+    except Exception:
+        cpu_count = None
+    if cpu_count is None:
+        return None
+    try:
+        cpu_count = int(cpu_count)
+    except Exception:
+        return None
+    return cpu_count if cpu_count > 0 else None
+
+
+def _benchmark_ram_gib() -> Optional[float]:
+    system = platform.system()
+    if system == "Linux":
+        meminfo = _read_linux_meminfo()
+        if meminfo is not None:
+            _, total_mb = meminfo
+            if total_mb and total_mb > 0:
+                return float(total_mb) / 1024.0
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            raw = str(result.stdout or "").strip()
+            bytes_total = int(raw) if raw else 0
+            if bytes_total > 0:
+                return float(bytes_total) / (1024.0 ** 3)
+        except Exception:
+            return None
+    return None
+
+
+def _resolve_dks_extract_stage2_cpu_benchmark_cap(stage2_backend: str) -> tuple[Optional[int], str, int, str, str]:
+    requested_cap, raw_cap, env_name = _read_benchmark_dks_stage2_cpu_cap_request()
+    applied_cap = DKS_EXTRACT_STAGE2_CONCURRENCY_CAP
+    ignored_reason = ""
+
+    if requested_cap is None:
+        if raw_cap == "unset":
+            ignored_reason = "not_requested"
+        else:
+            ignored_reason = "invalid_request"
+        return requested_cap, raw_cap, applied_cap, ignored_reason, env_name
+
+    if stage2_backend == "directml":
+        return requested_cap, raw_cap, applied_cap, "directml_fixed_cap1", env_name
+    if stage2_backend == "mps":
+        return requested_cap, raw_cap, applied_cap, "mps_fixed_cap1", env_name
+    if stage2_backend != "cpu":
+        return requested_cap, raw_cap, applied_cap, "backend_not_cpu", env_name
+    if requested_cap == 1:
+        return requested_cap, raw_cap, 1, "", env_name
+    if os.name != "posix":
+        return requested_cap, raw_cap, 1, "fcntl_unavailable", env_name
+
+    if requested_cap == 4:
+        cpu_count = _benchmark_cpu_count()
+        ram_gib = _benchmark_ram_gib()
+        if cpu_count is None:
+            return requested_cap, raw_cap, applied_cap, "cpu_threads_unknown_for_cap4", env_name
+        if cpu_count < 8:
+            return requested_cap, raw_cap, applied_cap, "cpu_threads_low_for_cap4", env_name
+        if ram_gib is None:
+            return requested_cap, raw_cap, applied_cap, "cpu_ram_unknown_for_cap4", env_name
+        if ram_gib < 8:
+            return requested_cap, raw_cap, applied_cap, "cpu_ram_low_for_cap4", env_name
+
+    return requested_cap, raw_cap, requested_cap, "", env_name
 
 
 def _benchmark_resource_sampling_requested() -> bool:
@@ -846,6 +945,9 @@ def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):
     """Serialize DrumSep stage 2 for Drum Split multi runs to avoid ROCm contention."""
     stage2_backend = _detect_dks_extract_stage2_backend(stage2_backend)
     requested_cap, raw_cap, effective_cap, ignored_reason = _resolve_dks_extract_stage2_benchmark_cap(stage2_backend)
+    cpu_requested_cap, cpu_raw_cap, cpu_effective_cap, cpu_ignored_reason, cpu_env_name = _resolve_dks_extract_stage2_cpu_benchmark_cap(stage2_backend)
+    if cpu_requested_cap is not None:
+        effective_cap = cpu_effective_cap
     batch_root = output_root.parent if output_root.parent.name.startswith("STEMwerk_") else output_root
     lock_path = batch_root / ".dks_extract_stage2.lock"
     lock_fh = None
@@ -855,6 +957,10 @@ def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):
     print(f"bench_dks_stage2_cap_requested={requested_cap if requested_cap is not None else raw_cap}", file=sys.stderr)
     print(f"bench_dks_stage2_cap_applied={effective_cap}", file=sys.stderr)
     print(f"bench_dks_stage2_cap_ignored_reason={ignored_reason}", file=sys.stderr)
+    print(f"bench_cpu_cap_env={cpu_env_name}", file=sys.stderr)
+    print(f"bench_cpu_cap_requested={cpu_requested_cap if cpu_requested_cap is not None else cpu_raw_cap}", file=sys.stderr)
+    print(f"bench_cpu_cap_applied={cpu_effective_cap}", file=sys.stderr)
+    print(f"bench_cpu_cap_ignored_reason={cpu_ignored_reason}", file=sys.stderr)
     print(f"dks_extract_stage2_effective_cap={effective_cap}", file=sys.stderr)
     print(f"dks_extract_stage2_backend={stage2_backend}", file=sys.stderr)
     print(f"dks_extract_stage2_device={stage2_backend}", file=sys.stderr)

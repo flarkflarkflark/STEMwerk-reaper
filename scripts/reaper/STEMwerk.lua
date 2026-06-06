@@ -17608,6 +17608,94 @@ local function readBenchmarkGpuCapRequest()
     return nil, raw
 end
 
+function readBenchmarkCpuCapRequest(envName)
+    local raw = tostring(os.getenv(envName or "STEMWERK_BENCH_CPU_CAP") or "")
+    raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
+    if raw == "" then
+        return nil, "unset"
+    end
+    local requested = tonumber(raw)
+    if requested == 1 or requested == 2 or requested == 4 then
+        return requested, raw
+    end
+    return nil, raw
+end
+
+function readBenchmarkCpuCapRequestForPolicy(route, stage)
+    local policyRoute = tostring(route or "")
+    local policyStage = tostring(stage or "")
+    if policyRoute == "dks_extract" and policyStage == "stage1_normal" then
+        local stageRequested, stageRaw = readBenchmarkCpuCapRequest("STEMWERK_BENCH_DKS_STAGE1_CPU_CAP")
+        if stageRaw ~= "unset" then
+            return stageRequested, stageRaw, "STEMWERK_BENCH_DKS_STAGE1_CPU_CAP"
+        end
+    end
+    local globalRequested, globalRaw = readBenchmarkCpuCapRequest("STEMWERK_BENCH_CPU_CAP")
+    return globalRequested, globalRaw, "STEMWERK_BENCH_CPU_CAP"
+end
+
+function benchmarkCpuCapIgnoredReasonForPolicy(policy, cpuCount, ramGiB, requestedParallel)
+    local backend = tostring(policy and policy.backend or "")
+    local requested = requestedParallel == true
+    if not requested then
+        return "parallel_not_requested"
+    end
+    if backend == "directml" then
+        return "directml_fixed_cap1"
+    end
+    if backend == "mps" then
+        return "mps_fixed_cap1"
+    end
+    if backend ~= "cpu" then
+        return backend == "" and "backend_unknown" or "backend_not_cpu"
+    end
+    return ""
+end
+
+function applyBenchmarkCpuCapToPolicy(policy, opts)
+    opts = opts or {}
+    local route = tostring(policy and policy.route or opts.route or "")
+    local stage = tostring(policy and policy.stage or opts.stage or "")
+    local jobCount = math.max(0, math.floor(tonumber(opts.jobCount or 0) or 0))
+    local cpuCount = tonumber(opts.cpuCount or 0)
+    local ramGiB = tonumber(opts.ramGiB or 0)
+    local requestedParallel = opts.requestedParallel == true
+    local requestedCap, rawCap, envName = readBenchmarkCpuCapRequestForPolicy(route, stage)
+    local appliedCap = policy and policy.cap or nil
+    local ignoredReason = ""
+
+    if requestedCap == nil then
+        ignoredReason = rawCap == "unset" and "not_requested" or "invalid_request"
+        return requestedCap, rawCap, appliedCap, ignoredReason, envName
+    end
+
+    ignoredReason = benchmarkCpuCapIgnoredReasonForPolicy(policy, cpuCount, ramGiB, requestedParallel)
+    if ignoredReason ~= "" then
+        return requestedCap, rawCap, appliedCap, ignoredReason, envName
+    end
+
+    if requestedCap == 4 then
+        if not cpuCount or cpuCount <= 0 then
+            return requestedCap, rawCap, appliedCap, "cpu_threads_unknown_for_cap4", envName
+        end
+        if cpuCount < 8 then
+            return requestedCap, rawCap, appliedCap, "cpu_threads_low_for_cap4", envName
+        end
+        if not ramGiB or ramGiB <= 0 then
+            return requestedCap, rawCap, appliedCap, "cpu_ram_unknown_for_cap4", envName
+        end
+        if ramGiB < 8 then
+            return requestedCap, rawCap, appliedCap, "cpu_ram_low_for_cap4", envName
+        end
+    end
+
+    appliedCap = math.max(1, math.min(jobCount, math.floor(requestedCap)))
+    policy.cap = appliedCap
+    policy.sequentialMode = appliedCap <= 1
+    policy.reason = "bench_cpu_cap" .. tostring(requestedCap)
+    return requestedCap, rawCap, appliedCap, "", envName
+end
+
 local function appendBenchmarkGpuCapDiagnostics(logFile)
     if not logFile or logFile == "" then
         return
@@ -17641,12 +17729,56 @@ local function appendBenchmarkGpuCapDiagnostics(logFile)
     f:close()
 end
 
-_sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
-    local _, raw = readBenchmarkGpuCapRequest()
-    if raw == nil or raw == "" or raw == "unset" then
+function appendBenchmarkCpuCapDiagnostics(logFile)
+    if not logFile or logFile == "" then
         return
     end
+
+    local raw = multiTrackQueue and multiTrackQueue.benchmarkCpuCapRaw or nil
+    local stage1Raw = multiTrackQueue and multiTrackQueue.benchmarkDksStage1CpuCapRaw or nil
+    local anyRequested = (raw and raw ~= "" and raw ~= "unset")
+        or (stage1Raw and stage1Raw ~= "" and stage1Raw ~= "unset")
+    if not anyRequested then
+        return
+    end
+
+    local f = io.open(logFile, "a")
+    if not f then
+        return
+    end
+
+    local schedulerCap = multiTrackQueue and (multiTrackQueue.schedulerPolicyCap or multiTrackQueue.parallelJobLimit or "none") or "none"
+    local effectiveCap = multiTrackQueue and (multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") or "none"
+    f:write("bench_cpu_cap_env=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkCpuCapEnv or "") .. "\n")
+    f:write("bench_cpu_cap_requested=" .. tostring(multiTrackQueue and (multiTrackQueue.benchmarkCpuCapRequested or multiTrackQueue.benchmarkCpuCapRaw) or "unset") .. "\n")
+    f:write("bench_cpu_cap_applied=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkCpuCapApplied or "none") .. "\n")
+    f:write("bench_cpu_cap_ignored_reason=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkCpuCapIgnoredReason or "") .. "\n")
+    f:write("effective_parallel_cap=" .. tostring(effectiveCap) .. "\n")
+    f:write("scheduler_policy_cap=" .. tostring(schedulerCap) .. "\n")
+    f:write("lua_dks_scheduler_policy_cap=" .. tostring(multiTrackQueue and (multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") or "none") .. "\n")
+    f:write("parallelJobLimit=" .. tostring(multiTrackQueue and multiTrackQueue.parallelJobLimit or "none") .. "\n")
+    f:write("workflow_source=" .. tostring(multiTrackQueue and multiTrackQueue.workflowSource or "") .. "\n")
+    f:write("workflow_mode=" .. tostring(multiTrackQueue and multiTrackQueue.workflowMode or "") .. "\n")
+    f:write("route=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyRoute or "") .. "\n")
+    f:write("stage=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyStage or "") .. "\n")
+    f:write("device=" .. tostring(effectiveRunDevice() or "") .. "\n")
+    f:write("backend=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyBackend or "") .. "\n")
+    f:write("\n")
+    f:close()
+end
+
+_sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
+    local _, raw = readBenchmarkGpuCapRequest()
     if not logFile or logFile == "" then
+        return
+    end
+
+    local _, globalCpuRaw = readBenchmarkCpuCapRequest("STEMWERK_BENCH_CPU_CAP")
+    local _, dksStage1CpuRaw = readBenchmarkCpuCapRequest("STEMWERK_BENCH_DKS_STAGE1_CPU_CAP")
+    local shouldPersistGpu = not (raw == nil or raw == "" or raw == "unset")
+    local shouldPersistCpu = not (globalCpuRaw == nil or globalCpuRaw == "" or globalCpuRaw == "unset")
+        or not (dksStage1CpuRaw == nil or dksStage1CpuRaw == "" or dksStage1CpuRaw == "unset")
+    if not shouldPersistGpu and not shouldPersistCpu then
         return
     end
 
@@ -17654,12 +17786,19 @@ _sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
     if existing then
         local content = existing:read("*a") or ""
         existing:close()
-        if content:find("bench_gpu_cap_requested=", 1, true) then
+        local hasGpu = content:find("bench_gpu_cap_requested=", 1, true) ~= nil
+        local hasCpu = content:find("bench_cpu_cap_requested=", 1, true) ~= nil
+        if (not shouldPersistGpu or hasGpu) and (not shouldPersistCpu or hasCpu) then
             return
         end
     end
 
-    appendBenchmarkGpuCapDiagnostics(logFile)
+    if shouldPersistGpu then
+        appendBenchmarkGpuCapDiagnostics(logFile)
+    end
+    if shouldPersistCpu then
+        appendBenchmarkCpuCapDiagnostics(logFile)
+    end
 end
 
 local function benchmarkGpuCapIgnoredReasonForPolicy(policy)
@@ -18232,6 +18371,15 @@ _sep.runSingleTrackSeparation = function(trackList)
         ramGiB = detectSystemRamGiB(),
         longWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy),
     })
+    local benchmarkCpuCapRequested, benchmarkCpuCapRaw, benchmarkCpuCapApplied, benchmarkCpuCapIgnoredReason, benchmarkCpuCapEnv =
+        applyBenchmarkCpuCapToPolicy(schedulerPolicy, {
+            route = schedulerRoute,
+            stage = schedulerStage,
+            requestedParallel = requestedParallel,
+            jobCount = #trackJobs,
+            cpuCount = detectLogicalCpuCount(),
+            ramGiB = detectSystemRamGiB(),
+        })
 
     local benchmarkGpuCapRequested, benchmarkGpuCapRaw = readBenchmarkGpuCapRequest()
     local benchmarkGpuCapApplied = schedulerPolicy.cap
@@ -18274,6 +18422,13 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.schedulerPolicyLongWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy)
     multiTrackQueue.sequentialMode = schedulerPolicy.sequentialMode and true or false
     multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil
+    multiTrackQueue.benchmarkCpuCapEnv = benchmarkCpuCapEnv
+    multiTrackQueue.benchmarkCpuCapRaw = benchmarkCpuCapRaw
+    multiTrackQueue.benchmarkCpuCapRequested = benchmarkCpuCapRequested
+    multiTrackQueue.benchmarkCpuCapApplied = benchmarkCpuCapApplied
+    multiTrackQueue.benchmarkCpuCapIgnoredReason = benchmarkCpuCapIgnoredReason
+    multiTrackQueue.benchmarkDksStage1CpuCapRaw = (schedulerRoute == "dks_extract" and schedulerStage == "stage1_normal")
+        and select(2, readBenchmarkCpuCapRequest("STEMWERK_BENCH_DKS_STAGE1_CPU_CAP")) or "unset"
     multiTrackQueue.benchmarkGpuCapRequested = benchmarkGpuCapRequested
     multiTrackQueue.benchmarkGpuCapApplied = benchmarkGpuCapApplied
     multiTrackQueue.benchmarkGpuCapIgnoredReason = benchmarkGpuCapIgnoredReason
@@ -18317,6 +18472,10 @@ _sep.runSingleTrackSeparation = function(trackList)
             .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
             .. "\nscheduler_policy_reason=" .. tostring(multiTrackQueue.schedulerPolicyReason or "none")
             .. "\nscheduler_policy_long_workload=" .. tostring(multiTrackQueue.schedulerPolicyLongWorkload and "yes" or "no")
+            .. "\nbench_cpu_cap_env=" .. tostring(benchmarkCpuCapEnv or "")
+            .. "\nbench_cpu_cap_requested=" .. tostring(benchmarkCpuCapRequested or benchmarkCpuCapRaw)
+            .. "\nbench_cpu_cap_applied=" .. tostring(benchmarkCpuCapApplied or "none")
+            .. "\nbench_cpu_cap_ignored_reason=" .. tostring(benchmarkCpuCapIgnoredReason or "")
             .. "\nbench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw)
             .. "\nbench_gpu_cap_applied=" .. tostring(benchmarkGpuCapApplied or "none")
             .. "\nbench_gpu_cap_ignored_reason=" .. tostring(benchmarkGpuCapIgnoredReason or "")
@@ -18347,6 +18506,10 @@ _sep.runSingleTrackSeparation = function(trackList)
                 .. "model_name=" .. benchmarkModelName .. "\n"
                 .. "device=" .. benchmarkDevice .. "\n"
                 .. "backend=" .. benchmarkBackend .. "\n"
+                .. "bench_cpu_cap_env=" .. tostring(benchmarkCpuCapEnv or "") .. "\n"
+                .. "bench_cpu_cap_requested=" .. tostring(benchmarkCpuCapRequested or benchmarkCpuCapRaw) .. "\n"
+                .. "bench_cpu_cap_applied=" .. tostring(benchmarkCpuCapApplied or "none") .. "\n"
+                .. "bench_cpu_cap_ignored_reason=" .. tostring(benchmarkCpuCapIgnoredReason or "") .. "\n"
                 .. "bench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw) .. "\n"
                 .. "bench_gpu_cap_applied=" .. tostring(benchmarkGpuCapApplied or "none") .. "\n"
                 .. "effective_parallel_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") .. "\n"
@@ -18362,6 +18525,7 @@ _sep.runSingleTrackSeparation = function(trackList)
     if not multiTrackQueue.sequentialMode
         and type(INTERNAL_PARALLEL_JOB_LIMIT) == "number"
         and INTERNAL_PARALLEL_JOB_LIMIT > 0
+        and not benchmarkCpuCapRequested
         and not benchmarkGpuCapRequested
     then
         multiTrackQueue.parallelJobLimit = math.max(1, math.floor(INTERNAL_PARALLEL_JOB_LIMIT))

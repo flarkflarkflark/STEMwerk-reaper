@@ -210,6 +210,113 @@ Resource-sampling caveat:
 - use this comparison for correctness, policy markers, and wall time only
 - do not draw hard thermal or efficiency conclusions from this specific CPU dataset
 
+## Experimental CPU drum-workflow slice
+
+This slice adds benchmark-only CPU override hooks for drum workflows:
+
+- `STEMWERK_BENCH_CPU_CAP=1|2|4`
+- `STEMWERK_BENCH_DKS_STAGE1_CPU_CAP=1|2|4`
+- `STEMWERK_BENCH_DKS_STAGE2_CPU_CAP=1|2|4`
+
+Scope boundary:
+
+- benchmark-only
+- CPU backend only
+- only when `requestedParallel=true`
+- no default-policy change in this slice
+- no GPU policy change
+- no DirectML change
+- no MPS change
+- `cap4` remains experimental and safety-gated only
+
+### Direct Kit CPU live benchmark
+
+Dataset:
+
+- branch: `feature/direct-dks-linux-integration`
+- route: `dks_direct`
+- workflow: `drumkit`
+- device/backend: `cpu`
+- material: 8 short items
+
+Results:
+
+| CPU cap | Result | Wall | Notes |
+| --- | --- | --- | --- |
+| `1` | PASS | `343.03s` | clean baseline |
+| `2` | PASS | `331.77s` | fastest result |
+| `4` | PASS | `501.62s` | much slower than `1` and `2` |
+
+PASS gate:
+
+- `workflow_source=dks_direct`
+- `workflow_mode=drumkit`
+- `route=dks_direct`
+- `stage=single_stage`
+- `device=cpu`
+- `backend=cpu`
+- cap markers matched request
+- `8/8 exit_code=0`
+- all expected drum outputs present
+- no partial, fail, OOM, or error markers
+
+Interpretation:
+
+- Direct Kit CPU benefits from `cap2`
+- `cap4` is a stress-only or experimental path, not a default candidate
+- follow-up default candidate, if a later slice chooses to change policy: Direct Kit CPU `cap2`
+
+### Kit Split CPU live benchmark
+
+Dataset:
+
+- branch: `feature/direct-dks-linux-integration`
+- route: `dks_extract`
+- workflow: `drumkit`
+- device/backend: `cpu`
+- material: 8 short items
+
+Results:
+
+| Stage1 / Stage2 | Result | Wall | Notes |
+| --- | --- | --- | --- |
+| `1 / 1` | PASS | `366.16s` | clean conservative baseline |
+| `2 / 1` | PASS | `333.39s` | best result |
+| `2 / 2` | PASS | `389.56s` | worse than `1 / 1` and `2 / 1` |
+
+Marker notes:
+
+- Stage 1 uses the root scheduler summary:
+  - `bench_cpu_cap_env`
+  - `bench_cpu_cap_requested`
+  - `bench_cpu_cap_applied`
+  - `scheduler_policy_cap`
+  - `effective_parallel_cap`
+- Stage 2 uses per-item `separation_log.txt` markers:
+  - `bench_cpu_cap_env`
+  - `bench_cpu_cap_requested`
+  - `bench_cpu_cap_applied`
+  - `dks_extract_stage2_effective_cap`
+  - `lua_dks_extract_stage2_concurrency_cap`
+
+Interpretation:
+
+- Stage 1 benefits from `cap2`
+- Stage 2 should remain at `cap1` on this dataset
+- `2 / 1` is the strongest current CPU default candidate for Kit Split
+- `2 / 2` is not a good default candidate
+
+Recommended follow-up policy candidate for a separate slice:
+
+- Direct Kit CPU: `cap2`
+- Kit Split CPU: Stage 1 `cap2`, Stage 2 `cap1`
+
+Still intentionally not done here:
+
+- no default-policy changes
+- no `cap4` default anywhere
+- no CPU policy changes outside drum workflows
+
 ## UI polish TODO
 
 Future GUI polish notes:

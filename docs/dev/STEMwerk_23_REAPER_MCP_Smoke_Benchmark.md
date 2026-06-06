@@ -259,6 +259,95 @@ Telemetry note:
 
 ## Experimental CPU slice
 
+These CPU env vars are benchmark-only diagnostics hooks:
+
+- `STEMWERK_BENCH_CPU_CAP=1|2|4`
+- `STEMWERK_BENCH_DKS_STAGE1_CPU_CAP=1|2|4`
+- `STEMWERK_BENCH_DKS_STAGE2_CPU_CAP=1|2|4`
+
+Guardrails:
+
+- CPU only
+- only when `requestedParallel=true`
+- no GPU policy change
+- no DirectML change
+- no MPS change
+- no default-policy change in this slice
+- `cap4` remains stress or experimental only and requires the safety gate (`cpuCount >= 8`, `ramGiB >= 8`)
+
+### Direct Kit CPU benchmark
+
+Live REAPER benchmark on the current branch with 8 short items:
+
+| Route | Requested cap | Result | Wall time | Markers |
+| --- | --- | --- | --- | --- |
+| `dks_direct` | `1` | PASS | `343.03s` | `bench_cpu_cap_requested=1`, `bench_cpu_cap_applied=1`, `scheduler_policy_cap=1`, `effective_parallel_cap=1` |
+| `dks_direct` | `2` | PASS | `331.77s` | `bench_cpu_cap_requested=2`, `bench_cpu_cap_applied=2`, `scheduler_policy_cap=2`, `effective_parallel_cap=2` |
+| `dks_direct` | `4` | PASS | `501.62s` | `bench_cpu_cap_requested=4`, `bench_cpu_cap_applied=4`, `scheduler_policy_cap=4`, `effective_parallel_cap=4` |
+
+Observed PASS gate:
+
+- `workflow_source=dks_direct`
+- `workflow_mode=drumkit`
+- `route=dks_direct`
+- `stage=single_stage`
+- `device=cpu`
+- `backend=cpu`
+- `8/8 exit_code=0`
+- complete drum outputs per item: `kick`, `snare`, `toms`, `hi-hat`, `ride`, `crash`
+- no partial, fail, OOM, or error markers
+
+Interpretation:
+
+- `cap2` is the fastest Direct Kit CPU result in this dataset
+- `cap4` is clearly worse than both `cap1` and `cap2`
+- recommended follow-up default candidate for Direct Kit CPU: `cap2`
+- do not apply that default in this slice; this slice remains benchmark-only
+
+### Kit Split CPU benchmark
+
+Live REAPER staged CPU benchmark on the current branch with 8 short items:
+
+| Route | Stage1 cap | Stage2 cap | Result | Wall time | Stage1 marker | Stage2 marker |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dks_extract` | `1` | `1` | PASS | `366.16s` | `bench_cpu_cap_requested=1`, `scheduler_policy_cap=1`, `effective_parallel_cap=1` | `bench_cpu_cap_requested=1`, `dks_extract_stage2_effective_cap=1`, `lua_dks_extract_stage2_concurrency_cap=1` |
+| `dks_extract` | `2` | `1` | PASS | `333.39s` | `bench_cpu_cap_requested=2`, `scheduler_policy_cap=2`, `effective_parallel_cap=2` | `bench_cpu_cap_requested=1`, `dks_extract_stage2_effective_cap=1`, `lua_dks_extract_stage2_concurrency_cap=1` |
+| `dks_extract` | `2` | `2` | PASS | `389.56s` | `bench_cpu_cap_requested=2`, `scheduler_policy_cap=2`, `effective_parallel_cap=2` | `bench_cpu_cap_requested=2`, `dks_extract_stage2_effective_cap=2`, `lua_dks_extract_stage2_concurrency_cap=2` |
+
+Observed PASS gate:
+
+- `workflow_source=dks_extract`
+- `workflow_mode=drumkit`
+- `route=dks_extract`
+- `stage=stage1_normal` in the root benchmark summary
+- `device=cpu`
+- `backend=cpu`
+- `8/8 exit_code=0`
+- complete final drum outputs per item: `kick`, `snare`, `toms`, `hi-hat`, `ride`, `crash`
+- no partial, fail, OOM, or error markers
+
+Interpretation:
+
+- `2/1` is the best staged CPU combination in this dataset
+- Stage 1 benefits from `cap2`
+- Stage 2 at `cap2` is worse than Stage 2 at `cap1`
+- recommended follow-up default candidate for Kit Split CPU: Stage 1 `cap2`, Stage 2 `cap1`
+- do not apply that default in this slice; this slice remains benchmark-only
+
+### Follow-up boundary
+
+Any later default-policy slice may consider:
+
+- Direct Kit CPU default candidate: `cap2`
+- Kit Split CPU default candidate: Stage 1 `cap2`, Stage 2 `cap1`
+
+Still out of scope here:
+
+- changing defaults
+- changing GPU policy
+- changing DirectML or MPS behavior
+- using `cap4` as a default anywhere
+
 Current policy slice under development:
 
 - normal stems on `backend=cpu`, `route=normal`, `stage=single_stage` now targets `scheduler_policy_cap=2`
