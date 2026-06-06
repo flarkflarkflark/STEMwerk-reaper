@@ -17458,7 +17458,7 @@ _sep.SCHEDULER_POLICY = {
     NORMAL_MPS_MAX_PARALLEL = 1,
     DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2,
     DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 1,
-    DKS_DIRECT_CPU_MAX_PARALLEL = 1,
+    DKS_DIRECT_CPU_MAX_PARALLEL = 2,
     DKS_DIRECT_DIRECTML_MAX_PARALLEL = 1,
     DKS_EXTRACT_STAGE2_MAX_PARALLEL = 1,
 }
@@ -17519,6 +17519,26 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
         return policy
     end
 
+    local cpuCount = tonumber(opts.cpuCount or 0)
+    local ramGiB = tonumber(opts.ramGiB or 0)
+    local minCpuForParallel = 8
+    local minRamGiBForParallel = 8
+    local function cpuParallelAllowed()
+        local cpuOk = cpuCount and cpuCount >= minCpuForParallel
+        local ramOk = ramGiB and ramGiB >= minRamGiBForParallel
+        return cpuOk and ramOk
+    end
+    local function cpuParallelFallbackReason()
+        if not cpuCount or cpuCount <= 0 then
+            return "cpu_threads_unknown"
+        elseif cpuCount < minCpuForParallel then
+            return "cpu_threads_low"
+        elseif not ramGiB or ramGiB <= 0 then
+            return "cpu_ram_unknown"
+        end
+        return "cpu_ram_low"
+    end
+
     if backend == "directml" then
         policy.sequentialMode = true
         policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
@@ -17543,10 +17563,20 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_SHORT_MAX_PARALLEL)
                 policy.reason = "scheduler_dks_direct_gpu_cap2"
             end
+        elseif backend == "cpu" then
+            if cpuParallelAllowed() then
+                policy.sequentialMode = false
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_direct_cpu_cap2"
+            else
+                policy.sequentialMode = true
+                policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL
+                policy.reason = "scheduler_dks_direct_" .. cpuParallelFallbackReason() .. "_cap1"
+            end
         else
             policy.sequentialMode = true
             policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL
-            policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"
+            policy.reason = "scheduler_dks_direct_unknown_cap1"
         end
         return policy
     end
@@ -17563,27 +17593,22 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     end
 
     if backend == "cpu" then
-        local cpuCount = tonumber(opts.cpuCount or 0)
-        local ramGiB = tonumber(opts.ramGiB or 0)
-        local minCpuForParallel = 8
-        local minRamGiBForParallel = 8
-        local cpuOk = cpuCount and cpuCount >= minCpuForParallel
-        local ramOk = ramGiB and ramGiB >= minRamGiBForParallel
-        if cpuOk and ramOk then
+        if cpuParallelAllowed() then
             local adaptiveCap = math.max(1, math.floor(cpuCount / 2))
             policy.sequentialMode = false
-            policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))
-            policy.reason = "scheduler_normal_cpu_cap2"
+            if route == "dks_extract" then
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"
+            else
+                policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))
+                policy.reason = "scheduler_normal_cpu_cap2"
+            end
         else
             policy.sequentialMode = true
-            if not cpuCount or cpuCount <= 0 then
-                policy.reason = "cpu_threads_unknown"
-            elseif cpuCount < minCpuForParallel then
-                policy.reason = "cpu_threads_low"
-            elseif not ramGiB or ramGiB <= 0 then
-                policy.reason = "cpu_ram_unknown"
+            if route == "dks_extract" then
+                policy.reason = "scheduler_dks_extract_stage1_normal_" .. cpuParallelFallbackReason() .. "_cap1"
             else
-                policy.reason = "cpu_ram_low"
+                policy.reason = cpuParallelFallbackReason()
             end
         end
         return policy

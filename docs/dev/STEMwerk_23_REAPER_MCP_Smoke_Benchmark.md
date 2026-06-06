@@ -272,7 +272,6 @@ Guardrails:
 - no GPU policy change
 - no DirectML change
 - no MPS change
-- no default-policy change in this slice
 - `cap4` remains stress or experimental only and requires the safety gate (`cpuCount >= 8`, `ramGiB >= 8`)
 
 ### Direct Kit CPU benchmark
@@ -301,8 +300,8 @@ Interpretation:
 
 - `cap2` is the fastest Direct Kit CPU result in this dataset
 - `cap4` is clearly worse than both `cap1` and `cap2`
-- recommended follow-up default candidate for Direct Kit CPU: `cap2`
-- do not apply that default in this slice; this slice remains benchmark-only
+- the follow-up default-policy slice applies Direct Kit CPU `cap2`
+- benchmark env vars remain available as override diagnostics
 
 ### Kit Split CPU benchmark
 
@@ -331,19 +330,18 @@ Interpretation:
 - `2/1` is the best staged CPU combination in this dataset
 - Stage 1 benefits from `cap2`
 - Stage 2 at `cap2` is worse than Stage 2 at `cap1`
-- recommended follow-up default candidate for Kit Split CPU: Stage 1 `cap2`, Stage 2 `cap1`
-- do not apply that default in this slice; this slice remains benchmark-only
+- the follow-up default-policy slice applies Kit Split CPU Stage 1 `cap2`, Stage 2 `cap1`
+- benchmark env vars remain available as override diagnostics
 
 ### Follow-up boundary
 
-Any later default-policy slice may consider:
+The later default-policy slice now applies:
 
 - Direct Kit CPU default candidate: `cap2`
 - Kit Split CPU default candidate: Stage 1 `cap2`, Stage 2 `cap1`
 
-Still out of scope here:
+Still out of scope for the default-policy slice:
 
-- changing defaults
 - changing GPU policy
 - changing DirectML or MPS behavior
 - using `cap4` as a default anywhere

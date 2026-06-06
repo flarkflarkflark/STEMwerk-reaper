@@ -212,18 +212,17 @@ Resource-sampling caveat:
 
 ## Experimental CPU drum-workflow slice
 
-This slice adds benchmark-only CPU override hooks for drum workflows:
+This slice added benchmark-only CPU override hooks for drum workflows:
 
 - `STEMWERK_BENCH_CPU_CAP=1|2|4`
 - `STEMWERK_BENCH_DKS_STAGE1_CPU_CAP=1|2|4`
 - `STEMWERK_BENCH_DKS_STAGE2_CPU_CAP=1|2|4`
 
-Scope boundary:
+Benchmark override boundary:
 
 - benchmark-only
 - CPU backend only
 - only when `requestedParallel=true`
-- no default-policy change in this slice
 - no GPU policy change
 - no DirectML change
 - no MPS change
@@ -264,7 +263,7 @@ Interpretation:
 
 - Direct Kit CPU benefits from `cap2`
 - `cap4` is a stress-only or experimental path, not a default candidate
-- follow-up default candidate, if a later slice chooses to change policy: Direct Kit CPU `cap2`
+- the follow-up default-policy slice applies Direct Kit CPU `cap2`
 
 ### Kit Split CPU live benchmark
 
@@ -306,14 +305,14 @@ Interpretation:
 - `2 / 1` is the strongest current CPU default candidate for Kit Split
 - `2 / 2` is not a good default candidate
 
-Recommended follow-up policy candidate for a separate slice:
+Applied follow-up default-policy direction:
 
 - Direct Kit CPU: `cap2`
 - Kit Split CPU: Stage 1 `cap2`, Stage 2 `cap1`
 
-Still intentionally not done here:
+Still intentionally not done in the default-policy slice:
 
-- no default-policy changes
+- no GPU policy changes
 - no `cap4` default anywhere
 - no CPU policy changes outside drum workflows
 

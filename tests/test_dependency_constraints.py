@@ -611,10 +611,10 @@ def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
     assert "local minCpuForParallel = 8" in script
     assert "local minRamGiBForParallel = 8" in script
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
-    assert 'policy.reason = "cpu_threads_low"' in script
-    assert 'policy.reason = "cpu_threads_unknown"' in script
-    assert 'policy.reason = "cpu_ram_low"' in script
-    assert 'policy.reason = "cpu_ram_unknown"' in script
+    assert 'return "cpu_threads_low"' in script
+    assert 'return "cpu_threads_unknown"' in script
+    assert 'return "cpu_ram_low"' in script
+    assert 'return "cpu_ram_unknown"' in script
     assert 'policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))' in script
     assert 'policy.reason = "directml_multi_track"' in script
     assert 'timing:workers_launched count=' in script
@@ -724,7 +724,8 @@ def test_scheduler_policy_cpu_override_slice_keeps_default_normal_cpu_cap2_witho
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
-    assert 'policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"' in script
+    assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
     assert 'local benchmarkCpuCapRequested, benchmarkCpuCapRaw, benchmarkCpuCapApplied, benchmarkCpuCapIgnoredReason, benchmarkCpuCapEnv =' in script
     assert "applyBenchmarkCpuCapToPolicy(schedulerPolicy" in script
@@ -813,7 +814,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert "NORMAL_MPS_MAX_PARALLEL = 1" in script
     assert "DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2" in script
     assert "DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 1" in script
-    assert "DKS_DIRECT_CPU_MAX_PARALLEL = 1" in script
+    assert "DKS_DIRECT_CPU_MAX_PARALLEL = 2" in script
     assert "DKS_EXTRACT_STAGE2_MAX_PARALLEL = 1" in script
     assert 'if route == "dks_direct" then' in script
     assert 'schedulerRoute = "dks_direct"' in script
@@ -823,8 +824,12 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'schedulerBackend = "mps"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_cap2"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap1"' in script
-    assert 'policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"' in script
+    assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_direct_unknown_cap1"' in script
+    assert '"scheduler_dks_direct_" .. cpuParallelFallbackReason() .. "_cap1"' in script
     assert '"scheduler_dks_extract_stage1_normal_gpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"' in script
+    assert '"scheduler_dks_extract_stage1_normal_" .. cpuParallelFallbackReason() .. "_cap1"' in script
     assert '"scheduler_normal_gpu_cap2"' in script
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_mps_conservative"' in script
@@ -848,10 +853,39 @@ def test_normal_cpu_policy_cap2_slice_keeps_other_backend_caps_unchanged():
     assert 'policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL' in script
     assert 'if route == "dks_direct" then' in script
     assert 'policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL' in script
-    assert 'policy.reason = "scheduler_dks_direct_cpu_or_unknown_cap1"' in script
+    assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
     assert 'schedulerPolicy.backend == "gpu"' in script
     assert "not_gpu_parallel_eligible" in script
+
+
+def test_drumkit_cpu_default_policy_applies_cap2_only_when_safety_gate_passes():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "local function cpuParallelAllowed()" in script
+    assert "local function cpuParallelFallbackReason()" in script
+    assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL)' in script
+    assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_direct_" .. cpuParallelFallbackReason() .. "_cap1"' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_normal_" .. cpuParallelFallbackReason() .. "_cap1"' in script
+
+
+def test_drumkit_stage2_cpu_default_stays_cap1_without_benchmark_override(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_CPU_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP", raising=False)
+
+    with module._dks_extract_stage2_lock(tmp_path, "cpu"):
+        pass
+    captured = capsys.readouterr()
+    assert "bench_cpu_cap_requested=unset" in captured.err
+    assert "bench_cpu_cap_applied=1" in captured.err
+    assert "bench_cpu_cap_ignored_reason=not_requested" in captured.err
+    assert "dks_extract_stage2_effective_cap=1" in captured.err
+    assert "lua_dks_extract_stage2_concurrency_cap=1" in captured.err
 
 
 def test_normal_workflow_provenance_is_explicit_in_lua_summary_and_python_stderr():
