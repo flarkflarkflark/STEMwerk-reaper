@@ -225,7 +225,8 @@ function SETTINGS_MOD.load()
 
     local device = C.reaper.GetExtState(C.EXT_SECTION, "device")
     if device ~= "" then C.SETTINGS.device = device end
-    if C.OS == "macOS" and C.ARCH == "arm64" and tostring(C.SETTINGS.device or "") == "mps" then
+    if tostring(C.SETTINGS.device or "") == "mps"
+        and not (C.OS == "macOS" and (C.ARCH == "arm64" or C.ARCH == "aarch64")) then
         C.SETTINGS.device = "cpu"
     end
 
@@ -306,7 +307,8 @@ function SETTINGS_MOD.save()
     C.reaper.SetExtState(C.EXT_SECTION, "tooltips", C.SETTINGS.tooltips and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "keepTempFiles", C.SETTINGS.keepTempFiles and "1" or "0", true)
     C.reaper.SetExtState(C.EXT_SECTION, "language", C.SETTINGS.language, true)
-    if C.OS == "macOS" and C.ARCH == "arm64" and tostring(C.SETTINGS.device or "") == "mps" then
+    if tostring(C.SETTINGS.device or "") == "mps"
+        and not (C.OS == "macOS" and (C.ARCH == "arm64" or C.ARCH == "aarch64")) then
         C.SETTINGS.device = "cpu"
     end
     C.reaper.SetExtState(C.EXT_SECTION, "device", C.SETTINGS.device, true)

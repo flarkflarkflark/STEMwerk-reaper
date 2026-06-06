@@ -220,6 +220,32 @@ local function envJsonBool(envJson, key)
     return nil
 end
 
+local function isAppleSiliconMpsPlatform()
+    return OS == "macOS" and (ARCH == "arm64" or ARCH == "aarch64")
+end
+
+local function hasMpsDevice(devices)
+    for _, d in ipairs(devices or {}) do
+        if tostring(d.id or "") == "mps" or tostring(d.type or "") == "mps" then
+            return true
+        end
+    end
+    return false
+end
+
+local function filterExplicitMpsDevices(devices, envJson)
+    local mpsAvailable = envJsonBool(envJson, "mps_available")
+    local allowMps = isAppleSiliconMpsPlatform() and mpsAvailable == true
+    local filtered = {}
+    for _, d in ipairs(devices or {}) do
+        local isMps = tostring(d.id or "") == "mps" or tostring(d.type or "") == "mps"
+        if not isMps or allowMps then
+            filtered[#filtered + 1] = d
+        end
+    end
+    return filtered
+end
+
 function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opts)
     now = now or os.time()
     opts = opts or {}
@@ -379,15 +405,7 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
         devices = filtered
     end
 
-    if OS == "macOS" and ARCH == "arm64" then
-        local filtered = {}
-        for _, d in ipairs(devices) do
-            if d.type ~= "mps" and tostring(d.id or "") ~= "mps" then
-                filtered[#filtered + 1] = d
-            end
-        end
-        devices = filtered
-    end
+    devices = filterExplicitMpsDevices(devices, envJson)
 
 
     local directmlPossible = envJsonBool(envJson, "directml_possible")
@@ -437,6 +455,7 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
             d.descKey = "device_directml_desc"
         elseif d.type == "mps" then
             d.descKey = "device_mps_desc"
+            d.uiName = type(C.T) == "function" and (C.T("device_mps_label") or d.uiName) or d.uiName
         end
     end
 
@@ -444,7 +463,7 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
     RUNTIME_DEVICE_NOTE_KEY = buildDeviceNoteFromEnvJson(envJson, devices)
     RUNTIME_DEVICE_LAST_PROBE = now
 
-    if OS == "macOS" and ARCH == "arm64" and SETTINGS.device == "mps" then
+    if SETTINGS.device == "mps" and not hasMpsDevice(RUNTIME_DEVICES) then
         SETTINGS.device = "cpu"
         saveSettings()
     end
@@ -864,7 +883,7 @@ function DEVICE_RUNTIME.refreshRuntimeDevices(force)
     end
     if not devices then
         local py = [[
-import json, importlib.util
+import json, importlib.util, platform
 env = {}
 try:
     import torch
@@ -886,7 +905,8 @@ env['directml_possible'] = importlib.util.find_spec('torch_directml') is not Non
 print('STEMWERK_ENV_JSON ' + json.dumps(env, ensure_ascii=False))
 for i, n in enumerate(env.get('cuda_names', [])):
     print(f'STEMWERK_CUDA_DEVICE\tcuda:{i}\t{n}')
-if env.get('mps_available'):
+machine = platform.machine().lower()
+if platform.system() == 'Darwin' and machine in ('arm64', 'aarch64') and env.get('mps_available'):
     print('STEMWERK_MPS_DEVICE\tmps\tApple MPS')
 if env.get('directml_possible'):
     try:
@@ -1017,6 +1037,8 @@ if env.get('directml_possible'):
         devices = filtered
     end
 
+    devices = filterExplicitMpsDevices(devices, envJson)
+
     local directmlPossible = envJsonBool(envJson, "directml_possible")
     if OS ~= "Windows" then
         directmlPossible = false
@@ -1060,12 +1082,18 @@ if env.get('directml_possible'):
             d.descKey = "device_directml_desc"
         elseif d.type == "mps" then
             d.descKey = "device_mps_desc"
+            d.uiName = type(C.T) == "function" and (C.T("device_mps_label") or d.uiName) or d.uiName
         end
     end
 
     RUNTIME_DEVICES = devices
     RUNTIME_DEVICE_NOTE_KEY = buildDeviceNoteFromEnvJson(envJson, devices)
     RUNTIME_DEVICE_LAST_PROBE = now
+
+    if SETTINGS.device == "mps" and not hasMpsDevice(RUNTIME_DEVICES) then
+        SETTINGS.device = "cpu"
+        saveSettings()
+    end
 
     local ok = false
     for _, d in ipairs(RUNTIME_DEVICES) do
@@ -1171,9 +1199,6 @@ function DEVICE_RUNTIME.normalizeRequestedDeviceForRuntime(requestedDevice)
     local rawReq = tostring(requestedDevice or "auto")
     local req = rawReq:gsub("^%s+", ""):gsub("%s+$", ""):lower()
     if req == "" then return "auto" end
-    if req == "mps" and OS == "macOS" and ARCH == "arm64" then return "cpu" end
-    if req == "auto" or req == "cpu" or req == "mps" then return req end
-
     local list = RUNTIME_DEVICES or C.DEVICES or {}
     local function hasId(id)
         for _, d in ipairs(list) do
@@ -1192,6 +1217,14 @@ function DEVICE_RUNTIME.normalizeRequestedDeviceForRuntime(requestedDevice)
         end
         return nil
     end
+
+    if req == "mps" then
+        if isAppleSiliconMpsPlatform() and hasId("mps") then
+            return "mps"
+        end
+        return "cpu"
+    end
+    if req == "auto" or req == "cpu" then return req end
 
     if hasId(req) then
         return req

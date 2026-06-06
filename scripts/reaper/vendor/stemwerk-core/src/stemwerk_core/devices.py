@@ -25,6 +25,18 @@ def _is_macos_apple_silicon() -> bool:
     return platform.system() == "Darwin" and machine in {"arm64", "aarch64"}
 
 
+def _is_mps_available() -> bool:
+    if not _is_macos_apple_silicon():
+        return False
+    try:
+        import torch
+
+        mps = getattr(getattr(torch, "backends", None), "mps", None)
+        return bool(mps is not None and mps.is_available())
+    except Exception:
+        return False
+
+
 def _rocm_arches_from_rocminfo() -> List[str]:
     """Best-effort list of GPU arch names (gfx...) in enumeration order."""
     try:
@@ -191,11 +203,8 @@ def get_available_devices() -> List[Dict[str, str]]:
                     continue
             devices.append({"id": f"cuda:{i}", "name": name, "type": "cuda"})
 
-    try:
-        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-            devices.append({"id": "mps", "name": "Apple MPS", "type": "mps"})
-    except Exception:
-        pass
+    if _is_mps_available():
+        devices.append({"id": "mps", "name": "Apple MPS", "type": "mps"})
 
     try:
         import torch_directml
@@ -235,15 +244,8 @@ def select_device(requested_device: str = "auto") -> Tuple[str, str]:
         return None
 
     if requested_device == "auto":
-        if _is_macos_apple_silicon():
-            has_mps = any(
-                str(dev.get("id", "")) == "mps" or str(dev.get("type", "")) == "mps"
-                for dev in available
-            )
-            if has_mps:
-                return "cpu", "CPU"
         for dev in available:
-            if dev["type"] in ("cuda", "directml", "mps"):
+            if dev["type"] in ("cuda", "directml"):
                 return dev["id"], dev["name"]
         return "cpu", "CPU"
 
@@ -251,12 +253,8 @@ def select_device(requested_device: str = "auto") -> Tuple[str, str]:
         return "cpu", "CPU"
 
     if requested_device == "mps":
-        if torch is not None:
-            try:
-                if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-                    return "mps", "Apple MPS"
-            except Exception:
-                pass
+        if torch is not None and _is_mps_available():
+            return "mps", "Apple MPS"
         warnings.warn("MPS requested but not available; using CPU.")
         return "cpu", "CPU"
 

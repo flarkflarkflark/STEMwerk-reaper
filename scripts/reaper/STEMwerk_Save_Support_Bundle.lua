@@ -1456,6 +1456,25 @@ local function appendDrumsepRuntimeBlock(lines, title, runtimePython, stateData,
     appendLine(lines, "")
 end
 
+local function resolveDrumsepRuntimePython(runtimeBase, stateData, dirname)
+    local candidates = {
+        trim(stateData.PYTHON_PATH or ""),
+        trim(stateData.VENV_PYTHON_PATH or ""),
+        trim(stateData.VENV_PYTHON or ""),
+    }
+    local fallback = OS == "Windows"
+        and joinPath(runtimeBase, dirname, "Scripts", "python.exe")
+        or joinPath(runtimeBase, dirname, "bin", "python")
+    candidates[#candidates + 1] = fallback
+    for i = 1, #candidates do
+        local path = trim(candidates[i])
+        if path ~= "" and fileExists(path) then
+            return path
+        end
+    end
+    return trim(candidates[1]) ~= "" and trim(candidates[1]) or fallback
+end
+
 local function collectLatestDksMarkers(cacheLogDir)
     local markerKeys = toLowerSet({
         "workflow_mode", "workflow_source", "error_stage", "error_reason",
@@ -1589,17 +1608,12 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
     local modelFile = joinPath(modelDir, "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt")
     local modelYaml = joinPath(modelDir, "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml")
 
-    local cpuPy = OS == "Windows"
-        and joinPath(runtimeBase, ".venv-drumsep", "Scripts", "python.exe")
-        or joinPath(runtimeBase, ".venv-drumsep", "bin", "python")
-    local rocmPy = OS == "Windows"
-        and joinPath(runtimeBase, ".venv-drumsep-rocm", "Scripts", "python.exe")
-        or joinPath(runtimeBase, ".venv-drumsep-rocm", "bin", "python")
-
     local cpuStatePath = joinPath(runtimeStateDir, "drumsep_runtime.env")
     local rocmStatePath = joinPath(runtimeStateDir, "drumsep_runtime_rocm.env")
     local cpuState = readEnvFile(cpuStatePath)
     local rocmState = readEnvFile(rocmStatePath)
+    local cpuPy = resolveDrumsepRuntimePython(runtimeBase, cpuState, ".venv-drumsep")
+    local rocmPy = resolveDrumsepRuntimePython(runtimeBase, rocmState, ".venv-drumsep-rocm")
     local cpuProbe = nil
     local rocmProbe = nil
 
@@ -2317,10 +2331,39 @@ local function parseSupportRunText(entry, text)
         local selected = raw:match("^STEMWERK_DIAG%s+selected_device=(.+)$")
         if selected then
             kvAssignIfUnknown(entry, "device", selected)
+            kvAssignLast(entry, "selected_device", selected)
         end
         local requested = raw:match("^STEMWERK_DIAG%s+requested_device=(.+)$")
-        if requested and tostring(entry.device or "unknown") == "unknown" then
-            kvAssignIfUnknown(entry, "device", requested)
+        if requested then
+            kvAssignLast(entry, "requested_device", requested)
+            if tostring(entry.device or "unknown") == "unknown" then
+                kvAssignIfUnknown(entry, "device", requested)
+            end
+        end
+        local effective = raw:match("^STEMWERK_DIAG%s+effective_device=(.+)$")
+        if effective then
+            kvAssignLast(entry, "effective_device", effective)
+            kvAssignLast(entry, "device", effective)
+        end
+        local mpsExperimental = raw:match("^STEMWERK_DIAG%s+mps_experimental=(.+)$")
+        if mpsExperimental then
+            kvAssignLast(entry, "mps_experimental", mpsExperimental)
+        end
+        local mpsSegmentSize = raw:match("^STEMWERK_DIAG%s+mps_segment_size=(.+)$")
+        if mpsSegmentSize then
+            kvAssignLast(entry, "mps_segment_size", mpsSegmentSize)
+        end
+        local mpsSegmentPolicy = raw:match("^STEMWERK_DIAG%s+mps_segment_policy=(.+)$")
+        if mpsSegmentPolicy then
+            kvAssignLast(entry, "mps_segment_policy", mpsSegmentPolicy)
+        end
+        local mpsFallbackUsed = raw:match("^STEMWERK_DIAG%s+mps_fallback_used=(.+)$")
+        if mpsFallbackUsed then
+            kvAssignLast(entry, "mps_fallback_used", mpsFallbackUsed)
+        end
+        local mpsFallbackReason = raw:match("^STEMWERK_DIAG%s+mps_fallback_reason=(.+)$")
+        if mpsFallbackReason then
+            kvAssignLast(entry, "mps_fallback_reason", mpsFallbackReason)
         end
         local autoSelected = raw:match("^STEMWERK_DIAG%s+auto_selected[_%w]*=([%w%-%_:%.%/]+)")
         if autoSelected and tostring(entry.device or "unknown") == "unknown" then
@@ -2792,6 +2835,14 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             backend = trim(capabilityState.BACKEND or runtimeState.BACKEND or "") ~= "" and trim(capabilityState.BACKEND or runtimeState.BACKEND or "") or "unknown",
             profile = trim(capabilityState.PROFILE or runtimeState.PROFILE or "") ~= "" and trim(capabilityState.PROFILE or runtimeState.PROFILE or "") or "unknown",
             device = "unknown",
+            requested_device = "unknown",
+            selected_device = "unknown",
+            effective_device = "unknown",
+            mps_experimental = "unknown",
+            mps_segment_size = "unknown",
+            mps_segment_policy = "unknown",
+            mps_fallback_used = "unknown",
+            mps_fallback_reason = "unknown",
             mode = "unknown",
             jobs = tostring(#jobNames),
             items = "unknown",
@@ -2975,6 +3026,14 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "profile: " .. tostring(entry.profile or "unknown")
         lines[#lines + 1] = "device: " .. tostring(entry.device or "unknown")
         lines[#lines + 1] = "friendly_device: " .. tostring(entry.friendly_device or "unknown")
+        lines[#lines + 1] = "requested_device: " .. tostring(entry.requested_device or "unknown")
+        lines[#lines + 1] = "selected_device: " .. tostring(entry.selected_device or "unknown")
+        lines[#lines + 1] = "effective_device: " .. tostring(entry.effective_device or "unknown")
+        lines[#lines + 1] = "mps_experimental: " .. tostring(entry.mps_experimental or "unknown")
+        lines[#lines + 1] = "mps_segment_size: " .. tostring(entry.mps_segment_size or "unknown")
+        lines[#lines + 1] = "mps_segment_policy: " .. tostring(entry.mps_segment_policy or "unknown")
+        lines[#lines + 1] = "mps_fallback_used: " .. tostring(entry.mps_fallback_used or "unknown")
+        lines[#lines + 1] = "mps_fallback_reason: " .. tostring(entry.mps_fallback_reason or "unknown")
         lines[#lines + 1] = "mode: " .. tostring(entry.mode or "unknown")
         lines[#lines + 1] = "jobs: " .. tostring(entry.jobs or "unknown")
         lines[#lines + 1] = "items: " .. tostring(entry.items or "unknown")

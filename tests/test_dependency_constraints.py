@@ -821,7 +821,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'schedulerRoute = "dks_extract"' in script
     assert 'schedulerStage = "stage1_normal"' in script
     assert 'and hasRuntimeBackendType("mps")' in script
-    assert 'schedulerBackend = "mps"' in script
+    assert 'schedulerBackend = "cpu"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_cap2"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap1"' in script
     assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
@@ -2402,6 +2402,47 @@ def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
     assert info["selection_policy"] == "auto_prefer_rocm"
 
 
+def test_drumsep_runtime_selector_uses_state_python_path_on_macos_cpu_runtime(tmp_path):
+    module = _load_audio_separator_process_module()
+    base = tmp_path
+    state_dir = base / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    shared_python = base / ".venv" / "bin" / "python"
+    shared_python.parent.mkdir(parents=True, exist_ok=True)
+    shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    shared_python.chmod(0o755)
+    (state_dir / "drumsep_runtime.env").write_text(
+        f"STATUS=ok\nPYTHON_PATH={shared_python}\nVENV_PYTHON_PATH={shared_python}\n",
+        encoding="utf-8",
+    )
+
+    def fake_verify(path, require_gpu=False):
+        return (True, "ok", {"versions": {"torch": "2.5.1"}, "torch_hip": "", "device_names": []})
+
+    module._verify_drumsep_runtime = fake_verify
+    selected, kind, info = module._select_drumsep_runtime("cpu", base)
+    assert selected == shared_python
+    assert kind == "cpu"
+    assert info["selection_policy"] == "explicit_cpu"
+
+
+def test_drumsep_runtime_selector_reports_missing_for_stale_ok_without_existing_python(tmp_path):
+    module = _load_audio_separator_process_module()
+    base = tmp_path
+    state_dir = base / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    missing_python = base / ".venv" / "bin" / "python"
+    (state_dir / "drumsep_runtime.env").write_text(
+        f"STATUS=ok\nPYTHON_PATH={missing_python}\nVENV_PYTHON_PATH={missing_python}\n",
+        encoding="utf-8",
+    )
+
+    selected, kind, info = module._select_drumsep_runtime("cpu", base)
+    assert selected is None
+    assert kind == "missing"
+    assert info["cpu_detail"] == "missing"
+
+
 def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     module = _load_audio_separator_process_module()
     base = tmp_path
@@ -3493,7 +3534,7 @@ def test_normal_workflow_python_logs_live_device_preview_and_blocks_cpu_only_gpu
     assert "normal_workflow_backend_preview_device=" in script
     assert "normal_workflow_backend_preview_name=" in script
     assert "normal_workflow_backend_fallback_reason=live_runtime_cpu_only" in script
-    assert 'if str(device_preference or "auto").strip().lower() != "cpu" and str(preview_device_id) == "cpu":' in script
+    assert "if _is_unexpected_cpu_downgrade(device_preference, preview_device_id):" in script
 
 
 def test_audio_separator_runtime_diagnostics_include_cuda_visibility():
@@ -3508,17 +3549,42 @@ def test_main_dialog_prefers_live_runtime_probe_and_only_falls_back_to_cached_de
 
     assert 'local probeStarted = startRuntimeDeviceProbeAsync(true)' in script
     assert 'perfMark("showStemSelectionDialog(): live device probe started")' in script
-    assert 'if applyCachedRuntimeDevices(cacheOpts) then' in script
+    assert 'local cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)' in script
+    assert 'if not cachedDevicesApplied and not RUNTIME_DEVICES then' in script
+    assert 'if cachedDevicesApplied or applyCachedRuntimeDevices(cacheOpts) then' in script
 
 
-def test_device_column_uses_route_aware_runtime_sources_and_sanitizes_cpu_only_normal_mode():
+def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps_for_drumkit():
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
     assert 'local runtimeDevicesForUi = directDksRoute and buildDirectDksDeviceList() or RUNTIME_DEVICES' in script
     assert 'stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env"' in script
+    assert 'local function isOkState(state, primaryKey, fallbackKey)' in script
+    assert 'local function resolveRuntimePython(state, defaultPath)' in script
+    assert 'local rocmReady = isOkState(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")' in script
+    assert 'local rocmPython = resolveRuntimePython(rocmState, defaultRuntimePython(".venv-drumsep-rocm"))' in script
+    assert 'local cpuPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))' in script
+    assert 'rocmReady = rocmReady and rocmPython ~= ""' in script
+    assert 'local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""' in script
     assert 'rocmState.DRUMSEP_ROCM_DEVICE_NAMES' in script
-    assert 'if not directDksRoute and not listHasGpuDevice(deviceList) then' in script
+    assert 'local mpsAvailable = false' in script
+    assert 'if OS == "macOS" and (ARCH == "arm64" or ARCH == "aarch64") then' in script
+    assert 'if id == "mps" or devType == "mps" then' in script
+    assert 'if mpsAvailable and cpuReady then' in script
+    assert 'add("mps", "Apple MPS", "mps", "device_mps_desc")' in script
     assert 'SETTINGS.device = directDksRoute and "auto" or "cpu"' in script
+
+
+def test_drumsep_runtime_selector_reads_state_python_candidates_before_dedicated_runtime_paths():
+    script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+
+    assert "def _drumsep_runtime_state(" in script
+    assert "def _drumsep_state_python_candidates(" in script
+    assert 'add(state.get("PYTHON_PATH"))' in script
+    assert 'add(state.get("VENV_PYTHON_PATH"))' in script
+    assert 'add(state.get("VENV_PYTHON"))' in script
+    assert "selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)" in script
+    assert "selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)" in script
 
 
 def test_cached_capability_devices_ignore_stale_raw_gpu_blocks_when_runtime_is_cpu_only():

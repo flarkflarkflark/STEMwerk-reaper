@@ -213,6 +213,9 @@ local function getCrashLogPath()
 end
 
 OS = getOS()
+-- Intentionally not a local: this file is already near Lua's main-chunk local
+-- limit, and REAPER/Lua must still see the host arch for MPS UI gating.
+ARCH = SYSTEM.getArch()
 PATH_SEP = OS == "Windows" and "\\" or "/"
 
 function uiNow()
@@ -1715,19 +1718,8 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
         return nil
     end
 
-    local msg = "Apple MPS failed because this model hits a PyTorch MPS limitation.\n"
-        .. "Please use CPU for now.\n\n"
-        .. "Exit code: " .. tostring(exitCode or "unknown") .. "\n"
-        .. "Command: " .. tostring(cmdLine or "unknown") .. "\n"
-        .. "Python log (" .. tostring(logPath or "unknown") .. "):\n"
-        .. tostring(logSnippet or "(no log output found)")
-        .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
-
-    if stdoutSnippet and stdoutSnippet ~= "" then
-        msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
-    end
-
-    return msg
+    return (type(T) == "function" and T("mps_failure_message"))
+        or "MPS processing failed on this Mac. Please switch Device to CPU and try again."
 end
 
 local function isEffectiveRun6Stem()
@@ -1834,6 +1826,8 @@ addPostProcessCandidate = GLUE_HELPERS.addPostProcessCandidate
 SETTINGS_MOD.configure({
     reaper = reaper,
     EXT_SECTION = EXT_SECTION,
+    OS = OS,
+    ARCH = ARCH,
     GUI = GUI,
     SETTINGS = SETTINGS,
     STEMS = STEMS,
@@ -10260,16 +10254,66 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
             }
         end
 
-        local rocmReady = string.lower(tostring(rocmState.DRUMSEP_ROCM_RUNTIME_STATUS or "")) == "ok"
+        local function isOkState(state, primaryKey, fallbackKey)
+            local primary = string.lower(tostring(state and state[primaryKey] or ""))
+            if primary == "ok" then return true end
+            local fallback = string.lower(tostring(state and state[fallbackKey] or ""))
+            return fallback == "ok"
+        end
+
+        local function defaultRuntimePython(dirname)
+            local base = runtime and runtime.base or ""
+            if base == "" then return "" end
+            if OS == "Windows" then
+                return base .. PATH_SEP .. dirname .. PATH_SEP .. "Scripts" .. PATH_SEP .. "python.exe"
+            end
+            return base .. PATH_SEP .. dirname .. PATH_SEP .. "bin" .. PATH_SEP .. "python"
+        end
+
+        local function resolveRuntimePython(state, defaultPath)
+            local candidates = {
+                tostring(state and state.PYTHON_PATH or ""),
+                tostring(state and state.VENV_PYTHON_PATH or ""),
+                tostring(state and state.VENV_PYTHON or ""),
+                tostring(defaultPath or ""),
+            }
+            for _, candidate in ipairs(candidates) do
+                local path = tostring(candidate or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if path ~= "" and fileExists(path) then
+                    return path
+                end
+            end
+            return ""
+        end
+
+        local rocmReady = isOkState(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
         local rocmCudaAvailable = string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
         local rocmDeviceNames = tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "")
-        local cpuReady = string.lower(tostring(cpuState.DRUMSEP_RUNTIME_STATUS or "")) == "ok"
+        local rocmPython = resolveRuntimePython(rocmState, defaultRuntimePython(".venv-drumsep-rocm"))
+        local cpuPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))
+        rocmReady = rocmReady and rocmPython ~= ""
+        local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""
+        local mpsAvailable = false
+
+        if OS == "macOS" and (ARCH == "arm64" or ARCH == "aarch64") then
+            for _, dev in ipairs(RUNTIME_DEVICES or {}) do
+                local id = tostring(dev and dev.id or "")
+                local devType = tostring(dev and dev.type or "")
+                if id == "mps" or devType == "mps" then
+                    mpsAvailable = true
+                    break
+                end
+            end
+        end
 
         if rocmReady or cpuReady then
             add("auto", "Auto", "auto", "device_auto_desc")
         end
         if cpuReady or rocmReady then
             add("cpu", "CPU", "cpu", "device_cpu_desc")
+        end
+        if mpsAvailable and cpuReady then
+            add("mps", "Apple MPS", "mps", "device_mps_desc")
         end
         if rocmReady and rocmCudaAvailable then
             local idx = 0
@@ -10360,16 +10404,6 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         deviceList = filtered
     end
 
-    if OS == "macOS" and ARCH == "arm64" then
-        local filtered = {}
-        for _, d in ipairs(deviceList) do
-            if d.type ~= "mps" and tostring(d.id or "") ~= "mps" then
-                filtered[#filtered + 1] = d
-            end
-        end
-        deviceList = filtered
-    end
-
     local function hasNumberedDevice(prefix)
         for _, d in ipairs(deviceList) do
             if d.id and tostring(d.id):match("^" .. prefix .. ":%d+$") then
@@ -10415,27 +10449,6 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
             end
         end
         deviceList = filtered
-    end
-
-    if not directDksRoute and not listHasGpuDevice(deviceList) then
-        local cpuOnly = {}
-        for _, d in ipairs(deviceList) do
-            if tostring(d.id or "") == "cpu" then
-                cpuOnly[#cpuOnly + 1] = d
-            end
-        end
-        if #cpuOnly == 0 then
-            cpuOnly[1] = {
-                id = "cpu",
-                name = "CPU",
-                fullName = "CPU",
-                uiName = "CPU",
-                type = "cpu",
-                descKey = "device_cpu_desc",
-                available = true,
-            }
-        end
-        deviceList = cpuOnly
     end
 
     if SETTINGS and SETTINGS.device then
@@ -10653,7 +10666,11 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         if OS == "Windows" then
             applyFriendlyGpuName(d)
         end
-        d.uiName = buildDeviceUiLabel(d)
+        if tostring(d.id or "") == "mps" or tostring(d.type or "") == "mps" then
+            d.uiName = T("device_mps_label") or "Apple MPS (Experimental)"
+        else
+            d.uiName = buildDeviceUiLabel(d)
+        end
     end
 
     local deviceLabels = {}
@@ -10670,6 +10687,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         ["directml:0"] = "device_directml_desc",
         ["directml:1"] = "device_directml_desc",
         directml = "device_directml_desc",
+        mps = "device_mps_desc",
     }
 
     local function cleanDeviceLabel(name)
@@ -10679,13 +10697,18 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
     local function chosenDeviceLabel()
         local selId = SETTINGS.device or "auto"
         if selId == "auto" then
+            local sawMps = false
             if runtimeDevicesForUi then
                 for _, d in ipairs(runtimeDevicesForUi) do
-                    if d.id and not (d.id == "auto" or d.id == "cpu") then
+                    local isMps = tostring(d.id or "") == "mps" or tostring(d.type or "") == "mps"
+                    if isMps then
+                        sawMps = true
+                    elseif d.id and not (d.id == "auto" or d.id == "cpu") then
                         return cleanDeviceLabel(d.fullName or d.name or d.id)
                     end
                 end
             end
+            if sawMps then return "CPU" end
             return "Auto"
         end
         for _, d in ipairs(deviceList) do
@@ -10748,7 +10771,8 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
                 local bestDevice = nil
                 if RUNTIME_DEVICES then
                     for _, d in ipairs(RUNTIME_DEVICES) do
-                        if d.id and not (d.id == "auto" or d.id == "cpu") then
+                        local isMps = tostring(d.id or "") == "mps" or tostring(d.type or "") == "mps"
+                        if not isMps and d.id and not (d.id == "auto" or d.id == "cpu") then
                             bestDevice = d
                             break
                         end
@@ -13135,7 +13159,12 @@ showStemSelectionDialog = function()
 
     -- Keep startup non-blocking: seed a safe device list immediately and do runtime probing
     -- only after the window is already visible.
-    if not RUNTIME_DEVICES then
+    local cacheOpts = nil
+    if OS == "Windows" and getTrustedWindowsRuntimeState and getTrustedWindowsRuntimeState() then
+        cacheOpts = { skipQuickBench = true }
+    end
+    local cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)
+    if not cachedDevicesApplied and not RUNTIME_DEVICES then
         RUNTIME_DEVICES = runtimeDeviceSafeList()
     end
 
@@ -13150,11 +13179,7 @@ showStemSelectionDialog = function()
         if probeStarted then
             perfMark("showStemSelectionDialog(): live device probe started")
         else
-            local cacheOpts = nil
-            if OS == "Windows" and getTrustedWindowsRuntimeState and getTrustedWindowsRuntimeState() then
-                cacheOpts = { skipQuickBench = true }
-            end
-            if applyCachedRuntimeDevices(cacheOpts) then
+            if cachedDevicesApplied or applyCachedRuntimeDevices(cacheOpts) then
                 perfMark("showStemSelectionDialog(): cached devices applied")
             else
                 perfMark("showStemSelectionDialog(): cached devices unavailable")
@@ -18392,7 +18417,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         and hasRuntimeBackendType("mps")
         and not hasRuntimeBackendType("cuda")
         and not hasRuntimeBackendType("directml") then
-        schedulerBackend = "mps"
+        schedulerBackend = "cpu"
     end
     if schedulerBackend == "unknown" and hasRuntimeBackendType("cuda") then
         schedulerBackend = "gpu"

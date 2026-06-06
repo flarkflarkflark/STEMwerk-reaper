@@ -36,6 +36,8 @@ _core_loaded = False
 
 MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
+MPS_DEMUCS_SEGMENT_SIZE = 2
+MPS_SEGMENT_POLICY = "universal_safe_segment_2"
 DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DIRECT_DKS_MODEL_ENTRY_NAME = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
@@ -1185,21 +1187,22 @@ def _direct_dks_preflight_check(model_name: str, model_cache_dir: Path) -> Tuple
         raise
 
 
-def _enforce_mps_demucs_cpu_policy(requested_device: str, resolved_device: str, model_name: str) -> str:
+def _apply_mps_experimental_policy(
+    requested_device: str, resolved_device: str, model_name: str
+) -> str:
     if resolved_device != "mps":
         return resolved_device
-    if not _is_darwin_arm64():
+    if not (_is_darwin_arm64() and _is_demucs_model(model_name)):
         return resolved_device
-    if not _is_demucs_model(model_name):
-        return resolved_device
-    requested = str(requested_device or "")
-    print("STEMWERK_MPS_DISABLED_FOR_DEMUCS=1", file=sys.stderr)
-    print("STEMWERK_MPS_DISABLED_REASON=mps_demucs_output_channels_unsupported", file=sys.stderr)
-    print(f"STEMWERK_MPS_CONTEXT requested_device={requested}", file=sys.stderr)
-    print("STEMWERK_MPS_CONTEXT selected_device=cpu", file=sys.stderr)
-    print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
-    print("STEMWERK_DIAG selected_device=cpu", file=sys.stderr)
-    return "cpu"
+    print(f"STEMWERK_DIAG requested_device={requested_device}", file=sys.stderr)
+    print("STEMWERK_DIAG effective_device=mps", file=sys.stderr)
+    print("STEMWERK_DIAG mps_experimental=yes", file=sys.stderr)
+    print(f"STEMWERK_DIAG mps_segment_size={MPS_DEMUCS_SEGMENT_SIZE}", file=sys.stderr)
+    print(f"STEMWERK_DIAG mps_segment_policy={MPS_SEGMENT_POLICY}", file=sys.stderr)
+    print(f"STEMWERK_DIAG mps_model={model_name}", file=sys.stderr)
+    print("STEMWERK_DIAG mps_fallback_used=no", file=sys.stderr)
+    print("STEMWERK_DIAG mps_fallback_reason=none", file=sys.stderr)
+    return resolved_device
 
 
 def _require_core() -> None:
@@ -1364,6 +1367,69 @@ def _drumsep_rocm_runtime_python_path(runtime_base: Optional[Path] = None) -> Pa
     return runtime_dir / "bin" / "python"
 
 
+def _read_env_file(path: Path) -> Dict[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {}
+    result: Dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = str(raw_line or "").strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            result[key] = value.strip()
+    return result
+
+
+def _drumsep_runtime_state(runtime_base: Optional[Path] = None, kind: str = "cpu") -> Dict[str, str]:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    state_name = "drumsep_runtime_rocm.env" if kind == "rocm" else "drumsep_runtime.env"
+    return _read_env_file(base / "state" / state_name)
+
+
+def _drumsep_state_python_candidates(state: Dict[str, str], fallback: Path) -> List[Path]:
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    def add(raw_value: Any) -> None:
+        text = str(raw_value or "").strip()
+        if not text:
+            return
+        try:
+            path = Path(text).expanduser()
+        except Exception:
+            return
+        key = str(path).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    add(state.get("PYTHON_PATH"))
+    add(state.get("VENV_PYTHON_PATH"))
+    add(state.get("VENV_PYTHON"))
+    add(fallback)
+    return candidates
+
+
+def _probe_drumsep_runtime_candidates(
+    candidates: List[Path], require_gpu: bool = False
+) -> Tuple[Optional[Path], str, Dict[str, Any], List[Dict[str, Any]]]:
+    attempts: List[Dict[str, Any]] = []
+    first_broken_detail = ""
+    for candidate in candidates:
+        ok, detail, payload = _verify_drumsep_runtime(candidate, require_gpu=require_gpu)
+        attempts.append({"python": str(candidate), "ok": bool(ok), "detail": str(detail)})
+        if ok:
+            return candidate, detail, payload, attempts
+        if detail != "missing" and first_broken_detail == "":
+            first_broken_detail = str(detail)
+    return None, (first_broken_detail or "missing"), {}, attempts
+
+
 def _verify_drumsep_runtime(python_path: Path, require_gpu: bool = False) -> Tuple[bool, str, Dict[str, Any]]:
     try:
         exists = python_path.exists()
@@ -1470,8 +1536,12 @@ print(json.dumps({
 def _select_drumsep_runtime(
     requested_device: str = "auto", runtime_base: Optional[Path] = None
 ) -> Tuple[Optional[Path], str, Dict[str, Any]]:
-    rocm_python = _drumsep_rocm_runtime_python_path(runtime_base)
-    cpu_python = _drumsep_runtime_python_path(runtime_base)
+    rocm_state = _drumsep_runtime_state(runtime_base, "rocm")
+    cpu_state = _drumsep_runtime_state(runtime_base, "cpu")
+    rocm_candidates = _drumsep_state_python_candidates(rocm_state, _drumsep_rocm_runtime_python_path(runtime_base))
+    cpu_candidates = _drumsep_state_python_candidates(cpu_state, _drumsep_runtime_python_path(runtime_base))
+    rocm_python = rocm_candidates[0]
+    cpu_python = cpu_candidates[0]
     device_norm = str(requested_device or "auto").strip().lower()
 
     def _normalized_device_request(value: str) -> str:
@@ -1492,18 +1562,20 @@ def _select_drumsep_runtime(
     if explicit_cpu:
         print("drumsep_runtime_selection_policy=explicit_cpu", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
-        cpu_ok, cpu_detail, cpu_payload = _verify_drumsep_runtime(cpu_python, require_gpu=False)
+        selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
-        if cpu_ok:
+        if selected_cpu_python is not None:
             info = dict(cpu_payload or {})
             info["kind"] = "cpu"
             info["detail"] = cpu_detail
             info["fallback_reason"] = ""
             info["selection_policy"] = "explicit_cpu"
-            return cpu_python, "cpu", info
+            info["cpu_python_attempts"] = cpu_attempts
+            return selected_cpu_python, "cpu", info
         info = {
             "cpu_detail": cpu_detail,
             "cpu_python": str(cpu_python),
+            "cpu_python_attempts": cpu_attempts,
             "selection_policy": "explicit_cpu",
         }
         reason = "missing" if cpu_detail == "missing" else "broken"
@@ -1512,37 +1584,42 @@ def _select_drumsep_runtime(
     selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"
     print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_start", file=sys.stderr)
-    rocm_ok, rocm_detail, rocm_payload = _verify_drumsep_runtime(rocm_python, require_gpu=True)
+    selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_end detail={rocm_detail}", file=sys.stderr)
-    if not rocm_ok and rocm_detail in {"rocm_cuda_unavailable", "rocm_no_device_names"}:
+    if selected_rocm_python is None and rocm_detail in {"rocm_cuda_unavailable", "rocm_no_device_names"}:
         time.sleep(1.0)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_start", file=sys.stderr)
-        rocm_ok, rocm_detail, rocm_payload = _verify_drumsep_runtime(rocm_python, require_gpu=True)
+        selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_end detail={rocm_detail}", file=sys.stderr)
-    if rocm_ok:
+    if selected_rocm_python is not None:
         info = dict(rocm_payload or {})
         info["kind"] = "rocm"
         info["detail"] = rocm_detail
         info["fallback_reason"] = ""
         info["selection_policy"] = selection_policy
-        return rocm_python, "rocm", info
+        info["rocm_python_attempts"] = rocm_attempts
+        return selected_rocm_python, "rocm", info
 
     print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
-    cpu_ok, cpu_detail, cpu_payload = _verify_drumsep_runtime(cpu_python, require_gpu=False)
+    selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
-    if cpu_ok:
+    if selected_cpu_python is not None:
         info = dict(cpu_payload or {})
         info["kind"] = "cpu"
         info["detail"] = cpu_detail
         info["fallback_reason"] = f"rocm_skipped:{rocm_detail}"
         info["selection_policy"] = "fallback_cpu"
-        return cpu_python, "cpu", info
+        info["cpu_python_attempts"] = cpu_attempts
+        info["rocm_python_attempts"] = rocm_attempts
+        return selected_cpu_python, "cpu", info
 
     info = {
         "rocm_detail": rocm_detail,
         "cpu_detail": cpu_detail,
         "rocm_python": str(rocm_python),
         "cpu_python": str(cpu_python),
+        "rocm_python_attempts": rocm_attempts,
+        "cpu_python_attempts": cpu_attempts,
         "selection_policy": "fallback_cpu",
         "normalized_request": normalized_request,
     }
@@ -1876,6 +1953,7 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
     resolved = requested
     live_devices = get_available_devices()
     live_device_ids = [str(dev.get("id", "")) for dev in live_devices]
+    print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
 
     if requested == "auto":
         preferred = None
@@ -1894,9 +1972,6 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
                 resolved = dev_id
             except Exception:
                 resolved = "auto"
-    else:
-        print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
-
     preview_device_id = resolved
     preview_device_name = ""
     try:
@@ -1905,6 +1980,14 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
         print(f"normal_workflow_backend_preview_error={type(exc).__name__}:{exc}", file=sys.stderr)
 
     return requested, resolved, f"{preview_device_id}|{preview_device_name}", live_device_ids
+
+
+def _is_unexpected_cpu_downgrade(requested_device: str, preview_device: str) -> bool:
+    requested = str(requested_device or "auto").strip().lower()
+    effective = str(preview_device or "").strip().lower()
+    if effective != "cpu":
+        return False
+    return requested not in ("", "auto", "cpu")
 
 
 def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, str]:
@@ -2166,17 +2249,19 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
     print(f"STEMWERK_DIAG selected_device={selected_device}", file=sys.stderr)
+    print(f"STEMWERK_DIAG effective_device={selected_device}", file=sys.stderr)
     return env
 
 
-def _enable_mps_runtime_fallback(requested_device: str, resolved_device: str) -> bool:
+def _configure_mps_runtime_fallback(requested_device: str, resolved_device: str) -> bool:
     if resolved_device != "mps":
         return False
-    os.environ[MPS_FALLBACK_ENV] = "1"
+    os.environ.pop(MPS_FALLBACK_ENV, None)
     print(
-        f"STEMWERK_DIAG mps_fallback_enabled=1 requested_device={requested_device} resolved_device={resolved_device}",
+        f"STEMWERK_DIAG mps_fallback_enabled=0 requested_device={requested_device} resolved_device={resolved_device}",
         file=sys.stderr,
     )
+    print("STEMWERK_DIAG pytorch_mps_fallback_env=unset", file=sys.stderr)
     return True
 
 
@@ -2207,6 +2292,7 @@ def _classify_runtime_failure(
     details = {
         "requested_device": requested_device or "",
         "selected_device": selected_device or "",
+        "effective_device": selected_device or "",
         "model": model_name or "",
         "torch_version": str(env.get("torch_version") or env.get("torch") or "unknown"),
         "platform": str(env.get("platform") or platform.system()),
@@ -2214,6 +2300,11 @@ def _classify_runtime_failure(
         "mps_built": str(env.get("mps_built")),
         "mps_available": str(env.get("mps_available")),
         "mps_fallback_env": str(env.get("mps_fallback_env") or os.environ.get(MPS_FALLBACK_ENV, "")),
+        "mps_experimental": "yes",
+        "mps_segment_size": str(MPS_DEMUCS_SEGMENT_SIZE),
+        "mps_segment_policy": MPS_SEGMENT_POLICY,
+        "mps_fallback_used": "no",
+        "mps_fallback_reason": "mps_channel_limit",
     }
     return {
         "marker": MPS_UNSUPPORTED_MARKER,
@@ -2633,15 +2724,19 @@ def main():
         print(f"dks_extract_intermediate_dir={stage1_root}", file=sys.stderr)
         print(f"dks_extract_stage2_dir={stage2_root}", file=sys.stderr)
         stage1_fallback_reason = ""
-        if str(stage1_requested).strip().lower() != "cpu" and str(stage1_preview_device) == "cpu":
+        if _is_unexpected_cpu_downgrade(stage1_requested, stage1_preview_device):
             stage1_fallback_reason = "live_runtime_cpu_only"
             print(f"dks_extract_stage1_fallback_reason={stage1_fallback_reason}", file=sys.stderr)
         try:
             print("PROGRESS:1:Extracting drums...", flush=True)
             emit_phase("stage1_parent_start")
             runtime_env = _emit_runtime_diagnostics(stage1_preview_device or stage1_resolved)
-            _enable_mps_runtime_fallback(stage1_requested, stage1_resolved)
-            stage1_runtime_device = _enforce_mps_demucs_cpu_policy(stage1_requested, stage1_preview_device or stage1_resolved, stage1_model)
+            _configure_mps_runtime_fallback(stage1_requested, stage1_resolved)
+            stage1_runtime_device = _apply_mps_experimental_policy(
+                stage1_requested,
+                stage1_preview_device or stage1_resolved,
+                stage1_model,
+            )
             _enable_torch_weights_only_compat(stage1_model, stage1_runtime_device)
             emit_phase("model_setup_start")
             stage1_sep = StemSeparator(model=stage1_model, device=stage1_runtime_device)
@@ -2674,7 +2769,9 @@ def main():
             print(f"dks_extract_stage2_backend={runtime_kind}", file=sys.stderr)
             if drumsep_python is None:
                 reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
-                runtime_path = _drumsep_rocm_runtime_python_path()
+                runtime_path = Path(
+                    str(runtime_info.get("cpu_python") or runtime_info.get("rocm_python") or _drumsep_runtime_python_path())
+                )
                 _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
                 print("dks_extract_stage2_runtime=drumsep", file=sys.stderr)
                 emit_phase("python_error")
@@ -2780,7 +2877,9 @@ def main():
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         if drumsep_python is None:
             reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
-            runtime_path = _drumsep_rocm_runtime_python_path()
+            runtime_path = Path(
+                str(runtime_info.get("cpu_python") or runtime_info.get("rocm_python") or _drumsep_runtime_python_path())
+            )
             _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
             emit_phase("python_error")
             if write_done:
@@ -2882,10 +2981,10 @@ def main():
     print(f"model_name={run_model}", file=sys.stderr)
     print(f"device={resolved_device}", file=sys.stderr)
     print(f"backend={backend}", file=sys.stderr)
-    if str(device_preference or "auto").strip().lower() != "cpu" and str(preview_device_id) == "cpu":
+    if _is_unexpected_cpu_downgrade(device_preference, preview_device_id):
         print("normal_workflow_backend_fallback_reason=live_runtime_cpu_only", file=sys.stderr)
         print(
-            "Runtime device fallback blocked: requested GPU/Auto but the live normal STEMwerk runtime exposes CPU only.",
+            "Runtime device fallback blocked: the explicitly requested accelerator is unavailable in the live normal STEMwerk runtime.",
             file=sys.stderr,
         )
         return 2
@@ -2894,8 +2993,12 @@ def main():
     try:
         output_root = Path(args.output_dir).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
-        _enable_mps_runtime_fallback(device_preference, resolved_device)
-        resolved_device = _enforce_mps_demucs_cpu_policy(device_preference, resolved_device, run_model)
+        _configure_mps_runtime_fallback(device_preference, resolved_device)
+        resolved_device = _apply_mps_experimental_policy(
+            device_preference,
+            resolved_device,
+            run_model,
+        )
         runtime_env = _emit_runtime_diagnostics(resolved_device)
         _enable_torch_weights_only_compat(run_model, resolved_device)
 
@@ -2963,6 +3066,7 @@ def main():
             print(failure["marker"], file=sys.stderr)
             for key, value in failure.get("details", {}).items():
                 print(f"STEMWERK_MPS_CONTEXT {key}={value}", file=sys.stderr)
+                print(f"STEMWERK_DIAG {key}={value}", file=sys.stderr)
         print(f"ERROR: {exc}", file=sys.stderr)
         print(traceback_text, file=sys.stderr, end="" if traceback_text.endswith("\n") else "\n")
         emit_phase("python_error")

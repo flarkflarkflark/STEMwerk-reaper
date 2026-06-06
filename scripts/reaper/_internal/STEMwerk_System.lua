@@ -14,6 +14,24 @@ function M.getOS()
     return "Linux"
 end
 
+function M.getArch()
+    local arch = ""
+    if M.getOS() == "Windows" then
+        arch = tostring(os.getenv("PROCESSOR_ARCHITEW6432") or os.getenv("PROCESSOR_ARCHITECTURE") or "")
+    else
+        local handle = io.popen("uname -m 2>/dev/null", "r")
+        if handle then
+            arch = tostring(handle:read("*l") or "")
+            handle:close()
+        end
+    end
+
+    arch = arch:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if arch == "amd64" then return "x86_64" end
+    if arch == "arm64e" then return "arm64" end
+    return arch
+end
+
 function M.isAbsolutePath(p)
     if not p or p == "" then return false end
     if p:match("^%a:[/\\]") then return true end -- Windows drive

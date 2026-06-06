@@ -75,8 +75,9 @@ def _resolve_directml_device(device_id: str) -> Tuple[str, bool, int]:
 
 QUALITY_PRESETS = {"fast": 0, "normal": 1, "best": 2}
 DEFAULT_QUALITY = "normal"
+MPS_DEMUCS_SEGMENT_SIZE = 2
 
-_SEPARATOR_CACHE: Dict[Tuple[str, str, bool, int], Any] = {}
+_SEPARATOR_CACHE: Dict[Tuple[str, str, bool, int, Union[int, str]], Any] = {}
 _SEPARATOR_CACHE_LOCK = threading.Lock()
 
 
@@ -165,7 +166,16 @@ class StemSeparator:
                 use_directml = False
 
         quality_shift = QUALITY_PRESETS[self.quality]
-        cache_key = (model_name, str(separator_device), bool(use_directml), int(quality_shift))
+        segment_size: Union[int, str] = (
+            MPS_DEMUCS_SEGMENT_SIZE if str(separator_device) == "mps" else "Default"
+        )
+        cache_key = (
+            model_name,
+            str(separator_device),
+            bool(use_directml),
+            int(quality_shift),
+            segment_size,
+        )
         with _SEPARATOR_CACHE_LOCK:
             separator = _SEPARATOR_CACHE.get(cache_key)
             if separator is not None:
@@ -189,7 +199,7 @@ class StemSeparator:
             if "demucs_params" in init_params:
                 kwargs["demucs_params"] = {
                     "device": separator_device,
-                    "segment_size": "Default",
+                    "segment_size": segment_size,
                     "shifts": quality_shift,
                     "overlap": 0.25,
                     "segments_enabled": True,
