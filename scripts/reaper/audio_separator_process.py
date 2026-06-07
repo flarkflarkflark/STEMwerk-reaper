@@ -91,6 +91,45 @@ def _is_extract_dks_source(workflow_mode: Optional[str], workflow_source: Option
     return mode == "drumkit" and source == "dks_extract"
 
 
+def _should_use_drumsep_mps_direct_demix(
+    workflow_mode: Optional[str],
+    workflow_source: Optional[str],
+    requested_device: str,
+    runtime_info: Optional[Dict[str, Any]],
+    resolved_model: str,
+) -> tuple[bool, str]:
+    if not (
+        _is_direct_dks_source(workflow_mode, workflow_source)
+        or _is_extract_dks_source(workflow_mode, workflow_source)
+    ):
+        return False, "not_direct_kit_stage2"
+    if sys.platform != "darwin":
+        return False, "platform_not_darwin"
+    machine = platform.machine().lower()
+    if machine not in {"arm64", "aarch64"}:
+        return False, "machine_not_apple_silicon"
+    if str(requested_device or "").strip().lower() != "mps":
+        return False, "requested_device_not_explicit_mps"
+
+    info = runtime_info if isinstance(runtime_info, dict) else {}
+    if str(info.get("kind") or "").strip().lower() != "mps":
+        return False, "effective_runtime_not_mps"
+    if not bool(info.get("mps_built")):
+        return False, "mps_not_built"
+    if not bool(info.get("mps_available")):
+        return False, "mps_not_available"
+    versions = info.get("versions") if isinstance(info.get("versions"), dict) else {}
+    if str(versions.get("audio-separator") or "").strip() != "0.23.0":
+        return False, "audio_separator_version_not_0_23_0"
+    if str(resolved_model or "").strip() != DIRECT_DKS_MODEL_ALIAS:
+        return False, "unsupported_drumsep_model"
+    if os.environ.get(MPS_FALLBACK_ENV):
+        return False, "pytorch_mps_fallback_env_set"
+    if not bool(info.get("mps_experimental")):
+        return False, "mps_experimental_policy_inactive"
+    return True, "ok"
+
+
 def _resolve_normal_workflow_backend(selected_device: Optional[str]) -> str:
     device = str(selected_device or "").strip().lower()
     if device.startswith("cuda:") or device == "cuda":
@@ -1380,6 +1419,7 @@ def _direct_dks_preflight_check(
     model_name: str,
     model_cache_dir: Path,
     runtime_info: Optional[Dict[str, Any]] = None,
+    allow_mps_direct_demix: bool = False,
 ) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
     # This prevents delayed failure in sep.separate()/load_model for known
@@ -1418,7 +1458,14 @@ def _direct_dks_preflight_check(
     if not yaml_ok:
         return False, requested_model, resolved_model, yaml_detail
     model_meta = _load_direct_dks_yaml_metadata(asset_map, model_cache_dir)
-    backend_limit = _direct_dks_backend_limit_payload(runtime_info, resolved_model or requested_model, model_meta)
+    skip_backend_limit = (
+        allow_mps_direct_demix
+        and requested_model == DIRECT_DKS_MODEL_ALIAS
+        and resolved_model == DIRECT_DKS_MODEL_FILENAME
+    )
+    backend_limit = None
+    if not skip_backend_limit:
+        backend_limit = _direct_dks_backend_limit_payload(runtime_info, resolved_model or requested_model, model_meta)
     if backend_limit:
         return False, requested_model, resolved_model, "backend_limited:" + _format_direct_dks_backend_limit_detail(backend_limit)
     print("drumsep_model_files_ready=yes", file=sys.stderr)
@@ -1654,12 +1701,19 @@ def _drumsep_state_python_candidates(state: Dict[str, str], fallback: Path) -> L
 
 
 def _probe_drumsep_runtime_candidates(
-    candidates: List[Path], require_gpu: bool = False
+    candidates: List[Path], require_gpu: bool = False, require_mps: bool = False
 ) -> Tuple[Optional[Path], str, Dict[str, Any], List[Dict[str, Any]]]:
     attempts: List[Dict[str, Any]] = []
     first_broken_detail = ""
     for candidate in candidates:
-        ok, detail, payload = _verify_drumsep_runtime(candidate, require_gpu=require_gpu)
+        if require_mps:
+            ok, detail, payload = _verify_drumsep_runtime(
+                candidate,
+                require_gpu=require_gpu,
+                require_mps=True,
+            )
+        else:
+            ok, detail, payload = _verify_drumsep_runtime(candidate, require_gpu=require_gpu)
         attempts.append({"python": str(candidate), "ok": bool(ok), "detail": str(detail)})
         if ok:
             return candidate, detail, payload, attempts
@@ -1668,7 +1722,11 @@ def _probe_drumsep_runtime_candidates(
     return None, (first_broken_detail or "missing"), {}, attempts
 
 
-def _verify_drumsep_runtime(python_path: Path, require_gpu: bool = False) -> Tuple[bool, str, Dict[str, Any]]:
+def _verify_drumsep_runtime(
+    python_path: Path,
+    require_gpu: bool = False,
+    require_mps: bool = False,
+) -> Tuple[bool, str, Dict[str, Any]]:
     try:
         exists = python_path.exists()
     except Exception:
@@ -1710,10 +1768,16 @@ for module_name in optional:
 device_names = []
 torch_hip = ""
 torch_cuda_available = False
+mps_built = False
+mps_available = False
 try:
     import torch
     torch_hip = str(getattr(torch.version, "hip", "") or "")
     torch_cuda_available = bool(torch.cuda.is_available())
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None:
+        mps_built = bool(mps_backend.is_built())
+        mps_available = bool(mps_backend.is_available())
     if torch_cuda_available:
         for idx in range(int(torch.cuda.device_count())):
             try:
@@ -1729,6 +1793,8 @@ print(json.dumps({
     "torch_hip": torch_hip,
     "torch_cuda_available": torch_cuda_available,
     "device_names": device_names,
+    "mps_built": mps_built,
+    "mps_available": mps_available,
 }, sort_keys=True))
 """
     try:
@@ -1767,6 +1833,11 @@ print(json.dumps({
             return False, "rocm_cuda_unavailable", payload
         if len([d for d in device_names if str(d).strip()]) == 0:
             return False, "rocm_no_device_names", payload
+    if require_mps:
+        if not bool(payload.get("mps_built")):
+            return False, "mps_not_built", payload
+        if not bool(payload.get("mps_available")):
+            return False, "mps_not_available", payload
 
     return True, output[:1200] or "ok", payload
 
@@ -1796,6 +1867,32 @@ def _select_drumsep_runtime(
     normalized_request = _normalized_device_request(device_norm)
     explicit_cpu = normalized_request == "cpu"
     print(f"normalized_device_request={normalized_request}", file=sys.stderr)
+
+    if device_norm == "mps" and _is_darwin_arm64():
+        print("drumsep_runtime_selection_policy=explicit_mps", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_mps_start", file=sys.stderr)
+        selected_mps_python, mps_detail, mps_payload, mps_attempts = _probe_drumsep_runtime_candidates(
+            cpu_candidates,
+            require_mps=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_mps_end detail={mps_detail}", file=sys.stderr)
+        if selected_mps_python is not None:
+            info = dict(mps_payload or {})
+            info["kind"] = "mps"
+            info["detail"] = mps_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = "explicit_mps"
+            info["mps_experimental"] = True
+            info["mps_python_attempts"] = mps_attempts
+            return selected_mps_python, "mps", info
+        info = {
+            "mps_detail": mps_detail,
+            "mps_python": str(cpu_python),
+            "mps_python_attempts": mps_attempts,
+            "selection_policy": "explicit_mps",
+        }
+        reason = "missing" if mps_detail == "missing" else "broken"
+        return None, reason, info
 
     if explicit_cpu:
         print("drumsep_runtime_selection_policy=explicit_cpu", file=sys.stderr)
@@ -1872,6 +1969,8 @@ def _run_direct_dks_drumsep_helper(
     drumsep_python: Path,
     requested_model: str,
     resolved_model: str,
+    route: str = "wrapper",
+    device: str = "cpu",
 ) -> Tuple[bool, Dict[str, str], str, str]:
     helper_path = _drumsep_helper_path()
     result_json = output_root / "drumsep_result.json"
@@ -1883,6 +1982,8 @@ def _run_direct_dks_drumsep_helper(
     print(f"drumsep_helper_python={drumsep_python}", file=sys.stderr)
     print(f"drumsep_helper_script={helper_path}", file=sys.stderr)
     print(f"drumsep_helper_model={resolved_model}", file=sys.stderr)
+    print(f"drumsep_helper_route={route}", file=sys.stderr)
+    print(f"drumsep_helper_device={device}", file=sys.stderr)
     print(f"drumsep_helper_output_dir={output_root}", file=sys.stderr)
     print(f"drumsep_helper_result_json={result_json}", file=sys.stderr)
     print(f"drumsep_helper_stdout={helper_stdout}", file=sys.stderr)
@@ -1906,6 +2007,10 @@ def _run_direct_dks_drumsep_helper(
         str(result_json),
         "--log-file",
         str(helper_log),
+        "--route",
+        route,
+        "--device",
+        device,
     ]
     print("PROGRESS:1:Starting Drum Kit runtime...", flush=True)
     print(f"timing_utc={_ts()} drumsep_helper_python_start", file=sys.stderr)
@@ -1983,6 +2088,13 @@ def _run_direct_dks_drumsep_helper(
             "yaml_training_instruments",
             "yaml_target_instrument",
             "output_validation_reason",
+            "drumsep_mps_all_targets_route",
+            "backend_runtime",
+            "audio_separator_version",
+            "requested_device",
+            "effective_device",
+            "model_device",
+            "direct_demix_keys",
         ):
             value = result_data.get(key)
             if value in (None, "", [], {}):
@@ -2022,6 +2134,26 @@ def _run_direct_dks_drumsep_helper(
             shutil.move(str(path), str(target))
         reaper_stems[reaper_key] = str(target)
         print(f"  {reaper_key}:  {target}", file=sys.stderr)
+
+    for key in (
+        "drumsep_mps_all_targets_route",
+        "mps_fallback_enabled",
+        "pytorch_mps_fallback_env",
+        "output_validation_reason",
+        "expected_stems",
+        "found_stems",
+        "backend_runtime",
+        "audio_separator_version",
+        "requested_device",
+        "effective_device",
+        "model_device",
+        "direct_demix_keys",
+    ):
+        value = result_data.get(key)
+        if isinstance(value, list):
+            value = ",".join(str(item) for item in value)
+        if value not in (None, ""):
+            print(f"{key}={value}", file=sys.stderr)
 
     print(f"timing_utc={_ts()} drumsep_helper_ok=true", file=sys.stderr)
     return True, reaper_stems, "", ""
@@ -2985,6 +3117,8 @@ def main():
         print(f"dks_extract_stage2_dir={stage2_root}", file=sys.stderr)
         emit_phase("stage2_preflight")
         print("PROGRESS:0:Checking Drum Kit backend...", flush=True)
+        if str(device_preference or "").strip().lower() == "mps":
+            _configure_mps_runtime_fallback("mps", "mps")
         print(f"timing_utc={_ts()} drumsep_runtime_select_start", file=sys.stderr)
         drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
@@ -3009,16 +3143,26 @@ def main():
         print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
         print(f"drumsep_runtime_selection_policy={runtime_info.get('selection_policy', '')}", file=sys.stderr)
         print(f"drumsep_python={drumsep_python}", file=sys.stderr)
-        print(f"drumsep_gpu_capable={'yes' if runtime_kind == 'rocm' else 'no'}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps'} else 'no'}", file=sys.stderr)
         print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
         print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
         if fallback_reason:
             print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
+        use_mps_direct_demix, mps_direct_demix_reason = _should_use_drumsep_mps_direct_demix(
+            args.workflow_mode,
+            args.workflow_source,
+            device_preference,
+            runtime_info,
+            requested_stage2_model,
+        )
+        print(f"drumsep_mps_direct_demix_gate={'enabled' if use_mps_direct_demix else 'disabled'}", file=sys.stderr)
+        print(f"drumsep_mps_direct_demix_gate_reason={mps_direct_demix_reason}", file=sys.stderr)
         ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(
             requested_stage2_model,
             model_cache_dir,
             runtime_info=runtime_info,
+            allow_mps_direct_demix=use_mps_direct_demix,
         )
         if not ok:
             known_err_text = str(known_err or "")
@@ -3091,12 +3235,14 @@ def main():
                     drumsep_python,
                     requested_stage2_model,
                     run_model,
+                    route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
+                    device="mps" if use_mps_direct_demix else "cpu",
                 )
             if not helper_ok:
                 stage = "stage2_separate"
                 if helper_reason == "drumsep_model_load_failed":
                     stage = "stage2_model_load"
-                elif helper_reason == "drumsep_output_count_mismatch":
+                elif helper_reason in {"drumsep_output_count_mismatch", "drumsep_direct_demix_failed"}:
                     stage = "stage2_output_validation"
                 _emit_direct_dks_helper_failure_markers(
                     helper_reason or "drumsep_helper_failed",
@@ -3146,6 +3292,8 @@ def main():
         )
         print(f"ui_device_selected_before_run={device_preference}", file=sys.stderr)
         print(f"backend_device_arg={device_preference}", file=sys.stderr)
+        if str(device_preference or "").strip().lower() == "mps":
+            _configure_mps_runtime_fallback("mps", "mps")
         drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         if drumsep_python is None:
@@ -3167,17 +3315,27 @@ def main():
             file=sys.stderr,
         )
         print(f"drumsep_python={drumsep_python}", file=sys.stderr)
-        print(f"drumsep_gpu_capable={'yes' if runtime_kind == 'rocm' else 'no'}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps'} else 'no'}", file=sys.stderr)
         print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
         print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
         if fallback_reason:
             print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
+        use_mps_direct_demix, mps_direct_demix_reason = _should_use_drumsep_mps_direct_demix(
+            args.workflow_mode,
+            args.workflow_source,
+            device_preference,
+            runtime_info,
+            run_model,
+        )
+        print(f"drumsep_mps_direct_demix_gate={'enabled' if use_mps_direct_demix else 'disabled'}", file=sys.stderr)
+        print(f"drumsep_mps_direct_demix_gate_reason={mps_direct_demix_reason}", file=sys.stderr)
         try:
             ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(
                 run_model,
                 model_cache_dir,
                 runtime_info=runtime_info,
+                allow_mps_direct_demix=use_mps_direct_demix,
             )
             if not ok:
                 known_err_text = str(known_err or "")
@@ -3219,12 +3377,14 @@ def main():
             drumsep_python,
             requested_stage2_model,
             run_model,
+            route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
+            device="mps" if use_mps_direct_demix else "cpu",
         )
         if not helper_ok:
             stage = "stage2_separate"
             if helper_reason == "drumsep_model_load_failed":
                 stage = "stage2_model_load"
-            elif helper_reason == "drumsep_output_count_mismatch":
+            elif helper_reason in {"drumsep_output_count_mismatch", "drumsep_direct_demix_failed"}:
                 stage = "stage2_output_validation"
             _emit_direct_dks_helper_failure_markers(
                 helper_reason or "drumsep_helper_failed",

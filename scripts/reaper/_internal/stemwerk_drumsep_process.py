@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.metadata as metadata
 import json
+import os
 import shutil
 import sys
 import traceback
@@ -24,6 +26,13 @@ REAPER_FILENAMES = {
     "ride": "ride.wav",
     "crash": "crash.wav",
 }
+DIRECT_DEMIX_KEYS = ("Kick", "Snare", "Toms", "Hh", "Ride", "Crash")
+
+
+class DirectDemixValidationError(RuntimeError):
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
 
 
 def normalize_stem_name(value: str | Path) -> str | None:
@@ -185,6 +194,196 @@ def _runtime_two_stem_limit_reason(found_stems: list[str], model_meta: dict[str,
     return ""
 
 
+def _ordered_found_stems(stems: dict[str, Any]) -> list[str]:
+    return [name for name in EXPECTED_STEMS if name in stems]
+
+
+def _distribution_version(name: str) -> str:
+    try:
+        return metadata.version(name)
+    except Exception:
+        return ""
+
+
+def _direct_demix_model_device(separator: Any) -> str:
+    try:
+        model_run = separator.model_instance.model_run
+        parameter = next(model_run.parameters())
+        return str(parameter.device)
+    except Exception:
+        return "unknown"
+
+
+def _validate_direct_demix_sources(sources: Any) -> dict[str, Any]:
+    if not isinstance(sources, dict):
+        raise DirectDemixValidationError(
+            "direct_demix_not_dict",
+            f"MDXCSeparator.demix() returned {type(sources).__name__}, expected dict",
+        )
+
+    normalized_sources: dict[str, Any] = {}
+    raw_keys: list[str] = []
+    unknown_keys: list[str] = []
+    for raw_key, value in sources.items():
+        raw_name = str(raw_key)
+        raw_keys.append(raw_name)
+        normalized = normalize_stem_name(raw_name)
+        if normalized not in EXPECTED_STEMS:
+            unknown_keys.append(raw_name)
+            continue
+        if normalized in normalized_sources:
+            raise DirectDemixValidationError(
+                "duplicate_normalized_stem",
+                f"Multiple direct-demix keys normalize to {normalized}",
+            )
+        normalized_sources[normalized] = value
+
+    if unknown_keys:
+        raise DirectDemixValidationError(
+            "unknown_direct_demix_keys",
+            "Unknown direct-demix keys: " + ",".join(sorted(unknown_keys)),
+        )
+
+    expected_raw = set(DIRECT_DEMIX_KEYS)
+    found_raw = set(raw_keys)
+    missing_raw = sorted(expected_raw - found_raw)
+    extra_raw = sorted(found_raw - expected_raw)
+    if missing_raw:
+        raise DirectDemixValidationError(
+            "missing_direct_demix_keys",
+            "Missing direct-demix keys: " + ",".join(missing_raw),
+        )
+    if extra_raw:
+        raise DirectDemixValidationError(
+            "unknown_direct_demix_keys",
+            "Unknown direct-demix keys: " + ",".join(extra_raw),
+        )
+    if set(normalized_sources) != set(EXPECTED_STEMS):
+        raise DirectDemixValidationError(
+            "partial_direct_demix_kit",
+            "Direct-demix result did not normalize to the complete six-part kit",
+        )
+    return normalized_sources
+
+
+def _direct_demix_frames_channels(array: Any) -> Any:
+    import numpy as np
+
+    data = np.asarray(array)
+    if data.ndim == 1:
+        data = data.reshape((-1, 1))
+    elif data.ndim == 2:
+        if data.shape[0] in {1, 2} and data.shape[1] > data.shape[0]:
+            data = data.T
+        elif data.shape[1] not in {1, 2}:
+            raise DirectDemixValidationError(
+                "invalid_output_channel_count",
+                f"Unsupported direct-demix array shape {tuple(data.shape)}",
+            )
+    else:
+        raise DirectDemixValidationError(
+            "invalid_output_shape",
+            f"Unsupported direct-demix array shape {tuple(data.shape)}",
+        )
+    if data.shape[0] <= 0:
+        raise DirectDemixValidationError("empty_output", "Direct-demix output has no frames")
+    if data.shape[1] not in {1, 2}:
+        raise DirectDemixValidationError(
+            "invalid_output_channel_count",
+            f"Direct-demix output has {data.shape[1]} channels",
+        )
+    if not np.isfinite(data).all():
+        raise DirectDemixValidationError("invalid_output_samples", "Direct-demix output contains non-finite samples")
+    return data
+
+
+def _validate_written_audio(path: Path, expected_sample_rate: int, expected_frames: int, expected_channels: int) -> None:
+    import soundfile as sf
+
+    try:
+        info = sf.info(str(path))
+    except Exception as exc:
+        raise DirectDemixValidationError(
+            "unreadable_output",
+            f"Could not read output {path}: {type(exc).__name__}: {exc}",
+        ) from exc
+    if int(info.samplerate or 0) != expected_sample_rate or expected_sample_rate <= 0:
+        raise DirectDemixValidationError(
+            "invalid_output_sample_rate",
+            f"Output {path} sample rate is {info.samplerate}, expected {expected_sample_rate}",
+        )
+    if int(info.frames or 0) != expected_frames or expected_frames <= 0:
+        raise DirectDemixValidationError(
+            "invalid_output_frame_count",
+            f"Output {path} frames are {info.frames}, expected {expected_frames}",
+        )
+    if int(info.channels or 0) != expected_channels or expected_channels not in {1, 2}:
+        raise DirectDemixValidationError(
+            "invalid_output_channel_count",
+            f"Output {path} channels are {info.channels}, expected {expected_channels}",
+        )
+    if not path.exists() or path.stat().st_size <= 44:
+        raise DirectDemixValidationError("empty_output", f"Output {path} is empty")
+
+
+def _run_drumsep_mps_all_targets_direct_demix(
+    separator: Any,
+    input_path: Path,
+    output_dir: Path,
+    model_metadata: dict[str, Any],
+) -> dict[str, str]:
+    del model_metadata
+    import soundfile as sf
+    from audio_separator.separator.uvr_lib_v5 import spec_utils
+
+    fallback_value = os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK")
+    if fallback_value is not None:
+        raise DirectDemixValidationError(
+            "pytorch_mps_fallback_env_set",
+            "PYTORCH_ENABLE_MPS_FALLBACK must be unset for direct-demix",
+        )
+    if str(getattr(separator, "torch_device", "")).lower() != "mps":
+        raise DirectDemixValidationError(
+            "effective_device_not_mps",
+            f"Separator device is {getattr(separator, 'torch_device', 'unknown')}",
+        )
+    model_device = _direct_demix_model_device(separator)
+    if not model_device.lower().startswith("mps"):
+        raise DirectDemixValidationError(
+            "model_device_not_mps",
+            f"Model device is {model_device}",
+        )
+
+    model = separator.model_instance
+    mix = model.prepare_mix(str(input_path))
+    mix = spec_utils.normalize(
+        wave=mix,
+        max_peak=separator.normalization_threshold,
+        min_peak=separator.amplification_threshold,
+    )
+    normalized_sources = _validate_direct_demix_sources(model.demix(mix=mix))
+    sample_rate = int(getattr(separator, "sample_rate", 0) or 0)
+    if sample_rate <= 0:
+        raise DirectDemixValidationError("invalid_output_sample_rate", f"Invalid sample rate {sample_rate}")
+
+    stems: dict[str, str] = {}
+    for stem_name in EXPECTED_STEMS:
+        data = _direct_demix_frames_channels(normalized_sources[stem_name])
+        target = output_dir / REAPER_FILENAMES[stem_name]
+        try:
+            sf.write(str(target), data, sample_rate)
+        except Exception as exc:
+            raise DirectDemixValidationError(
+                "output_write_failed",
+                f"Could not write {target}: {type(exc).__name__}: {exc}",
+            ) from exc
+        _validate_written_audio(target, sample_rate, int(data.shape[0]), int(data.shape[1]))
+        stems[stem_name] = str(target)
+    if set(stems) != set(EXPECTED_STEMS):
+        raise DirectDemixValidationError("partial_direct_demix_kit", "Not all six canonical outputs were written")
+    return stems
+
+
 def run(args: argparse.Namespace) -> int:
     input_path = Path(args.input).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -209,7 +408,20 @@ def run(args: argparse.Namespace) -> int:
         print(f"drumsep_helper_model_dir={model_dir}", file=sys.stderr)
         print(f"drumsep_helper_model={model_name}", file=sys.stderr)
         print(f"drumsep_helper_output_dir={output_dir}", file=sys.stderr)
-        sep = Separator(model_file_dir=str(model_dir), output_dir=str(output_dir), output_format="WAV")
+        separator_kwargs = {
+            "model_file_dir": str(model_dir),
+            "output_dir": str(output_dir),
+            "output_format": "WAV",
+        }
+        if args.route == "mps-direct-demix":
+            separator_kwargs.update(
+                {
+                    "output_single_stem": None,
+                    "use_soundfile": True,
+                    "use_autocast": False,
+                }
+            )
+        sep = Separator(**separator_kwargs)
         sep.load_model(model_name)
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_model_load_end", file=sys.stderr)
     except Exception as exc:
@@ -224,28 +436,55 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
 
+    model_meta = _load_model_metadata(model_dir, model_name)
     try:
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_start", file=sys.stderr)
-        raw_outputs = sep.separate(str(input_path))
+        if args.route == "mps-direct-demix":
+            if args.device != "mps":
+                raise DirectDemixValidationError(
+                    "requested_device_not_mps",
+                    f"Direct-demix requires device mps, got {args.device}",
+                )
+            stems = _run_drumsep_mps_all_targets_direct_demix(
+                sep,
+                input_path,
+                output_dir,
+                model_meta,
+            )
+            raw_outputs = list(stems.values())
+        else:
+            raw_outputs = sep.separate(str(input_path))
+            stems, raw_outputs = normalize_outputs(output_dir, raw_outputs, before)
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_end", file=sys.stderr)
     except Exception as exc:
+        validation_reason = getattr(exc, "reason", "")
+        if validation_reason:
+            print(f"output_validation_reason={validation_reason}", file=sys.stderr)
         write_result(
             result_json,
             _error_payload(
-                "drumsep_separate_failed",
-                "stage2_separate",
+                "drumsep_direct_demix_failed" if args.route == "mps-direct-demix" else "drumsep_separate_failed",
+                "stage2_output_validation" if validation_reason else "stage2_separate",
                 f"{type(exc).__name__}: {exc}",
                 traceback=traceback.format_exc(),
+                output_validation_reason=validation_reason,
+                expected_stems=list(EXPECTED_STEMS),
+                found_stems=[],
+                drumsep_mps_all_targets_route="direct_demix" if args.route == "mps-direct-demix" else "",
+                backend_runtime=args.device,
+                audio_separator_version=_distribution_version("audio-separator"),
+                requested_device=args.device,
+                effective_device=str(getattr(sep, "torch_device", "unknown")),
+                model_device=_direct_demix_model_device(sep),
             ),
         )
         return 1
 
-    stems, raw_paths = normalize_outputs(output_dir, raw_outputs, before)
+    raw_paths = [str(path) for path in raw_outputs]
     expected_count = len(EXPECTED_STEMS)
     actual_count = len(stems)
     missing = [name for name in EXPECTED_STEMS if name not in stems]
-    model_meta = _load_model_metadata(model_dir, model_name)
-    found_stems = sorted(stems.keys())
+    found_stems = _ordered_found_stems(stems)
     validation_reason = _runtime_two_stem_limit_reason(found_stems, model_meta)
     print(f"model_id={model_name}", file=sys.stderr)
     print(f"output_dir={output_dir}", file=sys.stderr)
@@ -257,6 +496,17 @@ def run(args: argparse.Namespace) -> int:
     print(f"yaml_training_instruments={','.join(model_meta.get('training_instruments') or [])}", file=sys.stderr)
     print(f"yaml_target_instrument={model_meta.get('target_instrument') or 'none'}", file=sys.stderr)
     print(f"expected_stems={','.join(EXPECTED_STEMS)}", file=sys.stderr)
+    if args.route == "mps-direct-demix":
+        print("drumsep_mps_all_targets_route=direct_demix", file=sys.stderr)
+        print("mps_fallback_enabled=0", file=sys.stderr)
+        print("pytorch_mps_fallback_env=unset", file=sys.stderr)
+        print("output_validation_reason=ok", file=sys.stderr)
+        print("backend_runtime=mps", file=sys.stderr)
+        print(f"audio_separator_version={_distribution_version('audio-separator')}", file=sys.stderr)
+        print("requested_device=mps", file=sys.stderr)
+        print("effective_device=mps", file=sys.stderr)
+        print(f"model_device={_direct_demix_model_device(sep)}", file=sys.stderr)
+        print(f"direct_demix_keys={','.join(DIRECT_DEMIX_KEYS)}", file=sys.stderr)
     if validation_reason:
         print(f"output_validation_reason={validation_reason}", file=sys.stderr)
     if missing or len(stems) != len(EXPECTED_STEMS):
@@ -298,6 +548,18 @@ def run(args: argparse.Namespace) -> int:
             "expected_drum_outputs": expected_count,
             "actual_drum_outputs": actual_count,
             "output_count_mismatch": False,
+            "drumsep_mps_all_targets_route": "direct_demix" if args.route == "mps-direct-demix" else "",
+            "mps_fallback_enabled": 0 if args.route == "mps-direct-demix" else "",
+            "pytorch_mps_fallback_env": "unset" if args.route == "mps-direct-demix" else "",
+            "output_validation_reason": "ok",
+            "expected_stems": list(EXPECTED_STEMS),
+            "found_stems": found_stems,
+            "backend_runtime": args.device,
+            "audio_separator_version": _distribution_version("audio-separator"),
+            "requested_device": args.device,
+            "effective_device": str(getattr(sep, "torch_device", "unknown")),
+            "model_device": _direct_demix_model_device(sep),
+            "direct_demix_keys": list(DIRECT_DEMIX_KEYS) if args.route == "mps-direct-demix" else [],
         },
     )
     print("drumsep_helper_ok=true", file=sys.stderr)
@@ -312,6 +574,8 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--log-file", default="")
+    parser.add_argument("--route", choices=["wrapper", "mps-direct-demix"], default="wrapper")
+    parser.add_argument("--device", choices=["cpu", "mps"], default="cpu")
     args = parser.parse_args()
 
     if args.log_file:
