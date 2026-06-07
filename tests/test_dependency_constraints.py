@@ -3345,8 +3345,8 @@ def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_devic
     workflow_script = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text()
 
     assert 'function activeDrumKitFolderSuffix()' in main_script
-    assert 'return trSafeValue("drum_kit_split_folder_suffix", "Drum Kit Split")' in main_script
-    assert 'return trSafeValue("direct_drum_kit_folder_suffix", "Direct Drum Kit")' in main_script
+    assert 'return trSafeValue("drum_kit_split_folder_suffix", "Kit Split")' in main_script
+    assert 'return trSafeValue("direct_drum_kit_folder_suffix", "Direct Kit")' in main_script
     assert 'sourceTrackName .. " - " .. folderLabel' in main_script
     assert "ui_device_selected_before_run=" in workflow_script
     assert "backend_device_arg=" in workflow_script
@@ -3566,7 +3566,7 @@ def test_german_visual_and_help_copy_uses_umlauts_for_direct_dks_paths():
     assert "Audio in REAPER auswählen" in langs
     assert "Tracks, Medien-Items oder Zeitauswahl wählen" in langs
     assert "Ausgewählte Multi-Take Items" in langs
-    assert "Mehrere Qualitätsmodi" in langs
+    assert "Mehrere Modi (Fast, Quality, Expanded)" in langs
     assert "Was jeder Stem enthält" in langs
 
 
