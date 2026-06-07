@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-import soundfile as sf
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -279,6 +278,10 @@ def _install_fake_spec_utils(monkeypatch):
     )
 
 
+def _install_fake_soundfile(monkeypatch):
+    monkeypatch.setitem(sys.modules, "soundfile", SimpleNamespace())
+
+
 @pytest.mark.parametrize(
     ("torch_device", "model_device", "reason"),
     [
@@ -295,6 +298,7 @@ def test_direct_demix_rejects_cpu_or_unknown_model_device(
 ):
     helper = _load_helper()
     _install_fake_spec_utils(monkeypatch)
+    _install_fake_soundfile(monkeypatch)
     monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
     separator = _FakeSeparator(_complete_sources(), torch_device, model_device)
 
@@ -312,6 +316,7 @@ def test_direct_demix_rejects_cpu_or_unknown_model_device(
 def test_direct_demix_rejects_enabled_pytorch_fallback(tmp_path, monkeypatch):
     helper = _load_helper()
     _install_fake_spec_utils(monkeypatch)
+    _install_fake_soundfile(monkeypatch)
     monkeypatch.setenv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
     with pytest.raises(helper.DirectDemixValidationError) as exc_info:
@@ -326,6 +331,7 @@ def test_direct_demix_rejects_enabled_pytorch_fallback(tmp_path, monkeypatch):
 
 
 def test_synthetic_direct_demix_writes_six_valid_outputs(tmp_path, monkeypatch):
+    sf = pytest.importorskip("soundfile")
     helper = _load_helper()
     _install_fake_spec_utils(monkeypatch)
     monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
