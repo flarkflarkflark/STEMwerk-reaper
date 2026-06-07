@@ -297,6 +297,11 @@ function SW_LOG.classifyModelFailure(logText, stdoutText)
     local joined = tostring(logText or "") .. "\n" .. tostring(stdoutText or "")
     local lower = string.lower(joined)
     if lower == "" then return nil end
+    if lower:find("error_reason=drumsep_backend_runtime_limited", 1, true)
+        or lower:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)
+        or lower:find("this drumsep backend currently returned only kick and snare", 1, true) then
+        return nil
+    end
 
     local timeoutHints = {
         "read timed out",

@@ -24,6 +24,7 @@ import threading
 import sys
 import time
 import urllib.request
+import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -38,9 +39,20 @@ MPS_UNSUPPORTED_MARKER = "STEMWERK_MPS_UNSUPPORTED_OP output_channels_gt_65536"
 MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
 MPS_DEMUCS_SEGMENT_SIZE = 2
 MPS_SEGMENT_POLICY = "universal_safe_segment_2"
+DRUMSEP_RUNTIME_LIMIT_REASON = "audio_separator_mdxc_runtime_primary_secondary_only"
 DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DIRECT_DKS_MODEL_ENTRY_NAME = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
+DIRECT_DKS_MODEL_DEAD_CKPT_URL = (
+    "https://github.com/jarredou/models/releases/download/"
+    "aufr33-jarredou_MDX23C_DrumSep_model_v0.1/"
+    "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+)
+DIRECT_DKS_MODEL_MIRROR_CKPT_URL = (
+    "https://huggingface.co/Sucial/MSST-WebUI/resolve/main/"
+    "All_Models/multi_stem_models/"
+    "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+)
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
@@ -48,6 +60,7 @@ DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1
 DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
 BENCHMARK_CPU_CAPS = {1, 2, 4}
+DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -895,6 +908,43 @@ def _emit_direct_dks_preflight_markers(reason: str, requested_model: str, resolv
     )
 
 
+def _emit_direct_dks_backend_limited_markers(requested_model: str, resolved_model: str, detail: str) -> None:
+    print("error_stage=stage2_preflight", file=sys.stderr)
+    print("error_reason=drumsep_backend_runtime_limited", file=sys.stderr)
+    print(f"requested_model={requested_model}", file=sys.stderr)
+    if resolved_model:
+        print(f"resolved_model={resolved_model}", file=sys.stderr)
+    detail_map: Dict[str, str] = {}
+    for part in str(detail or "").split("|"):
+        token = str(part or "").strip()
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        detail_map[key.strip()] = value.strip()
+    for key in (
+        "model_id",
+        "audio_separator_version",
+        "yaml_path",
+        "yaml_source",
+        "yaml_top_level_keys",
+        "yaml_training_instruments",
+        "yaml_target_instrument",
+        "expected_stems",
+        "found_stems",
+        "found_files",
+        "output_validation_reason",
+    ):
+        value = detail_map.get(key, "")
+        if value == "" and key in {"found_files", "yaml_target_instrument"}:
+            value = "none"
+        print(f"{key}={value}", file=sys.stderr)
+    print("Direct Drum Kit Split preflight failed: drumsep_backend_runtime_limited", file=sys.stderr)
+    print("This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split.", file=sys.stderr)
+    if detail:
+        print(f"Detail: {detail}", file=sys.stderr)
+    print("guidance=Use normal stems for now; a 6-output DrumSep backend is still required for Direct Kit / Kit Split.", file=sys.stderr)
+
+
 def _emit_direct_dks_runtime_unsupported_markers(requested_model: str, resolved_model: str, detail: str) -> None:
     print("error_stage=stage2_model_load", file=sys.stderr)
     print("error_reason=drumsep_model_runtime_unsupported", file=sys.stderr)
@@ -1106,13 +1156,27 @@ def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_nam
     except Exception as exc:
         return False, f"download_checks_read_failed:{exc}"
 
+    normalized_sources = _normalize_direct_dks_asset_map(entry_payload)
+    yaml_filename = _direct_dks_yaml_filename(normalized_sources)
+    if not yaml_filename:
+        return False, "drumsep_yaml_filename_missing"
+
     changed = False
     mdx23c = checks_data.setdefault("mdx23c_download_list", {})
     if not isinstance(mdx23c, dict):
         return False, "mdx23c_download_list_invalid"
+    runtime_entry = {DIRECT_DKS_MODEL_FILENAME: yaml_filename}
     current = mdx23c.get(entry_name)
-    if current != entry_payload:
-        mdx23c[entry_name] = dict(entry_payload)
+    if current != runtime_entry:
+        mdx23c[entry_name] = dict(runtime_entry)
+        changed = True
+
+    other_network = checks_data.setdefault("other_network_list_new", {})
+    if not isinstance(other_network, dict):
+        return False, "other_network_list_new_invalid"
+    current_sources = other_network.get(entry_name)
+    if current_sources != normalized_sources:
+        other_network[entry_name] = dict(normalized_sources)
         changed = True
 
     if changed or not checks_path.exists():
@@ -1124,13 +1188,177 @@ def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_nam
     return True, str(checks_path)
 
 
+def _preferred_direct_dks_asset_url(filename: str, url: str) -> str:
+    normalized_filename = str(filename or "").strip()
+    normalized_url = str(url or "").strip()
+    if normalized_filename == DIRECT_DKS_MODEL_FILENAME and normalized_url == DIRECT_DKS_MODEL_DEAD_CKPT_URL:
+        return DIRECT_DKS_MODEL_MIRROR_CKPT_URL
+    return normalized_url
+
+
+def _normalize_direct_dks_asset_map(asset_map: Dict[str, str]) -> Dict[str, str]:
+    normalized: Dict[str, str] = {}
+    for filename, url in (asset_map or {}).items():
+        normalized[str(filename)] = _preferred_direct_dks_asset_url(str(filename), str(url))
+    return normalized
+
+
+def _direct_dks_yaml_filename(asset_map: Dict[str, str]) -> str:
+    for filename in asset_map:
+        if str(filename).lower().endswith(".yaml"):
+            return str(filename)
+    return ""
+
+
+def _direct_dks_assets_ready(model_cache_dir: Path, asset_map: Dict[str, str]) -> Tuple[bool, List[str]]:
+    missing_targets: List[str] = []
+    for filename in asset_map:
+        target = model_cache_dir / str(filename)
+        if not target.exists():
+            missing_targets.append(str(target))
+    return len(missing_targets) == 0, missing_targets
+
+
+def _validate_direct_dks_yaml(asset_map: Dict[str, str], model_cache_dir: Path, model_name: str) -> Tuple[bool, str]:
+    yaml_name = _direct_dks_yaml_filename(asset_map)
+    if not yaml_name:
+        return False, "yaml_path_missing"
+    yaml_path = model_cache_dir / yaml_name
+    yaml_source = str(asset_map.get(yaml_name) or "")
+    ckpt_path = model_cache_dir / DIRECT_DKS_MODEL_FILENAME
+    ckpt_source = str(asset_map.get(DIRECT_DKS_MODEL_FILENAME) or "")
+    print(f"model_id={model_name}", file=sys.stderr)
+    print(f"yaml_path={yaml_path}", file=sys.stderr)
+    print(f"yaml_source={yaml_source or 'unknown'}", file=sys.stderr)
+    print(f"ckpt_path={ckpt_path}", file=sys.stderr)
+    print(f"ckpt_source={ckpt_source or 'unknown'}", file=sys.stderr)
+    print("expected_schema=audio,model,training", file=sys.stderr)
+    try:
+        data = yaml.load(yaml_path.read_text(encoding="utf-8"), Loader=yaml.FullLoader)
+    except Exception as exc:
+        return False, f"yaml_load_failed:path={yaml_path}:source={yaml_source}:{type(exc).__name__}: {exc}"
+    if not isinstance(data, dict):
+        return False, f"yaml_schema_invalid:path={yaml_path}:top_level_type={type(data).__name__}"
+    top_keys = sorted(str(key) for key in data.keys())
+    print(f"yaml_top_level_keys={','.join(top_keys)}", file=sys.stderr)
+    if "model" not in data:
+        return False, (
+            f"yaml_schema_invalid:path={yaml_path}:source={yaml_source}:"
+            f"top_level_keys={','.join(top_keys)}:missing=model"
+        )
+    if "audio" not in data or "training" not in data:
+        return False, (
+            f"yaml_schema_invalid:path={yaml_path}:source={yaml_source}:"
+            f"top_level_keys={','.join(top_keys)}:missing=audio_or_training"
+        )
+    model_section = data.get("model")
+    if not isinstance(model_section, dict):
+        return False, f"yaml_schema_invalid:path={yaml_path}:model_type={type(model_section).__name__}"
+    return True, "ok"
+
+
+def _normalize_direct_dks_stem_name(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("_", "").replace("-", "").replace(" ", "")
+    if text in {"kick", "snare", "toms", "ride", "crash"}:
+        return text
+    if text in {"tom", "tomsdrums"}:
+        return "toms"
+    if text in {"hh", "hihat", "hihats"}:
+        return "hihat"
+    return text
+
+
+def _load_direct_dks_yaml_metadata(asset_map: Dict[str, str], model_cache_dir: Path) -> Dict[str, Any]:
+    yaml_name = _direct_dks_yaml_filename(asset_map)
+    yaml_path = model_cache_dir / yaml_name if yaml_name else model_cache_dir
+    payload: Dict[str, Any] = {
+        "yaml_path": str(yaml_path) if yaml_name else "",
+        "yaml_source": str(asset_map.get(yaml_name) or "") if yaml_name else "",
+        "yaml_top_level_keys": [],
+        "yaml_training_instruments": [],
+        "yaml_target_instrument": "",
+    }
+    if not yaml_name or not yaml_path.exists():
+        return payload
+    try:
+        data = yaml.load(yaml_path.read_text(encoding="utf-8"), Loader=yaml.FullLoader)
+    except Exception:
+        return payload
+    if not isinstance(data, dict):
+        return payload
+    payload["yaml_top_level_keys"] = sorted(str(key) for key in data.keys())
+    training = data.get("training")
+    if isinstance(training, dict):
+        instruments = training.get("instruments")
+        if isinstance(instruments, list):
+            payload["yaml_training_instruments"] = [str(item) for item in instruments if str(item).strip()]
+        target = str(training.get("target_instrument") or "").strip()
+        if target:
+            payload["yaml_target_instrument"] = target
+    return payload
+
+
+def _direct_dks_backend_limit_payload(
+    runtime_info: Optional[Dict[str, Any]],
+    model_name: str,
+    model_meta: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    info = runtime_info if isinstance(runtime_info, dict) else {}
+    versions = info.get("versions") if isinstance(info.get("versions"), dict) else {}
+    audio_separator_version = str(versions.get("audio-separator") or "").strip()
+    if audio_separator_version != "0.23.0":
+        return None
+
+    training_instruments = model_meta.get("yaml_training_instruments")
+    if not isinstance(training_instruments, list):
+        training_instruments = []
+    normalized = {_normalize_direct_dks_stem_name(item) for item in training_instruments if str(item).strip()}
+    if not set(DIRECT_DKS_EXPECTED_STEMS).issubset(normalized):
+        return None
+
+    return {
+        "audio_separator_version": audio_separator_version,
+        "model_id": str(model_name or ""),
+        "yaml_path": str(model_meta.get("yaml_path") or ""),
+        "yaml_source": str(model_meta.get("yaml_source") or ""),
+        "yaml_top_level_keys": list(model_meta.get("yaml_top_level_keys") or []),
+        "yaml_training_instruments": list(training_instruments),
+        "yaml_target_instrument": str(model_meta.get("yaml_target_instrument") or ""),
+        "expected_stems": list(DIRECT_DKS_EXPECTED_STEMS),
+        "found_stems": ["kick", "snare"],
+        "found_files": [],
+        "output_validation_reason": DRUMSEP_RUNTIME_LIMIT_REASON,
+    }
+
+
+def _format_direct_dks_backend_limit_detail(payload: Dict[str, Any]) -> str:
+    detail_parts = [
+        f"model_id={payload.get('model_id') or ''}",
+        f"audio_separator_version={payload.get('audio_separator_version') or ''}",
+        f"expected_stems={','.join(str(item) for item in payload.get('expected_stems') or [])}",
+        f"found_stems={','.join(str(item) for item in payload.get('found_stems') or [])}",
+        f"found_files={','.join(str(item) for item in payload.get('found_files') or [])}",
+        f"yaml_path={payload.get('yaml_path') or ''}",
+        f"yaml_source={payload.get('yaml_source') or ''}",
+        f"yaml_top_level_keys={','.join(str(item) for item in payload.get('yaml_top_level_keys') or [])}",
+        f"yaml_training_instruments={','.join(str(item) for item in payload.get('yaml_training_instruments') or [])}",
+        f"yaml_target_instrument={payload.get('yaml_target_instrument') or ''}",
+        f"output_validation_reason={payload.get('output_validation_reason') or ''}",
+    ]
+    return " | ".join(detail_parts)
+
+
 def _download_direct_dks_assets(model_cache_dir: Path, asset_map: Dict[str, str]) -> Tuple[bool, str]:
     for filename, url in asset_map.items():
         target = model_cache_dir / filename
         if target.exists():
+            print(f"drumsep_cache_target={target}", file=sys.stderr)
+            print("drumsep_cache_status=exists", file=sys.stderr)
             continue
         if not url:
-            return False, f"asset_url_missing:{filename}"
+            return False, f"asset_url_missing:{filename}:target={target}"
+        print(f"drumsep_cache_target={target}", file=sys.stderr)
+        print(f"drumsep_cache_source={url}", file=sys.stderr)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             with urllib.request.urlopen(url, timeout=120) as response:
@@ -1143,11 +1371,16 @@ def _download_direct_dks_assets(model_cache_dir: Path, asset_map: Dict[str, str]
                 print(f"drumsep_cache_sha256={digest}", file=sys.stderr)
             print(f"drumsep_cache_asset={target}", file=sys.stderr)
         except Exception as exc:
-            return False, f"asset_download_failed:{filename}:{exc}"
+            print(f"drumsep_cache_error={filename}|{url}|{type(exc).__name__}: {exc}", file=sys.stderr)
+            return False, f"asset_download_failed:{filename}:target={target}:source={url}:{type(exc).__name__}: {exc}"
     return True, "ok"
 
 
-def _direct_dks_preflight_check(model_name: str, model_cache_dir: Path) -> Tuple[bool, str, str, Optional[str]]:
+def _direct_dks_preflight_check(
+    model_name: str,
+    model_cache_dir: Path,
+    runtime_info: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
     # This prevents delayed failure in sep.separate()/load_model for known
     # unresolved DrumSep model names.
@@ -1161,6 +1394,9 @@ def _direct_dks_preflight_check(model_name: str, model_cache_dir: Path) -> Tuple
     print(f"catalog_lookup_status={lookup_status}", file=sys.stderr)
     if not asset_map:
         return False, requested_model, resolved_model, lookup_status
+    for filename, source_url in asset_map.items():
+        print(f"drumsep_catalog_asset={filename}|{source_url}", file=sys.stderr)
+    asset_map = _normalize_direct_dks_asset_map(asset_map)
     ok, check_detail = _ensure_runtime_download_checks_has_drumsep(
         model_cache_dir,
         DIRECT_DKS_MODEL_ENTRY_NAME,
@@ -1175,16 +1411,18 @@ def _direct_dks_preflight_check(model_name: str, model_cache_dir: Path) -> Tuple
     dl_ok, dl_detail = _download_direct_dks_assets(model_cache_dir, asset_map)
     if not dl_ok:
         return False, requested_model, resolved_model, dl_detail
-    try:
-        from audio_separator.separator import Separator as AudioSeparator
-
-        sep = AudioSeparator(model_file_dir=str(model_cache_dir), output_dir=".")
-        sep.download_model_files(resolved_model)
-        return True, requested_model, resolved_model, None
-    except Exception as exc:
-        if _is_known_drumsep_model_missing_error(exc):
-            return False, requested_model, resolved_model, str(exc)
-        raise
+    ready, missing_targets = _direct_dks_assets_ready(model_cache_dir, asset_map)
+    if not ready:
+        return False, requested_model, resolved_model, "asset_ready_check_failed:" + "|".join(missing_targets)
+    yaml_ok, yaml_detail = _validate_direct_dks_yaml(asset_map, model_cache_dir, requested_model or resolved_model)
+    if not yaml_ok:
+        return False, requested_model, resolved_model, yaml_detail
+    model_meta = _load_direct_dks_yaml_metadata(asset_map, model_cache_dir)
+    backend_limit = _direct_dks_backend_limit_payload(runtime_info, resolved_model or requested_model, model_meta)
+    if backend_limit:
+        return False, requested_model, resolved_model, "backend_limited:" + _format_direct_dks_backend_limit_detail(backend_limit)
+    print("drumsep_model_files_ready=yes", file=sys.stderr)
+    return True, requested_model, resolved_model, None
 
 
 def _apply_mps_experimental_policy(
@@ -1732,7 +1970,29 @@ def _run_direct_dks_drumsep_helper(
 
     if completed_returncode != 0 or not result_data.get("ok"):
         reason = str(result_data.get("error_reason") or "drumsep_helper_failed")
-        detail = str(result_data.get("message") or result_data)
+        detail_parts = [str(result_data.get("message") or reason)]
+        for key in (
+            "expected_stems",
+            "found_stems",
+            "found_files",
+            "output_dir",
+            "model_id",
+            "yaml_path",
+            "yaml_resolution",
+            "yaml_top_level_keys",
+            "yaml_training_instruments",
+            "yaml_target_instrument",
+            "output_validation_reason",
+        ):
+            value = result_data.get(key)
+            if value in (None, "", [], {}):
+                continue
+            if isinstance(value, list):
+                rendered = ",".join(str(item) for item in value)
+            else:
+                rendered = str(value)
+            detail_parts.append(f"{key}={rendered}")
+        detail = " | ".join(detail_parts)
         return False, {}, reason, detail
 
     raw_stems = result_data.get("stems") or {}
@@ -2723,6 +2983,65 @@ def main():
         print(f"dks_extract_stage1_live_device_ids={','.join(live_device_ids)}", file=sys.stderr)
         print(f"dks_extract_intermediate_dir={stage1_root}", file=sys.stderr)
         print(f"dks_extract_stage2_dir={stage2_root}", file=sys.stderr)
+        emit_phase("stage2_preflight")
+        print("PROGRESS:0:Checking Drum Kit backend...", flush=True)
+        print(f"timing_utc={_ts()} drumsep_runtime_select_start", file=sys.stderr)
+        drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
+        print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
+        print(f"dks_extract_stage2_backend={runtime_kind}", file=sys.stderr)
+        if drumsep_python is None:
+            reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+            runtime_path = Path(
+                str(runtime_info.get("cpu_python") or runtime_info.get("rocm_python") or _drumsep_runtime_python_path())
+            )
+            _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
+            print("dks_extract_stage2_runtime=drumsep", file=sys.stderr)
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return _finish_benchmark_run(benchmark_sampler, 1)
+        versions = runtime_info.get("versions") if isinstance(runtime_info.get("versions"), dict) else {}
+        device_names = runtime_info.get("device_names") if isinstance(runtime_info.get("device_names"), list) else []
+        fallback_reason = str(runtime_info.get("fallback_reason") or "")
+        print(f"dks_extract_stage2_runtime=drumsep", file=sys.stderr)
+        print(f"dks_extract_stage2_device={runtime_kind}", file=sys.stderr)
+        print(f"dks_extract_stage2_requested_device={device_preference}", file=sys.stderr)
+        print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
+        print(f"drumsep_runtime_selection_policy={runtime_info.get('selection_policy', '')}", file=sys.stderr)
+        print(f"drumsep_python={drumsep_python}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind == 'rocm' else 'no'}", file=sys.stderr)
+        print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
+        print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
+        print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
+        if fallback_reason:
+            print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
+        ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(
+            requested_stage2_model,
+            model_cache_dir,
+            runtime_info=runtime_info,
+        )
+        if not ok:
+            known_err_text = str(known_err or "")
+            known_err_lower = known_err_text.lower()
+            if known_err_text.startswith("backend_limited:"):
+                _emit_direct_dks_backend_limited_markers(
+                    requested_model or requested_stage2_model,
+                    resolved_model or "",
+                    known_err_text[len("backend_limited:"):],
+                )
+            else:
+                reason = (
+                    "drumsep_model_missing"
+                    if "not found in supported model files" in known_err_lower or known_err_lower.startswith("catalog_") or known_err_lower.startswith("unsupported_")
+                    else "drumsep_model_download_failed"
+                )
+                _emit_direct_dks_preflight_markers(reason, requested_model or requested_stage2_model, resolved_model or "", known_err_text)
+            emit_phase("python_error")
+            if write_done:
+                write_done("ERROR")
+            return _finish_benchmark_run(benchmark_sampler, 1)
+        requested_stage2_model = requested_model or requested_stage2_model
+        run_model = resolved_model or run_model
         stage1_fallback_reason = ""
         if _is_unexpected_cpu_downgrade(stage1_requested, stage1_preview_device):
             stage1_fallback_reason = "live_runtime_cpu_only"
@@ -2761,53 +3080,7 @@ def main():
             print(f"dks_extract_stage1_output={drums_input}", file=sys.stderr)
             emit_phase("stage1_parent_end")
 
-            emit_phase("stage2_preflight")
             print("PROGRESS:50:Starting Drum Kit runtime [Stage 2]...", flush=True)
-            print(f"timing_utc={_ts()} drumsep_runtime_select_start", file=sys.stderr)
-            drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
-            print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
-            print(f"dks_extract_stage2_backend={runtime_kind}", file=sys.stderr)
-            if drumsep_python is None:
-                reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
-                runtime_path = Path(
-                    str(runtime_info.get("cpu_python") or runtime_info.get("rocm_python") or _drumsep_runtime_python_path())
-                )
-                _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
-                print("dks_extract_stage2_runtime=drumsep", file=sys.stderr)
-                emit_phase("python_error")
-                if write_done:
-                    write_done("ERROR")
-                return _finish_benchmark_run(benchmark_sampler, 1)
-            versions = runtime_info.get("versions") if isinstance(runtime_info.get("versions"), dict) else {}
-            device_names = runtime_info.get("device_names") if isinstance(runtime_info.get("device_names"), list) else []
-            fallback_reason = str(runtime_info.get("fallback_reason") or "")
-            print(f"dks_extract_stage2_runtime=drumsep", file=sys.stderr)
-            print(f"dks_extract_stage2_device={runtime_kind}", file=sys.stderr)
-            print(f"dks_extract_stage2_requested_device={device_preference}", file=sys.stderr)
-            print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
-            print(f"drumsep_runtime_selection_policy={runtime_info.get('selection_policy', '')}", file=sys.stderr)
-            print(f"drumsep_python={drumsep_python}", file=sys.stderr)
-            print(f"drumsep_gpu_capable={'yes' if runtime_kind == 'rocm' else 'no'}", file=sys.stderr)
-            print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
-            print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
-            print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
-            if fallback_reason:
-                print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
-            ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(requested_stage2_model, model_cache_dir)
-            if not ok:
-                known_err_text = str(known_err or "").lower()
-                reason = (
-                    "drumsep_model_missing"
-                    if "not found in supported model files" in known_err_text or known_err_text.startswith("catalog_") or known_err_text.startswith("unsupported_")
-                    else "drumsep_model_download_failed"
-                )
-                _emit_direct_dks_preflight_markers(reason, requested_model or requested_stage2_model, resolved_model or "", str(known_err or ""))
-                emit_phase("python_error")
-                if write_done:
-                    write_done("ERROR")
-                return _finish_benchmark_run(benchmark_sampler, 1)
-            requested_stage2_model = requested_model or requested_stage2_model
-            run_model = resolved_model or run_model
             emit_phase("stage2_separate")
             stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)
             with _dks_extract_stage2_lock(output_root, stage2_backend):
@@ -2901,16 +3174,28 @@ def main():
         if fallback_reason:
             print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
         try:
-            ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(run_model, model_cache_dir)
+            ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(
+                run_model,
+                model_cache_dir,
+                runtime_info=runtime_info,
+            )
             if not ok:
-                known_err_text = str(known_err or "").lower()
-                reason = (
-                    "drumsep_model_missing"
-                    if "not found in supported model files" in known_err_text
-                    or known_err_text.startswith("catalog_")
-                    else "drumsep_model_download_failed"
-                )
-                _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", str(known_err or ""))
+                known_err_text = str(known_err or "")
+                known_err_lower = known_err_text.lower()
+                if known_err_text.startswith("backend_limited:"):
+                    _emit_direct_dks_backend_limited_markers(
+                        requested_model or run_model,
+                        resolved_model or "",
+                        known_err_text[len("backend_limited:"):],
+                    )
+                else:
+                    reason = (
+                        "drumsep_model_missing"
+                        if "not found in supported model files" in known_err_lower
+                        or known_err_lower.startswith("catalog_")
+                        else "drumsep_model_download_failed"
+                    )
+                    _emit_direct_dks_preflight_markers(reason, requested_model or run_model, resolved_model or "", known_err_text)
                 emit_phase("python_error")
                 if write_done:
                     write_done("ERROR")

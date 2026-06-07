@@ -1029,7 +1029,7 @@ function WORKFLOW.finishSeparationCallback()
             persistWithExitCodeRetry(function()
                 isProcessingActive = false  -- Reset guard so workflow can be restarted
                 local exitCode = SW_LOG.readExitCode(C.progressState.exitCodeFile)
-                local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 2000) or "(no log output found)"
+                local logSnippet = SW_LOG.readFileSnippet(C.progressState.logFile, 12000) or "(no log output found)"
                 local stdoutSnippet = SW_LOG.readFileSnippet(C.progressState.stdoutFile, 1200)
                 local errMsg = nil
                 if C.buildKnownSeparationFailureMessage then

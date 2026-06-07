@@ -1560,6 +1560,31 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
     local isDirectDksCmd = lowerCmd:find("workflow%-source", 1, false) and lowerCmd:find("dks_direct", 1, true)
     local hasFallbackModelMissing = lowerLog:find("not found in supported model files", 1, true)
         and lowerLog:find("model file", 1, true)
+    if lowerLog:find("error_reason=drumsep_backend_runtime_limited", 1, true)
+        or lowerLog:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)
+        or lowerLog:find("this drumsep backend currently returned only kick and snare", 1, true) then
+        local expected = tostring(logSnippet or ""):match("expected_stems=([^\r\n]+)") or "kick,snare,toms,hihat,ride,crash"
+        local found = tostring(logSnippet or ""):match("found_stems=([^\r\n]+)") or "kick,snare"
+        local modelId = tostring(logSnippet or ""):match("model_id=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
+        local title = trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")
+        local body = trSafeValue("drumsep_backend_limited_body", "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split.")
+        local msg = title .. "\n"
+            .. body
+            .. "\nModel: " .. tostring(modelId)
+            .. "\nExpected stems: " .. tostring(expected)
+            .. "\nCurrent backend outputs: " .. tostring(found)
+            .. "\nerror_stage=stage2_preflight\n"
+            .. "error_reason=drumsep_backend_runtime_limited"
+            .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+            .. "\nCommand: " .. tostring(cmdLine or "unknown")
+            .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+            .. tostring(logSnippet or "(no log output found)")
+            .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+        if stdoutSnippet and stdoutSnippet ~= "" then
+            msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+        end
+        return msg
+    end
     if lowerLog:find("error_stage=stage2_preflight", 1, true)
         and (lowerLog:find("error_reason=drumsep_model_missing", 1, true)
             or lowerLog:find("error_reason=drumsep_model_download_failed", 1, true)) then
@@ -1617,6 +1642,31 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
         or lowerLog:find("error_reason=drumsep_output_count_mismatch", 1, true) then
         local reason = tostring(logSnippet or ""):match("error_reason=([^\r\n]+)") or "drumsep_helper_failed"
         local stage = tostring(logSnippet or ""):match("error_stage=([^\r\n]+)") or "stage2_separate"
+        local validationReason = tostring(logSnippet or ""):match("output_validation_reason=([^\r\n]+)") or ""
+        if reason == "drumsep_output_count_mismatch"
+            and validationReason == "audio_separator_mdxc_runtime_primary_secondary_only" then
+            local expected = tostring(logSnippet or ""):match("expected_stems=([^\r\n]+)") or "kick,snare,toms,hihat,ride,crash"
+            local found = tostring(logSnippet or ""):match("found_stems=([^\r\n]+)") or "kick,snare"
+            local modelId = tostring(logSnippet or ""):match("model_id=([^\r\n]+)") or DKS_WORKFLOW.DIRECT_DKS_MODEL
+            local title = trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")
+            local body = trSafeValue("drumsep_backend_limited_body", "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split.")
+            local msg = title .. "\n"
+                .. body
+                .. "\nModel: " .. tostring(modelId)
+                .. "\nExpected stems: " .. tostring(expected)
+                .. "\nCurrent backend outputs: " .. tostring(found)
+                .. "\nerror_stage=" .. tostring(stage)
+                .. "\nerror_reason=" .. tostring(reason)
+                .. "\n\nExit code: " .. tostring(exitCode or "unknown")
+                .. "\nCommand: " .. tostring(cmdLine or "unknown")
+                .. "\nPython log (" .. tostring(logPath or "unknown") .. "):\n"
+                .. tostring(logSnippet or "(no log output found)")
+                .. "\n\nDebug log: " .. tostring(debugLogPath or SW_LOG.getLogPath())
+            if stdoutSnippet and stdoutSnippet ~= "" then
+                msg = msg .. "\n\nStdout (first 1200 chars):\n" .. stdoutSnippet
+            end
+            return msg
+        end
         local msg = "Drum Kit Split separation failed.\n"
             .. "Reason: " .. tostring(reason)
             .. "\nerror_stage=" .. tostring(stage)
@@ -20966,7 +21016,7 @@ _sep.processAllStemsResult = function()
         -- Use the first job's log as the primary error (usually enough).
         local firstJob = multiTrackQueue.jobs and multiTrackQueue.jobs[1] or nil
         local logPath = firstJob and firstJob.logFile or nil
-        local logSnippet = SW_LOG.readFileSnippet(logPath, 1400) or "(no log output found)"
+        local logSnippet = SW_LOG.readFileSnippet(logPath, 12000) or "(no log output found)"
         local stdoutSnippet = firstJob and SW_LOG.readFileSnippet(firstJob.stdoutFile, 1200) or nil
         local exitCode = firstJob and SW_LOG.readExitCode(firstJob.exitCodeFile) or nil
         local cmdLine = firstJob and firstJob.lastCmd or nil

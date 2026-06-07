@@ -1840,13 +1840,26 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "other_network_list_new" in script
     assert "def _ensure_runtime_download_checks_has_drumsep(" in script
     assert "mdx23c_download_list" in script
+    assert "DIRECT_DKS_MODEL_DEAD_CKPT_URL" in script
+    assert "DIRECT_DKS_MODEL_MIRROR_CKPT_URL" in script
+    assert "def _preferred_direct_dks_asset_url(" in script
+    assert "def _normalize_direct_dks_asset_map(" in script
+    assert "def _direct_dks_yaml_filename(" in script
+    assert "def _direct_dks_assets_ready(" in script
+    assert "def _validate_direct_dks_yaml(" in script
     assert "def _download_direct_dks_assets(" in script
     assert "def _is_known_drumsep_runtime_unsupported_error(exc: Exception, traceback_text: str, model_name: str) -> bool:" in script
     assert "def _emit_direct_dks_runtime_unsupported_markers(" in script
     assert 'print("error_stage=stage2_model_load", file=sys.stderr)' in script
     assert 'print("error_reason=drumsep_model_runtime_unsupported", file=sys.stderr)' in script
     assert "audio_separator mdxc loader missing expected config field 'model'" in script
-    assert "sep.download_model_files(resolved_model)" in script
+    assert 'print(f"drumsep_cache_source={url}", file=sys.stderr)' in script
+    assert 'print(f"drumsep_cache_error={filename}|{url}|{type(exc).__name__}: {exc}", file=sys.stderr)' in script
+    assert 'print(f"yaml_path={yaml_path}", file=sys.stderr)' in script
+    assert 'print(f"yaml_source={yaml_source or \'unknown\'}", file=sys.stderr)' in script
+    assert 'print(f"yaml_top_level_keys={\',\'.join(top_keys)}", file=sys.stderr)' in script
+    assert 'print("expected_schema=audio,model,training", file=sys.stderr)' in script
+    assert 'print("drumsep_model_files_ready=yes", file=sys.stderr)' in script
     assert "resolved_model=" in script
     assert "Direct Drum Kit Split route detected: workflow_mode=" in script
     assert "workflow_source=" in script
@@ -1867,20 +1880,21 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(" in script
     assert "drumsep_helper_python=" in script
     assert "drumsep_helper_ok=true" in script
-    assert "_direct_dks_preflight_check(run_model, model_cache_dir)" in script
-    assert script.index("drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)") < script.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
+    assert "_direct_dks_preflight_check(" in script
+    assert "runtime_info=runtime_info" in script
+    assert after_direct_route.index("drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)") < after_direct_route.index("_direct_dks_preflight_check(")
     assert "drumsep_runtime_selection_policy=explicit_cpu" in script
     assert 'selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"' in script
     assert "normalized_device_request=" in script
     assert 'info["selection_policy"] = "fallback_cpu"' in script
-    assert after_direct_route.index("_direct_dks_preflight_check(run_model, model_cache_dir)") < after_direct_route.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
+    assert after_direct_route.index("_direct_dks_preflight_check(") < after_direct_route.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
     assert 'print("error_stage=stage2_preflight", file=sys.stderr)' in script
     assert 'print(f"error_reason={reason}", file=sys.stderr)' in script
     assert 'print(f"requested_model={requested_model}", file=sys.stderr)' in script
     assert 'print(f"Direct Drum Kit Split preflight failed: {reason}", file=sys.stderr)' in script
     assert "drumsep_model_download_failed" in script
-    assert "known_err_text.startswith(\"catalog_\")" in script
-    assert 'known_err_text.startswith("unsupported_")' in script
+    assert "catalog_" in script
+    assert "unsupported_" in script
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
@@ -1923,11 +1937,13 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "actual_drum_outputs=" in helper_script
     assert "output_count_mismatch=yes" in helper_script
     assert 'dst = output_root / src.name' in script
-    assert "_direct_dks_preflight_check(requested_stage2_model, model_cache_dir)" in script
+    assert "_direct_dks_preflight_check(" in script
+    assert "requested_stage2_model," in script
     assert "requested_stage2_model = _resolve_requested_stage2_model(args)" in script
-    assert "known_err_text.startswith(\"unsupported_\")" in script
+    assert "unsupported_" in script
     assert "print(json.dumps(final_stems))" in script
     assert "workflow_source=dks_extract" not in support_script
+    assert 'SW_LOG.readFileSnippet(C.progressState.logFile, 12000)' in Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
     assert '"dks_extract_stage1_runtime", "dks_extract_stage1_requested_device"' in support_script
     assert '"dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_stage2_backend"' in support_script
     assert '"dks_extract_stage2_effective_cap", "bench_dks_stage2_cap_requested", "bench_dks_stage2_cap_applied",' in support_script
@@ -2217,8 +2233,9 @@ def test_drumkit_extract_stage2_uses_requested_drumsep_model_not_stage1_demucs_m
     assert "def _resolve_requested_stage2_model(args: argparse.Namespace) -> str:" in script
     assert "return DIRECT_DKS_MODEL_ALIAS" in script
     assert "requested_stage2_model = _resolve_requested_stage2_model(args)" in script
-    assert "_direct_dks_preflight_check(requested_stage2_model, model_cache_dir)" in script
-    assert "_emit_direct_dks_preflight_markers(reason, requested_model or requested_stage2_model, resolved_model or \"\", str(known_err or \"\"))" in script
+    assert "_direct_dks_preflight_check(" in script
+    assert "requested_stage2_model," in script
+    assert "_emit_direct_dks_backend_limited_markers(" in script
 
 
 def test_drumsep_runtime_verify_and_helper_use_clean_subprocess_env():
@@ -2443,6 +2460,277 @@ def test_drumsep_runtime_selector_reports_missing_for_stale_ok_without_existing_
     assert info["cpu_detail"] == "missing"
 
 
+def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_path, monkeypatch):
+    module = _load_audio_separator_process_module()
+    model_cache_dir = tmp_path / "model cache with spaces"
+    repo_checks = tmp_path / "download_checks.json"
+    yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    yaml_url = (
+        "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+        "mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    )
+    repo_checks.write_text(
+        json.dumps(
+            {
+                "other_network_list_new": {
+                    module.DIRECT_DKS_MODEL_ENTRY_NAME: {
+                        module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
+                        yaml_name: yaml_url,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: repo_checks)
+
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def read(self) -> bytes:
+            return self.payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    payloads = {
+        module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL: b"fake-ckpt-bytes",
+        yaml_url: b"audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n",
+    }
+
+    def fake_urlopen(url, timeout=120):
+        requests.append((str(url), timeout))
+        return FakeResponse(payloads[str(url)])
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    ok, requested_model, resolved_model, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        model_cache_dir,
+    )
+
+    assert ok is True
+    assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
+    assert detail is None
+    assert [url for url, _timeout in requests] == [module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL, yaml_url]
+    assert (model_cache_dir / module.DIRECT_DKS_MODEL_FILENAME).read_bytes() == b"fake-ckpt-bytes"
+    assert "model:" in (model_cache_dir / yaml_name).read_text(encoding="utf-8")
+
+    runtime_checks = json.loads((model_cache_dir / "download_checks.json").read_text(encoding="utf-8"))
+    written_entry = runtime_checks["mdx23c_download_list"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
+    assert written_entry == {module.DIRECT_DKS_MODEL_FILENAME: yaml_name}
+    persisted_sources = runtime_checks["other_network_list_new"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
+    assert persisted_sources[module.DIRECT_DKS_MODEL_FILENAME] == module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL
+    assert persisted_sources[yaml_name] == yaml_url
+
+
+def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path, monkeypatch):
+    module = _load_audio_separator_process_module()
+    model_cache_dir = tmp_path / "model cache with spaces"
+    model_cache_dir.mkdir(parents=True, exist_ok=True)
+    yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    yaml_url = (
+        "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+        "mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    )
+    repo_checks = tmp_path / "download_checks.json"
+    repo_checks.write_text(
+        json.dumps(
+            {
+                "other_network_list_new": {
+                    module.DIRECT_DKS_MODEL_ENTRY_NAME: {
+                        module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
+                        yaml_name: yaml_url,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (model_cache_dir / module.DIRECT_DKS_MODEL_FILENAME).write_bytes(b"existing-ckpt")
+    (model_cache_dir / yaml_name).write_text(
+        "audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: repo_checks)
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("urlopen should not be called")),
+    )
+
+    ok, _requested_model, _resolved_model, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        model_cache_dir,
+    )
+
+    assert ok is True
+    assert detail is None
+
+
+def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limited(tmp_path, monkeypatch):
+    module = _load_audio_separator_process_module()
+    model_cache_dir = tmp_path / "model cache with spaces"
+    model_cache_dir.mkdir(parents=True, exist_ok=True)
+    yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    yaml_url = (
+        "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+        "mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    )
+    repo_checks = tmp_path / "download_checks.json"
+    repo_checks.write_text(
+        json.dumps(
+            {
+                "other_network_list_new": {
+                    module.DIRECT_DKS_MODEL_ENTRY_NAME: {
+                        module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
+                        yaml_name: yaml_url,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (model_cache_dir / module.DIRECT_DKS_MODEL_FILENAME).write_bytes(b"existing-ckpt")
+    (model_cache_dir / yaml_name).write_text(
+        "audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n    - Snare\n    - Toms\n    - Hh\n    - Ride\n    - Crash\n  target_instrument: drums\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: repo_checks)
+    runtime_info = {"versions": {"audio-separator": "0.23.0"}}
+
+    ok, requested_model, resolved_model, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        model_cache_dir,
+        runtime_info=runtime_info,
+    )
+
+    assert ok is False
+    assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
+    assert str(detail).startswith("backend_limited:")
+    assert "audio_separator_version=0.23.0" in str(detail)
+    assert "expected_stems=kick,snare,toms,hihat,ride,crash" in str(detail)
+    assert "found_stems=kick,snare" in str(detail)
+    assert f"yaml_path={model_cache_dir / yaml_name}" in str(detail)
+    assert "output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only" in str(detail)
+
+
+def test_direct_dks_preflight_reports_source_and_target_on_download_failure(tmp_path, monkeypatch, capsys):
+    module = _load_audio_separator_process_module()
+    model_cache_dir = tmp_path / "model cache with spaces"
+    repo_checks = tmp_path / "download_checks.json"
+    yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    yaml_url = (
+        "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+        "mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    )
+    repo_checks.write_text(
+        json.dumps(
+            {
+                "other_network_list_new": {
+                    module.DIRECT_DKS_MODEL_ENTRY_NAME: {
+                        module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
+                        yaml_name: yaml_url,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: repo_checks)
+
+    def fake_urlopen(url, timeout=120):
+        raise OSError("ssl cert verify failed")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    ok, requested_model, resolved_model, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        model_cache_dir,
+    )
+
+    assert ok is False
+    assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
+    assert "asset_download_failed:aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt" in str(detail)
+    assert f"target={model_cache_dir / module.DIRECT_DKS_MODEL_FILENAME}" in str(detail)
+    assert f"source={module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL}" in str(detail)
+    stderr = capsys.readouterr().err
+    assert f"drumsep_cache_source={module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL}" in stderr
+    assert "drumsep_cache_error=aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt|" in stderr
+
+
+def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_path, monkeypatch, capsys):
+    module = _load_audio_separator_process_module()
+    model_cache_dir = tmp_path / "model cache with spaces"
+    repo_checks = tmp_path / "download_checks.json"
+    yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    yaml_url = (
+        "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+        "mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    )
+    repo_checks.write_text(
+        json.dumps(
+            {
+                "other_network_list_new": {
+                    module.DIRECT_DKS_MODEL_ENTRY_NAME: {
+                        module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
+                        yaml_name: yaml_url,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: repo_checks)
+
+    class FakeResponse:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def read(self) -> bytes:
+            return self.payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    payloads = {
+        module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL: b"fake-ckpt-bytes",
+        yaml_url: b"audio:\n  dim_f: 1024\ntraining:\n  instruments:\n    - Kick\n",
+    }
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", lambda url, timeout=120: FakeResponse(payloads[str(url)]))
+
+    ok, requested_model, resolved_model, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        model_cache_dir,
+    )
+
+    assert ok is False
+    assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
+    assert "yaml_schema_invalid:" in str(detail)
+    assert "missing=model" in str(detail)
+    stderr = capsys.readouterr().err
+    assert f"yaml_path={model_cache_dir / yaml_name}" in stderr
+    assert f"yaml_source={yaml_url}" in stderr
+    assert "yaml_top_level_keys=audio,training" in stderr
+    assert "expected_schema=audio,model,training" in stderr
+
+
 def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     module = _load_audio_separator_process_module()
     base = tmp_path
@@ -2540,10 +2828,13 @@ def test_normal_stem_workflows_do_not_reference_drumsep_runtime():
     _, after_direct_dks = script.split(marker, 1)
 
     assert "_select_drumsep_runtime(" in after_direct_dks
-    assert after_direct_dks.index("_select_drumsep_runtime(") < after_direct_dks.index("_direct_dks_preflight_check(run_model, model_cache_dir)")
+    assert after_direct_dks.index("_select_drumsep_runtime(") < after_direct_dks.index("_direct_dks_preflight_check(")
     assert after_direct_dks.index("_select_drumsep_runtime(") < after_direct_dks.index('emit_phase("model_setup_start")')
     assert after_direct_dks.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(") < after_direct_dks.index('emit_phase("model_setup_start")')
     assert "_enable_torch_weights_only_compat(run_model, resolved_device)" in script
+    assert 'error_reason=drumsep_backend_runtime_limited' in script
+    assert 'audio_separator_mdxc_runtime_primary_secondary_only' in script
+    assert 'PROGRESS:0:Checking Drum Kit backend...' in script
 
 
 def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
@@ -2559,10 +2850,12 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert "error_stage=stage2_runtime" in main_script
     assert "error_reason=drumsep_runtime_missing" in main_script
     assert "error_reason=drumsep_runtime_broken" in main_script
+    assert "error_reason=drumsep_backend_runtime_limited" in main_script
     assert "error_reason=drumsep_helper_failed" in main_script
     assert "error_reason=drumsep_model_load_failed" in main_script
     assert "error_reason=drumsep_separate_failed" in main_script
     assert "error_reason=drumsep_output_count_mismatch" in main_script
+    assert 'trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")' in main_script
     assert 'file = "hi-hat.wav"' in main_script
     assert "activateWorkflowStemSet(isDirectDKS)" in main_script
     assert "Run Setup/Repair Drum Kit Split runtime." in main_script
@@ -2720,6 +3013,12 @@ def test_drumsep_helper_wrong_output_count_schema(tmp_path):
         "expected 6 stems, got 1",
         stems=stems,
         raw_outputs=raw_outputs,
+        expected_drum_outputs=6,
+        actual_drum_outputs=1,
+        expected_stems=list(helper.EXPECTED_STEMS),
+        found_stems=["kick"],
+        found_files=raw_outputs,
+        output_count_mismatch=True,
     )
 
     assert stems == {"kick": str(tmp_path / "kick.wav")}
@@ -2729,6 +3028,59 @@ def test_drumsep_helper_wrong_output_count_schema(tmp_path):
     assert payload["expected_drum_outputs"] == 6
     assert payload["actual_drum_outputs"] == 1
     assert payload["output_count_mismatch"] is True
+
+
+def test_drumsep_helper_reads_yaml_metadata_from_runtime_download_checks(tmp_path):
+    helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
+    spec = importlib.util.spec_from_file_location("stemwerk_drumsep_process_meta_test", helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(helper)
+
+    model_dir = tmp_path / "model dir with spaces"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "download_checks.json").write_text(
+        json.dumps(
+            {
+                "mdx23c_download_list": {
+                    "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)": {
+                        "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    yaml_path = model_dir / "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    yaml_path.write_text(
+        "audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n    - Snare\n    - Toms\n    - Hh\n    - Ride\n    - Crash\n  target_instrument: null\n",
+        encoding="utf-8",
+    )
+
+    meta = helper._load_model_metadata(
+        model_dir,
+        "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+    )
+
+    assert meta["yaml_path"] == str(yaml_path)
+    assert meta["yaml_resolution"] == "download_checks"
+    assert meta["yaml_top_level_keys"] == ["audio", "model", "training"]
+    assert meta["training_instruments"] == ["Kick", "Snare", "Toms", "Hh", "Ride", "Crash"]
+
+
+def test_drumsep_helper_flags_audio_separator_mdxc_two_stem_runtime_limit():
+    helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
+    spec = importlib.util.spec_from_file_location("stemwerk_drumsep_process_limit_test", helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(helper)
+
+    reason = helper._runtime_two_stem_limit_reason(
+        ["kick", "snare"],
+        {"training_instruments": ["Kick", "Snare", "Toms", "Hh", "Ride", "Crash"]},
+    )
+
+    assert reason == "audio_separator_mdxc_runtime_primary_secondary_only"
 
 
 def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
@@ -2748,6 +3100,11 @@ def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     assert "timing_utc=" in script
     assert 'error_reason=drumsep_stage2_delegation_not_implemented' not in script
     assert 'drumsep_output_count_mismatch' in script
+    assert "output_validation_reason" in script
+    assert "expected_stems" in script
+    assert "found_stems" in script
+    assert "found_files" in script
+    assert "yaml_top_level_keys" in script
 
 
 def test_drumkit_wrapper_selects_integrated_mode_and_extract_source():
@@ -2774,6 +3131,8 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert "[Latest Direct DKS markers]" in script
     assert "drumsep_runtime_selected" in script
     assert "drumsep_gpu_capable" in script
+    assert "output_validation_reason" in script
+    assert "found_files" in script
     assert "drumsep_install.log" in script
     assert "drumsep_rocm_install.log" in script
     assert script.index('writeFile(joinPath(bundleDir, "diagnostics.txt"') < script.index('local zipStartedAt = phaseStart("create_zip")')
@@ -2794,6 +3153,10 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_complete_title = "Direct Kit completed successfully!"' in langs
     assert 'drumkit_complete_title = "Direct Kit succesvol voltooid!"' in langs
     assert 'drumkit_complete_title = "Direct Kit erfolgreich abgeschlossen!"' in langs
+    assert 'drumsep_backend_limited_title = "Drum Kit backend not yet supported."' in langs
+    assert 'drumsep_backend_limited_title = "Drum Kit-backend wordt nog niet ondersteund."' in langs
+    assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstuetzt."' in langs
+    assert 'drumsep_backend_limited_body = "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split."' in langs
     assert 'drumkit_result_track_many = "drum tracks"' in langs
     assert 'drumkit_result_track_many = "drumtracks"' in langs
     assert 'drumkit_result_track_many = "Drum-Tracks"' in langs
@@ -3264,9 +3627,21 @@ def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
     assert "Model download/load failed." in main_script
     assert "Model cache folder:" in main_script
     assert "SW_LOG.classifyModelFailure" in main_script
+    assert 'lower:find("error_reason=drumsep_backend_runtime_limited", 1, true)' in log_script
+    assert 'lower:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)' in log_script
 
     assert 'print(f"STEMWERK_ERROR_CLASS={model_failure[\'error_class\']}", file=sys.stderr)' in py_script
     assert 'print(f"STEMWERK_ERROR_HINT={model_failure[\'error_hint\']}", file=sys.stderr)' in py_script
+
+
+def test_backend_limited_drumsep_message_preempts_model_failure_and_generic_no_stems():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert 'lowerLog:find("error_reason=drumsep_backend_runtime_limited", 1, true)' in main_script
+    assert 'lowerLog:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)' in main_script
+    assert 'trSafeValue("drumsep_backend_limited_body", "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split.")' in main_script
+    assert main_script.index('trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")') < main_script.index('local msg = "Model download/load failed.\\n"')
+    assert 'SW_LOG.readFileSnippet(logPath, 12000)' in main_script
 
 
 def test_support_bundle_processing_summary_prefers_current_success_and_guards_cancel():

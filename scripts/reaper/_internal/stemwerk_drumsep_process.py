@@ -9,6 +9,7 @@ import json
 import shutil
 import sys
 import traceback
+import yaml
 from pathlib import Path
 from typing import Any
 import time
@@ -115,6 +116,75 @@ def _emit_output_count_markers(expected_count: int, actual_count: int, mismatch:
         print("output_count_mismatch=yes", file=sys.stderr)
 
 
+def _model_download_checks_path(model_dir: Path) -> Path:
+    return model_dir / "download_checks.json"
+
+
+def _resolve_model_yaml_path(model_dir: Path, model_name: str) -> tuple[Path | None, str]:
+    checks_path = _model_download_checks_path(model_dir)
+    try:
+        checks = json.loads(checks_path.read_text(encoding="utf-8"))
+    except Exception:
+        checks = {}
+    mdx23c = checks.get("mdx23c_download_list") if isinstance(checks, dict) else {}
+    if isinstance(mdx23c, dict):
+        for _entry_name, entry in mdx23c.items():
+            if not isinstance(entry, dict):
+                continue
+            yaml_name = entry.get(model_name)
+            if yaml_name:
+                return model_dir / str(yaml_name), "download_checks"
+    yaml_candidates = sorted(model_dir.glob("*.yaml"))
+    if len(yaml_candidates) == 1:
+        return yaml_candidates[0], "single_yaml_fallback"
+    named = model_dir / (Path(model_name).stem + ".yaml")
+    if named.exists():
+        return named, "named_fallback"
+    return None, "missing"
+
+
+def _load_model_metadata(model_dir: Path, model_name: str) -> dict[str, Any]:
+    yaml_path, yaml_resolution = _resolve_model_yaml_path(model_dir, model_name)
+    payload: dict[str, Any] = {
+        "yaml_path": str(yaml_path) if yaml_path else "",
+        "yaml_resolution": yaml_resolution,
+        "yaml_top_level_keys": [],
+        "training_instruments": [],
+        "target_instrument": "",
+        "expected_stems": list(EXPECTED_STEMS),
+    }
+    if not yaml_path or not yaml_path.exists():
+        return payload
+    try:
+        data = yaml.load(yaml_path.read_text(encoding="utf-8"), Loader=yaml.FullLoader)
+    except Exception as exc:
+        payload["yaml_error"] = f"{type(exc).__name__}: {exc}"
+        return payload
+    if not isinstance(data, dict):
+        payload["yaml_error"] = f"unexpected_yaml_type:{type(data).__name__}"
+        return payload
+    payload["yaml_top_level_keys"] = sorted(str(key) for key in data.keys())
+    training = data.get("training") if isinstance(data.get("training"), dict) else {}
+    instruments = training.get("instruments") if isinstance(training.get("instruments"), list) else []
+    payload["training_instruments"] = [str(item) for item in instruments if str(item).strip()]
+    payload["target_instrument"] = str(training.get("target_instrument") or "")
+    return payload
+
+
+def _runtime_two_stem_limit_reason(found_stems: list[str], model_meta: dict[str, Any]) -> str:
+    training_instruments = model_meta.get("training_instruments") if isinstance(model_meta, dict) else []
+    if not isinstance(training_instruments, list):
+        training_instruments = []
+    if len(training_instruments) < 3:
+        return ""
+    normalized = {normalize_stem_name(name) for name in training_instruments}
+    normalized.discard(None)
+    found_set = {str(name) for name in found_stems}
+    if found_set == {"kick", "snare"} and {"kick", "snare"}.issubset(normalized):
+        return "audio_separator_mdxc_runtime_primary_secondary_only"
+    return ""
+
+
 def run(args: argparse.Namespace) -> int:
     input_path = Path(args.input).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -174,6 +244,21 @@ def run(args: argparse.Namespace) -> int:
     expected_count = len(EXPECTED_STEMS)
     actual_count = len(stems)
     missing = [name for name in EXPECTED_STEMS if name not in stems]
+    model_meta = _load_model_metadata(model_dir, model_name)
+    found_stems = sorted(stems.keys())
+    validation_reason = _runtime_two_stem_limit_reason(found_stems, model_meta)
+    print(f"model_id={model_name}", file=sys.stderr)
+    print(f"output_dir={output_dir}", file=sys.stderr)
+    print(f"found_stems={','.join(found_stems)}", file=sys.stderr)
+    print(f"found_files={'|'.join(raw_paths)}", file=sys.stderr)
+    print(f"yaml_path={model_meta.get('yaml_path') or 'missing'}", file=sys.stderr)
+    print(f"yaml_resolution={model_meta.get('yaml_resolution') or 'unknown'}", file=sys.stderr)
+    print(f"yaml_top_level_keys={','.join(model_meta.get('yaml_top_level_keys') or [])}", file=sys.stderr)
+    print(f"yaml_training_instruments={','.join(model_meta.get('training_instruments') or [])}", file=sys.stderr)
+    print(f"yaml_target_instrument={model_meta.get('target_instrument') or 'none'}", file=sys.stderr)
+    print(f"expected_stems={','.join(EXPECTED_STEMS)}", file=sys.stderr)
+    if validation_reason:
+        print(f"output_validation_reason={validation_reason}", file=sys.stderr)
     if missing or len(stems) != len(EXPECTED_STEMS):
         _emit_output_count_markers(expected_count, actual_count, True)
         write_result(
@@ -187,6 +272,17 @@ def run(args: argparse.Namespace) -> int:
                 raw_outputs=raw_paths,
                 expected_drum_outputs=expected_count,
                 actual_drum_outputs=actual_count,
+                expected_stems=list(EXPECTED_STEMS),
+                found_stems=found_stems,
+                found_files=raw_paths,
+                output_dir=str(output_dir),
+                model_id=model_name,
+                yaml_path=model_meta.get("yaml_path") or "",
+                yaml_resolution=model_meta.get("yaml_resolution") or "",
+                yaml_top_level_keys=model_meta.get("yaml_top_level_keys") or [],
+                yaml_training_instruments=model_meta.get("training_instruments") or [],
+                yaml_target_instrument=model_meta.get("target_instrument") or "",
+                output_validation_reason=validation_reason,
                 output_count_mismatch=True,
             ),
         )
