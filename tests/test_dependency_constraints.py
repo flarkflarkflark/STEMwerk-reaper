@@ -2625,6 +2625,55 @@ def test_direct_dks_preflight_flags_audio_separator_0230_runtime_as_backend_limi
     assert "output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only" in str(detail)
 
 
+def test_direct_dks_preflight_allows_linux_rocm_runtime_with_six_output_capable_backend(tmp_path, monkeypatch):
+    module = _load_audio_separator_process_module()
+    model_cache_dir = tmp_path / "model cache with spaces"
+    model_cache_dir.mkdir(parents=True, exist_ok=True)
+    yaml_name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    yaml_url = (
+        "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+        "mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    )
+    repo_checks = tmp_path / "download_checks.json"
+    repo_checks.write_text(
+        json.dumps(
+            {
+                "other_network_list_new": {
+                    module.DIRECT_DKS_MODEL_ENTRY_NAME: {
+                        module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_DEAD_CKPT_URL,
+                        yaml_name: yaml_url,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (model_cache_dir / module.DIRECT_DKS_MODEL_FILENAME).write_bytes(b"existing-ckpt")
+    (model_cache_dir / yaml_name).write_text(
+        "audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n    - Snare\n    - Toms\n    - Hh\n    - Ride\n    - Crash\n  target_instrument: drums\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: repo_checks)
+    runtime_info = {
+        "kind": "rocm",
+        "torch_hip": "6.4",
+        "device_names": ["AMD Radeon RX 9070"],
+        "versions": {"audio-separator": "0.34.1", "torch": "2.9.1+rocm6.4"},
+    }
+
+    ok, requested_model, resolved_model, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        model_cache_dir,
+        runtime_info=runtime_info,
+    )
+
+    assert ok is True
+    assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
+    assert detail is None
+
+
 def test_direct_dks_preflight_reports_source_and_target_on_download_failure(tmp_path, monkeypatch, capsys):
     module = _load_audio_separator_process_module()
     model_cache_dir = tmp_path / "model cache with spaces"
