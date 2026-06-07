@@ -214,6 +214,20 @@ def _direct_demix_model_device(separator: Any) -> str:
         return "unknown"
 
 
+def _observability_requested_device(args: argparse.Namespace) -> str:
+    requested = str(getattr(args, "requested_device", "") or "").strip()
+    if requested:
+        return requested
+    return str(getattr(args, "device", "") or "").strip()
+
+
+def _observability_backend_runtime(args: argparse.Namespace) -> str:
+    backend = str(getattr(args, "backend_runtime", "") or "").strip()
+    if backend:
+        return backend
+    return str(getattr(args, "device", "") or "").strip()
+
+
 def _validate_direct_demix_sources(sources: Any) -> dict[str, Any]:
     if not isinstance(sources, dict):
         raise DirectDemixValidationError(
@@ -437,6 +451,8 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     model_meta = _load_model_metadata(model_dir, model_name)
+    requested_device = _observability_requested_device(args)
+    backend_runtime = _observability_backend_runtime(args)
     try:
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_start", file=sys.stderr)
         if args.route == "mps-direct-demix":
@@ -471,9 +487,9 @@ def run(args: argparse.Namespace) -> int:
                 expected_stems=list(EXPECTED_STEMS),
                 found_stems=[],
                 drumsep_mps_all_targets_route="direct_demix" if args.route == "mps-direct-demix" else "",
-                backend_runtime=args.device,
+                backend_runtime=backend_runtime,
                 audio_separator_version=_distribution_version("audio-separator"),
-                requested_device=args.device,
+                requested_device=requested_device,
                 effective_device=str(getattr(sep, "torch_device", "unknown")),
                 model_device=_direct_demix_model_device(sep),
             ),
@@ -501,9 +517,9 @@ def run(args: argparse.Namespace) -> int:
         print("mps_fallback_enabled=0", file=sys.stderr)
         print("pytorch_mps_fallback_env=unset", file=sys.stderr)
         print("output_validation_reason=ok", file=sys.stderr)
-        print("backend_runtime=mps", file=sys.stderr)
+        print(f"backend_runtime={backend_runtime}", file=sys.stderr)
         print(f"audio_separator_version={_distribution_version('audio-separator')}", file=sys.stderr)
-        print("requested_device=mps", file=sys.stderr)
+        print(f"requested_device={requested_device}", file=sys.stderr)
         print("effective_device=mps", file=sys.stderr)
         print(f"model_device={_direct_demix_model_device(sep)}", file=sys.stderr)
         print(f"direct_demix_keys={','.join(DIRECT_DEMIX_KEYS)}", file=sys.stderr)
@@ -554,9 +570,9 @@ def run(args: argparse.Namespace) -> int:
             "output_validation_reason": "ok",
             "expected_stems": list(EXPECTED_STEMS),
             "found_stems": found_stems,
-            "backend_runtime": args.device,
+            "backend_runtime": backend_runtime,
             "audio_separator_version": _distribution_version("audio-separator"),
-            "requested_device": args.device,
+            "requested_device": requested_device,
             "effective_device": str(getattr(sep, "torch_device", "unknown")),
             "model_device": _direct_demix_model_device(sep),
             "direct_demix_keys": list(DIRECT_DEMIX_KEYS) if args.route == "mps-direct-demix" else [],
@@ -576,6 +592,8 @@ def main() -> int:
     parser.add_argument("--log-file", default="")
     parser.add_argument("--route", choices=["wrapper", "mps-direct-demix"], default="wrapper")
     parser.add_argument("--device", choices=["cpu", "mps"], default="cpu")
+    parser.add_argument("--requested-device", default="")
+    parser.add_argument("--backend-runtime", default="")
     args = parser.parse_args()
 
     if args.log_file:

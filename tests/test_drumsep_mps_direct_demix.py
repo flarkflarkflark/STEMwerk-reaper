@@ -1,5 +1,6 @@
 import importlib.util
 import inspect
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -282,6 +283,37 @@ def _install_fake_soundfile(monkeypatch):
     monkeypatch.setitem(sys.modules, "soundfile", SimpleNamespace())
 
 
+class _FakeSoundFileInfo:
+    def __init__(self, samplerate=44100, frames=64, channels=2):
+        self.samplerate = samplerate
+        self.frames = frames
+        self.channels = channels
+
+
+def _install_fake_soundfile_module(monkeypatch):
+    written = {}
+
+    def write(path, data, samplerate):
+        path_obj = Path(path)
+        path_obj.write_bytes(b"RIFFFAKE")
+        written[str(path_obj)] = _FakeSoundFileInfo(
+            samplerate=int(samplerate),
+            frames=int(data.shape[0]),
+            channels=int(data.shape[1]) if len(data.shape) > 1 else 1,
+        )
+
+    def info(path):
+        return written[str(Path(path))]
+
+    monkeypatch.setitem(sys.modules, "soundfile", SimpleNamespace(write=write, info=info))
+    return written
+
+
+def _fake_audio_separator_package(separator_cls):
+    separator_module = SimpleNamespace(Separator=separator_cls)
+    return SimpleNamespace(separator=separator_module), separator_module
+
+
 @pytest.mark.parametrize(
     ("torch_device", "model_device", "reason"),
     [
@@ -328,6 +360,112 @@ def test_direct_demix_rejects_enabled_pytorch_fallback(tmp_path, monkeypatch):
         )
 
     assert exc_info.value.reason == "pytorch_mps_fallback_env_set"
+
+
+def test_wrapper_helper_result_uses_runtime_and_requested_device_markers(tmp_path, monkeypatch):
+    helper = _load_helper()
+
+    class FakeSeparator:
+        def __init__(self, **kwargs):
+            self.output_dir = Path(kwargs["output_dir"])
+            self.torch_device = "cuda"
+            self.model_instance = _FakeModel(_complete_sources(), "cuda:0")
+
+        def load_model(self, _model_name):
+            return None
+
+        def separate(self, _input_path):
+            outputs = []
+            for stem_name, filename in helper.REAPER_FILENAMES.items():
+                path = self.output_dir / filename
+                path.write_bytes(stem_name.encode("ascii"))
+                outputs.append(str(path))
+            return outputs
+
+    fake_package, fake_separator_module = _fake_audio_separator_package(FakeSeparator)
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_separator_module)
+    monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+
+    result_json = tmp_path / "result.json"
+    args = SimpleNamespace(
+        input=str(tmp_path / "input.wav"),
+        output_dir=str(tmp_path / "out"),
+        model_dir=str(tmp_path / "models"),
+        model="MDX23C",
+        result_json=str(result_json),
+        log_file="",
+        route="wrapper",
+        device="cpu",
+        requested_device="gpu",
+        backend_runtime="rocm",
+    )
+
+    rc = helper.run(args)
+    payload = json.loads(result_json.read_text(encoding="utf-8"))
+
+    assert rc == 0
+    assert payload["ok"] is True
+    assert payload["requested_device"] == "gpu"
+    assert payload["backend_runtime"] == "rocm"
+    assert payload["effective_device"] == "cuda"
+    assert payload["model_device"] == "cuda:0"
+    assert payload["drumsep_mps_all_targets_route"] == ""
+    assert payload["direct_demix_keys"] == []
+
+
+def test_direct_demix_helper_result_keeps_mps_markers(tmp_path, monkeypatch):
+    helper = _load_helper()
+    monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+
+    class FakeSeparator:
+        def __init__(self, **kwargs):
+            self.output_dir = Path(kwargs["output_dir"])
+            self.torch_device = "mps"
+            self.model_instance = _FakeModel(_complete_sources(), "mps:0")
+
+        def load_model(self, _model_name):
+            return None
+
+    fake_package, fake_separator_module = _fake_audio_separator_package(FakeSeparator)
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_separator_module)
+
+    def fake_direct_demix(_sep, _input_path, output_dir, _model_meta):
+        stems = {}
+        for stem_name, filename in helper.REAPER_FILENAMES.items():
+            path = Path(output_dir) / filename
+            path.write_bytes(stem_name.encode("ascii"))
+            stems[stem_name] = str(path)
+        return stems
+
+    monkeypatch.setattr(helper, "_run_drumsep_mps_all_targets_direct_demix", fake_direct_demix)
+
+    result_json = tmp_path / "result.json"
+    args = SimpleNamespace(
+        input=str(tmp_path / "input.wav"),
+        output_dir=str(tmp_path / "out"),
+        model_dir=str(tmp_path / "models"),
+        model="MDX23C",
+        result_json=str(result_json),
+        log_file="",
+        route="mps-direct-demix",
+        device="mps",
+        requested_device="mps",
+        backend_runtime="mps",
+    )
+
+    rc = helper.run(args)
+    payload = json.loads(result_json.read_text(encoding="utf-8"))
+
+    assert rc == 0
+    assert payload["ok"] is True
+    assert payload["requested_device"] == "mps"
+    assert payload["backend_runtime"] == "mps"
+    assert payload["effective_device"] == "mps"
+    assert payload["model_device"] == "mps:0"
+    assert payload["drumsep_mps_all_targets_route"] == "direct_demix"
+    assert payload["direct_demix_keys"] == list(helper.DIRECT_DEMIX_KEYS)
 
 
 def test_synthetic_direct_demix_writes_six_valid_outputs(tmp_path, monkeypatch):

@@ -1971,6 +1971,8 @@ def _run_direct_dks_drumsep_helper(
     resolved_model: str,
     route: str = "wrapper",
     device: str = "cpu",
+    requested_device: str = "",
+    backend_runtime: str = "",
 ) -> Tuple[bool, Dict[str, str], str, str]:
     helper_path = _drumsep_helper_path()
     result_json = output_root / "drumsep_result.json"
@@ -1984,6 +1986,8 @@ def _run_direct_dks_drumsep_helper(
     print(f"drumsep_helper_model={resolved_model}", file=sys.stderr)
     print(f"drumsep_helper_route={route}", file=sys.stderr)
     print(f"drumsep_helper_device={device}", file=sys.stderr)
+    print(f"drumsep_helper_requested_device={requested_device or device}", file=sys.stderr)
+    print(f"drumsep_helper_backend_runtime={backend_runtime or device}", file=sys.stderr)
     print(f"drumsep_helper_output_dir={output_root}", file=sys.stderr)
     print(f"drumsep_helper_result_json={result_json}", file=sys.stderr)
     print(f"drumsep_helper_stdout={helper_stdout}", file=sys.stderr)
@@ -2011,6 +2015,10 @@ def _run_direct_dks_drumsep_helper(
         route,
         "--device",
         device,
+        "--requested-device",
+        requested_device or device,
+        "--backend-runtime",
+        backend_runtime or device,
     ]
     print("PROGRESS:1:Starting Drum Kit runtime...", flush=True)
     print(f"timing_utc={_ts()} drumsep_helper_python_start", file=sys.stderr)
@@ -3237,6 +3245,8 @@ def main():
                     run_model,
                     route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
                     device="mps" if use_mps_direct_demix else "cpu",
+                    requested_device=device_preference,
+                    backend_runtime="mps" if use_mps_direct_demix else stage2_backend,
                 )
             if not helper_ok:
                 stage = "stage2_separate"
@@ -3370,6 +3380,7 @@ def main():
         output_root.mkdir(parents=True, exist_ok=True)
         emit_phase("separate_start")
         print(f"timing_utc={_ts()} drumsep_helper_start", file=sys.stderr)
+        stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)
         helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
             Path(args.input).resolve(),
             output_root,
@@ -3379,6 +3390,8 @@ def main():
             run_model,
             route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
             device="mps" if use_mps_direct_demix else "cpu",
+            requested_device=device_preference,
+            backend_runtime="mps" if use_mps_direct_demix else stage2_backend,
         )
         if not helper_ok:
             stage = "stage2_separate"
