@@ -3778,15 +3778,34 @@ def test_multitrack_row_right_column_always_shows_bounded_percentage():
     assert 'gfx.drawstr(isWaiting and (T("progress_waiting") or "Waiting") or (T("mt_done_label") or "Done"))' not in script
 
 
-def test_multitrack_prestart_rows_stay_queued_until_real_progress_activity():
+def test_multitrack_drumkit_prestart_rows_show_loading_while_waiting_rows_stay_queued():
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
     assert "job.rawPercent = 0\n    job.percent = 0" in script
     assert "local hasProgressActivity = (tonumber(job.rawPercent) or 0) > 0" in script
     assert "or (tonumber(job.percent) or 0) > 0" in script
-    assert 'and normalizeProgressStage(job.stage)' in script
-    assert 'or (T("progress_queued") or "Queued")' in script
+    assert "local isActiveDrumKitPrestart = job.startTime ~= nil" in script
+    assert "and not job.done" in script
+    assert "and not hasProgressActivity" in script
+    assert "and DKS_WORKFLOW.isDrumKitSource(workflowSource)" in script
+    assert "if hasProgressActivity then\n                    stageText = normalizeProgressStage(job.stage)" in script
+    assert 'elseif isActiveDrumKitPrestart then\n                    stageText = T("progress_stage_loading_drum_model") or "Loading drum model..."' in script
+    assert 'stageText = T("progress_queued") or "Queued"' in script
     assert "local rowPercent = job.done and 100 or math.max(0, math.min(99, tonumber(job.percent) or 0))" in script
+
+
+def test_drumkit_prestart_loading_copy_is_localized_without_stage_or_debug_text():
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'progress_stage_loading_drum_model = "Loading drum model..."' in langs
+    assert 'progress_stage_loading_drum_model = "Drummodel laden..."' in langs
+    assert 'progress_stage_loading_drum_model = "Drum-Modell wird geladen..."' in langs
+    assert 'T("progress_stage_loading_drum_model")' in script
+    assert 'progress_stage_loading_drum_model = "Stage 2/2' not in langs
+    assert 'progress_stage_loading_drum_model = "Stap 2/2' not in langs
+    assert 'progress_stage_loading_drum_model = "Schritt 2/2' not in langs
+    assert "Stage 2 serialized for stability" not in script
 
 
 def test_drumkit_visible_progress_and_support_summary_hide_raw_cuda_devices():

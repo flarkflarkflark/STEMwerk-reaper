@@ -20145,9 +20145,19 @@ function drawMultiTrackProgressWindow()
                 gfx.setfont(1, "Arial", PS(9))
                 local hasProgressActivity = (tonumber(job.rawPercent) or 0) > 0
                     or (tonumber(job.percent) or 0) > 0
-                local stageText = hasProgressActivity
-                    and normalizeProgressStage(job.stage)
-                    or (T("progress_queued") or "Queued")
+                local workflowSource = tostring(job.workflowSource or multiTrackQueue.workflowSource or "")
+                local isActiveDrumKitPrestart = job.startTime ~= nil
+                    and not job.done
+                    and not hasProgressActivity
+                    and DKS_WORKFLOW.isDrumKitSource(workflowSource)
+                local stageText
+                if hasProgressActivity then
+                    stageText = normalizeProgressStage(job.stage)
+                elseif isActiveDrumKitPrestart then
+                    stageText = T("progress_stage_loading_drum_model") or "Loading drum model..."
+                else
+                    stageText = T("progress_queued") or "Queued"
+                end
                 if stageText == "Waiting.." or stageText == "Waiting..." then
                     stageText = T("waiting") or stageText
                 elseif stageText == "Starting.." or stageText == "Starting..." then
