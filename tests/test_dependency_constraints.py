@@ -621,6 +621,18 @@ def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
     assert ' .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none")' in script
 
 
+def test_gpu_scheduler_policy_defaults_to_cap4_for_capable_backends():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "NORMAL_GPU_MAX_PARALLEL = 4" in script
+    assert "DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 4" in script
+    assert "DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 4" in script
+    assert 'policy.reason = "scheduler_dks_direct_gpu_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap4"' in script
+    assert '"scheduler_dks_extract_stage1_normal_gpu_cap4"' in script
+    assert '"scheduler_normal_gpu_cap4"' in script
+
+
 def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logged():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
@@ -640,7 +652,7 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert "schedulerPolicy.cap >= 2" in script
     assert "directml_fixed_cap1" in script
     assert "mps_fixed_cap1" in script
-    assert "dks_direct_long_cap1" in script
+    assert "scheduler_dks_direct_gpu_long_cap4" in script
     assert "cap8_normal_gpu_only" in script
     assert 'requestedBenchmarkCap == 8' in script
     assert 'and schedulerPolicy.route == "normal"' in script
@@ -808,29 +820,29 @@ def test_reaper_mcp_benchmark_runbook_documents_fixed_dispatcher_and_request_flo
 def test_scheduler_policy_route_backend_defaults_are_explicit():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
-    assert "NORMAL_GPU_MAX_PARALLEL = 2" in script
+    assert "NORMAL_GPU_MAX_PARALLEL = 4" in script
     assert "NORMAL_CPU_MAX_PARALLEL = 2" in script
     assert "NORMAL_DIRECTML_MAX_PARALLEL = 1" in script
     assert "NORMAL_MPS_MAX_PARALLEL = 1" in script
-    assert "DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2" in script
-    assert "DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 1" in script
+    assert "DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 4" in script
+    assert "DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 4" in script
     assert "DKS_DIRECT_CPU_MAX_PARALLEL = 2" in script
-    assert "DKS_EXTRACT_STAGE2_MAX_PARALLEL = 1" in script
+    assert "DKS_EXTRACT_STAGE2_MAX_PARALLEL = 4" in script
     assert 'if route == "dks_direct" then' in script
     assert 'schedulerRoute = "dks_direct"' in script
     assert 'schedulerRoute = "dks_extract"' in script
     assert 'schedulerStage = "stage1_normal"' in script
     assert 'and hasRuntimeBackendType("mps")' in script
     assert 'schedulerBackend = "cpu"' in script
-    assert 'policy.reason = "scheduler_dks_direct_gpu_cap2"' in script
-    assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap1"' in script
+    assert 'policy.reason = "scheduler_dks_direct_gpu_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap4"' in script
     assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_dks_direct_unknown_cap1"' in script
     assert '"scheduler_dks_direct_" .. cpuParallelFallbackReason() .. "_cap1"' in script
-    assert '"scheduler_dks_extract_stage1_normal_gpu_cap2"' in script
+    assert '"scheduler_dks_extract_stage1_normal_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"' in script
     assert '"scheduler_dks_extract_stage1_normal_" .. cpuParallelFallbackReason() .. "_cap1"' in script
-    assert '"scheduler_normal_gpu_cap2"' in script
+    assert '"scheduler_normal_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_mps_conservative"' in script
     assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
@@ -886,6 +898,22 @@ def test_drumkit_stage2_cpu_default_stays_cap1_without_benchmark_override(monkey
     assert "bench_cpu_cap_ignored_reason=not_requested" in captured.err
     assert "dks_extract_stage2_effective_cap=1" in captured.err
     assert "lua_dks_extract_stage2_concurrency_cap=1" in captured.err
+
+
+def test_drumkit_stage2_gpu_default_policy_uses_cap4_without_benchmark_override(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_CPU_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP", raising=False)
+
+    with module._dks_extract_stage2_lock(tmp_path, "rocm"):
+        pass
+    captured = capsys.readouterr()
+    assert "bench_dks_stage2_cap_requested=unset" in captured.err
+    assert "bench_dks_stage2_cap_applied=4" in captured.err
+    assert "bench_dks_stage2_cap_ignored_reason=not_requested" in captured.err
+    assert "dks_extract_stage2_effective_cap=4" in captured.err
+    assert "lua_dks_extract_stage2_concurrency_cap=4" in captured.err
 
 
 def test_normal_workflow_provenance_is_explicit_in_lua_summary_and_python_stderr():
@@ -1925,7 +1953,7 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert "bench_dks_stage2_cap_applied=" in script
     assert "bench_dks_stage2_cap_ignored_reason=" in script
     assert "dks_extract_stage2_effective_cap=" in script
-    assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1" in script
+    assert "DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4" in script
     assert 'def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):' in script
     assert "stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)" in script
     assert "with _dks_extract_stage2_lock(output_root, stage2_backend):" in script
@@ -1957,7 +1985,7 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
 
     monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
     assert module._read_benchmark_dks_stage2_cap_request() == (None, "unset")
-    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "unset", 1, "not_requested")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "unset", 4, "not_requested")
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "2")
     assert module._read_benchmark_dks_stage2_cap_request() == (2, "2")
@@ -1970,7 +1998,7 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "8")
     assert module._read_benchmark_dks_stage2_cap_request() == (None, "8")
-    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "8", 1, "invalid_request")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("rocm") == (None, "8", 4, "invalid_request")
 
     monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "1")
     assert module._read_benchmark_dks_stage2_cap_request() == (1, "1")
@@ -2017,6 +2045,15 @@ def test_drumkit_stage2_cpu_benchmark_cap_parser_accepts_stage_override_and_glob
     assert module._resolve_dks_extract_stage2_cpu_benchmark_cap("cpu") == (None, "3", 1, "invalid_request", "STEMWERK_BENCH_DKS_STAGE2_CPU_CAP")
 
 
+def test_drumkit_stage2_default_cap_stays_conservative_for_mps_and_unknown_backends(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
+    assert module._resolve_dks_extract_stage2_benchmark_cap("mps") == (None, "unset", 1, "not_requested")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("directml") == (None, "unset", 1, "not_requested")
+    assert module._resolve_dks_extract_stage2_benchmark_cap("cpu") == (None, "unset", 1, "not_requested")
+
+
 def test_drumkit_stage2_backend_detection_prefers_selected_runtime_markers_over_parent_executable():
     module = _load_audio_separator_process_module()
 
@@ -2060,6 +2097,7 @@ def test_dks_extract_stage2_lock_uses_explicit_runtime_backend_for_benchmark_cap
     assert "bench_dks_stage2_cap_applied=1" in captured.err
     assert "bench_dks_stage2_cap_ignored_reason=backend_not_rocm_cuda" in captured.err
     assert "bench_cpu_cap_requested=unset" in captured.err
+    assert "bench_cpu_cap_applied=1" in captured.err
     assert "dks_extract_stage2_backend=cpu" in captured.err
 
 
@@ -3255,8 +3293,8 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
     progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text()
 
-    assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Drum Kit") .. " (Z)"' in main_script
-    assert 'local presetLabelEdks    = trSafe("workflow_edks_short_label", "Drum Kit Split") .. " (X)"' in main_script
+    assert 'local presetLabelDrumKit = trSafe("workflow_drumkit_short_label", "Direct Kit") .. " (Z)"' in main_script
+    assert 'local presetLabelEdks    = trSafe("workflow_edks_short_label", "Kit Split") .. " (X)"' in main_script
     assert 'local stemsHeader = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and trSafe("drum_stems_label", "Drum Stems:")' in main_script
     assert 'if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end' in main_script
@@ -3272,13 +3310,13 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'workflow_edks_label = "Kit Split"' in langs
     assert 'workflow_edks_short_label = "Kit Split"' in langs
     assert 'drum_stems_label = "Drum Stems:"' in langs
-    assert 'tooltip_preset_drumkit = "Direct drum-kit separation: Kick, Snare, Toms, Hi-Hat, Ride, Crash."' in langs
-    assert 'tooltip_preset_edks = "Two-stage drum-kit split for more detailed drum separation."' in langs
-    assert 'tooltip_preset_drumkit = "Directe drum-kit scheiding: Kick, Snare, Toms, Hi-Hat, Ride, Crash."' in langs
+    assert 'tooltip_preset_drumkit = "Direct Kit creates Kick, Snare, Toms, Hi-Hat, Ride, and Crash directly."' in langs
+    assert 'tooltip_preset_edks = "Kit Split uses a two-step workflow for more detailed drum-kit splitting."' in langs
+    assert 'tooltip_preset_drumkit = "Direct Kit maakt direct Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
     assert 'tooltip_preset_edks = "Twee-staps kit-split voor meer gedetailleerdere drumscheiding."' not in langs
-    assert 'tooltip_preset_edks = "Twee-staps kit-split voor meer gedetailleerde drumscheiding."' in langs
-    assert 'tooltip_preset_drumkit = "Direkte Drum-Kit-Trennung: Kick, Snare, Toms, Hi-Hat, Ride, Crash."' in langs
-    assert 'tooltip_preset_edks = "Zweistufiger Kit-Split für detailliertere Drum-Trennung."' in langs
+    assert 'tooltip_preset_edks = "Kit Split gebruikt twee stappen voor een gedetailleerdere drumkitscheiding."' in langs
+    assert 'tooltip_preset_drumkit = "Direct Kit erstellt Kick, Snare, Toms, Hi-Hat, Ride und Crash direkt."' in langs
+    assert 'tooltip_preset_edks = "Kit Split nutzt zwei Schritte für eine detailliertere Schlagzeugtrennung."' in langs
     assert 'tooltip_stem_drumkit_kick = "Kick drum / bass drum"' in langs
     assert 'tooltip_stem_drumkit_snare = "Snare drum"' in langs
     assert 'tooltip_stem_drumkit_toms = "Toms"' in langs
@@ -3299,12 +3337,12 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'selected = "Ausgewählt:"' in langs
     assert 'delete_original = "Original löschen"' in langs
     assert 'tooltip_close = "STEMwerk schließen (ESC)"' in langs
-    assert 'progress_stage_splitting_drum_kit = "Creating Drum Kit Split..."' in langs
-    assert 'progress_stage_splitting_drum_kit = "Drum Kit Split maken..."' in langs
-    assert 'progress_stage_splitting_drum_kit = "Drum Kit Split erstellen..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Creating Direct Drum Kit..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit maken..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Direct Drum Kit erstellen..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Creating Kit Split..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Kit Split maken..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Kit Split erstellen..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Creating Direct Kit..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Direct Kit maken..."' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Direct Kit erstellen..."' in langs
     assert 'progress_stage_extracting_drums = "Extracting drums..."' in langs
     assert 'progress_stage_extracting_drums = "Drums extraheren..."' in langs
     assert 'progress_stage_extracting_drums = "Drums extrahieren..."' in langs
@@ -3344,8 +3382,8 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'footer_drum_stem_folder = "drum folder"' in langs
     assert 'footer_drum_stem_folder = "drum-map"' in langs
     assert 'footer_drum_stem_folder = "Drum-Ordner"' in langs
-    assert 'direct_drum_kit_folder_suffix = "Direct Drum Kit"' in langs
-    assert 'drum_kit_split_folder_suffix = "Drum Kit Split"' in langs
+    assert 'direct_drum_kit_folder_suffix = "Direct Kit"' in langs
+    assert 'drum_kit_split_folder_suffix = "Kit Split"' in langs
     assert 'edks_complete_title = "Kit Split completed successfully!"' in langs
     assert 'route_badge_normal = "Normal STEMwerk"' in langs
     assert 'route_badge_normal = "Normale STEMwerk"' in langs
@@ -3546,7 +3584,11 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
 
     assert "function deriveResolvedRuntimeFooter(footerDeviceDetail)" in script
+    assert "function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice)" in script
     assert "progressState._runtimeSelected" in script
+    assert "progressState._stage2Runtime" in script
+    assert "progressState._stage1Runtime" in script
+    assert "progressState._backendRuntime" in script
     assert "progressState._stage2Device" in script
     assert "progressState._stage1Device" in script
     assert "progressState._normalizedDeviceRequest" in script
@@ -3589,6 +3631,33 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'if lower:match("^cuda:%d+") then return "GPU" end' in script
     assert 'return compactProgressDeviceToken(rawDetail)' in script
     assert 'compactProgressDeviceToken(deviceDetail, deviceDetail)' in script
+    assert 'progressState._stage2Runtime,' in script
+    assert 'progressState._stage1Runtime,' in script
+    assert 'progressState._backendRuntime,' in script
+
+
+def test_result_and_progress_labels_prefer_explicit_runtime_over_cuda_device_tokens():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local runtimeSelected = preferredRuntimeSelection(' in script
+    assert 'data and data.stage2Runtime,' in script
+    assert 'data and data.stage1Runtime,' in script
+    assert 'data and data.backendRuntime,' in script
+    assert 'if runtimeSel == "rocm" then' in script
+    assert 'return sanitizeUserFacingMethodLabel("rocm")' in script
+    assert 'progressState._stage2Runtime,' in script
+    assert 'progressState._stage1Runtime,' in script
+    assert 'progressState._backendRuntime,' in script
+    assert 'local backendRuntime = line:match("backend_runtime=([%w_:%-]+)")' in script
+    assert 'if n >= 200 then break end' in script
+
+
+def test_multitrack_progress_scroll_uses_mouse_wheel_delta_tracking():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert "lastMouseWheel = 0," in script
+    assert 'local wheelDelta = (tonumber(mouseWheel) or 0) - (tonumber(multiTrackQueue.lastMouseWheel) or 0)' in script
+    assert 'multiTrackQueue.lastMouseWheel = tonumber(mouseWheel) or 0' in script
 
 
 def test_drumkit_visible_progress_and_support_summary_hide_raw_cuda_devices():

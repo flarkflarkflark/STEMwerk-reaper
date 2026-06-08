@@ -9121,13 +9121,34 @@ function attachResultRuntimeMetadata(data)
         data.deviceRequest = tostring((state and state._normalizedDeviceRequest) or (SETTINGS and SETTINGS.device) or "")
     end
     if not data.runtimeSelected or data.runtimeSelected == "" then
-        data.runtimeSelected = tostring((state and (state._runtimeSelected or state._stage2Device or state._stage1Device)) or "")
+        data.runtimeSelected = tostring((state and preferredRuntimeSelection(
+            state._runtimeSelected,
+            state._stage2Runtime,
+            state._stage1Runtime,
+            state._backendRuntime,
+            state._stage2Device or state._stage1Device
+        )) or "")
+    end
+    if not data.stage2Runtime or data.stage2Runtime == "" then
+        data.stage2Runtime = tostring((state and state._stage2Runtime) or "")
+    end
+    if not data.stage1Runtime or data.stage1Runtime == "" then
+        data.stage1Runtime = tostring((state and state._stage1Runtime) or "")
+    end
+    if not data.backendRuntime or data.backendRuntime == "" then
+        data.backendRuntime = tostring((state and state._backendRuntime) or "")
     end
     if not data.backend or data.backend == "" then
         if multiTrackQueue and multiTrackQueue.schedulerPolicyBackend and multiTrackQueue.schedulerPolicyBackend ~= "" then
             data.backend = tostring(multiTrackQueue.schedulerPolicyBackend)
         else
-            local selected = tostring(data.runtimeSelected or ""):lower()
+            local selected = preferredRuntimeSelection(
+                data.runtimeSelected,
+                data.stage2Runtime,
+                data.stage1Runtime,
+                data.backendRuntime,
+                data.effectiveDevice
+            )
             local requested = tostring(data.deviceRequest or ""):lower()
             if selected == "cpu" or requested == "cpu" then
                 data.backend = "cpu"
@@ -9156,10 +9177,27 @@ function sanitizeUserFacingMethodLabel(candidate)
     return ""
 end
 
+function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice)
+    local candidates = { runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice }
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower ~= "" then
+            return lower
+        end
+    end
+    return ""
+end
+
 function resolveResultMethodLabel(data)
     local backend = tostring((data and data.backend) or ""):lower()
     local deviceRequest = tostring((data and data.deviceRequest) or ""):lower()
-    local runtimeSelected = tostring((data and data.runtimeSelected) or ""):lower()
+    local runtimeSelected = preferredRuntimeSelection(
+        data and data.runtimeSelected,
+        data and data.stage2Runtime,
+        data and data.stage1Runtime,
+        data and data.backendRuntime,
+        data and data.effectiveDevice
+    )
 
     if backend == "directml" or deviceRequest:find("directml", 1, true) or runtimeSelected:find("directml", 1, true) then
         return sanitizeUserFacingMethodLabel("directml")
@@ -14287,7 +14325,13 @@ end
 
 function buildDksFooterDeviceIntent(deviceDetail)
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
-    local runtimeSel = tostring(progressState._runtimeSelected or progressState._stage2Device or progressState._stage1Device or ""):lower()
+    local runtimeSel = preferredRuntimeSelection(
+        progressState._runtimeSelected,
+        progressState._stage2Runtime,
+        progressState._stage1Runtime,
+        progressState._backendRuntime,
+        progressState._stage2Device or progressState._stage1Device
+    )
     local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
     local detail = tostring(deviceDetail or ""):lower()
 
@@ -14388,7 +14432,13 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
         return compactProgressDeviceToken(rawDetail)
     end
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
-    local runtimeSel = tostring(progressState._runtimeSelected or progressState._stage2Device or progressState._stage1Device or ""):lower()
+    local runtimeSel = preferredRuntimeSelection(
+        progressState._runtimeSelected,
+        progressState._stage2Runtime,
+        progressState._stage1Runtime,
+        progressState._backendRuntime,
+        progressState._stage2Device or progressState._stage1Device
+    )
     local gpuCap = tostring(progressState._runtimeGpuCapable or ""):lower()
     local deviceName = progressState._deviceName
     if (not deviceName or deviceName == "") and progressState._runtimeDeviceNames and progressState._runtimeDeviceNames ~= "" then
@@ -14457,6 +14507,13 @@ function deriveMultiTrackRuntimeFooter(job)
     local compactDetail = compactProgressDeviceToken(footerDeviceDetail, footerDeviceDetail)
     local backend = tostring((multiTrackQueue and multiTrackQueue.schedulerPolicyBackend) or ""):lower()
     local requestedDevice = tostring(effectiveRunDevice() or ""):lower()
+    local runtimeSel = preferredRuntimeSelection(
+        progressState._runtimeSelected,
+        progressState._stage2Runtime,
+        progressState._stage1Runtime,
+        progressState._backendRuntime,
+        footerDeviceDetail
+    )
 
     if backend == "directml" then
         return "DirectML"
@@ -14468,6 +14525,12 @@ function deriveMultiTrackRuntimeFooter(job)
         return compactDetail ~= "" and compactDetail or "CPU"
     end
     if backend == "gpu" then
+        if runtimeSel == "rocm" then
+            return "ROCm"
+        end
+        if runtimeSel == "cuda" or runtimeSel:match("^cuda:%d+") then
+            return "CUDA"
+        end
         if requestedDevice:find("directml", 1, true) then
             return "DirectML"
         end
@@ -14629,6 +14692,7 @@ multiTrackQueue = {
     showTerminal = false,  -- Nerd mode: show terminal output (sequential mode only)
     terminalLines = {},    -- Terminal output lines
     lastTerminalUpdate = 0, -- Last time terminal was updated
+    lastMouseWheel = 0,
     listScroll = 0,        -- Scroll offset for large multi-job batches
     listScrollDragging = false,
     listScrollDragOffset = 0,
@@ -14770,7 +14834,11 @@ function drawProgressWindow()
                 if s2d then
                     info.stage2Device = s2d
                 end
-                if n >= 80 then break end
+                local backendRuntime = line:match("backend_runtime=([%w_:%-]+)")
+                if backendRuntime then
+                    info.backendRuntime = backendRuntime
+                end
+                if n >= 200 then break end
             end
             f:close()
         end
@@ -14778,6 +14846,7 @@ function drawProgressWindow()
         progressState._deviceName = info.devName
         progressState._runtimeSelected = info.runtimeSelected
         progressState._normalizedDeviceRequest = info.normalizedRequest
+        progressState._backendRuntime = info.backendRuntime
         progressState._runtimeGpuCapable = info.gpuCapable
         progressState._runtimeDeviceNames = info.runtimeDeviceNames
         progressState._stage1Runtime = info.stage1Runtime
@@ -17538,15 +17607,15 @@ _sep.buildSourceItemPlan = function(trackList, hasTimeSel, perItemMap, noTimeSel
 end
 
 _sep.SCHEDULER_POLICY = {
-    NORMAL_GPU_MAX_PARALLEL = 2,
+    NORMAL_GPU_MAX_PARALLEL = 4,
     NORMAL_CPU_MAX_PARALLEL = 2,
     NORMAL_DIRECTML_MAX_PARALLEL = 1,
     NORMAL_MPS_MAX_PARALLEL = 1,
-    DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 2,
-    DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 1,
+    DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 4,
+    DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 4,
     DKS_DIRECT_CPU_MAX_PARALLEL = 2,
     DKS_DIRECT_DIRECTML_MAX_PARALLEL = 1,
-    DKS_EXTRACT_STAGE2_MAX_PARALLEL = 1,
+    DKS_EXTRACT_STAGE2_MAX_PARALLEL = 4,
 }
 
 _sep.schedulerTotalAudioDuration = function(jobs)
@@ -17644,10 +17713,10 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
             policy.sequentialMode = false
             if opts.longWorkload then
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_LONG_MAX_PARALLEL)
-                policy.reason = "scheduler_dks_direct_gpu_long_cap1"
+                policy.reason = "scheduler_dks_direct_gpu_long_cap4"
             else
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_SHORT_MAX_PARALLEL)
-                policy.reason = "scheduler_dks_direct_gpu_cap2"
+                policy.reason = "scheduler_dks_direct_gpu_cap4"
             end
         elseif backend == "cpu" then
             if cpuParallelAllowed() then
@@ -17667,14 +17736,14 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
         return policy
     end
 
-    -- Drum Split stage 1 follows the normal STEMwerk policy. Stage 2 is serialized
-    -- in audio_separator_process.py via DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1.
+    -- Drum Split stage 1 follows the normal STEMwerk policy. Stage 2 concurrency
+    -- is managed separately in audio_separator_process.py.
     if backend == "gpu" then
         policy.sequentialMode = false
         policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
         policy.reason = (route == "dks_extract")
-            and "scheduler_dks_extract_stage1_normal_gpu_cap2"
-            or "scheduler_normal_gpu_cap2"
+            and "scheduler_dks_extract_stage1_normal_gpu_cap4"
+            or "scheduler_normal_gpu_cap4"
         return policy
     end
 
@@ -17926,8 +17995,8 @@ local function benchmarkGpuCapIgnoredReasonForPolicy(policy)
     if backend ~= "gpu" then
         return backend == "" and "backend_unknown" or "backend_not_gpu"
     end
-    if route == "dks_direct" and reason == "scheduler_dks_direct_gpu_long_cap1" then
-        return "dks_direct_long_cap1"
+    if route == "dks_direct" and reason == "scheduler_dks_direct_gpu_long_cap4" then
+        return "dks_direct_long_cap4"
     end
     if route == "dks_extract" and stage == "stage2" then
         return "dks_extract_stage2_serialized"
@@ -19876,12 +19945,11 @@ function drawMultiTrackProgressWindow()
             thumbY = scrollTrackY + math.floor(thumbTravel * ((multiTrackQueue.listScroll or 0) / math.max(1, maxScroll)))
             local scrollHover = mx >= scrollTrackX - PS(6) and mx <= scrollTrackX + PS(8) and my >= scrollTrackY and my <= scrollTrackY + scrollTrackH
 
-            local wheelDelta = tonumber(mouseWheel) or 0
+            local wheelDelta = (tonumber(mouseWheel) or 0) - (tonumber(multiTrackQueue.lastMouseWheel) or 0)
             if (listHover or scrollHover) and wheelDelta ~= 0 then
                 local step = math.max(1, math.floor(math.abs(wheelDelta) / 120))
                 local delta = (wheelDelta > 0) and -step or step
                 multiTrackQueue.listScroll = math.max(0, math.min(maxScroll, (multiTrackQueue.listScroll or 0) + delta))
-                gfx.mouse_wheel = 0
             end
 
             if scrollHover and mouseDown and not multiTrackQueue.wasMouseDown then
@@ -20320,6 +20388,7 @@ function drawMultiTrackProgressWindow()
     -- Track mouse state for next frame
     multiTrackQueue.wasMouseDown = mouseDown
     multiTrackQueue.wasRightMouseDown = rightMouseDown
+    multiTrackQueue.lastMouseWheel = tonumber(mouseWheel) or 0
 
     gfx.update()
 
@@ -20411,6 +20480,7 @@ _sep.showMultiTrackProgressWindow = function()
     GUI.snapshotMainGeometry()
     local winW, winH, winX, winY = GUI.applyLiveGeometry(840, 600)
     multiTrackQueue.listScroll = 0
+    multiTrackQueue.lastMouseWheel = 0
     multiTrackQueue.nextFrameAt = 0
     multiTrackQueue.nextPollAt = 0
     multiTrackQueue.windowTitle = getMultiTrackWindowTitle()

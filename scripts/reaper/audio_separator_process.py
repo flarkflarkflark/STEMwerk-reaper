@@ -57,7 +57,7 @@ DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
-DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 1
+DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4
 DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
 BENCHMARK_CPU_CAPS = {1, 2, 4}
 DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
@@ -219,7 +219,11 @@ def _detect_dks_extract_stage2_backend(
 
 def _resolve_dks_extract_stage2_benchmark_cap(stage2_backend: str) -> tuple[Optional[int], str, int, str]:
     requested_cap, raw_cap = _read_benchmark_dks_stage2_cap_request()
-    applied_cap = DKS_EXTRACT_STAGE2_CONCURRENCY_CAP
+    applied_cap = (
+        DKS_EXTRACT_STAGE2_CONCURRENCY_CAP
+        if stage2_backend in {"rocm", "cuda"}
+        else 1
+    )
     ignored_reason = ""
 
     if requested_cap is None:
@@ -282,7 +286,7 @@ def _benchmark_ram_gib() -> Optional[float]:
 
 def _resolve_dks_extract_stage2_cpu_benchmark_cap(stage2_backend: str) -> tuple[Optional[int], str, int, str, str]:
     requested_cap, raw_cap, env_name = _read_benchmark_dks_stage2_cpu_cap_request()
-    applied_cap = DKS_EXTRACT_STAGE2_CONCURRENCY_CAP
+    applied_cap = 1
     ignored_reason = ""
 
     if requested_cap is None:
@@ -1033,7 +1037,7 @@ def _drumsep_helper_path() -> Path:
 
 @contextmanager
 def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):
-    """Serialize DrumSep stage 2 for Drum Split multi runs to avoid ROCm contention."""
+    """Throttle DrumSep stage 2 for Drum Split multi runs with backend-aware caps."""
     stage2_backend = _detect_dks_extract_stage2_backend(stage2_backend)
     requested_cap, raw_cap, effective_cap, ignored_reason = _resolve_dks_extract_stage2_benchmark_cap(stage2_backend)
     cpu_requested_cap, cpu_raw_cap, cpu_effective_cap, cpu_ignored_reason, cpu_env_name = _resolve_dks_extract_stage2_cpu_benchmark_cap(stage2_backend)
