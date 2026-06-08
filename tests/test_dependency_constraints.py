@@ -2006,6 +2006,9 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert '"dks_extract_stage2_requested_device", "dks_extract_stage2_device", "dks_extract_stage2_backend"' in support_script
     assert '"dks_extract_stage2_effective_cap", "bench_dks_stage2_cap_requested", "bench_dks_stage2_cap_applied",' in support_script
     assert '"bench_dks_stage2_cap_ignored_reason", "dks_extract_intermediate_dir"' in support_script
+    assert '"drumsep_subprocess_env_profile", "drumsep_helper_device_arg", "drumsep_virtual_env"' in support_script
+    assert '"drumsep_cuda_visible_devices", "drumsep_nvidia_visible_devices"' in support_script
+    assert '"drumsep_ld_library_path_contains_main_venv", "drumsep_path_starts_with_drumsep_venv"' in support_script
     assert '"lua_dks_extract_outputs_detected", "lua_dks_extract_output_count"' in support_script
     assert '"expected_drum_outputs", "actual_drum_outputs", "output_count_mismatch"' in support_script
 
@@ -2365,6 +2368,160 @@ def test_drumsep_runtime_verify_and_helper_use_clean_subprocess_env():
 
     assert "env=_clean_env()," in script
     assert script.count("env=_clean_env(),") >= 2
+    assert "build_drumsep_subprocess_env(" in script
+    assert '"drumsep_subprocess_env_profile": profile' in script
+    assert '"drumsep_helper_device_arg": backend or "unknown"' in script
+    assert '"drumsep_ld_library_path_contains_main_venv": "yes"' in script
+
+
+def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_gpu_vars(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
+    fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
+    fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "executable", fake_sys_executable)
+
+    runtime_python = tmp_path / "helper" / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    runtime_venv = runtime_python.parent.parent
+    main_venv_root = module._path_text(fake_sys_executable.parent.parent)
+    base_env = {
+        "PATH": f"{fake_sys_executable.parent}:{'/usr/local/bin:/usr/bin:/bin:/opt/custom/bin'}",
+        "LD_LIBRARY_PATH": f"{fake_sys_executable.parent.parent}/lib/python3.12/site-packages/nvidia/cudnn/lib:/usr/lib:{runtime_venv}/lib",
+        "PYTHONPATH": f"{fake_sys_executable.parent.parent}/lib/python3.12/site-packages",
+        "PYTHONHOME": str(fake_sys_executable.parent.parent),
+        "VIRTUAL_ENV": str(fake_sys_executable.parent.parent),
+        "CUDA_VISIBLE_DEVICES": "0",
+        "NVIDIA_VISIBLE_DEVICES": "all",
+        "HIP_VISIBLE_DEVICES": "0",
+        "ROCR_VISIBLE_DEVICES": "0",
+        "HSA_OVERRIDE_GFX_VERSION": "11.0.0",
+    }
+
+    env, diag = module.build_drumsep_subprocess_env(base_env, runtime_python, runtime_venv, "cpu")
+
+    assert env["VIRTUAL_ENV"] == str(runtime_venv)
+    assert env["PATH"].startswith(str(runtime_venv / "bin"))
+    assert main_venv_root not in module._path_text(env["PATH"])
+    assert env["CUDA_VISIBLE_DEVICES"] == ""
+    assert env["NVIDIA_VISIBLE_DEVICES"] == ""
+    assert "PYTHONPATH" not in env
+    assert "PYTHONHOME" not in env
+    assert "HIP_VISIBLE_DEVICES" not in env
+    assert "ROCR_VISIBLE_DEVICES" not in env
+    assert "HSA_OVERRIDE_GFX_VERSION" not in env
+    assert main_venv_root not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
+    assert "/usr/lib" in env.get("LD_LIBRARY_PATH", "")
+    assert diag["drumsep_subprocess_env_profile"] == "cpu_isolated"
+    assert diag["drumsep_helper_device_arg"] == "cpu"
+    assert diag["drumsep_virtual_env"] == str(runtime_venv)
+    assert diag["drumsep_ld_library_path_contains_main_venv"] == "no"
+    assert diag["drumsep_path_starts_with_drumsep_venv"] == "yes"
+
+
+def test_run_direct_dks_drumsep_helper_uses_cpu_device_and_isolated_env(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py").resolve()
+    input_path = tmp_path / "input.wav"
+    output_root = tmp_path / "stage2_drumsep"
+    model_cache_dir = tmp_path / "models"
+    result_json = output_root / "drumsep_result.json"
+    helper_stdout = output_root / "drumsep_helper_stdout.txt"
+    helper_stderr = output_root / "drumsep_helper_stderr.txt"
+    helper_log = output_root / "drumsep_helper.log"
+    fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
+    fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
+    fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "executable", str(fake_sys_executable))
+    drumsep_python = tmp_path / "helper" / ".venv-drumsep" / "bin" / "python"
+    drumsep_python.parent.mkdir(parents=True, exist_ok=True)
+    drumsep_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    expected_runtime_venv = str(module._runtime_venv_root(drumsep_python))
+    input_path.write_bytes(b"RIFF0000WAVE")
+    output_root.mkdir(parents=True, exist_ok=True)
+    model_cache_dir.mkdir(parents=True, exist_ok=True)
+    for stem_name in ("kick", "snare", "toms", "hihat", "ride", "crash"):
+        (output_root / f"{stem_name}.wav").write_bytes(b"data")
+    result_json.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "stems": {
+                    "kick": str(output_root / "kick.wav"),
+                    "snare": str(output_root / "snare.wav"),
+                    "toms": str(output_root / "toms.wav"),
+                    "hihat": str(output_root / "hihat.wav"),
+                    "ride": str(output_root / "ride.wav"),
+                    "crash": str(output_root / "crash.wav"),
+                },
+                "raw_outputs": [str(output_root / f"{stem}.wav") for stem in ("kick", "snare", "toms", "hihat", "ride", "crash")],
+                "expected_drum_outputs": 6,
+                "actual_drum_outputs": 6,
+                "output_count_mismatch": False,
+                "drumsep_mps_all_targets_route": "",
+                "mps_fallback_enabled": "",
+                "pytorch_mps_fallback_env": "",
+                "output_validation_reason": "ok",
+                "expected_stems": ["kick", "snare", "toms", "hihat", "ride", "crash"],
+                "found_stems": ["kick", "snare", "toms", "hihat", "ride", "crash"],
+                "backend_runtime": "cpu",
+                "audio_separator_version": "0.34.1",
+                "requested_device": "auto",
+                "effective_device": "cpu",
+                "model_device": "cpu",
+                "direct_demix_keys": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = 0
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env", {})
+        return FakeProcess()
+
+    monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
+    ok, stems, reason, detail = module._run_direct_dks_drumsep_helper(
+        input_path,
+        output_root,
+        model_cache_dir,
+        drumsep_python,
+        "MDX23C-DrumSep-aufr33-jarredou.ckpt",
+        "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+        route="wrapper",
+        device="cpu",
+        requested_device="auto",
+        backend_runtime="cpu",
+    )
+
+    assert ok is True
+    assert reason == ""
+    assert detail == ""
+    assert stems["kick"].endswith("kick.wav")
+    assert captured["cmd"][0] == str(drumsep_python)
+    assert captured["cmd"][2] == "--input"
+    assert captured["cmd"][16] == "--device"
+    assert captured["cmd"][17] == "cpu"
+    assert captured["env"]["VIRTUAL_ENV"] == expected_runtime_venv
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    assert captured["env"]["NVIDIA_VISIBLE_DEVICES"] == ""
+    assert "PYTHONPATH" not in captured["env"]
+    assert "PYTHONHOME" not in captured["env"]
+    assert module._path_text(fake_sys_executable.parent.parent) not in module._path_text(captured["env"].get("LD_LIBRARY_PATH", ""))
+    assert captured["env"]["PATH"].startswith(str(drumsep_python.parent))
 
 
 def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers():

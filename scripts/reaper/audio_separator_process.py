@@ -2054,6 +2054,14 @@ def _run_direct_dks_drumsep_helper(
     print(f"drumsep_helper_stdout={helper_stdout}", file=sys.stderr)
     print(f"drumsep_helper_stderr={helper_stderr}", file=sys.stderr)
 
+    helper_env, helper_env_diag = build_drumsep_subprocess_env(
+        _clean_env(),
+        drumsep_python,
+        _runtime_venv_root(drumsep_python),
+        device,
+    )
+    _emit_drumsep_subprocess_env_diagnostics(helper_env_diag)
+
     if not helper_path.exists():
         return False, {}, "drumsep_helper_failed", f"helper script missing: {helper_path}"
 
@@ -2102,7 +2110,7 @@ def _run_direct_dks_drumsep_helper(
             text=True,
             stdout=stdout_fh,
             stderr=stderr_fh,
-            env=_clean_env(),
+            env=helper_env,
             **_windows_no_window_kwargs(),
         )
         start_time = time.monotonic()
@@ -2531,6 +2539,130 @@ def _clean_env() -> Dict[str, str]:
     for key in ("HIP_VISIBLE_DEVICES", "HSA_OVERRIDE_GFX_VERSION", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
         env.pop(key, None)
     return env
+
+
+def _path_text(value: str | Path | None) -> str:
+    return str(value or "").replace("\\", "/").strip().lower()
+
+
+def _split_path_value(value: str | None) -> List[str]:
+    parts: List[str] = []
+    for part in str(value or "").split(os.pathsep):
+        text = part.strip()
+        if text:
+            parts.append(text)
+    return parts
+
+
+def _dedupe_path_parts(parts: List[str]) -> List[str]:
+    seen: Set[str] = set()
+    deduped: List[str] = []
+    for part in parts:
+        normalized = _path_text(part)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(part)
+    return deduped
+
+
+def _filter_path_parts(parts: List[str], blocked_tokens: List[str]) -> List[str]:
+    blocked = [token for token in blocked_tokens if token]
+    if not blocked:
+        return _dedupe_path_parts(parts)
+    filtered: List[str] = []
+    for part in parts:
+        normalized = _path_text(part)
+        if not normalized:
+            continue
+        if any(token in normalized for token in blocked):
+            continue
+        filtered.append(part)
+    return _dedupe_path_parts(filtered)
+
+
+def _runtime_venv_root(runtime_python: Path) -> Path:
+    try:
+        return Path(runtime_python).expanduser().resolve().parent.parent
+    except Exception:
+        return Path(runtime_python).expanduser().parent.parent
+
+
+def _runtime_bin_dir(runtime_venv: Path) -> Path:
+    return Path(runtime_venv) / ("Scripts" if os.name == "nt" else "bin")
+
+
+def build_drumsep_subprocess_env(
+    base_env: Dict[str, str],
+    runtime_python: Path,
+    runtime_venv: Path,
+    selected_backend: str,
+) -> tuple[Dict[str, str], Dict[str, str]]:
+    env = dict(base_env or {})
+    backend = str(selected_backend or "").strip().lower()
+    main_venv_root = _path_text(Path(sys.executable).expanduser().resolve().parent.parent)
+    runtime_python = Path(runtime_python).expanduser()
+    runtime_venv = Path(runtime_venv).expanduser()
+    runtime_bin = str(_runtime_bin_dir(runtime_venv))
+    runtime_venv_text = _path_text(runtime_venv)
+    profile = "cpu_isolated" if backend == "cpu" else (f"{backend}_isolated" if backend else "helper_isolated")
+
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
+    env["VIRTUAL_ENV"] = str(runtime_venv)
+
+    if backend == "cpu":
+        env["CUDA_VISIBLE_DEVICES"] = ""
+        env["NVIDIA_VISIBLE_DEVICES"] = ""
+        env.pop("HIP_VISIBLE_DEVICES", None)
+        env.pop("ROCR_VISIBLE_DEVICES", None)
+        env.pop("HSA_OVERRIDE_GFX_VERSION", None)
+
+    path_parts = _split_path_value(env.get("PATH"))
+    path_parts = _filter_path_parts(path_parts, [main_venv_root, runtime_venv_text])
+    env["PATH"] = os.pathsep.join([runtime_bin] + path_parts) if path_parts else runtime_bin
+
+    ld_library_parts = _split_path_value(env.get("LD_LIBRARY_PATH"))
+    ld_library_parts = _filter_path_parts(
+        ld_library_parts,
+        [
+            main_venv_root,
+            f"{main_venv_root}/site-packages/torch",
+            f"{main_venv_root}/site-packages/nvidia",
+        ],
+    )
+    if ld_library_parts:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(ld_library_parts)
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
+
+    sanitized_ld = _path_text(env.get("LD_LIBRARY_PATH"))
+    sanitized_path = _split_path_value(env.get("PATH"))
+    diagnostics = {
+        "drumsep_subprocess_env_profile": profile,
+        "drumsep_helper_device_arg": backend or "unknown",
+        "drumsep_python": str(runtime_python),
+        "drumsep_virtual_env": str(runtime_venv),
+        "drumsep_cuda_visible_devices": str(env.get("CUDA_VISIBLE_DEVICES", "")),
+        "drumsep_nvidia_visible_devices": str(env.get("NVIDIA_VISIBLE_DEVICES", "")),
+        "drumsep_ld_library_path_contains_main_venv": "yes" if main_venv_root and main_venv_root in sanitized_ld else "no",
+        "drumsep_path_starts_with_drumsep_venv": "yes" if sanitized_path and _path_text(sanitized_path[0]) == _path_text(runtime_bin) else "no",
+    }
+    return env, diagnostics
+
+
+def _emit_drumsep_subprocess_env_diagnostics(diagnostics: Dict[str, str]) -> None:
+    for key in (
+        "drumsep_subprocess_env_profile",
+        "drumsep_helper_device_arg",
+        "drumsep_python",
+        "drumsep_virtual_env",
+        "drumsep_cuda_visible_devices",
+        "drumsep_nvidia_visible_devices",
+        "drumsep_ld_library_path_contains_main_venv",
+        "drumsep_path_starts_with_drumsep_venv",
+    ):
+        print(f"{key}={diagnostics.get(key, '')}", file=sys.stderr)
 
 def _run_cmd_lines(cmd: List[str]) -> List[str]:
     try:
