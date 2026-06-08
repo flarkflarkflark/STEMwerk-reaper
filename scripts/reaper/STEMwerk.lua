@@ -9181,6 +9181,27 @@ function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime
     local candidates = { runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice }
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
+        if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then
+            return "rocm"
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "directml" or lower:find("directml", 1, true) then
+            return "directml"
+        end
+        if lower == "mps" or lower:find("mps", 1, true) then
+            return "mps"
+        end
+        if lower == "cpu" then
+            return "cpu"
+        end
+        if lower == "cuda" or lower:match("^cuda:%d+$") then
+            return lower
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
         if lower ~= "" then
             return lower
         end
@@ -14373,7 +14394,7 @@ function buildProgressRouteSummary(deviceDetail)
         local stageBadge = stageIdx == 1
             and trSafeValue("progress_stage_label_1_of_2", "Stage 1/2")
             or trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
-        local routeSummary = trSafeValue("progress_dks_extract_route_summary", "Normal stems → Drum Kit")
+        local routeSummary = trSafeValue("progress_dks_extract_route_summary", "Drums extract → Kit Split")
         if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then
             routeSummary = routeSummary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end

@@ -74,14 +74,14 @@ end
 
 local function drumKitStageBaseLabel(stageIndex)
     if isDirectDrumKitProgress() then
-        return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating Direct Drum Kit...")
+        return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")
     end
     if isExtractDrumKitProgress() then
         if stageIndex == 1 then
-            return progressUiLabel("progress_stage_extracting_drums", "Extracting drums...")
+            return progressUiLabel("progress_stage_extracting_drums", "Isolating drums…")
         end
         if stageIndex == 2 then
-            return progressUiLabel("progress_stage_splitting_drum_kit", "Creating Drum Kit Split...")
+            return progressUiLabel("progress_stage_splitting_drum_kit", "Stage 2/2: Creating drum parts…")
         end
     end
     return nil
@@ -116,39 +116,43 @@ local function normalizeProgressStage(stage)
     stage = stage:gsub("%s*%b()", "")
     stage = stage:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
     stage = stage:gsub("^[Ss]tage%s+%d+/%d+:%s*", "")
+    stage = stage:gsub("^[Ss]tap%s+%d+/%d+:%s*", "")
+    stage = stage:gsub("^[Ss]chritt%s+%d+/%d+:%s*", "")
     local lower = stage:lower()
+    local flat = lower:gsub("[%s%.:]+$", "")
     local stageIndex = inferDrumKitStageIndex(rawStage or stage)
     if isDirectDrumKitProgress() and stage ~= "" then
-        if lower == "starting backend"
-            or lower == "starting drum kit runtime"
-            or lower == "preparing direct drum kit"
-            or lower == "splitting drum kit"
-            or lower == "writing drum tracks"
-            or lower == "drumsep stage2 separating kit stems"
+        if flat == "starting backend"
+            or flat == "starting drum kit runtime"
+            or flat == "preparing direct drum kit"
+            or flat == "splitting drum kit"
+            or flat == "writing drum tracks"
+            or flat == "drumsep stage2 separating kit stems"
         then
             local directLabel = drumKitStageBaseLabel()
             if directLabel and directLabel ~= "" then
                 stage = directLabel
                 lower = stage:lower()
+                flat = lower:gsub("[%s%.:]+$", "")
             end
         end
-    elseif isExtractDrumKitProgress() and (stageIndex or lower == "starting backend") then
-        if not stageIndex and lower == "starting backend" then
+    elseif isExtractDrumKitProgress() and (stageIndex or flat == "starting backend") then
+        if not stageIndex and flat == "starting backend" then
             stageIndex = 1
         end
         local extractLabel = drumKitStageBaseLabel(stageIndex)
         if extractLabel and extractLabel ~= "" then
             stage = extractLabel
             lower = stage:lower()
+            flat = lower:gsub("[%s%.:]+$", "")
         end
     end
     if stage == "" then
         stage = progressUiLabel("progress_stage_processing", "Processing")
-    elseif lower:match("^processing[%s%.]*$") then
+    elseif flat == "processing" then
         stage = progressUiLabel("progress_stage_processing", "Processing")
     else
         local key = nil
-        local flat = lower:gsub("[%s%.:]+$", "")
         if flat == "initializing" then
             key = "progress_initializing"
         elseif flat == "loading model" then
@@ -194,12 +198,12 @@ local function localizeProgressStagePrefix(stageText)
         {"loading ai model",    progressUiLabel("progress_stage_loading_ai_model",   "Loading AI model")},
         {"loading model",       progressUiLabel("progress_stage_loading_model",      "Loading model")},
         {"starting separation", progressUiLabel("progress_stage_starting_separation","Starting separation")},
-        {"preparing direct drum kit", progressUiLabel("progress_stage_preparing_direct_drum_kit","Creating Direct Drum Kit...")},
+        {"preparing direct drum kit", progressUiLabel("progress_stage_preparing_direct_drum_kit","Creating drum parts…")},
         {"stage 2 queued for drumsep", progressUiLabel("progress_stage_queued_drumsep","Queued for drum kit...")},
-        {"starting backend", progressUiLabel("progress_stage_starting_drum_kit_runtime","Creating Direct Drum Kit...")},
-        {"starting drum kit runtime", progressUiLabel("progress_stage_starting_drum_kit_runtime","Creating Direct Drum Kit...")},
-        {"splitting drum kit", progressUiLabel("progress_stage_splitting_drum_kit","Creating Drum Kit Split...")},
-        {"drumsep stage2 separating kit stems", progressUiLabel("progress_stage_splitting_drum_kit","Creating Drum Kit Split...")},
+        {"starting backend", progressUiLabel("progress_stage_starting_drum_kit_runtime","Preparing Kit Split stage 2...")},
+        {"starting drum kit runtime", progressUiLabel("progress_stage_starting_drum_kit_runtime","Preparing Kit Split stage 2...")},
+        {"splitting drum kit", progressUiLabel("progress_stage_splitting_drum_kit","Stage 2/2: Creating drum parts…")},
+        {"drumsep stage2 separating kit stems", progressUiLabel("progress_stage_splitting_drum_kit","Stage 2/2: Creating drum parts…")},
         {"writing drum tracks", progressUiLabel("progress_stage_writing_drum_tracks","Writing drum tracks...")},
         {"writing stems",       progressUiLabel("progress_stage_writing_stems",      "Writing stems")},
         {"complete",            progressUiLabel("progress_stage_complete",           "Complete")},

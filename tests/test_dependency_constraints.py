@@ -3337,21 +3337,21 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'selected = "Ausgewählt:"' in langs
     assert 'delete_original = "Original löschen"' in langs
     assert 'tooltip_close = "STEMwerk schließen (ESC)"' in langs
-    assert 'progress_stage_splitting_drum_kit = "Creating Kit Split..."' in langs
-    assert 'progress_stage_splitting_drum_kit = "Kit Split maken..."' in langs
-    assert 'progress_stage_splitting_drum_kit = "Kit Split erstellen..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Creating Direct Kit..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Direct Kit maken..."' in langs
-    assert 'progress_stage_preparing_direct_drum_kit = "Direct Kit erstellen..."' in langs
-    assert 'progress_stage_extracting_drums = "Extracting drums..."' in langs
-    assert 'progress_stage_extracting_drums = "Drums extraheren..."' in langs
-    assert 'progress_stage_extracting_drums = "Drums extrahieren..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Stage 2/2: Creating drum parts…"' in langs
+    assert 'progress_stage_splitting_drum_kit = "Stap 2/2: Drumpartijen maken…"' in langs
+    assert 'progress_stage_splitting_drum_kit = "Schritt 2/2: Drum-Parts werden erstellt…"' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Creating drum parts…"' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Drumpartijen maken…"' in langs
+    assert 'progress_stage_preparing_direct_drum_kit = "Drum-Parts werden erstellt…"' in langs
+    assert 'progress_stage_extracting_drums = "Isolating drums…"' in langs
+    assert 'progress_stage_extracting_drums = "Drums isoleren…"' in langs
+    assert 'progress_stage_extracting_drums = "Drums werden isoliert…"' in langs
     assert 'progress_stage_queued_drumsep = "Queued for drum kit..."' in langs
     assert 'progress_stage_queued_drumsep = "In wachtrij voor drumkit..."' in langs
     assert 'progress_stage_queued_drumsep = "In Warteschlange für Drumkit..."' in langs
-    assert 'progress_stage_starting_drum_kit_runtime = "Preparing drum kit..."' in langs
-    assert 'progress_stage_starting_drum_kit_runtime = "Drumkit voorbereiden..."' in langs
-    assert 'progress_stage_starting_drum_kit_runtime = "Drumkit vorbereiten..."' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Preparing Kit Split stage 2..."' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Kit Split stap 2 voorbereiden..."' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Kit Split Stufe 2 vorbereiten..."' in langs
     assert 'mt_parallel_cap = "cap %d"' in langs
     assert 'mt_parallel_cap = "limiet %d"' in langs
     assert 'mt_parallel_cap = "Limit %d"' in langs
@@ -3364,9 +3364,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage2_serialized_caption = "Stage 2 serialized for stability"' in langs
     assert 'progress_stage2_serialized_caption = "Stap 2 serieel voor stabiliteit"' in langs
     assert 'progress_stage2_serialized_caption = "Stufe 2 seriell für Stabilität"' in langs
-    assert 'progress_dks_extract_route_summary = "Normal stems → Drum Kit"' in langs
-    assert 'progress_dks_extract_route_summary = "Normale stems → Drum Kit"' in langs
-    assert 'progress_dks_extract_route_summary = "Normale Stems → Drum Kit"' in langs
+    assert 'progress_dks_extract_route_summary = "Drums extract → Kit Split"' in langs
+    assert 'progress_dks_extract_route_summary = "Drums extraheren → Kit Split"' in langs
+    assert 'progress_dks_extract_route_summary = "Drums extrahieren → Kit Split"' in langs
     assert 'progress_stage_writing_drum_tracks = "Writing drum tracks..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drumtracks schrijven..."' in langs
     assert 'progress_stage_writing_drum_tracks = "Drum-Spuren werden geschrieben..."' in langs
@@ -3671,6 +3671,66 @@ def test_drumkit_visible_progress_and_support_summary_hide_raw_cuda_devices():
     assert 'lines[#lines + 1] = "friendly_device: " .. tostring(entry.friendly_device or "unknown")' in support_script
     assert "local function friendlyDeviceLabel(rawDevice, runtimeState, entry)" in support_script
     assert 'return "Auto [GPU]"' in support_script
+
+
+def test_runtime_selection_prefers_explicit_rocm_over_cuda_device_fallback():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice)' in script
+    assert 'if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then' in script
+    assert 'return "rocm"' in script
+    assert 'if lower == "cuda" or lower:match("^cuda:%d+$") then' in script
+
+
+def test_drumkit_progress_copy_uses_explicit_stage2_and_kit_split_wording():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text(encoding="utf-8")
+
+    assert 'local routeSummary = trSafeValue("progress_dks_extract_route_summary", "Drums extract → Kit Split")' in script
+    assert 'if isDirectDrumKitProgress() then' in progress_render
+    assert 'return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")' in progress_render
+    assert 'if isExtractDrumKitProgress() then' in progress_render
+    assert 'return progressUiLabel("progress_stage_extracting_drums", "Isolating drums…")' in progress_render
+    assert 'return progressUiLabel("progress_stage_splitting_drum_kit", "Stage 2/2: Creating drum parts…")' in progress_render
+    assert 'progress_stage_starting_drum_kit_runtime = "Preparing Kit Split stage 2..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Stage 2/2: Creating drum parts…"' in langs
+    assert 'progress_dks_extract_route_summary = "Drums extract → Kit Split"' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Kit Split stap 2 voorbereiden..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Stap 2/2: Drumpartijen maken…"' in langs
+    assert 'progress_dks_extract_route_summary = "Drums extraheren → Kit Split"' in langs
+    assert 'progress_stage_starting_drum_kit_runtime = "Kit Split Stufe 2 vorbereiten..."' in langs
+    assert 'progress_stage_splitting_drum_kit = "Schritt 2/2: Drum-Parts werden erstellt…"' in langs
+    assert 'progress_stage_extracting_drums = "Isolating drums…"' in langs
+    assert 'progress_stage_extracting_drums = "Drums isoleren…"' in langs
+    assert 'progress_stage_extracting_drums = "Drums werden isoliert…"' in langs
+    assert 'Creating drum parts…' in langs
+    assert 'Stage 2/2: Creating drum parts…' in langs
+    assert 'Splitting kit with DrumSep' not in langs
+    assert 'Kit splitten met DrumSep' not in langs
+    assert 'Kit mit DrumSep aufteilen' not in langs
+    assert 'stage = stage:gsub("^[Ss]tage%s+%d+/%d+:%s*", "")' in progress_render
+    assert 'stage = stage:gsub("^[Ss]tap%s+%d+/%d+:%s*", "")' in progress_render
+    assert 'stage = stage:gsub("^[Ss]chritt%s+%d+/%d+:%s*", "")' in progress_render
+    assert 'local flat = lower:gsub("[%s%.:]+$", "")' in progress_render
+    assert 'if flat == "starting backend"' in progress_render
+    assert 'or flat == "splitting drum kit"' in progress_render
+    assert 'elseif isExtractDrumKitProgress() and (stageIndex or flat == "starting backend") then' in progress_render
+
+
+def test_direct_kit_running_rows_strip_prefixed_stage2_copy_but_extract_keeps_it():
+    progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text(encoding="utf-8")
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'stage = stage:gsub("^[Ss]tage%s+%d+/%d+:%s*", "")' in progress_render
+    assert 'stage = stage:gsub("^[Ss]tap%s+%d+/%d+:%s*", "")' in progress_render
+    assert 'stage = stage:gsub("^[Ss]chritt%s+%d+/%d+:%s*", "")' in progress_render
+    assert 'if isDirectDrumKitProgress() and stage ~= "" then' in progress_render
+    assert 'or flat == "splitting drum kit"' in progress_render
+    assert 'return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")' in progress_render
+    assert 'return progressUiLabel("progress_stage_splitting_drum_kit", "Stage 2/2: Creating drum parts…")' in progress_render
+    assert 'if isExtractDrumKitWorkflowActive()\n                    and inferProgressStageIndex(job.stage) == 2' in main_script
+    assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' in main_script
 
 
 def test_sync_to_reaper_does_not_overwrite_script_local_i18n_with_repo_root_i18n():
