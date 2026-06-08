@@ -18777,6 +18777,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         )
     end
     multiTrackQueue.currentJobIndex = 0
+    multiTrackQueue.lastOverallProgress = 0
     multiTrackQueue.globalStartTime = os.time()  -- Track total elapsed time
     multiTrackQueue.totalAudioDuration = 0  -- Will be updated when jobs start
     SW_TIMING.beginRun({ mode = multiTrackQueue.sequentialMode and "sequential" or "parallel", job_count = #trackJobs, model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
@@ -18843,6 +18844,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     job.execLogPath = SW_LOG.getLogPath()
     local execLogPath = job.execLogPath or SW_LOG.getLogPath()
     local jobTag = "item_" .. tostring(job.index or 0)
+    job.rawPercent = 0
     job.percent = 0
     job.stage = isDrumKitWorkflowActive()
         and trSafeValue("progress_stage_starting_drum_kit_runtime", "Preparing drum kit...")
@@ -19150,6 +19152,18 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     end
 end
 
+-- Normalize worker progress into stable user-facing units. Kit Split reserves
+-- the first half for drum isolation and the second half for drum-part creation.
+_sep.getProgressTotalUnits = function()
+    local sourceCount = #(multiTrackQueue.jobs or {})
+    return UI_PROGRESS.multiTrackProgressTotalUnits(sourceCount, tostring(multiTrackQueue.workflowSource or ""))
+end
+
+_sep.normalizeJobProgress = function(job, rawPercent, stage)
+    local workflowSource = tostring((job and job.workflowSource) or multiTrackQueue.workflowSource or "")
+    return UI_PROGRESS.normalizeMultiTrackProgress(rawPercent, stage, workflowSource, job and job.percent)
+end
+
 -- Update progress for all jobs from their stdout files
 _sep.updateAllJobsProgress = function()
     for _, job in ipairs(multiTrackQueue.jobs) do
@@ -19189,7 +19203,8 @@ _sep.updateAllJobsProgress = function()
                 end
                 f:close()
                 if lastProgress then
-                    job.percent = lastProgress.percent
+                    job.rawPercent = lastProgress.percent
+                    job.percent = _sep.normalizeJobProgress(job, lastProgress.percent, lastProgress.stage)
                     job.stage = lastProgress.stage
                 end
             end
@@ -19202,6 +19217,7 @@ _sep.updateAllJobsProgress = function()
                     _sep.ensureBenchmarkGpuCapDiagnosticsPersisted(job.logFile)
                     SW_LOG.persistRunDiagnostics(job.trackDir)
                     job.done = true
+                    job.percent = 100
                     job.stage = "Waiting for import"
                     writeTimingEvent(job, "done_seen", job.index)
                     SW_TIMING.mark(job.index, "output_detected")
@@ -19223,6 +19239,7 @@ _sep.updateAllJobsProgress = function()
             end
         else
             -- Job not yet started (sequential mode)
+            job.rawPercent = 0
             job.percent = 0
             job.stage = T("progress_queued") or "Queued"
         end
@@ -19274,11 +19291,21 @@ end
 
 -- Calculate overall progress
 _sep.getOverallProgress = function()
-    local total = 0
-    for _, job in ipairs(multiTrackQueue.jobs) do
-        total = total + (job.percent or 0)
+    local jobs = multiTrackQueue.jobs or {}
+    if #jobs == 0 then return 0 end
+    local totalUnits = _sep.getProgressTotalUnits()
+    local unitsPerSource = tostring(multiTrackQueue.workflowSource or "") == DKS_WORKFLOW.SOURCE_EXTRACT and 2 or 1
+    local completedUnits = 0
+    local allDone = true
+    for _, job in ipairs(jobs) do
+        local percent = job.done and 100 or math.max(0, math.min(99, tonumber(job.percent) or 0))
+        completedUnits = completedUnits + (percent / 100) * unitsPerSource
+        if not job.done then allDone = false end
     end
-    return math.floor(total / #multiTrackQueue.jobs)
+    local current = allDone and 100 or math.floor((completedUnits / math.max(1, totalUnits)) * 100)
+    current = math.max(tonumber(multiTrackQueue.lastOverallProgress) or 0, current)
+    multiTrackQueue.lastOverallProgress = math.max(0, math.min(100, current))
+    return multiTrackQueue.lastOverallProgress
 end
 
 -- Draw multi-track progress window
@@ -20111,10 +20138,19 @@ function drawMultiTrackProgressWindow()
                 gfx.rect(tBarX + 1, yPos + 1, tFillW - 2, tBarH - 2, 1)
             end
 
-            -- Stage text inside progress bar
-            if not job.done and job.stage and job.stage ~= "" then
+            -- Stage/status text stays inside the progress bar; the right column
+            -- is reserved for the numeric percentage.
+            if job.done then
                 gfx.setfont(1, "Arial", PS(9))
-                local stageText = normalizeProgressStage(job.stage)
+                local doneText = T("mt_done_label") or "Done"
+                drawProgressText(doneText, tBarX + PS(5), yPos + PS(3), 0.95)
+            elseif job.stage and job.stage ~= "" then
+                gfx.setfont(1, "Arial", PS(9))
+                local hasProgressActivity = (tonumber(job.rawPercent) or 0) > 0
+                    or (tonumber(job.percent) or 0) > 0
+                local stageText = hasProgressActivity
+                    and normalizeProgressStage(job.stage)
+                    or (T("progress_queued") or "Queued")
                 if stageText == "Waiting.." or stageText == "Waiting..." then
                     stageText = T("waiting") or stageText
                 elseif stageText == "Starting.." or stageText == "Starting..." then
@@ -20128,30 +20164,13 @@ function drawMultiTrackProgressWindow()
                 drawProgressText(fittedStageText, stageX, stageY, 0.95)
             end
 
-            -- Done checkmark or percentage
+            -- Numeric percentage for queued, active, and completed rows.
             gfx.setfont(1, "Arial", PS(10))
-            if job.done then
-                local isWaiting = (job.stage == "Waiting for import")
-                if isWaiting then
-                    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.7)
-                else
-                    gfx.set(0.3, 0.75, 0.4, 1)
-                end
-                gfx.x = tBarX + tBarW + PS(8)
-                gfx.y = yPos + PS(2)
-                gfx.drawstr(isWaiting and (T("progress_waiting") or "Waiting") or (T("mt_done_label") or "Done"))
-            else
-                gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-                gfx.x = tBarX + tBarW + PS(8)
-                gfx.y = yPos + PS(2)
-                local pctText = string.format("%d%%", job.percent or 0)
-                if isExtractDrumKitWorkflowActive()
-                    and inferProgressStageIndex(job.stage) == 2
-                    and (tonumber(job.percent or 0) or 0) <= 50 then
-                    pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
-                end
-                gfx.drawstr(pctText)
-            end
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+            gfx.x = tBarX + tBarW + PS(8)
+            gfx.y = yPos + PS(2)
+            local rowPercent = job.done and 100 or math.max(0, math.min(99, tonumber(job.percent) or 0))
+            gfx.drawstr(string.format("%d%%", rowPercent))
         end
 
         if scrollNeeded then

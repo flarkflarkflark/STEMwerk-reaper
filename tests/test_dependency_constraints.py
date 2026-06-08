@@ -3424,7 +3424,7 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_label_2_of_2' in progress_render
     assert 'isExtractDrumKitProgress()' in progress_render
     assert 'progress_stage2_serialized_caption' in main_script
-    assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' in main_script
+    assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' not in main_script
 
 
 def test_drumkit_direct_route_uses_drum_specific_folder_suffix_and_runtime_device_breadcrumbs():
@@ -3692,6 +3692,91 @@ def test_multitrack_progress_scroll_uses_mouse_wheel_delta_tracking():
     assert 'multiTrackQueue.lastMouseWheel = tonumber(mouseWheel) or 0' in script
 
 
+def test_multitrack_progress_uses_route_aware_monotonic_units():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    progress_render = Path("scripts/reaper/_internal/STEMwerk_Progress_Render.lua").read_text(encoding="utf-8")
+
+    assert "_sep.getProgressTotalUnits = function()" in script
+    assert "UI_PROGRESS.multiTrackProgressTotalUnits(sourceCount" in script
+    assert "_sep.normalizeJobProgress = function(job, rawPercent, stage)" in script
+    assert "UI_PROGRESS.normalizeMultiTrackProgress(rawPercent, stage, workflowSource, job and job.percent)" in script
+    assert 'return workflowSource == "dks_extract" and count * 2 or count' in progress_render
+    assert "percent = math.min(49, percent)" in progress_render
+    assert "percent = 50 + math.floor(percent * 0.45)" in progress_render
+    assert "percent = math.max(50, percent)" in progress_render
+    assert "job.rawPercent = lastProgress.percent" in script
+    assert "job.percent = _sep.normalizeJobProgress(job, lastProgress.percent, lastProgress.stage)" in script
+
+
+def test_multitrack_progress_mapping_sequences_execute_monotonically():
+    lua = subprocess.run(
+        [
+            "lua",
+            "-",
+        ],
+        input="""
+local p = dofile("scripts/reaper/_internal/STEMwerk_Progress_Render.lua")
+assert(p.multiTrackProgressTotalUnits(8, "normal") == 8)
+assert(p.multiTrackProgressTotalUnits(8, "dks_direct") == 8)
+assert(p.multiTrackProgressTotalUnits(8, "dks_extract") == 16)
+assert(p.normalizeMultiTrackProgress(25, "Processing", "normal", 0) == 25)
+assert(p.normalizeMultiTrackProgress(25, "Splitting drum kit...", "dks_direct", 0) == 25)
+local s1 = p.normalizeMultiTrackProgress(48, "Extracting drums...", "dks_extract", 0)
+local queued = p.normalizeMultiTrackProgress(50, "Stage 2 queued for DrumSep...", "dks_extract", s1)
+local s2start = p.normalizeMultiTrackProgress(1, "Starting Drum Kit runtime...", "dks_extract", queued)
+local s2mid = p.normalizeMultiTrackProgress(50, "Splitting drum kit...", "dks_extract", s2start)
+local s2end = p.normalizeMultiTrackProgress(99, "Splitting drum kit...", "dks_extract", s2mid)
+local writing = p.normalizeMultiTrackProgress(95, "Writing drum tracks...", "dks_extract", s2end)
+assert(s1 == 48)
+assert(queued == 50)
+assert(s2start == 50)
+assert(s2mid == 72)
+assert(s2end == 94)
+assert(writing == 95)
+""",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert lua.returncode == 0, lua.stderr
+
+
+def test_multitrack_done_and_overall_progress_are_visually_complete_and_monotonic():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert "job.done = true\n                    job.percent = 100" in script
+    assert "job.rawPercent = 0\n            job.percent = 0" in script
+    assert "local totalUnits = _sep.getProgressTotalUnits()" in script
+    assert "local unitsPerSource = tostring(multiTrackQueue.workflowSource or \"\") == DKS_WORKFLOW.SOURCE_EXTRACT and 2 or 1" in script
+    assert "local percent = job.done and 100 or math.max(0, math.min(99, tonumber(job.percent) or 0))" in script
+    assert "completedUnits = completedUnits + (percent / 100) * unitsPerSource" in script
+    assert "local current = allDone and 100 or math.floor((completedUnits / math.max(1, totalUnits)) * 100)" in script
+    assert "current = math.max(tonumber(multiTrackQueue.lastOverallProgress) or 0, current)" in script
+    assert "multiTrackQueue.lastOverallProgress = 0" in script
+
+
+def test_multitrack_row_right_column_always_shows_bounded_percentage():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local doneText = T("mt_done_label") or "Done"' in script
+    assert "drawProgressText(doneText, tBarX + PS(5), yPos + PS(3), 0.95)" in script
+    assert "local rowPercent = job.done and 100 or math.max(0, math.min(99, tonumber(job.percent) or 0))" in script
+    assert 'gfx.drawstr(string.format("%d%%", rowPercent))' in script
+    assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' not in script
+    assert 'gfx.drawstr(isWaiting and (T("progress_waiting") or "Waiting") or (T("mt_done_label") or "Done"))' not in script
+
+
+def test_multitrack_prestart_rows_stay_queued_until_real_progress_activity():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert "job.rawPercent = 0\n    job.percent = 0" in script
+    assert "local hasProgressActivity = (tonumber(job.rawPercent) or 0) > 0" in script
+    assert "or (tonumber(job.percent) or 0) > 0" in script
+    assert 'and normalizeProgressStage(job.stage)' in script
+    assert 'or (T("progress_queued") or "Queued")' in script
+    assert "local rowPercent = job.done and 100 or math.max(0, math.min(99, tonumber(job.percent) or 0))" in script
+
+
 def test_drumkit_visible_progress_and_support_summary_hide_raw_cuda_devices():
     py_script = Path("scripts/reaper/audio_separator_process.py").read_text()
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
@@ -3762,7 +3847,7 @@ def test_direct_kit_running_rows_strip_prefixed_stage2_copy_but_extract_keeps_it
     assert 'return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")' in progress_render
     assert 'return progressUiLabel("progress_stage_splitting_drum_kit", "Stage 2/2: Creating drum parts…")' in progress_render
     assert 'if isExtractDrumKitWorkflowActive()\n                    and inferProgressStageIndex(job.stage) == 2' in main_script
-    assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' in main_script
+    assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' not in main_script
 
 
 def test_sync_to_reaper_does_not_overwrite_script_local_i18n_with_repo_root_i18n():

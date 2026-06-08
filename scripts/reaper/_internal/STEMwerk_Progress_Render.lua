@@ -72,6 +72,32 @@ local function inferDrumKitStageIndex(stageText)
     return nil
 end
 
+local function multiTrackProgressTotalUnits(sourceCount, workflowSource)
+    local count = math.max(0, tonumber(sourceCount) or 0)
+    return workflowSource == "dks_extract" and count * 2 or count
+end
+
+local function normalizeMultiTrackProgress(rawPercent, stage, workflowSource, previousPercent)
+    local percent = math.max(0, math.min(99, tonumber(rawPercent) or 0))
+    if workflowSource == "dks_extract" then
+        local stageIndex = inferDrumKitStageIndex(stage)
+        local lowerStage = tostring(stage or ""):lower()
+        if stageIndex == 1 then
+            percent = math.min(49, percent)
+        elseif stageIndex == 2 then
+            if lowerStage:find("splitting drum kit", 1, true)
+                or lowerStage:find("drumsep stage2 separating kit stems", 1, true) then
+                percent = 50 + math.floor(percent * 0.45)
+            elseif lowerStage:find("writing drum tracks", 1, true) then
+                percent = math.max(95, percent)
+            else
+                percent = math.max(50, percent)
+            end
+        end
+    end
+    return math.max(tonumber(previousPercent) or 0, math.max(0, math.min(99, percent)))
+end
+
 local function drumKitStageBaseLabel(stageIndex)
     if isDirectDrumKitProgress() then
         return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")
@@ -417,6 +443,8 @@ M.PROGRESS_BASE_W             = PROGRESS_BASE_W
 M.PROGRESS_BASE_H             = PROGRESS_BASE_H
 M.progressUiLabel             = progressUiLabel
 M.normalizeProgressStage      = normalizeProgressStage
+M.multiTrackProgressTotalUnits = multiTrackProgressTotalUnits
+M.normalizeMultiTrackProgress = normalizeMultiTrackProgress
 M.localizeProgressStagePrefix = localizeProgressStagePrefix
 M.readableTerminalAccent      = readableTerminalAccent
 M.formatProgressLine          = formatProgressLine
