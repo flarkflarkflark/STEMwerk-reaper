@@ -3359,8 +3359,8 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_label_2_of_2 = "Stage 2/2"' in langs
     assert 'progress_stage_label_1_of_2 = "Stap 1/2"' in langs
     assert 'progress_stage_label_2_of_2 = "Stap 2/2"' in langs
-    assert 'progress_stage_label_1_of_2 = "Stufe 1/2"' in langs
-    assert 'progress_stage_label_2_of_2 = "Stufe 2/2"' in langs
+    assert 'progress_stage_label_1_of_2 = "Schritt 1/2"' in langs
+    assert 'progress_stage_label_2_of_2 = "Schritt 2/2"' in langs
     assert 'progress_stage2_serialized_caption = "Stage 2 serialized for stability"' in langs
     assert 'progress_stage2_serialized_caption = "Stap 2 serieel voor stabiliteit"' in langs
     assert 'progress_stage2_serialized_caption = "Stufe 2 seriell für Stabilität"' in langs
@@ -3849,6 +3849,10 @@ def test_drumkit_progress_copy_uses_explicit_stage2_and_kit_split_wording():
     assert 'progress_dks_extract_route_summary = "Drums extraheren → Kit Split"' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Kit Split Stufe 2 vorbereiten..."' in langs
     assert 'progress_stage_splitting_drum_kit = "Schritt 2/2: Drum-Parts werden erstellt…"' in langs
+    assert 'progress_stage_label_1_of_2 = "Schritt 1/2"' in langs
+    assert 'progress_stage_label_2_of_2 = "Schritt 2/2"' in langs
+    assert 'progress_stage_label_1_of_2 = "Stufe 1/2"' not in langs
+    assert 'progress_stage_label_2_of_2 = "Stufe 2/2"' not in langs
     assert 'progress_stage_extracting_drums = "Isolating drums…"' in langs
     assert 'progress_stage_extracting_drums = "Drums isoleren…"' in langs
     assert 'progress_stage_extracting_drums = "Drums werden isoliert…"' in langs
@@ -3864,6 +3868,21 @@ def test_drumkit_progress_copy_uses_explicit_stage2_and_kit_split_wording():
     assert 'if flat == "starting backend"' in progress_render
     assert 'or flat == "splitting drum kit"' in progress_render
     assert 'elseif isExtractDrumKitProgress() and (stageIndex or flat == "starting backend") then' in progress_render
+
+
+def test_german_kit_split_stage_prefixes_are_consistent_and_not_duplicated():
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+
+    stage1_prefix = 'progress_stage_label_1_of_2 = "Schritt 1/2"'
+    stage2_prefix = 'progress_stage_label_2_of_2 = "Schritt 2/2"'
+    stage2_copy = 'progress_stage_splitting_drum_kit = "Schritt 2/2: Drum-Parts werden erstellt…"'
+    assert stage1_prefix in langs
+    assert stage2_prefix in langs
+    assert stage2_copy in langs
+    assert 'progress_stage_label_1_of_2 = "Stufe 1/2"' not in langs
+    assert 'progress_stage_label_2_of_2 = "Stufe 2/2"' not in langs
+    assert "Stufe 1/2: Schritt 1/2" not in langs
+    assert "Stufe 2/2: Schritt 2/2" not in langs
 
 
 def test_direct_kit_running_rows_strip_prefixed_stage2_copy_but_extract_keeps_it():
