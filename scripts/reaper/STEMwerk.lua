@@ -9117,6 +9117,9 @@ function attachResultRuntimeMetadata(data)
 
     local state = type(progressState) == "table" and progressState or nil
 
+    if not data.deviceName or data.deviceName == "" then
+        data.deviceName = tostring((state and state._deviceName) or "")
+    end
     if not data.deviceRequest or data.deviceRequest == "" then
         data.deviceRequest = tostring((state and state._normalizedDeviceRequest) or (SETTINGS and SETTINGS.device) or "")
     end
@@ -9138,6 +9141,9 @@ function attachResultRuntimeMetadata(data)
     if not data.backendRuntime or data.backendRuntime == "" then
         data.backendRuntime = tostring((state and state._backendRuntime) or "")
     end
+    if not data.effectiveDevice or data.effectiveDevice == "" then
+        data.effectiveDevice = tostring((state and state._effectiveDevice) or "")
+    end
     if not data.backend or data.backend == "" then
         if multiTrackQueue and multiTrackQueue.schedulerPolicyBackend and multiTrackQueue.schedulerPolicyBackend ~= "" then
             data.backend = tostring(multiTrackQueue.schedulerPolicyBackend)
@@ -9158,7 +9164,23 @@ function attachResultRuntimeMetadata(data)
                 data.backend = "mps"
             elseif selected == "rocm" or selected == "cuda" or selected:match("^cuda:%d+") or requested == "gpu" or requested == "rocm" or requested == "cuda" or requested:match("^cuda:%d+") then
                 data.backend = "gpu"
+            elseif data.deviceName and data.deviceName ~= "" then
+                local dn = tostring(data.deviceName):lower()
+                if dn:find("nvidia", 1, true) or dn:find("geforce", 1, true) or dn:find("rtx", 1, true) or dn:find("gtx", 1, true)
+                    or dn:find("amd", 1, true) or dn:find("radeon", 1, true) or dn:find("intel", 1, true)
+                then
+                    data.backend = "gpu"
+                end
             end
+        end
+    end
+
+    if (not data.methodLabel or data.methodLabel == "") and data.backend == "gpu" then
+        local resolved = resolveResultMethodLabel(data)
+        if resolved ~= "" then
+            data.methodLabel = tostring(resolved)
+        else
+            data.methodLabel = sanitizeUserFacingMethodLabel("gpu")
         end
     end
 
@@ -9239,6 +9261,13 @@ function resolveResultMethodLabel(data)
         return sanitizeUserFacingMethodLabel("gpu")
     end
     return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")
+end
+
+function resolveSingleTrackMethodLabel(data)
+    local methodLabel = resolveResultMethodLabel(data)
+    if methodLabel == "CPU" then return "CPU" end
+    if methodLabel ~= "" then return "GPU" end
+    return ""
 end
 
 function buildResultMessageLines()
@@ -9443,15 +9472,20 @@ function buildResultMessageLines()
             table.insert(lines, T(actionKey) or "")
         end
         local speed = tonumber(data.realtimeFactor or 0) or 0
+        local methodLabel = resolveSingleTrackMethodLabel(data)
         if speed > 0 then
             local speedStr = string.format("%.2fx", speed)
-            table.insert(lines, string.format(T("result_time_speed_line") or "Time: %s | Speed: %s realtime", timeStr, speedStr))
+            local line2 = string.format(T("result_time_speed_line") or "Time: %s | Speed: %s realtime", timeStr, speedStr)
+            if methodLabel ~= "" then
+                line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+            end
+            table.insert(lines, line2)
         else
-            table.insert(lines, string.format(T("result_time_line") or "Time: %s", timeStr))
-        end
-        local methodLabel = resolveResultMethodLabel(data)
-        if methodLabel ~= "" then
-            table.insert(lines, string.format(T("result_method_line") or "Method: %s", methodLabel))
+            local line2 = string.format(T("result_time_line") or "Time: %s", timeStr)
+            if methodLabel ~= "" then
+                line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+            end
+            table.insert(lines, line2)
         end
     end
 
@@ -14818,6 +14852,19 @@ function drawProgressWindow()
                     info.devId = id
                     info.devName = name
                 end
+                local preferredId, preferredName = line:match("auto_selected_preferred=([%w%-%_:%.]+)%s*%((.+)%)")
+                if preferredId then
+                    info.devId = preferredId
+                    info.devName = preferredName
+                end
+                local effectiveDevice = line:match("effective_device=([%w_:%-]+)")
+                if effectiveDevice then
+                    info.effectiveDevice = effectiveDevice
+                end
+                local torchVersion = line:match("torch_version=([^%s]+)")
+                if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then
+                    info.runtimeSelected = "rocm"
+                end
                 -- Example: STEMWERK: torch.cuda.set_device(1) -> current_device=1 (AMD Radeon 780M Graphics)
                 local idx, name2 = line:match("^STEMWERK:%s*torch%.cuda%.set_device%((%d+)%)%s*%-%>%s*current_device=%d+%s*%((.+)%)")
                 if idx then
@@ -14869,6 +14916,7 @@ function drawProgressWindow()
         progressState._runtimeSelected = info.runtimeSelected
         progressState._normalizedDeviceRequest = info.normalizedRequest
         progressState._backendRuntime = info.backendRuntime
+        progressState._effectiveDevice = info.effectiveDevice
         progressState._runtimeGpuCapable = info.gpuCapable
         progressState._runtimeDeviceNames = info.runtimeDeviceNames
         progressState._stage1Runtime = info.stage1Runtime
@@ -15065,20 +15113,6 @@ function drawProgressWindow()
                 })
             end
         end
-    end
-
-    local routeBadge = drumKitMode and "" or activeProcessingRouteBadge()
-    if routeBadge and routeBadge ~= "" then
-        gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-        local routeBadgeW = gfx.measurestr(routeBadge) + PS(14)
-        local routeBadgeH = PS(16)
-        local routeBadgeX = titleX
-        local routeBadgeY = titleY + PS(22)
-        drawThemeSurfaceBox(routeBadgeX, routeBadgeY, routeBadgeW, routeBadgeH, THEME.inputBg, THEME.border, 0.95, 0.95, getThemeRadius(PS, 8, math.floor(routeBadgeH / 2)), getThemeBorderWeight(PS, 1), 0.45, "button")
-        gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
-        gfx.x = routeBadgeX + PS(7)
-        gfx.y = routeBadgeY + PS(2)
-        gfx.drawstr(routeBadge)
     end
 
     -- Stem indicators (simple colored boxes)
@@ -15551,11 +15585,19 @@ function drawProgressWindow()
     local processedAudioDur = footerProcessedAudioDur
     local audioDurStr = processedAudioDur > 0 and string.format("%.1fs", processedAudioDur) or nil
     local realtimeFactor = footerRealtimeFactor
+    local singleTrackMethodLabel = ""
+    if not isDrumKitWorkflowActive() then
+        local footerMethod = sanitizeUserFacingMethodLabel(footerDeviceDetail)
+        if footerMethod == "CPU" then
+            singleTrackMethodLabel = "CPU"
+        elseif footerMethod ~= "" or tostring(footerDeviceDetail or "") ~= "" then
+            singleTrackMethodLabel = "GPU"
+        end
+    end
 
     local leftParts = { string.format("%s: %d:%02d%s", mtTime, elapsedMins, elapsedSecs, etaText), modelDisplay }
-    if not isDrumKitWorkflowActive() then
-        local mtSeg = T("mt_seg") or "Seg"
-        leftParts[#leftParts + 1] = string.format("%s: %s", mtSeg, "30")
+    if singleTrackMethodLabel ~= "" then
+        leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)
     end
     local rightParts = {}
     if currentLabel and currentLabel ~= "" then
@@ -15573,15 +15615,17 @@ function drawProgressWindow()
         summaryLeft = string.format(speedFmt, realtimeFactor)
     end
     local summaryRight = nil
-    if not progressState.showTerminal then
+    if not progressState.showTerminal and isDrumKitWorkflowActive() then
         summaryRight = deviceDetail
     end
-    local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)
-    if routeSummaryLeft and routeSummaryLeft ~= "" then
-        summaryLeft = routeSummaryLeft
-    end
-    if routeSummaryRight and routeSummaryRight ~= "" then
-        summaryRight = routeSummaryRight
+    if isDrumKitWorkflowActive() then
+        local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)
+        if routeSummaryLeft and routeSummaryLeft ~= "" then
+            summaryLeft = routeSummaryLeft
+        end
+        if routeSummaryRight and routeSummaryRight ~= "" then
+            summaryRight = routeSummaryRight
+        end
     end
 
     local statusFontSize = PS(10)
@@ -17164,6 +17208,19 @@ function processStemsResult(stems)
         resultData.sequentialMode = requestedParallel and false or true
         resultData.requestedParallel = requestedParallel and true or false
         resultData.drumKitCopy = drumKitOutput or resultData.drumKitCopy
+        resultData.deviceRequest = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or resultData.deviceRequest or "")
+        resultData.runtimeSelected = tostring(preferredRuntimeSelection(
+            progressState._runtimeSelected,
+            progressState._stage2Runtime,
+            progressState._stage1Runtime,
+            progressState._backendRuntime,
+            progressState._stage2Device or progressState._stage1Device
+        ) or resultData.runtimeSelected or "")
+        resultData.stage2Runtime = tostring(progressState._stage2Runtime or resultData.stage2Runtime or "")
+        resultData.stage1Runtime = tostring(progressState._stage1Runtime or resultData.stage1Runtime or "")
+        resultData.backendRuntime = tostring(progressState._backendRuntime or resultData.backendRuntime or "")
+        resultData.effectiveDevice = tostring(progressState._stage2Device or progressState._stage1Device or progressState._effectiveDevice or resultData.effectiveDevice or "")
+        resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")
     end
 
     reaper.UpdateArrange()

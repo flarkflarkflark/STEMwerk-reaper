@@ -3470,7 +3470,6 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'routeLeft = routeLeft .. " · " .. deviceIntent' in script
     assert 'routeLeft = routeLeft .. " · " .. tostring(deviceDetail)' not in script
     assert 'directSummary = directSummary .. " · " .. deviceIntent' in script
-    assert 'local routeBadge = drumKitMode and "" or activeProcessingRouteBadge()' in script
     assert 'if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then' in script
     assert 'stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)' not in script
     assert 'progress_dks_extract_route_summary' in script
@@ -3499,6 +3498,37 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'tooltipText = progressState.showTerminal and trSafeValue("tooltip_terminal_close_output", "Close output")' in script
     assert 'textStr = textStr:gsub("%s*%[" .. shortcutEsc .. "%]%s*$", "")' in script
     assert 'footer_drum_stem_folder = "drum-map"' in langs
+
+
+def test_single_track_footer_hides_normal_route_badge_and_shows_method_line():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local routeBadge = drumKitMode and "" or activeProcessingRouteBadge()' not in script
+    assert 'gfx.drawstr(routeBadge)' not in script
+    assert 'drawThemeSurfaceBox(routeBadgeX, routeBadgeY, routeBadgeW, routeBadgeH' not in script
+    assert 'if isDrumKitWorkflowActive() then' in script
+    assert 'local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)' in script
+    assert 'local singleTrackMethodLabel = ""' in script
+    assert 'singleTrackMethodLabel = "CPU"' in script
+    assert 'singleTrackMethodLabel = "GPU"' in script
+    assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
+    assert 'return trSafeValue("route_badge_normal", "Normal STEMwerk")' in script
+
+
+def test_single_track_footer_uses_shared_runtime_resolution_without_rocm_cuda_regression():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'footerDeviceDetail = deriveResolvedRuntimeFooter(footerDeviceDetail)' in script
+    assert 'local speedFmt = T("mt_footer_speed_line") or "Speed %.2fx realtime"' in script
+    assert 'local mtCancel = T("mt_cancel") or "ESC=cancel"' in script
+    assert 'local footerMethod = sanitizeUserFacingMethodLabel(footerDeviceDetail)' in script
+    assert 'elseif footerMethod ~= "" or tostring(footerDeviceDetail or "") ~= "" then' in script
+    assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
+    assert 'local mtSeg = T("mt_seg") or "Seg"' not in script
+    assert 'summaryLeft = summaryLeft .. " | " .. segText' not in script
+    assert 'return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short ~= "" and short or rawDeviceName)' in script
+    assert 'return string.format(trSafeValue("footer_device_cuda_runtime", "CUDA: %s"), short ~= "" and short or rawDeviceName)' in script
+    assert 'return trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
 
 
 def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations():
@@ -3609,7 +3639,9 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert "if not isDrumKitWorkflowActive() then" in script
-    assert 'leftParts[#leftParts + 1] = string.format("%s: %s", mtSeg, "30")' in script
+    assert 'local singleTrackMethodLabel = ""' in script
+    assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
+    assert 'local segText = string.format("%s: %s", mtSeg, "30")' not in script
     assert 'footer_device_auto_resolved_gpu = "Auto → GPU/ROCm: %s"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU runtime"' in langs
     assert 'footer_device_auto_gpu_intent = "Auto [GPU]"' in langs
@@ -4176,9 +4208,24 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
 
     assert 'function attachResultRuntimeMetadata(data)' in script
     assert 'local state = type(progressState) == "table" and progressState or nil' in script
+    assert 'data.deviceName = tostring((state and state._deviceName) or "")' in script
+    assert 'data.effectiveDevice = tostring((state and state._effectiveDevice) or "")' in script
     assert 'function sanitizeUserFacingMethodLabel(candidate)' in script
+    assert 'function resolveSingleTrackMethodLabel(data)' in script
+    assert 'if methodLabel == "CPU" then return "CPU" end' in script
+    assert 'if methodLabel ~= "" then return "GPU" end' in script
     assert 'return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")' in script
     assert 'string.format(T("result_method_line") or "Method: %s", methodLabel)' in script
+    assert 'local methodLabel = resolveSingleTrackMethodLabel(data)' in script
+    assert 'line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)' in script
+    assert 'resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")' in script
+    assert 'if (not data.methodLabel or data.methodLabel == "") and data.backend == "gpu" then' in script
+    assert 'data.methodLabel = sanitizeUserFacingMethodLabel("gpu")' in script
+    assert 'local preferredId, preferredName = line:match("auto_selected_preferred=([%w%-%_:%.]+)%s*%((.+)%)")' in script
+    assert 'local effectiveDevice = line:match("effective_device=([%w_:%-]+)")' in script
+    assert 'if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then' in script
+    assert 'progressState._effectiveDevice = info.effectiveDevice' in script
+    assert 'progressState._stage2Device or progressState._stage1Device or progressState._effectiveDevice' in script
 
 
 def test_result_window_hides_user_facing_reason_lines_for_backend_tokens():
