@@ -3423,7 +3423,7 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_label_1_of_2' in progress_render
     assert 'progress_stage_label_2_of_2' in progress_render
     assert 'isExtractDrumKitProgress()' in progress_render
-    assert 'progress_stage2_serialized_caption' in main_script
+    assert 'progress_stage2_serialized_caption' not in main_script
     assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' not in main_script
 
 
@@ -3470,7 +3470,7 @@ def test_drumkit_ui_strings_use_safe_translation_resolution():
     assert 'routeLeft = routeLeft .. " · " .. deviceIntent' in script
     assert 'routeLeft = routeLeft .. " · " .. tostring(deviceDetail)' not in script
     assert 'directSummary = directSummary .. " · " .. deviceIntent' in script
-    assert 'if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then' in script
+    assert 'if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then' not in script
     assert 'stage2Compact = stage2Compact .. " " .. tostring(deviceDetail)' not in script
     assert 'progress_dks_extract_route_summary' in script
     assert 'local routeSummaryLeft, routeSummaryRight = buildProgressRouteSummary(deviceDetail)' in script
@@ -3690,6 +3690,18 @@ def test_multitrack_progress_scroll_uses_mouse_wheel_delta_tracking():
     assert "lastMouseWheel = 0," in script
     assert 'local wheelDelta = (tonumber(mouseWheel) or 0) - (tonumber(multiTrackQueue.lastMouseWheel) or 0)' in script
     assert 'multiTrackQueue.lastMouseWheel = tonumber(mouseWheel) or 0' in script
+
+
+def test_multitrack_footer_hides_internal_stage2_scheduling_copy():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert "progress_stage2_serialized_caption" not in script
+    assert 'local mtTime = T("mt_time") or "Time"' in script
+    assert 'local etaText = ""' in script
+    assert 'local capLabel = T("mt_parallel_cap") or "Parallel cap %d"' in script
+    assert "deriveMultiTrackRuntimeFooter(activeJob)" in script
+    assert 'local speedFmt = trSafeProgress("mt_footer_speed_line", "Speed %.2fx realtime")' in script
+    assert 'rightParts[#rightParts + 1] = string.format("%s (%s, %d:%02d)", currentLabel, audioDurStr, jobMins, jobSecs)' in script
 
 
 def test_multitrack_progress_uses_route_aware_monotonic_units():

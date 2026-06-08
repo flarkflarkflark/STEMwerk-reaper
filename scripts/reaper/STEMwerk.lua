@@ -14429,9 +14429,6 @@ function buildProgressRouteSummary(deviceDetail)
             and trSafeValue("progress_stage_label_1_of_2", "Stage 1/2")
             or trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")
         local routeSummary = trSafeValue("progress_dks_extract_route_summary", "Drums extract → Kit Split")
-        if multiTrackQueue and multiTrackQueue.active and SETTINGS and SETTINGS.parallelProcessing then
-            routeSummary = routeSummary .. " · " .. trSafeValue("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
-        end
         local routeLeft = activeProcessingRouteBadge() .. " · " .. stageBadge
         local deviceIntent = buildDksFooterDeviceIntent(deviceDetail)
         if deviceIntent ~= "" then
@@ -20304,9 +20301,6 @@ function drawMultiTrackProgressWindow()
             local etaMins = math.floor(eta / 60)
             local etaSecs = math.floor(eta % 60)
             summaryLine2 = summaryLine2 .. string.format(" | %s %d:%02d", tostring(T("eta_label") or "ETA:"), etaMins, etaSecs)
-        end
-        if isExtractDrumKitWorkflowActive() then
-            summaryLine2 = summaryLine2 .. " · " .. trSafeProgress("progress_stage2_serialized_caption", "Stage 2 serialized for stability")
         end
     end
 
