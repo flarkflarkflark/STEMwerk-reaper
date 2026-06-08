@@ -60,6 +60,8 @@ DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4
 DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
 BENCHMARK_CPU_CAPS = {1, 2, 4}
+BENCHMARK_MPS_CAP_MIN = 1
+BENCHMARK_MPS_CAP_MAX = 8
 DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
 def _ts() -> str:
@@ -160,6 +162,27 @@ def _read_benchmark_dks_stage2_cap_request() -> tuple[Optional[int], str]:
     return None, raw
 
 
+def _read_benchmark_mps_cap_request(env_name: str) -> tuple[Optional[int], str]:
+    raw = str(os.environ.get(env_name) or "").strip()
+    if raw == "":
+        return None, "unset"
+    try:
+        requested = int(raw)
+    except ValueError:
+        return None, raw
+    if BENCHMARK_MPS_CAP_MIN <= requested <= BENCHMARK_MPS_CAP_MAX:
+        return requested, raw
+    return None, raw
+
+
+def _read_benchmark_dks_stage2_mps_cap_request() -> tuple[Optional[int], str, str]:
+    requested, raw = _read_benchmark_mps_cap_request("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP")
+    if raw != "unset":
+        return requested, raw, "STEMWERK_BENCH_DKS_STAGE2_MPS_CAP"
+    requested_cap, raw_cap = _read_benchmark_dks_stage2_cap_request()
+    return requested_cap, raw_cap, "STEMWERK_BENCH_DKS_STAGE2_CAP"
+
+
 def _read_benchmark_cpu_cap_request(env_name: str) -> tuple[Optional[int], str]:
     raw = str(os.environ.get(env_name) or "").strip()
     if raw == "":
@@ -245,6 +268,24 @@ def _resolve_dks_extract_stage2_benchmark_cap(stage2_backend: str) -> tuple[Opti
     return requested_cap, raw_cap, requested_cap, ""
 
 
+def _resolve_dks_extract_stage2_mps_benchmark_cap(stage2_backend: str) -> tuple[Optional[int], str, int, str, str]:
+    requested_cap, raw_cap, env_name = _read_benchmark_dks_stage2_mps_cap_request()
+    applied_cap = 1
+    ignored_reason = ""
+
+    if requested_cap is None:
+        if raw_cap == "unset":
+            ignored_reason = "not_requested"
+        else:
+            ignored_reason = "invalid_request"
+        return requested_cap, raw_cap, applied_cap, ignored_reason, env_name
+
+    if stage2_backend != "mps":
+        return requested_cap, raw_cap, applied_cap, "backend_not_mps", env_name
+
+    return requested_cap, raw_cap, max(1, requested_cap), "", env_name
+
+
 def _benchmark_cpu_count() -> Optional[int]:
     try:
         cpu_count = os.cpu_count()
@@ -324,8 +365,17 @@ def _resolve_dks_extract_stage2_cpu_benchmark_cap(stage2_backend: str) -> tuple[
 
 def _benchmark_resource_sampling_requested() -> bool:
     gpu_cap = str(os.environ.get("STEMWERK_BENCH_GPU_CAP") or "").strip()
+    mps_cap = str(os.environ.get("STEMWERK_BENCH_MPS_CAP") or "").strip()
+    stage1_mps_cap = str(os.environ.get("STEMWERK_BENCH_DKS_STAGE1_MPS_CAP") or "").strip()
+    stage2_mps_cap = str(os.environ.get("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP") or "").strip()
     sampling = str(os.environ.get("STEMWERK_BENCH_RESOURCE_SAMPLING") or "").strip().lower()
-    return gpu_cap != "" or sampling in {"1", "true", "yes", "on"}
+    return (
+        gpu_cap != ""
+        or mps_cap != ""
+        or stage1_mps_cap != ""
+        or stage2_mps_cap != ""
+        or sampling in {"1", "true", "yes", "on"}
+    )
 
 
 def _read_linux_cpu_times() -> Optional[tuple[int, int]]:
@@ -1040,7 +1090,10 @@ def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):
     """Throttle DrumSep stage 2 for Drum Split multi runs with backend-aware caps."""
     stage2_backend = _detect_dks_extract_stage2_backend(stage2_backend)
     requested_cap, raw_cap, effective_cap, ignored_reason = _resolve_dks_extract_stage2_benchmark_cap(stage2_backend)
+    mps_requested_cap, mps_raw_cap, mps_effective_cap, mps_ignored_reason, mps_env_name = _resolve_dks_extract_stage2_mps_benchmark_cap(stage2_backend)
     cpu_requested_cap, cpu_raw_cap, cpu_effective_cap, cpu_ignored_reason, cpu_env_name = _resolve_dks_extract_stage2_cpu_benchmark_cap(stage2_backend)
+    if mps_requested_cap is not None and stage2_backend == "mps":
+        effective_cap = mps_effective_cap
     if cpu_requested_cap is not None:
         effective_cap = cpu_effective_cap
     batch_root = output_root.parent if output_root.parent.name.startswith("STEMwerk_") else output_root
@@ -1052,6 +1105,10 @@ def _dks_extract_stage2_lock(output_root: Path, stage2_backend: str = ""):
     print(f"bench_dks_stage2_cap_requested={requested_cap if requested_cap is not None else raw_cap}", file=sys.stderr)
     print(f"bench_dks_stage2_cap_applied={effective_cap}", file=sys.stderr)
     print(f"bench_dks_stage2_cap_ignored_reason={ignored_reason}", file=sys.stderr)
+    print(f"bench_dks_stage2_mps_cap_env={mps_env_name}", file=sys.stderr)
+    print(f"bench_dks_stage2_mps_cap_requested={mps_requested_cap if mps_requested_cap is not None else mps_raw_cap}", file=sys.stderr)
+    print(f"bench_dks_stage2_mps_cap_applied={mps_effective_cap}", file=sys.stderr)
+    print(f"bench_dks_stage2_mps_cap_ignored_reason={mps_ignored_reason}", file=sys.stderr)
     print(f"bench_cpu_cap_env={cpu_env_name}", file=sys.stderr)
     print(f"bench_cpu_cap_requested={cpu_requested_cap if cpu_requested_cap is not None else cpu_raw_cap}", file=sys.stderr)
     print(f"bench_cpu_cap_applied={cpu_effective_cap}", file=sys.stderr)

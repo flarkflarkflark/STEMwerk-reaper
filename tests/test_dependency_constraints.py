@@ -637,10 +637,10 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
     assert "STEMWERK_BENCH_GPU_CAP" in script
-    assert "local function readBenchmarkGpuCapRequest()" in script
+    assert "function readBenchmarkGpuCapRequest()" in script
     assert "if requested == 2 or requested == 4 or requested == 8 then" in script
-    assert "local function appendBenchmarkGpuCapDiagnostics(logFile)" in script
-    assert "local function benchmarkGpuCapIgnoredReasonForPolicy(policy)" in script
+    assert "function appendBenchmarkGpuCapDiagnostics(logFile)" in script
+    assert "function benchmarkGpuCapIgnoredReasonForPolicy(policy)" in script
     assert "benchmarkGpuCapRequested" in script
     assert "benchmarkGpuCapApplied" in script
     assert "benchmarkGpuCapIgnoredReason" in script
@@ -694,6 +694,36 @@ def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logg
     assert 'workflow_source=" .. benchmarkWorkflowSource' in script
     assert 'workflow_mode=" .. benchmarkWorkflowMode' in script
     assert 'device=" .. benchmarkDevice' in script
+
+
+def test_runtime_scheduler_benchmark_mps_cap_override_is_benchmark_only_stage_aware_and_logged():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert "STEMWERK_BENCH_MPS_CAP" in script
+    assert "STEMWERK_BENCH_DKS_STAGE1_MPS_CAP" in script
+    assert "function readBenchmarkMpsCapRequest(envName)" in script
+    assert "function readBenchmarkMpsCapRequestForPolicy(route, stage)" in script
+    assert 'return stageRequested, stageRaw, "STEMWERK_BENCH_DKS_STAGE1_MPS_CAP"' in script
+    assert 'return globalRequested, globalRaw, "STEMWERK_BENCH_MPS_CAP"' in script
+    assert "function benchmarkMpsCapIgnoredReasonForPolicy(policy, requestedParallel)" in script
+    assert 'return "parallel_not_requested"' in script
+    assert 'return "directml_not_mps"' in script
+    assert 'return backend == "" and "backend_unknown" or "backend_not_mps"' in script
+    assert "function applyBenchmarkMpsCapToPolicy(policy, opts)" in script
+    assert 'policy.reason = "bench_mps_cap" .. tostring(requestedCap)' in script
+    assert 'policy.reason = "bench_dks_stage1_mps_cap" .. tostring(requestedCap)' in script
+    assert "benchmarkMpsCapRequested" in script
+    assert "benchmarkMpsCapApplied" in script
+    assert "benchmarkMpsCapIgnoredReason" in script
+    assert "benchmarkMpsCapEnv" in script
+    assert "bench_mps_cap_requested=" in script
+    assert "bench_mps_cap_applied=" in script
+    assert "bench_mps_cap_ignored_reason=" in script
+    assert "bench_dks_stage1_mps_cap_requested=" in script
+    assert "bench_dks_stage1_mps_cap_applied=" in script
+    assert "bench_dks_stage1_mps_cap_ignored_reason=" in script
+    assert 'local hasMps = content:find("bench_mps_cap_requested=", 1, true) ~= nil' in script
+    assert "appendBenchmarkMpsCapDiagnostics(logFile)" in script
 
 
 def test_runtime_scheduler_benchmark_cpu_cap_override_is_cpu_only_stage_aware_and_logged():
@@ -2005,6 +2035,30 @@ def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_res
     assert module._resolve_dks_extract_stage2_benchmark_cap("cpu") == (1, "1", 1, "")
 
 
+def test_drumkit_stage2_mps_benchmark_cap_parser_prefers_mps_specific_env_and_keeps_generic_precedence_clear(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
+    assert module._read_benchmark_dks_stage2_mps_cap_request() == (None, "unset", "STEMWERK_BENCH_DKS_STAGE2_CAP")
+    assert module._resolve_dks_extract_stage2_mps_benchmark_cap("mps") == (None, "unset", 1, "not_requested", "STEMWERK_BENCH_DKS_STAGE2_CAP")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_CAP", "2")
+    assert module._read_benchmark_dks_stage2_mps_cap_request() == (2, "2", "STEMWERK_BENCH_DKS_STAGE2_CAP")
+    assert module._resolve_dks_extract_stage2_mps_benchmark_cap("mps") == (2, "2", 2, "", "STEMWERK_BENCH_DKS_STAGE2_CAP")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP", "4")
+    assert module._read_benchmark_dks_stage2_mps_cap_request() == (4, "4", "STEMWERK_BENCH_DKS_STAGE2_MPS_CAP")
+    assert module._resolve_dks_extract_stage2_mps_benchmark_cap("mps") == (4, "4", 4, "", "STEMWERK_BENCH_DKS_STAGE2_MPS_CAP")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP", "9")
+    assert module._read_benchmark_dks_stage2_mps_cap_request() == (None, "9", "STEMWERK_BENCH_DKS_STAGE2_MPS_CAP")
+    assert module._resolve_dks_extract_stage2_mps_benchmark_cap("mps") == (None, "9", 1, "invalid_request", "STEMWERK_BENCH_DKS_STAGE2_MPS_CAP")
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP", "2")
+    assert module._resolve_dks_extract_stage2_mps_benchmark_cap("cpu") == (2, "2", 1, "backend_not_mps", "STEMWERK_BENCH_DKS_STAGE2_MPS_CAP")
+
+
 def test_drumkit_stage2_cpu_benchmark_cap_parser_accepts_stage_override_and_global_fallback(monkeypatch):
     module = _load_audio_separator_process_module()
 
@@ -2052,6 +2106,33 @@ def test_drumkit_stage2_default_cap_stays_conservative_for_mps_and_unknown_backe
     assert module._resolve_dks_extract_stage2_benchmark_cap("mps") == (None, "unset", 1, "not_requested")
     assert module._resolve_dks_extract_stage2_benchmark_cap("directml") == (None, "unset", 1, "not_requested")
     assert module._resolve_dks_extract_stage2_benchmark_cap("cpu") == (None, "unset", 1, "not_requested")
+
+
+def test_dks_extract_stage2_lock_prefers_mps_benchmark_cap_for_mps_backend(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_CPU_CAP", raising=False)
+    monkeypatch.delenv("STEMWERK_BENCH_DKS_STAGE2_CPU_CAP", raising=False)
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP", "2")
+
+    with module._dks_extract_stage2_lock(tmp_path, "mps"):
+        pass
+    captured = capsys.readouterr()
+    assert "bench_dks_stage2_mps_cap_requested=2" in captured.err
+    assert "bench_dks_stage2_mps_cap_applied=2" in captured.err
+    assert "bench_dks_stage2_mps_cap_ignored_reason=" in captured.err
+    assert "dks_extract_stage2_effective_cap=2" in captured.err
+    assert "lua_dks_extract_stage2_concurrency_cap=2" in captured.err
+    assert "dks_extract_stage2_backend=mps" in captured.err
+
+    monkeypatch.setenv("STEMWERK_BENCH_DKS_STAGE2_MPS_CAP", "bad")
+    with module._dks_extract_stage2_lock(tmp_path, "mps"):
+        pass
+    captured = capsys.readouterr()
+    assert "bench_dks_stage2_mps_cap_requested=bad" in captured.err
+    assert "bench_dks_stage2_mps_cap_applied=1" in captured.err
+    assert "bench_dks_stage2_mps_cap_ignored_reason=invalid_request" in captured.err
+    assert "dks_extract_stage2_effective_cap=1" in captured.err
 
 
 def test_drumkit_stage2_backend_detection_prefers_selected_runtime_markers_over_parent_executable():
@@ -2143,6 +2224,9 @@ def test_benchmark_resource_sampler_code_path_exposes_expected_files_and_gracefu
     monkeypatch.setenv("STEMWERK_BENCH_GPU_CAP", "4")
     assert module._benchmark_resource_sampling_requested() is True
     monkeypatch.delenv("STEMWERK_BENCH_GPU_CAP", raising=False)
+    monkeypatch.setenv("STEMWERK_BENCH_MPS_CAP", "2")
+    assert module._benchmark_resource_sampling_requested() is True
+    monkeypatch.delenv("STEMWERK_BENCH_MPS_CAP", raising=False)
     monkeypatch.setenv("STEMWERK_BENCH_RESOURCE_SAMPLING", "1")
     assert module._benchmark_resource_sampling_requested() is True
 

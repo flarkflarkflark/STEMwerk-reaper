@@ -17851,7 +17851,7 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     return policy
 end
 
-local function readBenchmarkGpuCapRequest()
+function readBenchmarkGpuCapRequest()
     local raw = tostring(os.getenv("STEMWERK_BENCH_GPU_CAP") or "")
     raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
     if raw == "" then
@@ -17859,6 +17859,22 @@ local function readBenchmarkGpuCapRequest()
     end
     local requested = tonumber(raw)
     if requested == 2 or requested == 4 or requested == 8 then
+        return requested, raw
+    end
+    return nil, raw
+end
+
+function readBenchmarkMpsCapRequest(envName)
+    local raw = tostring(os.getenv(envName or "STEMWERK_BENCH_MPS_CAP") or "")
+    raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
+    if raw == "" then
+        return nil, "unset"
+    end
+    local requested = tonumber(raw)
+    if requested then
+        requested = math.floor(requested)
+    end
+    if requested and requested >= 1 and requested <= 8 then
         return requested, raw
     end
     return nil, raw
@@ -17890,6 +17906,17 @@ function readBenchmarkCpuCapRequestForPolicy(route, stage)
     return globalRequested, globalRaw, "STEMWERK_BENCH_CPU_CAP"
 end
 
+function readBenchmarkMpsCapRequestForPolicy(route, stage)
+    local policyRoute = tostring(route or "")
+    local policyStage = tostring(stage or "")
+    if policyRoute == "dks_extract" and policyStage == "stage1_normal" then
+        local stageRequested, stageRaw = readBenchmarkMpsCapRequest("STEMWERK_BENCH_DKS_STAGE1_MPS_CAP")
+        return stageRequested, stageRaw, "STEMWERK_BENCH_DKS_STAGE1_MPS_CAP"
+    end
+    local globalRequested, globalRaw = readBenchmarkMpsCapRequest("STEMWERK_BENCH_MPS_CAP")
+    return globalRequested, globalRaw, "STEMWERK_BENCH_MPS_CAP"
+end
+
 function benchmarkCpuCapIgnoredReasonForPolicy(policy, cpuCount, ramGiB, requestedParallel)
     local backend = tostring(policy and policy.backend or "")
     local requested = requestedParallel == true
@@ -17904,6 +17931,21 @@ function benchmarkCpuCapIgnoredReasonForPolicy(policy, cpuCount, ramGiB, request
     end
     if backend ~= "cpu" then
         return backend == "" and "backend_unknown" or "backend_not_cpu"
+    end
+    return ""
+end
+
+function benchmarkMpsCapIgnoredReasonForPolicy(policy, requestedParallel)
+    local backend = tostring(policy and policy.backend or "")
+    local requested = requestedParallel == true
+    if not requested then
+        return "parallel_not_requested"
+    end
+    if backend == "directml" then
+        return "directml_not_mps"
+    end
+    if backend ~= "mps" then
+        return backend == "" and "backend_unknown" or "backend_not_mps"
     end
     return ""
 end
@@ -17952,7 +17994,38 @@ function applyBenchmarkCpuCapToPolicy(policy, opts)
     return requestedCap, rawCap, appliedCap, "", envName
 end
 
-local function appendBenchmarkGpuCapDiagnostics(logFile)
+function applyBenchmarkMpsCapToPolicy(policy, opts)
+    opts = opts or {}
+    local route = tostring(policy and policy.route or opts.route or "")
+    local stage = tostring(policy and policy.stage or opts.stage or "")
+    local jobCount = math.max(0, math.floor(tonumber(opts.jobCount or 0) or 0))
+    local requestedParallel = opts.requestedParallel == true
+    local requestedCap, rawCap, envName = readBenchmarkMpsCapRequestForPolicy(route, stage)
+    local appliedCap = policy and policy.cap or nil
+    local ignoredReason = ""
+
+    if requestedCap == nil then
+        ignoredReason = rawCap == "unset" and "not_requested" or "invalid_request"
+        return requestedCap, rawCap, appliedCap, ignoredReason, envName
+    end
+
+    ignoredReason = benchmarkMpsCapIgnoredReasonForPolicy(policy, requestedParallel)
+    if ignoredReason ~= "" then
+        return requestedCap, rawCap, appliedCap, ignoredReason, envName
+    end
+
+    appliedCap = math.max(1, math.min(jobCount, math.floor(requestedCap)))
+    policy.cap = appliedCap
+    policy.sequentialMode = appliedCap <= 1
+    if route == "dks_extract" and stage == "stage1_normal" then
+        policy.reason = "bench_dks_stage1_mps_cap" .. tostring(requestedCap)
+    else
+        policy.reason = "bench_mps_cap" .. tostring(requestedCap)
+    end
+    return requestedCap, rawCap, appliedCap, "", envName
+end
+
+function appendBenchmarkGpuCapDiagnostics(logFile)
     if not logFile or logFile == "" then
         return
     end
@@ -17977,6 +18050,47 @@ local function appendBenchmarkGpuCapDiagnostics(logFile)
     f:write("scheduler_policy_cap=" .. tostring(schedulerCap) .. "\n")
     f:write("lua_dks_scheduler_policy_cap=" .. tostring(multiTrackQueue and (multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") or "none") .. "\n")
     f:write("workflow_source=" .. tostring(multiTrackQueue and multiTrackQueue.workflowSource or "") .. "\n")
+    f:write("route=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyRoute or "") .. "\n")
+    f:write("stage=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyStage or "") .. "\n")
+    f:write("device=" .. tostring(effectiveRunDevice() or "") .. "\n")
+    f:write("backend=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyBackend or "") .. "\n")
+    f:write("\n")
+    f:close()
+end
+
+function appendBenchmarkMpsCapDiagnostics(logFile)
+    if not logFile or logFile == "" then
+        return
+    end
+
+    local raw = multiTrackQueue and multiTrackQueue.benchmarkMpsCapRaw or nil
+    local stage1Raw = multiTrackQueue and multiTrackQueue.benchmarkDksStage1MpsCapRaw or nil
+    local anyRequested = (raw and raw ~= "" and raw ~= "unset")
+        or (stage1Raw and stage1Raw ~= "" and stage1Raw ~= "unset")
+    if not anyRequested then
+        return
+    end
+
+    local f = io.open(logFile, "a")
+    if not f then
+        return
+    end
+
+    local schedulerCap = multiTrackQueue and (multiTrackQueue.schedulerPolicyCap or multiTrackQueue.parallelJobLimit or "none") or "none"
+    local effectiveCap = multiTrackQueue and (multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") or "none"
+    f:write("bench_mps_cap_env=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkMpsCapEnv or "") .. "\n")
+    f:write("bench_mps_cap_requested=" .. tostring(multiTrackQueue and (multiTrackQueue.benchmarkMpsCapRequested or multiTrackQueue.benchmarkMpsCapRaw) or "unset") .. "\n")
+    f:write("bench_mps_cap_applied=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkMpsCapApplied or "none") .. "\n")
+    f:write("bench_mps_cap_ignored_reason=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkMpsCapIgnoredReason or "") .. "\n")
+    f:write("bench_dks_stage1_mps_cap_requested=" .. tostring(multiTrackQueue and (multiTrackQueue.benchmarkDksStage1MpsCapRequested or multiTrackQueue.benchmarkDksStage1MpsCapRaw) or "unset") .. "\n")
+    f:write("bench_dks_stage1_mps_cap_applied=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkDksStage1MpsCapApplied or "none") .. "\n")
+    f:write("bench_dks_stage1_mps_cap_ignored_reason=" .. tostring(multiTrackQueue and multiTrackQueue.benchmarkDksStage1MpsCapIgnoredReason or "") .. "\n")
+    f:write("effective_parallel_cap=" .. tostring(effectiveCap) .. "\n")
+    f:write("scheduler_policy_cap=" .. tostring(schedulerCap) .. "\n")
+    f:write("lua_dks_scheduler_policy_cap=" .. tostring(multiTrackQueue and (multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") or "none") .. "\n")
+    f:write("parallelJobLimit=" .. tostring(multiTrackQueue and multiTrackQueue.parallelJobLimit or "none") .. "\n")
+    f:write("workflow_source=" .. tostring(multiTrackQueue and multiTrackQueue.workflowSource or "") .. "\n")
+    f:write("workflow_mode=" .. tostring(multiTrackQueue and multiTrackQueue.workflowMode or "") .. "\n")
     f:write("route=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyRoute or "") .. "\n")
     f:write("stage=" .. tostring(multiTrackQueue and multiTrackQueue.schedulerPolicyStage or "") .. "\n")
     f:write("device=" .. tostring(effectiveRunDevice() or "") .. "\n")
@@ -18025,6 +18139,8 @@ end
 
 _sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
     local _, raw = readBenchmarkGpuCapRequest()
+    local _, globalMpsRaw = readBenchmarkMpsCapRequest("STEMWERK_BENCH_MPS_CAP")
+    local _, dksStage1MpsRaw = readBenchmarkMpsCapRequest("STEMWERK_BENCH_DKS_STAGE1_MPS_CAP")
     if not logFile or logFile == "" then
         return
     end
@@ -18032,9 +18148,11 @@ _sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
     local _, globalCpuRaw = readBenchmarkCpuCapRequest("STEMWERK_BENCH_CPU_CAP")
     local _, dksStage1CpuRaw = readBenchmarkCpuCapRequest("STEMWERK_BENCH_DKS_STAGE1_CPU_CAP")
     local shouldPersistGpu = not (raw == nil or raw == "" or raw == "unset")
+    local shouldPersistMps = not (globalMpsRaw == nil or globalMpsRaw == "" or globalMpsRaw == "unset")
+        or not (dksStage1MpsRaw == nil or dksStage1MpsRaw == "" or dksStage1MpsRaw == "unset")
     local shouldPersistCpu = not (globalCpuRaw == nil or globalCpuRaw == "" or globalCpuRaw == "unset")
         or not (dksStage1CpuRaw == nil or dksStage1CpuRaw == "" or dksStage1CpuRaw == "unset")
-    if not shouldPersistGpu and not shouldPersistCpu then
+    if not shouldPersistGpu and not shouldPersistMps and not shouldPersistCpu then
         return
     end
 
@@ -18043,8 +18161,9 @@ _sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
         local content = existing:read("*a") or ""
         existing:close()
         local hasGpu = content:find("bench_gpu_cap_requested=", 1, true) ~= nil
+        local hasMps = content:find("bench_mps_cap_requested=", 1, true) ~= nil
         local hasCpu = content:find("bench_cpu_cap_requested=", 1, true) ~= nil
-        if (not shouldPersistGpu or hasGpu) and (not shouldPersistCpu or hasCpu) then
+        if (not shouldPersistGpu or hasGpu) and (not shouldPersistMps or hasMps) and (not shouldPersistCpu or hasCpu) then
             return
         end
     end
@@ -18052,12 +18171,15 @@ _sep.ensureBenchmarkGpuCapDiagnosticsPersisted = function(logFile)
     if shouldPersistGpu then
         appendBenchmarkGpuCapDiagnostics(logFile)
     end
+    if shouldPersistMps then
+        appendBenchmarkMpsCapDiagnostics(logFile)
+    end
     if shouldPersistCpu then
         appendBenchmarkCpuCapDiagnostics(logFile)
     end
 end
 
-local function benchmarkGpuCapIgnoredReasonForPolicy(policy)
+function benchmarkGpuCapIgnoredReasonForPolicy(policy)
     local backend = tostring(policy and policy.backend or "")
     local route = tostring(policy and policy.route or "")
     local stage = tostring(policy and policy.stage or "")
@@ -18066,6 +18188,17 @@ local function benchmarkGpuCapIgnoredReasonForPolicy(policy)
         return "directml_fixed_cap1"
     end
     if backend == "mps" then
+        local route = tostring(policy and policy.route or "")
+        local stage = tostring(policy and policy.stage or "")
+        local _, globalMpsRaw = readBenchmarkMpsCapRequest("STEMWERK_BENCH_MPS_CAP")
+        local _, stage1MpsRaw = readBenchmarkMpsCapRequest("STEMWERK_BENCH_DKS_STAGE1_MPS_CAP")
+        if route == "dks_extract" and stage == "stage1_normal" then
+            if stage1MpsRaw ~= "unset" then
+                return ""
+            end
+        elseif globalMpsRaw ~= "unset" then
+            return ""
+        end
         return "mps_fixed_cap1"
     end
     if backend ~= "gpu" then
@@ -18636,6 +18769,13 @@ _sep.runSingleTrackSeparation = function(trackList)
             cpuCount = detectLogicalCpuCount(),
             ramGiB = detectSystemRamGiB(),
         })
+    local benchmarkMpsCapRequested, benchmarkMpsCapRaw, benchmarkMpsCapApplied, benchmarkMpsCapIgnoredReason, benchmarkMpsCapEnv =
+        applyBenchmarkMpsCapToPolicy(schedulerPolicy, {
+            route = schedulerRoute,
+            stage = schedulerStage,
+            requestedParallel = requestedParallel,
+            jobCount = #trackJobs,
+        })
 
     local benchmarkGpuCapRequested, benchmarkGpuCapRaw = readBenchmarkGpuCapRequest()
     local benchmarkGpuCapApplied = schedulerPolicy.cap
@@ -18685,6 +18825,19 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.benchmarkCpuCapIgnoredReason = benchmarkCpuCapIgnoredReason
     multiTrackQueue.benchmarkDksStage1CpuCapRaw = (schedulerRoute == "dks_extract" and schedulerStage == "stage1_normal")
         and select(2, readBenchmarkCpuCapRequest("STEMWERK_BENCH_DKS_STAGE1_CPU_CAP")) or "unset"
+    multiTrackQueue.benchmarkMpsCapEnv = benchmarkMpsCapEnv
+    multiTrackQueue.benchmarkMpsCapRaw = benchmarkMpsCapRaw
+    multiTrackQueue.benchmarkMpsCapRequested = benchmarkMpsCapRequested
+    multiTrackQueue.benchmarkMpsCapApplied = benchmarkMpsCapApplied
+    multiTrackQueue.benchmarkMpsCapIgnoredReason = benchmarkMpsCapIgnoredReason
+    multiTrackQueue.benchmarkDksStage1MpsCapRaw = (schedulerRoute == "dks_extract" and schedulerStage == "stage1_normal")
+        and select(2, readBenchmarkMpsCapRequest("STEMWERK_BENCH_DKS_STAGE1_MPS_CAP")) or "unset"
+    multiTrackQueue.benchmarkDksStage1MpsCapRequested = (schedulerRoute == "dks_extract" and schedulerStage == "stage1_normal")
+        and benchmarkMpsCapRequested or nil
+    multiTrackQueue.benchmarkDksStage1MpsCapApplied = (schedulerRoute == "dks_extract" and schedulerStage == "stage1_normal")
+        and benchmarkMpsCapApplied or "none"
+    multiTrackQueue.benchmarkDksStage1MpsCapIgnoredReason = (schedulerRoute == "dks_extract" and schedulerStage == "stage1_normal")
+        and benchmarkMpsCapIgnoredReason or ""
     multiTrackQueue.benchmarkGpuCapRequested = benchmarkGpuCapRequested
     multiTrackQueue.benchmarkGpuCapApplied = benchmarkGpuCapApplied
     multiTrackQueue.benchmarkGpuCapIgnoredReason = benchmarkGpuCapIgnoredReason
@@ -18732,6 +18885,13 @@ _sep.runSingleTrackSeparation = function(trackList)
             .. "\nbench_cpu_cap_requested=" .. tostring(benchmarkCpuCapRequested or benchmarkCpuCapRaw)
             .. "\nbench_cpu_cap_applied=" .. tostring(benchmarkCpuCapApplied or "none")
             .. "\nbench_cpu_cap_ignored_reason=" .. tostring(benchmarkCpuCapIgnoredReason or "")
+            .. "\nbench_mps_cap_env=" .. tostring(benchmarkMpsCapEnv or "")
+            .. "\nbench_mps_cap_requested=" .. tostring(benchmarkMpsCapRequested or benchmarkMpsCapRaw)
+            .. "\nbench_mps_cap_applied=" .. tostring(benchmarkMpsCapApplied or "none")
+            .. "\nbench_mps_cap_ignored_reason=" .. tostring(benchmarkMpsCapIgnoredReason or "")
+            .. "\nbench_dks_stage1_mps_cap_requested=" .. tostring(multiTrackQueue.benchmarkDksStage1MpsCapRequested or multiTrackQueue.benchmarkDksStage1MpsCapRaw)
+            .. "\nbench_dks_stage1_mps_cap_applied=" .. tostring(multiTrackQueue.benchmarkDksStage1MpsCapApplied or "none")
+            .. "\nbench_dks_stage1_mps_cap_ignored_reason=" .. tostring(multiTrackQueue.benchmarkDksStage1MpsCapIgnoredReason or "")
             .. "\nbench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw)
             .. "\nbench_gpu_cap_applied=" .. tostring(benchmarkGpuCapApplied or "none")
             .. "\nbench_gpu_cap_ignored_reason=" .. tostring(benchmarkGpuCapIgnoredReason or "")
@@ -18766,6 +18926,13 @@ _sep.runSingleTrackSeparation = function(trackList)
                 .. "bench_cpu_cap_requested=" .. tostring(benchmarkCpuCapRequested or benchmarkCpuCapRaw) .. "\n"
                 .. "bench_cpu_cap_applied=" .. tostring(benchmarkCpuCapApplied or "none") .. "\n"
                 .. "bench_cpu_cap_ignored_reason=" .. tostring(benchmarkCpuCapIgnoredReason or "") .. "\n"
+                .. "bench_mps_cap_env=" .. tostring(benchmarkMpsCapEnv or "") .. "\n"
+                .. "bench_mps_cap_requested=" .. tostring(benchmarkMpsCapRequested or benchmarkMpsCapRaw) .. "\n"
+                .. "bench_mps_cap_applied=" .. tostring(benchmarkMpsCapApplied or "none") .. "\n"
+                .. "bench_mps_cap_ignored_reason=" .. tostring(benchmarkMpsCapIgnoredReason or "") .. "\n"
+                .. "bench_dks_stage1_mps_cap_requested=" .. tostring(multiTrackQueue.benchmarkDksStage1MpsCapRequested or multiTrackQueue.benchmarkDksStage1MpsCapRaw) .. "\n"
+                .. "bench_dks_stage1_mps_cap_applied=" .. tostring(multiTrackQueue.benchmarkDksStage1MpsCapApplied or "none") .. "\n"
+                .. "bench_dks_stage1_mps_cap_ignored_reason=" .. tostring(multiTrackQueue.benchmarkDksStage1MpsCapIgnoredReason or "") .. "\n"
                 .. "bench_gpu_cap_requested=" .. tostring(benchmarkGpuCapRequested or benchmarkGpuCapRaw) .. "\n"
                 .. "bench_gpu_cap_applied=" .. tostring(benchmarkGpuCapApplied or "none") .. "\n"
                 .. "effective_parallel_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none") .. "\n"
