@@ -10330,12 +10330,13 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local cpuState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
         local devices = {}
         local function add(id, name, devType, descKey)
+            local rawName = tostring(name or "")
             local uiLabel = normalizeUserFacingDeviceLabel(name)
             devices[#devices + 1] = {
                 id = id,
-                name = uiLabel ~= "" and uiLabel or name,
-                fullName = uiLabel ~= "" and uiLabel or name,
-                uiName = uiLabel ~= "" and uiLabel or name,
+                name = uiLabel ~= "" and uiLabel or rawName,
+                fullName = rawName ~= "" and rawName or (uiLabel ~= "" and uiLabel or rawName),
+                uiName = uiLabel ~= "" and uiLabel or rawName,
                 type = devType,
                 descKey = descKey,
                 available = true,

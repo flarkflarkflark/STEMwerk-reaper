@@ -4133,10 +4133,11 @@ def test_direct_dks_device_labels_use_shared_user_facing_normalizer():
 
     assert 'function normalizeUserFacingDeviceLabel(name)' in script
     assert 'lbl = lbl:gsub("([Rr][Xx])(%d%d%d%d+)", "%1 %2")' in script
+    assert 'local rawName = tostring(name or "")' in script
     assert 'local uiLabel = normalizeUserFacingDeviceLabel(name)' in script
-    assert 'name = uiLabel ~= "" and uiLabel or name' in script
-    assert 'fullName = uiLabel ~= "" and uiLabel or name' in script
-    assert 'uiName = uiLabel ~= "" and uiLabel or name' in script
+    assert 'name = uiLabel ~= "" and uiLabel or rawName' in script
+    assert 'fullName = rawName ~= "" and rawName or (uiLabel ~= "" and uiLabel or rawName)' in script
+    assert 'uiName = uiLabel ~= "" and uiLabel or rawName' in script
     assert 'return normalizeUserFacingDeviceLabel(name)' in script
     assert 'local s = normalizeUserFacingDeviceLabel(name)' in script
 
@@ -4146,3 +4147,106 @@ def test_direct_dks_device_labels_keep_runtime_ids_unchanged():
 
     assert 'add("cuda:" .. tostring(idx), trimmed, "cuda", "device_cuda_desc")' in script
     assert 'add("cuda:0", "GPU 0", "cuda", "device_cuda_desc")' in script
+
+
+def test_direct_dks_integrated_amd_filter_uses_raw_runtime_name():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'if lower:find("780m graphics", 1, true) then return true end' in script
+    assert 'if lower:find("760m graphics", 1, true) then return true end' in script
+    assert 'if not isIntegratedAmdGraphicsName(dev.fullName or dev.name or "") then return false end' in script
+    assert 'local cname = tostring(candidate.fullName or candidate.name or "")' in script
+    assert 'fullName = rawName ~= "" and rawName or (uiLabel ~= "" and uiLabel or rawName)' in script
+
+
+def test_direct_dks_integrated_amd_filter_hides_780m_when_discrete_gpu_exists():
+    def normalize_user_label(name: str) -> str:
+        raw = " ".join(str(name or "").split())
+        lbl = raw
+        lbl = lbl.replace("(TM)", "").replace("(tm)", "")
+        lbl = lbl.replace("(R)", "").replace("(r)", "")
+        import re
+        lbl = re.sub(r"(?i)amd\s*radeon\s*", "", lbl)
+        lbl = re.sub(r"(?i)nvidia\s*geforce\s*", "", lbl)
+        lbl = re.sub(r"(?i)nvidia\s*", "", lbl)
+        lbl = re.sub(r"(?i)intel\s*", "", lbl)
+        lbl = re.sub(r"(?i)\(\s*external\s*\)", "eGPU", lbl)
+        lbl = re.sub(r"(?i)\(\s*internal\s*\)", "iGPU", lbl)
+        lbl = re.sub(r"(?i)\s*laptop\s*gpu\s*$", "", lbl)
+        lbl = re.sub(r"(?i)\s*graphics\s*$", "", lbl)
+        lbl = re.sub(r"(?i)\s*gpu\s*$", "", lbl)
+        lbl = re.sub(r"([Rr][Xx])(\d\d\d\d+)", r"\1 \2", lbl)
+        lbl = " ".join(lbl.split()).strip()
+        return lbl or raw
+
+    def is_integrated_amd_graphics_name(name: str) -> bool:
+        lower = str(name or "").lower()
+        if lower == "":
+            return False
+        if "780m graphics" in lower:
+            return True
+        if "760m graphics" in lower:
+            return True
+        if "graphics" in lower and "radeon" in lower and "rx" not in lower:
+            return True
+        return False
+
+    def build_direct_dks_devices(names):
+        devices = [
+            {"id": "auto", "name": "Auto", "fullName": "Auto", "uiName": "Auto"},
+            {"id": "cpu", "name": "CPU", "fullName": "CPU", "uiName": "CPU"},
+        ]
+        for idx, raw_name in enumerate(names):
+            raw_name = str(raw_name).strip()
+            if not raw_name:
+                continue
+            ui_label = normalize_user_label(raw_name)
+            devices.append(
+                {
+                    "id": f"cuda:{idx}",
+                    "name": ui_label,
+                    "fullName": raw_name,
+                    "uiName": ui_label,
+                }
+            )
+        return devices
+
+    def should_hide(dev, all_devices):
+        if not str(dev["id"]).startswith("cuda:"):
+            return False
+        if not is_integrated_amd_graphics_name(dev.get("fullName") or dev.get("name") or ""):
+            return False
+        for candidate in all_devices:
+            if candidate is dev:
+                continue
+            if str(candidate["id"]).startswith("cuda:") and not is_integrated_amd_graphics_name(
+                candidate.get("fullName") or candidate.get("name") or ""
+            ):
+                return True
+        return False
+
+    devices = build_direct_dks_devices(["AMD Radeon RX 9070", "AMD Radeon 780M Graphics"])
+    visible = [d["uiName"] for d in devices if not should_hide(d, devices)]
+
+    assert visible == ["Auto", "CPU", "RX 9070"]
+
+
+def test_direct_dks_integrated_amd_filter_keeps_same_behavior_for_direct_and_extract_routes():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'return workflowMode == DKS_WORKFLOW.WORKFLOW_DRUMKIT' in script
+    assert 'and DKS_WORKFLOW.isDrumKitSource(workflowSource)' in script
+
+
+def test_linux_auto_prefers_rx9070_and_ignores_skipped_780m():
+    module = _load_audio_separator_process_module()
+
+    devices = [
+        {"id": "cuda:0", "name": "AMD Radeon RX 9070"},
+        {"id": "cuda:1", "name": "AMD Radeon 780M Graphics"},
+    ]
+
+    preferred = module._prefer_linux_amd_device(devices, {"cuda:1"})
+
+    assert preferred is not None
+    assert preferred["id"] == "cuda:0"
