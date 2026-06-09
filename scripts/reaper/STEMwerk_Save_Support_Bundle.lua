@@ -1515,6 +1515,7 @@ local function collectLatestDksMarkers(cacheLogDir)
         "lua_dks_multi_worker_args", "lua_dks_multi_worker_exit_code", "lua_dks_multi_stdout_json_ok",
         "lua_dks_multi_output_count", "lua_dks_multi_import_created", "lua_dks_multi_import_total_created",
         "lua_dks_multi_no_stems_reason",
+        "drumsep_scheduler_backend", "drumsep_scheduler_policy", "drumsep_scheduler_uses_cpu_fallback",
         "scheduler_policy_route", "scheduler_policy_stage", "scheduler_policy_backend",
         "scheduler_policy_cap", "scheduler_policy_reason", "scheduler_policy_long_workload",
         "lua_dks_scheduler_policy_route", "lua_dks_scheduler_policy_stage", "lua_dks_scheduler_policy_cap",

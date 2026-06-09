@@ -14379,6 +14379,151 @@ function compactProgressDeviceToken(rawDevice, friendlyDetail)
     return raw
 end
 
+function readSchedulerEnvFile(path)
+    local f = io.open(path or "", "r")
+    if not f then return nil end
+    local kv = {}
+    for line in f:lines() do
+        local key, value = tostring(line or ""):match("^([A-Z0-9_]+)=(.*)$")
+        if key and key ~= "" then
+            kv[key] = value or ""
+        end
+    end
+    f:close()
+    return kv
+end
+
+function schedulerRuntimePythonDefault(dirname)
+    local runtime = getRuntimePaths and getRuntimePaths() or nil
+    local base = runtime and runtime.base or ""
+    if base == "" then return "" end
+    if OS == "Windows" then
+        return base .. PATH_SEP .. dirname .. PATH_SEP .. "Scripts" .. PATH_SEP .. "python.exe"
+    end
+    return base .. PATH_SEP .. dirname .. PATH_SEP .. "bin" .. PATH_SEP .. "python"
+end
+
+function schedulerResolveRuntimePython(state, defaultPath)
+    local candidates = {
+        tostring(state and state.PYTHON_PATH or ""),
+        tostring(state and state.VENV_PYTHON_PATH or ""),
+        tostring(state and state.VENV_PYTHON or ""),
+        tostring(defaultPath or ""),
+    }
+    for _, candidate in ipairs(candidates) do
+        local path = tostring(candidate or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if path ~= "" and fileExists(path) then
+            return path
+        end
+    end
+    return ""
+end
+
+function schedulerRuntimeStateOk(state, primaryKey, fallbackKey)
+    local primary = string.lower(tostring(state and state[primaryKey] or ""))
+    if primary == "ok" then return true end
+    local fallback = string.lower(tostring(state and state[fallbackKey] or ""))
+    return fallback == "ok"
+end
+
+function hasRuntimeSchedulerDeviceType(kind)
+    local needle = string.lower(tostring(kind or ""))
+    local list = RUNTIME_DEVICES or DEVICES or {}
+    for _, d in ipairs(list) do
+        local id = string.lower(tostring(d.id or ""))
+        local typ = string.lower(tostring(d.type or ""))
+        if typ == needle then return true end
+        if needle == "directml" and id:match("^directml:") then return true end
+        if needle == "cuda" and id:match("^cuda:") then return true end
+        if needle == "mps" and id == "mps" then return true end
+    end
+    return false
+end
+
+function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
+    local rawRequest = string.lower(tostring(requestedDevice or "auto"))
+    if rawRequest == "" then rawRequest = "auto" end
+    local policyRoute = string.lower(tostring(route or ""))
+    local resolvedModel = tostring(modelName or "")
+
+    local normalizedRequest = "unknown"
+    if rawRequest == "cpu" then
+        normalizedRequest = "cpu"
+    elseif rawRequest == "auto" then
+        normalizedRequest = "auto"
+    elseif rawRequest == "mps"
+        or rawRequest:match("^cuda")
+        or rawRequest:find("rocm", 1, true)
+        or rawRequest:find("directml", 1, true)
+        or rawRequest:find("gpu", 1, true)
+    then
+        normalizedRequest = "gpu"
+    end
+
+    if normalizedRequest == "cpu" then
+        return "cpu", "explicit_cpu"
+    end
+
+    if policyRoute == "dks_direct" then
+        local explicitMpsDirectDemix = rawRequest == "mps"
+            and (ARCH == "arm64" or ARCH == "aarch64")
+            and hasRuntimeSchedulerDeviceType("mps")
+            and resolvedModel == "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+        if explicitMpsDirectDemix then
+            return "mps", "explicit_mps_direct_demix"
+        end
+        -- Direct Kit currently runs the DrumSep helper on CPU for every non-MPS route.
+        -- The selected ROCm/CUDA runtime only decides which optional helper runtime is available,
+        -- not the actual helper device used for Direct Kit processing.
+        return "cpu", "fallback_cpu"
+    end
+
+    if rawRequest == "mps" and (ARCH == "arm64" or ARCH == "aarch64") and hasRuntimeSchedulerDeviceType("mps") then
+        return "mps", "explicit_mps"
+    end
+
+    local runtime = getRuntimePaths and getRuntimePaths() or nil
+    local stateDir = runtime and runtime.runtimeState or ""
+    if stateDir == "" then
+        return "", normalizedRequest == "gpu" and "gpu_prefer_rocm" or "auto_prefer_rocm"
+    end
+
+    local rocmState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {}
+    local cpuState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
+    local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefault(".venv-drumsep-rocm"))
+    local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
+    local rocmReady = schedulerRuntimeStateOk(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
+        and rocmPython ~= ""
+        and string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
+        and tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "") ~= ""
+    local cpuReady = schedulerRuntimeStateOk(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS")
+        and cpuPython ~= ""
+
+    if rocmReady then
+        return "rocm", normalizedRequest == "gpu" and "gpu_prefer_rocm" or "auto_prefer_rocm"
+    end
+    if cpuReady then
+        return "cpu", "fallback_cpu"
+    end
+    return "", normalizedRequest == "gpu" and "gpu_prefer_rocm" or "auto_prefer_rocm"
+end
+
+function activeDrumsepCpuFallbackLabel()
+    local requested = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
+    local selectionPolicy = tostring(progressState._drumsepRuntimeSelectionPolicy or progressState._drumsepSchedulerPolicy or ""):lower()
+    local schedulerFallback = tostring(progressState._drumsepSchedulerUsesCpuFallback or ""):lower()
+    local helperDevice = tostring(progressState._drumsepHelperDeviceArg or ""):lower()
+    local helperEnvProfile = tostring(progressState._drumsepSubprocessEnvProfile or ""):lower()
+    local helperCpu = helperDevice == "cpu" or helperEnvProfile == "cpu_isolated"
+    if requested == "cpu" or selectionPolicy == "explicit_cpu" then
+        return trSafeValue("progress_drumsep_helper_cpu", "DrumSep helper: CPU")
+    end
+    if helperCpu or selectionPolicy == "fallback_cpu" or schedulerFallback == "yes" then
+        return trSafeValue("progress_drumsep_cpu_fallback", "DrumSep CPU fallback")
+    end
+    return ""
+end
+
 function buildDksFooterDeviceIntent(deviceDetail)
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
     local runtimeSel = preferredRuntimeSelection(
@@ -14423,6 +14568,7 @@ function buildDksFooterDeviceIntent(deviceDetail)
 end
 
 function buildProgressRouteSummary(deviceDetail)
+    local helperLabel = activeDrumsepCpuFallbackLabel()
     if isExtractDrumKitWorkflowActive() then
         local stageIdx = inferProgressStageIndex(progressState.stage)
         local stageBadge = stageIdx == 1
@@ -14433,6 +14579,9 @@ function buildProgressRouteSummary(deviceDetail)
         local deviceIntent = buildDksFooterDeviceIntent(deviceDetail)
         if deviceIntent ~= "" then
             routeLeft = routeLeft .. " · " .. deviceIntent
+        end
+        if helperLabel ~= "" then
+            routeLeft = routeLeft .. " · " .. helperLabel
         end
         if deviceDetail and deviceDetail ~= "" then
             local displayDetail = compactProgressDeviceToken(deviceDetail, deviceDetail)
@@ -14445,6 +14594,9 @@ function buildProgressRouteSummary(deviceDetail)
         local deviceIntent = buildDksFooterDeviceIntent(deviceDetail)
         if deviceIntent ~= "" then
             directSummary = directSummary .. " · " .. deviceIntent
+        end
+        if helperLabel ~= "" then
+            directSummary = directSummary .. " · " .. helperLabel
         end
         return directSummary, compactProgressDeviceToken(deviceDetail, deviceDetail)
     end
@@ -14872,6 +15024,22 @@ function drawProgressWindow()
                 if selected then
                     info.runtimeSelected = selected
                 end
+                local drumsepSelectionPolicy = line:match("drumsep_runtime_selection_policy=([%w_:%-]+)")
+                if drumsepSelectionPolicy then
+                    info.drumsepRuntimeSelectionPolicy = drumsepSelectionPolicy
+                end
+                local drumsepSubprocessEnvProfile = line:match("drumsep_subprocess_env_profile=([%w_:%-]+)")
+                if drumsepSubprocessEnvProfile then
+                    info.drumsepSubprocessEnvProfile = drumsepSubprocessEnvProfile
+                end
+                local drumsepHelperDeviceArg = line:match("drumsep_helper_device_arg=([%w_:%-]+)")
+                if drumsepHelperDeviceArg then
+                    info.drumsepHelperDeviceArg = drumsepHelperDeviceArg
+                end
+                local drumsepFallbackReason = line:match("drumsep_runtime_fallback_reason=([^\r\n]+)")
+                if drumsepFallbackReason then
+                    info.drumsepRuntimeFallbackReason = drumsepFallbackReason
+                end
                 local req = line:match("normalized_device_request=([%w_:%-]+)")
                 if req then
                     info.normalizedRequest = req
@@ -14904,6 +15072,18 @@ function drawProgressWindow()
                 if backendRuntime then
                     info.backendRuntime = backendRuntime
                 end
+                local drumsepSchedulerBackend = line:match("drumsep_scheduler_backend=([%w_:%-]+)")
+                if drumsepSchedulerBackend then
+                    info.drumsepSchedulerBackend = drumsepSchedulerBackend
+                end
+                local drumsepSchedulerPolicy = line:match("drumsep_scheduler_policy=([%w_:%-]+)")
+                if drumsepSchedulerPolicy then
+                    info.drumsepSchedulerPolicy = drumsepSchedulerPolicy
+                end
+                local drumsepSchedulerUsesCpuFallback = line:match("drumsep_scheduler_uses_cpu_fallback=([%w_:%-]+)")
+                if drumsepSchedulerUsesCpuFallback then
+                    info.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback
+                end
                 if n >= 200 then break end
             end
             f:close()
@@ -14920,6 +15100,13 @@ function drawProgressWindow()
         progressState._stage1Device = info.stage1Device
         progressState._stage2Runtime = info.stage2Runtime
         progressState._stage2Device = info.stage2Device
+        progressState._drumsepRuntimeSelectionPolicy = info.drumsepRuntimeSelectionPolicy
+        progressState._drumsepSubprocessEnvProfile = info.drumsepSubprocessEnvProfile
+        progressState._drumsepHelperDeviceArg = info.drumsepHelperDeviceArg
+        progressState._drumsepRuntimeFallbackReason = info.drumsepRuntimeFallbackReason
+        progressState._drumsepSchedulerBackend = info.drumsepSchedulerBackend
+        progressState._drumsepSchedulerPolicy = info.drumsepSchedulerPolicy
+        progressState._drumsepSchedulerUsesCpuFallback = info.drumsepSchedulerUsesCpuFallback
     end
 
     -- === THEME TOGGLE (top right) ===
@@ -18750,6 +18937,20 @@ _sep.runSingleTrackSeparation = function(trackList)
     if schedulerBackend == "unknown" and hasRuntimeBackendType("cuda") then
         schedulerBackend = "gpu"
     end
+    local drumsepSchedulerBackend = ""
+    local drumsepSchedulerPolicy = ""
+    local drumsepSchedulerUsesCpuFallback = false
+    if isDrumKitMultiRun and schedulerRoute == "dks_direct" then
+        drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(
+            effectiveRunDevice(),
+            schedulerRoute,
+            effectiveRunModel()
+        )
+        drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu" and drumsepSchedulerPolicy == "fallback_cpu"
+        if drumsepSchedulerUsesCpuFallback then
+            schedulerBackend = "cpu"
+        end
+    end
     local schedulerPolicy = _sep.resolveSchedulerConcurrencyPolicy({
         route = schedulerRoute,
         stage = schedulerStage,
@@ -18760,6 +18961,18 @@ _sep.runSingleTrackSeparation = function(trackList)
         ramGiB = detectSystemRamGiB(),
         longWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy),
     })
+    if drumsepSchedulerUsesCpuFallback then
+        schedulerPolicy.backend = "cpu"
+        if schedulerRoute == "dks_direct" then
+            schedulerPolicy.reason = schedulerPolicy.sequentialMode
+                and "scheduler_dks_direct_drumsep_cpu_fallback_cap1"
+                or ("scheduler_dks_direct_drumsep_cpu_fallback_cap" .. tostring(schedulerPolicy.cap or 1))
+        elseif schedulerRoute == "dks_extract" then
+            schedulerPolicy.reason = schedulerPolicy.sequentialMode
+                and "scheduler_dks_extract_drumsep_cpu_fallback_cap1"
+                or ("scheduler_dks_extract_drumsep_cpu_fallback_cap" .. tostring(schedulerPolicy.cap or 1))
+        end
+    end
     local benchmarkCpuCapRequested, benchmarkCpuCapRaw, benchmarkCpuCapApplied, benchmarkCpuCapIgnoredReason, benchmarkCpuCapEnv =
         applyBenchmarkCpuCapToPolicy(schedulerPolicy, {
             route = schedulerRoute,
@@ -18815,6 +19028,9 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.schedulerPolicyBackend = schedulerPolicy.backend
     multiTrackQueue.schedulerPolicyReason = schedulerPolicy.reason
     multiTrackQueue.schedulerPolicyCap = schedulerPolicy.cap
+    multiTrackQueue.drumsepSchedulerBackend = drumsepSchedulerBackend
+    multiTrackQueue.drumsepSchedulerPolicy = drumsepSchedulerPolicy
+    multiTrackQueue.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback and "yes" or "no"
     multiTrackQueue.schedulerPolicyLongWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy)
     multiTrackQueue.sequentialMode = schedulerPolicy.sequentialMode and true or false
     multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil
@@ -18876,6 +19092,9 @@ _sep.runSingleTrackSeparation = function(trackList)
             .. "\nmodel_name=" .. benchmarkModelName
             .. "\ndevice=" .. benchmarkDevice
             .. "\nbackend=" .. benchmarkBackend
+            .. "\ndrumsep_scheduler_backend=" .. tostring(drumsepSchedulerBackend or "")
+            .. "\ndrumsep_scheduler_policy=" .. tostring(drumsepSchedulerPolicy or "")
+            .. "\ndrumsep_scheduler_uses_cpu_fallback=" .. tostring(drumsepSchedulerUsesCpuFallback and "yes" or "no")
             .. "\nscheduler_policy_stage=" .. tostring(multiTrackQueue.schedulerPolicyStage)
             .. "\nscheduler_policy_backend=" .. tostring(multiTrackQueue.schedulerPolicyBackend)
             .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")
@@ -18922,6 +19141,9 @@ _sep.runSingleTrackSeparation = function(trackList)
                 .. "model_name=" .. benchmarkModelName .. "\n"
                 .. "device=" .. benchmarkDevice .. "\n"
                 .. "backend=" .. benchmarkBackend .. "\n"
+                .. "drumsep_scheduler_backend=" .. tostring(drumsepSchedulerBackend or "") .. "\n"
+                .. "drumsep_scheduler_policy=" .. tostring(drumsepSchedulerPolicy or "") .. "\n"
+                .. "drumsep_scheduler_uses_cpu_fallback=" .. tostring(drumsepSchedulerUsesCpuFallback and "yes" or "no") .. "\n"
                 .. "bench_cpu_cap_env=" .. tostring(benchmarkCpuCapEnv or "") .. "\n"
                 .. "bench_cpu_cap_requested=" .. tostring(benchmarkCpuCapRequested or benchmarkCpuCapRaw) .. "\n"
                 .. "bench_cpu_cap_applied=" .. tostring(benchmarkCpuCapApplied or "none") .. "\n"

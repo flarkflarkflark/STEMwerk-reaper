@@ -773,6 +773,34 @@ def test_scheduler_policy_cpu_override_slice_keeps_default_normal_cpu_cap2_witho
     assert "applyBenchmarkCpuCapToPolicy(schedulerPolicy" in script
 
 
+def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    support = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert "function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)" in script
+    assert 'if policyRoute == "dks_direct" then' in script
+    assert 'return "mps", "explicit_mps_direct_demix"' in script
+    assert 'return "cpu", "fallback_cpu"' in script
+    assert 'drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(' in script
+    assert "effectiveRunModel()" in script
+    assert 'isDrumKitMultiRun and schedulerRoute == "dks_direct"' in script
+    assert 'drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu" and drumsepSchedulerPolicy == "fallback_cpu"' in script
+    assert 'if drumsepSchedulerUsesCpuFallback then' in script
+    assert 'schedulerBackend = "cpu"' in script
+    assert 'schedulerPolicy.reason = schedulerPolicy.sequentialMode' in script
+    assert '"scheduler_dks_direct_drumsep_cpu_fallback_cap1"' in script
+    assert '"scheduler_dks_extract_drumsep_cpu_fallback_cap1"' in script
+    assert '"scheduler_dks_direct_drumsep_cpu_fallback_cap" .. tostring(schedulerPolicy.cap or 1)' in script
+    assert '"scheduler_dks_extract_drumsep_cpu_fallback_cap" .. tostring(schedulerPolicy.cap or 1)' in script
+    assert 'multiTrackQueue.drumsepSchedulerBackend = drumsepSchedulerBackend' in script
+    assert 'multiTrackQueue.drumsepSchedulerPolicy = drumsepSchedulerPolicy' in script
+    assert 'multiTrackQueue.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback and "yes" or "no"' in script
+    assert 'drumsep_scheduler_backend=' in script
+    assert 'drumsep_scheduler_policy=' in script
+    assert 'drumsep_scheduler_uses_cpu_fallback=' in script
+    assert '"drumsep_scheduler_backend", "drumsep_scheduler_policy", "drumsep_scheduler_uses_cpu_fallback"' in support
+
+
 def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
     script = Path("scripts/reaper/STEMwerk_Dev_Project_State_Snapshot.lua").read_text()
 
@@ -2011,6 +2039,7 @@ def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
     assert '"drumsep_ld_library_path_contains_main_venv", "drumsep_path_starts_with_drumsep_venv"' in support_script
     assert '"lua_dks_extract_outputs_detected", "lua_dks_extract_output_count"' in support_script
     assert '"expected_drum_outputs", "actual_drum_outputs", "output_count_mismatch"' in support_script
+    assert '"drumsep_scheduler_backend", "drumsep_scheduler_policy", "drumsep_scheduler_uses_cpu_fallback"' in support_script
 
 
 def test_drumkit_stage2_benchmark_cap_parser_accepts_only_allowed_values_and_respects_backend_safety(monkeypatch):
@@ -3796,9 +3825,9 @@ def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations(
 
     assert "Zielordner für die finalen Stem-Dateien eingeben." in helpers
     assert "Audio auswählen oder Tracks/Items in REAPER hörbar machen." in helpers
-    assert '"device = "Gerät:"' in langs
-    assert '"selected = "Ausgewählt:"' in langs
-    assert '"tooltip_close = "STEMwerk schließen (ESC)"' in langs
+    assert 'device = "Gerät:"' in langs
+    assert 'selected = "Ausgewählt:"' in langs
+    assert 'tooltip_close = "STEMwerk schließen (ESC)"' in langs
 
 
 def test_direct_drumkit_tooltips_use_single_shortcut_and_route_scoped_expanded_copy():
@@ -3863,10 +3892,20 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "progressState._stage2Device" in script
     assert "progressState._stage1Device" in script
     assert "progressState._normalizedDeviceRequest" in script
+    assert "progressState._drumsepRuntimeSelectionPolicy" in script
+    assert "progressState._drumsepSubprocessEnvProfile" in script
+    assert "progressState._drumsepHelperDeviceArg" in script
+    assert "progressState._drumsepSchedulerPolicy" in script
+    assert "progressState._drumsepSchedulerUsesCpuFallback" in script
     assert "progressState._runtimeGpuCapable" in script
     assert "progressState._runtimeDeviceNames" in script
     assert "function shortRuntimeGpuName(name)" in script
+    assert "function activeDrumsepCpuFallbackLabel()" in script
     assert "function buildDksFooterDeviceIntent(deviceDetail)" in script
+    assert "local helperLabel = activeDrumsepCpuFallbackLabel()" in script
+    assert 'trSafeValue("progress_drumsep_cpu_fallback", "DrumSep CPU fallback")' in script
+    assert 'trSafeValue("progress_drumsep_helper_cpu", "DrumSep helper: CPU")' in script
+    assert 'local helperCpu = helperDevice == "cpu" or helperEnvProfile == "cpu_isolated"' in script
     assert "local first = s:match(\"^([^|,;]+)\") or s" in script
     assert 'local s = normalizeUserFacingDeviceLabel(name)' in script
     assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s")' in script
@@ -3883,6 +3922,8 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'local singleTrackMethodLabel = ""' in script
     assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
     assert 'local segText = string.format("%s: %s", mtSeg, "30")' not in script
+    assert "progress_drumsep_cpu_fallback = " in langs
+    assert "progress_drumsep_helper_cpu = " in langs
     assert 'footer_device_auto_resolved_gpu = "Auto → GPU/ROCm: %s"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU runtime"' in langs
     assert 'footer_device_auto_gpu_intent = "Auto [GPU]"' in langs
