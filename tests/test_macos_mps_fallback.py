@@ -300,7 +300,10 @@ def test_lua_and_i18n_expose_user_facing_apple_mps_labels_without_experimental_c
     assert 'if mpsAvailable and cpuReady then' in main
     assert 'add("mps", "Apple MPS", "mps", "device_mps_desc")' in main
     assert '"Apple MPS (Experimental)"' not in main
-    assert 'if sawMps then return "CPU" end' in main
+    assert 'return T("device_mps_label") or "Apple MPS"' in main
+    assert 'if sawMps then' in main
+    assert 'if (not directDksRoute) and OS == "macOS" and (ARCH == "arm64" or ARCH == "aarch64") then' in main
+    assert 'if sawMps then return "CPU" end' not in main
     assert 'schedulerBackend = "cpu"' in main
     for field in (
         "requested_device",

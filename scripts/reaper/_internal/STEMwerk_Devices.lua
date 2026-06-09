@@ -197,7 +197,7 @@ local function buildDeviceNoteFromEnvJson(envJson, devices)
             noteKey = "device_note_linux_cuda_build"
         end
 
-        if envJson:find('"cuda_available"%s*:%s*false') and OS ~= "Windows" then
+        if envJson:find('"cuda_available"%s*:%s*false') and OS ~= "Windows" and OS ~= "macOS" then
             noteKey = noteKey or "device_note_cuda_unavailable"
         end
         if envJson:find('"mps_available"%s*:%s*false') and OS == "macOS" then

@@ -4735,6 +4735,7 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
 def test_i18n_device_copy_matches_normal_auto_mps_behavior_without_experimental_label():
     languages = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
     devices = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
+    main = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
     assert 'device_auto_desc = "Automatically chooses the best available processing. On Apple Silicon, Auto uses Apple MPS for normal stems."' in languages
     assert 'device_auto_desc = "Kiest automatisch de beste beschikbare verwerking. Op Apple Silicon gebruikt Auto Apple MPS voor normale stems."' in languages
@@ -4747,6 +4748,11 @@ def test_i18n_device_copy_matches_normal_auto_mps_behavior_without_experimental_
     assert "Apple MPS (Experimenteel)" not in languages
     assert "Apple MPS (Experimentell)" not in languages
     assert '"Automatically chooses the best available processing."' in devices
+    assert 'OS ~= "Windows" and OS ~= "macOS"' in devices
+    assert 'noteKey = noteKey or "device_note_cuda_unavailable"' in devices
+    assert 'return T("device_mps_label") or "Apple MPS"' in main
+    assert 'if (not directDksRoute) and OS == "macOS" and (ARCH == "arm64" or ARCH == "aarch64") then' in main
+    assert 'if sawMps then return "CPU" end' not in main
 
 
 def test_drumsep_runtime_selector_reads_state_python_candidates_before_dedicated_runtime_paths():

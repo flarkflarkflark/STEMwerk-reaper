@@ -10884,7 +10884,12 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
                     end
                 end
             end
-            if sawMps then return "CPU" end
+            if sawMps then
+                if (not directDksRoute) and OS == "macOS" and (ARCH == "arm64" or ARCH == "aarch64") then
+                    return T("device_mps_label") or "Apple MPS"
+                end
+                return "Auto"
+            end
             return "Auto"
         end
         for _, d in ipairs(deviceList) do
