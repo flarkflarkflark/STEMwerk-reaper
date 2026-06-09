@@ -14440,6 +14440,16 @@ function hasRuntimeSchedulerDeviceType(kind)
     return false
 end
 
+function readBenchmarkDrumsepHelperDeviceRequest()
+    local raw = string.lower(tostring(os.getenv("STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE") or ""))
+    raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
+    if raw == "" then return nil, "unset" end
+    if raw == "cpu" or raw == "cuda" or raw == "rocm" then
+        return raw, raw
+    end
+    return nil, raw
+end
+
 function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
     local rawRequest = string.lower(tostring(requestedDevice or "auto"))
     if rawRequest == "" then rawRequest = "auto" end
@@ -14471,6 +14481,26 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
             and resolvedModel == "MDX23C-DrumSep-aufr33-jarredou.ckpt"
         if explicitMpsDirectDemix then
             return "mps", "explicit_mps_direct_demix"
+        end
+        local benchHelperDevice = select(1, readBenchmarkDrumsepHelperDeviceRequest())
+        if normalizedRequest ~= "cpu" and OS == "Linux" and benchHelperDevice == "rocm" then
+            local runtime = getRuntimePaths and getRuntimePaths() or nil
+            local stateDir = runtime and runtime.runtimeState or ""
+            local rocmState = stateDir ~= ""
+                and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {})
+                or {}
+            local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefault(".venv-drumsep-rocm"))
+            local rocmReady = schedulerRuntimeStateOk(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
+                and rocmPython ~= ""
+                and string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
+                and tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "") ~= ""
+            if rocmReady then
+                return "rocm", "bench_helper_rocm"
+            end
+        elseif normalizedRequest ~= "cpu" and OS == "Linux" and benchHelperDevice == "cuda"
+            and hasRuntimeSchedulerDeviceType("cuda")
+        then
+            return "cuda", "bench_helper_cuda"
         end
         -- Direct Kit currently runs the DrumSep helper on CPU for every non-MPS route.
         -- The selected ROCm/CUDA runtime only decides which optional helper runtime is available,
@@ -18949,6 +18979,8 @@ _sep.runSingleTrackSeparation = function(trackList)
         drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu" and drumsepSchedulerPolicy == "fallback_cpu"
         if drumsepSchedulerUsesCpuFallback then
             schedulerBackend = "cpu"
+        elseif drumsepSchedulerPolicy == "bench_helper_rocm" or drumsepSchedulerPolicy == "bench_helper_cuda" then
+            schedulerBackend = "gpu"
         end
     end
     local schedulerPolicy = _sep.resolveSchedulerConcurrencyPolicy({
@@ -19031,6 +19063,11 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.drumsepSchedulerBackend = drumsepSchedulerBackend
     multiTrackQueue.drumsepSchedulerPolicy = drumsepSchedulerPolicy
     multiTrackQueue.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback and "yes" or "no"
+    local benchDrumsepHelperDevice, benchDrumsepHelperDeviceRaw = readBenchmarkDrumsepHelperDeviceRequest()
+    multiTrackQueue.benchDrumsepHelperDeviceRequested = benchDrumsepHelperDeviceRaw
+    multiTrackQueue.benchDrumsepHelperDeviceApplied =
+        (drumsepSchedulerPolicy == "bench_helper_rocm" or drumsepSchedulerPolicy == "bench_helper_cuda")
+        and tostring(benchDrumsepHelperDevice or "") or "none"
     multiTrackQueue.schedulerPolicyLongWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy)
     multiTrackQueue.sequentialMode = schedulerPolicy.sequentialMode and true or false
     multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil
@@ -19095,6 +19132,8 @@ _sep.runSingleTrackSeparation = function(trackList)
             .. "\ndrumsep_scheduler_backend=" .. tostring(drumsepSchedulerBackend or "")
             .. "\ndrumsep_scheduler_policy=" .. tostring(drumsepSchedulerPolicy or "")
             .. "\ndrumsep_scheduler_uses_cpu_fallback=" .. tostring(drumsepSchedulerUsesCpuFallback and "yes" or "no")
+            .. "\nbench_drumsep_helper_device_requested=" .. tostring(benchDrumsepHelperDeviceRaw or "unset")
+            .. "\nbench_drumsep_helper_device_applied=" .. tostring(multiTrackQueue.benchDrumsepHelperDeviceApplied or "none")
             .. "\nscheduler_policy_stage=" .. tostring(multiTrackQueue.schedulerPolicyStage)
             .. "\nscheduler_policy_backend=" .. tostring(multiTrackQueue.schedulerPolicyBackend)
             .. "\nscheduler_policy_cap=" .. tostring(multiTrackQueue.parallelJobLimit or multiTrackQueue.schedulerPolicyCap or "none")

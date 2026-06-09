@@ -35,6 +35,33 @@ class DirectDemixValidationError(RuntimeError):
         self.reason = reason
 
 
+def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
+    requested = str(device or "").strip().lower()
+    if requested not in {"cuda", "rocm"}:
+        return True, "not_requested", {}
+    try:
+        import torch
+
+        hip = str(getattr(torch.version, "hip", "") or "")
+        cuda_version = str(getattr(torch.version, "cuda", "") or "")
+        available = bool(torch.cuda.is_available())
+        if requested == "rocm" and not hip:
+            return False, "rocm_no_hip", {"torch_hip": hip, "torch_cuda": cuda_version}
+        if requested == "cuda" and hip:
+            return False, "cuda_runtime_is_rocm", {"torch_hip": hip, "torch_cuda": cuda_version}
+        if not available:
+            return False, "torch_cuda_unavailable", {"torch_hip": hip, "torch_cuda": cuda_version}
+        tensor = torch.ones(1, device="cuda:0")
+        return True, "ok", {
+            "torch_hip": hip,
+            "torch_cuda": cuda_version,
+            "tensor_device": str(tensor.device),
+            "device_name": str(torch.cuda.get_device_name(0)),
+        }
+    except Exception as exc:
+        return False, f"{type(exc).__name__}:{exc}", {}
+
+
 def normalize_stem_name(value: str | Path) -> str | None:
     text = Path(value).stem if isinstance(value, Path) else str(value or "")
     normalized = "".join(ch for ch in text.lower() if ch.isalnum())
@@ -416,6 +443,26 @@ def run(args: argparse.Namespace) -> int:
         write_result(result_json, _error_payload("drumsep_helper_failed", "stage2_runtime", f"{type(exc).__name__}: {exc}"))
         return 1
 
+    gpu_probe_ok, gpu_probe_reason, gpu_probe = _probe_gpu_device(args.device)
+    print(f"drumsep_helper_gpu_probe_status={'ok' if gpu_probe_ok else 'failed'}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_reason={gpu_probe_reason}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_torch_hip={gpu_probe.get('torch_hip', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_torch_cuda={gpu_probe.get('torch_cuda', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_tensor_device={gpu_probe.get('tensor_device', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_device_name={gpu_probe.get('device_name', '')}", file=sys.stderr)
+    if not gpu_probe_ok:
+        write_result(
+            result_json,
+            _error_payload(
+                "drumsep_helper_gpu_probe_failed",
+                "stage2_runtime",
+                gpu_probe_reason,
+                requested_helper_device=args.device,
+                gpu_probe=gpu_probe,
+            ),
+        )
+        return 1
+
     try:
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_model_load_start", file=sys.stderr)
         print(f"drumsep_helper_start input={input_path}", file=sys.stderr)
@@ -591,7 +638,7 @@ def main() -> int:
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--log-file", default="")
     parser.add_argument("--route", choices=["wrapper", "mps-direct-demix"], default="wrapper")
-    parser.add_argument("--device", choices=["cpu", "mps"], default="cpu")
+    parser.add_argument("--device", choices=["cpu", "cuda", "rocm", "mps"], default="cpu")
     parser.add_argument("--requested-device", default="")
     parser.add_argument("--backend-runtime", default="")
     args = parser.parse_args()

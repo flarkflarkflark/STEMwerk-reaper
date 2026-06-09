@@ -62,6 +62,8 @@ DKS_EXTRACT_STAGE2_BENCHMARK_CAPS = {1, 2, 4}
 BENCHMARK_CPU_CAPS = {1, 2, 4}
 BENCHMARK_MPS_CAP_MIN = 1
 BENCHMARK_MPS_CAP_MAX = 8
+BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"
+BENCHMARK_DRUMSEP_HELPER_DEVICES = {"cpu", "cuda", "rocm"}
 DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
 def _ts() -> str:
@@ -1762,12 +1764,22 @@ def _drumsep_state_python_candidates(state: Dict[str, str], fallback: Path) -> L
 
 
 def _probe_drumsep_runtime_candidates(
-    candidates: List[Path], require_gpu: bool = False, require_mps: bool = False
+    candidates: List[Path],
+    require_gpu: bool = False,
+    require_mps: bool = False,
+    require_cuda: bool = False,
 ) -> Tuple[Optional[Path], str, Dict[str, Any], List[Dict[str, Any]]]:
     attempts: List[Dict[str, Any]] = []
     first_broken_detail = ""
     for candidate in candidates:
-        if require_mps:
+        if require_cuda:
+            ok, detail, payload = _verify_drumsep_runtime(
+                candidate,
+                require_gpu=require_gpu,
+                require_mps=require_mps,
+                require_cuda=True,
+            )
+        elif require_mps:
             ok, detail, payload = _verify_drumsep_runtime(
                 candidate,
                 require_gpu=require_gpu,
@@ -1787,6 +1799,7 @@ def _verify_drumsep_runtime(
     python_path: Path,
     require_gpu: bool = False,
     require_mps: bool = False,
+    require_cuda: bool = False,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     try:
         exists = python_path.exists()
@@ -1894,6 +1907,18 @@ print(json.dumps({
             return False, "rocm_cuda_unavailable", payload
         if len([d for d in device_names if str(d).strip()]) == 0:
             return False, "rocm_no_device_names", payload
+    if require_cuda:
+        hip = str(payload.get("torch_hip") or "")
+        cuda_available = bool(payload.get("torch_cuda_available"))
+        device_names = payload.get("device_names") or []
+        if not isinstance(device_names, list):
+            device_names = []
+        if hip:
+            return False, "cuda_runtime_is_rocm", payload
+        if not cuda_available:
+            return False, "cuda_unavailable", payload
+        if len([d for d in device_names if str(d).strip()]) == 0:
+            return False, "cuda_no_device_names", payload
     if require_mps:
         if not bool(payload.get("mps_built")):
             return False, "mps_not_built", payload
@@ -1927,6 +1952,7 @@ def _select_drumsep_runtime(
 
     normalized_request = _normalized_device_request(device_norm)
     explicit_cpu = normalized_request == "cpu"
+    bench_helper_device = str(os.environ.get(BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "") or "").strip().lower()
     print(f"normalized_device_request={normalized_request}", file=sys.stderr)
 
     if device_norm == "mps" and _is_darwin_arm64():
@@ -1977,6 +2003,31 @@ def _select_drumsep_runtime(
         reason = "missing" if cpu_detail == "missing" else "broken"
         return None, reason, info
 
+    if bench_helper_device == "cuda" and sys.platform.startswith("linux"):
+        print("drumsep_runtime_selection_policy=bench_helper_cuda", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
+        selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
+            cpu_candidates,
+            require_cuda=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_end detail={cuda_detail}", file=sys.stderr)
+        if selected_cuda_python is not None:
+            info = dict(cuda_payload or {})
+            info["kind"] = "cuda"
+            info["detail"] = cuda_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = "bench_helper_cuda"
+            info["cuda_python_attempts"] = cuda_attempts
+            return selected_cuda_python, "cuda", info
+        info = {
+            "cuda_detail": cuda_detail,
+            "cuda_python": str(cpu_python),
+            "cuda_python_attempts": cuda_attempts,
+            "selection_policy": "bench_helper_cuda_failed",
+        }
+        reason = "missing" if cuda_detail == "missing" else "broken"
+        return None, reason, info
+
     selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"
     print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_start", file=sys.stderr)
@@ -2021,6 +2072,45 @@ def _select_drumsep_runtime(
     }
     reason = "missing" if rocm_detail == "missing" and cpu_detail == "missing" else "broken"
     return None, reason, info
+
+
+def _resolve_benchmark_drumsep_helper_device(
+    requested_device: str,
+    runtime_kind: str,
+) -> Tuple[str, str]:
+    raw = str(os.environ.get(BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "") or "").strip().lower()
+    normalized_request = str(requested_device or "auto").strip().lower()
+    print(f"bench_drumsep_helper_device_env={raw or 'unset'}", file=sys.stderr)
+    print(f"bench_drumsep_helper_device_requested={raw or 'none'}", file=sys.stderr)
+
+    if not raw:
+        print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=not_requested", file=sys.stderr)
+        return "cpu", "not_requested"
+    if raw not in BENCHMARK_DRUMSEP_HELPER_DEVICES:
+        print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=invalid_request", file=sys.stderr)
+        return "cpu", "invalid_request"
+    if normalized_request == "cpu" and raw != "cpu":
+        print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=explicit_cpu", file=sys.stderr)
+        return "cpu", "explicit_cpu"
+    if raw == "cpu":
+        print("bench_drumsep_helper_device_applied=cpu", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=", file=sys.stderr)
+        return "cpu", ""
+    if not sys.platform.startswith("linux"):
+        print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=platform_not_linux", file=sys.stderr)
+        return "cpu", "platform_not_linux"
+    if str(runtime_kind or "").strip().lower() != raw:
+        print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=runtime_backend_mismatch", file=sys.stderr)
+        return "cpu", "runtime_backend_mismatch"
+
+    print(f"bench_drumsep_helper_device_applied={raw}", file=sys.stderr)
+    print("bench_drumsep_helper_device_ignored_reason=", file=sys.stderr)
+    return raw, ""
 
 
 def _run_direct_dks_drumsep_helper(
@@ -3428,6 +3518,7 @@ def main():
             print("PROGRESS:50:Starting Drum Kit runtime [Stage 2]...", flush=True)
             emit_phase("stage2_separate")
             stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)
+            helper_device, _ = _resolve_benchmark_drumsep_helper_device(device_preference, runtime_kind)
             with _dks_extract_stage2_lock(output_root, stage2_backend):
                 helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
                     drums_input,
@@ -3437,7 +3528,7 @@ def main():
                     requested_stage2_model,
                     run_model,
                     route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
-                    device="mps" if use_mps_direct_demix else "cpu",
+                    device="mps" if use_mps_direct_demix else helper_device,
                     requested_device=device_preference,
                     backend_runtime="mps" if use_mps_direct_demix else stage2_backend,
                 )
@@ -3574,6 +3665,7 @@ def main():
         emit_phase("separate_start")
         print(f"timing_utc={_ts()} drumsep_helper_start", file=sys.stderr)
         stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)
+        helper_device, _ = _resolve_benchmark_drumsep_helper_device(device_preference, runtime_kind)
         helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
             Path(args.input).resolve(),
             output_root,
@@ -3582,7 +3674,7 @@ def main():
             requested_stage2_model,
             run_model,
             route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
-            device="mps" if use_mps_direct_demix else "cpu",
+            device="mps" if use_mps_direct_demix else helper_device,
             requested_device=device_preference,
             backend_runtime="mps" if use_mps_direct_demix else stage2_backend,
         )

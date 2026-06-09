@@ -801,6 +801,25 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
     assert '"drumsep_scheduler_backend", "drumsep_scheduler_policy", "drumsep_scheduler_uses_cpu_fallback"' in support
 
 
+def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_visible():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    process = Path("scripts/reaper/audio_separator_process.py").read_text()
+    helper = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py").read_text()
+    support = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+
+    assert 'os.getenv("STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE")' in script
+    assert 'return "rocm", "bench_helper_rocm"' in script
+    assert 'return "cuda", "bench_helper_cuda"' in script
+    assert 'schedulerBackend = "gpu"' in script
+    assert 'BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"' in process
+    assert 'return "cpu", "not_requested"' in process
+    assert 'require_cuda=True' in process
+    assert 'device="mps" if use_mps_direct_demix else helper_device' in process
+    assert 'def _probe_gpu_device(device: str)' in helper
+    assert 'choices=["cpu", "cuda", "rocm", "mps"]' in helper
+    assert '"drumsep_helper_gpu_probe_status"' in support
+
+
 def test_dev_project_state_snapshot_helper_handles_benchmark_prep_request_and_defaults_to_read_only():
     script = Path("scripts/reaper/STEMwerk_Dev_Project_State_Snapshot.lua").read_text()
 

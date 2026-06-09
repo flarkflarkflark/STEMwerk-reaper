@@ -137,7 +137,69 @@ def test_auto_linux_and_rocm_do_not_activate_direct_demix(monkeypatch):
     assert helper_signature.parameters["route"].default == "wrapper"
     assert helper_signature.parameters["device"].default == "cpu"
     source = AUDIO_PROCESS.read_text(encoding="utf-8")
-    assert 'device="mps" if use_mps_direct_demix else "cpu"' in source
+    assert 'device="mps" if use_mps_direct_demix else helper_device' in source
+
+
+def test_benchmark_helper_device_defaults_to_cpu_and_rejects_invalid(monkeypatch, capsys):
+    module = _load_audio_process()
+    monkeypatch.delenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, raising=False)
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("cpu", "not_requested")
+
+    monkeypatch.setenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "vulkan")
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("cpu", "invalid_request")
+    assert "bench_drumsep_helper_device_ignored_reason=invalid_request" in capsys.readouterr().err
+
+
+def test_benchmark_rocm_helper_device_requires_matching_linux_runtime(monkeypatch):
+    module = _load_audio_process()
+    monkeypatch.setenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "rocm")
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("rocm", "")
+    assert module._resolve_benchmark_drumsep_helper_device("cpu", "rocm") == ("cpu", "explicit_cpu")
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "cpu") == ("cpu", "runtime_backend_mismatch")
+
+
+def test_helper_gpu_probe_accepts_rocm_tensor(monkeypatch):
+    helper = _load_helper()
+
+    class FakeVersion:
+        hip = "6.4"
+        cuda = None
+
+    class FakeCuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def get_device_name(_index):
+            return "AMD Test GPU"
+
+    class FakeTensor:
+        device = "cuda:0"
+
+    fake_torch = SimpleNamespace(
+        version=FakeVersion(),
+        cuda=FakeCuda(),
+        ones=lambda *_args, **_kwargs: FakeTensor(),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    ok, reason, payload = helper._probe_gpu_device("rocm")
+    assert ok is True
+    assert reason == "ok"
+    assert payload["tensor_device"] == "cuda:0"
+
+
+def test_helper_gpu_probe_rejects_cuda_request_on_rocm(monkeypatch):
+    helper = _load_helper()
+    fake_torch = SimpleNamespace(
+        version=SimpleNamespace(hip="6.4", cuda=None),
+        cuda=SimpleNamespace(is_available=lambda: True),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    ok, reason, _payload = helper._probe_gpu_device("cuda")
+    assert ok is False
+    assert reason == "cuda_runtime_is_rocm"
 
 
 def test_explicit_mps_runtime_selection_uses_normal_runtime_candidates(tmp_path, monkeypatch):
