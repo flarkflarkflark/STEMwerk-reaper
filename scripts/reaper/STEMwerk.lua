@@ -14537,7 +14537,10 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
         elseif normalizedRequest ~= "cpu" and OS == "Linux" and benchHelperDevice == "cuda"
             and hasRuntimeSchedulerDeviceType("cuda")
         then
-            return "cuda", "bench_helper_cuda"
+            -- The CUDA helper probe runs inside Python workers. Until a prelaunch
+            -- probe exists, schedule conservatively because workers may fail
+            -- closed to CPU after Lua has already selected concurrency.
+            return "cpu", "bench_helper_cuda_unverified_cpu_fallback"
         end
         -- Direct Kit currently runs the DrumSep helper on CPU for every non-MPS route.
         -- The selected ROCm/CUDA runtime only decides which optional helper runtime is available,
@@ -18921,10 +18924,14 @@ _sep.runSingleTrackSeparation = function(trackList)
             schedulerRoute,
             effectiveRunModel()
         )
-        drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu" and drumsepSchedulerPolicy == "fallback_cpu"
+        drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu"
+            and (
+                drumsepSchedulerPolicy == "fallback_cpu"
+                or drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback"
+            )
         if drumsepSchedulerUsesCpuFallback then
             schedulerBackend = "cpu"
-        elseif drumsepSchedulerPolicy == "bench_helper_rocm" or drumsepSchedulerPolicy == "bench_helper_cuda" then
+        elseif drumsepSchedulerPolicy == "bench_helper_rocm" then
             schedulerBackend = "gpu"
         end
     end
@@ -19010,9 +19017,13 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback and "yes" or "no"
     local benchDrumsepHelperDevice, benchDrumsepHelperDeviceRaw = readBenchmarkDrumsepHelperDeviceRequest()
     multiTrackQueue.benchDrumsepHelperDeviceRequested = benchDrumsepHelperDeviceRaw
-    multiTrackQueue.benchDrumsepHelperDeviceApplied =
-        (drumsepSchedulerPolicy == "bench_helper_rocm" or drumsepSchedulerPolicy == "bench_helper_cuda")
-        and tostring(benchDrumsepHelperDevice or "") or "none"
+    if drumsepSchedulerPolicy == "bench_helper_rocm" then
+        multiTrackQueue.benchDrumsepHelperDeviceApplied = tostring(benchDrumsepHelperDevice or "")
+    elseif drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback" then
+        multiTrackQueue.benchDrumsepHelperDeviceApplied = "unverified"
+    else
+        multiTrackQueue.benchDrumsepHelperDeviceApplied = "none"
+    end
     multiTrackQueue.schedulerPolicyLongWorkload = _sep.schedulerHasLongWorkload(trackJobs, totalAudioDurationForPolicy)
     multiTrackQueue.sequentialMode = schedulerPolicy.sequentialMode and true or false
     multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil

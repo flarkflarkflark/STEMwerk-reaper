@@ -781,10 +781,13 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
     assert 'if policyRoute == "dks_direct" then' in script
     assert 'return "mps", "explicit_mps_direct_demix"' in script
     assert 'return "cpu", "fallback_cpu"' in script
+    assert 'return "cpu", "bench_helper_cuda_unverified_cpu_fallback"' in script
     assert 'drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(' in script
     assert "effectiveRunModel()" in script
     assert 'isDrumKitMultiRun and schedulerRoute == "dks_direct"' in script
-    assert 'drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu" and drumsepSchedulerPolicy == "fallback_cpu"' in script
+    assert 'drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu"' in script
+    assert 'drumsepSchedulerPolicy == "fallback_cpu"' in script
+    assert 'drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback"' in script
     assert 'if drumsepSchedulerUsesCpuFallback then' in script
     assert 'schedulerBackend = "cpu"' in script
     assert 'schedulerPolicy.reason = schedulerPolicy.sequentialMode' in script
@@ -809,7 +812,13 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
 
     assert 'os.getenv("STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE")' in script
     assert 'return "rocm", "bench_helper_rocm"' in script
-    assert 'return "cuda", "bench_helper_cuda"' in script
+    assert 'return "cpu", "bench_helper_cuda_unverified_cpu_fallback"' in script
+    assert 'return "cuda", "bench_helper_cuda"' not in script
+    assert 'drumsepSchedulerPolicy == "bench_helper_rocm"' in script
+    assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = tostring(benchDrumsepHelperDevice or "")' in script
+    assert 'drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback"' in script
+    assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = "unverified"' in script
+    assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = "none"' in script
     assert 'schedulerBackend = "gpu"' in script
     assert 'BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"' in process
     assert 'return "cpu", "not_requested"' in process
