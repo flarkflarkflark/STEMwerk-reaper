@@ -4565,14 +4565,25 @@ def test_audio_separator_runtime_diagnostics_include_cuda_visibility():
     assert 'print(f"STEMWERK_DIAG cuda_count={env.get(\'cuda_count\')}", file=sys.stderr)' in script
 
 
-def test_main_dialog_prefers_live_runtime_probe_and_only_falls_back_to_cached_devices():
+def test_main_dialog_uses_fresh_live_device_cache_before_async_probe():
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    devices = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
 
+    assert 'local liveProbeCacheApplied, liveProbeCacheReason = applyFreshDeviceProbeCache(cacheOpts)' in script
+    assert 'if liveProbeCacheApplied then' in script
+    assert 'perfMark("showStemSelectionDialog(): fresh live device cache applied")' in script
+    assert 'perfMark("showStemSelectionDialog(): live device probe skipped reason=fresh_cache")' in script
     assert 'local probeStarted = startRuntimeDeviceProbeAsync(true)' in script
     assert 'perfMark("showStemSelectionDialog(): live device probe started")' in script
-    assert 'local cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)' in script
-    assert 'if not cachedDevicesApplied and not RUNTIME_DEVICES then' in script
-    assert 'if cachedDevicesApplied or applyCachedRuntimeDevices(cacheOpts) then' in script
+    assert 'local DEVICE_PROBE_CACHE_TTL_SECONDS = 600' in devices
+    assert 'STEMWERK_DEVICE_PROBE_CACHE_PYTHON=' in devices
+    assert 'STEMWERK_DEVICE_PROBE_CACHE_SEPARATOR=' in devices
+    assert 'if devices then' in devices
+    assert 'writeSuccessfulDeviceProbeCache(out, os.time())' in devices
+    assert 'function DEVICE_RUNTIME.applyFreshDeviceProbeCache(opts)' in devices
+    assert 'return nil, "expired"' in devices
+    assert 'return nil, "python_changed"' in devices
+    assert 'return nil, "separator_changed"' in devices
 
 
 def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps_for_drumkit():

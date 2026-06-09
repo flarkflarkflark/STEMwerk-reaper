@@ -4,6 +4,8 @@
 DEVICE_RUNTIME = DEVICE_RUNTIME or {}
 
 local C = {}
+local DEVICE_PROBE_CACHE_TTL_SECONDS = 600
+local DEVICE_PROBE_CACHE_VERSION = "1"
 
 function DEVICE_RUNTIME.configure(ctx)
     for k, v in pairs(ctx or {}) do
@@ -16,6 +18,54 @@ function DEVICE_RUNTIME.runtimeDeviceSafeList()
         { id = "auto", name = "Auto", type = "auto", desc = "Auto-select best available backend (or CPU fallback)." },
         { id = "cpu", name = "CPU", type = "cpu", desc = "Force CPU processing (works everywhere; slower)." },
     }
+end
+
+local function deviceProbeCachePath()
+    if type(C.getRuntimePaths) ~= "function" then return nil end
+    local paths = C.getRuntimePaths()
+    local stateDir = paths and paths.runtimeState or ""
+    if stateDir == "" then return nil end
+    return stateDir .. C.PATH_SEP .. "device_probe_cache.txt"
+end
+
+local function writeSuccessfulDeviceProbeCache(out, now)
+    local path = deviceProbeCachePath()
+    if not path or not out or out == "" then return false end
+    local tmpPath = path .. ".tmp"
+    local f = io.open(tmpPath, "w")
+    if not f then return false end
+    f:write("STEMWERK_DEVICE_PROBE_CACHE_VERSION=" .. DEVICE_PROBE_CACHE_VERSION .. "\n")
+    f:write("STEMWERK_DEVICE_PROBE_CACHE_TIME=" .. tostring(now or os.time()) .. "\n")
+    f:write("STEMWERK_DEVICE_PROBE_CACHE_PYTHON=" .. tostring(PYTHON_PATH or "") .. "\n")
+    f:write("STEMWERK_DEVICE_PROBE_CACHE_SEPARATOR=" .. tostring(SEPARATOR_SCRIPT or "") .. "\n")
+    f:write(out)
+    if out:sub(-1) ~= "\n" then f:write("\n") end
+    f:close()
+    os.remove(path)
+    local ok = os.rename(tmpPath, path)
+    if not ok then os.remove(tmpPath) end
+    return ok and true or false
+end
+
+local function readFreshDeviceProbeCache(now)
+    local path = deviceProbeCachePath()
+    if not path then return nil, "path_unavailable" end
+    local f = io.open(path, "r")
+    if not f then return nil, "missing" end
+    local content = f:read("*a") or ""
+    f:close()
+    if content == "" then return nil, "empty" end
+
+    local version = content:match("STEMWERK_DEVICE_PROBE_CACHE_VERSION=([^\r\n]+)")
+    local cachedAt = tonumber(content:match("STEMWERK_DEVICE_PROBE_CACHE_TIME=(%d+)") or "")
+    local cachedPython = content:match("STEMWERK_DEVICE_PROBE_CACHE_PYTHON=([^\r\n]*)") or ""
+    local cachedSeparator = content:match("STEMWERK_DEVICE_PROBE_CACHE_SEPARATOR=([^\r\n]*)") or ""
+    if version ~= DEVICE_PROBE_CACHE_VERSION then return nil, "version_mismatch" end
+    if not cachedAt then return nil, "timestamp_missing" end
+    if tostring(cachedPython) ~= tostring(PYTHON_PATH or "") then return nil, "python_changed" end
+    if tostring(cachedSeparator) ~= tostring(SEPARATOR_SCRIPT or "") then return nil, "separator_changed" end
+    if (now or os.time()) - cachedAt > DEVICE_PROBE_CACHE_TTL_SECONDS then return nil, "expired" end
+    return content, "fresh"
 end
 
 local function sanitizeFriendlyName(name)
@@ -805,10 +855,30 @@ function DEVICE_RUNTIME.pollRuntimeDeviceProbe()
 
     local devices, envJson, skipNote = parseDeviceListFromPythonOutput(out)
     RUNTIME_DEVICE_SKIP_NOTE = skipNote
+    if devices then
+        writeSuccessfulDeviceProbeCache(out, os.time())
+    end
     DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, os.time())
     RUNTIME_DEVICE_PROBE.active = false
     debugLog("=== Device probe: async done (devices=" .. tostring(RUNTIME_DEVICES and #RUNTIME_DEVICES or 0) .. ") ===")
     return true
+end
+
+function DEVICE_RUNTIME.applyFreshDeviceProbeCache(opts)
+    local content, reason = readFreshDeviceProbeCache(os.time())
+    if not content then
+        debugLog("Device probe cache skipped reason=" .. tostring(reason))
+        return false, reason
+    end
+    local devices, envJson, skipNote = parseDeviceListFromPythonOutput(content)
+    if not devices then
+        debugLog("Device probe cache skipped reason=parse_failed")
+        return false, "parse_failed"
+    end
+    RUNTIME_DEVICE_SKIP_NOTE = skipNote
+    DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, os.time(), opts)
+    debugLog("Device probe cache applied ttl_seconds=" .. tostring(DEVICE_PROBE_CACHE_TTL_SECONDS))
+    return true, "fresh"
 end
 
 function DEVICE_RUNTIME.refreshRuntimeDevices(force)

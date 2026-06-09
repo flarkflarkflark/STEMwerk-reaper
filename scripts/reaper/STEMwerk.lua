@@ -1447,6 +1447,7 @@ startRuntimeDeviceProbeAsync = DEVICE_RUNTIME.startRuntimeDeviceProbeAsync
 pollRuntimeDeviceProbe = DEVICE_RUNTIME.pollRuntimeDeviceProbe
 refreshRuntimeDevices = DEVICE_RUNTIME.refreshRuntimeDevices
 applyCachedRuntimeDevices = DEVICE_RUNTIME.applyCachedRuntimeDevices
+applyFreshDeviceProbeCache = DEVICE_RUNTIME.applyFreshDeviceProbeCache
 getTrustedWindowsRuntimeState = DEVICE_RUNTIME.getTrustedWindowsRuntimeState
 applyTrustedWindowsRuntimeState = DEVICE_RUNTIME.applyTrustedWindowsRuntimeState
 normalizeRequestedDeviceForRuntime = DEVICE_RUNTIME.normalizeRequestedDeviceForRuntime
@@ -1908,6 +1909,7 @@ DEVICE_RUNTIME.configure({
     fileExists = fileExists,
     isAbsolutePath = isAbsolutePath,
     readCapabilities = readCapabilities,
+    getRuntimePaths = getRuntimePaths,
 })
 SETTINGS_MOD.loadSavedMainWindowPos()
 
@@ -13308,6 +13310,7 @@ showStemSelectionDialog = function()
         cacheOpts = { skipQuickBench = true }
     end
     local cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)
+    local liveProbeCacheApplied, liveProbeCacheReason = applyFreshDeviceProbeCache(cacheOpts)
     if not cachedDevicesApplied and not RUNTIME_DEVICES then
         RUNTIME_DEVICES = runtimeDeviceSafeList()
     end
@@ -13319,11 +13322,15 @@ showStemSelectionDialog = function()
     perfMark("showStemSelectionDialog(): gfx.init done (window visible)")
 
     reaper.defer(function()
-        local probeStarted = startRuntimeDeviceProbeAsync(true)
-        if probeStarted then
-            perfMark("showStemSelectionDialog(): live device probe started")
+        if liveProbeCacheApplied then
+            perfMark("showStemSelectionDialog(): fresh live device cache applied")
+            perfMark("showStemSelectionDialog(): live device probe skipped reason=fresh_cache")
         else
-            if cachedDevicesApplied or applyCachedRuntimeDevices(cacheOpts) then
+            perfMark("showStemSelectionDialog(): live device cache unavailable reason=" .. tostring(liveProbeCacheReason))
+            local probeStarted = startRuntimeDeviceProbeAsync(true)
+            if probeStarted then
+                perfMark("showStemSelectionDialog(): live device probe started")
+            elseif cachedDevicesApplied or applyCachedRuntimeDevices(cacheOpts) then
                 perfMark("showStemSelectionDialog(): cached devices applied")
             else
                 perfMark("showStemSelectionDialog(): cached devices unavailable")
