@@ -159,6 +159,18 @@ def test_benchmark_rocm_helper_device_requires_matching_linux_runtime(monkeypatc
     assert module._resolve_benchmark_drumsep_helper_device("auto", "cpu") == ("cpu", "runtime_backend_mismatch")
 
 
+def test_benchmark_cuda_helper_device_requires_successful_isolation_probe(monkeypatch, tmp_path):
+    module = _load_audio_process()
+    runtime_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "cuda")
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module, "_probe_cuda_helper_isolation", lambda _runtime: (True, "ok", "{}"))
+
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "cuda", runtime_python) == ("cuda", "")
+
+
 def test_helper_gpu_probe_accepts_rocm_tensor(monkeypatch):
     helper = _load_helper()
 

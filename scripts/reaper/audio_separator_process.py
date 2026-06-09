@@ -2077,6 +2077,7 @@ def _select_drumsep_runtime(
 def _resolve_benchmark_drumsep_helper_device(
     requested_device: str,
     runtime_kind: str,
+    runtime_python: Optional[Path] = None,
 ) -> Tuple[str, str]:
     raw = str(os.environ.get(BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "") or "").strip().lower()
     normalized_request = str(requested_device or "auto").strip().lower()
@@ -2107,6 +2108,15 @@ def _resolve_benchmark_drumsep_helper_device(
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=runtime_backend_mismatch", file=sys.stderr)
         return "cpu", "runtime_backend_mismatch"
+    if raw == "cuda":
+        probe_ok, probe_reason, probe_detail = _probe_cuda_helper_isolation(Path(runtime_python or ""))
+        print(f"drumsep_cuda_helper_probe_status={'ok' if probe_ok else 'failed'}", file=sys.stderr)
+        print(f"drumsep_cuda_helper_probe_reason={probe_reason}", file=sys.stderr)
+        print(f"drumsep_cuda_helper_probe_detail={probe_detail}", file=sys.stderr)
+        if not probe_ok:
+            print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+            print(f"bench_drumsep_helper_device_ignored_reason={probe_reason}", file=sys.stderr)
+            return "cpu", probe_reason
 
     print(f"bench_drumsep_helper_device_applied={raw}", file=sys.stderr)
     print("bench_drumsep_helper_device_ignored_reason=", file=sys.stderr)
@@ -2672,10 +2682,7 @@ def _filter_path_parts(parts: List[str], blocked_tokens: List[str]) -> List[str]
 
 
 def _runtime_venv_root(runtime_python: Path) -> Path:
-    try:
-        return Path(runtime_python).expanduser().resolve().parent.parent
-    except Exception:
-        return Path(runtime_python).expanduser().parent.parent
+    return Path(runtime_python).expanduser().parent.parent
 
 
 def _runtime_bin_dir(runtime_venv: Path) -> Path:
@@ -2690,7 +2697,7 @@ def build_drumsep_subprocess_env(
 ) -> tuple[Dict[str, str], Dict[str, str]]:
     env = dict(base_env or {})
     backend = str(selected_backend or "").strip().lower()
-    main_venv_root = _path_text(Path(sys.executable).expanduser().resolve().parent.parent)
+    main_venv_root = _path_text(Path(sys.executable).expanduser().parent.parent)
     runtime_python = Path(runtime_python).expanduser()
     runtime_venv = Path(runtime_venv).expanduser()
     runtime_bin = str(_runtime_bin_dir(runtime_venv))
@@ -2736,9 +2743,84 @@ def build_drumsep_subprocess_env(
         "drumsep_cuda_visible_devices": str(env.get("CUDA_VISIBLE_DEVICES", "")),
         "drumsep_nvidia_visible_devices": str(env.get("NVIDIA_VISIBLE_DEVICES", "")),
         "drumsep_ld_library_path_contains_main_venv": "yes" if main_venv_root and main_venv_root in sanitized_ld else "no",
+        "drumsep_cuda_ld_library_path_contains_main_venv": "yes" if backend == "cuda" and main_venv_root and main_venv_root in sanitized_ld else "no",
+        "drumsep_cuda_helper_runtime_venv": str(runtime_venv) if backend == "cuda" else "",
         "drumsep_path_starts_with_drumsep_venv": "yes" if sanitized_path and _path_text(sanitized_path[0]) == _path_text(runtime_bin) else "no",
     }
     return env, diagnostics
+
+
+def _probe_cuda_helper_isolation(runtime_python: Path) -> tuple[bool, str, str]:
+    if not str(runtime_python or "").strip() or not runtime_python.exists():
+        return False, "cuda_helper_probe_runtime_missing", str(runtime_python or "")
+    runtime_venv = _runtime_venv_root(runtime_python)
+    env, diagnostics = build_drumsep_subprocess_env(_clean_env(), runtime_python, runtime_venv, "cuda")
+    if diagnostics.get("drumsep_cuda_ld_library_path_contains_main_venv") != "no":
+        return False, "cuda_helper_isolation_failed_main_venv_cudnn_leak", "sanitized_ld_library_path_contains_main_venv"
+
+    main_venv_root = _path_text(Path(sys.executable).expanduser().parent.parent)
+    probe_code = r"""
+import json
+import os
+from pathlib import Path
+
+from audio_separator.separator import Separator
+import torch
+
+tensor = torch.ones((1, 1, 8, 8), device="cuda:0")
+weight = torch.ones((1, 1, 3, 3), device="cuda:0")
+torch.nn.functional.conv2d(tensor, weight)
+torch.cuda.synchronize()
+maps = ""
+try:
+    maps = Path("/proc/self/maps").read_text(encoding="utf-8", errors="ignore")
+except Exception:
+    pass
+cudnn_paths = sorted({
+    line.rsplit(None, 1)[-1]
+    for line in maps.splitlines()
+    if "libcudnn" in line.lower() and "/" in line
+})
+print(json.dumps({
+    "torch_file": str(getattr(torch, "__file__", "") or ""),
+    "torch_cuda": str(getattr(torch.version, "cuda", "") or ""),
+    "device_name": str(torch.cuda.get_device_name(0)),
+    "cudnn_version": str(torch.backends.cudnn.version() or ""),
+    "cudnn_paths": cudnn_paths,
+    "virtual_env": str(os.environ.get("VIRTUAL_ENV", "")),
+}))
+"""
+    try:
+        completed = subprocess.run(
+            [str(runtime_python), "-c", probe_code],
+            text=True,
+            capture_output=True,
+            timeout=90,
+            env=env,
+            **_windows_no_window_kwargs(),
+        )
+    except Exception as exc:
+        return False, "cuda_helper_probe_failed", f"{type(exc).__name__}:{exc}"
+
+    combined = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+    lower = combined.lower()
+    if "cudnngetlibconfig" in lower or "undefined symbol" in lower:
+        return False, "cuda_helper_probe_failed_cudnn_symbol", combined[-1000:]
+    if completed.returncode != 0:
+        return False, "cuda_helper_probe_failed", combined[-1000:] or f"exit_{completed.returncode}"
+    try:
+        payload = json.loads((completed.stdout or "").strip().splitlines()[-1])
+    except Exception as exc:
+        return False, "cuda_helper_probe_invalid_output", f"{type(exc).__name__}:{combined[-500:]}"
+    cudnn_paths = [str(path) for path in payload.get("cudnn_paths", [])]
+    if main_venv_root and any(main_venv_root in _path_text(path) for path in cudnn_paths):
+        return False, "cuda_helper_isolation_failed_main_venv_cudnn_leak", "|".join(cudnn_paths)
+    runtime_venv_text = _path_text(runtime_venv)
+    if cudnn_paths and not all(runtime_venv_text in _path_text(path) for path in cudnn_paths):
+        return False, "cuda_helper_probe_untrusted_cudnn_source", "|".join(cudnn_paths)
+    detail = json.dumps(payload, sort_keys=True)
+    print(f"drumsep_cuda_helper_cudnn_source={'|'.join(cudnn_paths) or 'torch_runtime_managed'}", file=sys.stderr)
+    return True, "ok", detail
 
 
 def _emit_drumsep_subprocess_env_diagnostics(diagnostics: Dict[str, str]) -> None:
@@ -2750,6 +2832,8 @@ def _emit_drumsep_subprocess_env_diagnostics(diagnostics: Dict[str, str]) -> Non
         "drumsep_cuda_visible_devices",
         "drumsep_nvidia_visible_devices",
         "drumsep_ld_library_path_contains_main_venv",
+        "drumsep_cuda_ld_library_path_contains_main_venv",
+        "drumsep_cuda_helper_runtime_venv",
         "drumsep_path_starts_with_drumsep_venv",
     ):
         print(f"{key}={diagnostics.get(key, '')}", file=sys.stderr)
@@ -3518,7 +3602,7 @@ def main():
             print("PROGRESS:50:Starting Drum Kit runtime [Stage 2]...", flush=True)
             emit_phase("stage2_separate")
             stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)
-            helper_device, _ = _resolve_benchmark_drumsep_helper_device(device_preference, runtime_kind)
+            helper_device, _ = _resolve_benchmark_drumsep_helper_device(device_preference, runtime_kind, drumsep_python)
             with _dks_extract_stage2_lock(output_root, stage2_backend):
                 helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
                     drums_input,
@@ -3665,7 +3749,7 @@ def main():
         emit_phase("separate_start")
         print(f"timing_utc={_ts()} drumsep_helper_start", file=sys.stderr)
         stage2_backend = _detect_dks_extract_stage2_backend(runtime_kind, runtime_info, drumsep_python)
-        helper_device, _ = _resolve_benchmark_drumsep_helper_device(device_preference, runtime_kind)
+        helper_device, _ = _resolve_benchmark_drumsep_helper_device(device_preference, runtime_kind, drumsep_python)
         helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(
             Path(args.input).resolve(),
             output_root,

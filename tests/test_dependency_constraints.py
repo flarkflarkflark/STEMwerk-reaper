@@ -2468,6 +2468,85 @@ def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_g
     assert diag["drumsep_path_starts_with_drumsep_venv"] == "yes"
 
 
+def test_drumsep_helper_subprocess_env_cuda_isolated_uses_raw_venv_roots(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
+    fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
+    fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "executable", str(fake_sys_executable))
+
+    runtime_python = tmp_path / "helper" / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    runtime_venv = runtime_python.parent.parent
+    main_venv = fake_sys_executable.parent.parent
+    base_env = {
+        "PATH": f"{main_venv}/bin:/usr/bin",
+        "LD_LIBRARY_PATH": (
+            f"{main_venv}/lib/python3.12/site-packages/nvidia/cudnn/lib:"
+            f"{main_venv}/lib/python3.12/site-packages/torch/lib:/usr/lib"
+        ),
+        "PYTHONPATH": f"{main_venv}/lib/python3.12/site-packages",
+        "PYTHONHOME": str(main_venv),
+        "VIRTUAL_ENV": str(main_venv),
+    }
+
+    env, diag = module.build_drumsep_subprocess_env(base_env, runtime_python, runtime_venv, "cuda")
+
+    assert module._runtime_venv_root(runtime_python) == runtime_venv
+    assert env["VIRTUAL_ENV"] == str(runtime_venv)
+    assert env["PATH"].startswith(str(runtime_venv / "bin"))
+    assert module._path_text(main_venv) not in module._path_text(env["PATH"])
+    assert module._path_text(main_venv) not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
+    assert "site-packages/nvidia" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
+    assert "site-packages/torch/lib" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
+    assert "PYTHONPATH" not in env
+    assert "PYTHONHOME" not in env
+    assert diag["drumsep_subprocess_env_profile"] == "cuda_isolated"
+    assert diag["drumsep_cuda_ld_library_path_contains_main_venv"] == "no"
+    assert diag["drumsep_cuda_helper_runtime_venv"] == str(runtime_venv)
+
+
+def test_cuda_helper_probe_rejects_cudnn_symbol_failure(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    runtime_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    class Completed:
+        returncode = -6
+        stdout = ""
+        stderr = "Could not load symbol cudnnGetLibConfig: undefined symbol"
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Completed())
+    ok, reason, _detail = module._probe_cuda_helper_isolation(runtime_python)
+
+    assert ok is False
+    assert reason == "cuda_helper_probe_failed_cudnn_symbol"
+
+
+def test_cuda_benchmark_override_falls_back_to_cpu_when_isolation_probe_fails(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    runtime_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "cuda")
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        module,
+        "_probe_cuda_helper_isolation",
+        lambda _runtime: (False, "cuda_helper_probe_failed_cudnn_symbol", "undefined symbol"),
+    )
+
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "cuda", runtime_python) == (
+        "cpu",
+        "cuda_helper_probe_failed_cudnn_symbol",
+    )
+    stderr = capsys.readouterr().err
+    assert "bench_drumsep_helper_device_applied=none" in stderr
+    assert "bench_drumsep_helper_device_ignored_reason=cuda_helper_probe_failed_cudnn_symbol" in stderr
+
+
 def test_run_direct_dks_drumsep_helper_uses_cpu_device_and_isolated_env(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
     helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py").resolve()
