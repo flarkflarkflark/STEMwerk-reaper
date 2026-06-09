@@ -3808,6 +3808,7 @@ def test_single_track_footer_uses_shared_runtime_resolution_without_rocm_cuda_re
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
     assert 'footerDeviceDetail = deriveResolvedRuntimeFooter(footerDeviceDetail)' in script
+    assert 'function formatUserFacingProcessingDeviceLabel(...)' in script
     assert 'local speedFmt = T("mt_footer_speed_line") or "Speed %.2fx realtime"' in script
     assert 'local mtCancel = T("mt_cancel") or "ESC=cancel"' in script
     assert 'local footerMethod = sanitizeUserFacingMethodLabel(footerDeviceDetail)' in script
@@ -3815,9 +3816,10 @@ def test_single_track_footer_uses_shared_runtime_resolution_without_rocm_cuda_re
     assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
     assert 'local mtSeg = T("mt_seg") or "Seg"' not in script
     assert 'summaryLeft = summaryLeft .. " | " .. segText' not in script
-    assert 'return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short ~= "" and short or rawDeviceName)' in script
-    assert 'return string.format(trSafeValue("footer_device_cuda_runtime", "CUDA: %s"), short ~= "" and short or rawDeviceName)' in script
-    assert 'return trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
+    assert 'return formatUserFacingProcessingDeviceLabel(' in script
+    assert 'or lower:find("radeon", 1, true)' in script
+    assert 'or lower:match("%f[%a]rtx%s*%d")' in script
+    assert 'or lower:match("%f[%a]gtx%s*%d") or lower:match("%f[%a]rx%s*%d")' in script
 
 
 def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations():
@@ -3918,16 +3920,13 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "progressState._drumsepSchedulerUsesCpuFallback" in script
     assert "progressState._runtimeGpuCapable" in script
     assert "progressState._runtimeDeviceNames" in script
-    assert "function shortRuntimeGpuName(name)" in script
+    assert "function formatUserFacingProcessingDeviceLabel(...)" in script
     assert "function activeDrumsepCpuFallbackLabel()" in script
     assert "function buildDksFooterDeviceIntent(deviceDetail)" in script
     assert "local helperLabel = activeDrumsepCpuFallbackLabel()" in script
     assert 'trSafeValue("progress_drumsep_cpu_fallback", "DrumSep CPU fallback")' in script
     assert 'trSafeValue("progress_drumsep_helper_cpu", "DrumSep helper: CPU")' in script
     assert 'local helperCpu = helperDevice == "cpu" or helperEnvProfile == "cpu_isolated"' in script
-    assert "local first = s:match(\"^([^|,;]+)\") or s" in script
-    assert 'local s = normalizeUserFacingDeviceLabel(name)' in script
-    assert 'trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s")' in script
     assert 'trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")' in script
     assert 'trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")' in script
     assert 'trSafeValue("footer_device_gpu_intent", "GPU")' in script
@@ -3935,7 +3934,6 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "trSafeValue(\"footer_device_auto_gpu_intent\", \"Auto [GPU]\")" in script
     assert "or req:find(\"directml\", 1, true)" in script
 
-    assert 'trSafeValue("footer_device_cpu_runtime", "CPU runtime")' in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert 'local singleTrackMethodLabel = ""' in script
@@ -3955,14 +3953,10 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'footer_device_cpu_runtime = "CPU-runtime"' in langs
     assert 'footer_device_auto_resolved_cpu = "Auto -> CPU-Runtime"' in langs
     assert 'footer_device_cpu_runtime = "CPU-Runtime"' in langs
-    assert 'rawLower:match("^cuda:%d+")' in script
-    assert 'return trSafeValue("footer_device_gpu_intent", "GPU")' in script
-    assert 'rawDeviceName:lower():find("amd", 1, true)' in script
-
-    assert 'trSafeValue("footer_device_cuda_runtime", "CUDA: %s")' in script
+    assert 'return formatUserFacingProcessingDeviceLabel(' in script
+    assert 'progressState._deviceName' in script
     assert 'local raw = tostring(rawDevice or ""):gsub("^%s+", ""):gsub("%s+$", "")' in script
     assert 'if lower:match("^cuda:%d+") then return "GPU" end' in script
-    assert 'return compactProgressDeviceToken(rawDetail)' in script
     assert 'compactProgressDeviceToken(deviceDetail, deviceDetail)' in script
     assert 'progressState._stage2Runtime,' in script
     assert 'progressState._stage1Runtime,' in script
@@ -3971,13 +3965,23 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
 
 def test_result_and_progress_labels_prefer_explicit_runtime_over_cuda_device_tokens():
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    support = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
 
     assert 'local runtimeSelected = preferredRuntimeSelection(' in script
     assert 'data and data.stage2Runtime,' in script
     assert 'data and data.stage1Runtime,' in script
     assert 'data and data.backendRuntime,' in script
-    assert 'if runtimeSel == "rocm" then' in script
+    assert 'if runtimeSelected == "rocm" or deviceRequest == "rocm" then' in script
     assert 'return sanitizeUserFacingMethodLabel("rocm")' in script
+    assert 'function sanitizeUserFacingMethodLabel(candidate)' in script
+    assert 'return formatUserFacingProcessingDeviceLabel(candidate)' in script
+    assert 'or lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true)' in script
+    assert 'if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then' in script
+    assert '"backend_runtime", "audio_separator_version", "requested_device", "effective_device",' in support
+    assert '"model_device", "direct_demix_keys", "drumsep_mps_direct_demix_gate",' in support
+    assert 'appendKey(lines, "torch.version.hip"' in support
+    assert 'appendKey(lines, "torch.cuda.is_available"' in support
+    assert 'appendKey(lines, "torch_device_names"' in support
     assert 'progressState._stage2Runtime,' in script
     assert 'progressState._stage1Runtime,' in script
     assert 'progressState._backendRuntime,' in script
@@ -4693,7 +4697,8 @@ def test_direct_dks_device_labels_use_shared_user_facing_normalizer():
     assert 'fullName = rawName ~= "" and rawName or (uiLabel ~= "" and uiLabel or rawName)' in script
     assert 'uiName = uiLabel ~= "" and uiLabel or rawName' in script
     assert 'return normalizeUserFacingDeviceLabel(name)' in script
-    assert 'local s = normalizeUserFacingDeviceLabel(name)' in script
+    assert 'function formatUserFacingProcessingDeviceLabel(...)' in script
+    assert 'or lower:find("radeon", 1, true)' in script
 
 
 def test_direct_dks_device_labels_keep_runtime_ids_unchanged():

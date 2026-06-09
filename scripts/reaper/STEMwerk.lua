@@ -1085,6 +1085,44 @@ function normalizeUserFacingDeviceLabel(name)
     return raw
 end
 
+function formatUserFacingProcessingDeviceLabel(...)
+    local candidates = { ... }
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "cpu" or lower:find("cpu", 1, true) or lower:find("fallback_cpu", 1, true)
+            or lower:find("cpu_isolated", 1, true) or lower:find("unknown_cap1", 1, true)
+            or lower == "backend_not_gpu" or lower == "auto_no_gpu"
+        then
+            return "CPU"
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then
+            return "MPS"
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "directml" or lower:find("directml", 1, true) then
+            return "DirectML"
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "gpu" or lower == "cuda" or lower:match("^cuda:%d+")
+            or lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true)
+            or lower:find("gpu", 1, true) or lower:find("nvidia", 1, true)
+            or lower:find("geforce", 1, true) or lower:find("radeon", 1, true)
+            or lower:find("amd ", 1, true) or lower:match("%f[%a]rtx%s*%d")
+            or lower:match("%f[%a]gtx%s*%d") or lower:match("%f[%a]rx%s*%d")
+        then
+            return "GPU"
+        end
+    end
+    return ""
+end
+
 -- Stem configuration (with selection state)
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
 STEMS = {
@@ -9190,15 +9228,7 @@ function attachResultRuntimeMetadata(data)
 end
 
 function sanitizeUserFacingMethodLabel(candidate)
-    local lower = tostring(candidate or ""):lower()
-    if lower == "" then return "" end
-    if lower == "cpu" or lower:find("cpu", 1, true) or lower:find("unknown_cap1", 1, true) or lower == "backend_not_gpu" or lower == "auto_no_gpu" then return "CPU" end
-    if lower == "directml" or lower:find("directml", 1, true) then return "DirectML" end
-    if lower == "mps" or lower:find("mps", 1, true) then return "MPS" end
-    if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then return "ROCm" end
-    if lower == "cuda" or lower:match("^cuda:%d+$") then return "CUDA" end
-    if lower == "gpu" or lower:find("gpu", 1, true) then return "GPU" end
-    return ""
+    return formatUserFacingProcessingDeviceLabel(candidate)
 end
 
 function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice)
@@ -14640,38 +14670,20 @@ function buildProgressRouteSummary(deviceDetail)
     return nil, compactProgressDeviceToken(deviceDetail, deviceDetail)
 end
 
-function shortRuntimeGpuName(name)
-    local s = normalizeUserFacingDeviceLabel(name)
-    if s == "" then return "" end
-    local first = s:match("^([^|,;]+)") or s
-    first = first:gsub("^%s+", ""):gsub("%s+$", "")
-    return first
-end
-
 function deriveResolvedRuntimeFooter(footerDeviceDetail)
     local rawDetail = tostring(footerDeviceDetail or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    local rawLower = rawDetail:lower()
     local rawDeviceName = progressState._deviceName
     if rawDeviceName then
         rawDeviceName = tostring(rawDeviceName):gsub("^%s+", ""):gsub("%s+$", "")
     end
     if not isDrumKitWorkflowActive() then
-        if rawLower:match("^cuda:%d+") or rawLower == "cuda" then
-            if rawDeviceName and rawDeviceName ~= "" then
-                local short = shortRuntimeGpuName(rawDeviceName)
-                if rawDeviceName:lower():find("amd", 1, true) then
-                    return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short ~= "" and short or rawDeviceName)
-                end
-                return string.format(trSafeValue("footer_device_cuda_runtime", "CUDA: %s"), short ~= "" and short or rawDeviceName)
-            end
-        elseif rawLower:find("directml", 1, true) then
-            return "DirectML"
-        elseif rawLower == "mps" then
-            return "MPS"
-        elseif rawLower == "cpu" then
-            return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
-        end
-        return compactProgressDeviceToken(rawDetail)
+        return formatUserFacingProcessingDeviceLabel(
+            progressState._runtimeSelected,
+            progressState._backendRuntime,
+            rawDetail,
+            rawDeviceName,
+            progressState._normalizedDeviceRequest
+        )
     end
     local req = tostring(progressState._normalizedDeviceRequest or SETTINGS.device or "auto"):lower()
     local runtimeSel = preferredRuntimeSelection(
@@ -14690,57 +14702,14 @@ function deriveResolvedRuntimeFooter(footerDeviceDetail)
         deviceName = tostring(deviceName):gsub("^%s+", ""):gsub("%s+$", "")
     end
 
-    if req == "cpu" then
-        return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
-    end
-    if runtimeSel == "rocm" then
-        local gpuLabel = shortRuntimeGpuName(deviceName)
-        if gpuLabel == "" then gpuLabel = "ROCm" end
-        if req == "auto" then
-            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s"), gpuLabel)
-        end
-        return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), gpuLabel)
-    end
-    if runtimeSel == "cuda" or runtimeSel:match("^cuda:%d+") then
-        local gpuLabel = shortRuntimeGpuName(deviceName)
-        if gpuLabel == "" then gpuLabel = "CUDA" end
-        if req == "auto" then
-            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s"), gpuLabel)
-        end
-        return string.format(trSafeValue("footer_device_cuda_runtime", "CUDA: %s"), gpuLabel)
-    end
-    if runtimeSel == "cpu" then
-        if req == "auto" then
-            return trSafeValue("footer_device_auto_resolved_cpu", "Auto -> CPU runtime")
-        end
-        return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
-    end
-    if gpuCap == "yes" and deviceName and deviceName ~= "" then
-        local short = shortRuntimeGpuName(deviceName)
-        if short == "" then short = tostring(deviceName) end
-        if req == "auto" then
-            return string.format(trSafeValue("footer_device_auto_resolved_gpu", "Auto → GPU/ROCm: %s"), short)
-        end
-        return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short)
-    end
-    if req == "cpu" then
-        return trSafeValue("footer_device_cpu_runtime", "CPU runtime")
-    end
-    if rawLower:match("^cuda:%d+") or rawLower == "cuda" or rawLower == "rocm" then
-        if deviceName and deviceName ~= "" then
-            local short = shortRuntimeGpuName(deviceName)
-            if short == "" then short = tostring(deviceName) end
-            return string.format(trSafeValue("footer_device_gpu_runtime", "GPU/ROCm: %s"), short)
-        end
-        return trSafeValue("footer_device_gpu_intent", "GPU")
-    end
-    if rawLower:find("directml", 1, true) then
-        return "DirectML"
-    end
-    if rawLower == "mps" then
-        return "MPS"
-    end
-    return compactProgressDeviceToken(rawDetail)
+    return formatUserFacingProcessingDeviceLabel(
+        runtimeSel,
+        progressState._backendRuntime,
+        rawDetail,
+        deviceName,
+        gpuCap == "yes" and "gpu" or "",
+        req ~= "auto" and req or ""
+    )
 end
 
 function deriveMultiTrackRuntimeFooter(job)
@@ -14757,44 +14726,13 @@ function deriveMultiTrackRuntimeFooter(job)
         footerDeviceDetail
     )
 
-    if backend == "directml" then
-        return "DirectML"
-    end
-    if backend == "mps" then
-        return "MPS"
-    end
-    if backend == "cpu" then
-        return compactDetail ~= "" and compactDetail or "CPU"
-    end
-    if backend == "gpu" then
-        if runtimeSel == "rocm" then
-            return "ROCm"
-        end
-        if runtimeSel == "cuda" or runtimeSel:match("^cuda:%d+") then
-            return "CUDA"
-        end
-        if requestedDevice:find("directml", 1, true) then
-            return "DirectML"
-        end
-        if requestedDevice == "mps" then
-            return "MPS"
-        end
-        if requestedDevice == "rocm" then
-            return "ROCm"
-        end
-        if requestedDevice == "cuda" or requestedDevice:match("^cuda:%d+") then
-            return "CUDA"
-        end
-        if compactDetail ~= "" and compactDetail ~= "GPU" then
-            return compactDetail
-        end
-        return "GPU"
-    end
-
-    if compactDetail ~= "" then
-        return compactDetail
-    end
-    return ""
+    return formatUserFacingProcessingDeviceLabel(
+        backend,
+        runtimeSel,
+        requestedDevice,
+        compactDetail,
+        progressState._deviceName
+    )
 end
 
 function setWorkflowContextForRun(runOptions)
