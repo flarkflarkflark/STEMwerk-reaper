@@ -365,12 +365,12 @@ en = {
         window_title_multi_track = "Multi-Track Progress",
 
         -- Device tooltips
-        device_auto_desc = "Auto-select the best supported backend (CUDA/DirectML/CPU). MPS requires explicit selection.",
+        device_auto_desc = "Automatically chooses the best available processing. On Apple Silicon, Auto uses Apple MPS for normal stems.",
         device_cpu_desc = "Force CPU processing (works everywhere; slower).",
         device_cuda_desc = "CUDA device (typically NVIDIA). On Linux with ROCm-supported AMD + ROCm PyTorch, GPUs may also appear here.",
         device_directml_desc = "Windows DirectML device (requires torch-directml).",
-        device_mps_label = "Apple MPS (Experimental)",
-        device_mps_desc = "Apple Silicon GPU acceleration. Experimental; CPU remains the safest supported option.",
+        device_mps_label = "Apple MPS",
+        device_mps_desc = "Use Apple MPS on Apple Silicon. Recommended for normal stems.",
         mps_failure_message = "MPS processing failed on this Mac. Please switch Device to CPU and try again.",
         device_note_linux_no_gpu = "GPU backend not detected on this Linux setup. AMD GPUs typically require ROCm-supported hardware + a ROCm PyTorch build. On Windows, AMD GPU acceleration is typically via DirectML.",
         device_note_linux_cuda_build = "Your Python environment is using a CUDA PyTorch build (e.g. +cuXXX) but CUDA is not available. For AMD GPUs on Linux you typically need a ROCm-enabled PyTorch build (torch.version.hip set).",
@@ -1011,12 +1011,12 @@ en = {
         window_title_multi_track = "Meersporen voortgang",
 
         -- Device tooltips
-        device_auto_desc = "Kies automatisch de beste ondersteunde backend (CUDA/DirectML/CPU). MPS vereist een expliciete keuze.",
+        device_auto_desc = "Kiest automatisch de beste beschikbare verwerking. Op Apple Silicon gebruikt Auto Apple MPS voor normale stems.",
         device_cpu_desc = "Forceer CPU-verwerking (werkt overal; langzamer).",
         device_cuda_desc = "CUDA-apparaat (meestal NVIDIA). Op Linux kunnen ROCm-ondersteunde AMD + ROCm PyTorch soms ook via torch.cuda verschijnen.",
         device_directml_desc = "Windows DirectML-apparaat (vereist torch-directml).",
-        device_mps_label = "Apple MPS (Experimenteel)",
-        device_mps_desc = "Apple Silicon GPU-versnelling. Experimenteel; CPU blijft de veiligste ondersteunde keuze.",
+        device_mps_label = "Apple MPS",
+        device_mps_desc = "Gebruik Apple MPS op Apple Silicon. Aanbevolen voor normale stems.",
         mps_failure_message = "MPS-verwerking is mislukt op deze Mac. Kies CPU als apparaat en probeer het opnieuw.",
         device_note_linux_no_gpu = "Geen GPU-backend gedetecteerd op deze Linux setup. AMD GPU's vereisen meestal ROCm-ondersteunde hardware + een ROCm PyTorch build. Op Windows is AMD GPU-acceleratie meestal via DirectML.",
         device_note_linux_cuda_build = "Je Python-omgeving gebruikt een CUDA PyTorch build (bijv. +cuXXX) maar CUDA is niet beschikbaar. Voor AMD GPU's op Linux heb je meestal een ROCm-enabled PyTorch build nodig (torch.version.hip ingesteld).",
@@ -1653,12 +1653,12 @@ en = {
         window_title_multi_track = "Mehrspur-Fortschritt",
 
         -- Device tooltips
-        device_auto_desc = "Bestes unterstütztes Backend automatisch wählen (CUDA/DirectML/CPU). MPS muss ausdrücklich gewählt werden.",
+        device_auto_desc = "Wählt automatisch die beste verfügbare Verarbeitung. Auf Apple Silicon verwendet Auto Apple MPS für normale Stems.",
         device_cpu_desc = "CPU erzwingen (funktioniert ueberall; langsamer).",
         device_cuda_desc = "CUDA Gerät (typischerweise NVIDIA). Unter Linux können ROCm-unterstuetzte AMD + ROCm PyTorch manchmal auch ueber torch.cuda erscheinen.",
         device_directml_desc = "Windows DirectML Gerät (benoetigt torch-directml).",
-        device_mps_label = "Apple MPS (Experimentell)",
-        device_mps_desc = "Apple-Silicon-GPU-Beschleunigung. Experimentell; CPU bleibt die sicherste unterstützte Option.",
+        device_mps_label = "Apple MPS",
+        device_mps_desc = "Apple MPS auf Apple Silicon verwenden. Empfohlen für normale Stems.",
         mps_failure_message = "Die MPS-Verarbeitung ist auf diesem Mac fehlgeschlagen. Bitte CPU als Gerät wählen und erneut versuchen.",
         device_note_linux_no_gpu = "Kein GPU-Backend auf diesem Linux Setup erkannt. AMD GPUs brauchen typischerweise ROCm-unterstuetzte Hardware + einen ROCm PyTorch Build. Unter Windows laeuft AMD GPU Beschleunigung meist ueber DirectML.",
         device_note_linux_cuda_build = "Ihre Python-Umgebung nutzt einen CUDA PyTorch Build (z.B. +cuXXX) aber CUDA ist nicht verfügbar. Fuer AMD GPUs unter Linux benoetigen Sie typischerweise einen ROCm-faehigen PyTorch Build (torch.version.hip gesetzt).",

@@ -4728,7 +4728,25 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'if id == "mps" or devType == "mps" then' in script
     assert 'if mpsAvailable and cpuReady then' in script
     assert 'add("mps", "Apple MPS", "mps", "device_mps_desc")' in script
+    assert 'd.uiName = T("device_mps_label") or "Apple MPS"' in script
     assert 'SETTINGS.device = directDksRoute and "auto" or "cpu"' in script
+
+
+def test_i18n_device_copy_matches_normal_auto_mps_behavior_without_experimental_label():
+    languages = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    devices = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
+
+    assert 'device_auto_desc = "Automatically chooses the best available processing. On Apple Silicon, Auto uses Apple MPS for normal stems."' in languages
+    assert 'device_auto_desc = "Kiest automatisch de beste beschikbare verwerking. Op Apple Silicon gebruikt Auto Apple MPS voor normale stems."' in languages
+    assert 'device_auto_desc = "Wählt automatisch die beste verfügbare Verarbeitung. Auf Apple Silicon verwendet Auto Apple MPS für normale Stems."' in languages
+    assert 'device_mps_label = "Apple MPS"' in languages
+    assert 'device_mps_desc = "Use Apple MPS on Apple Silicon. Recommended for normal stems."' in languages
+    assert 'device_mps_desc = "Gebruik Apple MPS op Apple Silicon. Aanbevolen voor normale stems."' in languages
+    assert 'device_mps_desc = "Apple MPS auf Apple Silicon verwenden. Empfohlen für normale Stems."' in languages
+    assert "Apple MPS (Experimental)" not in languages
+    assert "Apple MPS (Experimenteel)" not in languages
+    assert "Apple MPS (Experimentell)" not in languages
+    assert '"Automatically chooses the best available processing."' in devices
 
 
 def test_drumsep_runtime_selector_reads_state_python_candidates_before_dedicated_runtime_paths():

@@ -258,7 +258,7 @@ def test_failure_message_uses_mps_marker():
     ]
 
 
-def test_lua_and_i18n_expose_only_explicit_experimental_mps():
+def test_lua_and_i18n_expose_user_facing_apple_mps_labels_without_experimental_copy():
     devices = (ROOT / "scripts" / "reaper" / "_internal" / "STEMwerk_Devices.lua").read_text(
         encoding="utf-8"
     )
@@ -280,9 +280,17 @@ def test_lua_and_i18n_expose_only_explicit_experimental_mps():
     assert "ARCH = SYSTEM.getArch()" in main
     assert "ARCH = ARCH," in main
     assert 'C.ARCH == "arm64" or C.ARCH == "aarch64"' in settings
-    assert 'device_mps_label = "Apple MPS (Experimental)"' in languages
-    assert 'device_mps_label = "Apple MPS (Experimenteel)"' in languages
-    assert 'device_mps_label = "Apple MPS (Experimentell)"' in languages
+    assert 'device_mps_label = "Apple MPS"' in languages
+    assert "Apple MPS (Experimental)" not in languages
+    assert "Apple MPS (Experimenteel)" not in languages
+    assert "Apple MPS (Experimentell)" not in languages
+    assert "On Apple Silicon, Auto uses Apple MPS for normal stems." in languages
+    assert "Op Apple Silicon gebruikt Auto Apple MPS voor normale stems." in languages
+    assert "Auf Apple Silicon verwendet Auto Apple MPS für normale Stems." in languages
+    assert "Use Apple MPS on Apple Silicon. Recommended for normal stems." in languages
+    assert "Gebruik Apple MPS op Apple Silicon. Aanbevolen voor normale stems." in languages
+    assert "Apple MPS auf Apple Silicon verwenden. Empfohlen fuer normale Stems." not in languages
+    assert "Apple MPS auf Apple Silicon verwenden. Empfohlen für normale Stems." in languages
     assert "MPS/CPU" not in "\n".join(
         line for line in languages.splitlines() if "device_auto_desc" in line
     )
@@ -291,6 +299,7 @@ def test_lua_and_i18n_expose_only_explicit_experimental_mps():
     assert 'local mpsAvailable = false' in main
     assert 'if mpsAvailable and cpuReady then' in main
     assert 'add("mps", "Apple MPS", "mps", "device_mps_desc")' in main
+    assert '"Apple MPS (Experimental)"' not in main
     assert 'if sawMps then return "CPU" end' in main
     assert 'schedulerBackend = "cpu"' in main
     for field in (

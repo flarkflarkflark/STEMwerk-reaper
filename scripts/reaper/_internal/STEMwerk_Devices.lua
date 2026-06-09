@@ -15,7 +15,7 @@ end
 
 function DEVICE_RUNTIME.runtimeDeviceSafeList()
     return {
-        { id = "auto", name = "Auto", type = "auto", desc = "Auto-select best available backend (or CPU fallback)." },
+        { id = "auto", name = "Auto", type = "auto", desc = "Automatically chooses the best available processing." },
         { id = "cpu", name = "CPU", type = "cpu", desc = "Force CPU processing (works everywhere; slower)." },
     }
 end

@@ -10843,7 +10843,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
             applyFriendlyGpuName(d)
         end
         if tostring(d.id or "") == "mps" or tostring(d.type or "") == "mps" then
-            d.uiName = T("device_mps_label") or "Apple MPS (Experimental)"
+            d.uiName = T("device_mps_label") or "Apple MPS"
         else
             d.uiName = buildDeviceUiLabel(d)
         end
