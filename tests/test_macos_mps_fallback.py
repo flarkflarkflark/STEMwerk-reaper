@@ -111,8 +111,35 @@ def test_select_device_auto_skips_mps_even_if_listed(monkeypatch):
     assert devices.select_device("auto") == ("cpu", "CPU")
 
 
+def test_normal_auto_prefers_mps_on_macos_apple_silicon(monkeypatch, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "_is_darwin_arm64", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "get_available_devices",
+        lambda: [
+            {"id": "auto", "name": "Auto", "type": "auto"},
+            {"id": "cpu", "name": "CPU", "type": "cpu"},
+            {"id": "mps", "name": "Apple MPS", "type": "mps"},
+        ],
+    )
+    monkeypatch.setattr(module, "select_device", lambda requested: ("mps", "Apple MPS"))
+
+    requested, resolved, preview, _live_ids = module._resolve_normal_runtime_device("auto")
+    preview_device, _sep, _name = preview.partition("|")
+
+    assert requested == "auto"
+    assert resolved == "mps"
+    assert preview_device == "mps"
+    stderr = capsys.readouterr().err
+    assert "STEMWERK_DIAG requested_device=auto" in stderr
+    assert "STEMWERK_DIAG auto_selected_preferred=mps (Apple MPS)" in stderr
+    assert module._is_unexpected_cpu_downgrade(requested, preview_device) is False
+
+
 def test_auto_cpu_is_not_an_unexpected_runtime_downgrade(monkeypatch):
     module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "_is_darwin_arm64", lambda: False)
     monkeypatch.setattr(module.sys, "platform", "darwin")
     monkeypatch.setattr(
         module,

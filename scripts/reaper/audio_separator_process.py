@@ -2526,8 +2526,10 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
 
     if requested == "auto":
         preferred = None
+        if _is_darwin_arm64():
+            preferred = next((dev for dev in live_devices if str(dev.get("id", "")).strip().lower() == "mps"), None)
         if sys.platform.startswith("linux"):
-            preferred = _prefer_linux_amd_device(live_devices, _get_skip_ids())
+            preferred = preferred or _prefer_linux_amd_device(live_devices, _get_skip_ids())
         if preferred:
             resolved = preferred.get("id") or "auto"
             print(

@@ -17851,7 +17851,7 @@ _sep.SCHEDULER_POLICY = {
     NORMAL_GPU_MAX_PARALLEL = 4,
     NORMAL_CPU_MAX_PARALLEL = 2,
     NORMAL_DIRECTML_MAX_PARALLEL = 1,
-    NORMAL_MPS_MAX_PARALLEL = 1,
+    NORMAL_MPS_MAX_PARALLEL = 2,
     DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 4,
     DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 4,
     DKS_DIRECT_CPU_MAX_PARALLEL = 2,
@@ -17943,9 +17943,15 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     end
 
     if backend == "mps" then
-        policy.sequentialMode = true
-        policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL
-        policy.reason = "scheduler_mps_conservative"
+        if route == "normal" then
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)
+            policy.reason = "scheduler_normal_mps_cap2"
+        else
+            policy.sequentialMode = true
+            policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL
+            policy.reason = "scheduler_mps_conservative"
+        end
         return policy
     end
 
@@ -18910,7 +18916,11 @@ _sep.runSingleTrackSeparation = function(trackList)
         and hasRuntimeBackendType("mps")
         and not hasRuntimeBackendType("cuda")
         and not hasRuntimeBackendType("directml") then
-        schedulerBackend = "cpu"
+        if schedulerRoute == "normal" then
+            schedulerBackend = "mps"
+        else
+            schedulerBackend = "cpu"
+        end
     end
     if schedulerBackend == "unknown" and hasRuntimeBackendType("cuda") then
         schedulerBackend = "gpu"

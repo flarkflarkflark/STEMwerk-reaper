@@ -909,7 +909,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert "NORMAL_GPU_MAX_PARALLEL = 4" in script
     assert "NORMAL_CPU_MAX_PARALLEL = 2" in script
     assert "NORMAL_DIRECTML_MAX_PARALLEL = 1" in script
-    assert "NORMAL_MPS_MAX_PARALLEL = 1" in script
+    assert "NORMAL_MPS_MAX_PARALLEL = 2" in script
     assert "DKS_DIRECT_GPU_SHORT_MAX_PARALLEL = 4" in script
     assert "DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 4" in script
     assert "DKS_DIRECT_CPU_MAX_PARALLEL = 2" in script
@@ -919,6 +919,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'schedulerRoute = "dks_extract"' in script
     assert 'schedulerStage = "stage1_normal"' in script
     assert 'and hasRuntimeBackendType("mps")' in script
+    assert 'schedulerBackend = "mps"' in script
     assert 'schedulerBackend = "cpu"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap4"' in script
@@ -930,6 +931,7 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert '"scheduler_dks_extract_stage1_normal_" .. cpuParallelFallbackReason() .. "_cap1"' in script
     assert '"scheduler_normal_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
+    assert 'policy.reason = "scheduler_normal_mps_cap2"' in script
     assert 'policy.reason = "scheduler_mps_conservative"' in script
     assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
     assert 'benchmarkGpuCapIgnoredReason = requestedBenchmarkCap == 8 and "cap8_normal_gpu_only" or "invalid_request"' in script
@@ -948,7 +950,10 @@ def test_normal_cpu_policy_cap2_slice_keeps_other_backend_caps_unchanged():
     assert 'if backend == "directml" then' in script
     assert 'policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL' in script
     assert 'if backend == "mps" then' in script
+    assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)' in script
+    assert 'policy.reason = "scheduler_normal_mps_cap2"' in script
     assert 'policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL' in script
+    assert 'policy.reason = "scheduler_mps_conservative"' in script
     assert 'if route == "dks_direct" then' in script
     assert 'policy.cap = _sep.SCHEDULER_POLICY.DKS_DIRECT_CPU_MAX_PARALLEL' in script
     assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
@@ -956,6 +961,33 @@ def test_normal_cpu_policy_cap2_slice_keeps_other_backend_caps_unchanged():
     assert 'policy.reason = "scheduler_unknown_backend_conservative"' in script
     assert 'schedulerPolicy.backend == "gpu"' in script
     assert "not_gpu_parallel_eligible" in script
+
+
+def test_normal_mps_scheduler_cap2_slice_preserves_parallel_launch_limiter():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert 'if backend == "mps" then' in script
+    assert 'if route == "normal" then' in script
+    assert 'policy.sequentialMode = false' in script
+    assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)' in script
+    assert 'policy.reason = "scheduler_normal_mps_cap2"' in script
+    assert 'multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil' in script
+    assert 'launchCount = math.min(#trackJobs, multiTrackQueue.parallelJobLimit)' in script
+    assert '"timing:workers_launched count=" .. tostring(#trackJobs)' in script
+    assert ' .. " mode=" .. (multiTrackQueue.sequentialMode and "sequential" or "parallel")' in script
+    assert ' .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit or "none")' in script
+
+
+def test_normal_auto_mps_slice_prefers_mps_without_changing_dks_routes():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert 'if string.lower(tostring(effectiveRunDevice() or "")) == "auto"' in script
+    assert 'and hasRuntimeBackendType("mps")' in script
+    assert 'if schedulerRoute == "normal" then' in script
+    assert 'schedulerBackend = "mps"' in script
+    assert 'schedulerBackend = "cpu"' in script
+    assert 'if isDrumKitMultiRun and workflowSourceArg == "dks_direct" then' in script
+    assert 'elseif isDrumKitMultiRun and workflowSourceArg == "dks_extract" then' in script
 
 
 def test_drumkit_cpu_default_policy_applies_cap2_only_when_safety_gate_passes():
