@@ -2637,6 +2637,16 @@ def test_cuda_benchmark_override_falls_back_to_cpu_when_isolation_probe_fails(mo
     assert "bench_drumsep_helper_device_ignored_reason=cuda_helper_probe_failed_cudnn_symbol" in stderr
 
 
+def test_rocm_runtime_defaults_auto_helper_to_rocm_without_benchmark_override(monkeypatch):
+    module = _load_audio_separator_process_module()
+    monkeypatch.delenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, raising=False)
+    monkeypatch.setattr(module.sys, "platform", "linux")
+
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("rocm", "auto_rocm_default")
+    assert module._resolve_benchmark_drumsep_helper_device("cpu", "rocm") == ("cpu", "not_requested")
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "cuda") == ("cpu", "not_requested")
+
+
 def test_run_direct_dks_drumsep_helper_uses_cpu_device_and_isolated_env(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
     helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py").resolve()

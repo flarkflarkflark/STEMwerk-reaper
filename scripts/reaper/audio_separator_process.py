@@ -2145,10 +2145,15 @@ def _resolve_benchmark_drumsep_helper_device(
     print(f"bench_drumsep_helper_device_requested={raw or 'none'}", file=sys.stderr)
 
     if not raw:
-        if sys.platform.startswith("linux") and runtime_kind_lower == "rocm" and explicit_gpu_request:
-            print("bench_drumsep_helper_device_applied=rocm", file=sys.stderr)
-            print("bench_drumsep_helper_device_ignored_reason=explicit_rocm_default", file=sys.stderr)
-            return "rocm", "explicit_rocm_default"
+        if sys.platform.startswith("linux") and runtime_kind_lower == "rocm":
+            if normalized_request in {"", "auto"}:
+                print("bench_drumsep_helper_device_applied=rocm", file=sys.stderr)
+                print("bench_drumsep_helper_device_ignored_reason=auto_rocm_default", file=sys.stderr)
+                return "rocm", "auto_rocm_default"
+            if explicit_gpu_request:
+                print("bench_drumsep_helper_device_applied=rocm", file=sys.stderr)
+                print("bench_drumsep_helper_device_ignored_reason=explicit_rocm_default", file=sys.stderr)
+                return "rocm", "explicit_rocm_default"
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=not_requested", file=sys.stderr)
         return "cpu", "not_requested"
