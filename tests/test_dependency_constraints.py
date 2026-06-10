@@ -985,11 +985,24 @@ def test_normal_auto_mps_slice_prefers_mps_without_changing_dks_routes():
 
     assert 'if string.lower(tostring(effectiveRunDevice() or "")) == "auto"' in script
     assert 'and hasRuntimeBackendType("mps")' in script
-    assert 'if schedulerRoute == "normal" then' in script
+    assert 'if schedulerRoute == "normal" or schedulerRoute == "dks_extract" then' in script
     assert 'schedulerBackend = "mps"' in script
     assert 'schedulerBackend = "cpu"' in script
     assert 'if isDrumKitMultiRun and workflowSourceArg == "dks_direct" then' in script
     assert 'elseif isDrumKitMultiRun and workflowSourceArg == "dks_extract" then' in script
+
+
+def test_dks_extract_mps_scheduler_markers_match_actual_parent_policy():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text()
+
+    assert 'requestedDevice = effectiveRunDevice()' in script
+    assert 'elseif route == "dks_extract" and tostring(opts.requestedDevice or ""):lower() == "auto" then' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_normal_mps_cap2"' in script
+    assert 'elseif route == "dks_extract" then' in script
+    assert 'policy.cap = 1' in script
+    assert 'policy.reason = "scheduler_dks_extract_mps_sequential"' in script
+    assert 'multiTrackQueue.parallelJobLimit = (not multiTrackQueue.sequentialMode) and schedulerPolicy.cap or nil' in script
+    assert ' .. " cap=" .. tostring(multiTrackQueue.parallelJobLimit or "none")' in script
 
 
 def test_drumkit_cpu_default_policy_applies_cap2_only_when_safety_gate_passes():

@@ -18026,6 +18026,14 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
             policy.sequentialMode = false
             policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)
             policy.reason = "scheduler_normal_mps_cap2"
+        elseif route == "dks_extract" and tostring(opts.requestedDevice or ""):lower() == "auto" then
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)
+            policy.reason = "scheduler_dks_extract_stage1_normal_mps_cap2"
+        elseif route == "dks_extract" then
+            policy.sequentialMode = true
+            policy.cap = 1
+            policy.reason = "scheduler_dks_extract_mps_sequential"
         else
             policy.sequentialMode = true
             policy.cap = _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL
@@ -19000,7 +19008,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         and hasRuntimeBackendType("mps")
         and not hasRuntimeBackendType("cuda")
         and not hasRuntimeBackendType("directml") then
-        if schedulerRoute == "normal" then
+        if schedulerRoute == "normal" or schedulerRoute == "dks_extract" then
             schedulerBackend = "mps"
         else
             schedulerBackend = "cpu"
@@ -19033,6 +19041,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         route = schedulerRoute,
         stage = schedulerStage,
         backend = schedulerBackend,
+        requestedDevice = effectiveRunDevice(),
         requestedParallel = requestedParallel,
         jobCount = #trackJobs,
         cpuCount = detectLogicalCpuCount(),
