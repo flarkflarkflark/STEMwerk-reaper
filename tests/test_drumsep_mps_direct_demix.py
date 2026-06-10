@@ -151,6 +151,7 @@ def test_benchmark_helper_device_defaults_to_cpu_and_rejects_invalid(monkeypatch
     module = _load_audio_process()
     monkeypatch.delenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, raising=False)
     assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("cpu", "not_requested")
+    assert module._resolve_benchmark_drumsep_helper_device("cuda:0", "rocm") == ("rocm", "explicit_rocm_default")
 
     monkeypatch.setenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "vulkan")
     assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("cpu", "invalid_request")

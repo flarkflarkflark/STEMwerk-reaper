@@ -2129,10 +2129,26 @@ def _resolve_benchmark_drumsep_helper_device(
 ) -> Tuple[str, str]:
     raw = str(os.environ.get(BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "") or "").strip().lower()
     normalized_request = str(requested_device or "auto").strip().lower()
+    runtime_kind_lower = str(runtime_kind or "").strip().lower()
+    explicit_gpu_request = (
+        normalized_request not in {"", "auto", "cpu"}
+        and (
+            normalized_request.startswith("cuda")
+            or normalized_request.startswith("rocm")
+            or normalized_request == "gpu"
+            or "radeon" in normalized_request
+            or "nvidia" in normalized_request
+            or "rx " in normalized_request
+        )
+    )
     print(f"bench_drumsep_helper_device_env={raw or 'unset'}", file=sys.stderr)
     print(f"bench_drumsep_helper_device_requested={raw or 'none'}", file=sys.stderr)
 
     if not raw:
+        if sys.platform.startswith("linux") and runtime_kind_lower == "rocm" and explicit_gpu_request:
+            print("bench_drumsep_helper_device_applied=rocm", file=sys.stderr)
+            print("bench_drumsep_helper_device_ignored_reason=explicit_rocm_default", file=sys.stderr)
+            return "rocm", "explicit_rocm_default"
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=not_requested", file=sys.stderr)
         return "cpu", "not_requested"
@@ -2152,7 +2168,7 @@ def _resolve_benchmark_drumsep_helper_device(
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=platform_not_linux", file=sys.stderr)
         return "cpu", "platform_not_linux"
-    if str(runtime_kind or "").strip().lower() != raw:
+    if runtime_kind_lower != raw:
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=runtime_backend_mismatch", file=sys.stderr)
         return "cpu", "runtime_backend_mismatch"
