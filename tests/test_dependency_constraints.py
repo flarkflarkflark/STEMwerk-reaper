@@ -780,10 +780,11 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
     assert "function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)" in script
     assert 'if policyRoute == "dks_direct" then' in script
     assert 'return "mps", "explicit_mps_direct_demix"' in script
+    assert 'return "mps", "auto_mps_direct_demix"' in script
     assert 'return "cpu", "fallback_cpu"' in script
     assert 'return "cpu", "bench_helper_cuda_unverified_cpu_fallback"' in script
     assert 'drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(' in script
-    assert "effectiveRunModel()" in script
+    assert "            requestedStage2ModelArg\n        )" in script
     assert 'isDrumKitMultiRun and schedulerRoute == "dks_direct"' in script
     assert 'drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu"' in script
     assert 'drumsepSchedulerPolicy == "fallback_cpu"' in script
@@ -4033,6 +4034,7 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
 
     assert "function deriveResolvedRuntimeFooter(footerDeviceDetail)" in script
+    assert "function deriveMultiTrackRuntimeFooter(job)" in script
     assert "function preferredRuntimeSelection(runtimeSelected, stage2Runtime, stage1Runtime, backendRuntime, fallbackDevice)" in script
     assert "progressState._runtimeSelected" in script
     assert "progressState._stage2Runtime" in script
@@ -4049,6 +4051,8 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "progressState._runtimeGpuCapable" in script
     assert "progressState._runtimeDeviceNames" in script
     assert "function formatUserFacingProcessingDeviceLabel(...)" in script
+    assert "local preferred = formatUserFacingProcessingDeviceLabel(" in script
+    assert 'if preferred ~= "" then' in script
     assert "function activeDrumsepCpuFallbackLabel()" in script
     assert "function buildDksFooterDeviceIntent(deviceDetail)" in script
     assert "local helperLabel = activeDrumsepCpuFallbackLabel()" in script
@@ -4058,6 +4062,7 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")' in script
     assert 'trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")' in script
     assert 'trSafeValue("footer_device_gpu_intent", "GPU")' in script
+    assert 'local gpuResolved = runtimeSel == "mps" or runtimeSel == "rocm" or runtimeSel == "cuda"' in script
     assert "gpuRequested or gpuResolved" in script
     assert "trSafeValue(\"footer_device_auto_gpu_intent\", \"Auto [GPU]\")" in script
     assert "or req:find(\"directml\", 1, true)" in script
@@ -4813,7 +4818,7 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'function attachResultRuntimeMetadata(data)' in script
     assert 'local state = type(progressState) == "table" and progressState or nil' in script
     assert 'data.deviceName = tostring((state and state._deviceName) or "")' in script
-    assert 'data.effectiveDevice = tostring((state and state._effectiveDevice) or "")' in script
+    assert 'data.effectiveDevice = tostring((state and (state._effectiveDevice or state._drumsepHelperDeviceArg)) or "")' in script
     assert 'function sanitizeUserFacingMethodLabel(candidate)' in script
     assert 'function resolveSingleTrackMethodLabel(data)' in script
     assert 'if methodLabel == "CPU" then return "CPU" end' in script
@@ -4830,6 +4835,25 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then' in script
     assert 'progressState._effectiveDevice = info.effectiveDevice' in script
     assert 'progressState._stage2Device or progressState._stage1Device or progressState._effectiveDevice' in script
+
+
+def test_multi_track_footer_and_result_use_observed_job_runtime():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert "function updateMultiTrackJobRuntimeMetadata(job)" in script
+    assert 'runtimeSelected = line:match("drumsep_runtime_selected=([%w_:%-]+)") or runtimeSelected' in script
+    assert 'helperDevice = line:match("drumsep_helper_device_arg=([%w_:%-]+)") or helperDevice' in script
+    assert 'directDemixDevice = line:match("direct_demix_device=([%w_:%-]+)") or directDemixDevice' in script
+    assert "updateMultiTrackJobRuntimeMetadata(job)" in script
+    assert "job and job.runtimeSelected" in script
+    assert "multiTrackQueue and multiTrackQueue.runtimeSelected" in script
+    assert 'local predictedDrumsepBackend = tostring((multiTrackQueue and multiTrackQueue.drumsepSchedulerBackend) or ""):lower()' in script
+    assert 'if requestedDevice == "auto" and predictedDrumsepBackend ~= "" and not runtimeConfirmed then' in script
+    assert "job.runtimeMetadataConfirmed = true" in script
+    assert "multiTrackQueue.runtimeMetadataConfirmed = true" in script
+    assert 'resultData.runtimeSelected = tostring(multiTrackQueue.runtimeSelected or "")' in script
+    assert 'resultData.backendRuntime = tostring(multiTrackQueue.backendRuntime or "")' in script
+    assert 'resultData.effectiveDevice = tostring(multiTrackQueue.effectiveDevice or multiTrackQueue.drumsepHelperDeviceArg or "")' in script
 
 
 def test_result_window_hides_user_facing_reason_lines_for_backend_tokens():
@@ -4851,6 +4875,8 @@ def test_direct_dks_device_labels_use_shared_user_facing_normalizer():
     assert 'uiName = uiLabel ~= "" and uiLabel or rawName' in script
     assert 'return normalizeUserFacingDeviceLabel(name)' in script
     assert 'function formatUserFacingProcessingDeviceLabel(...)' in script
+    assert 'if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then' in script
+    assert 'if lower == "cpu" or lower:find("cpu", 1, true) or lower:find("fallback_cpu", 1, true)' in script
     assert 'or lower:find("radeon", 1, true)' in script
 
 

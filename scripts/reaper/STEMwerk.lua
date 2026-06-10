@@ -1089,15 +1089,6 @@ function formatUserFacingProcessingDeviceLabel(...)
     local candidates = { ... }
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
-        if lower == "cpu" or lower:find("cpu", 1, true) or lower:find("fallback_cpu", 1, true)
-            or lower:find("cpu_isolated", 1, true) or lower:find("unknown_cap1", 1, true)
-            or lower == "backend_not_gpu" or lower == "auto_no_gpu"
-        then
-            return "CPU"
-        end
-    end
-    for _, candidate in ipairs(candidates) do
-        local lower = tostring(candidate or ""):lower()
         if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then
             return "MPS"
         end
@@ -1118,6 +1109,15 @@ function formatUserFacingProcessingDeviceLabel(...)
             or lower:match("%f[%a]gtx%s*%d") or lower:match("%f[%a]rx%s*%d")
         then
             return "GPU"
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "cpu" or lower:find("cpu", 1, true) or lower:find("fallback_cpu", 1, true)
+            or lower:find("cpu_isolated", 1, true) or lower:find("unknown_cap1", 1, true)
+            or lower == "backend_not_gpu" or lower == "auto_no_gpu"
+        then
+            return "CPU"
         end
     end
     return ""
@@ -9156,6 +9156,13 @@ function attachResultRuntimeMetadata(data)
     if type(data) ~= "table" then return data end
 
     local state = type(progressState) == "table" and progressState or nil
+    local runtimeObserved = state and preferredRuntimeSelection(
+        state._runtimeSelected,
+        state._stage2Runtime,
+        state._stage1Runtime,
+        state._backendRuntime,
+        state._drumsepHelperDeviceArg or state._effectiveDevice or state._stage2Device or state._stage1Device
+    ) or ""
 
     if not data.deviceName or data.deviceName == "" then
         data.deviceName = tostring((state and state._deviceName) or "")
@@ -9164,13 +9171,7 @@ function attachResultRuntimeMetadata(data)
         data.deviceRequest = tostring((state and state._normalizedDeviceRequest) or (SETTINGS and SETTINGS.device) or "")
     end
     if not data.runtimeSelected or data.runtimeSelected == "" then
-        data.runtimeSelected = tostring((state and preferredRuntimeSelection(
-            state._runtimeSelected,
-            state._stage2Runtime,
-            state._stage1Runtime,
-            state._backendRuntime,
-            state._stage2Device or state._stage1Device
-        )) or "")
+        data.runtimeSelected = tostring(runtimeObserved or "")
     end
     if not data.stage2Runtime or data.stage2Runtime == "" then
         data.stage2Runtime = tostring((state and state._stage2Runtime) or "")
@@ -9179,38 +9180,36 @@ function attachResultRuntimeMetadata(data)
         data.stage1Runtime = tostring((state and state._stage1Runtime) or "")
     end
     if not data.backendRuntime or data.backendRuntime == "" then
-        data.backendRuntime = tostring((state and state._backendRuntime) or "")
+        data.backendRuntime = tostring((state and (state._backendRuntime or state._drumsepHelperDeviceArg)) or "")
     end
     if not data.effectiveDevice or data.effectiveDevice == "" then
-        data.effectiveDevice = tostring((state and state._effectiveDevice) or "")
+        data.effectiveDevice = tostring((state and (state._effectiveDevice or state._drumsepHelperDeviceArg)) or "")
     end
     if not data.backend or data.backend == "" then
-        if multiTrackQueue and multiTrackQueue.schedulerPolicyBackend and multiTrackQueue.schedulerPolicyBackend ~= "" then
+        local selected = preferredRuntimeSelection(
+            data.runtimeSelected,
+            data.stage2Runtime,
+            data.stage1Runtime,
+            data.backendRuntime,
+            data.effectiveDevice
+        )
+        local requested = tostring(data.deviceRequest or ""):lower()
+        if selected:find("directml", 1, true) or requested:find("directml", 1, true) then
+            data.backend = "directml"
+        elseif selected == "mps" or requested == "mps" then
+            data.backend = "mps"
+        elseif selected == "rocm" or selected == "cuda" or selected:match("^cuda:%d+") or requested == "gpu" or requested == "rocm" or requested == "cuda" or requested:match("^cuda:%d+") then
+            data.backend = "gpu"
+        elseif selected == "cpu" or requested == "cpu" then
+            data.backend = "cpu"
+        elseif multiTrackQueue and multiTrackQueue.schedulerPolicyBackend and multiTrackQueue.schedulerPolicyBackend ~= "" then
             data.backend = tostring(multiTrackQueue.schedulerPolicyBackend)
-        else
-            local selected = preferredRuntimeSelection(
-                data.runtimeSelected,
-                data.stage2Runtime,
-                data.stage1Runtime,
-                data.backendRuntime,
-                data.effectiveDevice
-            )
-            local requested = tostring(data.deviceRequest or ""):lower()
-            if selected == "cpu" or requested == "cpu" then
-                data.backend = "cpu"
-            elseif selected:find("directml", 1, true) or requested:find("directml", 1, true) then
-                data.backend = "directml"
-            elseif selected == "mps" or requested == "mps" then
-                data.backend = "mps"
-            elseif selected == "rocm" or selected == "cuda" or selected:match("^cuda:%d+") or requested == "gpu" or requested == "rocm" or requested == "cuda" or requested:match("^cuda:%d+") then
+        elseif data.deviceName and data.deviceName ~= "" then
+            local dn = tostring(data.deviceName):lower()
+            if dn:find("nvidia", 1, true) or dn:find("geforce", 1, true) or dn:find("rtx", 1, true) or dn:find("gtx", 1, true)
+                or dn:find("amd", 1, true) or dn:find("radeon", 1, true) or dn:find("intel", 1, true)
+            then
                 data.backend = "gpu"
-            elseif data.deviceName and data.deviceName ~= "" then
-                local dn = tostring(data.deviceName):lower()
-                if dn:find("nvidia", 1, true) or dn:find("geforce", 1, true) or dn:find("rtx", 1, true) or dn:find("gtx", 1, true)
-                    or dn:find("amd", 1, true) or dn:find("radeon", 1, true) or dn:find("intel", 1, true)
-                then
-                    data.backend = "gpu"
-                end
             end
         end
     end
@@ -14517,12 +14516,16 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
     end
 
     if policyRoute == "dks_direct" then
-        local explicitMpsDirectDemix = rawRequest == "mps"
-            and (ARCH == "arm64" or ARCH == "aarch64")
+        local mpsDirectDemixAvailable = (ARCH == "arm64" or ARCH == "aarch64")
             and hasRuntimeSchedulerDeviceType("mps")
             and resolvedModel == "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+        local explicitMpsDirectDemix = rawRequest == "mps"
+            and mpsDirectDemixAvailable
         if explicitMpsDirectDemix then
             return "mps", "explicit_mps_direct_demix"
+        end
+        if normalizedRequest == "auto" and mpsDirectDemixAvailable then
+            return "mps", "auto_mps_direct_demix"
         end
         local benchHelperDevice = select(1, readBenchmarkDrumsepHelperDeviceRequest())
         if normalizedRequest ~= "cpu" and OS == "Linux" and benchHelperDevice == "rocm" then
@@ -14547,9 +14550,8 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
             -- closed to CPU after Lua has already selected concurrency.
             return "cpu", "bench_helper_cuda_unverified_cpu_fallback"
         end
-        -- Direct Kit currently runs the DrumSep helper on CPU for every non-MPS route.
-        -- The selected ROCm/CUDA runtime only decides which optional helper runtime is available,
-        -- not the actual helper device used for Direct Kit processing.
+        -- On Apple Silicon, Direct Kit Auto now prefers MPS direct-demix when available.
+        -- Other unsupported/non-MPS routes still fall back to CPU helper execution here.
         return "cpu", "fallback_cpu"
     end
 
@@ -14612,8 +14614,9 @@ function buildDksFooterDeviceIntent(deviceDetail)
     local detail = tostring(deviceDetail or ""):lower()
 
     local gpuRequested = req == "gpu" or req == "cuda" or req == "rocm" or req:match("^cuda:%d+") or req:find("directml", 1, true)
-    local gpuResolved = runtimeSel == "rocm" or runtimeSel == "cuda" or runtimeSel:match("^cuda:%d+") or gpuCap == "yes"
+    local gpuResolved = runtimeSel == "mps" or runtimeSel == "rocm" or runtimeSel == "cuda" or runtimeSel:match("^cuda:%d+") or gpuCap == "yes"
         or detail:find("gpu", 1, true) ~= nil
+        or detail:find("mps", 1, true) ~= nil
         or detail:find("rocm", 1, true) ~= nil
         or detail:find("cuda", 1, true) ~= nil
         or detail:find("directml", 1, true) ~= nil
@@ -14725,21 +14728,43 @@ function deriveMultiTrackRuntimeFooter(job)
     local footerDeviceDetail = jobStage:match("%[([^%]]+)%]") or ""
     local compactDetail = compactProgressDeviceToken(footerDeviceDetail, footerDeviceDetail)
     local backend = tostring((multiTrackQueue and multiTrackQueue.schedulerPolicyBackend) or ""):lower()
+    local predictedDrumsepBackend = tostring((multiTrackQueue and multiTrackQueue.drumsepSchedulerBackend) or ""):lower()
     local requestedDevice = tostring(effectiveRunDevice() or ""):lower()
+    local runtimeConfirmed = (job and job.runtimeMetadataConfirmed)
+        or (multiTrackQueue and multiTrackQueue.runtimeMetadataConfirmed)
+    if requestedDevice == "auto" and predictedDrumsepBackend ~= "" and not runtimeConfirmed then
+        return formatUserFacingProcessingDeviceLabel(predictedDrumsepBackend)
+    end
     local runtimeSel = preferredRuntimeSelection(
-        progressState._runtimeSelected,
-        progressState._stage2Runtime,
-        progressState._stage1Runtime,
-        progressState._backendRuntime,
-        footerDeviceDetail
+        job and job.runtimeSelected,
+        multiTrackQueue and multiTrackQueue.runtimeSelected,
+        job and job.backendRuntime,
+        multiTrackQueue and multiTrackQueue.backendRuntime,
+        job and (job.drumsepHelperDeviceArg or job.effectiveDevice)
+            or (multiTrackQueue and (multiTrackQueue.drumsepHelperDeviceArg or multiTrackQueue.effectiveDevice))
+            or footerDeviceDetail
     )
 
+    local preferred = formatUserFacingProcessingDeviceLabel(
+        runtimeSel,
+        job and job.drumsepHelperDeviceArg,
+        multiTrackQueue and multiTrackQueue.drumsepHelperDeviceArg,
+        job and job.effectiveDevice,
+        multiTrackQueue and multiTrackQueue.effectiveDevice,
+        compactDetail,
+        progressState._deviceName
+    )
+    if preferred ~= "" then
+        return preferred
+    end
+
     return formatUserFacingProcessingDeviceLabel(
-        backend,
+        predictedDrumsepBackend,
         runtimeSel,
         requestedDevice,
         compactDetail,
-        progressState._deviceName
+        progressState._deviceName,
+        backend
     )
 end
 
@@ -14888,6 +14913,47 @@ multiTrackQueue = {
     nextPollAt = 0,
 }
 
+function updateMultiTrackJobRuntimeMetadata(job)
+    if not job or not job.logFile or job.logFile == "" then return end
+    local f = io.open(job.logFile, "r")
+    if not f then return end
+
+    local runtimeSelected = ""
+    local backendRuntime = ""
+    local effectiveDevice = ""
+    local helperDevice = ""
+    local directDemixDevice = ""
+    for line in f:lines() do
+        runtimeSelected = line:match("drumsep_runtime_selected=([%w_:%-]+)") or runtimeSelected
+        backendRuntime = line:match("backend_runtime=([%w_:%-]+)") or backendRuntime
+        effectiveDevice = line:match("effective_device=([%w_:%-]+)") or effectiveDevice
+        helperDevice = line:match("drumsep_helper_device_arg=([%w_:%-]+)") or helperDevice
+        directDemixDevice = line:match("direct_demix_device=([%w_:%-]+)") or directDemixDevice
+    end
+    f:close()
+
+    local observed = preferredRuntimeSelection(
+        runtimeSelected,
+        directDemixDevice,
+        helperDevice,
+        effectiveDevice,
+        ""
+    )
+    if observed == "" then return end
+
+    job.runtimeMetadataConfirmed = true
+    job.runtimeSelected = observed
+    job.backendRuntime = backendRuntime ~= "" and backendRuntime or observed
+    job.effectiveDevice = directDemixDevice ~= "" and directDemixDevice
+        or (effectiveDevice ~= "" and effectiveDevice or helperDevice)
+    job.drumsepHelperDeviceArg = helperDevice
+    multiTrackQueue.runtimeSelected = job.runtimeSelected
+    multiTrackQueue.backendRuntime = job.backendRuntime
+    multiTrackQueue.effectiveDevice = job.effectiveDevice
+    multiTrackQueue.drumsepHelperDeviceArg = job.drumsepHelperDeviceArg
+    multiTrackQueue.runtimeMetadataConfirmed = true
+end
+
 -- Internal/dev-only parallel worker limiter (no UI yet).
 -- nil = production/default: unchanged unlimited parallel launch behavior
 -- 3/4 were promising internal benchmark candidates on local GPU
@@ -15018,6 +15084,14 @@ function drawProgressWindow()
                 local drumsepHelperDeviceArg = line:match("drumsep_helper_device_arg=([%w_:%-]+)")
                 if drumsepHelperDeviceArg then
                     info.drumsepHelperDeviceArg = drumsepHelperDeviceArg
+                end
+                local directDemixDevice = line:match("direct_demix_device=([%w_:%-]+)")
+                if directDemixDevice then
+                    info.effectiveDevice = directDemixDevice
+                    info.stage2Device = directDemixDevice
+                    if not info.backendRuntime or info.backendRuntime == "" then
+                        info.backendRuntime = directDemixDevice
+                    end
                 end
                 local drumsepFallbackReason = line:match("drumsep_runtime_fallback_reason=([^\r\n]+)")
                 if drumsepFallbackReason then
@@ -18841,6 +18915,11 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.forceSequentialReason = nil
     multiTrackQueue.parallelJobLimit = nil
     multiTrackQueue.executionModeReason = requestedParallel and "user_parallel" or "user_sequential"
+    multiTrackQueue.runtimeSelected = nil
+    multiTrackQueue.backendRuntime = nil
+    multiTrackQueue.effectiveDevice = nil
+    multiTrackQueue.drumsepHelperDeviceArg = nil
+    multiTrackQueue.runtimeMetadataConfirmed = nil
     local hasPerItemJobs = false
     for _, job in ipairs(trackJobs) do
         if job.perItem then
@@ -18937,7 +19016,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(
             effectiveRunDevice(),
             schedulerRoute,
-            effectiveRunModel()
+            requestedStage2ModelArg
         )
         drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu"
             and (
@@ -19604,6 +19683,7 @@ _sep.updateAllJobsProgress = function()
                     job.stage = lastProgress.stage
                 end
             end
+            updateMultiTrackJobRuntimeMetadata(job)
 
             -- Check if done
             local doneFile = io.open(job.doneFile, "r")
@@ -21906,6 +21986,10 @@ _sep.processAllStemsResult = function()
         resultData.totalJobs = #multiTrackQueue.jobs
         resultData.failedJobIndices = multiTrackQueue.dksFailedJobIndices or ""
     end
+    resultData.deviceRequest = tostring(effectiveRunDevice() or "")
+    resultData.runtimeSelected = tostring(multiTrackQueue.runtimeSelected or "")
+    resultData.backendRuntime = tostring(multiTrackQueue.backendRuntime or "")
+    resultData.effectiveDevice = tostring(multiTrackQueue.effectiveDevice or multiTrackQueue.drumsepHelperDeviceArg or "")
     resultData.action = actionData
 
     -- Cleanup temp working files (keep stem WAVs for REAPER references).
