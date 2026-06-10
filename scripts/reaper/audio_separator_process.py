@@ -112,25 +112,28 @@ def _should_use_drumsep_mps_direct_demix(
     machine = platform.machine().lower()
     if machine not in {"arm64", "aarch64"}:
         return False, "machine_not_apple_silicon"
-    if str(requested_device or "").strip().lower() != "mps":
-        return False, "requested_device_not_explicit_mps"
+    normalized_request = str(requested_device or "").strip().lower()
+    if normalized_request not in {"auto", "cpu", "mps"}:
+        return False, "requested_device_not_supported"
 
     info = runtime_info if isinstance(runtime_info, dict) else {}
-    if str(info.get("kind") or "").strip().lower() != "mps":
-        return False, "effective_runtime_not_mps"
-    if not bool(info.get("mps_built")):
-        return False, "mps_not_built"
-    if not bool(info.get("mps_available")):
-        return False, "mps_not_available"
+    runtime_kind = str(info.get("kind") or "").strip().lower()
+    if runtime_kind not in {"cpu", "mps"}:
+        return False, "effective_runtime_not_direct_demix_capable"
     versions = info.get("versions") if isinstance(info.get("versions"), dict) else {}
     if str(versions.get("audio-separator") or "").strip() != "0.23.0":
         return False, "audio_separator_version_not_0_23_0"
     if str(resolved_model or "").strip() != DIRECT_DKS_MODEL_ALIAS:
         return False, "unsupported_drumsep_model"
-    if os.environ.get(MPS_FALLBACK_ENV):
-        return False, "pytorch_mps_fallback_env_set"
-    if not bool(info.get("mps_experimental")):
-        return False, "mps_experimental_policy_inactive"
+    if runtime_kind == "mps":
+        if not bool(info.get("mps_built")):
+            return False, "mps_not_built"
+        if not bool(info.get("mps_available")):
+            return False, "mps_not_available"
+        if os.environ.get(MPS_FALLBACK_ENV):
+            return False, "pytorch_mps_fallback_env_set"
+        if not bool(info.get("mps_experimental")):
+            return False, "mps_experimental_policy_inactive"
     return True, "ok"
 
 
@@ -1482,7 +1485,7 @@ def _direct_dks_preflight_check(
     model_name: str,
     model_cache_dir: Path,
     runtime_info: Optional[Dict[str, Any]] = None,
-    allow_mps_direct_demix: bool = False,
+    allow_direct_demix: bool = False,
 ) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
     # This prevents delayed failure in sep.separate()/load_model for known
@@ -1522,7 +1525,7 @@ def _direct_dks_preflight_check(
         return False, requested_model, resolved_model, yaml_detail
     model_meta = _load_direct_dks_yaml_metadata(asset_map, model_cache_dir)
     skip_backend_limit = (
-        allow_mps_direct_demix
+        allow_direct_demix
         and requested_model == DIRECT_DKS_MODEL_ALIAS
         and resolved_model == DIRECT_DKS_MODEL_FILENAME
     )
@@ -1979,6 +1982,51 @@ def _select_drumsep_runtime(
             "selection_policy": "explicit_mps",
         }
         reason = "missing" if mps_detail == "missing" else "broken"
+        return None, reason, info
+
+    if _is_darwin_arm64() and normalized_request in {"auto", "gpu"}:
+        selection_policy = "gpu_prefer_mps" if normalized_request == "gpu" else "auto_prefer_mps"
+        print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_mps_start", file=sys.stderr)
+        selected_mps_python, mps_detail, mps_payload, mps_attempts = _probe_drumsep_runtime_candidates(
+            cpu_candidates,
+            require_mps=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_mps_end detail={mps_detail}", file=sys.stderr)
+        if selected_mps_python is not None:
+            info = dict(mps_payload or {})
+            info["kind"] = "mps"
+            info["detail"] = mps_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = selection_policy
+            info["mps_experimental"] = True
+            info["mps_python_attempts"] = mps_attempts
+            return selected_mps_python, "mps", info
+
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
+        selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
+        if selected_cpu_python is not None:
+            info = dict(cpu_payload or {})
+            info["kind"] = "cpu"
+            info["detail"] = cpu_detail
+            info["fallback_reason"] = f"mps_skipped:{mps_detail}"
+            info["selection_policy"] = "fallback_cpu_direct_demix"
+            info["cpu_python_attempts"] = cpu_attempts
+            info["mps_python_attempts"] = mps_attempts
+            return selected_cpu_python, "cpu", info
+
+        info = {
+            "mps_detail": mps_detail,
+            "cpu_detail": cpu_detail,
+            "mps_python": str(cpu_python),
+            "cpu_python": str(cpu_python),
+            "mps_python_attempts": mps_attempts,
+            "cpu_python_attempts": cpu_attempts,
+            "selection_policy": "fallback_cpu_direct_demix",
+            "normalized_request": normalized_request,
+        }
+        reason = "missing" if cpu_detail == "missing" and mps_detail == "missing" else "broken"
         return None, reason, info
 
     if explicit_cpu:
@@ -3526,20 +3574,23 @@ def main():
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
         if fallback_reason:
             print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
-        use_mps_direct_demix, mps_direct_demix_reason = _should_use_drumsep_mps_direct_demix(
+        use_direct_demix, direct_demix_reason = _should_use_drumsep_mps_direct_demix(
             args.workflow_mode,
             args.workflow_source,
             device_preference,
             runtime_info,
             requested_stage2_model,
         )
-        print(f"drumsep_mps_direct_demix_gate={'enabled' if use_mps_direct_demix else 'disabled'}", file=sys.stderr)
-        print(f"drumsep_mps_direct_demix_gate_reason={mps_direct_demix_reason}", file=sys.stderr)
+        direct_demix_device = runtime_kind if use_direct_demix and runtime_kind in {"cpu", "mps"} else ""
+        print(f"drumsep_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
+        print(f"drumsep_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
+        print(f"drumsep_mps_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
+        print(f"drumsep_mps_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
         ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(
             requested_stage2_model,
             model_cache_dir,
             runtime_info=runtime_info,
-            allow_mps_direct_demix=use_mps_direct_demix,
+            allow_direct_demix=use_direct_demix,
         )
         if not ok:
             known_err_text = str(known_err or "")
@@ -3613,10 +3664,10 @@ def main():
                     drumsep_python,
                     requested_stage2_model,
                     run_model,
-                    route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
-                    device="mps" if use_mps_direct_demix else helper_device,
+                    route="direct-demix" if use_direct_demix else "wrapper",
+                    device=direct_demix_device if use_direct_demix else helper_device,
                     requested_device=device_preference,
-                    backend_runtime="mps" if use_mps_direct_demix else stage2_backend,
+                    backend_runtime=direct_demix_device if use_direct_demix else stage2_backend,
                 )
             if not helper_ok:
                 stage = "stage2_separate"
@@ -3701,21 +3752,24 @@ def main():
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
         if fallback_reason:
             print(f"drumsep_runtime_fallback_reason={fallback_reason}", file=sys.stderr)
-        use_mps_direct_demix, mps_direct_demix_reason = _should_use_drumsep_mps_direct_demix(
+        use_direct_demix, direct_demix_reason = _should_use_drumsep_mps_direct_demix(
             args.workflow_mode,
             args.workflow_source,
             device_preference,
             runtime_info,
             run_model,
         )
-        print(f"drumsep_mps_direct_demix_gate={'enabled' if use_mps_direct_demix else 'disabled'}", file=sys.stderr)
-        print(f"drumsep_mps_direct_demix_gate_reason={mps_direct_demix_reason}", file=sys.stderr)
+        direct_demix_device = runtime_kind if use_direct_demix and runtime_kind in {"cpu", "mps"} else ""
+        print(f"drumsep_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
+        print(f"drumsep_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
+        print(f"drumsep_mps_direct_demix_gate={'enabled' if use_direct_demix else 'disabled'}", file=sys.stderr)
+        print(f"drumsep_mps_direct_demix_gate_reason={direct_demix_reason}", file=sys.stderr)
         try:
             ok, requested_model, resolved_model, known_err = _direct_dks_preflight_check(
                 run_model,
                 model_cache_dir,
                 runtime_info=runtime_info,
-                allow_mps_direct_demix=use_mps_direct_demix,
+                allow_direct_demix=use_direct_demix,
             )
             if not ok:
                 known_err_text = str(known_err or "")
@@ -3759,10 +3813,10 @@ def main():
             drumsep_python,
             requested_stage2_model,
             run_model,
-            route="mps-direct-demix" if use_mps_direct_demix else "wrapper",
-            device="mps" if use_mps_direct_demix else helper_device,
+            route="direct-demix" if use_direct_demix else "wrapper",
+            device=direct_demix_device if use_direct_demix else helper_device,
             requested_device=device_preference,
-            backend_runtime="mps" if use_mps_direct_demix else stage2_backend,
+            backend_runtime=direct_demix_device if use_direct_demix else stage2_backend,
         )
         if not helper_ok:
             stage = "stage2_separate"

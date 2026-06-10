@@ -823,7 +823,8 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
     assert 'BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"' in process
     assert 'return "cpu", "not_requested"' in process
     assert 'require_cuda=True' in process
-    assert 'device="mps" if use_mps_direct_demix else helper_device' in process
+    assert 'route="direct-demix" if use_direct_demix else "wrapper"' in process
+    assert 'device=direct_demix_device if use_direct_demix else helper_device' in process
     assert 'def _probe_gpu_device(device: str)' in helper
     assert 'choices=["cpu", "cuda", "rocm", "mps"]' in helper
     assert '"drumsep_helper_gpu_probe_status"' in support
@@ -2843,6 +2844,7 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path):
 
 def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
     module = _load_audio_separator_process_module()
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
     cpu_python = base / ".venv-drumsep" / "bin" / "python"
@@ -2853,7 +2855,7 @@ def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False):
+    def fake_verify(path, require_gpu=False, require_mps=False):
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
@@ -3229,6 +3231,7 @@ def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_pa
 
 def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     module = _load_audio_separator_process_module()
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
     cpu_python = base / ".venv-drumsep" / "bin" / "python"
@@ -3239,7 +3242,7 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False):
+    def fake_verify(path, require_gpu=False, require_mps=False):
         if "drumsep-rocm" in str(path):
             return (False, "rocm_no_hip", {})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
@@ -3254,6 +3257,7 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
 
 def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path):
     module = _load_audio_separator_process_module()
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
     cpu_python = base / ".venv-drumsep" / "bin" / "python"
@@ -3264,15 +3268,15 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False):
+    def fake_verify(path, require_gpu=False, require_mps=False):
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
 
     verify_calls = []
-    def fake_verify_with_calls(path, require_gpu=False):
-        verify_calls.append((str(path), require_gpu))
-        return fake_verify(path, require_gpu=require_gpu)
+    def fake_verify_with_calls(path, require_gpu=False, require_mps=False):
+        verify_calls.append((str(path), require_gpu, require_mps))
+        return fake_verify(path, require_gpu=require_gpu, require_mps=require_mps)
 
     module._verify_drumsep_runtime = fake_verify_with_calls
     selected, kind, info = module._select_drumsep_runtime("cpu", base)
@@ -3280,12 +3284,13 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     assert kind == "cpu"
     assert info["selection_policy"] == "explicit_cpu"
     assert info["fallback_reason"] == ""
-    assert all("drumsep-rocm" not in p for p, _ in verify_calls)
+    assert all("drumsep-rocm" not in p for p, _, _ in verify_calls)
     assert verify_calls and verify_calls[0][1] is False
 
 
 def test_drumsep_runtime_selector_treats_gpu_request_as_rocm_preferred(tmp_path):
     module = _load_audio_separator_process_module()
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
     cpu_python = base / ".venv-drumsep" / "bin" / "python"
@@ -3296,7 +3301,7 @@ def test_drumsep_runtime_selector_treats_gpu_request_as_rocm_preferred(tmp_path)
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False):
+    def fake_verify(path, require_gpu=False, require_mps=False):
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
@@ -3313,7 +3318,10 @@ def test_drumsep_runtime_selector_reports_missing_when_both_absent(tmp_path):
     selected, kind, info = module._select_drumsep_runtime("auto", tmp_path)
     assert selected is None
     assert kind == "missing"
-    assert info["rocm_detail"] == "missing"
+    if module.sys.platform == "darwin":
+        assert info["mps_detail"] == "missing"
+    else:
+        assert info["rocm_detail"] == "missing"
     assert info["cpu_detail"] == "missing"
 
 
@@ -4098,7 +4106,8 @@ def test_result_and_progress_labels_prefer_explicit_runtime_over_cuda_device_tok
     assert 'or lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true)' in script
     assert 'if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then' in script
     assert '"backend_runtime", "audio_separator_version", "requested_device", "effective_device",' in support
-    assert '"model_device", "direct_demix_keys", "drumsep_mps_direct_demix_gate",' in support
+    assert '"model_device", "direct_demix_keys", "drumsep_direct_demix_gate",' in support
+    assert '"drumsep_direct_demix_gate_reason", "drumsep_mps_direct_demix_gate",' in support
     assert 'appendKey(lines, "torch.version.hip"' in support
     assert 'appendKey(lines, "torch.cuda.is_available"' in support
     assert 'appendKey(lines, "torch_device_names"' in support

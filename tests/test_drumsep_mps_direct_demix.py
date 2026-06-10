@@ -69,8 +69,7 @@ def test_gate_accepts_only_explicit_apple_silicon_mps(monkeypatch):
         ("route", "not_direct_kit_stage2"),
         ("platform", "platform_not_darwin"),
         ("machine", "machine_not_apple_silicon"),
-        ("auto", "requested_device_not_explicit_mps"),
-        ("runtime", "effective_runtime_not_mps"),
+        ("runtime", "effective_runtime_not_direct_demix_capable"),
         ("built", "mps_not_built"),
         ("available", "mps_not_available"),
         ("version", "audio_separator_version_not_0_23_0"),
@@ -96,10 +95,8 @@ def test_gate_rejects_each_failed_condition(monkeypatch, mutation, reason):
         monkeypatch.setattr(module.sys, "platform", "linux")
     elif mutation == "machine":
         monkeypatch.setattr(module.platform, "machine", lambda: "x86_64")
-    elif mutation == "auto":
-        requested_device = "auto"
     elif mutation == "runtime":
-        info["kind"] = "cpu"
+        info["kind"] = "rocm"
     elif mutation == "built":
         info["mps_built"] = False
     elif mutation == "available":
@@ -127,7 +124,16 @@ def test_auto_linux_and_rocm_do_not_activate_direct_demix(monkeypatch):
     monkeypatch.delenv(module.MPS_FALLBACK_ENV, raising=False)
     monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
     monkeypatch.setattr(module.sys, "platform", "darwin")
-    assert _gate(module, requested_device="auto") == (False, "requested_device_not_explicit_mps")
+    auto_mps = _valid_runtime_info()
+    auto_mps["kind"] = "mps"
+    assert _gate(module, runtime_info=auto_mps, requested_device="auto") == (True, "ok")
+
+    cpu_runtime = _valid_runtime_info()
+    cpu_runtime["kind"] = "cpu"
+    cpu_runtime["mps_built"] = False
+    cpu_runtime["mps_available"] = False
+    cpu_runtime["mps_experimental"] = False
+    assert _gate(module, runtime_info=cpu_runtime, requested_device="cpu") == (True, "ok")
 
     monkeypatch.setattr(module.sys, "platform", "linux")
     rocm = _valid_runtime_info()
@@ -137,7 +143,8 @@ def test_auto_linux_and_rocm_do_not_activate_direct_demix(monkeypatch):
     assert helper_signature.parameters["route"].default == "wrapper"
     assert helper_signature.parameters["device"].default == "cpu"
     source = AUDIO_PROCESS.read_text(encoding="utf-8")
-    assert 'device="mps" if use_mps_direct_demix else helper_device' in source
+    assert 'route="direct-demix" if use_direct_demix else "wrapper"' in source
+    assert 'device=direct_demix_device if use_direct_demix else helper_device' in source
 
 
 def test_benchmark_helper_device_defaults_to_cpu_and_rejects_invalid(monkeypatch, capsys):
@@ -258,6 +265,53 @@ def test_wrapper_0230_backend_limit_remains_when_override_is_inactive():
     assert payload["found_stems"] == ["kick", "snare"]
 
 
+def test_drumsep_runtime_selector_prefers_mps_for_auto_on_apple_silicon(tmp_path, monkeypatch):
+    module = _load_audio_process()
+    shared_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    shared_python.parent.mkdir(parents=True, exist_ok=True)
+    shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    shared_python.chmod(0o755)
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
+
+    def fake_verify(path, require_gpu=False, require_mps=False):
+        assert path == shared_python
+        if require_mps:
+            return True, "ok", {"mps_built": True, "mps_available": True, "versions": {"audio-separator": "0.23.0"}}
+        return True, "ok", {"versions": {"audio-separator": "0.23.0"}}
+
+    monkeypatch.setattr(module, "_verify_drumsep_runtime", fake_verify)
+    selected, kind, info = module._select_drumsep_runtime("auto", tmp_path)
+
+    assert selected == shared_python
+    assert kind == "mps"
+    assert info["selection_policy"] == "auto_prefer_mps"
+
+
+def test_drumsep_runtime_selector_falls_back_to_cpu_direct_demix_when_mps_missing(tmp_path, monkeypatch):
+    module = _load_audio_process()
+    shared_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    shared_python.parent.mkdir(parents=True, exist_ok=True)
+    shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    shared_python.chmod(0o755)
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
+
+    def fake_verify(path, require_gpu=False, require_mps=False):
+        assert path == shared_python
+        if require_mps:
+            return False, "mps_not_available", {"versions": {"audio-separator": "0.23.0"}}
+        return True, "ok", {"versions": {"audio-separator": "0.23.0"}}
+
+    monkeypatch.setattr(module, "_verify_drumsep_runtime", fake_verify)
+    selected, kind, info = module._select_drumsep_runtime("auto", tmp_path)
+
+    assert selected == shared_python
+    assert kind == "cpu"
+    assert info["selection_policy"] == "fallback_cpu_direct_demix"
+    assert info["fallback_reason"] == "mps_skipped:mps_not_available"
+
+
 def test_hh_mapping_uses_hihat_internal_name_and_hi_hat_filename():
     helper = _load_helper()
 
@@ -369,7 +423,7 @@ def _install_fake_soundfile_module(monkeypatch):
 
     def write(path, data, samplerate):
         path_obj = Path(path)
-        path_obj.write_bytes(b"RIFFFAKE")
+        path_obj.write_bytes(b"RIFF" + (b"0" * 64))
         written[str(path_obj)] = _FakeSoundFileInfo(
             samplerate=int(samplerate),
             frames=int(data.shape[0]),
@@ -389,10 +443,12 @@ def _fake_audio_separator_package(separator_cls):
 
 
 @pytest.mark.parametrize(
-    ("torch_device", "model_device", "reason"),
+    ("torch_device", "model_device", "requested_device", "reason"),
     [
-        ("cpu", "cpu", "effective_device_not_mps"),
-        ("mps", "unknown", "model_device_not_mps"),
+        ("cpu", "cpu", "mps", "effective_device_not_mps"),
+        ("mps", "unknown", "mps", "model_device_not_mps"),
+        ("mps", "mps:0", "cpu", "effective_device_not_cpu"),
+        ("cpu", "unknown", "cpu", "model_device_not_cpu"),
     ],
 )
 def test_direct_demix_rejects_cpu_or_unknown_model_device(
@@ -400,6 +456,7 @@ def test_direct_demix_rejects_cpu_or_unknown_model_device(
     monkeypatch,
     torch_device,
     model_device,
+    requested_device,
     reason,
 ):
     helper = _load_helper()
@@ -409,11 +466,12 @@ def test_direct_demix_rejects_cpu_or_unknown_model_device(
     separator = _FakeSeparator(_complete_sources(), torch_device, model_device)
 
     with pytest.raises(helper.DirectDemixValidationError) as exc_info:
-        helper._run_drumsep_mps_all_targets_direct_demix(
+        helper._run_drumsep_all_targets_direct_demix(
             separator,
             tmp_path / "input.wav",
             tmp_path,
             {},
+            requested_device,
         )
 
     assert exc_info.value.reason == reason
@@ -434,6 +492,25 @@ def test_direct_demix_rejects_enabled_pytorch_fallback(tmp_path, monkeypatch):
         )
 
     assert exc_info.value.reason == "pytorch_mps_fallback_env_set"
+
+
+def test_direct_demix_accepts_cpu_device_and_writes_outputs(tmp_path, monkeypatch):
+    helper = _load_helper()
+    _install_fake_spec_utils(monkeypatch)
+    written = _install_fake_soundfile_module(monkeypatch)
+    monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
+    separator = _FakeSeparator(_complete_sources(), torch_device="cpu", model_device="cpu")
+
+    stems = helper._run_drumsep_all_targets_direct_demix(
+        separator,
+        tmp_path / "input.wav",
+        tmp_path,
+        {},
+        "cpu",
+    )
+
+    assert set(stems) == set(helper.EXPECTED_STEMS)
+    assert written[str(Path(stems["kick"]))].samplerate == 44100
 
 
 def test_wrapper_helper_result_uses_runtime_and_requested_device_markers(tmp_path, monkeypatch):
@@ -491,9 +568,11 @@ def test_wrapper_helper_result_uses_runtime_and_requested_device_markers(tmp_pat
 def test_direct_demix_helper_result_keeps_mps_markers(tmp_path, monkeypatch):
     helper = _load_helper()
     monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+    captured = {}
 
     class FakeSeparator:
         def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
             self.output_dir = Path(kwargs["output_dir"])
             self.torch_device = "mps"
             self.model_instance = _FakeModel(_complete_sources(), "mps:0")
@@ -513,7 +592,7 @@ def test_direct_demix_helper_result_keeps_mps_markers(tmp_path, monkeypatch):
             stems[stem_name] = str(path)
         return stems
 
-    monkeypatch.setattr(helper, "_run_drumsep_mps_all_targets_direct_demix", fake_direct_demix)
+    monkeypatch.setattr(helper, "_run_drumsep_all_targets_direct_demix", lambda sep, input_path, output_dir, model_meta, device: fake_direct_demix(sep, input_path, output_dir, model_meta))
 
     result_json = tmp_path / "result.json"
     args = SimpleNamespace(
@@ -523,7 +602,7 @@ def test_direct_demix_helper_result_keeps_mps_markers(tmp_path, monkeypatch):
         model="MDX23C",
         result_json=str(result_json),
         log_file="",
-        route="mps-direct-demix",
+        route="direct-demix",
         device="mps",
         requested_device="mps",
         backend_runtime="mps",
@@ -538,8 +617,75 @@ def test_direct_demix_helper_result_keeps_mps_markers(tmp_path, monkeypatch):
     assert payload["backend_runtime"] == "mps"
     assert payload["effective_device"] == "mps"
     assert payload["model_device"] == "mps:0"
+    assert captured["kwargs"]["mdx_params"]["device"] == "mps"
+    assert captured["kwargs"]["mdxc_params"]["device"] == "mps"
+    assert payload["direct_demix_enabled"] == 1
+    assert payload["direct_demix_device"] == "mps"
+    assert payload["drumsep_direct_demix_route"] == "direct_demix"
     assert payload["drumsep_mps_all_targets_route"] == "direct_demix"
     assert payload["direct_demix_keys"] == list(helper.DIRECT_DEMIX_KEYS)
+
+
+def test_direct_demix_helper_result_keeps_cpu_markers(tmp_path, monkeypatch):
+    helper = _load_helper()
+    monkeypatch.setattr(helper.metadata, "version", lambda _name: "0.23.0")
+    captured = {}
+
+    class FakeSeparator:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+            self.output_dir = Path(kwargs["output_dir"])
+            self.torch_device = "cpu"
+            self.model_instance = _FakeModel(_complete_sources(), "cpu")
+
+        def load_model(self, _model_name):
+            return None
+
+    fake_package, fake_separator_module = _fake_audio_separator_package(FakeSeparator)
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_package)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_separator_module)
+
+    def fake_direct_demix_cpu(_sep, _input_path, output_dir, _model_meta, _device):
+        stems = {}
+        for stem_name, filename in helper.REAPER_FILENAMES.items():
+            path = Path(output_dir) / filename
+            path.write_bytes(stem_name.encode("ascii"))
+            stems[stem_name] = str(path)
+        return stems
+
+    monkeypatch.setattr(helper, "_run_drumsep_all_targets_direct_demix", fake_direct_demix_cpu)
+
+    result_json = tmp_path / "result.json"
+    args = SimpleNamespace(
+        input=str(tmp_path / "input.wav"),
+        output_dir=str(tmp_path / "out"),
+        model_dir=str(tmp_path / "models"),
+        model="MDX23C",
+        result_json=str(result_json),
+        log_file="",
+        route="direct-demix",
+        device="cpu",
+        requested_device="cpu",
+        backend_runtime="cpu",
+    )
+
+    rc = helper.run(args)
+    payload = json.loads(result_json.read_text(encoding="utf-8"))
+
+    assert rc == 0
+    assert payload["ok"] is True
+    assert payload["requested_device"] == "cpu"
+    assert payload["backend_runtime"] == "cpu"
+    assert payload["effective_device"] == "cpu"
+    assert payload["model_device"] == "cpu"
+    assert captured["kwargs"]["mdx_params"]["device"] == "cpu"
+    assert captured["kwargs"]["mdxc_params"]["device"] == "cpu"
+    assert payload["direct_demix_enabled"] == 1
+    assert payload["direct_demix_device"] == "cpu"
+    assert payload["drumsep_direct_demix_route"] == "direct_demix"
+    assert payload["drumsep_mps_all_targets_route"] == "direct_demix"
+    assert payload["mps_fallback_enabled"] == ""
+    assert payload["pytorch_mps_fallback_env"] == ""
 
 
 def test_synthetic_direct_demix_writes_six_valid_outputs(tmp_path, monkeypatch):
