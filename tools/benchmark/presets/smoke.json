@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "smoke",
+  "audio_file": "stemwerk-benchmark-30s.wav",
+  "cap": 1,
+  "runs": ["cold"],
+  "jobs": [
+    {"workflow": "normal", "mode": "htdemucs", "device": "auto"},
+    {"workflow": "dks_direct", "mode": "DrumSep", "device": "auto"},
+    {"workflow": "dks_extract", "mode": "Fast", "device": "auto"}
+  ]
+}

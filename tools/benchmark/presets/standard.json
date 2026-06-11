@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "standard",
+  "audio_file": "stemwerk-benchmark-2min.wav",
+  "cap": 1,
+  "runs": ["cold", "warm"],
+  "jobs": [
+    {"workflow": "normal", "mode": "htdemucs", "device": "auto"},
+    {"workflow": "normal", "mode": "htdemucs_ft", "device": "auto"},
+    {"workflow": "dks_direct", "mode": "DrumSep", "device": "auto"},
+    {"workflow": "dks_extract", "mode": "Fast", "device": "auto"}
+  ]
+}
