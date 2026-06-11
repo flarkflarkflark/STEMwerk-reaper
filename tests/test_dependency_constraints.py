@@ -782,6 +782,9 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
     assert 'return "mps", "explicit_mps_direct_demix"' in script
     assert 'return "mps", "auto_mps_direct_demix"' in script
     assert 'return "cpu", "fallback_cpu"' in script
+    assert 'return "rocm", "explicit_rocm"' in script
+    assert 'return "rocm", "auto_prefer_rocm"' in script
+    assert 'return "rocm", "gpu_prefer_rocm"' in script
     assert 'return "cuda", "bench_helper_cuda"' in script
     assert 'return "cpu", "bench_helper_cuda_fallback_cpu"' in script
     assert 'return "cuda", "explicit_cuda"' in script
@@ -816,6 +819,7 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
 
     assert 'os.getenv("STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE")' in script
     assert 'return "rocm", "bench_helper_rocm"' in script
+    assert 'return "rocm", "auto_prefer_rocm"' in script
     assert 'return "cuda", "bench_helper_cuda"' in script
     assert 'return "cpu", "bench_helper_cuda_fallback_cpu"' in script
     assert 'drumsepSchedulerPolicy == "bench_helper_rocm"' in script

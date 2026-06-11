@@ -14655,15 +14655,33 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
         -- Other unsupported/non-MPS routes still fall back to CPU helper execution here.
         local runtime = getRuntimePaths and getRuntimePaths() or nil
         local stateDir = runtime and runtime.runtimeState or ""
+        local rocmState = stateDir ~= ""
+            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {})
+            or {}
         local cpuState = stateDir ~= ""
             and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {})
             or {}
         local capabilityState = stateDir ~= ""
             and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {})
             or {}
+        local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefault(".venv-drumsep-rocm"))
         local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
+        local rocmReady = OS == "Linux"
+            and schedulerRuntimeStateOk(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
+            and rocmPython ~= ""
+            and string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
+            and tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "") ~= ""
         local cudaReady = OS == "Linux"
             and schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)
+        if explicitRocm and rocmReady then
+            return "rocm", "explicit_rocm"
+        end
+        if normalizedRequest == "auto" and rocmReady then
+            return "rocm", "auto_prefer_rocm"
+        end
+        if normalizedRequest == "gpu" and rocmReady and not explicitCuda then
+            return "rocm", "gpu_prefer_rocm"
+        end
         if explicitCuda and cudaReady then
             return "cuda", "explicit_cuda"
         end
