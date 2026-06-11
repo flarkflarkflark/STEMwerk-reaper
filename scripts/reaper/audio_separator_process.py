@@ -1941,6 +1941,8 @@ def _select_drumsep_runtime(
     rocm_python = rocm_candidates[0]
     cpu_python = cpu_candidates[0]
     device_norm = str(requested_device or "auto").strip().lower()
+    explicit_cuda = device_norm == "cuda" or bool(re.match(r"^cuda:\d+$", device_norm))
+    explicit_rocm = device_norm == "rocm"
 
     def _normalized_device_request(value: str) -> str:
         if value == "cpu":
@@ -2051,6 +2053,52 @@ def _select_drumsep_runtime(
         reason = "missing" if cpu_detail == "missing" else "broken"
         return None, reason, info
 
+    if explicit_cuda and sys.platform.startswith("linux"):
+        print("drumsep_runtime_selection_policy=explicit_cuda", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
+        selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
+            cpu_candidates,
+            require_cuda=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_end detail={cuda_detail}", file=sys.stderr)
+        if selected_cuda_python is not None:
+            info = dict(cuda_payload or {})
+            info["kind"] = "cuda"
+            info["detail"] = cuda_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = "explicit_cuda"
+            info["cuda_python_attempts"] = cuda_attempts
+            return selected_cuda_python, "cuda", info
+
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
+        selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(
+            cpu_candidates,
+            require_gpu=False,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
+        if selected_cpu_python is not None:
+            info = dict(cpu_payload or {})
+            info["kind"] = "cpu"
+            info["detail"] = cpu_detail
+            info["fallback_reason"] = f"cuda_skipped:{cuda_detail}"
+            info["selection_policy"] = "fallback_cpu"
+            info["cpu_python_attempts"] = cpu_attempts
+            info["cuda_python_attempts"] = cuda_attempts
+            return selected_cpu_python, "cpu", info
+
+        info = {
+            "cuda_detail": cuda_detail,
+            "cpu_detail": cpu_detail,
+            "cuda_python": str(cpu_python),
+            "cpu_python": str(cpu_python),
+            "cuda_python_attempts": cuda_attempts,
+            "cpu_python_attempts": cpu_attempts,
+            "selection_policy": "fallback_cpu",
+            "normalized_request": normalized_request,
+        }
+        reason = "missing" if cuda_detail == "missing" and cpu_detail == "missing" else "broken"
+        return None, reason, info
+
     if bench_helper_device == "cuda" and sys.platform.startswith("linux"):
         print("drumsep_runtime_selection_policy=bench_helper_cuda", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
@@ -2095,6 +2143,27 @@ def _select_drumsep_runtime(
         info["rocm_python_attempts"] = rocm_attempts
         return selected_rocm_python, "rocm", info
 
+    cuda_detail = "skipped"
+    cuda_attempts: List[Dict[str, Any]] = []
+    if sys.platform.startswith("linux") and not explicit_rocm:
+        cuda_selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
+        selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
+            cpu_candidates,
+            require_cuda=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_end detail={cuda_detail}", file=sys.stderr)
+        if selected_cuda_python is not None:
+            print(f"drumsep_runtime_selection_policy={cuda_selection_policy}", file=sys.stderr)
+            info = dict(cuda_payload or {})
+            info["kind"] = "cuda"
+            info["detail"] = cuda_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = cuda_selection_policy
+            info["cuda_python_attempts"] = cuda_attempts
+            info["rocm_python_attempts"] = rocm_attempts
+            return selected_cuda_python, "cuda", info
+
     print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
     selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)
     print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
@@ -2102,18 +2171,25 @@ def _select_drumsep_runtime(
         info = dict(cpu_payload or {})
         info["kind"] = "cpu"
         info["detail"] = cpu_detail
-        info["fallback_reason"] = f"rocm_skipped:{rocm_detail}"
+        fallback_reason = f"rocm_skipped:{rocm_detail}"
+        if sys.platform.startswith("linux") and not explicit_rocm:
+            fallback_reason = fallback_reason + f";cuda_skipped:{cuda_detail}"
+        info["fallback_reason"] = fallback_reason
         info["selection_policy"] = "fallback_cpu"
         info["cpu_python_attempts"] = cpu_attempts
         info["rocm_python_attempts"] = rocm_attempts
+        info["cuda_python_attempts"] = cuda_attempts
         return selected_cpu_python, "cpu", info
 
     info = {
         "rocm_detail": rocm_detail,
+        "cuda_detail": cuda_detail,
         "cpu_detail": cpu_detail,
         "rocm_python": str(rocm_python),
+        "cuda_python": str(cpu_python),
         "cpu_python": str(cpu_python),
         "rocm_python_attempts": rocm_attempts,
+        "cuda_python_attempts": cuda_attempts,
         "cpu_python_attempts": cpu_attempts,
         "selection_policy": "fallback_cpu",
         "normalized_request": normalized_request,
@@ -2154,6 +2230,19 @@ def _resolve_benchmark_drumsep_helper_device(
                 print("bench_drumsep_helper_device_applied=rocm", file=sys.stderr)
                 print("bench_drumsep_helper_device_ignored_reason=explicit_rocm_default", file=sys.stderr)
                 return "rocm", "explicit_rocm_default"
+        if sys.platform.startswith("linux") and runtime_kind_lower == "cuda":
+            probe_ok, probe_reason, probe_detail = _probe_cuda_helper_isolation(Path(runtime_python or ""))
+            print(f"drumsep_cuda_helper_probe_status={'ok' if probe_ok else 'failed'}", file=sys.stderr)
+            print(f"drumsep_cuda_helper_probe_reason={probe_reason}", file=sys.stderr)
+            print(f"drumsep_cuda_helper_probe_detail={probe_detail}", file=sys.stderr)
+            if probe_ok:
+                applied_reason = "auto_cuda_default" if normalized_request in {"", "auto"} else "verified_cuda_default"
+                print("bench_drumsep_helper_device_applied=cuda", file=sys.stderr)
+                print(f"bench_drumsep_helper_device_ignored_reason={applied_reason}", file=sys.stderr)
+                return "cuda", applied_reason
+            print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+            print(f"bench_drumsep_helper_device_ignored_reason={probe_reason}", file=sys.stderr)
+            return "cpu", probe_reason
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=not_requested", file=sys.stderr)
         return "cpu", "not_requested"
@@ -2737,19 +2826,51 @@ def _dedupe_path_parts(parts: List[str]) -> List[str]:
     return deduped
 
 
-def _filter_path_parts(parts: List[str], blocked_tokens: List[str]) -> List[str]:
-    blocked = [token for token in blocked_tokens if token]
+def _filter_path_parts(parts: List[str], blocked_roots: List[str | Path]) -> List[str]:
+    blocked = [root for root in blocked_roots if str(root or "").strip()]
     if not blocked:
         return _dedupe_path_parts(parts)
     filtered: List[str] = []
     for part in parts:
-        normalized = _path_text(part)
-        if not normalized:
+        if not str(part or "").strip():
             continue
-        if any(token in normalized for token in blocked):
+        if any(_path_is_within_root(part, root) for root in blocked):
             continue
         filtered.append(part)
     return _dedupe_path_parts(filtered)
+
+
+def _path_is_within_root(child: str | Path | None, root: str | Path | None) -> bool:
+    child_text = str(child or "").strip()
+    root_text = str(root or "").strip()
+    if not child_text or not root_text:
+        return False
+    if child_text.endswith(" (deleted)"):
+        child_text = child_text[:-10]
+    try:
+        child_path = Path(child_text).expanduser().resolve(strict=False)
+        root_path = Path(root_text).expanduser().resolve(strict=False)
+        child_path.relative_to(root_path)
+        return True
+    except (OSError, RuntimeError, ValueError):
+        try:
+            child_path = Path(os.path.abspath(os.path.expanduser(child_text)))
+            root_path = Path(os.path.abspath(os.path.expanduser(root_text)))
+            child_path.relative_to(root_path)
+            return True
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+
+def _first_path_within_root(paths: List[str], root: str | Path | None) -> str:
+    for path in paths:
+        if _path_is_within_root(path, root):
+            return str(path)
+    return ""
+
+
+def _ld_path_entry_within_root(ld_library_path: str | None, root: str | Path | None) -> str:
+    return _first_path_within_root(_split_path_value(ld_library_path), root)
 
 
 def _runtime_venv_root(runtime_python: Path) -> Path:
@@ -2760,6 +2881,19 @@ def _runtime_bin_dir(runtime_venv: Path) -> Path:
     return Path(runtime_venv) / ("Scripts" if os.name == "nt" else "bin")
 
 
+def _runtime_cuda_library_dirs(runtime_venv: Path) -> List[str]:
+    runtime_venv = Path(runtime_venv).expanduser()
+    candidates: List[str] = []
+    for pattern in (
+        "lib/python*/site-packages/torch/lib",
+        "lib/python*/site-packages/nvidia/*/lib",
+    ):
+        for path in sorted(runtime_venv.glob(pattern)):
+            if path.is_dir():
+                candidates.append(str(path))
+    return _dedupe_path_parts(candidates)
+
+
 def build_drumsep_subprocess_env(
     base_env: Dict[str, str],
     runtime_python: Path,
@@ -2768,7 +2902,7 @@ def build_drumsep_subprocess_env(
 ) -> tuple[Dict[str, str], Dict[str, str]]:
     env = dict(base_env or {})
     backend = str(selected_backend or "").strip().lower()
-    main_venv_root = _path_text(Path(sys.executable).expanduser().parent.parent)
+    main_venv_root = Path(sys.executable).expanduser().parent.parent
     runtime_python = Path(runtime_python).expanduser()
     runtime_venv = Path(runtime_venv).expanduser()
     runtime_bin = str(_runtime_bin_dir(runtime_venv))
@@ -2787,24 +2921,20 @@ def build_drumsep_subprocess_env(
         env.pop("HSA_OVERRIDE_GFX_VERSION", None)
 
     path_parts = _split_path_value(env.get("PATH"))
-    path_parts = _filter_path_parts(path_parts, [main_venv_root, runtime_venv_text])
+    path_parts = _filter_path_parts(path_parts, [main_venv_root, runtime_venv])
     env["PATH"] = os.pathsep.join([runtime_bin] + path_parts) if path_parts else runtime_bin
 
     ld_library_parts = _split_path_value(env.get("LD_LIBRARY_PATH"))
-    ld_library_parts = _filter_path_parts(
-        ld_library_parts,
-        [
-            main_venv_root,
-            f"{main_venv_root}/site-packages/torch",
-            f"{main_venv_root}/site-packages/nvidia",
-        ],
-    )
+    ld_library_parts = _filter_path_parts(ld_library_parts, [main_venv_root])
+    if backend == "cuda":
+        runtime_cuda_libs = _runtime_cuda_library_dirs(runtime_venv)
+        ld_library_parts = _dedupe_path_parts(runtime_cuda_libs + ld_library_parts)
     if ld_library_parts:
         env["LD_LIBRARY_PATH"] = os.pathsep.join(ld_library_parts)
     else:
         env.pop("LD_LIBRARY_PATH", None)
 
-    sanitized_ld = _path_text(env.get("LD_LIBRARY_PATH"))
+    main_venv_ld_path = _ld_path_entry_within_root(env.get("LD_LIBRARY_PATH"), main_venv_root)
     sanitized_path = _split_path_value(env.get("PATH"))
     diagnostics = {
         "drumsep_subprocess_env_profile": profile,
@@ -2813,9 +2943,11 @@ def build_drumsep_subprocess_env(
         "drumsep_virtual_env": str(runtime_venv),
         "drumsep_cuda_visible_devices": str(env.get("CUDA_VISIBLE_DEVICES", "")),
         "drumsep_nvidia_visible_devices": str(env.get("NVIDIA_VISIBLE_DEVICES", "")),
-        "drumsep_ld_library_path_contains_main_venv": "yes" if main_venv_root and main_venv_root in sanitized_ld else "no",
-        "drumsep_cuda_ld_library_path_contains_main_venv": "yes" if backend == "cuda" and main_venv_root and main_venv_root in sanitized_ld else "no",
+        "drumsep_ld_library_path_contains_main_venv": "yes" if main_venv_ld_path else "no",
+        "drumsep_cuda_ld_library_path_contains_main_venv": "yes" if backend == "cuda" and main_venv_ld_path else "no",
+        "drumsep_cuda_main_venv_leak_path": main_venv_ld_path if backend == "cuda" else "",
         "drumsep_cuda_helper_runtime_venv": str(runtime_venv) if backend == "cuda" else "",
+        "drumsep_cuda_runtime_lib_dirs": "|".join(_runtime_cuda_library_dirs(runtime_venv)) if backend == "cuda" else "",
         "drumsep_path_starts_with_drumsep_venv": "yes" if sanitized_path and _path_text(sanitized_path[0]) == _path_text(runtime_bin) else "no",
     }
     return env, diagnostics
@@ -2827,9 +2959,13 @@ def _probe_cuda_helper_isolation(runtime_python: Path) -> tuple[bool, str, str]:
     runtime_venv = _runtime_venv_root(runtime_python)
     env, diagnostics = build_drumsep_subprocess_env(_clean_env(), runtime_python, runtime_venv, "cuda")
     if diagnostics.get("drumsep_cuda_ld_library_path_contains_main_venv") != "no":
-        return False, "cuda_helper_isolation_failed_main_venv_cudnn_leak", "sanitized_ld_library_path_contains_main_venv"
+        return (
+            False,
+            "cuda_helper_isolation_failed_main_venv_cudnn_leak",
+            diagnostics.get("drumsep_cuda_main_venv_leak_path") or "sanitized_ld_library_path_contains_main_venv",
+        )
 
-    main_venv_root = _path_text(Path(sys.executable).expanduser().parent.parent)
+    main_venv_root = Path(sys.executable).expanduser().parent.parent
     probe_code = r"""
 import json
 import os
@@ -2884,11 +3020,12 @@ print(json.dumps({
     except Exception as exc:
         return False, "cuda_helper_probe_invalid_output", f"{type(exc).__name__}:{combined[-500:]}"
     cudnn_paths = [str(path) for path in payload.get("cudnn_paths", [])]
-    if main_venv_root and any(main_venv_root in _path_text(path) for path in cudnn_paths):
-        return False, "cuda_helper_isolation_failed_main_venv_cudnn_leak", "|".join(cudnn_paths)
-    runtime_venv_text = _path_text(runtime_venv)
-    if cudnn_paths and not all(runtime_venv_text in _path_text(path) for path in cudnn_paths):
-        return False, "cuda_helper_probe_untrusted_cudnn_source", "|".join(cudnn_paths)
+    main_venv_cudnn_path = _first_path_within_root(cudnn_paths, main_venv_root)
+    if main_venv_cudnn_path:
+        return False, "cuda_helper_isolation_failed_main_venv_cudnn_leak", main_venv_cudnn_path
+    untrusted_cudnn_paths = [path for path in cudnn_paths if not _path_is_within_root(path, runtime_venv)]
+    if untrusted_cudnn_paths:
+        return False, "cuda_helper_probe_untrusted_cudnn_source", "|".join(untrusted_cudnn_paths)
     detail = json.dumps(payload, sort_keys=True)
     print(f"drumsep_cuda_helper_cudnn_source={'|'.join(cudnn_paths) or 'torch_runtime_managed'}", file=sys.stderr)
     return True, "ok", detail
@@ -2904,7 +3041,9 @@ def _emit_drumsep_subprocess_env_diagnostics(diagnostics: Dict[str, str]) -> Non
         "drumsep_nvidia_visible_devices",
         "drumsep_ld_library_path_contains_main_venv",
         "drumsep_cuda_ld_library_path_contains_main_venv",
+        "drumsep_cuda_main_venv_leak_path",
         "drumsep_cuda_helper_runtime_venv",
+        "drumsep_cuda_runtime_lib_dirs",
         "drumsep_path_starts_with_drumsep_venv",
     ):
         print(f"{key}={diagnostics.get(key, '')}", file=sys.stderr)

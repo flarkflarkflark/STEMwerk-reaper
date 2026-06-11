@@ -782,13 +782,16 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
     assert 'return "mps", "explicit_mps_direct_demix"' in script
     assert 'return "mps", "auto_mps_direct_demix"' in script
     assert 'return "cpu", "fallback_cpu"' in script
-    assert 'return "cpu", "bench_helper_cuda_unverified_cpu_fallback"' in script
+    assert 'return "cuda", "bench_helper_cuda"' in script
+    assert 'return "cpu", "bench_helper_cuda_fallback_cpu"' in script
+    assert 'return "cuda", "explicit_cuda"' in script
+    assert 'return "cuda", "auto_prefer_cuda"' in script
     assert 'drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(' in script
     assert "            requestedStage2ModelArg\n        )" in script
     assert 'isDrumKitMultiRun and schedulerRoute == "dks_direct"' in script
     assert 'drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu"' in script
     assert 'drumsepSchedulerPolicy == "fallback_cpu"' in script
-    assert 'drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback"' in script
+    assert 'drumsepSchedulerPolicy == "bench_helper_cuda_fallback_cpu"' in script
     assert 'if drumsepSchedulerUsesCpuFallback then' in script
     assert 'schedulerBackend = "cpu"' in script
     assert 'schedulerPolicy.reason = schedulerPolicy.sequentialMode' in script
@@ -813,12 +816,14 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
 
     assert 'os.getenv("STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE")' in script
     assert 'return "rocm", "bench_helper_rocm"' in script
-    assert 'return "cpu", "bench_helper_cuda_unverified_cpu_fallback"' in script
-    assert 'return "cuda", "bench_helper_cuda"' not in script
+    assert 'return "cuda", "bench_helper_cuda"' in script
+    assert 'return "cpu", "bench_helper_cuda_fallback_cpu"' in script
     assert 'drumsepSchedulerPolicy == "bench_helper_rocm"' in script
     assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = tostring(benchDrumsepHelperDevice or "")' in script
-    assert 'drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback"' in script
-    assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = "unverified"' in script
+    assert 'drumsepSchedulerPolicy == "bench_helper_cuda"' in script
+    assert 'drumsepSchedulerPolicy == "bench_helper_cuda_fallback_cpu"' in script
+    assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = "cuda"' in script
+    assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = "fallback_cpu"' in script
     assert 'multiTrackQueue.benchDrumsepHelperDeviceApplied = "none"' in script
     assert 'schedulerBackend = "gpu"' in script
     assert 'BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"' in process
@@ -2046,6 +2051,8 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert after_direct_route.index("drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)") < after_direct_route.index("_direct_dks_preflight_check(")
     assert "drumsep_runtime_selection_policy=explicit_cpu" in script
     assert 'selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"' in script
+    assert "drumsep_runtime_selection_policy=explicit_cuda" in script
+    assert 'cuda_selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"' in script
     assert "normalized_device_request=" in script
     assert 'info["selection_policy"] = "fallback_cpu"' in script
     assert after_direct_route.index("_direct_dks_preflight_check(") < after_direct_route.index("helper_ok, helper_stems, helper_reason, helper_detail = _run_direct_dks_drumsep_helper(")
@@ -2489,6 +2496,8 @@ def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_g
     runtime_python.parent.mkdir(parents=True, exist_ok=True)
     runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
     runtime_venv = runtime_python.parent.parent
+    (runtime_venv / "lib" / "python3.12" / "site-packages" / "torch" / "lib").mkdir(parents=True, exist_ok=True)
+    (runtime_venv / "lib" / "python3.12" / "site-packages" / "nvidia" / "cudnn" / "lib").mkdir(parents=True, exist_ok=True)
     main_venv_root = module._path_text(fake_sys_executable.parent.parent)
     base_env = {
         "PATH": f"{fake_sys_executable.parent}:{'/usr/local/bin:/usr/bin:/bin:/opt/custom/bin'}",
@@ -2517,6 +2526,8 @@ def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_g
     assert "HSA_OVERRIDE_GFX_VERSION" not in env
     assert main_venv_root not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
     assert "/usr/lib" in env.get("LD_LIBRARY_PATH", "")
+    assert "site-packages/nvidia/cudnn/lib" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
+    assert "site-packages/torch/lib" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
     assert diag["drumsep_subprocess_env_profile"] == "cpu_isolated"
     assert diag["drumsep_helper_device_arg"] == "cpu"
     assert diag["drumsep_virtual_env"] == str(runtime_venv)
@@ -2526,15 +2537,20 @@ def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_g
 
 def test_drumsep_helper_subprocess_env_cuda_isolated_uses_raw_venv_roots(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
-    fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
+    runtime_base = tmp_path / "STEMwerk"
+    fake_sys_executable = runtime_base / ".venv" / "bin" / "python"
     fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
     fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setattr(module.sys, "executable", str(fake_sys_executable))
 
-    runtime_python = tmp_path / "helper" / ".venv-drumsep" / "bin" / "python"
+    runtime_python = runtime_base / ".venv-drumsep" / "bin" / "python"
     runtime_python.parent.mkdir(parents=True, exist_ok=True)
     runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
     runtime_venv = runtime_python.parent.parent
+    runtime_torch_lib = runtime_venv / "lib" / "python3.12" / "site-packages" / "torch" / "lib"
+    runtime_cuda_lib = runtime_venv / "lib" / "python3.12" / "site-packages" / "nvidia" / "cudnn" / "lib"
+    runtime_torch_lib.mkdir(parents=True, exist_ok=True)
+    runtime_cuda_lib.mkdir(parents=True, exist_ok=True)
     main_venv = fake_sys_executable.parent.parent
     base_env = {
         "PATH": f"{main_venv}/bin:/usr/bin",
@@ -2552,15 +2568,120 @@ def test_drumsep_helper_subprocess_env_cuda_isolated_uses_raw_venv_roots(monkeyp
     assert module._runtime_venv_root(runtime_python) == runtime_venv
     assert env["VIRTUAL_ENV"] == str(runtime_venv)
     assert env["PATH"].startswith(str(runtime_venv / "bin"))
-    assert module._path_text(main_venv) not in module._path_text(env["PATH"])
-    assert module._path_text(main_venv) not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
-    assert "site-packages/nvidia" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
-    assert "site-packages/torch/lib" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
+    assert module._first_path_within_root(module._split_path_value(env["PATH"]), main_venv) == ""
+    assert module._ld_path_entry_within_root(env.get("LD_LIBRARY_PATH", ""), main_venv) == ""
+    assert str(runtime_torch_lib) in env.get("LD_LIBRARY_PATH", "")
+    assert str(runtime_cuda_lib) in env.get("LD_LIBRARY_PATH", "")
     assert "PYTHONPATH" not in env
     assert "PYTHONHOME" not in env
     assert diag["drumsep_subprocess_env_profile"] == "cuda_isolated"
     assert diag["drumsep_cuda_ld_library_path_contains_main_venv"] == "no"
+    assert diag["drumsep_cuda_main_venv_leak_path"] == ""
     assert diag["drumsep_cuda_helper_runtime_venv"] == str(runtime_venv)
+    assert str(runtime_torch_lib) in diag["drumsep_cuda_runtime_lib_dirs"]
+    assert str(runtime_cuda_lib) in diag["drumsep_cuda_runtime_lib_dirs"]
+
+
+def test_cuda_path_containment_distinguishes_main_and_drumsep_venvs(tmp_path):
+    module = _load_audio_separator_process_module()
+    runtime_base = tmp_path / "STEMwerk"
+    main_venv = runtime_base / ".venv"
+    drumsep_venv = runtime_base / ".venv-drumsep"
+    main_cudnn = main_venv / "lib" / "python3.12" / "site-packages" / "nvidia" / "cudnn" / "lib"
+    drumsep_cudnn = drumsep_venv / "lib" / "python3.12" / "site-packages" / "nvidia" / "cudnn" / "lib"
+
+    assert module._path_is_within_root(drumsep_cudnn, main_venv) is False
+    assert module._path_is_within_root(main_cudnn, main_venv) is True
+    assert module._ld_path_entry_within_root(f"{drumsep_cudnn}:/usr/lib", main_venv) == ""
+    assert module._ld_path_entry_within_root(f"{drumsep_cudnn}:{main_cudnn}", main_venv) == str(main_cudnn)
+
+
+def test_cuda_helper_probe_accepts_drumsep_cudnn_prefix_path(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    runtime_base = tmp_path / "STEMwerk"
+    main_python = runtime_base / ".venv" / "bin" / "python"
+    runtime_python = runtime_base / ".venv-drumsep" / "bin" / "python"
+    runtime_cudnn = (
+        runtime_base
+        / ".venv-drumsep"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "nvidia"
+        / "cudnn"
+        / "lib"
+        / "libcudnn.so.9"
+    )
+    main_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    main_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "executable", str(main_python))
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps(
+            {
+                "torch_file": str(runtime_base / ".venv-drumsep" / "lib" / "python3.12" / "site-packages" / "torch" / "__init__.py"),
+                "torch_cuda": "13.0",
+                "device_name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+                "cudnn_version": "92000",
+                "cudnn_paths": [str(runtime_cudnn)],
+                "virtual_env": str(runtime_base / ".venv-drumsep"),
+            }
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Completed())
+    ok, reason, detail = module._probe_cuda_helper_isolation(runtime_python)
+
+    assert ok is True
+    assert reason == "ok"
+    assert str(runtime_cudnn) in detail
+
+
+def test_cuda_helper_probe_rejects_loaded_main_venv_cudnn_path(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    runtime_base = tmp_path / "STEMwerk"
+    main_python = runtime_base / ".venv" / "bin" / "python"
+    runtime_python = runtime_base / ".venv-drumsep" / "bin" / "python"
+    main_cudnn = (
+        runtime_base
+        / ".venv"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "nvidia"
+        / "cudnn"
+        / "lib"
+        / "libcudnn.so.9"
+    )
+    main_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    main_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "executable", str(main_python))
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps(
+            {
+                "torch_file": str(runtime_base / ".venv-drumsep" / "lib" / "python3.12" / "site-packages" / "torch" / "__init__.py"),
+                "torch_cuda": "13.0",
+                "device_name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+                "cudnn_version": "92000",
+                "cudnn_paths": [str(main_cudnn)],
+                "virtual_env": str(runtime_base / ".venv-drumsep"),
+            }
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Completed())
+    ok, reason, detail = module._probe_cuda_helper_isolation(runtime_python)
+
+    assert ok is False
+    assert reason == "cuda_helper_isolation_failed_main_venv_cudnn_leak"
+    assert detail == str(main_cudnn)
 
 
 def test_drumsep_helper_subprocess_env_rocm_isolated_keeps_gpu_visibility(monkeypatch, tmp_path):
@@ -2644,7 +2765,8 @@ def test_rocm_runtime_defaults_auto_helper_to_rocm_without_benchmark_override(mo
 
     assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("rocm", "auto_rocm_default")
     assert module._resolve_benchmark_drumsep_helper_device("cpu", "rocm") == ("cpu", "not_requested")
-    assert module._resolve_benchmark_drumsep_helper_device("auto", "cuda") == ("cpu", "not_requested")
+    module._probe_cuda_helper_isolation = lambda _runtime: (True, "ok", "{}")
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "cuda", Path("/tmp/runtime-python")) == ("cuda", "auto_cuda_default")
 
 
 def test_run_direct_dks_drumsep_helper_uses_cpu_device_and_isolated_env(monkeypatch, tmp_path):
@@ -2836,6 +2958,97 @@ def test_run_direct_dks_drumsep_helper_uses_rocm_device_and_isolated_env(monkeyp
     assert captured["env"]["VIRTUAL_ENV"] == expected_runtime_venv
     assert "CUDA_VISIBLE_DEVICES" not in captured["env"] or captured["env"]["CUDA_VISIBLE_DEVICES"] != ""
     assert "NVIDIA_VISIBLE_DEVICES" not in captured["env"] or captured["env"]["NVIDIA_VISIBLE_DEVICES"] != ""
+
+
+def test_run_direct_dks_drumsep_helper_uses_cuda_device_and_isolated_env(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    input_path = tmp_path / "input.wav"
+    output_root = tmp_path / "stage2_drumsep"
+    model_cache_dir = tmp_path / "models"
+    result_json = output_root / "drumsep_result.json"
+    fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
+    fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
+    fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "executable", str(fake_sys_executable))
+    drumsep_python = tmp_path / "helper" / ".venv-drumsep" / "bin" / "python"
+    drumsep_python.parent.mkdir(parents=True, exist_ok=True)
+    drumsep_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    expected_runtime_venv = str(module._runtime_venv_root(drumsep_python))
+    input_path.write_bytes(b"RIFF0000WAVE")
+    output_root.mkdir(parents=True, exist_ok=True)
+    model_cache_dir.mkdir(parents=True, exist_ok=True)
+    for stem_name in ("kick", "snare", "toms", "hihat", "ride", "crash"):
+        (output_root / f"{stem_name}.wav").write_bytes(b"data")
+    result_json.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "stems": {
+                    "kick": str(output_root / "kick.wav"),
+                    "snare": str(output_root / "snare.wav"),
+                    "toms": str(output_root / "toms.wav"),
+                    "hihat": str(output_root / "hihat.wav"),
+                    "ride": str(output_root / "ride.wav"),
+                    "crash": str(output_root / "crash.wav"),
+                },
+                "raw_outputs": [str(output_root / f"{stem}.wav") for stem in ("kick", "snare", "toms", "hihat", "ride", "crash")],
+                "expected_drum_outputs": 6,
+                "actual_drum_outputs": 6,
+                "output_count_mismatch": False,
+                "output_validation_reason": "ok",
+                "backend_runtime": "cuda",
+                "audio_separator_version": "0.34.1",
+                "requested_device": "auto",
+                "effective_device": "cuda",
+                "model_device": "cuda:0",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = 0
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env", {})
+        return FakeProcess()
+
+    monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
+    ok, stems, reason, detail = module._run_direct_dks_drumsep_helper(
+        input_path,
+        output_root,
+        model_cache_dir,
+        drumsep_python,
+        "MDX23C-DrumSep-aufr33-jarredou.ckpt",
+        "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+        route="wrapper",
+        device="cuda",
+        requested_device="auto",
+        backend_runtime="cuda",
+    )
+
+    assert ok is True
+    assert reason == ""
+    assert detail == ""
+    assert stems["kick"].endswith("kick.wav")
+    assert captured["cmd"][17] == "cuda"
+    assert captured["env"]["VIRTUAL_ENV"] == expected_runtime_venv
+    assert captured["env"].get("CUDA_VISIBLE_DEVICES", None) != ""
+    assert captured["env"].get("NVIDIA_VISIBLE_DEVICES", None) != ""
+    assert "PYTHONPATH" not in captured["env"]
+    assert "PYTHONHOME" not in captured["env"]
+    assert module._path_text(fake_sys_executable.parent.parent) not in module._path_text(captured["env"].get("LD_LIBRARY_PATH", ""))
+    assert captured["env"]["PATH"].startswith(str(drumsep_python.parent))
 
 
 def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers():
@@ -3387,16 +3600,18 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
         if "drumsep-rocm" in str(path):
             return (False, "rocm_no_hip", {})
+        if require_cuda:
+            return (False, "cuda_unavailable", {})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
 
     module._verify_drumsep_runtime = fake_verify
     selected, kind, info = module._select_drumsep_runtime("auto", base)
     assert selected == cpu_python
     assert kind == "cpu"
-    assert info["fallback_reason"] == "rocm_skipped:rocm_no_hip"
+    assert info["fallback_reason"] == "rocm_skipped:rocm_no_hip;cuda_skipped:cuda_unavailable"
     assert info["selection_policy"] == "fallback_cpu"
 
 
@@ -3413,15 +3628,15 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
 
     verify_calls = []
-    def fake_verify_with_calls(path, require_gpu=False, require_mps=False):
-        verify_calls.append((str(path), require_gpu, require_mps))
-        return fake_verify(path, require_gpu=require_gpu, require_mps=require_mps)
+    def fake_verify_with_calls(path, require_gpu=False, require_mps=False, require_cuda=False):
+        verify_calls.append((str(path), require_gpu, require_mps, require_cuda))
+        return fake_verify(path, require_gpu=require_gpu, require_mps=require_mps, require_cuda=require_cuda)
 
     module._verify_drumsep_runtime = fake_verify_with_calls
     selected, kind, info = module._select_drumsep_runtime("cpu", base)
@@ -3429,11 +3644,11 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     assert kind == "cpu"
     assert info["selection_policy"] == "explicit_cpu"
     assert info["fallback_reason"] == ""
-    assert all("drumsep-rocm" not in p for p, _, _ in verify_calls)
+    assert all("drumsep-rocm" not in p for p, _, _, _ in verify_calls)
     assert verify_calls and verify_calls[0][1] is False
 
 
-def test_drumsep_runtime_selector_treats_gpu_request_as_rocm_preferred(tmp_path):
+def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
     module = _load_audio_separator_process_module()
     module.sys.platform = "linux"
     base = tmp_path
@@ -3446,16 +3661,41 @@ def test_drumsep_runtime_selector_treats_gpu_request_as_rocm_preferred(tmp_path)
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
+        if require_cuda:
+            return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "torch_cuda_available": True, "device_names": ["NVIDIA GeForce RTX 3060 Laptop GPU"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
 
     module._verify_drumsep_runtime = fake_verify
     selected, kind, info = module._select_drumsep_runtime("cuda:0", base)
-    assert selected == rocm_python
-    assert kind == "rocm"
-    assert info["selection_policy"] == "gpu_prefer_rocm"
+    assert selected == cpu_python
+    assert kind == "cuda"
+    assert info["selection_policy"] == "explicit_cuda"
+
+
+def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path):
+    module = _load_audio_separator_process_module()
+    module.sys.platform = "linux"
+    base = tmp_path
+    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    cpu_python.parent.mkdir(parents=True, exist_ok=True)
+    cpu_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cpu_python.chmod(0o755)
+
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
+        if require_gpu:
+            return (False, "missing", {})
+        if require_cuda:
+            return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "torch_cuda_available": True, "device_names": ["NVIDIA GeForce RTX 3060 Laptop GPU"]})
+        return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
+
+    module._verify_drumsep_runtime = fake_verify
+    selected, kind, info = module._select_drumsep_runtime("auto", base)
+    assert selected == cpu_python
+    assert kind == "cuda"
+    assert info["selection_policy"] == "auto_prefer_cuda"
 
 
 def test_drumsep_runtime_selector_reports_missing_when_both_absent(tmp_path):
@@ -4878,6 +5118,9 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'local rocmReady = isOkState(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")' in script
     assert 'local rocmPython = resolveRuntimePython(rocmState, defaultRuntimePython(".venv-drumsep-rocm"))' in script
     assert 'local cpuPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))' in script
+    assert 'local capabilityState = readEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}' in script
+    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)' in script
+    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cpuState, capabilityState)' in script
     assert 'rocmReady = rocmReady and rocmPython ~= ""' in script
     assert 'local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""' in script
     assert 'rocmState.DRUMSEP_ROCM_DEVICE_NAMES' in script
@@ -4886,6 +5129,7 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'if id == "mps" or devType == "mps" then' in script
     assert 'if mpsAvailable and cpuReady then' in script
     assert 'add("mps", "Apple MPS", "mps", "device_mps_desc")' in script
+    assert 'add("auto", "Auto", "auto", "device_auto_dks_desc")' in script
     assert 'd.uiName = T("device_mps_label") or "Apple MPS"' in script
     assert 'SETTINGS.device = directDksRoute and "auto" or "cpu"' in script
 
@@ -4898,6 +5142,9 @@ def test_i18n_device_copy_matches_normal_auto_mps_behavior_without_experimental_
     assert 'device_auto_desc = "Automatically chooses the best available processing. On Apple Silicon, Auto uses Apple MPS for normal stems."' in languages
     assert 'device_auto_desc = "Kiest automatisch de beste beschikbare verwerking. Op Apple Silicon gebruikt Auto Apple MPS voor normale stems."' in languages
     assert 'device_auto_desc = "Wählt automatisch die beste verfügbare Verarbeitung. Auf Apple Silicon verwendet Auto Apple MPS für normale Stems."' in languages
+    assert 'device_auto_dks_desc = "Automatically chooses the best available DrumSep runtime.' in languages
+    assert 'device_auto_dks_desc = "Kiest automatisch de beste beschikbare DrumSep-runtime.' in languages
+    assert 'device_auto_dks_desc = "Wählt automatisch die beste verfügbare DrumSep-Laufzeit.' in languages
     assert 'device_mps_label = "Apple MPS"' in languages
     assert 'device_mps_desc = "Use Apple MPS on Apple Silicon. Recommended for normal stems."' in languages
     assert 'device_mps_desc = "Gebruik Apple MPS op Apple Silicon. Aanbevolen voor normale stems."' in languages

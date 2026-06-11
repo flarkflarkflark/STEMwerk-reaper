@@ -10414,6 +10414,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
 
         local rocmState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {}
         local cpuState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
+        local capabilityState = readEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}
         local devices = {}
         local function add(id, name, devType, descKey)
             local rawName = tostring(name or "")
@@ -10466,6 +10467,8 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local rocmDeviceNames = tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "")
         local rocmPython = resolveRuntimePython(rocmState, defaultRuntimePython(".venv-drumsep-rocm"))
         local cpuPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))
+        local cudaReady = schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)
+        local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cpuState, capabilityState)
         rocmReady = rocmReady and rocmPython ~= ""
         local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""
         local mpsAvailable = false
@@ -10482,7 +10485,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         end
 
         if rocmReady or cpuReady then
-            add("auto", "Auto", "auto", "device_auto_desc")
+            add("auto", "Auto", "auto", "device_auto_dks_desc")
         end
         if cpuReady or rocmReady then
             add("cpu", "CPU", "cpu", "device_cpu_desc")
@@ -10493,6 +10496,18 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         if rocmReady and rocmCudaAvailable then
             local idx = 0
             for rawName in rocmDeviceNames:gmatch("[^|]+") do
+                local trimmed = tostring(rawName):gsub("^%s+", ""):gsub("%s+$", "")
+                if trimmed ~= "" then
+                    add("cuda:" .. tostring(idx), trimmed, "cuda", "device_cuda_desc")
+                    idx = idx + 1
+                end
+            end
+            if idx == 0 then
+                add("cuda:0", "GPU 0", "cuda", "device_cuda_desc")
+            end
+        elseif cudaReady then
+            local idx = 0
+            for _, rawName in ipairs(cudaDeviceNames) do
                 local trimmed = tostring(rawName):gsub("^%s+", ""):gsub("%s+$", "")
                 if trimmed ~= "" then
                     add("cuda:" .. tostring(idx), trimmed, "cuda", "device_cuda_desc")
@@ -14481,6 +14496,81 @@ function hasRuntimeSchedulerDeviceType(kind)
     return false
 end
 
+function schedulerSplitDeviceNameList(raw)
+    local result = {}
+    local seen = {}
+    local text = tostring(raw or "")
+    if text == "" then return result end
+    for token in text:gmatch("[^,|]+") do
+        local trimmed = tostring(token or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local lower = trimmed:lower()
+        if trimmed ~= "" and lower ~= "auto" and lower ~= "cpu" and not seen[lower] then
+            seen[lower] = true
+            result[#result + 1] = trimmed
+        end
+    end
+    return result
+end
+
+function schedulerRuntimeHasCudaCapability(state, runtimePython, capabilityState)
+    if not schedulerRuntimeStateOk(state, "DRUMSEP_RUNTIME_STATUS", "STATUS") or runtimePython == "" then
+        return false
+    end
+    local backend = string.lower(tostring(state and state.BACKEND or ""))
+    local profile = string.lower(tostring(state and state.PROFILE or ""))
+    local explicitAvailable = string.lower(
+        tostring(
+            (state and (state.DRUMSEP_CUDA_AVAILABLE or state.CUDA_AVAILABLE))
+            or (capabilityState and capabilityState.CUDA_AVAILABLE)
+            or ""
+        )
+    )
+    local backendLooksCuda = explicitAvailable == "true"
+        or backend == "cuda"
+        or profile:find("cuda", 1, true) ~= nil
+    if not backendLooksCuda then
+        return false
+    end
+    if hasRuntimeSchedulerDeviceType("cuda") then
+        return true
+    end
+    local stateNames = schedulerSplitDeviceNameList(state and (state.DRUMSEP_CUDA_DEVICE_NAMES or state.DRUMSEP_DEVICE_NAMES) or "")
+    if #stateNames > 0 then
+        return true
+    end
+    local capabilityNames = schedulerSplitDeviceNameList(capabilityState and capabilityState.DEVICE_NAMES or "")
+    return #capabilityNames > 0
+end
+
+function schedulerRuntimeCudaDeviceNames(state, capabilityState)
+    local names = {}
+    local seen = {}
+    local function addName(rawName)
+        local trimmed = tostring(rawName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local lower = trimmed:lower()
+        if trimmed == "" or lower == "auto" or lower == "cpu" or seen[lower] then
+            return
+        end
+        seen[lower] = true
+        names[#names + 1] = trimmed
+    end
+
+    for _, rawName in ipairs(schedulerSplitDeviceNameList(state and (state.DRUMSEP_CUDA_DEVICE_NAMES or state.DRUMSEP_DEVICE_NAMES) or "")) do
+        addName(rawName)
+    end
+    for _, dev in ipairs(RUNTIME_DEVICES or {}) do
+        local id = string.lower(tostring(dev and dev.id or ""))
+        local devType = string.lower(tostring(dev and dev.type or ""))
+        if devType == "cuda" or id:match("^cuda:") then
+            addName(dev.fullName or dev.name or dev.uiName or "")
+        end
+    end
+    for _, rawName in ipairs(schedulerSplitDeviceNameList(capabilityState and capabilityState.DEVICE_NAMES or "")) do
+        addName(rawName)
+    end
+    return names
+end
+
 function readBenchmarkDrumsepHelperDeviceRequest()
     local raw = string.lower(tostring(os.getenv("STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE") or ""))
     raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
@@ -14496,6 +14586,8 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
     if rawRequest == "" then rawRequest = "auto" end
     local policyRoute = string.lower(tostring(route or ""))
     local resolvedModel = tostring(modelName or "")
+    local explicitCuda = rawRequest == "cuda" or rawRequest:match("^cuda:%d+$") ~= nil
+    local explicitRocm = rawRequest == "rocm"
 
     local normalizedRequest = "unknown"
     if rawRequest == "cpu" then
@@ -14545,13 +14637,42 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
         elseif normalizedRequest ~= "cpu" and OS == "Linux" and benchHelperDevice == "cuda"
             and hasRuntimeSchedulerDeviceType("cuda")
         then
-            -- The CUDA helper probe runs inside Python workers. Until a prelaunch
-            -- probe exists, schedule conservatively because workers may fail
-            -- closed to CPU after Lua has already selected concurrency.
-            return "cpu", "bench_helper_cuda_unverified_cpu_fallback"
+            local runtime = getRuntimePaths and getRuntimePaths() or nil
+            local stateDir = runtime and runtime.runtimeState or ""
+            local cpuState = stateDir ~= ""
+                and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {})
+                or {}
+            local capabilityState = stateDir ~= ""
+                and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {})
+                or {}
+            local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
+            if schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState) then
+                return "cuda", "bench_helper_cuda"
+            end
+            return "cpu", "bench_helper_cuda_fallback_cpu"
         end
         -- On Apple Silicon, Direct Kit Auto now prefers MPS direct-demix when available.
         -- Other unsupported/non-MPS routes still fall back to CPU helper execution here.
+        local runtime = getRuntimePaths and getRuntimePaths() or nil
+        local stateDir = runtime and runtime.runtimeState or ""
+        local cpuState = stateDir ~= ""
+            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {})
+            or {}
+        local capabilityState = stateDir ~= ""
+            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {})
+            or {}
+        local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
+        local cudaReady = OS == "Linux"
+            and schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)
+        if explicitCuda and cudaReady then
+            return "cuda", "explicit_cuda"
+        end
+        if normalizedRequest == "auto" and cudaReady then
+            return "cuda", "auto_prefer_cuda"
+        end
+        if normalizedRequest == "gpu" and cudaReady and not explicitRocm then
+            return "cuda", "gpu_prefer_cuda"
+        end
         return "cpu", "fallback_cpu"
     end
 
@@ -14567,6 +14688,7 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
 
     local rocmState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {}
     local cpuState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
+    local capabilityState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}
     local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefault(".venv-drumsep-rocm"))
     local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
     local rocmReady = schedulerRuntimeStateOk(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
@@ -14575,9 +14697,18 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
         and tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "") ~= ""
     local cpuReady = schedulerRuntimeStateOk(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS")
         and cpuPython ~= ""
+    local cudaReady = OS == "Linux"
+        and not explicitRocm
+        and schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)
 
     if rocmReady then
         return "rocm", normalizedRequest == "gpu" and "gpu_prefer_rocm" or "auto_prefer_rocm"
+    end
+    if explicitCuda and cudaReady then
+        return "cuda", "explicit_cuda"
+    end
+    if cudaReady then
+        return "cuda", normalizedRequest == "gpu" and "gpu_prefer_cuda" or "auto_prefer_cuda"
     end
     if cpuReady then
         return "cpu", "fallback_cpu"
@@ -19029,7 +19160,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         drumsepSchedulerUsesCpuFallback = drumsepSchedulerBackend == "cpu"
             and (
                 drumsepSchedulerPolicy == "fallback_cpu"
-                or drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback"
+                or drumsepSchedulerPolicy == "bench_helper_cuda_fallback_cpu"
             )
         if drumsepSchedulerUsesCpuFallback then
             schedulerBackend = "cpu"
@@ -19122,8 +19253,10 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.benchDrumsepHelperDeviceRequested = benchDrumsepHelperDeviceRaw
     if drumsepSchedulerPolicy == "bench_helper_rocm" then
         multiTrackQueue.benchDrumsepHelperDeviceApplied = tostring(benchDrumsepHelperDevice or "")
-    elseif drumsepSchedulerPolicy == "bench_helper_cuda_unverified_cpu_fallback" then
-        multiTrackQueue.benchDrumsepHelperDeviceApplied = "unverified"
+    elseif drumsepSchedulerPolicy == "bench_helper_cuda" then
+        multiTrackQueue.benchDrumsepHelperDeviceApplied = "cuda"
+    elseif drumsepSchedulerPolicy == "bench_helper_cuda_fallback_cpu" then
+        multiTrackQueue.benchDrumsepHelperDeviceApplied = "fallback_cpu"
     else
         multiTrackQueue.benchDrumsepHelperDeviceApplied = "none"
     end

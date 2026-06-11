@@ -159,6 +159,46 @@ def test_benchmark_helper_device_defaults_to_cpu_and_rejects_invalid(monkeypatch
     assert "bench_drumsep_helper_device_ignored_reason=invalid_request" in capsys.readouterr().err
 
 
+def test_verified_linux_cuda_helper_device_defaults_to_cuda_without_benchmark_override(monkeypatch, tmp_path, capsys):
+    module = _load_audio_process()
+    runtime_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.delenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, raising=False)
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module, "_probe_cuda_helper_isolation", lambda _runtime: (True, "ok", "{}"))
+
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "cuda", runtime_python) == (
+        "cuda",
+        "auto_cuda_default",
+    )
+    stderr = capsys.readouterr().err
+    assert "bench_drumsep_helper_device_applied=cuda" in stderr
+    assert "bench_drumsep_helper_device_ignored_reason=auto_cuda_default" in stderr
+
+
+def test_verified_linux_cuda_helper_device_falls_back_to_cpu_when_probe_fails(monkeypatch, tmp_path, capsys):
+    module = _load_audio_process()
+    runtime_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.delenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, raising=False)
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        module,
+        "_probe_cuda_helper_isolation",
+        lambda _runtime: (False, "cuda_helper_probe_runtime_missing", "missing"),
+    )
+
+    assert module._resolve_benchmark_drumsep_helper_device("auto", "cuda", runtime_python) == (
+        "cpu",
+        "cuda_helper_probe_runtime_missing",
+    )
+    stderr = capsys.readouterr().err
+    assert "bench_drumsep_helper_device_applied=none" in stderr
+    assert "bench_drumsep_helper_device_ignored_reason=cuda_helper_probe_runtime_missing" in stderr
+
+
 def test_benchmark_rocm_helper_device_requires_matching_linux_runtime(monkeypatch):
     module = _load_audio_process()
     monkeypatch.setenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "rocm")

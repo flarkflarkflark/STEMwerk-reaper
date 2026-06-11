@@ -366,6 +366,7 @@ en = {
 
         -- Device tooltips
         device_auto_desc = "Automatically chooses the best available processing. On Apple Silicon, Auto uses Apple MPS for normal stems.",
+        device_auto_dks_desc = "Automatically chooses the best available DrumSep runtime. On Linux, Auto prefers ROCm on supported AMD setups, CUDA on verified NVIDIA DrumSep runtimes, then CPU fallback.",
         device_cpu_desc = "Force CPU processing (works everywhere; slower).",
         device_cuda_desc = "CUDA device (typically NVIDIA). On Linux with ROCm-supported AMD + ROCm PyTorch, GPUs may also appear here.",
         device_directml_desc = "Windows DirectML device (requires torch-directml).",
@@ -1012,6 +1013,7 @@ en = {
 
         -- Device tooltips
         device_auto_desc = "Kiest automatisch de beste beschikbare verwerking. Op Apple Silicon gebruikt Auto Apple MPS voor normale stems.",
+        device_auto_dks_desc = "Kiest automatisch de beste beschikbare DrumSep-runtime. Op Linux geeft Auto de voorkeur aan ROCm op ondersteunde AMD-setup, CUDA op geverifieerde NVIDIA DrumSep-runtimes en daarna CPU-fallback.",
         device_cpu_desc = "Forceer CPU-verwerking (werkt overal; langzamer).",
         device_cuda_desc = "CUDA-apparaat (meestal NVIDIA). Op Linux kunnen ROCm-ondersteunde AMD + ROCm PyTorch soms ook via torch.cuda verschijnen.",
         device_directml_desc = "Windows DirectML-apparaat (vereist torch-directml).",
@@ -1654,6 +1656,7 @@ en = {
 
         -- Device tooltips
         device_auto_desc = "Wählt automatisch die beste verfügbare Verarbeitung. Auf Apple Silicon verwendet Auto Apple MPS für normale Stems.",
+        device_auto_dks_desc = "Wählt automatisch die beste verfügbare DrumSep-Laufzeit. Unter Linux bevorzugt Auto ROCm auf unterstützten AMD-Setups, CUDA auf verifizierten NVIDIA-DrumSep-Laufzeiten und danach CPU-Fallback.",
         device_cpu_desc = "CPU erzwingen (funktioniert ueberall; langsamer).",
         device_cuda_desc = "CUDA Gerät (typischerweise NVIDIA). Unter Linux können ROCm-unterstuetzte AMD + ROCm PyTorch manchmal auch ueber torch.cuda erscheinen.",
         device_directml_desc = "Windows DirectML Gerät (benoetigt torch-directml).",
