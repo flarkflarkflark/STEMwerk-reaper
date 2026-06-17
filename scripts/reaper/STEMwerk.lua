@@ -1090,7 +1090,13 @@ function formatUserFacingProcessingDeviceLabel(...)
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
         if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then
-            return "MPS"
+            return trSafeValue("device_mps_label", "Apple MPS")
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then
+            return trSafeValue("footer_device_rocm_label", "AMD ROCm")
         end
     end
     for _, candidate in ipairs(candidates) do
@@ -1101,14 +1107,21 @@ function formatUserFacingProcessingDeviceLabel(...)
     end
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
-        if lower == "gpu" or lower == "cuda" or lower:match("^cuda:%d+")
-            or lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true)
-            or lower:find("gpu", 1, true) or lower:find("nvidia", 1, true)
-            or lower:find("geforce", 1, true) or lower:find("radeon", 1, true)
-            or lower:find("amd ", 1, true) or lower:match("%f[%a]rtx%s*%d")
-            or lower:match("%f[%a]gtx%s*%d") or lower:match("%f[%a]rx%s*%d")
+        if lower == "cuda" or lower:match("^cuda:%d+")
+            or lower:find("nvidia", 1, true) or lower:find("geforce", 1, true)
+            or lower:match("%f[%a]rtx%s*%d") or lower:match("%f[%a]gtx%s*%d")
         then
-            return "GPU"
+            return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "gpu"
+            or lower:find("gpu", 1, true) or lower:find("radeon", 1, true)
+            or lower:find("amd ", 1, true) or lower:match("%f[%a]rx%s*%d")
+            or lower:find("intel", 1, true)
+        then
+            return trSafeValue("footer_device_gpu_intent", "GPU")
         end
     end
     for _, candidate in ipairs(candidates) do
@@ -1117,7 +1130,7 @@ function formatUserFacingProcessingDeviceLabel(...)
             or lower:find("cpu_isolated", 1, true) or lower:find("unknown_cap1", 1, true)
             or lower == "backend_not_gpu" or lower == "auto_no_gpu"
         then
-            return "CPU"
+            return trSafeValue("footer_device_cpu_label", "CPU")
         end
     end
     return ""
@@ -14420,18 +14433,23 @@ function compactProgressDeviceToken(rawDevice, friendlyDetail)
     local raw = tostring(rawDevice or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local lower = raw:lower()
     if lower == "" then return "" end
-    if lower == "cpu" then return "CPU" end
-    if lower:match("^cuda:%d+") or lower == "cuda" or lower == "rocm" then return "GPU" end
+    if lower == "cpu" then return trSafeValue("footer_device_cpu_label", "CPU") end
+    if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then
+        return trSafeValue("footer_device_rocm_label", "AMD ROCm")
+    end
+    if lower:match("^cuda:%d+") or lower == "cuda" then
+        return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")
+    end
     if lower:find("directml", 1, true) then return "DirectML" end
-    if lower == "mps" then return "MPS" end
+    if lower == "mps" then return trSafeValue("device_mps_label", "Apple MPS") end
     if lower == "normal" then return trSafeValue("progress_runtime_normal", "normal runtime") end
-    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "drum kit") end
+    if lower == "drumsep" then return trSafeValue("progress_drumkit_engine", "Drum Kit") end
     local friendly = tostring(friendlyDetail or "")
     if friendly ~= "" and not friendly:lower():match("^cuda:%d+") then
         return friendly
     end
     -- Prevent leakage of raw backend IDs like cuda:0 if no friendly detail was found
-    if lower:match("^cuda:%d+") then return "GPU" end
+    if lower:match("^cuda:%d+") then return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA") end
     return raw
 end
 
@@ -14742,10 +14760,10 @@ function activeDrumsepCpuFallbackLabel()
     local helperEnvProfile = tostring(progressState._drumsepSubprocessEnvProfile or ""):lower()
     local helperCpu = helperDevice == "cpu" or helperEnvProfile == "cpu_isolated"
     if requested == "cpu" or selectionPolicy == "explicit_cpu" then
-        return trSafeValue("progress_drumsep_helper_cpu", "DrumSep helper: CPU")
+        return trSafeValue("progress_drumsep_helper_cpu", "CPU")
     end
     if helperCpu or selectionPolicy == "fallback_cpu" or schedulerFallback == "yes" then
-        return trSafeValue("progress_drumsep_cpu_fallback", "DrumSep CPU fallback")
+        return trSafeValue("progress_drumsep_cpu_fallback", "CPU fallback")
     end
     return ""
 end
@@ -14786,7 +14804,7 @@ function buildDksFooterDeviceIntent(deviceDetail)
         return "DirectML"
     end
     if req == "mps" or detail == "mps" then
-        return "MPS"
+        return trSafeValue("device_mps_label", "Apple MPS")
     end
     if gpuRequested or gpuResolved then
         return trSafeValue("footer_device_gpu_intent", "GPU")
@@ -14882,7 +14900,10 @@ function deriveMultiTrackRuntimeFooter(job)
     local runtimeConfirmed = (job and job.runtimeMetadataConfirmed)
         or (multiTrackQueue and multiTrackQueue.runtimeMetadataConfirmed)
     if requestedDevice == "auto" and predictedDrumsepBackend ~= "" and not runtimeConfirmed then
-        return formatUserFacingProcessingDeviceLabel(predictedDrumsepBackend)
+        if predictedDrumsepBackend == "cpu" then
+            return trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")
+        end
+        return trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")
     end
     local runtimeSel = preferredRuntimeSelection(
         job and job.runtimeSelected,

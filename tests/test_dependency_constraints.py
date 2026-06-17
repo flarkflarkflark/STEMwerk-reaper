@@ -4336,7 +4336,8 @@ def test_single_track_footer_uses_shared_runtime_resolution_without_rocm_cuda_re
     assert 'return formatUserFacingProcessingDeviceLabel(' in script
     assert 'or lower:find("radeon", 1, true)' in script
     assert 'or lower:match("%f[%a]rtx%s*%d")' in script
-    assert 'or lower:match("%f[%a]gtx%s*%d") or lower:match("%f[%a]rx%s*%d")' in script
+    assert 'or lower:match("%f[%a]gtx%s*%d")' in script
+    assert 'or lower:match("%f[%a]rx%s*%d")' in script
 
 
 def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations():
@@ -4444,8 +4445,8 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "function activeDrumsepCpuFallbackLabel()" in script
     assert "function buildDksFooterDeviceIntent(deviceDetail)" in script
     assert "local helperLabel = activeDrumsepCpuFallbackLabel()" in script
-    assert 'trSafeValue("progress_drumsep_cpu_fallback", "DrumSep CPU fallback")' in script
-    assert 'trSafeValue("progress_drumsep_helper_cpu", "DrumSep helper: CPU")' in script
+    assert 'trSafeValue("progress_drumsep_cpu_fallback", "CPU fallback")' in script
+    assert 'trSafeValue("progress_drumsep_helper_cpu", "CPU")' in script
     assert 'local helperCpu = helperDevice == "cpu" or helperEnvProfile == "cpu_isolated"' in script
     assert 'trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")' in script
     assert 'trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")' in script
@@ -4467,6 +4468,9 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'footer_device_auto_gpu_intent = "Auto [GPU]"' in langs
     assert 'footer_device_auto_cpu_intent = "Auto [CPU]"' in langs
     assert 'footer_device_gpu_intent = "GPU"' in langs
+    assert 'footer_device_rocm_label = "AMD ROCm"' in langs
+    assert 'footer_device_cuda_label = "NVIDIA CUDA"' in langs
+    assert 'footer_device_cpu_label = "CPU"' in langs
     assert 'footer_device_cpu_runtime = "CPU runtime"' in langs
     assert 'footer_device_gpu_runtime = "GPU runtime: %s"' in langs
     assert 'footer_device_cuda_runtime = "NVIDIA CUDA: %s"' in langs
@@ -4477,7 +4481,10 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'return formatUserFacingProcessingDeviceLabel(' in script
     assert 'progressState._deviceName' in script
     assert 'local raw = tostring(rawDevice or ""):gsub("^%s+", ""):gsub("%s+$", "")' in script
-    assert 'if lower:match("^cuda:%d+") then return "GPU" end' in script
+    assert 'return trSafeValue("footer_device_rocm_label", "AMD ROCm")' in script
+    assert 'return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")' in script
+    assert 'return trSafeValue("footer_device_cpu_label", "CPU")' in script
+    assert 'if lower:match("^cuda:%d+") then return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA") end' in script
     assert 'compactProgressDeviceToken(deviceDetail, deviceDetail)' in script
     assert 'progressState._stage2Runtime,' in script
     assert 'progressState._stage1Runtime,' in script
@@ -4496,8 +4503,11 @@ def test_result_and_progress_labels_prefer_explicit_runtime_over_cuda_device_tok
     assert 'return sanitizeUserFacingMethodLabel("rocm")' in script
     assert 'function sanitizeUserFacingMethodLabel(candidate)' in script
     assert 'return formatUserFacingProcessingDeviceLabel(candidate)' in script
-    assert 'or lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true)' in script
+    assert 'if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then' in script
     assert 'if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then' in script
+    assert 'return trSafeValue("device_mps_label", "Apple MPS")' in script
+    assert 'return trSafeValue("footer_device_rocm_label", "AMD ROCm")' in script
+    assert 'return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")' in script
     assert '"backend_runtime", "audio_separator_version", "requested_device", "effective_device",' in support
     assert '"model_device", "direct_demix_keys", "drumsep_direct_demix_gate",' in support
     assert '"drumsep_direct_demix_gate_reason", "drumsep_mps_direct_demix_gate",' in support
@@ -5225,6 +5235,8 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")' in script
     assert 'if (not data.methodLabel or data.methodLabel == "") and data.backend == "gpu" then' in script
     assert 'data.methodLabel = sanitizeUserFacingMethodLabel("gpu")' in script
+    assert 'return trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")' in script
+    assert 'return trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")' in script
     assert 'local preferredId, preferredName = line:match("auto_selected_preferred=([%w%-%_:%.]+)%s*%((.+)%)")' in script
     assert 'local effectiveDevice = line:match("effective_device=([%w_:%-]+)")' in script
     assert 'if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then' in script
