@@ -4031,6 +4031,16 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert script.index('writeFile(joinPath(bundleDir, "diagnostics.txt"') < script.index('local zipStartedAt = phaseStart("create_zip")')
     assert "local function updateZipTimingFile(" in script
     assert "updateZipTimingFile(zipPath, bundleDir, timingsFile, detectedPythonPath)" in script
+    assert 'lines[#lines + 1] = "Latest run summary:"' in script
+    assert 'lines[#lines + 1] = "Status: " .. statusSummaryLabel(entry)' in script
+    assert 'lines[#lines + 1] = "Workflow: " .. workflowSummaryLabel(entry)' in script
+    assert 'lines[#lines + 1] = "Device: " .. tostring(entry.friendly_device or "unknown")' in script
+    assert 'lines[#lines + 1] = "Output validation: " .. tostring(entry.output_validation_reason or "unknown")' in script
+    assert 'lines[#lines + 1] = "summary: " .. statusSummaryLabel(entry)' in script
+    assert 'lines[#lines + 1] = "runtime_selected: " .. tostring(entry.runtime_selected or "unknown")' in script
+    assert 'lines[#lines + 1] = "backend_runtime: " .. tostring(entry.backend_runtime or "unknown")' in script
+    assert 'lines[#lines + 1] = "workflow_source: " .. tostring(entry.workflow_source or "unknown")' in script
+    assert 'lines[#lines + 1] = "exit_code: " .. tostring(entry.exit_code or "unknown")' in script
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
@@ -4655,7 +4665,8 @@ def test_drumkit_visible_progress_and_support_summary_hide_raw_cuda_devices():
     assert 'lines[#lines + 1] = "device: " .. tostring(entry.device or "unknown")' in support_script
     assert 'lines[#lines + 1] = "friendly_device: " .. tostring(entry.friendly_device or "unknown")' in support_script
     assert "local function friendlyDeviceLabel(rawDevice, runtimeState, entry)" in support_script
-    assert 'return "Auto [GPU]"' in support_script
+    assert 'return "AMD ROCm"' in support_script
+    assert 'return "NVIDIA CUDA"' in support_script
 
 
 def test_runtime_selection_prefers_explicit_rocm_over_cuda_device_fallback():
@@ -4839,6 +4850,20 @@ def test_support_bundle_processing_summary_prefers_current_success_and_guards_ca
     assert "setRunResult(entry, \"cancelled\", 90)" in script
     assert "if pathExists(stemsJsonPath) then" in script
     assert "finalizeRunClassification(entry)" in script
+    assert 'elseif key == "output_validation_reason" then' in script
+    assert 'elseif key == "expected_stems" then' in script
+    assert 'elseif key == "found_stems" then' in script
+    assert 'elseif key == "found_files" then' in script
+    assert 'elseif key == "drumsep_runtime_selected" or key == "runtime_selected" then' in script
+    assert 'elseif key == "backend_runtime" then' in script
+    assert 'elseif key == "workflow_mode" then' in script
+    assert 'elseif key == "workflow_source" then' in script
+    assert 'kvAssignLast(entry, "exit_code", tostring(rc))' in script
+    assert 'return "Apple MPS"' in script
+    assert 'return "AMD ROCm"' in script
+    assert 'return "NVIDIA CUDA"' in script
+    assert 'return "CPU"' in script
+    assert 'return "CPU fallback (supported, slower)"' in script
 
 
 def test_lua_wav_render_path_guards_unsigned_pack_overflow_and_invalid_samples():

@@ -887,15 +887,30 @@ local function shortRuntimeGpuName(name)
     return first
 end
 
+local function countDelimitedValues(value)
+    local raw = trim(value)
+    if raw == "" or raw == "unknown" then return nil end
+    local direct = tonumber(raw:match("(%d+)"))
+    if direct then return direct end
+    local count = 0
+    for token in raw:gmatch("[^,|]+") do
+        if trim(token) ~= "" then
+            count = count + 1
+        end
+    end
+    return count > 0 and count or nil
+end
+
 local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
     local raw = trim(rawDevice)
     local lower = raw:lower()
     local state = runtimeState or {}
+    local runtimeSelected = trim((entry and (entry.runtime_selected or entry.backend_runtime)) or ""):lower()
     if lower == "" then return "unknown" end
-    if lower == "cpu" then return "CPU runtime" end
+    if lower == "cpu" then return "CPU" end
     if lower:find("directml", 1, true) then return "DirectML" end
-    if lower == "mps" then return "MPS" end
-    if lower:match("^cuda:%d+") or lower == "cuda" or lower == "rocm" then
+    if lower == "mps" then return "Apple MPS" end
+    if runtimeSelected == "rocm" or lower == "rocm" then
         local candidates = {
             trim(state.ROCM_DETECTED_DEVICES or ""),
             trim(state.DRUMSEP_ROCM_DEVICE_NAMES or ""),
@@ -906,7 +921,7 @@ local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
             if candidate ~= "" then
                 local short = shortRuntimeGpuName(candidate)
                 if short ~= "" then
-                    return "GPU/ROCm: " .. short
+                    return "AMD ROCm (" .. short .. ")"
                 end
             end
         end
@@ -914,12 +929,102 @@ local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
         if entryName ~= "" then
             local short = shortRuntimeGpuName(entryName)
             if short ~= "" then
-                return "GPU/ROCm: " .. short
+                return "AMD ROCm (" .. short .. ")"
             end
         end
-        return "Auto [GPU]"
+        return "AMD ROCm"
+    end
+    if lower:match("^cuda:%d+") or lower == "cuda" then
+        return "NVIDIA CUDA"
+    end
+    if lower:find("nvidia", 1, true) or lower:find("geforce", 1, true) or lower:find("rtx", 1, true) or lower:find("gtx", 1, true) then
+        return "NVIDIA CUDA"
+    end
+    if lower:find("radeon", 1, true) or lower:find("amd", 1, true) or lower:find("hip", 1, true) then
+        return "AMD ROCm"
+    end
+    if lower:find("gpu", 1, true) then
+        return "GPU"
     end
     return raw
+end
+
+local function workflowSummaryLabel(entry)
+    local source = trim((entry and entry.workflow_source) or ""):lower()
+    if source == "dks_direct" then return "Direct Kit" end
+    if source == "dks_extract" then return "Kit Split" end
+    return "Stems"
+end
+
+local function statusSummaryLabel(entry)
+    local result = trim((entry and entry.result) or ""):lower()
+    local errorClass = trim((entry and entry.error_class) or ""):lower()
+    if result == "success" then return "PASS" end
+    if result == "partial" then return "PARTIAL" end
+    if result == "cancelled" then return "CANCELLED" end
+    if result == "fail" and errorClass:find("^model_", 1, true) then
+        return "MODEL ISSUE"
+    end
+    if result == "fail" then return "FAILED" end
+    return "UNKNOWN"
+end
+
+local function requestedDeviceSummaryLabel(entry, runtimeState)
+    local requested = trim((entry and (entry.requested_device or entry.selected_device or entry.device)) or "")
+    local lower = requested:lower()
+    if lower == "" or lower == "unknown" then return "unknown" end
+    if lower == "auto" then return "Auto" end
+    return friendlyDeviceLabel(requested, runtimeState, entry)
+end
+
+local function outputCountSummaryLabel(entry)
+    local expected = countDelimitedValues(entry and entry.expected_stems)
+    local found = countDelimitedValues(entry and entry.found_stems) or countDelimitedValues(entry and entry.found_files)
+    if expected and found then
+        return string.format("%d/%d", found, expected)
+    end
+    if found then
+        return tostring(found)
+    end
+    return "unknown"
+end
+
+local function cpuFallbackSummaryLabel(entry)
+    local requested = trim((entry and entry.requested_device) or ""):lower()
+    local runtimeSelected = trim((entry and entry.runtime_selected) or ""):lower()
+    local backendRuntime = trim((entry and entry.backend_runtime) or ""):lower()
+    local effectiveDevice = trim((entry and entry.effective_device) or ""):lower()
+    local mpsFallbackUsed = trim((entry and entry.mps_fallback_used) or ""):lower()
+    if mpsFallbackUsed == "1" or mpsFallbackUsed == "true" then
+        return "CPU fallback (supported, slower)"
+    end
+    if requested ~= "" and requested ~= "unknown" and requested ~= "cpu"
+        and (runtimeSelected == "cpu" or backendRuntime == "cpu" or effectiveDevice == "cpu") then
+        return "CPU fallback (supported, slower)"
+    end
+    return nil
+end
+
+local function appendLatestRunSummary(lines, entry, runtimeState)
+    lines[#lines + 1] = "Latest run summary:"
+    lines[#lines + 1] = "Status: " .. statusSummaryLabel(entry)
+    lines[#lines + 1] = "Workflow: " .. workflowSummaryLabel(entry)
+    lines[#lines + 1] = "Device: " .. tostring(entry.friendly_device or "unknown")
+    lines[#lines + 1] = "Requested device: " .. requestedDeviceSummaryLabel(entry, runtimeState)
+    lines[#lines + 1] = "Runtime: " .. tostring(entry.runtime_selected or "unknown")
+    lines[#lines + 1] = "Backend runtime: " .. tostring(entry.backend_runtime or "unknown")
+    lines[#lines + 1] = "Effective device: " .. tostring(entry.effective_device or "unknown")
+    lines[#lines + 1] = "Outputs: " .. outputCountSummaryLabel(entry)
+    lines[#lines + 1] = "Exit code: " .. tostring(entry.exit_code or "unknown")
+    lines[#lines + 1] = "Output validation: " .. tostring(entry.output_validation_reason or "unknown")
+    local fallback = cpuFallbackSummaryLabel(entry)
+    if fallback then
+        lines[#lines + 1] = "Fallback: " .. fallback
+    end
+    if trim(tostring(entry.error_reason or "")) ~= "" and tostring(entry.error_reason or "unknown") ~= "unknown" then
+        lines[#lines + 1] = "Reason: " .. tostring(entry.error_reason)
+    end
+    lines[#lines + 1] = ""
 end
 
 local function extBool(key)
@@ -2233,10 +2338,26 @@ local function parseSupportRunText(entry, text)
                 kvAssignIfUnknown(entry, "model", value)
             elseif key == "device" then
                 kvAssignIfUnknown(entry, "device", value)
+            elseif key == "workflow_mode" then
+                kvAssignLast(entry, "workflow_mode", value)
+            elseif key == "workflow_source" then
+                kvAssignLast(entry, "workflow_source", value)
             elseif key == "backend" then
                 kvAssignIfUnknown(entry, "backend", value)
+            elseif key == "backend_runtime" then
+                kvAssignLast(entry, "backend_runtime", value)
+            elseif key == "drumsep_runtime_selected" or key == "runtime_selected" then
+                kvAssignLast(entry, "runtime_selected", value)
             elseif key == "profile" then
                 kvAssignIfUnknown(entry, "profile", value)
+            elseif key == "output_validation_reason" then
+                kvAssignLast(entry, "output_validation_reason", value)
+            elseif key == "expected_stems" then
+                kvAssignLast(entry, "expected_stems", value)
+            elseif key == "found_stems" then
+                kvAssignLast(entry, "found_stems", value)
+            elseif key == "found_files" then
+                kvAssignLast(entry, "found_files", value)
             elseif key == "jobs" then
                 local count = parseCountValue(value)
                 if count then kvAssignLast(entry, "jobs", count) end
@@ -2292,6 +2413,7 @@ local function parseSupportRunText(entry, text)
                 kvAssignLast(entry, "timestamp", value)
             elseif key == "exit_code" and tonumber(value) then
                 local rc = tonumber(value)
+                kvAssignLast(entry, "exit_code", tostring(rc))
                 if rc == 0 then
                     entry._sawExitZero = (entry._sawExitZero or 0) + 1
                 elseif rc == 143 then
@@ -2861,6 +2983,15 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             requested_device = "unknown",
             selected_device = "unknown",
             effective_device = "unknown",
+            runtime_selected = "unknown",
+            backend_runtime = "unknown",
+            workflow_mode = "unknown",
+            workflow_source = "unknown",
+            output_validation_reason = "unknown",
+            expected_stems = "unknown",
+            found_stems = "unknown",
+            found_files = "unknown",
+            exit_code = "unknown",
             mps_experimental = "unknown",
             mps_segment_size = "unknown",
             mps_segment_policy = "unknown",
@@ -3039,8 +3170,14 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
 
     lines[#lines + 1] = "Recent processing summary (newest first)"
     lines[#lines + 1] = ""
+    appendLatestRunSummary(lines, out[1], runtimeState)
     for idx, entry in ipairs(out) do
         lines[#lines + 1] = string.format("Run %d", idx)
+        lines[#lines + 1] = "summary: " .. statusSummaryLabel(entry)
+            .. " | " .. workflowSummaryLabel(entry)
+            .. " | " .. tostring(entry.friendly_device or "unknown")
+            .. " | outputs " .. outputCountSummaryLabel(entry)
+            .. " | validation " .. tostring(entry.output_validation_reason or "unknown")
         lines[#lines + 1] = "run: " .. tostring(entry.run_name or "unknown")
         lines[#lines + 1] = "timestamp: " .. tostring(entry.timestamp or "unknown")
         lines[#lines + 1] = "result: " .. tostring(entry.result or "unknown")
@@ -3052,6 +3189,10 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "requested_device: " .. tostring(entry.requested_device or "unknown")
         lines[#lines + 1] = "selected_device: " .. tostring(entry.selected_device or "unknown")
         lines[#lines + 1] = "effective_device: " .. tostring(entry.effective_device or "unknown")
+        lines[#lines + 1] = "runtime_selected: " .. tostring(entry.runtime_selected or "unknown")
+        lines[#lines + 1] = "backend_runtime: " .. tostring(entry.backend_runtime or "unknown")
+        lines[#lines + 1] = "workflow_mode: " .. tostring(entry.workflow_mode or "unknown")
+        lines[#lines + 1] = "workflow_source: " .. tostring(entry.workflow_source or "unknown")
         lines[#lines + 1] = "mps_experimental: " .. tostring(entry.mps_experimental or "unknown")
         lines[#lines + 1] = "mps_segment_size: " .. tostring(entry.mps_segment_size or "unknown")
         lines[#lines + 1] = "mps_segment_policy: " .. tostring(entry.mps_segment_policy or "unknown")
@@ -3063,6 +3204,11 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "wall_clock_total: " .. tostring(entry.wall_clock_total or "unknown")
         lines[#lines + 1] = "total_source_duration: " .. tostring(entry.total_source_duration or "unknown")
         lines[#lines + 1] = "realtime_factor: " .. tostring(entry.realtime_factor or "unknown")
+        lines[#lines + 1] = "expected_stems: " .. tostring(entry.expected_stems or "unknown")
+        lines[#lines + 1] = "found_stems: " .. tostring(entry.found_stems or "unknown")
+        lines[#lines + 1] = "found_files: " .. tostring(entry.found_files or "unknown")
+        lines[#lines + 1] = "output_validation_reason: " .. tostring(entry.output_validation_reason or "unknown")
+        lines[#lines + 1] = "exit_code: " .. tostring(entry.exit_code or "unknown")
         if tostring(entry.result or "unknown") == "fail" or tostring(entry.result or "unknown") == "partial" then
             lines[#lines + 1] = "failure_reason: " .. tostring(entry.error_reason or "unknown")
             lines[#lines + 1] = "error_class: " .. tostring(entry.error_class or "unknown")
