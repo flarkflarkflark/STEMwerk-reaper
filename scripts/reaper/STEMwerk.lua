@@ -19676,9 +19676,8 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
                 "if ($wm -ne '') { $args += @('--workflow-mode',($dq + $wm + $dq)) };" ..
                 "if ($ws -ne '') { $args += @('--workflow-source',($dq + $ws + $dq)) };" ..
                 "if ($s2 -ne '') { $args += @('--requested-stage2-model',($dq + $s2 + $dq)) };" ..
-                "$p = Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "';" ..
+                "$p = Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory '" .. outD .. "' -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput '" .. stdoutF .. "' -RedirectStandardError '" .. stderrF .. "';" ..
                 " Set-Content -Path '" .. pidF .. "' -Value $p.Id -Encoding ascii;" ..
-                " Wait-Process -Id $p.Id;" ..
                 " $ec=$p.ExitCode; Set-Content -Path '" .. exitF .. "' -Value $ec -Encoding ascii;" ..
                 " if ($ec -eq 0) { Set-Content -Path '" .. doneF .. "' -Value 'DONE' -Encoding ascii } else { Set-Content -Path '" .. doneF .. "' -Value 'ERROR' -Encoding ascii }"
 

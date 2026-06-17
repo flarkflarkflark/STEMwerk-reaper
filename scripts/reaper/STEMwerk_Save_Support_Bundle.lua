@@ -901,6 +901,107 @@ local function countDelimitedValues(value)
     return count > 0 and count or nil
 end
 
+local function joinStringList(values)
+    if type(values) ~= "table" or #values == 0 then return "" end
+    local out = {}
+    for i = 1, #values do
+        local v = trim(values[i])
+        if v ~= "" then
+            out[#out + 1] = v
+        end
+    end
+    return table.concat(out, ",")
+end
+
+local function expectedNormalStemNamesForModel(model)
+    local lower = trim(model):lower()
+    if lower == "htdemucs_6s" then
+        return { "vocals", "drums", "bass", "other", "guitar", "piano" }
+    end
+    return { "vocals", "drums", "bass", "other" }
+end
+
+local function detectStemNamesFromText(text, stemNames)
+    local lower = tostring(text or ""):lower()
+    if lower == "" or type(stemNames) ~= "table" then return {} end
+    local found = {}
+    local seen = {}
+    for i = 1, #stemNames do
+        local stem = trim(stemNames[i]):lower()
+        if stem ~= "" and not seen[stem] then
+            local basenamePattern = "[/\\]" .. stem:gsub("%-", "%%-") .. "%.wav"
+            local jsonKeyPattern = '"' .. stem:gsub("%-", "%%-") .. '"%s*:'
+            local summaryPattern = "%f[%a]" .. stem:gsub("%-", "%%-") .. "%s*:%s*.+[/\\]" .. stem:gsub("%-", "%%-") .. "%.wav"
+            if lower:match(basenamePattern) or lower:match(jsonKeyPattern) or lower:match(summaryPattern) then
+                found[#found + 1] = stem
+                seen[stem] = true
+            end
+        end
+    end
+    return found
+end
+
+local function detectStemNamesFromFiles(jobDir, stemNames)
+    local fileNames = enumerateFiles(jobDir)
+    if #fileNames == 0 or type(stemNames) ~= "table" then return {} end
+    local found = {}
+    local seen = {}
+    local byFile = {}
+    for i = 1, #fileNames do
+        byFile[tostring(fileNames[i] or ""):lower()] = true
+    end
+    for i = 1, #stemNames do
+        local stem = trim(stemNames[i]):lower()
+        local fileName = stem ~= "" and (stem .. ".wav") or ""
+        if fileName ~= "" and byFile[fileName] and not seen[stem] then
+            found[#found + 1] = stem
+            seen[stem] = true
+        end
+    end
+    return found
+end
+
+local function maybeInferSingleNormalStemOutputs(entry, jobDir, stdoutData, sepData)
+    if tonumber(entry.jobs or 0) ~= 1 then return end
+    local workflowSource = trim(entry.workflow_source or ""):lower()
+    local workflowMode = trim(entry.workflow_mode or ""):lower()
+    if workflowSource == "dks_direct" or workflowSource == "dks_extract" or workflowMode == "drumkit" then
+        return
+    end
+
+    local expectedStemNames = expectedNormalStemNamesForModel(entry.model)
+    if tostring(entry.expected_stems or "unknown") == "unknown" then
+        entry.expected_stems = joinStringList(expectedStemNames)
+    end
+
+    if tostring(entry.found_stems or "unknown") == "unknown" then
+        local foundStemNames = detectStemNamesFromText(stdoutData, expectedStemNames)
+        if #foundStemNames == 0 then
+            foundStemNames = detectStemNamesFromText(sepData, expectedStemNames)
+        end
+        if #foundStemNames == 0 then
+            foundStemNames = detectStemNamesFromFiles(jobDir, expectedStemNames)
+        end
+        if #foundStemNames > 0 then
+            entry.found_stems = joinStringList(foundStemNames)
+        end
+    end
+
+    if tostring(entry.found_files or "unknown") == "unknown" and tostring(entry.found_stems or "unknown") ~= "unknown" then
+        entry.found_files = tostring(entry.found_stems)
+    end
+
+    local expectedCount = countDelimitedValues(entry.expected_stems)
+    local foundCount = countDelimitedValues(entry.found_stems) or countDelimitedValues(entry.found_files)
+    local hasExitZero = tonumber(entry._sawExitZero or 0) > 0
+    local hasDoneSuccess = tonumber(entry._sawDoneSuccess or 0) > 0
+    if expectedCount and foundCount and expectedCount == foundCount and hasExitZero and hasDoneSuccess then
+        if tostring(entry.output_validation_reason or "unknown") == "unknown" then
+            entry.output_validation_reason = "ok"
+        end
+    end
+end
+
 local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
     local raw = trim(rawDevice)
     local lower = raw:lower()
@@ -2358,6 +2459,14 @@ local function parseSupportRunText(entry, text)
                 kvAssignLast(entry, "found_stems", value)
             elseif key == "found_files" then
                 kvAssignLast(entry, "found_files", value)
+            elseif key == "expected_outputs" then
+                if tostring(entry.expected_stems or "unknown") == "unknown" then
+                    kvAssignLast(entry, "expected_stems", value)
+                end
+            elseif key == "created_outputs" then
+                if tostring(entry.found_files or "unknown") == "unknown" then
+                    kvAssignLast(entry, "found_files", value)
+                end
             elseif key == "jobs" then
                 local count = parseCountValue(value)
                 if count then kvAssignLast(entry, "jobs", count) end
@@ -3073,6 +3182,8 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
                 entry._sawStemsOutput = (entry._sawStemsOutput or 0) + 1
                 entry._positiveHints = (entry._positiveHints or 0) + 1
             end
+
+            maybeInferSingleNormalStemOutputs(entry, jobDir, stdoutData, sepData)
         end
 
         if stat.minTime and stat.maxTime and stat.maxTime >= stat.minTime then
