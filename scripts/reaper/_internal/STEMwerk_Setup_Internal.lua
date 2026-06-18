@@ -1846,7 +1846,6 @@ local function runBootstrap(runtime)
 end
 
 local function launchWindowsBootstrap(runtime, stateFile, logFile, scriptPath)
-    -- Windows REAPER-side bootstrap is disabled; installer handles heavy setup.
     return false
 end
 
@@ -2014,6 +2013,46 @@ end
 local function windowsSetupTick()
     if not WINDOWS_SETUP or not gfx then return end
 
+    local optionalRuntimeMode = WINDOWS_SETUP.mode == "drumsep-runtime" or WINDOWS_SETUP.mode == "drumsep-rocm-runtime"
+    local function buildOptionalRuntimeResult(localState)
+        localState = type(localState) == "table" and localState or {}
+        local isRocm = WINDOWS_SETUP.mode == "drumsep-rocm-runtime"
+        local runtimeLabel = isRocm and "Drum Kit Split ROCm runtime" or "Drum Kit Split runtime"
+        local modelStatus = trim(localState.DRUMSEP_ROCM_MODEL_STATUS or localState.DRUMSEP_MODEL_STATUS or "")
+        local runtimePython = trim(localState.DRUMSEP_ROCM_PYTHON or localState.DRUMSEP_PYTHON or localState.PYTHON_PATH or "")
+        local modelFile = trim(localState.DRUMSEP_ROCM_MODEL_FILE or localState.DRUMSEP_MODEL_FILE or "")
+        local modelYaml = trim(localState.DRUMSEP_ROCM_MODEL_YAML or localState.DRUMSEP_MODEL_YAML or "")
+        local status = trim(localState.STATUS or localState.DRUMSEP_ROCM_RUNTIME_STATUS or localState.DRUMSEP_RUNTIME_STATUS or "")
+        local reason = trim(localState.STATUS_REASON or localState.DRUMSEP_ROCM_RUNTIME_DETAIL or localState.DRUMSEP_RUNTIME_DETAIL or "")
+        if status == "ok" then
+            return {
+                success = true,
+                finalMessage = {
+                    runtimeLabel .. " is ready.",
+                    "Python: " .. (runtimePython ~= "" and runtimePython or "(unknown)"),
+                    "Model status: " .. (modelStatus ~= "" and modelStatus or "ok"),
+                    "Model file: " .. (modelFile ~= "" and modelFile or "(unknown)"),
+                    "Model YAML: " .. (modelYaml ~= "" and modelYaml or "(unknown)"),
+                    "Log: " .. tostring(WINDOWS_SETUP.logFile or ""),
+                }
+            }
+        end
+        local displayReason = reason ~= "" and reason or (status ~= "" and status or "install_failed")
+        return {
+            success = false,
+            finalMessage = {
+                runtimeLabel .. " could not be installed.",
+                "Reason: " .. tostring(displayReason),
+                "Python: " .. (runtimePython ~= "" and runtimePython or "(missing)"),
+                "Model status: " .. (modelStatus ~= "" and modelStatus or "missing"),
+                "Model file: " .. (modelFile ~= "" and modelFile or "(missing)"),
+                "Model YAML: " .. (modelYaml ~= "" and modelYaml or "(missing)"),
+                "Check internet connection and run Support Bundle if this persists.",
+                "Log: " .. tostring(WINDOWS_SETUP.logFile or ""),
+            }
+        }
+    end
+
     local state = parseStateFile(WINDOWS_SETUP.stateFile)
     local logLines = readTail(WINDOWS_SETUP.logFile, 32)
     local pid = readBootstrapPid(WINDOWS_SETUP.pidFile)
@@ -2026,13 +2065,32 @@ local function windowsSetupTick()
         local status = state.STATUS or ""
         local elapsed = os.time() - (WINDOWS_SETUP.startedAt or os.time())
         if status ~= "" and status ~= "running" then
-            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, status == "ok", state, WINDOWS_SETUP.separatorScript)
+            local result
+            if optionalRuntimeMode then
+                result = buildOptionalRuntimeResult(state)
+            else
+                result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, status == "ok", state, WINDOWS_SETUP.separatorScript)
+            end
             finalizeWindowsSetup(result)
         elseif status == "launch_failed" then
-            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, state, WINDOWS_SETUP.separatorScript)
+            local result
+            if optionalRuntimeMode then
+                result = buildOptionalRuntimeResult(state)
+            else
+                result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, state, WINDOWS_SETUP.separatorScript)
+            end
             finalizeWindowsSetup(result)
         elseif pid == nil and (status == "" or status == "running") and elapsed >= 5 then
-            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, state, WINDOWS_SETUP.separatorScript)
+            local result
+            if optionalRuntimeMode then
+                if state.STATUS == "" or state.STATUS == nil then
+                    state.STATUS = "launch_failed"
+                    state.STATUS_REASON = "bootstrap_pid_missing"
+                end
+                result = buildOptionalRuntimeResult(state)
+            else
+                result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, state, WINDOWS_SETUP.separatorScript)
+            end
             finalizeWindowsSetup(result)
         elseif pid ~= nil and not pidAlive and (status == "" or status == "running") and elapsed >= 5 then
             local stateDead = parseStateFile(WINDOWS_SETUP.stateFile)
@@ -2040,7 +2098,12 @@ local function windowsSetupTick()
                 stateDead.STATUS = "pid_dead"
                 stateDead.STATUS_REASON = "bootstrap_process_exited"
             end
-            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, stateDead, WINDOWS_SETUP.separatorScript)
+            local result
+            if optionalRuntimeMode then
+                result = buildOptionalRuntimeResult(stateDead)
+            else
+                result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, stateDead, WINDOWS_SETUP.separatorScript)
+            end
             finalizeWindowsSetup(result)
         elseif elapsed >= 1800 then
             local stateTimeout = parseStateFile(WINDOWS_SETUP.stateFile)
@@ -2048,7 +2111,12 @@ local function windowsSetupTick()
                 stateTimeout.STATUS = "timeout"
                 stateTimeout.STATUS_REASON = "bootstrap_timeout"
             end
-            local result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, stateTimeout, WINDOWS_SETUP.separatorScript)
+            local result
+            if optionalRuntimeMode then
+                result = buildOptionalRuntimeResult(stateTimeout)
+            else
+                result = safePerformPostBootstrap(WINDOWS_SETUP.runtime, WINDOWS_SETUP.stateFile, WINDOWS_SETUP.logFile, false, stateTimeout, WINDOWS_SETUP.separatorScript)
+            end
             finalizeWindowsSetup(result)
         end
     end
@@ -2081,14 +2149,24 @@ local function windowsSetupTick()
         if not WINDOWS_SETUP.finalized then
             writeBootstrapGuard(WINDOWS_SETUP.guardPath, "failed", "user_closed", WINDOWS_SETUP.bootstrapScript)
             if WINDOWS_SETUP.summaryText == "" then
-                local result = safePerformPostBootstrap(
-                    WINDOWS_SETUP.runtime,
-                    WINDOWS_SETUP.stateFile,
-                    WINDOWS_SETUP.logFile,
-                    false,
-                    parseStateFile(WINDOWS_SETUP.stateFile),
-                    WINDOWS_SETUP.separatorScript
-                )
+                local result
+                if optionalRuntimeMode then
+                    local stateClosed = parseStateFile(WINDOWS_SETUP.stateFile)
+                    if stateClosed.STATUS == "" or stateClosed.STATUS == nil then
+                        stateClosed.STATUS = "failed"
+                        stateClosed.STATUS_REASON = "user_closed"
+                    end
+                    result = buildOptionalRuntimeResult(stateClosed)
+                else
+                    result = safePerformPostBootstrap(
+                        WINDOWS_SETUP.runtime,
+                        WINDOWS_SETUP.stateFile,
+                        WINDOWS_SETUP.logFile,
+                        false,
+                        parseStateFile(WINDOWS_SETUP.stateFile),
+                        WINDOWS_SETUP.separatorScript
+                    )
+                end
                 finalizeWindowsSetup(result)
             end
         end
@@ -2100,15 +2178,99 @@ local function windowsSetupTick()
     reaper.defer(windowsSetupTick)
 end
 
-local function startWindowsSetup(runtime, separatorScript)
-    msgBox(
-        "STEMwerk Setup",
-        "On Windows, setup runs in the installer.\n\n"
-            .. "This REAPER script only verifies/repairs and will not launch bootstrap installers.\n\n"
-            .. "Please re-run the Windows installer if setup is incomplete.",
-        0
-    )
-    return
+local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
+    mode = tostring(mode or "repair")
+    local isDrumsepRuntime = mode == "drumsep-runtime"
+    local isDrumsepRocmRuntime = mode == "drumsep-rocm-runtime"
+    local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or "bootstrap.log")
+    local pidFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.pid") or (isDrumsepRocmRuntime and "drumsep_rocm_runtime.pid") or "bootstrap.pid")
+    local scriptPath = PATH_HELPER.getBootstrapScriptPath(INSTALL_ROOT, OS, PATH_SEP)
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
+    ensureDir(runtime.runtimeState)
+    ensureDir(runtime.runtimeLogs)
+
+    local busy, scriptInUse = isBootstrapBusy(guardPath, pidFile)
+    if busy then
+        msgBox(
+            "STEMwerk Setup",
+            "Another setup task is already running.\n\nScript: " .. tostring(scriptInUse or "") .. "\n\nWait for it to finish and try again.",
+            0
+        )
+        return false
+    end
+    recoverStaleBootstrapGuard(guardPath, pidFile)
+
+    if not fileExists(scriptPath) then
+        msgBox("STEMwerk Setup", "Bootstrap script missing:\n\n" .. tostring(scriptPath), 16)
+        return false
+    end
+
+    local launchMode = (isDrumsepRuntime or isDrumsepRocmRuntime) and mode or "repair"
+    local powershellPath = os.getenv("SystemRoot")
+    if powershellPath and powershellPath ~= "" then
+        powershellPath = powershellPath .. "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    else
+        powershellPath = "powershell.exe"
+    end
+    local cmd = powershellPath
+        .. " -NoProfile -ExecutionPolicy Bypass -Command "
+        .. psSingleQuote(
+            "$p = Start-Process -FilePath " .. psSingleQuote(powershellPath)
+            .. " -ArgumentList @("
+            .. psSingleQuote("-NoProfile") .. ","
+            .. psSingleQuote("-ExecutionPolicy") .. ","
+            .. psSingleQuote("Bypass") .. ","
+            .. psSingleQuote("-File") .. ","
+            .. psSingleQuote(scriptPath) .. ","
+            .. psSingleQuote("-RuntimeBase") .. ","
+            .. psSingleQuote(runtime.base) .. ","
+            .. psSingleQuote("-StateFile") .. ","
+            .. psSingleQuote(stateFile) .. ","
+            .. psSingleQuote("-LogFile") .. ","
+            .. psSingleQuote(logFile) .. ","
+            .. psSingleQuote("-Mode") .. ","
+            .. psSingleQuote(launchMode)
+            .. ") -WindowStyle Hidden -PassThru; "
+            .. "[System.IO.File]::WriteAllText(" .. psSingleQuote(pidFile) .. ", [string]$p.Id, [System.Text.Encoding]::ASCII)"
+        )
+
+    PATH_HELPER.writeEnvFile(stateFile, {
+        STATUS = "running",
+        STATUS_REASON = "launching",
+    })
+    writeBootstrapGuard(guardPath, "running", "launching", scriptPath)
+
+    local rc = select(1, exec(cmd, 1800000))
+    if rc ~= 0 then
+        PATH_HELPER.writeEnvFile(stateFile, {
+            STATUS = "launch_failed",
+            STATUS_REASON = "launch_failed",
+        })
+        writeBootstrapGuard(guardPath, "failed", "launch_failed", scriptPath)
+        msgBox("STEMwerk Setup", "Could not launch Windows setup task.\n\nScript:\n" .. tostring(scriptPath), 16)
+        return false
+    end
+
+    if not reuseWindow then
+        gfx.init(setupWindowTitle("Windows"), 900, 620, 0, 140, 100)
+    end
+    WINDOWS_SETUP = {
+        runtime = runtime,
+        separatorScript = separatorScript,
+        stateFile = stateFile,
+        logFile = logFile,
+        pidFile = pidFile,
+        guardPath = guardPath,
+        bootstrapScript = scriptPath,
+        startedAt = os.time(),
+        finalized = false,
+        finalSuccess = false,
+        summaryText = "",
+        mode = launchMode,
+    }
+    reaper.defer(windowsSetupTick)
+    return true
 end
 
 local function verifyRuntimePaths(state)
@@ -6218,7 +6380,11 @@ local function existingRuntimeSetupMenuTick()
             end
         elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" then
             if OS == "Windows" then
-                windowsVerifyStart(runtime, separatorScript, true)
+                if chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" then
+                    startWindowsSetup(runtime, separatorScript, chosen, true)
+                else
+                    windowsVerifyStart(runtime, separatorScript, true)
+                end
             else
                 gfx.quit()
                 startLinuxSetup(runtime, separatorScript, chosen)
@@ -6260,6 +6426,9 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
         { id = "open-logs",    label = "Open logs folder", sub = "Open runtime logs", accent = { 0.35, 0.56, 0.82 } },
         { id = "open-runtime", label = "Open runtime folder", sub = "Open runtime base", accent = { 0.35, 0.56, 0.82 } },
     }
+    if OS == "Windows" then
+        choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
+    end
     if OS ~= "Windows" then
         choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
         choices[#choices + 1] = { id = "drumsep-rocm-runtime", label = "Drum Kit Split ROCm runtime", sub = "Install/repair optional Drum Kit ROCm runtime", accent = { 0.16, 0.56, 0.78 } }

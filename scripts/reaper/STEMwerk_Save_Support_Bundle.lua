@@ -1052,8 +1052,10 @@ end
 
 local function workflowSummaryLabel(entry)
     local source = trim((entry and entry.workflow_source) or ""):lower()
+    local mode = trim((entry and entry.workflow_mode) or ""):lower()
     if source == "dks_direct" then return "Direct Kit" end
     if source == "dks_extract" then return "Kit Split" end
+    if mode == "drumkit" then return "Drum Kit" end
     return "Stems"
 end
 
@@ -1070,12 +1072,54 @@ local function statusSummaryLabel(entry)
     return "UNKNOWN"
 end
 
+local function requestedDeviceRaw(entry)
+    return trim((entry and (
+        entry.requested_device
+        or entry.ui_device_selected_before_run
+        or entry.backend_device_arg
+        or entry.drumsep_helper_requested_device
+        or entry.drumsep_helper_device_arg
+        or entry.selected_device
+        or entry.device
+    )) or "")
+end
+
 local function requestedDeviceSummaryLabel(entry, runtimeState)
-    local requested = trim((entry and (entry.requested_device or entry.selected_device or entry.device)) or "")
+    local requested = requestedDeviceRaw(entry)
     local lower = requested:lower()
     if lower == "" or lower == "unknown" then return "unknown" end
     if lower == "auto" then return "Auto" end
     return friendlyDeviceLabel(requested, runtimeState, entry)
+end
+
+local function effectiveDeviceRaw(entry)
+    return trim((entry and (
+        entry.effective_device
+        or entry.drumsep_helper_device
+        or entry.drumsep_helper_device_arg
+        or entry.backend_runtime
+        or entry.runtime_selected
+        or entry.device
+    )) or "")
+end
+
+local function effectiveDeviceSummaryLabel(entry, runtimeState)
+    local effective = effectiveDeviceRaw(entry)
+    local lower = effective:lower()
+    if lower == "" or lower == "unknown" then return "unknown" end
+    return friendlyDeviceLabel(effective, runtimeState, entry)
+end
+
+local function summaryDeviceLabel(entry, runtimeState)
+    local effective = effectiveDeviceRaw(entry)
+    if effective ~= "" and effective:lower() ~= "unknown" then
+        return friendlyDeviceLabel(effective, runtimeState, entry)
+    end
+    local requested = requestedDeviceRaw(entry)
+    if requested ~= "" and requested:lower() ~= "unknown" then
+        return friendlyDeviceLabel(requested, runtimeState, entry)
+    end
+    return tostring((entry and entry.friendly_device) or "unknown")
 end
 
 local function outputCountSummaryLabel(entry)
@@ -1110,11 +1154,11 @@ local function appendLatestRunSummary(lines, entry, runtimeState)
     lines[#lines + 1] = "Latest run summary:"
     lines[#lines + 1] = "Status: " .. statusSummaryLabel(entry)
     lines[#lines + 1] = "Workflow: " .. workflowSummaryLabel(entry)
-    lines[#lines + 1] = "Device: " .. tostring(entry.friendly_device or "unknown")
+    lines[#lines + 1] = "Device: " .. summaryDeviceLabel(entry, runtimeState)
     lines[#lines + 1] = "Requested device: " .. requestedDeviceSummaryLabel(entry, runtimeState)
     lines[#lines + 1] = "Runtime: " .. tostring(entry.runtime_selected or "unknown")
     lines[#lines + 1] = "Backend runtime: " .. tostring(entry.backend_runtime or "unknown")
-    lines[#lines + 1] = "Effective device: " .. tostring(entry.effective_device or "unknown")
+    lines[#lines + 1] = "Effective device: " .. effectiveDeviceSummaryLabel(entry, runtimeState)
     lines[#lines + 1] = "Outputs: " .. outputCountSummaryLabel(entry)
     lines[#lines + 1] = "Exit code: " .. tostring(entry.exit_code or "unknown")
     lines[#lines + 1] = "Output validation: " .. tostring(entry.output_validation_reason or "unknown")
@@ -2624,6 +2668,56 @@ local function parseSupportRunText(entry, text)
             kvAssignIfUnknown(entry, "device", autoSelected)
         end
 
+        local inlineWorkflowMode = raw:match("workflow_mode=([%w_:%-]+)")
+        if inlineWorkflowMode then
+            kvAssignLast(entry, "workflow_mode", inlineWorkflowMode)
+        end
+        local inlineWorkflowSource = raw:match("workflow_source=([%w_:%-]+)")
+        if inlineWorkflowSource then
+            kvAssignLast(entry, "workflow_source", inlineWorkflowSource)
+        end
+        local inlineRequested = raw:match("requested_device=([%w_:%-]+)")
+        if inlineRequested then
+            kvAssignLast(entry, "requested_device", inlineRequested)
+        end
+        local inlineUiRequested = raw:match("ui_device_selected_before_run=([%w_:%-]+)")
+        if inlineUiRequested then
+            kvAssignLast(entry, "ui_device_selected_before_run", inlineUiRequested)
+        end
+        local inlineBackendDevice = raw:match("backend_device_arg=([%w_:%-]+)")
+        if inlineBackendDevice then
+            kvAssignLast(entry, "backend_device_arg", inlineBackendDevice)
+        end
+        local inlineEffective = raw:match("effective_device=([%w_:%-]+)")
+        if inlineEffective then
+            kvAssignLast(entry, "effective_device", inlineEffective)
+            kvAssignLast(entry, "device", inlineEffective)
+        end
+        local inlineRuntimeSelected = raw:match("drumsep_runtime_selected=([%w_:%-]+)")
+        if inlineRuntimeSelected then
+            kvAssignLast(entry, "runtime_selected", inlineRuntimeSelected)
+        end
+        local inlineHelperRequested = raw:match("drumsep_helper_requested_device=([%w_:%-]+)")
+        if inlineHelperRequested then
+            kvAssignLast(entry, "drumsep_helper_requested_device", inlineHelperRequested)
+        end
+        local inlineHelperBackend = raw:match("drumsep_helper_backend_runtime=([%w_:%-]+)")
+        if inlineHelperBackend then
+            kvAssignLast(entry, "backend_runtime", inlineHelperBackend)
+            kvAssignLast(entry, "drumsep_helper_backend_runtime", inlineHelperBackend)
+        end
+        local inlineHelperDevice = raw:match("drumsep_helper_device=([%w_:%-]+)")
+        if inlineHelperDevice then
+            kvAssignLast(entry, "drumsep_helper_device", inlineHelperDevice)
+            if tostring(entry.effective_device or "unknown") == "unknown" then
+                kvAssignLast(entry, "effective_device", inlineHelperDevice)
+            end
+        end
+        local inlineHelperDeviceArg = raw:match("drumsep_helper_device_arg=([%w_:%-]+)")
+        if inlineHelperDeviceArg then
+            kvAssignLast(entry, "drumsep_helper_device_arg", inlineHelperDeviceArg)
+        end
+
         if lower:find("traceback", 1, true) then
             entry._clearFailures = (entry._clearFailures or 0) + 1
             setRunResult(entry, "fail", 4)
@@ -3270,6 +3364,12 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
 
     for i = 1, #out do
         local entry = out[i]
+        if tostring(entry.workflow_mode or "unknown") == "unknown" and trim(tostring(entry.runtime_selected or "")):lower() == "cpu" then
+            local foundCount = countDelimitedValues(entry.found_stems) or countDelimitedValues(entry.found_files)
+            if foundCount == 6 then
+                entry.workflow_mode = "drumkit"
+            end
+        end
         entry.friendly_device = friendlyDeviceLabel(entry.device, runtimeState, entry)
     end
 

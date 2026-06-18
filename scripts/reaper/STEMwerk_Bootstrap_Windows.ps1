@@ -1,7 +1,8 @@
 param(
     [string]$RuntimeBase = "",
     [string]$StateFile = "",
-    [string]$LogFile = ""
+    [string]$LogFile = "",
+    [string]$Mode = "repair"
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -33,6 +34,20 @@ New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeBase "python") | Ou
 $status = "ok"
 $statusReason = ""
 $audioSeparatorVersion = "0.24.4"
+$drumsepAudioSeparatorVersion = "0.34.1"
+$drumsepNumpyVersion = "2.4.6"
+$drumsepOnnxRuntimeVersion = "1.26.0"
+$drumsepOnnxVersion = "1.21.0"
+$drumsepOnnx2TorchVersion = "1.5.15"
+$drumsepOnnx2TorchPy313Version = "1.6.0"
+$drumsepTorchVersion = "2.12.0"
+$drumsepTorchVisionVersion = "0.27.0"
+$drumsepNumbaVersion = "0.65.1"
+$drumsepModelEntryName = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
+$drumsepModelFileName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+$drumsepModelYamlName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+$drumsepModelCkptUrl = "https://huggingface.co/KitsuneX07/Music_Source_Sepetration_Models/resolve/8309883c6b3fecc360fff24c932dcc588f8c23c2/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt?download=true"
+$drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 $torchVersion = "2.4.1"
 $torchVisionVersion = "0.19.1"
 $torchCudaSuffix = "+cu121"
@@ -512,6 +527,24 @@ function InstallWithPip([string]$PythonPath, [string[]]$InstallArgs, [string]$De
     RunHidden $PythonPath $args $Description | Out-Null
 }
 
+function InstallWithPipAllowOnlineFallback([string]$PythonPath, [string[]]$InstallArgs, [string]$Description) {
+    InstallWithPip $PythonPath $InstallArgs $Description
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    if (-not (HasBundledWheels)) {
+        return $false
+    }
+
+    $label = if (-not [string]::IsNullOrWhiteSpace($Description)) { $Description } else { "pip install" }
+    LogProgress ($label + " failed with bundled wheels; retrying online")
+    $args = @("-m", "pip", "install")
+    $args += $InstallArgs
+    RunHidden $PythonPath $args ($label + " (online fallback)") | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
 function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
     if ([string]::IsNullOrWhiteSpace($BackendName) -or $BackendName -eq "cpu") { return $true }
@@ -768,6 +801,345 @@ function InstallAndVerifyAudioSeparator([string]$PythonPath, [string]$BackendNam
     return "ok"
 }
 
+function GetDrumsepRuntimePythonPath {
+    return Join-Path $RuntimeBase ".venv-drumsep\\Scripts\\python.exe"
+}
+
+function GetDrumsepModelDir {
+    return Join-Path $RuntimeBase "models"
+}
+
+function GetDrumsepModelFilePath {
+    return Join-Path (GetDrumsepModelDir) $drumsepModelFileName
+}
+
+function GetDrumsepModelYamlPath {
+    return Join-Path (GetDrumsepModelDir) $drumsepModelYamlName
+}
+
+function WriteDrumsepState([string]$State, [string]$ModelStatus, [string]$Reason) {
+    $drumsepPython = GetDrumsepRuntimePythonPath
+    $modelFile = GetDrumsepModelFilePath
+    $modelYaml = GetDrumsepModelYamlPath
+    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $lines = @(
+        "STATUS=$State",
+        "STATUS_REASON=$Reason",
+        "DRUMSEP_RUNTIME_STATUS=$State",
+        "DRUMSEP_RUNTIME_DETAIL=$Reason",
+        "DRUMSEP_PYTHON=$drumsepPython",
+        "DRUMSEP_LAST_CHECK_UTC=$timestamp",
+        "DRUMSEP_MODEL_STATUS=$ModelStatus",
+        "DRUMSEP_MODEL_FILE=$modelFile",
+        "DRUMSEP_MODEL_YAML=$modelYaml",
+        "DRUMSEP_AUDIO_SEPARATOR_VERSION=",
+        "DRUMSEP_NUMPY_VERSION=",
+        "DRUMSEP_TORCH_VERSION=",
+        "DRUMSEP_ONNX_VERSION=",
+        "DRUMSEP_ONNXRUNTIME_VERSION=",
+        "DRUMSEP_ONNX2TORCH_VERSION=",
+        "DRUMSEP_ONNX2TORCH_PY313_VERSION="
+    )
+
+    if (Test-Path $drumsepPython) {
+        try {
+            $versionCode = @'
+import importlib.metadata as metadata
+for env_key, dist_name in (
+    ("DRUMSEP_AUDIO_SEPARATOR_VERSION", "audio-separator"),
+    ("DRUMSEP_NUMPY_VERSION", "numpy"),
+    ("DRUMSEP_TORCH_VERSION", "torch"),
+    ("DRUMSEP_ONNX_VERSION", "onnx"),
+    ("DRUMSEP_ONNXRUNTIME_VERSION", "onnxruntime"),
+    ("DRUMSEP_ONNX2TORCH_VERSION", "onnx2torch"),
+    ("DRUMSEP_ONNX2TORCH_PY313_VERSION", "onnx2torch-py313"),
+):
+    try:
+        value = metadata.version(dist_name)
+    except Exception:
+        value = ""
+    print(f"{env_key}={value}")
+'@
+            $versionOut = & $drumsepPython -c $versionCode 2>$null
+            if ($LASTEXITCODE -eq 0 -and $versionOut) {
+                $lines = @($lines | Where-Object { $_ -notmatch "^DRUMSEP_(AUDIO_SEPARATOR|NUMPY|TORCH|ONNX|ONNXRUNTIME|ONNX2TORCH|ONNX2TORCH_PY313)_VERSION=" })
+                $lines += $versionOut
+            }
+        } catch {
+        }
+    }
+
+    $lines | Out-File -FilePath $StateFile -Encoding ascii
+}
+
+function ResolveSupportedWindowsPython([string[]]$Candidates) {
+    $resolved = $null
+    foreach ($candidate in ($Candidates | Where-Object { $_ })) {
+        if ((Test-Path $candidate) -and -not (IsWindowsStorePython $candidate)) {
+            if (TestSupportedPython $candidate) {
+                $resolved = $candidate
+                break
+            }
+            LogUnsupportedPython $candidate
+        }
+    }
+
+    if (-not $resolved) {
+        $cmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($cmd -and -not (IsWindowsStorePython $cmd.Source)) {
+            if (TestSupportedPython $cmd.Source) {
+                $resolved = $cmd.Source
+            } else {
+                LogUnsupportedPython $cmd.Source
+            }
+        }
+    }
+
+    if ($resolved -and -not (TestSupportedPython $resolved)) {
+        LogUnsupportedPython $resolved
+        $resolved = $null
+    }
+
+    if (-not $resolved) {
+        LogProgress "Python not found; attempting direct install"
+        $resolved = InstallPythonDirect
+        if ($resolved -and -not (TestSupportedPython $resolved)) {
+            LogUnsupportedPython $resolved
+            $resolved = $null
+        }
+    }
+
+    return $resolved
+}
+
+function EnsureDrumsepDownloadChecks([string]$ModelDir) {
+    if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
+    try {
+        New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
+        $checksPath = Join-Path $ModelDir "download_checks.json"
+        $checks = @{
+            current_version = ""
+            current_version_ocl = ""
+            current_version_mac = ""
+            current_version_linux = ""
+            vr_download_list = @{}
+            mdx_download_list = @{}
+            demucs_download_list = @{}
+            mdx_download_vip_list = @{}
+            mdx23_download_list = @{}
+            mdx23c_download_list = @{
+                $drumsepModelEntryName = @{
+                    $drumsepModelFileName = $drumsepModelYamlName
+                }
+            }
+            mdx23c_download_vip_list = @{}
+            roformer_download_list = @{}
+            other_network_list_new = @{
+                $drumsepModelEntryName = @{
+                    $drumsepModelFileName = $drumsepModelCkptUrl
+                    $drumsepModelYamlName = $drumsepModelYamlUrl
+                }
+            }
+        }
+        $json = $checks | ConvertTo-Json -Depth 8
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($checksPath, $json, $utf8NoBom)
+        return $true
+    } catch {
+        LogLine ("DrumSep download_checks.json write failed: " + $_.Exception.Message)
+        return $false
+    }
+}
+
+function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label, [long]$MinimumBytes = 1) {
+    if ([string]::IsNullOrWhiteSpace($Url) -or [string]::IsNullOrWhiteSpace($TargetPath)) { return $false }
+    $tmpPath = $TargetPath + ".part"
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+            LogProgress ("Downloading " + $Label + " (attempt " + $attempt + "/3): " + $Url)
+            Invoke-WebRequest -Uri $Url -OutFile $tmpPath -UseBasicParsing | Out-Null
+            if ((Get-Item $tmpPath).Length -lt $MinimumBytes) {
+                throw ("download_too_small:" + (Get-Item $tmpPath).Length)
+            }
+            Move-Item -Path $tmpPath -Destination $TargetPath -Force
+            return $true
+        } catch {
+            LogLine ("Invoke-WebRequest failed for " + $Label + " attempt " + $attempt + ": " + $_.Exception.Message)
+            Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds ([Math]::Min(5 * $attempt, 15))
+        }
+    }
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        try {
+            Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+            LogProgress ("Retrying " + $Label + " with curl: " + $Url)
+            RunHidden $curl.Source @("-L", "--retry", "3", "--retry-all-errors", "-o", $tmpPath, $Url) ("Download " + $Label + " via curl") | Out-Null
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpPath) -and ((Get-Item $tmpPath).Length -ge $MinimumBytes)) {
+                Move-Item -Path $tmpPath -Destination $TargetPath -Force
+                return $true
+            }
+        } catch {
+            LogLine ("curl download failed for " + $Label + ": " + $_.Exception.Message)
+        }
+        Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+    }
+
+    return $false
+}
+
+function EnsureDrumsepAssets([string]$ModelDir) {
+    if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
+    try {
+        New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
+    } catch {
+        LogLine ("DrumSep model directory create failed: " + $_.Exception.Message)
+        return $false
+    }
+
+    $assets = @(
+        @{ Path = (Join-Path $ModelDir $drumsepModelFileName); Url = $drumsepModelCkptUrl; Label = "DrumSep model checkpoint"; MinimumBytes = 10485760 },
+        @{ Path = (Join-Path $ModelDir $drumsepModelYamlName); Url = $drumsepModelYamlUrl; Label = "DrumSep model YAML"; MinimumBytes = 128 }
+    )
+    foreach ($asset in $assets) {
+        if (Test-Path $asset.Path) {
+            $existingSize = (Get-Item $asset.Path).Length
+            if ($existingSize -ge $asset.MinimumBytes) {
+                LogProgress ($asset.Label + " already present: " + $asset.Path)
+                continue
+            }
+            LogProgress ($asset.Label + " is incomplete and will be re-downloaded: " + $asset.Path)
+            Remove-Item -Path $asset.Path -Force -ErrorAction SilentlyContinue
+        }
+        if (-not (DownloadFileWithRetry $asset.Url $asset.Path $asset.Label $asset.MinimumBytes)) {
+            LogLine ("DrumSep asset download failed: " + $asset.Url)
+            return $false
+        }
+    }
+
+    return (EnsureDrumsepDownloadChecks $ModelDir)
+}
+
+function VerifyDrumsepRuntime([string]$PythonPath) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return "python_missing" }
+    if (-not (Test-Path $PythonPath)) { return "python_missing" }
+
+    $modelDir = GetDrumsepModelDir
+    $modelFile = GetDrumsepModelFilePath
+    $modelYaml = GetDrumsepModelYamlPath
+    if (-not (Test-Path $modelFile) -or -not (Test-Path $modelYaml)) {
+        return "model_missing"
+    }
+
+    $verifyCode = @"
+import importlib
+import importlib.metadata as metadata
+import os
+import sys
+
+expected = {
+    "audio-separator": "$drumsepAudioSeparatorVersion",
+    "numpy": "$drumsepNumpyVersion",
+    "torch": "$drumsepTorchVersion",
+    "onnx": "$drumsepOnnxVersion",
+    "onnxruntime": "$drumsepOnnxRuntimeVersion",
+    "onnx2torch": "$drumsepOnnx2TorchVersion",
+    "onnx2torch-py313": "$drumsepOnnx2TorchPy313Version",
+    "numba": "$drumsepNumbaVersion",
+    "torchvision": "$drumsepTorchVisionVersion",
+}
+modules = ["audio_separator", "numpy", "torch", "onnx", "onnxruntime", "onnx2torch"]
+errors = []
+for module_name in modules:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        errors.append(f"import_failed:{module_name}:{type(exc).__name__}:{exc}")
+for dist_name, wanted in expected.items():
+    try:
+        found = metadata.version(dist_name).split("+", 1)[0]
+    except Exception as exc:
+        errors.append(f"version_missing:{dist_name}:{type(exc).__name__}:{exc}")
+        continue
+    if found != wanted:
+        errors.append(f"version_mismatch:{dist_name}:expected={wanted}:found={found}")
+if errors:
+    print("DRUMSEP_VERIFY broken " + ";".join(errors))
+    raise SystemExit(1)
+import torch
+torch.cuda.is_available = lambda: False
+from audio_separator.separator import Separator
+sep = Separator(model_file_dir=r"$modelDir", output_dir=".", output_format="wav")
+sep.load_model("$drumsepModelFileName")
+print("DRUMSEP_VERIFY ok")
+"@
+    RunHidden $PythonPath @("-c", $verifyCode) "Verify DrumSep runtime" | Out-Null
+    if ($LASTEXITCODE -eq 0) { return "ok" }
+    return "verify_failed"
+}
+
+function InstallDrumsepRuntime([string]$BasePythonPath) {
+    $drumsepPython = GetDrumsepRuntimePythonPath
+    $modelDir = GetDrumsepModelDir
+
+    WriteDrumsepState "running" "missing" "creating_venv"
+    LogProgress ("DrumSep runtime path: " + (Join-Path $RuntimeBase ".venv-drumsep"))
+    Remove-Item -Path (Join-Path $RuntimeBase ".venv-drumsep") -Recurse -Force -ErrorAction SilentlyContinue
+    RunHidden $BasePythonPath @("-m", "venv", (Join-Path $RuntimeBase ".venv-drumsep")) "Create DrumSep virtual environment" | Out-Null
+    if (-not (Test-Path $drumsepPython)) {
+        WriteDrumsepState "install_failed" "missing" "venv_create_failed"
+        return $false
+    }
+
+    WriteDrumsepState "running" "missing" "pip_upgrade"
+    InstallWithPip $drumsepPython @("--upgrade", "pip", "setuptools", "wheel") "Upgrade DrumSep pip"
+    if ($LASTEXITCODE -ne 0) {
+        WriteDrumsepState "install_failed" "missing" "pip_upgrade_failed"
+        return $false
+    }
+
+    WriteDrumsepState "running" "missing" "package_install"
+    if (-not (InstallWithPipAllowOnlineFallback $drumsepPython @(
+        "--upgrade",
+        "audio-separator==$drumsepAudioSeparatorVersion",
+        "numpy==$drumsepNumpyVersion",
+        "onnxruntime==$drumsepOnnxRuntimeVersion",
+        "onnx==$drumsepOnnxVersion",
+        "onnx2torch==$drumsepOnnx2TorchVersion",
+        "onnx2torch-py313==$drumsepOnnx2TorchPy313Version",
+        "torch==$drumsepTorchVersion",
+        "torchvision==$drumsepTorchVisionVersion",
+        "numba==$drumsepNumbaVersion"
+    ) "Install DrumSep packages")) {
+        WriteDrumsepState "install_failed" "missing" "package_install_failed"
+        return $false
+    }
+
+    WriteDrumsepState "running" "missing" "model_download"
+    if (-not (EnsureDrumsepAssets $modelDir)) {
+        WriteDrumsepState "install_failed" "missing" "model_download_failed"
+        return $false
+    }
+
+    WriteDrumsepState "running" "ok" "verify_runtime"
+    $verifyResult = VerifyDrumsepRuntime $drumsepPython
+    if ($verifyResult -ne "ok") {
+        if ($verifyResult -eq "model_missing") {
+            WriteDrumsepState "install_failed" "missing" "model_missing"
+        } elseif ($verifyResult -eq "python_missing") {
+            WriteDrumsepState "install_failed" "missing" "python_missing"
+        } else {
+            WriteDrumsepState "broken" "load_failed" "verify_failed"
+        }
+        return $false
+    }
+
+    WriteDrumsepState "ok" "ok" "ok"
+    return $true
+}
+
 $candidates = @()
 if ($env:CONDA_PREFIX) {
     $candidates += (Join-Path $env:CONDA_PREFIX "python.exe")
@@ -786,6 +1158,45 @@ $candidates += (Join-Path $programFiles "Python311\\python.exe")
 $candidates += (Join-Path $programFiles "Python310\\python.exe")
 $candidates += (Join-Path $programFilesX86 "Python311\\python.exe")
 $candidates += (Join-Path $programFilesX86 "Python310\\python.exe")
+
+if ($Mode -eq "drumsep-runtime") {
+    WriteBootstrapGuard "running" "drumsep_runtime_bootstrap"
+    if (-not (TestRuntimeWritable $RuntimeBase)) {
+        LogLine ("Runtime base is not writable: " + $RuntimeBase)
+        WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        WriteBootstrapGuard "failed" "runtime_write_test_failed"
+        exit 1
+    }
+    if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "state"))) {
+        LogLine ("Runtime state directory is not writable: " + (Join-Path $RuntimeBase "state"))
+        WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        WriteBootstrapGuard "failed" "runtime_write_test_failed"
+        exit 1
+    }
+    if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "logs"))) {
+        LogLine ("Runtime logs directory is not writable: " + (Join-Path $RuntimeBase "logs"))
+        WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        WriteBootstrapGuard "failed" "runtime_write_test_failed"
+        exit 1
+    }
+
+    LogProgress "Preparing Drum Kit Split runtime"
+    $basePython = ResolveSupportedWindowsPython $candidates
+    if (-not $basePython) {
+        WriteDrumsepState "install_failed" "missing" "python_missing"
+        WriteBootstrapGuard "failed" "python_missing"
+        exit 1
+    }
+
+    if (-not (InstallDrumsepRuntime $basePython)) {
+        WriteBootstrapGuard "failed" "drumsep_runtime_install_failed"
+        exit 1
+    }
+
+    WriteBootstrapGuard "ok" "completed"
+    LogProgress "DrumSep runtime install finished"
+    exit 0
+}
 
 Step "step_1_runtime" "runtime initialization"
 LogProgress "Runtime directories prepared"
