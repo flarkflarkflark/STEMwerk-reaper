@@ -9,6 +9,7 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
+import yaml
 
 from .devices import select_device
 from .models import resolve_model_name
@@ -79,6 +80,7 @@ MPS_DEMUCS_SEGMENT_SIZE = 2
 
 _SEPARATOR_CACHE: Dict[Tuple[str, str, bool, int, Union[int, str]], Any] = {}
 _SEPARATOR_CACHE_LOCK = threading.Lock()
+DEMUCS_MODEL_ALIASES = {"htdemucs", "htdemucs_ft", "htdemucs_6s", "hdemucs_mmi"}
 
 
 def _default_model_cache_dir() -> str:
@@ -100,6 +102,106 @@ def _default_model_cache_dir() -> str:
     if xdg_data_home:
         return str(Path(xdg_data_home) / "STEMwerk" / "models")
     return str(home / ".local" / "share" / "STEMwerk" / "models")
+
+
+def _is_demucs_model_alias(model_name: Optional[str]) -> bool:
+    candidate = str(model_name or "").strip().lower()
+    if not candidate:
+        return False
+    return Path(candidate).stem in DEMUCS_MODEL_ALIASES
+
+
+def _supported_model_contains(supported_model_files_grouped: Dict[str, Any], requested_name: str) -> bool:
+    requested = str(requested_name or "").strip()
+    if not requested:
+        return False
+    for model_list in supported_model_files_grouped.values():
+        if not isinstance(model_list, dict):
+            continue
+        for model_download_list in model_list.values():
+            if isinstance(model_download_list, str):
+                if model_download_list == requested:
+                    return True
+                continue
+            if not isinstance(model_download_list, dict):
+                continue
+            for file_name, file_url in model_download_list.items():
+                if file_name == requested or file_url == requested:
+                    return True
+    return False
+
+
+def _resolve_audio_separator_model_name(separator: Any, model_name: str) -> str:
+    requested = str(model_name or "").strip()
+    if not _is_demucs_model_alias(requested):
+        return requested
+
+    supported_model_files_grouped: Dict[str, Any] = {}
+    try:
+        supported = separator.list_supported_model_files()
+        if isinstance(supported, dict):
+            supported_model_files_grouped = supported
+    except Exception:
+        supported_model_files_grouped = {}
+
+    if _supported_model_contains(supported_model_files_grouped, requested):
+        return requested
+
+    yaml_candidate = requested if requested.lower().endswith(".yaml") else f"{requested}.yaml"
+    if _supported_model_contains(supported_model_files_grouped, yaml_candidate):
+        return yaml_candidate
+
+    model_file_dir = Path(str(getattr(separator, "model_file_dir", "") or _default_model_cache_dir()))
+    if (model_file_dir / yaml_candidate).is_file():
+        warnings.warn(
+            f"Demucs identifier '{requested}' is absent from the audio-separator catalog; using local asset '{yaml_candidate}'."
+        )
+        return yaml_candidate
+
+    return requested
+
+
+def _should_load_local_demucs_asset(requested_model_name: str, resolved_model_name: str, separator: Any) -> bool:
+    if not _is_demucs_model_alias(requested_model_name):
+        return False
+    candidate = str(resolved_model_name or "").strip()
+    if not candidate.lower().endswith(".yaml"):
+        return False
+    model_file_dir = Path(str(getattr(separator, "model_file_dir", "") or _default_model_cache_dir()))
+    return (model_file_dir / candidate).is_file()
+
+
+def _load_local_demucs_asset(separator: Any, requested_model_name: str, resolved_model_name: str) -> None:
+    from audio_separator.separator.architectures.demucs_separator import DemucsSeparator
+
+    model_file_dir = Path(str(getattr(separator, "model_file_dir", "") or _default_model_cache_dir()))
+    model_path = (model_file_dir / str(resolved_model_name or "").strip()).resolve()
+    model_data = yaml.safe_load(model_path.read_text(encoding="utf-8")) or {}
+    common_params = {
+        "logger": separator.logger,
+        "log_level": separator.log_level,
+        "torch_device": separator.torch_device,
+        "torch_device_cpu": separator.torch_device_cpu,
+        "torch_device_mps": separator.torch_device_mps,
+        "onnx_execution_provider": separator.onnx_execution_provider,
+        "model_name": Path(str(requested_model_name or "")).stem,
+        "model_path": str(model_path),
+        "model_data": model_data,
+        "output_format": separator.output_format,
+        "output_bitrate": separator.output_bitrate,
+        "output_dir": separator.output_dir,
+        "normalization_threshold": separator.normalization_threshold,
+        "amplification_threshold": separator.amplification_threshold,
+        "output_single_stem": separator.output_single_stem,
+        "invert_using_spec": separator.invert_using_spec,
+        "sample_rate": separator.sample_rate,
+        "use_soundfile": separator.use_soundfile,
+    }
+    separator.model_instance = DemucsSeparator(
+        common_config=common_params,
+        arch_config=separator.arch_specific_params["Demucs"],
+    )
+    separator.model_friendly_name = f"Demucs local asset: {Path(str(requested_model_name or '')).stem}"
 
 
 @dataclass(frozen=True)
@@ -337,7 +439,14 @@ class StemSeparator:
                 )
             else:
                 try:
-                    separator.load_model(model_name)
+                    load_model_name = _resolve_audio_separator_model_name(separator, model_name)
+                    if _should_load_local_demucs_asset(model_name, load_model_name, separator):
+                        separator.logger.info(
+                            f"Loading local Demucs asset {load_model_name} for model {Path(str(model_name)).stem}..."
+                        )
+                        _load_local_demucs_asset(separator, model_name, load_model_name)
+                    else:
+                        separator.load_model(load_model_name)
                 except Exception as exc:
                     msg = str(exc).lower()
                     fallback = model_name[:-5] if str(model_name).endswith(".yaml") else ""

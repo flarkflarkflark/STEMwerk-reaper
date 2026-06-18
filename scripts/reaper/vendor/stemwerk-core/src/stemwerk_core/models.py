@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Dict
 
 AVAILABLE_MODELS: Dict[str, str] = {
-    "htdemucs": "htdemucs.yaml",
-    "htdemucs_ft": "htdemucs_ft.yaml",
-    "htdemucs_6s": "htdemucs_6s.yaml",
-    "hdemucs_mmi": "hdemucs_mmi.yaml",
+    "htdemucs": "htdemucs",
+    "htdemucs_ft": "htdemucs_ft",
+    "htdemucs_6s": "htdemucs_6s",
+    "hdemucs_mmi": "hdemucs_mmi",
 }
 
 

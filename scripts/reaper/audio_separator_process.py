@@ -66,6 +66,16 @@ BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"
 BENCHMARK_DRUMSEP_HELPER_DEVICES = {"cpu", "cuda", "rocm"}
 DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
+
+def _prefer_vendored_stemwerk_core() -> None:
+    vendor_src = Path(__file__).resolve().parent / "vendor" / "stemwerk-core" / "src"
+    if not vendor_src.is_dir():
+        return
+    vendor_src_str = str(vendor_src)
+    if vendor_src_str in sys.path:
+        sys.path.remove(vendor_src_str)
+    sys.path.insert(0, vendor_src_str)
+
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
 
@@ -1561,6 +1571,7 @@ def _require_core() -> None:
     if _core_loaded:
         return
     try:
+        _prefer_vendored_stemwerk_core()
         import stemwerk_core as _stemwerk_core
         from stemwerk_core import StemSeparator as _StemSeparator
         from stemwerk_core import get_available_devices as _get_available_devices
