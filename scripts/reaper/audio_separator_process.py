@@ -55,6 +55,7 @@ DIRECT_DKS_MODEL_MIRROR_CKPT_URL = (
 )
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
+DRUMSEP_RUNTIME_DIRECTML_DIRNAME = ".venv-drumsep-directml"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
 DKS_EXTRACT_STAGE2_CONCURRENCY_CAP = 4
@@ -63,7 +64,7 @@ BENCHMARK_CPU_CAPS = {1, 2, 4}
 BENCHMARK_MPS_CAP_MIN = 1
 BENCHMARK_MPS_CAP_MAX = 8
 BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"
-BENCHMARK_DRUMSEP_HELPER_DEVICES = {"cpu", "cuda", "rocm"}
+BENCHMARK_DRUMSEP_HELPER_DEVICES = {"cpu", "cuda", "rocm", "directml"}
 DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 
 
@@ -1729,6 +1730,14 @@ def _drumsep_rocm_runtime_python_path(runtime_base: Optional[Path] = None) -> Pa
     return runtime_dir / "bin" / "python"
 
 
+def _drumsep_directml_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    runtime_dir = base / DRUMSEP_RUNTIME_DIRECTML_DIRNAME
+    if os.name == "nt":
+        return runtime_dir / "Scripts" / "python.exe"
+    return runtime_dir / "bin" / "python"
+
+
 def _read_env_file(path: Path) -> Dict[str, str]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -1748,7 +1757,12 @@ def _read_env_file(path: Path) -> Dict[str, str]:
 
 def _drumsep_runtime_state(runtime_base: Optional[Path] = None, kind: str = "cpu") -> Dict[str, str]:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
-    state_name = "drumsep_runtime_rocm.env" if kind == "rocm" else "drumsep_runtime.env"
+    if kind == "rocm":
+        state_name = "drumsep_runtime_rocm.env"
+    elif kind == "directml":
+        state_name = "drumsep_runtime_directml.env"
+    else:
+        state_name = "drumsep_runtime.env"
     return _read_env_file(base / "state" / state_name)
 
 
@@ -1945,15 +1959,22 @@ print(json.dumps({
 def _select_drumsep_runtime(
     requested_device: str = "auto", runtime_base: Optional[Path] = None
 ) -> Tuple[Optional[Path], str, Dict[str, Any]]:
+    directml_state = _drumsep_runtime_state(runtime_base, "directml")
     rocm_state = _drumsep_runtime_state(runtime_base, "rocm")
     cpu_state = _drumsep_runtime_state(runtime_base, "cpu")
+    directml_candidates = _drumsep_state_python_candidates(
+        directml_state,
+        _drumsep_directml_runtime_python_path(runtime_base),
+    )
     rocm_candidates = _drumsep_state_python_candidates(rocm_state, _drumsep_rocm_runtime_python_path(runtime_base))
     cpu_candidates = _drumsep_state_python_candidates(cpu_state, _drumsep_runtime_python_path(runtime_base))
+    directml_python = directml_candidates[0]
     rocm_python = rocm_candidates[0]
     cpu_python = cpu_candidates[0]
     device_norm = str(requested_device or "auto").strip().lower()
     explicit_cuda = device_norm == "cuda" or bool(re.match(r"^cuda:\d+$", device_norm))
     explicit_rocm = device_norm == "rocm"
+    explicit_directml = device_norm == "directml" or device_norm.startswith("directml:")
 
     def _normalized_device_request(value: str) -> str:
         if value == "cpu":
@@ -1970,6 +1991,31 @@ def _select_drumsep_runtime(
     explicit_cpu = normalized_request == "cpu"
     bench_helper_device = str(os.environ.get(BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, "") or "").strip().lower()
     print(f"normalized_device_request={normalized_request}", file=sys.stderr)
+
+    if explicit_directml:
+        print("drumsep_runtime_selection_policy=explicit_directml", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_start", file=sys.stderr)
+        selected_directml_python, directml_detail, directml_payload, directml_attempts = _probe_drumsep_runtime_candidates(
+            directml_candidates,
+            require_gpu=False,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_end detail={directml_detail}", file=sys.stderr)
+        if selected_directml_python is not None:
+            info = dict(directml_payload or {})
+            info["kind"] = "directml"
+            info["detail"] = directml_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = "explicit_directml"
+            info["directml_python_attempts"] = directml_attempts
+            return selected_directml_python, "directml", info
+        info = {
+            "directml_detail": directml_detail,
+            "directml_python": str(directml_python),
+            "directml_python_attempts": directml_attempts,
+            "selection_policy": "explicit_directml",
+        }
+        reason = "missing" if directml_detail == "missing" else "broken"
+        return None, reason, info
 
     if device_norm == "mps" and _is_darwin_arm64():
         print("drumsep_runtime_selection_policy=explicit_mps", file=sys.stderr)
@@ -2221,6 +2267,7 @@ def _resolve_benchmark_drumsep_helper_device(
         normalized_request not in {"", "auto", "cpu"}
         and (
             normalized_request.startswith("cuda")
+            or normalized_request.startswith("directml")
             or normalized_request.startswith("rocm")
             or normalized_request == "gpu"
             or "radeon" in normalized_request
@@ -2232,6 +2279,10 @@ def _resolve_benchmark_drumsep_helper_device(
     print(f"bench_drumsep_helper_device_requested={raw or 'none'}", file=sys.stderr)
 
     if not raw:
+        if os.name == "nt" and runtime_kind_lower == "directml" and normalized_request.startswith("directml"):
+            print("bench_drumsep_helper_device_applied=directml", file=sys.stderr)
+            print("bench_drumsep_helper_device_ignored_reason=explicit_directml_default", file=sys.stderr)
+            return "directml", "explicit_directml_default"
         if sys.platform.startswith("linux") and runtime_kind_lower == "rocm":
             if normalized_request in {"", "auto"}:
                 print("bench_drumsep_helper_device_applied=rocm", file=sys.stderr)
@@ -2269,6 +2320,18 @@ def _resolve_benchmark_drumsep_helper_device(
         print("bench_drumsep_helper_device_applied=cpu", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=", file=sys.stderr)
         return "cpu", ""
+    if raw == "directml":
+        if os.name != "nt":
+            print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+            print("bench_drumsep_helper_device_ignored_reason=platform_not_windows", file=sys.stderr)
+            return "cpu", "platform_not_windows"
+        if runtime_kind_lower != "directml":
+            print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+            print("bench_drumsep_helper_device_ignored_reason=runtime_backend_mismatch", file=sys.stderr)
+            return "cpu", "runtime_backend_mismatch"
+        print("bench_drumsep_helper_device_applied=directml", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=", file=sys.stderr)
+        return "directml", ""
     if not sys.platform.startswith("linux"):
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=platform_not_linux", file=sys.stderr)
@@ -3739,7 +3802,7 @@ def main():
         print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
         print(f"drumsep_runtime_selection_policy={runtime_info.get('selection_policy', '')}", file=sys.stderr)
         print(f"drumsep_python={drumsep_python}", file=sys.stderr)
-        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps'} else 'no'}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps', 'directml'} else 'no'}", file=sys.stderr)
         print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
         print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
@@ -3917,7 +3980,7 @@ def main():
             file=sys.stderr,
         )
         print(f"drumsep_python={drumsep_python}", file=sys.stderr)
-        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps'} else 'no'}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps', 'directml'} else 'no'}", file=sys.stderr)
         print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
         print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)

@@ -38,8 +38,31 @@ class DirectDemixValidationError(RuntimeError):
 
 def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
     requested = str(device or "").strip().lower()
-    if requested not in {"cuda", "rocm"}:
+    if requested not in {"cuda", "rocm", "directml"}:
         return True, "not_requested", {}
+    if requested == "directml":
+        try:
+            import onnxruntime as ort
+            import torch
+            import torch_directml
+
+            if not bool(torch_directml.is_available()):
+                return False, "torch_directml_unavailable", {}
+            providers = [str(item) for item in ort.get_available_providers()]
+            if "DmlExecutionProvider" not in providers:
+                return False, "onnxruntime_dml_provider_missing", {"onnx_providers": "|".join(providers)}
+            device_obj = torch_directml.device()
+            tensor = torch.ones((1, 1, 8, 8), device=device_obj)
+            weight = torch.ones((1, 1, 3, 3), device=device_obj)
+            output = torch.nn.functional.conv2d(tensor, weight)
+            return True, "ok", {
+                "tensor_device": str(tensor.device),
+                "conv_device": str(output.device),
+                "onnx_provider": "DmlExecutionProvider",
+                "torch_version": str(getattr(torch, "__version__", "")),
+            }
+        except Exception as exc:
+            return False, f"{type(exc).__name__}:{exc}", {}
     try:
         import torch
 
@@ -248,6 +271,11 @@ def _apply_separator_requested_device(separator: Any, requested_device: str) -> 
         cpu_device = getattr(separator, "torch_device_cpu", None)
         setattr(separator, "torch_device", cpu_device or "cpu")
         setattr(separator, "onnx_execution_provider", ["CPUExecutionProvider"])
+        return
+    if requested == "directml":
+        dml_device = getattr(separator, "torch_device_dml", None)
+        setattr(separator, "torch_device", dml_device or getattr(separator, "torch_device", "privateuseone:0"))
+        setattr(separator, "onnx_execution_provider", ["DmlExecutionProvider"])
         return
     if requested == "mps":
         mps_device = getattr(separator, "torch_device_mps", None)
@@ -496,7 +524,9 @@ def run(args: argparse.Namespace) -> int:
     print(f"drumsep_helper_gpu_probe_torch_hip={gpu_probe.get('torch_hip', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_torch_cuda={gpu_probe.get('torch_cuda', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_tensor_device={gpu_probe.get('tensor_device', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_conv_device={gpu_probe.get('conv_device', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_device_name={gpu_probe.get('device_name', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_onnx_provider={gpu_probe.get('onnx_provider', '')}", file=sys.stderr)
     if not gpu_probe_ok:
         write_result(
             result_json,
@@ -523,11 +553,13 @@ def run(args: argparse.Namespace) -> int:
         }
         init_params = inspect.signature(Separator.__init__).parameters
         accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in init_params.values())
-        if "mdx_params" in init_params or accepts_var_kwargs:
+        if args.device == "directml" and ("use_directml" in init_params or accepts_var_kwargs):
+            separator_kwargs["use_directml"] = True
+        if args.device != "directml" and ("mdx_params" in init_params or accepts_var_kwargs):
             separator_kwargs["mdx_params"] = {"device": str(args.device or "cpu")}
-        if "demucs_params" in init_params or accepts_var_kwargs:
+        if args.device != "directml" and ("demucs_params" in init_params or accepts_var_kwargs):
             separator_kwargs["demucs_params"] = {"device": str(args.device or "cpu")}
-        if "mdxc_params" in init_params or accepts_var_kwargs:
+        if args.device != "directml" and ("mdxc_params" in init_params or accepts_var_kwargs):
             separator_kwargs["mdxc_params"] = {"device": str(args.device or "cpu")}
         if args.route in {"mps-direct-demix", "direct-demix"}:
             separator_kwargs.update(
@@ -620,6 +652,13 @@ def run(args: argparse.Namespace) -> int:
     print(f"yaml_training_instruments={','.join(model_meta.get('training_instruments') or [])}", file=sys.stderr)
     print(f"yaml_target_instrument={model_meta.get('target_instrument') or 'none'}", file=sys.stderr)
     print(f"expected_stems={','.join(EXPECTED_STEMS)}", file=sys.stderr)
+    print("output_validation_reason=ok", file=sys.stderr)
+    print(f"backend_runtime={backend_runtime}", file=sys.stderr)
+    print(f"audio_separator_version={_distribution_version('audio-separator')}", file=sys.stderr)
+    print(f"requested_device={requested_device}", file=sys.stderr)
+    print(f"effective_device={getattr(sep, 'torch_device', 'unknown')}", file=sys.stderr)
+    print(f"model_device={_direct_demix_model_device(sep)}", file=sys.stderr)
+    print(f"separator_onnx_provider={'|'.join(getattr(sep, 'onnx_execution_provider', []) or [])}", file=sys.stderr)
     if args.route in {"mps-direct-demix", "direct-demix"}:
         direct_device = str(args.device or "").strip().lower()
         model_device = _direct_demix_model_device(sep)
@@ -691,6 +730,7 @@ def run(args: argparse.Namespace) -> int:
             "requested_device": requested_device,
             "effective_device": str(getattr(sep, "torch_device", "unknown")),
             "model_device": _direct_demix_model_device(sep),
+            "separator_onnx_provider": list(getattr(sep, "onnx_execution_provider", []) or []),
             "direct_demix_keys": list(DIRECT_DEMIX_KEYS) if args.route in {"mps-direct-demix", "direct-demix"} else [],
         },
     )
@@ -707,7 +747,7 @@ def main() -> int:
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--log-file", default="")
     parser.add_argument("--route", choices=["wrapper", "mps-direct-demix", "direct-demix"], default="wrapper")
-    parser.add_argument("--device", choices=["cpu", "cuda", "rocm", "mps"], default="cpu")
+    parser.add_argument("--device", choices=["cpu", "cuda", "rocm", "mps", "directml"], default="cpu")
     parser.add_argument("--requested-device", default="")
     parser.add_argument("--backend-runtime", default="")
     args = parser.parse_args()
