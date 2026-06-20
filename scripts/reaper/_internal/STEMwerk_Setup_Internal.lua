@@ -2014,24 +2014,28 @@ local function windowsSetupTick()
     if not WINDOWS_SETUP or not gfx then return end
 
     local optionalRuntimeMode = WINDOWS_SETUP.mode == "drumsep-runtime"
+        or WINDOWS_SETUP.mode == "drumsep-cuda-runtime"
         or WINDOWS_SETUP.mode == "drumsep-rocm-runtime"
         or WINDOWS_SETUP.mode == "drumsep-directml-runtime"
     local function buildOptionalRuntimeResult(localState)
         localState = type(localState) == "table" and localState or {}
+        local isCuda = WINDOWS_SETUP.mode == "drumsep-cuda-runtime"
         local isRocm = WINDOWS_SETUP.mode == "drumsep-rocm-runtime"
         local isDirectml = WINDOWS_SETUP.mode == "drumsep-directml-runtime"
         local runtimeLabel = "Drum Kit Split runtime"
-        if isRocm then
+        if isCuda then
+            runtimeLabel = "Drum Kit Split CUDA runtime"
+        elseif isRocm then
             runtimeLabel = "Drum Kit Split ROCm runtime"
         elseif isDirectml then
             runtimeLabel = "Drum Kit Split DirectML runtime"
         end
-        local modelStatus = trim(localState.DRUMSEP_DIRECTML_MODEL_STATUS or localState.DRUMSEP_ROCM_MODEL_STATUS or localState.DRUMSEP_MODEL_STATUS or "")
-        local runtimePython = trim(localState.DRUMSEP_DIRECTML_PYTHON or localState.DRUMSEP_ROCM_PYTHON or localState.DRUMSEP_PYTHON or localState.PYTHON_PATH or "")
-        local modelFile = trim(localState.DRUMSEP_DIRECTML_MODEL_FILE or localState.DRUMSEP_ROCM_MODEL_FILE or localState.DRUMSEP_MODEL_FILE or "")
-        local modelYaml = trim(localState.DRUMSEP_DIRECTML_MODEL_YAML or localState.DRUMSEP_ROCM_MODEL_YAML or localState.DRUMSEP_MODEL_YAML or "")
-        local status = trim(localState.STATUS or localState.DRUMSEP_DIRECTML_RUNTIME_STATUS or localState.DRUMSEP_ROCM_RUNTIME_STATUS or localState.DRUMSEP_RUNTIME_STATUS or "")
-        local reason = trim(localState.STATUS_REASON or localState.DRUMSEP_DIRECTML_RUNTIME_DETAIL or localState.DRUMSEP_ROCM_RUNTIME_DETAIL or localState.DRUMSEP_RUNTIME_DETAIL or "")
+        local modelStatus = trim(localState.DRUMSEP_CUDA_MODEL_STATUS or localState.DRUMSEP_DIRECTML_MODEL_STATUS or localState.DRUMSEP_ROCM_MODEL_STATUS or localState.DRUMSEP_MODEL_STATUS or "")
+        local runtimePython = trim(localState.DRUMSEP_CUDA_PYTHON or localState.DRUMSEP_DIRECTML_PYTHON or localState.DRUMSEP_ROCM_PYTHON or localState.DRUMSEP_PYTHON or localState.PYTHON_PATH or "")
+        local modelFile = trim(localState.DRUMSEP_CUDA_MODEL_FILE or localState.DRUMSEP_DIRECTML_MODEL_FILE or localState.DRUMSEP_ROCM_MODEL_FILE or localState.DRUMSEP_MODEL_FILE or "")
+        local modelYaml = trim(localState.DRUMSEP_CUDA_MODEL_YAML or localState.DRUMSEP_DIRECTML_MODEL_YAML or localState.DRUMSEP_ROCM_MODEL_YAML or localState.DRUMSEP_MODEL_YAML or "")
+        local status = trim(localState.STATUS or localState.DRUMSEP_CUDA_RUNTIME_STATUS or localState.DRUMSEP_DIRECTML_RUNTIME_STATUS or localState.DRUMSEP_ROCM_RUNTIME_STATUS or localState.DRUMSEP_RUNTIME_STATUS or "")
+        local reason = trim(localState.STATUS_REASON or localState.DRUMSEP_CUDA_RUNTIME_DETAIL or localState.DRUMSEP_DIRECTML_RUNTIME_DETAIL or localState.DRUMSEP_ROCM_RUNTIME_DETAIL or localState.DRUMSEP_RUNTIME_DETAIL or "")
         if status == "ok" then
             return {
                 success = true,
@@ -2189,11 +2193,12 @@ end
 local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
     mode = tostring(mode or "repair")
     local isDrumsepRuntime = mode == "drumsep-runtime"
+    local isDrumsepCudaRuntime = mode == "drumsep-cuda-runtime"
     local isDrumsepRocmRuntime = mode == "drumsep-rocm-runtime"
     local isDrumsepDirectmlRuntime = mode == "drumsep-directml-runtime"
-    local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or "bootstrap.env")
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or (isDrumsepDirectmlRuntime and "drumsep_directml_install.log") or "bootstrap.log")
-    local pidFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.pid") or (isDrumsepRocmRuntime and "drumsep_rocm_runtime.pid") or (isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid") or "bootstrap.pid")
+    local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepCudaRuntime and "drumsep_runtime_cuda.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or "bootstrap.env")
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepCudaRuntime and "drumsep_cuda_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or (isDrumsepDirectmlRuntime and "drumsep_directml_install.log") or "bootstrap.log")
+    local pidFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.pid") or (isDrumsepCudaRuntime and "drumsep_cuda_runtime.pid") or (isDrumsepRocmRuntime and "drumsep_rocm_runtime.pid") or (isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid") or "bootstrap.pid")
     local scriptPath = PATH_HELPER.getBootstrapScriptPath(INSTALL_ROOT, OS, PATH_SEP)
     local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     ensureDir(runtime.runtimeState)
@@ -2215,7 +2220,7 @@ local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
         return false
     end
 
-    local launchMode = (isDrumsepRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime) and mode or "repair"
+    local launchMode = (isDrumsepRuntime or isDrumsepCudaRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime) and mode or "repair"
     local powershellPath = os.getenv("SystemRoot")
     if powershellPath and powershellPath ~= "" then
         powershellPath = powershellPath .. "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
@@ -6387,9 +6392,9 @@ local function existingRuntimeSetupMenuTick()
                 gfx.quit()
                 verifyExistingSetup(runtime, separatorScript)
             end
-        elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
+        elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-cuda-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
             if OS == "Windows" then
-                if chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
+                if chosen == "drumsep-runtime" or chosen == "drumsep-cuda-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
                     startWindowsSetup(runtime, separatorScript, chosen, true)
                 else
                     windowsVerifyStart(runtime, separatorScript, true)
@@ -6436,7 +6441,7 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
         { id = "open-runtime", label = "Open runtime folder", sub = "Open runtime base", accent = { 0.35, 0.56, 0.82 } },
     }
     if OS == "Windows" then
-        choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
+        choices[#choices + 1] = { id = "drumsep-cuda-runtime", label = "Drum Kit Split CUDA runtime", sub = "Install/repair optional NVIDIA CUDA Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
         choices[#choices + 1] = { id = "drumsep-directml-runtime", label = "Drum Kit Split DirectML runtime", sub = "Install/repair optional DirectML Drum Kit runtime", accent = { 0.12, 0.58, 0.76 } }
     end
     if OS ~= "Windows" then

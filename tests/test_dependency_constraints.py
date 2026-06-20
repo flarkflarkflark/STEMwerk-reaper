@@ -3735,7 +3735,7 @@ def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(
     assert info["selection_policy"] == "auto_prefer_cuda"
 
 
-def test_drumsep_runtime_selector_prefers_directml_on_windows_when_runtime_is_verified(tmp_path):
+def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_is_missing(tmp_path):
     module = _load_audio_separator_process_module()
     module.sys.platform = "win32"
     base = tmp_path
@@ -3744,6 +3744,8 @@ def test_drumsep_runtime_selector_prefers_directml_on_windows_when_runtime_is_ve
     directml_python.write_text("", encoding="utf-8")
 
     def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        if require_cuda:
+            return (False, "missing", {})
         assert path == directml_python
         assert require_directml is True
         return (
@@ -3761,8 +3763,8 @@ def test_drumsep_runtime_selector_prefers_directml_on_windows_when_runtime_is_ve
     selected, kind, info = module._select_drumsep_runtime("auto", base)
     assert selected == directml_python
     assert kind == "directml"
-    assert info["selection_policy"] == "auto_prefer_directml"
-    assert info["fallback_reason"] == ""
+    assert info["selection_policy"] == "fallback_directml"
+    assert info["fallback_reason"] == "cuda_skipped:missing"
 
 
 def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path):
@@ -3777,6 +3779,8 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_
     cpu_python.write_text("", encoding="utf-8")
 
     def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        if require_cuda:
+            return (False, "missing", {})
         if path == directml_python:
             assert require_directml is True
             return (
@@ -3788,6 +3792,7 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_
                     "onnxruntime_providers": ["CPUExecutionProvider"],
                 },
             )
+        assert path == cpu_python
         return (True, "ok", {"versions": {"torch": "2.12.0"}})
 
     module._verify_drumsep_runtime = fake_verify
@@ -3795,7 +3800,7 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_
     assert selected == cpu_python
     assert kind == "cpu"
     assert info["selection_policy"] == "fallback_cpu"
-    assert info["fallback_reason"] == "directml_skipped:onnxruntime_dml_provider_missing"
+    assert info["fallback_reason"] == "cuda_skipped:missing;directml_skipped:onnxruntime_dml_provider_missing"
 
 
 def test_drumsep_runtime_selector_reports_missing_when_both_absent(tmp_path):
@@ -3926,7 +3931,12 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
 def test_windows_setup_exposes_directml_drumsep_runtime_action_and_state_files():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8", errors="replace")
 
+    assert 'WINDOWS_SETUP.mode == "drumsep-cuda-runtime"' in setup_internal
     assert 'WINDOWS_SETUP.mode == "drumsep-directml-runtime"' in setup_internal
+    assert '(isDrumsepCudaRuntime and "drumsep_runtime_cuda.env")' in setup_internal
+    assert '(isDrumsepCudaRuntime and "drumsep_cuda_install.log")' in setup_internal
+    assert '(isDrumsepCudaRuntime and "drumsep_cuda_runtime.pid")' in setup_internal
+    assert '{ id = "drumsep-cuda-runtime", label = "Drum Kit Split CUDA runtime"' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_install.log")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid")' in setup_internal
@@ -4137,7 +4147,14 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert "output_validation_reason" in script
     assert "found_files" in script
     assert "drumsep_install.log" in script
+    assert "drumsep_cuda_install.log" in script
     assert "drumsep_rocm_install.log" in script
+    assert "drumsep_runtime_cuda.env" in script
+    assert "CUDA runtime state" in script
+    assert "drumsep_cuda_runtime_status" in script
+    assert "drumsep_cuda_python" in script
+    assert "ort_cuda_provider" in script
+    assert "cuda_runtime_state_file" in script
     assert "drumsep_directml_install.log" in script
     assert "drumsep_runtime_directml.env" in script
     assert "DirectML runtime state" in script
@@ -4164,11 +4181,26 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
 def test_windows_bootstrap_has_drumsep_directml_runtime_mode_and_state_fields():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
 
+    assert 'function GetDrumsepCudaRuntimePythonPath' in script
+    assert 'function WriteDrumsepCudaState' in script
+    assert 'function VerifyDrumsepCudaRuntime' in script
+    assert 'function InstallDrumsepCudaRuntime' in script
     assert 'function GetDrumsepDirectmlRuntimePythonPath' in script
     assert 'function WriteDrumsepDirectmlState' in script
     assert 'function VerifyDrumsepDirectmlRuntime' in script
     assert 'function InstallDrumsepDirectmlRuntime' in script
-    assert '$Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime"' in script
+    assert '$Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-cuda-runtime" -or $Mode -eq "drumsep-directml-runtime"' in script
+    assert 'WriteDrumsepCudaState "error" "missing" "python_missing"' in script
+    assert 'WriteDrumsepCudaState "ok" "ok" "ok"' in script
+    assert 'LogProgress "Verifying existing DrumSep CUDA runtime"' in script
+    assert 'onnxruntime-gpu==$onnxRuntimeGpuVersion' in script
+    assert 'DRUMSEP_CUDA_RUNTIME_STATUS=' in script
+    assert 'DRUMSEP_CUDA_PYTHON=' in script
+    assert 'DRUMSEP_CUDA_MODEL_STATUS=' in script
+    assert 'TORCH_CUDA_STATUS=' in script
+    assert 'ORT_CUDA_PROVIDER=' in script
+    assert 'CUDA_DEVICE=' in script
+    assert 'CUDA_DEVICE_ID=' in script
     assert 'WriteDrumsepDirectmlState "error" "missing" "python_missing"' in script
     assert 'WriteDrumsepDirectmlState "ok" "ok" "ok"' in script
     assert 'LogProgress "Verifying existing DrumSep DirectML runtime"' in script

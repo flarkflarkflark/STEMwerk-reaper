@@ -55,8 +55,10 @@ $drumsepModelCkptMinimumBytes = 104857600
 $drumsepModelYamlMinimumBytes = 128
 $torchVersion = "2.4.1"
 $torchVisionVersion = "0.19.1"
+$torchAudioVersion = "2.4.1"
 $torchCudaSuffix = "+cu121"
 $torchDirectMlVersion = "0.2.5.dev240914"
+$onnxRuntimeGpuVersion = "1.24.4"
 $onnxRuntimeDirectMlVersion = "1.24.4"
 $audioSeparatorOk = $false
 $stemwerkCoreOk = $false
@@ -914,6 +916,10 @@ function GetDrumsepDirectmlRuntimePythonPath {
     return Join-Path $RuntimeBase ".venv-drumsep-directml\\Scripts\\python.exe"
 }
 
+function GetDrumsepCudaRuntimePythonPath {
+    return Join-Path $RuntimeBase ".venv-drumsep-cuda\\Scripts\\python.exe"
+}
+
 function GetDrumsepModelDir {
     return Join-Path $RuntimeBase "models"
 }
@@ -1054,6 +1060,86 @@ function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string
     )
 
     $lines | Out-File -FilePath $StateFile -Encoding ascii
+}
+
+function WriteDrumsepCudaState([string]$State, [string]$ModelStatus, [string]$Reason, [hashtable]$Probe = $null, [string]$FfmpegPath = "") {
+    $drumsepPython = GetDrumsepCudaRuntimePythonPath
+    $modelFile = GetDrumsepModelFilePath
+    $modelYaml = GetDrumsepModelYamlPath
+    if ($ModelStatus -eq "missing" -and (Test-Path $modelFile) -and (Test-Path $modelYaml)) {
+        $ModelStatus = "ok"
+    }
+    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $probe = if ($Probe) { $Probe } else { @{} }
+    $statusValue = if ($State -eq "running") { "running" } elseif ($State -eq "ok") { "ok" } else { "error" }
+    $audioSeparatorVersionValue = [string]($probe["DRUMSEP_CUDA_AUDIO_SEPARATOR_VERSION"])
+    $torchVersionValue = [string]($probe["DRUMSEP_CUDA_TORCH_VERSION"])
+    $torchVisionVersionValue = [string]($probe["DRUMSEP_CUDA_TORCHVISION_VERSION"])
+    $torchAudioVersionValue = [string]($probe["DRUMSEP_CUDA_TORCHAUDIO_VERSION"])
+    $onnxRuntimeGpuVersionValue = [string]($probe["DRUMSEP_CUDA_ONNXRUNTIME_GPU_VERSION"])
+    $cudaDeviceValue = [string]($probe["CUDA_DEVICE"])
+    $cudaDeviceIdValue = [string]($probe["CUDA_DEVICE_ID"])
+    $ortAvailableProvidersValue = [string]($probe["ORT_AVAILABLE_PROVIDERS"])
+    $ffmpegStatusValue = [string]($probe["FFMPEG_STATUS"])
+    $torchCudaStatusValue = [string]($probe["TORCH_CUDA_STATUS"])
+    $ortCudaProviderValue = [string]($probe["ORT_CUDA_PROVIDER"])
+    if ($State -eq "ok") {
+        if ([string]::IsNullOrWhiteSpace($audioSeparatorVersionValue)) { $audioSeparatorVersionValue = $drumsepAudioSeparatorVersion }
+        if ([string]::IsNullOrWhiteSpace($torchVersionValue)) { $torchVersionValue = "$torchVersion$torchCudaSuffix" }
+        if ([string]::IsNullOrWhiteSpace($torchVisionVersionValue)) { $torchVisionVersionValue = "$torchVisionVersion$torchCudaSuffix" }
+        if ([string]::IsNullOrWhiteSpace($torchAudioVersionValue)) { $torchAudioVersionValue = "$torchAudioVersion$torchCudaSuffix" }
+        if ([string]::IsNullOrWhiteSpace($onnxRuntimeGpuVersionValue)) { $onnxRuntimeGpuVersionValue = $onnxRuntimeGpuVersion }
+        if ([string]::IsNullOrWhiteSpace($cudaDeviceIdValue)) { $cudaDeviceIdValue = "cuda:0" }
+        if ([string]::IsNullOrWhiteSpace($ffmpegStatusValue)) { $ffmpegStatusValue = "ok" }
+        if ([string]::IsNullOrWhiteSpace($torchCudaStatusValue)) { $torchCudaStatusValue = "ok" }
+        if ([string]::IsNullOrWhiteSpace($ortCudaProviderValue)) { $ortCudaProviderValue = "ok" }
+    }
+    $lines = @(
+        "STATUS=$statusValue",
+        "STATUS_REASON=$Reason",
+        "DRUMSEP_CUDA_RUNTIME_STATUS=$statusValue",
+        "DRUMSEP_CUDA_RUNTIME_DETAIL=$Reason",
+        "DRUMSEP_CUDA_PYTHON=$drumsepPython",
+        "DRUMSEP_CUDA_LAST_CHECK_UTC=$timestamp",
+        "DRUMSEP_CUDA_MODEL_STATUS=$ModelStatus",
+        "DRUMSEP_CUDA_MODEL_FILE=$modelFile",
+        "DRUMSEP_CUDA_MODEL_YAML=$modelYaml",
+        "DRUMSEP_CUDA_AUDIO_SEPARATOR_VERSION=$audioSeparatorVersionValue",
+        "DRUMSEP_CUDA_TORCH_VERSION=$torchVersionValue",
+        "DRUMSEP_CUDA_TORCHVISION_VERSION=$torchVisionVersionValue",
+        "DRUMSEP_CUDA_TORCHAUDIO_VERSION=$torchAudioVersionValue",
+        "DRUMSEP_CUDA_ONNXRUNTIME_GPU_VERSION=$onnxRuntimeGpuVersionValue",
+        "TORCH_CUDA_STATUS=$torchCudaStatusValue",
+        "ORT_CUDA_PROVIDER=$ortCudaProviderValue",
+        "CUDA_DEVICE=$cudaDeviceValue",
+        "CUDA_DEVICE_ID=$cudaDeviceIdValue",
+        "ORT_AVAILABLE_PROVIDERS=$ortAvailableProvidersValue",
+        "FFMPEG_STATUS=$ffmpegStatusValue",
+        "FFMPEG_PATH=$FfmpegPath"
+    )
+    $lines | Out-File -FilePath $StateFile -Encoding ascii
+}
+
+function TestWindowsCudaCapableHost {
+    $gpuNames = @()
+    try {
+        $gpuNames = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name)
+    } catch {
+        $gpuNames = @()
+    }
+    foreach ($name in $gpuNames) {
+        if ([string]$name -match "NVIDIA") {
+            return $true
+        }
+    }
+    $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if ($nvidiaSmi) {
+        & $nvidiaSmi.Source -L | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+    }
+    return $false
 }
 
 function ResolveSupportedWindowsPython([string[]]$Candidates) {
@@ -1412,6 +1498,112 @@ print("DRUMSEP_DIRECTML_VERIFY ok device=" + str(device) + " provider=DmlExecuti
     return "verify_failed"
 }
 
+function VerifyDrumsepCudaRuntime([string]$PythonPath) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return @{ Status = "python_missing"; Probe = @{}; FfmpegPath = "" } }
+    if (-not (Test-Path $PythonPath)) { return @{ Status = "python_missing"; Probe = @{}; FfmpegPath = "" } }
+
+    $modelDir = GetDrumsepModelDir
+    $modelFile = GetDrumsepModelFilePath
+    $modelYaml = GetDrumsepModelYamlPath
+    if (-not (Test-Path $modelFile) -or -not (Test-Path $modelYaml)) {
+        return @{ Status = "model_missing"; Probe = @{}; FfmpegPath = "" }
+    }
+
+    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall
+    if ([string]::IsNullOrWhiteSpace($resolvedFfmpeg) -or -not (Test-Path $resolvedFfmpeg)) {
+        LogLine "DrumSep CUDA verify could not resolve FFmpeg"
+        return @{ Status = "ffmpeg_missing"; Probe = @{}; FfmpegPath = "" }
+    }
+    LogProgress ("DrumSep CUDA verify using FFmpeg: " + $resolvedFfmpeg)
+    $resultPath = Join-Path $RuntimeBase "state\\drumsep_cuda_verify.json"
+    if (Test-Path $resultPath) {
+        Remove-Item -Path $resultPath -Force -ErrorAction SilentlyContinue
+    }
+
+    $verifyCode = @"
+import importlib
+import importlib.metadata as metadata
+import json
+from pathlib import Path
+import onnxruntime as ort
+import torch
+from audio_separator.separator import Separator
+
+expected = {
+    "audio-separator": "$drumsepAudioSeparatorVersion",
+    "torch": "$torchVersion",
+    "torchvision": "$torchVisionVersion",
+    "torchaudio": "$torchAudioVersion",
+    "onnxruntime-gpu": "$onnxRuntimeGpuVersion",
+}
+modules = ["audio_separator", "torch", "torchvision", "torchaudio", "onnxruntime"]
+errors = []
+for module_name in modules:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        errors.append(f"import_failed:{module_name}:{type(exc).__name__}:{exc}")
+for dist_name, wanted in expected.items():
+    try:
+        found = metadata.version(dist_name)
+    except Exception as exc:
+        errors.append(f"version_missing:{dist_name}:{type(exc).__name__}:{exc}")
+        continue
+    if found != wanted and found.split("+", 1)[0] != wanted:
+        errors.append(f"version_mismatch:{dist_name}:expected={wanted}:found={found}")
+providers = [str(item) for item in (ort.get_available_providers() or [])]
+if not bool(torch.cuda.is_available()):
+    errors.append("torch_cuda_unavailable")
+cuda_device_name = ""
+cuda_device_id = ""
+if bool(torch.cuda.is_available()):
+    cuda_device_name = str(torch.cuda.get_device_name(0))
+    cuda_device_id = "cuda:0"
+    tensor = torch.ones((1, 1, 8, 8), dtype=torch.float32, device="cuda:0")
+    weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device="cuda:0")
+    out = torch.nn.functional.conv2d(tensor, weight)
+    torch.cuda.synchronize()
+    _ = float(out.detach().cpu().sum().item())
+if "CUDAExecutionProvider" not in providers:
+    errors.append("cuda_provider_missing")
+sep = Separator(model_file_dir=r"$modelDir", output_dir=".", output_format="wav")
+sep.load_model("$drumsepModelFileName")
+payload = {
+    "status": "ok" if not errors else "verify_failed",
+    "DRUMSEP_CUDA_AUDIO_SEPARATOR_VERSION": metadata.version("audio-separator"),
+    "DRUMSEP_CUDA_TORCH_VERSION": metadata.version("torch"),
+    "DRUMSEP_CUDA_TORCHVISION_VERSION": metadata.version("torchvision"),
+    "DRUMSEP_CUDA_TORCHAUDIO_VERSION": metadata.version("torchaudio"),
+    "DRUMSEP_CUDA_ONNXRUNTIME_GPU_VERSION": metadata.version("onnxruntime-gpu"),
+    "TORCH_CUDA_STATUS": "ok" if bool(torch.cuda.is_available()) else "error",
+    "ORT_CUDA_PROVIDER": "ok" if "CUDAExecutionProvider" in providers else "error",
+    "CUDA_DEVICE": cuda_device_name,
+    "CUDA_DEVICE_ID": cuda_device_id,
+    "ORT_AVAILABLE_PROVIDERS": ",".join(providers),
+    "FFMPEG_STATUS": "ok",
+    "errors": errors,
+}
+Path(r"$resultPath").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+if errors:
+    print("DRUMSEP_CUDA_VERIFY broken " + ";".join(errors))
+    raise SystemExit(1)
+print("DRUMSEP_CUDA_VERIFY ok device=" + cuda_device_name + " provider=CUDAExecutionProvider")
+"@
+    InvokeWithResolvedFfmpegEnvironment $resolvedFfmpeg {
+        RunHidden $PythonPath @("-c", $verifyCode) "Verify DrumSep CUDA runtime" | Out-Null
+    } | Out-Null
+    $probe = @{}
+    if (Test-Path $resultPath) {
+        try {
+            $probe = Get-Content -Raw $resultPath | ConvertFrom-Json -AsHashtable
+        } catch {
+            $probe = @{}
+        }
+    }
+    $status = if ($LASTEXITCODE -eq 0) { "ok" } elseif ($LASTEXITCODE -eq 9009) { "ffmpeg_missing" } else { "verify_failed" }
+    return @{ Status = $status; Probe = $probe; FfmpegPath = $resolvedFfmpeg }
+}
+
 function InstallDrumsepRuntime([string]$BasePythonPath) {
     $drumsepPython = GetDrumsepRuntimePythonPath
     $modelDir = GetDrumsepModelDir
@@ -1561,6 +1753,79 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
     return $true
 }
 
+function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
+    if (-not (TestWindowsCudaCapableHost)) {
+        WriteDrumsepCudaState "error" "missing" "cuda_host_missing"
+        return $false
+    }
+
+    $drumsepPython = GetDrumsepCudaRuntimePythonPath
+    $modelDir = GetDrumsepModelDir
+
+    if (Test-Path $drumsepPython) {
+        WriteDrumsepCudaState "running" "missing" "verify_existing_runtime"
+        LogProgress "Verifying existing DrumSep CUDA runtime"
+        if (EnsureDrumsepAssets $modelDir) {
+            $existingVerify = VerifyDrumsepCudaRuntime $drumsepPython
+            if ($existingVerify.Status -eq "ok") {
+                WriteDrumsepCudaState "ok" "ok" "ok" $existingVerify.Probe $existingVerify.FfmpegPath
+                LogProgress "Existing DrumSep CUDA runtime verified"
+                return $true
+            }
+            LogLine ("Existing DrumSep CUDA runtime verify failed: " + $existingVerify.Status + "; rebuilding runtime")
+        } else {
+            LogLine "Existing DrumSep CUDA runtime assets could not be verified; rebuilding runtime"
+        }
+    }
+
+    WriteDrumsepCudaState "running" "missing" "creating_venv"
+    LogProgress ("DrumSep CUDA runtime path: " + (Join-Path $RuntimeBase ".venv-drumsep-cuda"))
+    Remove-Item -Path (Join-Path $RuntimeBase ".venv-drumsep-cuda") -Recurse -Force -ErrorAction SilentlyContinue
+    RunHidden $BasePythonPath @("-m", "venv", (Join-Path $RuntimeBase ".venv-drumsep-cuda")) "Create DrumSep CUDA virtual environment" | Out-Null
+    if (-not (Test-Path $drumsepPython)) {
+        WriteDrumsepCudaState "error" "missing" "venv_create_failed"
+        return $false
+    }
+
+    WriteDrumsepCudaState "running" "missing" "pip_upgrade"
+    InstallWithPip $drumsepPython @("--upgrade", "pip", "setuptools", "wheel") "Upgrade DrumSep CUDA pip"
+    if ($LASTEXITCODE -ne 0) {
+        WriteDrumsepCudaState "error" "missing" "pip_upgrade_failed"
+        return $false
+    }
+
+    WriteDrumsepCudaState "running" "missing" "package_install"
+    if (-not (InstallWithPipAllowOnlineFallback $drumsepPython @(
+        "--upgrade",
+        "--prefer-binary",
+        "--extra-index-url", $pytorchCudaIndex,
+        "audio-separator==$drumsepAudioSeparatorVersion",
+        "torch==$torchVersion$torchCudaSuffix",
+        "torchvision==$torchVisionVersion$torchCudaSuffix",
+        "torchaudio==$torchAudioVersion$torchCudaSuffix",
+        "onnxruntime-gpu==$onnxRuntimeGpuVersion"
+    ) "Install DrumSep CUDA packages")) {
+        WriteDrumsepCudaState "error" "missing" "package_install_failed"
+        return $false
+    }
+
+    WriteDrumsepCudaState "running" "missing" "model_download"
+    if (-not (EnsureDrumsepAssets $modelDir)) {
+        WriteDrumsepCudaState "error" "missing" "model_download_failed"
+        return $false
+    }
+
+    WriteDrumsepCudaState "running" "ok" "verify_runtime"
+    $verifyResult = VerifyDrumsepCudaRuntime $drumsepPython
+    if ($verifyResult.Status -ne "ok") {
+        WriteDrumsepCudaState "error" "ok" ("probe_failed:" + $verifyResult.Status) $verifyResult.Probe $verifyResult.FfmpegPath
+        return $false
+    }
+
+    WriteDrumsepCudaState "ok" "ok" "ok" $verifyResult.Probe $verifyResult.FfmpegPath
+    return $true
+}
+
 $candidates = @()
 if ($env:CONDA_PREFIX) {
     $candidates += (Join-Path $env:CONDA_PREFIX "python.exe")
@@ -1580,10 +1845,15 @@ $candidates += (Join-Path $programFiles "Python310\\python.exe")
 $candidates += (Join-Path $programFilesX86 "Python311\\python.exe")
 $candidates += (Join-Path $programFilesX86 "Python310\\python.exe")
 
-if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime") {
+if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-cuda-runtime" -or $Mode -eq "drumsep-directml-runtime") {
+    $isCudaDrumsepRuntime = ($Mode -eq "drumsep-cuda-runtime")
     $isDirectmlDrumsepRuntime = ($Mode -eq "drumsep-directml-runtime")
     $runtimeLabel = "Drum Kit Split runtime"
     $bootstrapReason = "drumsep_runtime_bootstrap"
+    if ($isCudaDrumsepRuntime) {
+        $runtimeLabel = "Drum Kit Split CUDA runtime"
+        $bootstrapReason = "drumsep_cuda_runtime_bootstrap"
+    }
     if ($isDirectmlDrumsepRuntime) {
         $runtimeLabel = "Drum Kit Split DirectML runtime"
         $bootstrapReason = "drumsep_directml_runtime_bootstrap"
@@ -1593,6 +1863,8 @@ if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime") {
         LogLine ("Runtime base is not writable: " + $RuntimeBase)
         if ($isDirectmlDrumsepRuntime) {
             WriteDrumsepDirectmlState "error" "missing" "runtime_write_test_failed"
+        } elseif ($isCudaDrumsepRuntime) {
+            WriteDrumsepCudaState "error" "missing" "runtime_write_test_failed"
         } else {
             WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
         }
@@ -1603,6 +1875,8 @@ if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime") {
         LogLine ("Runtime state directory is not writable: " + (Join-Path $RuntimeBase "state"))
         if ($isDirectmlDrumsepRuntime) {
             WriteDrumsepDirectmlState "error" "missing" "runtime_write_test_failed"
+        } elseif ($isCudaDrumsepRuntime) {
+            WriteDrumsepCudaState "error" "missing" "runtime_write_test_failed"
         } else {
             WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
         }
@@ -1613,6 +1887,8 @@ if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime") {
         LogLine ("Runtime logs directory is not writable: " + (Join-Path $RuntimeBase "logs"))
         if ($isDirectmlDrumsepRuntime) {
             WriteDrumsepDirectmlState "error" "missing" "runtime_write_test_failed"
+        } elseif ($isCudaDrumsepRuntime) {
+            WriteDrumsepCudaState "error" "missing" "runtime_write_test_failed"
         } else {
             WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
         }
@@ -1625,6 +1901,8 @@ if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime") {
     if (-not $basePython) {
         if ($isDirectmlDrumsepRuntime) {
             WriteDrumsepDirectmlState "error" "missing" "python_missing"
+        } elseif ($isCudaDrumsepRuntime) {
+            WriteDrumsepCudaState "error" "missing" "python_missing"
         } else {
             WriteDrumsepState "install_failed" "missing" "python_missing"
         }
@@ -1633,14 +1911,18 @@ if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime") {
     }
 
     $runtimeInstalled = $false
-    if ($isDirectmlDrumsepRuntime) {
+    if ($isCudaDrumsepRuntime) {
+        $runtimeInstalled = InstallDrumsepCudaRuntime $basePython
+    } elseif ($isDirectmlDrumsepRuntime) {
         $runtimeInstalled = InstallDrumsepDirectmlRuntime $basePython
     } else {
         $runtimeInstalled = InstallDrumsepRuntime $basePython
     }
     if (-not $runtimeInstalled) {
         $installFailedReason = "drumsep_runtime_install_failed"
-        if ($isDirectmlDrumsepRuntime) {
+        if ($isCudaDrumsepRuntime) {
+            $installFailedReason = "drumsep_cuda_runtime_install_failed"
+        } elseif ($isDirectmlDrumsepRuntime) {
             $installFailedReason = "drumsep_directml_runtime_install_failed"
         }
         WriteBootstrapGuard "failed" $installFailedReason

@@ -19,6 +19,9 @@ import time
 
 
 EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
+DRUMSEP_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+DRUMSEP_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+DRUMSEP_MODEL_YAML = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 REAPER_FILENAMES = {
     "kick": "kick.wav",
     "snare": "snare.wav",
@@ -181,6 +184,15 @@ def _model_download_checks_path(model_dir: Path) -> Path:
 
 
 def _resolve_model_yaml_path(model_dir: Path, model_name: str) -> tuple[Path | None, str]:
+    known_names = {
+        str(model_name or "").strip(),
+        Path(str(model_name or "")).name,
+        Path(str(model_name or "")).stem,
+    }
+    if DRUMSEP_MODEL_ALIAS in known_names or DRUMSEP_MODEL_FILENAME in known_names or Path(DRUMSEP_MODEL_ALIAS).stem in known_names:
+        canonical_yaml = model_dir / DRUMSEP_MODEL_YAML
+        if canonical_yaml.exists():
+            return canonical_yaml, "known_drumsep_yaml"
     checks_path = _model_download_checks_path(model_dir)
     try:
         checks = json.loads(checks_path.read_text(encoding="utf-8"))

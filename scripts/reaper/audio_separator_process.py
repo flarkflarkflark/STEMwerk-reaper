@@ -55,6 +55,7 @@ DIRECT_DKS_MODEL_MIRROR_CKPT_URL = (
 )
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
+DRUMSEP_RUNTIME_CUDA_DIRNAME = ".venv-drumsep-cuda"
 DRUMSEP_RUNTIME_DIRECTML_DIRNAME = ".venv-drumsep-directml"
 DRUMSEP_RUNTIME_GUIDANCE = "Run Setup/Repair Drum Kit Split runtime."
 DRUMSEP_HELPER_RELATIVE = Path("_internal") / "stemwerk_drumsep_process.py"
@@ -1730,6 +1731,14 @@ def _drumsep_rocm_runtime_python_path(runtime_base: Optional[Path] = None) -> Pa
     return runtime_dir / "bin" / "python"
 
 
+def _drumsep_cuda_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    runtime_dir = base / DRUMSEP_RUNTIME_CUDA_DIRNAME
+    if os.name == "nt":
+        return runtime_dir / "Scripts" / "python.exe"
+    return runtime_dir / "bin" / "python"
+
+
 def _drumsep_directml_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     runtime_dir = base / DRUMSEP_RUNTIME_DIRECTML_DIRNAME
@@ -1759,6 +1768,8 @@ def _drumsep_runtime_state(runtime_base: Optional[Path] = None, kind: str = "cpu
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     if kind == "rocm":
         state_name = "drumsep_runtime_rocm.env"
+    elif kind == "cuda":
+        state_name = "drumsep_runtime_cuda.env"
     elif kind == "directml":
         state_name = "drumsep_runtime_directml.env"
     else:
@@ -1997,15 +2008,21 @@ print(json.dumps({
 def _select_drumsep_runtime(
     requested_device: str = "auto", runtime_base: Optional[Path] = None
 ) -> Tuple[Optional[Path], str, Dict[str, Any]]:
+    cuda_state = _drumsep_runtime_state(runtime_base, "cuda")
     directml_state = _drumsep_runtime_state(runtime_base, "directml")
     rocm_state = _drumsep_runtime_state(runtime_base, "rocm")
     cpu_state = _drumsep_runtime_state(runtime_base, "cpu")
+    cuda_candidates = _drumsep_state_python_candidates(
+        cuda_state,
+        _drumsep_cuda_runtime_python_path(runtime_base),
+    )
     directml_candidates = _drumsep_state_python_candidates(
         directml_state,
         _drumsep_directml_runtime_python_path(runtime_base),
     )
     rocm_candidates = _drumsep_state_python_candidates(rocm_state, _drumsep_rocm_runtime_python_path(runtime_base))
     cpu_candidates = _drumsep_state_python_candidates(cpu_state, _drumsep_runtime_python_path(runtime_base))
+    cuda_python = cuda_candidates[0]
     directml_python = directml_candidates[0]
     rocm_python = rocm_candidates[0]
     cpu_python = cpu_candidates[0]
@@ -2056,9 +2073,50 @@ def _select_drumsep_runtime(
         reason = "missing" if directml_detail == "missing" else "broken"
         return None, reason, info
 
+    if os.name == "nt" and explicit_cuda:
+        print("drumsep_runtime_selection_policy=explicit_cuda", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
+        selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
+            cuda_candidates,
+            require_cuda=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_end detail={cuda_detail}", file=sys.stderr)
+        if selected_cuda_python is not None:
+            info = dict(cuda_payload or {})
+            info["kind"] = "cuda"
+            info["detail"] = cuda_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = "explicit_cuda"
+            info["cuda_python_attempts"] = cuda_attempts
+            return selected_cuda_python, "cuda", info
+        info = {
+            "cuda_detail": cuda_detail,
+            "cuda_python": str(cuda_python),
+            "cuda_python_attempts": cuda_attempts,
+            "selection_policy": "explicit_cuda",
+        }
+        reason = "missing" if cuda_detail == "missing" else "broken"
+        return None, reason, info
+
     if os.name == "nt" and normalized_request in {"auto", "gpu"}:
-        selection_policy = "gpu_prefer_directml" if normalized_request == "gpu" else "auto_prefer_directml"
+        selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"
         print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
+        selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
+            cuda_candidates,
+            require_cuda=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_end detail={cuda_detail}", file=sys.stderr)
+        if selected_cuda_python is not None:
+            info = dict(cuda_payload or {})
+            info["kind"] = "cuda"
+            info["detail"] = cuda_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = selection_policy
+            info["cuda_python_attempts"] = cuda_attempts
+            return selected_cuda_python, "cuda", info
+
+        directml_selection_policy = "fallback_directml"
         print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_start", file=sys.stderr)
         selected_directml_python, directml_detail, directml_payload, directml_attempts = _probe_drumsep_runtime_candidates(
             directml_candidates,
@@ -2070,8 +2128,9 @@ def _select_drumsep_runtime(
             info = dict(directml_payload or {})
             info["kind"] = "directml"
             info["detail"] = directml_detail
-            info["fallback_reason"] = ""
-            info["selection_policy"] = selection_policy
+            info["fallback_reason"] = f"cuda_skipped:{cuda_detail}"
+            info["selection_policy"] = directml_selection_policy
+            info["cuda_python_attempts"] = cuda_attempts
             info["directml_python_attempts"] = directml_attempts
             return selected_directml_python, "directml", info
 
@@ -2085,23 +2144,27 @@ def _select_drumsep_runtime(
             info = dict(cpu_payload or {})
             info["kind"] = "cpu"
             info["detail"] = cpu_detail
-            info["fallback_reason"] = f"directml_skipped:{directml_detail}"
+            info["fallback_reason"] = f"cuda_skipped:{cuda_detail};directml_skipped:{directml_detail}"
             info["selection_policy"] = "fallback_cpu"
             info["cpu_python_attempts"] = cpu_attempts
+            info["cuda_python_attempts"] = cuda_attempts
             info["directml_python_attempts"] = directml_attempts
             return selected_cpu_python, "cpu", info
 
         info = {
+            "cuda_detail": cuda_detail,
             "directml_detail": directml_detail,
             "cpu_detail": cpu_detail,
+            "cuda_python": str(cuda_python),
             "directml_python": str(directml_python),
             "cpu_python": str(cpu_python),
+            "cuda_python_attempts": cuda_attempts,
             "directml_python_attempts": directml_attempts,
             "cpu_python_attempts": cpu_attempts,
             "selection_policy": "fallback_cpu",
             "normalized_request": normalized_request,
         }
-        reason = "missing" if directml_detail == "missing" and cpu_detail == "missing" else "broken"
+        reason = "missing" if cuda_detail == "missing" and directml_detail == "missing" and cpu_detail == "missing" else "broken"
         return None, reason, info
 
     if device_norm == "mps" and _is_darwin_arm64():
@@ -2330,8 +2393,8 @@ def _select_drumsep_runtime(
         "cuda_detail": cuda_detail,
         "cpu_detail": cpu_detail,
         "rocm_python": str(rocm_python),
-        "cuda_python": str(cpu_python),
-        "cpu_python": str(cpu_python),
+            "cuda_python": str(cpu_python),
+            "cpu_python": str(cpu_python),
         "rocm_python_attempts": rocm_attempts,
         "cuda_python_attempts": cuda_attempts,
         "cpu_python_attempts": cpu_attempts,
@@ -2366,6 +2429,19 @@ def _resolve_benchmark_drumsep_helper_device(
     print(f"bench_drumsep_helper_device_requested={raw or 'none'}", file=sys.stderr)
 
     if not raw:
+        if os.name == "nt" and runtime_kind_lower == "cuda":
+            probe_ok, probe_reason, probe_detail = _probe_cuda_helper_isolation(Path(runtime_python or ""))
+            print(f"drumsep_cuda_helper_probe_status={'ok' if probe_ok else 'failed'}", file=sys.stderr)
+            print(f"drumsep_cuda_helper_probe_reason={probe_reason}", file=sys.stderr)
+            print(f"drumsep_cuda_helper_probe_detail={probe_detail}", file=sys.stderr)
+            if probe_ok:
+                applied_reason = "auto_cuda_default" if normalized_request in {"", "auto"} else "verified_cuda_default"
+                print("bench_drumsep_helper_device_applied=cuda", file=sys.stderr)
+                print(f"bench_drumsep_helper_device_ignored_reason={applied_reason}", file=sys.stderr)
+                return "cuda", applied_reason
+            print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+            print(f"bench_drumsep_helper_device_ignored_reason={probe_reason}", file=sys.stderr)
+            return "cpu", probe_reason
         if os.name == "nt" and runtime_kind_lower == "directml" and normalized_request in {"auto", "gpu"}:
             print("bench_drumsep_helper_device_applied=directml", file=sys.stderr)
             print("bench_drumsep_helper_device_ignored_reason=auto_directml_default", file=sys.stderr)
@@ -2423,6 +2499,22 @@ def _resolve_benchmark_drumsep_helper_device(
         print("bench_drumsep_helper_device_applied=directml", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=", file=sys.stderr)
         return "directml", ""
+    if raw == "cuda" and os.name == "nt":
+        if runtime_kind_lower != "cuda":
+            print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+            print("bench_drumsep_helper_device_ignored_reason=runtime_backend_mismatch", file=sys.stderr)
+            return "cpu", "runtime_backend_mismatch"
+        probe_ok, probe_reason, probe_detail = _probe_cuda_helper_isolation(Path(runtime_python or ""))
+        print(f"drumsep_cuda_helper_probe_status={'ok' if probe_ok else 'failed'}", file=sys.stderr)
+        print(f"drumsep_cuda_helper_probe_reason={probe_reason}", file=sys.stderr)
+        print(f"drumsep_cuda_helper_probe_detail={probe_detail}", file=sys.stderr)
+        if not probe_ok:
+            print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
+            print(f"bench_drumsep_helper_device_ignored_reason={probe_reason}", file=sys.stderr)
+            return "cpu", probe_reason
+        print("bench_drumsep_helper_device_applied=cuda", file=sys.stderr)
+        print("bench_drumsep_helper_device_ignored_reason=", file=sys.stderr)
+        return "cuda", ""
     if not sys.platform.startswith("linux"):
         print("bench_drumsep_helper_device_applied=none", file=sys.stderr)
         print("bench_drumsep_helper_device_ignored_reason=platform_not_linux", file=sys.stderr)
@@ -3876,7 +3968,12 @@ def main():
         if drumsep_python is None:
             reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
             runtime_path = Path(
-                str(runtime_info.get("cpu_python") or runtime_info.get("rocm_python") or _drumsep_runtime_python_path())
+                str(
+                    runtime_info.get("cuda_python")
+                    or runtime_info.get("cpu_python")
+                    or runtime_info.get("rocm_python")
+                    or _drumsep_runtime_python_path()
+                )
             )
             _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
             print("dks_extract_stage2_runtime=drumsep", file=sys.stderr)
@@ -3893,7 +3990,7 @@ def main():
         print(f"drumsep_runtime_selected={runtime_kind}", file=sys.stderr)
         print(f"drumsep_runtime_selection_policy={runtime_info.get('selection_policy', '')}", file=sys.stderr)
         print(f"drumsep_python={drumsep_python}", file=sys.stderr)
-        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps', 'directml'} else 'no'}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'cuda', 'rocm', 'mps', 'directml'} else 'no'}", file=sys.stderr)
         print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
         print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
@@ -4055,7 +4152,12 @@ def main():
         if drumsep_python is None:
             reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
             runtime_path = Path(
-                str(runtime_info.get("cpu_python") or runtime_info.get("rocm_python") or _drumsep_runtime_python_path())
+                str(
+                    runtime_info.get("cuda_python")
+                    or runtime_info.get("cpu_python")
+                    or runtime_info.get("rocm_python")
+                    or _drumsep_runtime_python_path()
+                )
             )
             _emit_direct_dks_stage2_runtime_markers(reason, runtime_path, json.dumps(runtime_info, sort_keys=True))
             emit_phase("python_error")
@@ -4071,7 +4173,7 @@ def main():
             file=sys.stderr,
         )
         print(f"drumsep_python={drumsep_python}", file=sys.stderr)
-        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'rocm', 'mps', 'directml'} else 'no'}", file=sys.stderr)
+        print(f"drumsep_gpu_capable={'yes' if runtime_kind in {'cuda', 'rocm', 'mps', 'directml'} else 'no'}", file=sys.stderr)
         print(f"drumsep_torch_version={versions.get('torch', '')}", file=sys.stderr)
         print(f"drumsep_torch_hip={runtime_info.get('torch_hip', '')}", file=sys.stderr)
         print(f"drumsep_device_names={'|'.join(str(x) for x in device_names if str(x).strip())}", file=sys.stderr)
