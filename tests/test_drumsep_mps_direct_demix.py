@@ -240,6 +240,7 @@ def test_benchmark_cuda_helper_device_requires_successful_isolation_probe(monkey
 def test_benchmark_directml_helper_device_defaults_to_directml_on_windows_auto(monkeypatch, capsys):
     module = _load_audio_process()
     monkeypatch.delenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, raising=False)
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="nt"))
     assert module._resolve_benchmark_drumsep_helper_device("auto", "directml") == ("directml", "auto_directml_default")
     stderr = capsys.readouterr().err
     assert "bench_drumsep_helper_device_applied=directml" in stderr

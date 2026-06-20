@@ -5651,3 +5651,43 @@ def test_windows_normal_device_ui_shows_explicit_cuda_label():
     assert 'if gpuCount <= 1 then' not in device_section
     assert 'return "GPU"' not in device_section
     assert 'return "GPU" .. tostring(idx)' not in device_section
+
+
+def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle():
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text(encoding="utf-8")
+    macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
+    release_notes = Path("docs/RELEASE_2.3.0.0.md").read_text(encoding="utf-8")
+
+    assert "WriteReadyToGoState" in windows_bootstrap
+    assert "EnsureCoreModelCache $python $readyModelDir" in windows_bootstrap
+    assert "InstallDrumsepCudaRuntime $python" in windows_bootstrap
+    assert "InstallDrumsepDirectmlRuntime $python" in windows_bootstrap
+    assert "WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail" in windows_bootstrap
+
+    assert "ensure_core_model_cache" in linux_bootstrap
+    assert "ensure_drumsep_assets" in linux_bootstrap
+    assert 'set_status "deps_failed" "core_model_prefetch_failed"' in linux_bootstrap
+    assert 'set_status "deps_failed" "drumsep_ready_runtime_failed"' in linux_bootstrap
+    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"' in linux_bootstrap
+
+    assert "ready_to_go_state_file()" in macos_bootstrap
+    assert "ensure_core_model_cache" in macos_bootstrap
+    assert "ensure_drumsep_assets" in macos_bootstrap
+    assert 'set_status "deps_failed" "drumsep_model_prefetch_failed"' in macos_bootstrap
+    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"' in macos_bootstrap
+
+    assert 'local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"' in setup_internal
+    assert 'if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end' in setup_internal
+    assert 'readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown"' in setup_internal
+
+    assert 'local readyStatePath = joinPath(runtimeStateDir, "ready_to_go.env")' in support_script
+    assert 'appendKey(lines, "ready_to_go_status"' in support_script
+    assert 'collectExpectedFileStatus(statusLines, "ready_to_go.env", readyToGoEnvPath)' in support_script
+    assert 'modelDir = getModelCacheDir()' in support_script
+
+    assert "## Pre-release live smoke plan" in release_notes
+    assert "READY_TO_GO_SMOKE_PASS" in release_notes
+    assert "PRE_RELEASE_SMOKE_MATRIX_BLOCKED" in release_notes

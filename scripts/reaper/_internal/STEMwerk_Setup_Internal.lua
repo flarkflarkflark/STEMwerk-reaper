@@ -3601,8 +3601,10 @@ end
 local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
+    local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"
     local state = fileExists(stateFile) and parseStateFile(stateFile) or {}
     local capState = fileExists(capFile) and parseStateFile(capFile) or {}
+    local readyState = fileExists(readyFile) and parseStateFile(readyFile) or {}
     local extPythonRaw = trim(getExt("pythonPath") or "")
     local extFfmpeg = trim(getExt("ffmpegPath") or "")
     local profile = trim(capState.PROFILE or state.PROFILE or "")
@@ -3627,6 +3629,7 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     if verification ~= "" and verification ~= "ok" then needsRepair = true end
     if trim(capState.AUDIO_SEPARATOR or "") == "missing" then needsRepair = true end
     if trim(capState.STEMWERK_CORE or "") == "missing" then needsRepair = true end
+    if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end
     if python == "" or (not isAbsolutePath(python)) or (not fileExists(python)) then needsRepair = true end
     if ffmpeg == "" or (not fileExists(ffmpeg)) then needsRepair = true end
 
@@ -3652,6 +3655,8 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         extPython = extPythonRaw ~= "" and extPythonRaw or "(empty)",
         ffmpegPath = ffmpeg ~= "" and ffmpeg or "unknown",
         verification = verification ~= "" and verification or "unknown",
+        readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown",
+        readyToGoDetail = trim(readyState.READY_TO_GO_DETAIL or ""),
         deps = deps,
         updateDetected = lastSetupVersion ~= "" and setupVersion ~= "" and lastSetupVersion ~= setupVersion,
         needsRepair = needsRepair,

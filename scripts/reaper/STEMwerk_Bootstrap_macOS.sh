@@ -86,6 +86,109 @@ model_cache_dir() {
   printf "%s/Library/Application Support/STEMwerk/models\n" "${HOME:-/tmp}"
 }
 
+ready_to_go_state_file() {
+  printf "%s/state/ready_to_go.env\n" "${RUNTIME_BASE}"
+}
+
+verify_core_model_cache() {
+  _model_dir="${1:-$(model_cache_dir)}"
+  _fast="missing"
+  _quality="missing"
+  _sixstem="missing"
+  [ -f "${_model_dir}/htdemucs.yaml" ] && [ -f "${_model_dir}/955717e8-8726e21a.th" ] && _fast="ok"
+  [ -f "${_model_dir}/htdemucs_ft.yaml" ] \
+    && [ -f "${_model_dir}/f7e0c4bc-ba3fe64a.th" ] \
+    && [ -f "${_model_dir}/d12395a8-e57c48e6.th" ] \
+    && [ -f "${_model_dir}/92cfc3b6-ef3bcb9c.th" ] \
+    && [ -f "${_model_dir}/04573f0d-f3cf25b2.th" ] && _quality="ok"
+  [ -f "${_model_dir}/htdemucs_6s.yaml" ] && [ -f "${_model_dir}/5c90dfd2-34c22ccb.th" ] && _sixstem="ok"
+  printf "model_dir=%s\nfast=%s\nquality=%s\nsixstem=%s\n" "${_model_dir}" "${_fast}" "${_quality}" "${_sixstem}"
+}
+
+ensure_core_model_cache() {
+  _py="$1"
+  _model_dir="${2:-$(model_cache_dir)}"
+  [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
+  mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  _status="$(verify_core_model_cache "${_model_dir}")"
+  case "${_status}" in
+    *$'\nfast=ok'$'\n'*$'quality=ok'$'\n'*$'sixstem=ok'*|*fast=ok*quality=ok*sixstem=ok*)
+      log "Core model cache already present: ${_model_dir}"
+      return 0
+      ;;
+  esac
+  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+from audio_separator.separator import Separator
+
+model_dir = r"${_model_dir}"
+for model_name in ("htdemucs", "htdemucs_ft", "htdemucs_6s"):
+    sep = Separator(model_file_dir=model_dir, output_dir=".", output_format="wav")
+    sep.load_model(model_name)
+print("STEMWERK_CORE_MODEL_PREFETCH ok")
+PY
+  [ $? -eq 0 ] || return 1
+  _status="$(verify_core_model_cache "${_model_dir}")"
+  case "${_status}" in
+    *$'\nfast=ok'$'\n'*$'quality=ok'$'\n'*$'sixstem=ok'*|*fast=ok*quality=ok*sixstem=ok*) return 0 ;;
+  esac
+  return 1
+}
+
+ensure_drumsep_assets() {
+  _py="$1"
+  _model_dir="${2:-$(model_cache_dir)}"
+  [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
+  mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+import importlib.util
+from pathlib import Path
+
+script_path = Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"
+spec = importlib.util.spec_from_file_location("stemwerk_audio_separator_process_ready", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec and spec.loader
+spec.loader.exec_module(module)
+ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
+    module.DIRECT_DKS_MODEL_ALIAS,
+    Path(r"${_model_dir}"),
+)
+if not ok:
+    raise SystemExit(str(detail or "drumsep_prefetch_failed"))
+print("STEMWERK_DRUMSEP_MODEL_PREFETCH ok")
+PY
+}
+
+write_ready_to_go_state() {
+  _runtime_kind="${1:-unknown}"
+  _runtime_status="${2:-missing}"
+  _drumsep_model_status="${3:-missing}"
+  _detail="${4:-}"
+  _core="$(verify_core_model_cache)"
+  _model_dir="$(printf "%s\n" "${_core}" | awk -F= '/^model_dir=/{print $2; exit}')"
+  _fast="$(printf "%s\n" "${_core}" | awk -F= '/^fast=/{print $2; exit}')"
+  _quality="$(printf "%s\n" "${_core}" | awk -F= '/^quality=/{print $2; exit}')"
+  _sixstem="$(printf "%s\n" "${_core}" | awk -F= '/^sixstem=/{print $2; exit}')"
+  _ready="ok"
+  if [ "${_fast}" != "ok" ] || [ "${_quality}" != "ok" ] || [ "${_sixstem}" != "ok" ] || [ "${_drumsep_model_status}" != "ok" ]; then
+    _ready="missing"
+  fi
+  if [ "${_runtime_status}" != "ok" ] && [ "${_runtime_status}" != "skipped" ]; then
+    _ready="missing"
+  fi
+  {
+    echo "READY_TO_GO_STATUS=${_ready}"
+    echo "READY_TO_GO_DETAIL=${_detail}"
+    echo "READY_TO_GO_LAST_CHECK_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
+    echo "CORE_MODEL_CACHE_DIR=${_model_dir}"
+    echo "CORE_MODEL_FAST_STATUS=${_fast}"
+    echo "CORE_MODEL_QUALITY_STATUS=${_quality}"
+    echo "CORE_MODEL_6STEM_STATUS=${_sixstem}"
+    echo "DRUMSEP_READY_RUNTIME=${_runtime_kind}"
+    echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"
+    echo "DRUMSEP_READY_MODEL_STATUS=${_drumsep_model_status}"
+  } > "$(ready_to_go_state_file)"
+}
+
 get_python_version() {
   if [ -z "${1:-}" ] || [ ! -x "$1" ]; then
     return 1
@@ -1135,6 +1238,32 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     log "Cleared stale STATUS from earlier pinned runtime assertion failure after final runtime verification success"
   fi
 fi
+
+READY_RUNTIME_KIND="cpu"
+READY_RUNTIME_STATUS="missing"
+READY_DRUMSEP_MODEL_STATUS="missing"
+READY_DETAIL="${STATUS_REASON}"
+if [ "${MAC_ARCH}" = "arm64" ]; then
+  READY_RUNTIME_KIND="mps"
+fi
+if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  if ! ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"; then
+    set_status "deps_failed" "core_model_prefetch_failed"
+  fi
+fi
+if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
+    READY_RUNTIME_STATUS="ok"
+    READY_DRUMSEP_MODEL_STATUS="ok"
+    READY_DETAIL="ok"
+  else
+    READY_RUNTIME_STATUS="missing"
+    READY_DRUMSEP_MODEL_STATUS="missing"
+    READY_DETAIL="drumsep_model_prefetch_failed"
+    set_status "deps_failed" "drumsep_model_prefetch_failed"
+  fi
+fi
+write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"
 
 if [ -n "${STATE_FILE}" ]; then
   write_state

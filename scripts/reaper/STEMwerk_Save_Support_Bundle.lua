@@ -570,6 +570,25 @@ local function getRuntimePaths(runtimeBase)
     }
 end
 
+local function getModelCacheDir()
+    local home = getHome()
+    if OS == "Windows" then
+        local localAppData = os.getenv("LOCALAPPDATA") or ""
+        if localAppData ~= "" then
+            return localAppData .. "\\STEMwerk\\models"
+        end
+        return home .. "\\AppData\\Local\\STEMwerk\\models"
+    elseif OS == "macOS" then
+        return home .. "/Library/Application Support/STEMwerk/models"
+    else
+        local xdg = os.getenv("XDG_DATA_HOME") or ""
+        if xdg ~= "" then
+            return xdg .. "/STEMwerk/models"
+        end
+        return home .. "/.local/share/STEMwerk/models"
+    end
+end
+
 local function resolveCommandOnPath(name)
     if not name or name == "" then return "" end
     if OS == "Windows" then
@@ -1907,7 +1926,12 @@ end
 
 local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runtimeLogDir, cacheLogDir)
     local lines = {}
-    local modelDir = joinPath(runtimeBase, "models")
+    local readyStatePath = joinPath(runtimeStateDir, "ready_to_go.env")
+    local readyState = readEnvFile(readyStatePath)
+    local modelDir = trim(readyState.CORE_MODEL_CACHE_DIR or "")
+    if modelDir == "" then
+        modelDir = getModelCacheDir()
+    end
     local modelFile = joinPath(modelDir, "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt")
     local modelYaml = joinPath(modelDir, "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml")
 
@@ -1933,6 +1957,14 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
     appendKey(lines, "runtime_state_dir", runtimeStateDir)
     appendKey(lines, "runtime_logs_dir", runtimeLogDir)
     appendKey(lines, "model_cache_dir", modelDir)
+    appendKey(lines, "ready_to_go_env", fileExists(readyStatePath) and "present" or "missing")
+    appendKey(lines, "ready_to_go_status", trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown")
+    appendKey(lines, "core_model_fast_status", trim(readyState.CORE_MODEL_FAST_STATUS or "") ~= "" and trim(readyState.CORE_MODEL_FAST_STATUS or "") or "unknown")
+    appendKey(lines, "core_model_quality_status", trim(readyState.CORE_MODEL_QUALITY_STATUS or "") ~= "" and trim(readyState.CORE_MODEL_QUALITY_STATUS or "") or "unknown")
+    appendKey(lines, "core_model_6stem_status", trim(readyState.CORE_MODEL_6STEM_STATUS or "") ~= "" and trim(readyState.CORE_MODEL_6STEM_STATUS or "") or "unknown")
+    appendKey(lines, "drumsep_ready_runtime", trim(readyState.DRUMSEP_READY_RUNTIME or "") ~= "" and trim(readyState.DRUMSEP_READY_RUNTIME or "") or "unknown")
+    appendKey(lines, "drumsep_ready_runtime_status", trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "") ~= "" and trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "") or "unknown")
+    appendKey(lines, "drumsep_ready_model_status", trim(readyState.DRUMSEP_READY_MODEL_STATUS or "") ~= "" and trim(readyState.DRUMSEP_READY_MODEL_STATUS or "") or "unknown")
     appendKey(lines, "collect_drumsep_runtime_source", "cached")
     appendKey(lines, "collect_drumsep_runtime_live_probe", "skipped")
     appendLine(lines, "")
@@ -2203,9 +2235,11 @@ local function collectStateFiles(runtimeDir, bundleDir, copiedFiles)
     local statusLines = {}
     local destDir = joinPath(bundleDir, "runtime_state")
     ensureDir(destDir)
+    local readyToGoEnvPath = joinPath(runtimeDir, "ready_to_go.env")
 
     collectExpectedFileStatus(statusLines, "bootstrap.env", bootstrapEnvPath)
     collectExpectedFileStatus(statusLines, "capabilities.env", capabilitiesEnvPath)
+    collectExpectedFileStatus(statusLines, "ready_to_go.env", readyToGoEnvPath)
     collectExpectedFileStatus(statusLines, "bootstrap.pid", bootstrapPidPath)
     collectExpectedFileStatus(statusLines, "bootstrap.guard", bootstrapGuardPath)
 

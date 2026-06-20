@@ -31,7 +31,51 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 ## Diagnostics and support bundles
 
 - Support bundles now surface clearer backend/runtime state for CUDA, DirectML, and CPU fallback.
+- Support bundles now include `ready_to_go.env` markers for prefetched core model cache state and DrumSep ready/runtime state.
 - Processing summaries report runtime/backend, output validation, and pass/fail state more accurately.
+
+## Pre-release live smoke plan
+
+- Release must stay blocked until live smoke evidence is captured per available target system with support bundles and latest run ids.
+- Required systems before release:
+  - Windows NVIDIA RTX 3060 / CUDA: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - Linux AMD RX 9070 / ROCm: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - macOS Apple Silicon / MPS: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - Windows AMD DirectML / RX 9070: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES` if available before release
+  - Linux NVIDIA CUDA laptop: optional if available, otherwise `NOT_TESTED`
+- Per system, prove after Setup/Repair/Prepare Ready-to-Go:
+  - `ready_to_go.env` exists
+  - `READY_TO_GO_STATUS=ok`
+  - `CORE_MODEL_FAST_STATUS=ok`
+  - `CORE_MODEL_QUALITY_STATUS=ok`
+  - `CORE_MODEL_6STEM_STATUS=ok`
+  - `DRUMSEP_READY_MODEL_STATUS=ok`
+  - matching DrumSep runtime status is `ok`
+  - first real run does not trigger a large Demucs, DrumSep, or runtime download/rebuild
+- Minimal workflow smokes per system:
+  - Normal stems: auto/default, one short audio item
+  - Direct Kit / Z: auto/default, one short audio item, expect six drum outputs
+  - Kit Split / X: auto/default, one short audio item, expect stage1 normal drums extraction, stage2 DrumSep, and six drum outputs
+- Log/support-bundle download prevention checks:
+  - no new Demucs model download on first run
+  - no DrumSep CKPT/YAML download on first run
+  - no `drumsep_model_download_failed`
+  - no `drumsep_cache_error`
+  - no runtime rebuild/download on first run
+- Report per system:
+  - exact system/OS/backend
+  - setup command or action
+  - support bundle path
+  - latest run id and workflow ids
+  - timings and output validation
+  - requested/effective device
+  - ready-to-go markers and status lines
+  - proof that first run did not perform a large download
+  - warnings, regressions, and final verdict
+- Release verdict values:
+  - `PRE_RELEASE_SMOKE_MATRIX_PASS`
+  - `PRE_RELEASE_SMOKE_MATRIX_PASS_WITH_NOTES`
+  - `PRE_RELEASE_SMOKE_MATRIX_BLOCKED`
 
 ## Known notes
 

@@ -767,6 +767,143 @@ function GetAudioRuntimeDependencyList([string]$BackendName) {
     return $deps
 }
 
+function GetReadyToGoStatePath {
+    return Join-Path $RuntimeBase "state\\ready_to_go.env"
+}
+
+function VerifyCoreModelCache([string]$ModelDir) {
+    $specs = [ordered]@{
+        fast = @("htdemucs.yaml", "955717e8-8726e21a.th")
+        quality = @("htdemucs_ft.yaml", "f7e0c4bc-ba3fe64a.th", "d12395a8-e57c48e6.th", "92cfc3b6-ef3bcb9c.th", "04573f0d-f3cf25b2.th")
+        sixstem = @("htdemucs_6s.yaml", "5c90dfd2-34c22ccb.th")
+    }
+    $result = [ordered]@{
+        model_dir = $ModelDir
+        fast = "missing"
+        quality = "missing"
+        sixstem = "missing"
+    }
+    foreach ($entry in $specs.GetEnumerator()) {
+        $ok = $true
+        foreach ($name in $entry.Value) {
+            if (-not (Test-Path (Join-Path $ModelDir $name))) {
+                $ok = $false
+                break
+            }
+        }
+        $result[$entry.Key] = if ($ok) { "ok" } else { "missing" }
+    }
+    return $result
+}
+
+function EnsureCoreModelCache([string]$PythonPath, [string]$ModelDir) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) { return $false }
+    if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
+    try {
+        New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
+    } catch {
+        LogLine ("Core model directory create failed: " + $_.Exception.Message)
+        return $false
+    }
+    $before = VerifyCoreModelCache $ModelDir
+    if ($before.fast -eq "ok" -and $before.quality -eq "ok" -and $before.sixstem -eq "ok") {
+        LogProgress ("Core model cache already present: " + $ModelDir)
+        return $true
+    }
+    $prefetchCode = @"
+import os
+from audio_separator.separator import Separator
+
+model_dir = r"$ModelDir"
+for model_name in ("htdemucs", "htdemucs_ft", "htdemucs_6s"):
+    sep = Separator(model_file_dir=model_dir, output_dir=".", output_format="wav")
+    sep.load_model(model_name)
+print("STEMWERK_CORE_MODEL_PREFETCH ok")
+"@
+    RunHidden $PythonPath @("-c", $prefetchCode) "Prefetch core model cache" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        LogLine ("Core model prefetch failed for cache: " + $ModelDir)
+        return $false
+    }
+    $after = VerifyCoreModelCache $ModelDir
+    return ($after.fast -eq "ok" -and $after.quality -eq "ok" -and $after.sixstem -eq "ok")
+}
+
+function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [string]$DrumsepModelStatus, [hashtable]$CoreStatus, [string]$Detail) {
+    $readyPath = GetReadyToGoStatePath
+    $modelDir = if ($CoreStatus -and $CoreStatus.Contains("model_dir")) { [string]$CoreStatus["model_dir"] } else { Join-Path $RuntimeBase "models" }
+    $fastStatus = if ($CoreStatus -and $CoreStatus.Contains("fast")) { [string]$CoreStatus["fast"] } else { "missing" }
+    $qualityStatus = if ($CoreStatus -and $CoreStatus.Contains("quality")) { [string]$CoreStatus["quality"] } else { "missing" }
+    $sixStemStatus = if ($CoreStatus -and $CoreStatus.Contains("sixstem")) { [string]$CoreStatus["sixstem"] } else { "missing" }
+    $runtimeKindValue = if ([string]::IsNullOrWhiteSpace($RuntimeKind)) { "unknown" } else { $RuntimeKind }
+    $runtimeStatusValue = if ([string]::IsNullOrWhiteSpace($RuntimeStatus)) { "missing" } else { $RuntimeStatus }
+    $drumsepModelValue = if ([string]::IsNullOrWhiteSpace($DrumsepModelStatus)) { "missing" } else { $DrumsepModelStatus }
+    $detailValue = if ([string]::IsNullOrWhiteSpace($Detail)) { "" } else { $Detail }
+    $readyStatus = "ok"
+    if ($fastStatus -ne "ok" -or $qualityStatus -ne "ok" -or $sixStemStatus -ne "ok" -or $drumsepModelValue -ne "ok") {
+        $readyStatus = "missing"
+    }
+    if ($runtimeStatusValue -eq "broken") {
+        $readyStatus = "broken"
+    } elseif ($runtimeStatusValue -ne "ok" -and $runtimeStatusValue -ne "skipped") {
+        $readyStatus = "missing"
+    }
+    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    @(
+        "READY_TO_GO_STATUS=$readyStatus",
+        "READY_TO_GO_DETAIL=$detailValue",
+        "READY_TO_GO_LAST_CHECK_UTC=$timestamp",
+        "CORE_MODEL_CACHE_DIR=$modelDir",
+        "CORE_MODEL_FAST_STATUS=$fastStatus",
+        "CORE_MODEL_QUALITY_STATUS=$qualityStatus",
+        "CORE_MODEL_6STEM_STATUS=$sixStemStatus",
+        "DRUMSEP_READY_RUNTIME=$runtimeKindValue",
+        "DRUMSEP_READY_RUNTIME_STATUS=$runtimeStatusValue",
+        "DRUMSEP_READY_MODEL_STATUS=$drumsepModelValue"
+    ) | Out-File -FilePath $readyPath -Encoding ascii
+}
+
+function GetReadyToGoRuntimeState([string]$BackendName) {
+    $result = @{
+        RuntimeKind = if ([string]::IsNullOrWhiteSpace($BackendName)) { "cpu" } else { $BackendName }
+        RuntimeStatus = "missing"
+        DrumsepModelStatus = "missing"
+        Detail = ""
+    }
+    $statePath = switch ($BackendName) {
+        "cuda" { Join-Path $RuntimeBase "state\drumsep_runtime_cuda.env" }
+        "directml" { Join-Path $RuntimeBase "state\drumsep_runtime_directml.env" }
+        default { Join-Path $RuntimeBase "state\drumsep_runtime.env" }
+    }
+    if (-not (Test-Path $statePath)) {
+        return $result
+    }
+    foreach ($line in Get-Content $statePath -ErrorAction SilentlyContinue) {
+        if ($line -match "^([^=]+)=(.*)$") {
+            $key = $matches[1]
+            $value = $matches[2]
+            switch ($BackendName) {
+                "cuda" {
+                    if ($key -eq "DRUMSEP_CUDA_RUNTIME_STATUS") { $result.RuntimeStatus = $value }
+                    elseif ($key -eq "DRUMSEP_CUDA_MODEL_STATUS") { $result.DrumsepModelStatus = $value }
+                    elseif ($key -eq "DRUMSEP_CUDA_RUNTIME_DETAIL") { $result.Detail = $value }
+                }
+                "directml" {
+                    if ($key -eq "DRUMSEP_DIRECTML_RUNTIME_STATUS") { $result.RuntimeStatus = $value }
+                    elseif ($key -eq "DRUMSEP_DIRECTML_MODEL_STATUS") { $result.DrumsepModelStatus = $value }
+                    elseif ($key -eq "DRUMSEP_DIRECTML_RUNTIME_DETAIL") { $result.Detail = $value }
+                }
+                default {
+                    if ($key -eq "DRUMSEP_RUNTIME_STATUS") { $result.RuntimeStatus = $value }
+                    elseif ($key -eq "DRUMSEP_MODEL_STATUS") { $result.DrumsepModelStatus = $value }
+                    elseif ($key -eq "DRUMSEP_RUNTIME_DETAIL") { $result.Detail = $value }
+                }
+            }
+        }
+    }
+    return $result
+}
+
 function InstallAudioRuntimeDependencies([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return $false }
     $deps = GetAudioRuntimeDependencyList $BackendName
@@ -2210,8 +2347,41 @@ if (Test-Path $venvPy) {
     if ($LASTEXITCODE -ne 0) {
         Set-Status "deps_failed" "stemwerk_core_missing"
     }
+
+    $readyModelDir = GetDrumsepModelDir
+    $readyCoreStatus = VerifyCoreModelCache $readyModelDir
+    $readyRuntime = if ($backend -eq "cuda") { "cuda" } elseif ($backend -eq "directml") { "directml" } else { "cpu" }
+    $readyRuntimeStatus = "missing"
+    $readyDrumsepModelStatus = "missing"
+    $readyDetail = ""
+    if ($status -eq "ok") {
+        if (-not (EnsureCoreModelCache $python $readyModelDir)) {
+            Set-Status "deps_failed" "core_model_prefetch_failed"
+        } else {
+            $readyCoreStatus = VerifyCoreModelCache $readyModelDir
+        }
+    }
+    if ($status -eq "ok") {
+        $drumsepReadyOk = switch ($readyRuntime) {
+            "cuda" { InstallDrumsepCudaRuntime $python }
+            "directml" { InstallDrumsepDirectmlRuntime $python }
+            default { InstallDrumsepRuntime $python }
+        }
+        if (-not $drumsepReadyOk) {
+            Set-Status "deps_failed" "drumsep_ready_runtime_failed"
+        }
+    }
+    $readyRuntimeState = GetReadyToGoRuntimeState $readyRuntime
+    $readyRuntimeStatus = [string]$readyRuntimeState.RuntimeStatus
+    $readyDrumsepModelStatus = [string]$readyRuntimeState.DrumsepModelStatus
+    $readyDetail = [string]$readyRuntimeState.Detail
+    if ($status -ne "ok" -and [string]::IsNullOrWhiteSpace($readyDetail)) {
+        $readyDetail = $statusReason
+    }
+    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail
 } else {
     LogProgress "Skipping core install (Python venv unavailable)"
+    WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable"
 }
 
 $lines = @()
