@@ -24,8 +24,9 @@ Als de installer geen GPU-runtime kan verifiëren, valt STEMwerk terug op CPU.
 
 Offline NVIDIA-opmerking (context issue #11):
 - Als processing online wel werkt maar offline niet, controleer of modellen aanwezig zijn in `%LOCALAPPDATA%\\STEMwerk\\models`.
-- Offline bundled installers worden nu alleen als `allmodels`-varianten uitgebracht.
+- Offline bundled installers worden nu alleen als `allmodels`-varianten uitgebracht voor de Demucs/core-modelcache.
 - In bundled/offline installers is de pre-setup optie "modelcache opschonen" bewust uitgeschakeld om net meegeleverde modelpayloads niet te verwijderen.
+- Dit zijn in de 2.3-release geen complete offline DrumSep/Drum Kit-bundels; DrumSep-runtime en modelassets lopen via de setup/runtime-route.
 
 ## Wat je nu doet
 

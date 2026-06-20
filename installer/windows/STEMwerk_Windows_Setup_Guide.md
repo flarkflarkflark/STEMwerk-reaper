@@ -10,7 +10,7 @@ The Windows installer:
 - prepared the STEMwerk runtime under your local Windows profile
 - created or updated the Python environment used by STEMwerk
 - checked FFmpeg and the core runtime Python packages
-- in bundled/offline variants, can include runtime wheels and model payloads
+- in bundled/offline variants, can include runtime wheels and core model payloads
 
 The Windows installer remains the recommended fresh-install/bootstrap route.
 
@@ -22,7 +22,7 @@ If you downloaded an offline bundled installer, the filename tells you which run
 - `offline-bundled-amd`: DirectML wheel payload for AMD/Intel GPUs
 - CPU/fallback paths are included where applicable for runtime repair
 
-Offline bundled installers are distributed as `allmodels` variants.
+Offline bundled installers are currently distributed as `allmodels` variants for the core Demucs model cache. They are not complete DrumSep/Drum Kit offline bundles in the 2.3 release line.
 
 Samplerate/runtime note:
 
@@ -33,6 +33,7 @@ Samplerate/runtime note:
 Bundled-model cleanup note:
 
 - In bundled/offline pre-setup flow, cleanup-models is intentionally disabled to avoid deleting freshly bundled model payloads.
+- Drum Kit/DrumSep runtimes and model assets in 2.3 are still handled through the setup/runtime flow after installation when needed.
 
 ## What to do next
 

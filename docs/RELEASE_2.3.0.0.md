@@ -35,6 +35,7 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 
 ## Known notes
 
+- Existing offline/allmodels assets are not DrumSep-complete in 2.3. DrumSep runtimes and model assets are handled by setup/runtime routes; full DrumSep offline bundles are post-2.3 work.
 - Windows DrumSep CUDA cap4 is not the default in 2.3; it remains an advanced/post-2.3 performance topic.
 - Windows Kit Split stage2 remains cap1 where Windows locking/fcntl support is unavailable.
 - Some support bundles may include historical failed runs; the latest processing summary and current run markers are the source of truth.

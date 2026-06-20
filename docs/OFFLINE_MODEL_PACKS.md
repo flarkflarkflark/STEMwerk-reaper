@@ -7,7 +7,7 @@ This guide defines a repeatable release flow for four offline model packs:
 - 6-Stem (`htdemucs_6s`)
 - All (combined)
 
-These packs are model cache files only. They do not include runtime/bootstrap dependencies.
+These packs are Demucs/core stem model cache files only. They do not include DrumSep/Drum Kit models, DrumSep CKPT/YAML assets, or backend runtime/bootstrap dependencies.
 
 ## 1) Target zip naming
 
