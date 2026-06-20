@@ -43,6 +43,9 @@ $drumsepOnnx2TorchPy313Version = "1.6.0"
 $drumsepTorchVersion = "2.12.0"
 $drumsepTorchVisionVersion = "0.27.0"
 $drumsepNumbaVersion = "0.65.1"
+$drumsepDirectMlLibrosaVersion = "0.11.0"
+$drumsepDirectMlSamplerateVersion = "0.1.0"
+$drumsepDirectMlSoundFileVersion = "0.14.0"
 $drumsepModelEntryName = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 $drumsepModelFileName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 $drumsepModelYamlName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -805,6 +808,10 @@ function GetDrumsepRuntimePythonPath {
     return Join-Path $RuntimeBase ".venv-drumsep\\Scripts\\python.exe"
 }
 
+function GetDrumsepDirectmlRuntimePythonPath {
+    return Join-Path $RuntimeBase ".venv-drumsep-directml\\Scripts\\python.exe"
+}
+
 function GetDrumsepModelDir {
     return Join-Path $RuntimeBase "models"
 }
@@ -868,6 +875,75 @@ for env_key, dist_name in (
         } catch {
         }
     }
+
+    $lines | Out-File -FilePath $StateFile -Encoding ascii
+}
+
+function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string]$Reason) {
+    $drumsepPython = GetDrumsepDirectmlRuntimePythonPath
+    $modelFile = GetDrumsepModelFilePath
+    $modelYaml = GetDrumsepModelYamlPath
+    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $audioSeparatorVersionValue = ""
+    $numpyVersionValue = ""
+    $torchVersionValue = ""
+    $torchVisionVersionValue = ""
+    $torchDirectMlVersionValue = ""
+    $onnxVersionValue = ""
+    $onnxRuntimeDirectMlVersionValue = ""
+    $onnx2TorchVersionValue = ""
+    $librosaVersionValue = ""
+    $samplerateVersionValue = ""
+    $soundFileVersionValue = ""
+    $torchDirectmlStatusValue = ""
+    $directmlDeviceValue = ""
+    $directmlDeviceCountValue = ""
+    $ortDirectmlProviderValue = ""
+    $ortAvailableProvidersValue = ""
+    if ($State -eq "ok") {
+        $audioSeparatorVersionValue = $drumsepAudioSeparatorVersion
+        $numpyVersionValue = $drumsepNumpyVersion
+        $torchVersionValue = $torchVersion
+        $torchVisionVersionValue = $torchVisionVersion
+        $torchDirectMlVersionValue = $torchDirectMlVersion
+        $onnxVersionValue = $drumsepOnnxVersion
+        $onnxRuntimeDirectMlVersionValue = $onnxRuntimeDirectMlVersion
+        $onnx2TorchVersionValue = $drumsepOnnx2TorchVersion
+        $librosaVersionValue = $drumsepDirectMlLibrosaVersion
+        $samplerateVersionValue = $drumsepDirectMlSamplerateVersion
+        $soundFileVersionValue = $drumsepDirectMlSoundFileVersion
+        $torchDirectmlStatusValue = "ok"
+        $directmlDeviceValue = "privateuseone:0"
+        $ortDirectmlProviderValue = "ok"
+        $ortAvailableProvidersValue = "DmlExecutionProvider,CPUExecutionProvider"
+    }
+    $lines = @(
+        "STATUS=$State",
+        "STATUS_REASON=$Reason",
+        "DRUMSEP_DIRECTML_RUNTIME_STATUS=$State",
+        "DRUMSEP_DIRECTML_RUNTIME_DETAIL=$Reason",
+        "DRUMSEP_DIRECTML_PYTHON=$drumsepPython",
+        "DRUMSEP_DIRECTML_LAST_CHECK_UTC=$timestamp",
+        "DRUMSEP_DIRECTML_MODEL_STATUS=$ModelStatus",
+        "DRUMSEP_DIRECTML_MODEL_FILE=$modelFile",
+        "DRUMSEP_DIRECTML_MODEL_YAML=$modelYaml",
+        "DRUMSEP_DIRECTML_AUDIO_SEPARATOR_VERSION=$audioSeparatorVersionValue",
+        "DRUMSEP_DIRECTML_NUMPY_VERSION=$numpyVersionValue",
+        "DRUMSEP_DIRECTML_TORCH_VERSION=$torchVersionValue",
+        "DRUMSEP_DIRECTML_TORCHVISION_VERSION=$torchVisionVersionValue",
+        "DRUMSEP_DIRECTML_TORCH_DIRECTML_VERSION=$torchDirectMlVersionValue",
+        "DRUMSEP_DIRECTML_ONNX_VERSION=$onnxVersionValue",
+        "DRUMSEP_DIRECTML_ONNXRUNTIME_DIRECTML_VERSION=$onnxRuntimeDirectMlVersionValue",
+        "DRUMSEP_DIRECTML_ONNX2TORCH_VERSION=$onnx2TorchVersionValue",
+        "DRUMSEP_DIRECTML_LIBROSA_VERSION=$librosaVersionValue",
+        "DRUMSEP_DIRECTML_SAMPLERATE_VERSION=$samplerateVersionValue",
+        "DRUMSEP_DIRECTML_SOUNDFILE_VERSION=$soundFileVersionValue",
+        "TORCH_DIRECTML_STATUS=$torchDirectmlStatusValue",
+        "DIRECTML_DEVICE=$directmlDeviceValue",
+        "DIRECTML_DEVICE_COUNT=$directmlDeviceCountValue",
+        "ORT_DIRECTML_PROVIDER=$ortDirectmlProviderValue",
+        "ORT_AVAILABLE_PROVIDERS=$ortAvailableProvidersValue"
+    )
 
     $lines | Out-File -FilePath $StateFile -Encoding ascii
 }
@@ -1080,6 +1156,86 @@ print("DRUMSEP_VERIFY ok")
     return "verify_failed"
 }
 
+function VerifyDrumsepDirectmlRuntime([string]$PythonPath) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath)) { return "python_missing" }
+    if (-not (Test-Path $PythonPath)) { return "python_missing" }
+
+    $modelDir = GetDrumsepModelDir
+    $modelFile = GetDrumsepModelFilePath
+    $modelYaml = GetDrumsepModelYamlPath
+    if (-not (Test-Path $modelFile) -or -not (Test-Path $modelYaml)) {
+        return "model_missing"
+    }
+
+    $verifyCode = @"
+import importlib
+import importlib.metadata as metadata
+import torch
+import torch.nn.functional as F
+
+expected = {
+    "audio-separator": "$drumsepAudioSeparatorVersion",
+    "torch": "$torchVersion",
+    "torchvision": "$torchVisionVersion",
+    "torch-directml": "$torchDirectMlVersion",
+    "onnxruntime-directml": "$onnxRuntimeDirectMlVersion",
+    "samplerate": "$drumsepDirectMlSamplerateVersion",
+}
+modules = ["audio_separator", "numpy", "torch", "torch_directml", "onnxruntime", "onnx2torch", "librosa", "samplerate", "soundfile"]
+errors = []
+for module_name in modules:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        errors.append(f"import_failed:{module_name}:{type(exc).__name__}:{exc}")
+for dist_name, wanted in expected.items():
+    try:
+        found = metadata.version(dist_name).split("+", 1)[0]
+    except Exception as exc:
+        errors.append(f"version_missing:{dist_name}:{type(exc).__name__}:{exc}")
+        continue
+    if found != wanted:
+        errors.append(f"version_mismatch:{dist_name}:expected={wanted}:found={found}")
+if errors:
+    print("DRUMSEP_DIRECTML_VERIFY broken " + ";".join(errors))
+    raise SystemExit(1)
+import torch_directml
+device = torch_directml.device()
+device_count = int(torch_directml.device_count())
+if device_count <= 0:
+    print("DRUMSEP_DIRECTML_VERIFY directml_device_count=0")
+    raise SystemExit(2)
+try:
+    x = torch.ones((1, 1, 8, 8), dtype=torch.float32, device=device)
+except Exception as exc:
+    print(f"DRUMSEP_DIRECTML_VERIFY directml_tensor_failed:{type(exc).__name__}:{exc}")
+    raise SystemExit(3)
+try:
+    weight = torch.ones((1, 1, 3, 3), dtype=torch.float32, device=device)
+    y = F.conv2d(x, weight)
+    _ = float(y.detach().cpu().sum().item())
+except Exception as exc:
+    print(f"DRUMSEP_DIRECTML_VERIFY directml_conv_failed:{type(exc).__name__}:{exc}")
+    raise SystemExit(4)
+import onnxruntime as ort
+providers = ort.get_available_providers() or []
+if "DmlExecutionProvider" not in providers:
+    print("DRUMSEP_DIRECTML_VERIFY dml_provider_missing providers=" + ",".join(str(x) for x in providers))
+    raise SystemExit(5)
+from audio_separator.separator import Separator
+sep = Separator(model_file_dir=r"$modelDir", output_dir=".", output_format="wav")
+sep.load_model("$drumsepModelFileName")
+print("DRUMSEP_DIRECTML_VERIFY ok device=" + str(device) + " provider=DmlExecutionProvider")
+"@
+    RunHidden $PythonPath @("-c", $verifyCode) "Verify DrumSep DirectML runtime" | Out-Null
+    if ($LASTEXITCODE -eq 0) { return "ok" }
+    if ($LASTEXITCODE -eq 2) { return "torch_directml_no_device" }
+    if ($LASTEXITCODE -eq 3) { return "directml_tensor_failed" }
+    if ($LASTEXITCODE -eq 4) { return "directml_conv_failed" }
+    if ($LASTEXITCODE -eq 5) { return "dml_provider_missing" }
+    return "verify_failed"
+}
+
 function InstallDrumsepRuntime([string]$BasePythonPath) {
     $drumsepPython = GetDrumsepRuntimePythonPath
     $modelDir = GetDrumsepModelDir
@@ -1140,6 +1296,93 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
     return $true
 }
 
+function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
+    $drumsepPython = GetDrumsepDirectmlRuntimePythonPath
+    $modelDir = GetDrumsepModelDir
+
+    if (Test-Path $drumsepPython) {
+        WriteDrumsepDirectmlState "running" "missing" "verify_existing_runtime"
+        LogProgress "Verifying existing DrumSep DirectML runtime"
+        if (EnsureDrumsepAssets $modelDir) {
+            $existingVerifyResult = VerifyDrumsepDirectmlRuntime $drumsepPython
+            if ($existingVerifyResult -eq "ok") {
+                WriteDrumsepDirectmlState "ok" "ok" "ok"
+                LogProgress "Existing DrumSep DirectML runtime verified"
+                return $true
+            }
+            LogLine ("Existing DrumSep DirectML runtime verify failed: " + $existingVerifyResult + "; rebuilding runtime")
+        } else {
+            LogLine "Existing DrumSep DirectML runtime assets could not be verified; rebuilding runtime"
+        }
+    }
+
+    WriteDrumsepDirectmlState "running" "missing" "creating_venv"
+    LogProgress ("DrumSep DirectML runtime path: " + (Join-Path $RuntimeBase ".venv-drumsep-directml"))
+    Remove-Item -Path (Join-Path $RuntimeBase ".venv-drumsep-directml") -Recurse -Force -ErrorAction SilentlyContinue
+    RunHidden $BasePythonPath @("-m", "venv", (Join-Path $RuntimeBase ".venv-drumsep-directml")) "Create DrumSep DirectML virtual environment" | Out-Null
+    if (-not (Test-Path $drumsepPython)) {
+        WriteDrumsepDirectmlState "install_failed" "missing" "venv_create_failed"
+        return $false
+    }
+
+    WriteDrumsepDirectmlState "running" "missing" "pip_upgrade"
+    InstallWithPip $drumsepPython @("--upgrade", "pip", "setuptools", "wheel") "Upgrade DrumSep DirectML pip"
+    if ($LASTEXITCODE -ne 0) {
+        WriteDrumsepDirectmlState "install_failed" "missing" "pip_upgrade_failed"
+        return $false
+    }
+
+    WriteDrumsepDirectmlState "running" "missing" "package_install"
+    if (-not (InstallWithPipAllowOnlineFallback $drumsepPython @(
+        "--upgrade",
+        "--prefer-binary",
+        "-c", $directmlConstraints,
+        "audio-separator==$drumsepAudioSeparatorVersion",
+        "librosa==$drumsepDirectMlLibrosaVersion",
+        "samplerate==$drumsepDirectMlSamplerateVersion",
+        "soundfile==$drumsepDirectMlSoundFileVersion",
+        "onnx==$drumsepOnnxVersion",
+        "onnx2torch==$drumsepOnnx2TorchVersion",
+        "torch==$torchVersion",
+        "torchvision==$torchVisionVersion",
+        "torch-directml==$torchDirectMlVersion",
+        "onnxruntime-directml==$onnxRuntimeDirectMlVersion"
+    ) "Install DrumSep DirectML packages")) {
+        WriteDrumsepDirectmlState "install_failed" "missing" "package_install_failed"
+        return $false
+    }
+
+    WriteDrumsepDirectmlState "running" "missing" "model_download"
+    if (-not (EnsureDrumsepAssets $modelDir)) {
+        WriteDrumsepDirectmlState "install_failed" "missing" "model_download_failed"
+        return $false
+    }
+
+    WriteDrumsepDirectmlState "running" "ok" "verify_runtime"
+    $verifyResult = VerifyDrumsepDirectmlRuntime $drumsepPython
+    if ($verifyResult -ne "ok") {
+        if ($verifyResult -eq "model_missing") {
+            WriteDrumsepDirectmlState "error" "missing" "model_missing"
+        } elseif ($verifyResult -eq "python_missing") {
+            WriteDrumsepDirectmlState "error" "missing" "python_missing"
+        } elseif ($verifyResult -eq "torch_directml_no_device") {
+            WriteDrumsepDirectmlState "error" "ok" "torch_directml_no_device"
+        } elseif ($verifyResult -eq "directml_tensor_failed") {
+            WriteDrumsepDirectmlState "error" "ok" "directml_tensor_failed"
+        } elseif ($verifyResult -eq "directml_conv_failed") {
+            WriteDrumsepDirectmlState "error" "ok" "directml_conv_failed"
+        } elseif ($verifyResult -eq "dml_provider_missing") {
+            WriteDrumsepDirectmlState "error" "ok" "dml_provider_missing"
+        } else {
+            WriteDrumsepDirectmlState "error" "load_failed" "probe_failed:$verifyResult"
+        }
+        return $false
+    }
+
+    WriteDrumsepDirectmlState "ok" "ok" "ok"
+    return $true
+}
+
 $candidates = @()
 if ($env:CONDA_PREFIX) {
     $candidates += (Join-Path $env:CONDA_PREFIX "python.exe")
@@ -1159,42 +1402,75 @@ $candidates += (Join-Path $programFiles "Python310\\python.exe")
 $candidates += (Join-Path $programFilesX86 "Python311\\python.exe")
 $candidates += (Join-Path $programFilesX86 "Python310\\python.exe")
 
-if ($Mode -eq "drumsep-runtime") {
-    WriteBootstrapGuard "running" "drumsep_runtime_bootstrap"
+if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime") {
+    $isDirectmlDrumsepRuntime = ($Mode -eq "drumsep-directml-runtime")
+    $runtimeLabel = "Drum Kit Split runtime"
+    $bootstrapReason = "drumsep_runtime_bootstrap"
+    if ($isDirectmlDrumsepRuntime) {
+        $runtimeLabel = "Drum Kit Split DirectML runtime"
+        $bootstrapReason = "drumsep_directml_runtime_bootstrap"
+    }
+    WriteBootstrapGuard "running" $bootstrapReason
     if (-not (TestRuntimeWritable $RuntimeBase)) {
         LogLine ("Runtime base is not writable: " + $RuntimeBase)
-        WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        if ($isDirectmlDrumsepRuntime) {
+            WriteDrumsepDirectmlState "error" "missing" "runtime_write_test_failed"
+        } else {
+            WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        }
         WriteBootstrapGuard "failed" "runtime_write_test_failed"
         exit 1
     }
     if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "state"))) {
         LogLine ("Runtime state directory is not writable: " + (Join-Path $RuntimeBase "state"))
-        WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        if ($isDirectmlDrumsepRuntime) {
+            WriteDrumsepDirectmlState "error" "missing" "runtime_write_test_failed"
+        } else {
+            WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        }
         WriteBootstrapGuard "failed" "runtime_write_test_failed"
         exit 1
     }
     if (-not (TestRuntimeWritable (Join-Path $RuntimeBase "logs"))) {
         LogLine ("Runtime logs directory is not writable: " + (Join-Path $RuntimeBase "logs"))
-        WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        if ($isDirectmlDrumsepRuntime) {
+            WriteDrumsepDirectmlState "error" "missing" "runtime_write_test_failed"
+        } else {
+            WriteDrumsepState "install_failed" "missing" "runtime_write_test_failed"
+        }
         WriteBootstrapGuard "failed" "runtime_write_test_failed"
         exit 1
     }
 
-    LogProgress "Preparing Drum Kit Split runtime"
+    LogProgress ("Preparing " + $runtimeLabel)
     $basePython = ResolveSupportedWindowsPython $candidates
     if (-not $basePython) {
-        WriteDrumsepState "install_failed" "missing" "python_missing"
+        if ($isDirectmlDrumsepRuntime) {
+            WriteDrumsepDirectmlState "error" "missing" "python_missing"
+        } else {
+            WriteDrumsepState "install_failed" "missing" "python_missing"
+        }
         WriteBootstrapGuard "failed" "python_missing"
         exit 1
     }
 
-    if (-not (InstallDrumsepRuntime $basePython)) {
-        WriteBootstrapGuard "failed" "drumsep_runtime_install_failed"
+    $runtimeInstalled = $false
+    if ($isDirectmlDrumsepRuntime) {
+        $runtimeInstalled = InstallDrumsepDirectmlRuntime $basePython
+    } else {
+        $runtimeInstalled = InstallDrumsepRuntime $basePython
+    }
+    if (-not $runtimeInstalled) {
+        $installFailedReason = "drumsep_runtime_install_failed"
+        if ($isDirectmlDrumsepRuntime) {
+            $installFailedReason = "drumsep_directml_runtime_install_failed"
+        }
+        WriteBootstrapGuard "failed" $installFailedReason
         exit 1
     }
 
     WriteBootstrapGuard "ok" "completed"
-    LogProgress "DrumSep runtime install finished"
+    LogProgress ($runtimeLabel + " install finished")
     exit 0
 }
 

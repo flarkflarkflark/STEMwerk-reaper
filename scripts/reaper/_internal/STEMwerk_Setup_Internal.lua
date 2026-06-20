@@ -2013,17 +2013,25 @@ end
 local function windowsSetupTick()
     if not WINDOWS_SETUP or not gfx then return end
 
-    local optionalRuntimeMode = WINDOWS_SETUP.mode == "drumsep-runtime" or WINDOWS_SETUP.mode == "drumsep-rocm-runtime"
+    local optionalRuntimeMode = WINDOWS_SETUP.mode == "drumsep-runtime"
+        or WINDOWS_SETUP.mode == "drumsep-rocm-runtime"
+        or WINDOWS_SETUP.mode == "drumsep-directml-runtime"
     local function buildOptionalRuntimeResult(localState)
         localState = type(localState) == "table" and localState or {}
         local isRocm = WINDOWS_SETUP.mode == "drumsep-rocm-runtime"
-        local runtimeLabel = isRocm and "Drum Kit Split ROCm runtime" or "Drum Kit Split runtime"
-        local modelStatus = trim(localState.DRUMSEP_ROCM_MODEL_STATUS or localState.DRUMSEP_MODEL_STATUS or "")
-        local runtimePython = trim(localState.DRUMSEP_ROCM_PYTHON or localState.DRUMSEP_PYTHON or localState.PYTHON_PATH or "")
-        local modelFile = trim(localState.DRUMSEP_ROCM_MODEL_FILE or localState.DRUMSEP_MODEL_FILE or "")
-        local modelYaml = trim(localState.DRUMSEP_ROCM_MODEL_YAML or localState.DRUMSEP_MODEL_YAML or "")
-        local status = trim(localState.STATUS or localState.DRUMSEP_ROCM_RUNTIME_STATUS or localState.DRUMSEP_RUNTIME_STATUS or "")
-        local reason = trim(localState.STATUS_REASON or localState.DRUMSEP_ROCM_RUNTIME_DETAIL or localState.DRUMSEP_RUNTIME_DETAIL or "")
+        local isDirectml = WINDOWS_SETUP.mode == "drumsep-directml-runtime"
+        local runtimeLabel = "Drum Kit Split runtime"
+        if isRocm then
+            runtimeLabel = "Drum Kit Split ROCm runtime"
+        elseif isDirectml then
+            runtimeLabel = "Drum Kit Split DirectML runtime"
+        end
+        local modelStatus = trim(localState.DRUMSEP_DIRECTML_MODEL_STATUS or localState.DRUMSEP_ROCM_MODEL_STATUS or localState.DRUMSEP_MODEL_STATUS or "")
+        local runtimePython = trim(localState.DRUMSEP_DIRECTML_PYTHON or localState.DRUMSEP_ROCM_PYTHON or localState.DRUMSEP_PYTHON or localState.PYTHON_PATH or "")
+        local modelFile = trim(localState.DRUMSEP_DIRECTML_MODEL_FILE or localState.DRUMSEP_ROCM_MODEL_FILE or localState.DRUMSEP_MODEL_FILE or "")
+        local modelYaml = trim(localState.DRUMSEP_DIRECTML_MODEL_YAML or localState.DRUMSEP_ROCM_MODEL_YAML or localState.DRUMSEP_MODEL_YAML or "")
+        local status = trim(localState.STATUS or localState.DRUMSEP_DIRECTML_RUNTIME_STATUS or localState.DRUMSEP_ROCM_RUNTIME_STATUS or localState.DRUMSEP_RUNTIME_STATUS or "")
+        local reason = trim(localState.STATUS_REASON or localState.DRUMSEP_DIRECTML_RUNTIME_DETAIL or localState.DRUMSEP_ROCM_RUNTIME_DETAIL or localState.DRUMSEP_RUNTIME_DETAIL or "")
         if status == "ok" then
             return {
                 success = true,
@@ -2182,9 +2190,10 @@ local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
     mode = tostring(mode or "repair")
     local isDrumsepRuntime = mode == "drumsep-runtime"
     local isDrumsepRocmRuntime = mode == "drumsep-rocm-runtime"
-    local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or "bootstrap.log")
-    local pidFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.pid") or (isDrumsepRocmRuntime and "drumsep_rocm_runtime.pid") or "bootstrap.pid")
+    local isDrumsepDirectmlRuntime = mode == "drumsep-directml-runtime"
+    local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or "bootstrap.env")
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or (isDrumsepDirectmlRuntime and "drumsep_directml_install.log") or "bootstrap.log")
+    local pidFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.pid") or (isDrumsepRocmRuntime and "drumsep_rocm_runtime.pid") or (isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid") or "bootstrap.pid")
     local scriptPath = PATH_HELPER.getBootstrapScriptPath(INSTALL_ROOT, OS, PATH_SEP)
     local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     ensureDir(runtime.runtimeState)
@@ -2206,7 +2215,7 @@ local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
         return false
     end
 
-    local launchMode = (isDrumsepRuntime or isDrumsepRocmRuntime) and mode or "repair"
+    local launchMode = (isDrumsepRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime) and mode or "repair"
     local powershellPath = os.getenv("SystemRoot")
     if powershellPath and powershellPath ~= "" then
         powershellPath = powershellPath .. "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
@@ -6378,9 +6387,9 @@ local function existingRuntimeSetupMenuTick()
                 gfx.quit()
                 verifyExistingSetup(runtime, separatorScript)
             end
-        elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" then
+        elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
             if OS == "Windows" then
-                if chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" then
+                if chosen == "drumsep-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
                     startWindowsSetup(runtime, separatorScript, chosen, true)
                 else
                     windowsVerifyStart(runtime, separatorScript, true)
@@ -6428,6 +6437,7 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
     }
     if OS == "Windows" then
         choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
+        choices[#choices + 1] = { id = "drumsep-directml-runtime", label = "Drum Kit Split DirectML runtime", sub = "Install/repair optional DirectML Drum Kit runtime", accent = { 0.12, 0.58, 0.76 } }
     end
     if OS ~= "Windows" then
         choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }

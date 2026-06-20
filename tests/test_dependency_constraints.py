@@ -3890,6 +3890,17 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
     assert 'write_drumsep_rocm_state "install_failed" "missing" "python_missing"' in linux_bootstrap
 
 
+def test_windows_setup_exposes_directml_drumsep_runtime_action_and_state_files():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8", errors="replace")
+
+    assert 'WINDOWS_SETUP.mode == "drumsep-directml-runtime"' in setup_internal
+    assert '(isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env")' in setup_internal
+    assert '(isDrumsepDirectmlRuntime and "drumsep_directml_install.log")' in setup_internal
+    assert '(isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid")' in setup_internal
+    assert '{ id = "drumsep-directml-runtime", label = "Drum Kit Split DirectML runtime"' in setup_internal
+    assert 'startWindowsSetup(runtime, separatorScript, chosen, true)' in setup_internal
+
+
 def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
@@ -4086,6 +4097,7 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert "drumsep_runtime_status.txt" in script
     assert "[CPU fallback runtime]" in script
     assert "[ROCm runtime]" in script
+    assert "[DirectML runtime]" in script
     assert "[Latest Direct DKS markers]" in script
     assert "drumsep_runtime_selected" in script
     assert "drumsep_gpu_capable" in script
@@ -4093,19 +4105,49 @@ def test_support_bundle_includes_drumsep_runtime_diagnostics_sections_and_files(
     assert "found_files" in script
     assert "drumsep_install.log" in script
     assert "drumsep_rocm_install.log" in script
+    assert "drumsep_directml_install.log" in script
+    assert "drumsep_runtime_directml.env" in script
+    assert "DirectML runtime state" in script
+    assert "drumsep_directml_runtime_status" in script
+    assert "drumsep_directml_python" in script
+    assert "torch_directml_status" in script
+    assert "ort_directml_provider" in script
+    assert "directml_runtime_state_file" in script
     assert script.index('writeFile(joinPath(bundleDir, "diagnostics.txt"') < script.index('local zipStartedAt = phaseStart("create_zip")')
     assert "local function updateZipTimingFile(" in script
     assert "updateZipTimingFile(zipPath, bundleDir, timingsFile, detectedPythonPath)" in script
     assert 'lines[#lines + 1] = "Latest run summary:"' in script
     assert 'lines[#lines + 1] = "Status: " .. statusSummaryLabel(entry)' in script
     assert 'lines[#lines + 1] = "Workflow: " .. workflowSummaryLabel(entry)' in script
-    assert 'lines[#lines + 1] = "Device: " .. tostring(entry.friendly_device or "unknown")' in script
+    assert "return tostring((entry and entry.friendly_device) or \"unknown\")" in script
     assert 'lines[#lines + 1] = "Output validation: " .. tostring(entry.output_validation_reason or "unknown")' in script
     assert 'lines[#lines + 1] = "summary: " .. statusSummaryLabel(entry)' in script
     assert 'lines[#lines + 1] = "runtime_selected: " .. tostring(entry.runtime_selected or "unknown")' in script
     assert 'lines[#lines + 1] = "backend_runtime: " .. tostring(entry.backend_runtime or "unknown")' in script
     assert 'lines[#lines + 1] = "workflow_source: " .. tostring(entry.workflow_source or "unknown")' in script
     assert 'lines[#lines + 1] = "exit_code: " .. tostring(entry.exit_code or "unknown")' in script
+
+
+def test_windows_bootstrap_has_drumsep_directml_runtime_mode_and_state_fields():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+
+    assert 'function GetDrumsepDirectmlRuntimePythonPath' in script
+    assert 'function WriteDrumsepDirectmlState' in script
+    assert 'function VerifyDrumsepDirectmlRuntime' in script
+    assert 'function InstallDrumsepDirectmlRuntime' in script
+    assert '$Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-directml-runtime"' in script
+    assert 'WriteDrumsepDirectmlState "error" "missing" "python_missing"' in script
+    assert 'WriteDrumsepDirectmlState "ok" "ok" "ok"' in script
+    assert 'LogProgress "Verifying existing DrumSep DirectML runtime"' in script
+    assert 'torch-directml==$torchDirectMlVersion' in script
+    assert 'onnxruntime-directml==$onnxRuntimeDirectMlVersion' in script
+    assert 'DRUMSEP_DIRECTML_RUNTIME_STATUS=' in script
+    assert 'DRUMSEP_DIRECTML_PYTHON=' in script
+    assert 'DRUMSEP_DIRECTML_MODEL_STATUS=' in script
+    assert 'TORCH_DIRECTML_STATUS=' in script
+    assert 'DIRECTML_DEVICE=' in script
+    assert 'DIRECTML_DEVICE_COUNT=' in script
+    assert 'ORT_DIRECTML_PROVIDER=' in script
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():

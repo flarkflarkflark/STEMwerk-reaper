@@ -1659,8 +1659,8 @@ local function appendDrumsepRuntimeBlock(lines, title, runtimePython, stateData,
     appendLine(lines, title)
     appendKey(lines, "python_path", sanitizePathValue(runtimePython))
     appendKey(lines, "python_exists", fileExists(runtimePython) and "yes" or "no")
-    appendKey(lines, "runtime_status", trim(stateData.STATUS or stateData.DRUMSEP_RUNTIME_STATUS or stateData.DRUMSEP_ROCM_RUNTIME_STATUS) ~= "" and trim(stateData.STATUS or stateData.DRUMSEP_RUNTIME_STATUS or stateData.DRUMSEP_ROCM_RUNTIME_STATUS) or "unknown")
-    appendKey(lines, "runtime_reason", trim(stateData.STATUS_REASON or stateData.DRUMSEP_RUNTIME_DETAIL or stateData.DRUMSEP_ROCM_RUNTIME_DETAIL) ~= "" and trim(stateData.STATUS_REASON or stateData.DRUMSEP_RUNTIME_DETAIL or stateData.DRUMSEP_ROCM_RUNTIME_DETAIL) or "unknown")
+    appendKey(lines, "runtime_status", trim(stateData.STATUS or stateData.DRUMSEP_DIRECTML_RUNTIME_STATUS or stateData.DRUMSEP_RUNTIME_STATUS or stateData.DRUMSEP_ROCM_RUNTIME_STATUS) ~= "" and trim(stateData.STATUS or stateData.DRUMSEP_DIRECTML_RUNTIME_STATUS or stateData.DRUMSEP_RUNTIME_STATUS or stateData.DRUMSEP_ROCM_RUNTIME_STATUS) or "unknown")
+    appendKey(lines, "runtime_reason", trim(stateData.STATUS_REASON or stateData.DRUMSEP_DIRECTML_RUNTIME_DETAIL or stateData.DRUMSEP_RUNTIME_DETAIL or stateData.DRUMSEP_ROCM_RUNTIME_DETAIL) ~= "" and trim(stateData.STATUS_REASON or stateData.DRUMSEP_DIRECTML_RUNTIME_DETAIL or stateData.DRUMSEP_RUNTIME_DETAIL or stateData.DRUMSEP_ROCM_RUNTIME_DETAIL) or "unknown")
     if probe and probe.data then
         appendKey(lines, "audio_separator_version", probe.data.audio_separator or "unknown")
         appendKey(lines, "numpy_version", probe.data.numpy or "unknown")
@@ -1680,17 +1680,29 @@ local function appendDrumsepRuntimeBlock(lines, title, runtimePython, stateData,
     else
         appendKey(lines, "probe_status", "not_run")
         appendKey(lines, "diagnostic_source", "cached_state")
-        appendKey(lines, "audio_separator_version", trim(stateData.DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_AUDIO_SEPARATOR_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_AUDIO_SEPARATOR_VERSION or "") or "unknown")
-        appendKey(lines, "numpy_version", trim(stateData.DRUMSEP_ROCM_NUMPY_VERSION or stateData.DRUMSEP_NUMPY_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_NUMPY_VERSION or stateData.DRUMSEP_NUMPY_VERSION or "") or "unknown")
-        appendKey(lines, "torch_version", trim(stateData.DRUMSEP_ROCM_TORCH_VERSION or stateData.DRUMSEP_TORCH_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_TORCH_VERSION or stateData.DRUMSEP_TORCH_VERSION or "") or "unknown")
+        appendKey(lines, "audio_separator_version", trim(stateData.DRUMSEP_DIRECTML_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_AUDIO_SEPARATOR_VERSION or "") ~= "" and trim(stateData.DRUMSEP_DIRECTML_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_ROCM_AUDIO_SEPARATOR_VERSION or stateData.DRUMSEP_AUDIO_SEPARATOR_VERSION or "") or "unknown")
+        appendKey(lines, "numpy_version", trim(stateData.DRUMSEP_DIRECTML_NUMPY_VERSION or stateData.DRUMSEP_ROCM_NUMPY_VERSION or stateData.DRUMSEP_NUMPY_VERSION or "") ~= "" and trim(stateData.DRUMSEP_DIRECTML_NUMPY_VERSION or stateData.DRUMSEP_ROCM_NUMPY_VERSION or stateData.DRUMSEP_NUMPY_VERSION or "") or "unknown")
+        appendKey(lines, "torch_version", trim(stateData.DRUMSEP_DIRECTML_TORCH_VERSION or stateData.DRUMSEP_ROCM_TORCH_VERSION or stateData.DRUMSEP_TORCH_VERSION or "") ~= "" and trim(stateData.DRUMSEP_DIRECTML_TORCH_VERSION or stateData.DRUMSEP_ROCM_TORCH_VERSION or stateData.DRUMSEP_TORCH_VERSION or "") or "unknown")
         appendKey(lines, "torch.version.hip", trim(stateData.DRUMSEP_ROCM_TORCH_HIP or stateData.DRUMSEP_TORCH_HIP or "") ~= "" and trim(stateData.DRUMSEP_ROCM_TORCH_HIP or stateData.DRUMSEP_TORCH_HIP or "") or "unknown")
         appendKey(lines, "torch.cuda.is_available", trim(stateData.DRUMSEP_ROCM_CUDA_AVAILABLE or stateData.DRUMSEP_CUDA_AVAILABLE or "") ~= "" and trim(stateData.DRUMSEP_ROCM_CUDA_AVAILABLE or stateData.DRUMSEP_CUDA_AVAILABLE or "") or "unknown")
         appendKey(lines, "torch_device_names", trim(stateData.DRUMSEP_ROCM_DEVICE_NAMES or stateData.DRUMSEP_DEVICE_NAMES or "") ~= "" and trim(stateData.DRUMSEP_ROCM_DEVICE_NAMES or stateData.DRUMSEP_DEVICE_NAMES or "") or "unknown")
-        appendKey(lines, "onnx_version", trim(stateData.DRUMSEP_ROCM_ONNX_VERSION or stateData.DRUMSEP_ONNX_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_ONNX_VERSION or stateData.DRUMSEP_ONNX_VERSION or "") or "unknown")
-        appendKey(lines, "onnxruntime_version", trim(stateData.DRUMSEP_ROCM_ONNXRUNTIME_VERSION or stateData.DRUMSEP_ONNXRUNTIME_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_ONNXRUNTIME_VERSION or stateData.DRUMSEP_ONNXRUNTIME_VERSION or "") or "unknown")
-        appendKey(lines, "onnx2torch_version", trim(stateData.DRUMSEP_ROCM_ONNX2TORCH_VERSION or stateData.DRUMSEP_ONNX2TORCH_VERSION or "") ~= "" and trim(stateData.DRUMSEP_ROCM_ONNX2TORCH_VERSION or stateData.DRUMSEP_ONNX2TORCH_VERSION or "") or "unknown")
+        appendKey(lines, "onnx_version", trim(stateData.DRUMSEP_DIRECTML_ONNX_VERSION or stateData.DRUMSEP_ROCM_ONNX_VERSION or stateData.DRUMSEP_ONNX_VERSION or "") ~= "" and trim(stateData.DRUMSEP_DIRECTML_ONNX_VERSION or stateData.DRUMSEP_ROCM_ONNX_VERSION or stateData.DRUMSEP_ONNX_VERSION or "") or "unknown")
+        appendKey(lines, "onnxruntime_version", trim(stateData.DRUMSEP_DIRECTML_ONNXRUNTIME_DIRECTML_VERSION or stateData.DRUMSEP_ROCM_ONNXRUNTIME_VERSION or stateData.DRUMSEP_ONNXRUNTIME_VERSION or "") ~= "" and trim(stateData.DRUMSEP_DIRECTML_ONNXRUNTIME_DIRECTML_VERSION or stateData.DRUMSEP_ROCM_ONNXRUNTIME_VERSION or stateData.DRUMSEP_ONNXRUNTIME_VERSION or "") or "unknown")
+        appendKey(lines, "onnx2torch_version", trim(stateData.DRUMSEP_DIRECTML_ONNX2TORCH_VERSION or stateData.DRUMSEP_ROCM_ONNX2TORCH_VERSION or stateData.DRUMSEP_ONNX2TORCH_VERSION or "") ~= "" and trim(stateData.DRUMSEP_DIRECTML_ONNX2TORCH_VERSION or stateData.DRUMSEP_ROCM_ONNX2TORCH_VERSION or stateData.DRUMSEP_ONNX2TORCH_VERSION or "") or "unknown")
+        if trim(stateData.TORCH_DIRECTML_STATUS or "") ~= "" then
+            appendKey(lines, "torch_directml_status", trim(stateData.TORCH_DIRECTML_STATUS or ""))
+        end
+        if trim(stateData.DIRECTML_DEVICE or "") ~= "" then
+            appendKey(lines, "directml_device", trim(stateData.DIRECTML_DEVICE or ""))
+        end
+        if trim(stateData.DIRECTML_DEVICE_COUNT or "") ~= "" then
+            appendKey(lines, "directml_device_count", trim(stateData.DIRECTML_DEVICE_COUNT or ""))
+        end
+        if trim(stateData.ORT_DIRECTML_PROVIDER or "") ~= "" then
+            appendKey(lines, "ort_directml_provider", trim(stateData.ORT_DIRECTML_PROVIDER or ""))
+        end
     end
-    appendKey(lines, "model_status", trim(stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) ~= "" and trim(stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) or "unknown")
+    appendKey(lines, "model_status", trim(stateData.DRUMSEP_DIRECTML_MODEL_STATUS or stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) ~= "" and trim(stateData.DRUMSEP_DIRECTML_MODEL_STATUS or stateData.DRUMSEP_MODEL_STATUS or stateData.DRUMSEP_ROCM_MODEL_STATUS) or "unknown")
     appendKey(lines, "model_file", sanitizePathValue(modelFile))
     appendKey(lines, "model_file_exists", fileExists(modelFile) and "yes" or "no")
     appendKey(lines, "model_file_size_bytes", tostring(fileSizeBytes(modelFile) or 0))
@@ -1700,14 +1712,17 @@ local function appendDrumsepRuntimeBlock(lines, title, runtimePython, stateData,
     if trim(stateData.DRUMSEP_ROCM_TEMP_DIR or "") ~= "" then
         appendKey(lines, "rocm_temp_dir", stateData.DRUMSEP_ROCM_TEMP_DIR)
     end
-    if trim(stateData.DRUMSEP_ROCM_LAST_CHECK_UTC or stateData.DRUMSEP_LAST_CHECK_UTC or "") ~= "" then
-        appendKey(lines, "last_check_utc", trim(stateData.DRUMSEP_ROCM_LAST_CHECK_UTC or stateData.DRUMSEP_LAST_CHECK_UTC or ""))
+    if trim(stateData.DRUMSEP_DIRECTML_LAST_CHECK_UTC or stateData.DRUMSEP_ROCM_LAST_CHECK_UTC or stateData.DRUMSEP_LAST_CHECK_UTC or "") ~= "" then
+        appendKey(lines, "last_check_utc", trim(stateData.DRUMSEP_DIRECTML_LAST_CHECK_UTC or stateData.DRUMSEP_ROCM_LAST_CHECK_UTC or stateData.DRUMSEP_LAST_CHECK_UTC or ""))
     end
     appendLine(lines, "")
 end
 
 local function resolveDrumsepRuntimePython(runtimeBase, stateData, dirname)
     local candidates = {
+        trim(stateData.DRUMSEP_DIRECTML_PYTHON or ""),
+        trim(stateData.DRUMSEP_ROCM_PYTHON or ""),
+        trim(stateData.DRUMSEP_PYTHON or ""),
         trim(stateData.PYTHON_PATH or ""),
         trim(stateData.VENV_PYTHON_PATH or ""),
         trim(stateData.VENV_PYTHON or ""),
@@ -1883,12 +1898,16 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
 
     local cpuStatePath = joinPath(runtimeStateDir, "drumsep_runtime.env")
     local rocmStatePath = joinPath(runtimeStateDir, "drumsep_runtime_rocm.env")
+    local directmlStatePath = joinPath(runtimeStateDir, "drumsep_runtime_directml.env")
     local cpuState = readEnvFile(cpuStatePath)
     local rocmState = readEnvFile(rocmStatePath)
+    local directmlState = readEnvFile(directmlStatePath)
     local cpuPy = resolveDrumsepRuntimePython(runtimeBase, cpuState, ".venv-drumsep")
     local rocmPy = resolveDrumsepRuntimePython(runtimeBase, rocmState, ".venv-drumsep-rocm")
+    local directmlPy = resolveDrumsepRuntimePython(runtimeBase, directmlState, ".venv-drumsep-directml")
     local cpuProbe = nil
     local rocmProbe = nil
+    local directmlProbe = nil
 
     appendLine(lines, "DrumSep Runtime Diagnostics")
     appendKey(lines, "runtime_base", runtimeBase)
@@ -1901,6 +1920,7 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
 
     appendDrumsepRuntimeBlock(lines, "[CPU fallback runtime]", cpuPy, cpuState, cpuProbe, modelFile, modelYaml)
     appendDrumsepRuntimeBlock(lines, "[ROCm runtime]", rocmPy, rocmState, rocmProbe, modelFile, modelYaml)
+    appendDrumsepRuntimeBlock(lines, "[DirectML runtime]", directmlPy, directmlState, directmlProbe, modelFile, modelYaml)
 
     appendLine(lines, "[Selector status]")
     appendKey(lines, "selected_runtime", trim(rocmState.DRUMSEP_SELECTED_RUNTIME or cpuState.DRUMSEP_SELECTED_RUNTIME or "") ~= "" and trim(rocmState.DRUMSEP_SELECTED_RUNTIME or cpuState.DRUMSEP_SELECTED_RUNTIME or "") or "unknown")
@@ -1921,8 +1941,10 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
     appendLine(lines, "[Install log tails]")
     local cpuInstallLog = joinPath(runtimeLogDir, "drumsep_install.log")
     local rocmInstallLog = joinPath(runtimeLogDir, "drumsep_rocm_install.log")
+    local directmlInstallLog = joinPath(runtimeLogDir, "drumsep_directml_install.log")
     appendKey(lines, "drumsep_install.log", fileExists(cpuInstallLog) and "present" or "missing")
     appendKey(lines, "drumsep_rocm_install.log", fileExists(rocmInstallLog) and "present" or "missing")
+    appendKey(lines, "drumsep_directml_install.log", fileExists(directmlInstallLog) and "present" or "missing")
     appendLine(lines, "")
     if fileExists(cpuInstallLog) then
         appendLine(lines, "----- tail: drumsep_install.log -----")
@@ -1932,6 +1954,11 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
     if fileExists(rocmInstallLog) then
         appendLine(lines, "----- tail: drumsep_rocm_install.log -----")
         appendLine(lines, readTailText(rocmInstallLog, 180 * 1024))
+        appendLine(lines, "")
+    end
+    if fileExists(directmlInstallLog) then
+        appendLine(lines, "----- tail: drumsep_directml_install.log -----")
+        appendLine(lines, readTailText(directmlInstallLog, 180 * 1024))
         appendLine(lines, "")
     end
 
@@ -3951,6 +3978,15 @@ local function performBundleCollection()
     appendKey(diagnostics, "DrumSep runtime status file", "drumsep_runtime_status.txt")
     appendKey(diagnostics, "CPU runtime state", fileExists(joinPath(runtimePaths.runtimeState, "drumsep_runtime.env")) and "present" or "missing")
     appendKey(diagnostics, "ROCm runtime state", fileExists(joinPath(runtimePaths.runtimeState, "drumsep_runtime_rocm.env")) and "present" or "missing")
+    appendKey(diagnostics, "DirectML runtime state", fileExists(joinPath(runtimePaths.runtimeState, "drumsep_runtime_directml.env")) and "present" or "missing")
+    do
+        local directmlState = readEnvFile(joinPath(runtimePaths.runtimeState, "drumsep_runtime_directml.env"))
+        appendKey(diagnostics, "drumsep_directml_runtime_status", trim(directmlState.DRUMSEP_DIRECTML_RUNTIME_STATUS or directmlState.STATUS or "") ~= "" and trim(directmlState.DRUMSEP_DIRECTML_RUNTIME_STATUS or directmlState.STATUS or "") or "missing")
+        appendKey(diagnostics, "drumsep_directml_python", trim(directmlState.DRUMSEP_DIRECTML_PYTHON or "") ~= "" and trim(directmlState.DRUMSEP_DIRECTML_PYTHON or "") or "missing")
+        appendKey(diagnostics, "torch_directml_status", trim(directmlState.TORCH_DIRECTML_STATUS or "") ~= "" and trim(directmlState.TORCH_DIRECTML_STATUS or "") or "unknown")
+        appendKey(diagnostics, "ort_directml_provider", trim(directmlState.ORT_DIRECTML_PROVIDER or "") ~= "" and trim(directmlState.ORT_DIRECTML_PROVIDER or "") or "unknown")
+        appendKey(diagnostics, "directml_runtime_state_file", joinPath(runtimePaths.runtimeState, "drumsep_runtime_directml.env"))
+    end
     appendLine(diagnostics, "")
 
     appendLine(diagnostics, "Settings Snapshot")
@@ -4052,7 +4088,7 @@ local function performBundleCollection()
         "- support_bundle_timings.txt with phase timing checkpoints",
         "- platform_details.txt with platform probe output",
         "- python_diagnostics.txt with dependency probe output when available",
-        "- drumsep_runtime_status.txt with DrumSep CPU/ROCm runtime diagnostics and recent Direct DKS markers",
+        "- drumsep_runtime_status.txt with DrumSep CPU/ROCm/DirectML runtime diagnostics and recent Direct DKS markers",
         "- See processing_summary.txt for recent processing results and speed.",
         "",
         "Intentionally excluded:",
