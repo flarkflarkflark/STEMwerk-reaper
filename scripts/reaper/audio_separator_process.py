@@ -1796,11 +1796,19 @@ def _probe_drumsep_runtime_candidates(
     require_gpu: bool = False,
     require_mps: bool = False,
     require_cuda: bool = False,
+    require_directml: bool = False,
 ) -> Tuple[Optional[Path], str, Dict[str, Any], List[Dict[str, Any]]]:
     attempts: List[Dict[str, Any]] = []
     first_broken_detail = ""
     for candidate in candidates:
-        if require_cuda:
+        if require_directml:
+            ok, detail, payload = _verify_drumsep_runtime(
+                candidate,
+                require_gpu=require_gpu,
+                require_mps=require_mps,
+                require_directml=True,
+            )
+        elif require_cuda:
             ok, detail, payload = _verify_drumsep_runtime(
                 candidate,
                 require_gpu=require_gpu,
@@ -1828,6 +1836,7 @@ def _verify_drumsep_runtime(
     require_gpu: bool = False,
     require_mps: bool = False,
     require_cuda: bool = False,
+    require_directml: bool = False,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     try:
         exists = python_path.exists()
@@ -1872,6 +1881,9 @@ torch_hip = ""
 torch_cuda_available = False
 mps_built = False
 mps_available = False
+directml_available = False
+directml_device_count = 0
+onnxruntime_providers = []
 try:
     import torch
     torch_hip = str(getattr(torch.version, "hip", "") or "")
@@ -1889,6 +1901,19 @@ try:
 except Exception:
     pass
 
+try:
+    import onnxruntime as ort
+    onnxruntime_providers = [str(item) for item in (ort.get_available_providers() or [])]
+except Exception:
+    pass
+
+try:
+    import torch_directml
+    directml_available = bool(torch_directml.is_available())
+    directml_device_count = int(torch_directml.device_count())
+except Exception:
+    pass
+
 print(json.dumps({
     "ok": True,
     "versions": versions,
@@ -1897,6 +1922,9 @@ print(json.dumps({
     "device_names": device_names,
     "mps_built": mps_built,
     "mps_available": mps_available,
+    "directml_available": directml_available,
+    "directml_device_count": directml_device_count,
+    "onnxruntime_providers": onnxruntime_providers,
 }, sort_keys=True))
 """
     try:
@@ -1952,6 +1980,16 @@ print(json.dumps({
             return False, "mps_not_built", payload
         if not bool(payload.get("mps_available")):
             return False, "mps_not_available", payload
+    if require_directml:
+        providers = payload.get("onnxruntime_providers") or []
+        if not isinstance(providers, list):
+            providers = []
+        if not bool(payload.get("directml_available")):
+            return False, "torch_directml_unavailable", payload
+        if int(payload.get("directml_device_count") or 0) < 1:
+            return False, "directml_no_devices", payload
+        if "DmlExecutionProvider" not in [str(item) for item in providers]:
+            return False, "onnxruntime_dml_provider_missing", payload
 
     return True, output[:1200] or "ok", payload
 
@@ -1998,6 +2036,7 @@ def _select_drumsep_runtime(
         selected_directml_python, directml_detail, directml_payload, directml_attempts = _probe_drumsep_runtime_candidates(
             directml_candidates,
             require_gpu=False,
+            require_directml=True,
         )
         print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_end detail={directml_detail}", file=sys.stderr)
         if selected_directml_python is not None:
@@ -2015,6 +2054,54 @@ def _select_drumsep_runtime(
             "selection_policy": "explicit_directml",
         }
         reason = "missing" if directml_detail == "missing" else "broken"
+        return None, reason, info
+
+    if os.name == "nt" and normalized_request in {"auto", "gpu"}:
+        selection_policy = "gpu_prefer_directml" if normalized_request == "gpu" else "auto_prefer_directml"
+        print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_start", file=sys.stderr)
+        selected_directml_python, directml_detail, directml_payload, directml_attempts = _probe_drumsep_runtime_candidates(
+            directml_candidates,
+            require_gpu=False,
+            require_directml=True,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_directml_end detail={directml_detail}", file=sys.stderr)
+        if selected_directml_python is not None:
+            info = dict(directml_payload or {})
+            info["kind"] = "directml"
+            info["detail"] = directml_detail
+            info["fallback_reason"] = ""
+            info["selection_policy"] = selection_policy
+            info["directml_python_attempts"] = directml_attempts
+            return selected_directml_python, "directml", info
+
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_start", file=sys.stderr)
+        selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(
+            cpu_candidates,
+            require_gpu=False,
+        )
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_cpu_end detail={cpu_detail}", file=sys.stderr)
+        if selected_cpu_python is not None:
+            info = dict(cpu_payload or {})
+            info["kind"] = "cpu"
+            info["detail"] = cpu_detail
+            info["fallback_reason"] = f"directml_skipped:{directml_detail}"
+            info["selection_policy"] = "fallback_cpu"
+            info["cpu_python_attempts"] = cpu_attempts
+            info["directml_python_attempts"] = directml_attempts
+            return selected_cpu_python, "cpu", info
+
+        info = {
+            "directml_detail": directml_detail,
+            "cpu_detail": cpu_detail,
+            "directml_python": str(directml_python),
+            "cpu_python": str(cpu_python),
+            "directml_python_attempts": directml_attempts,
+            "cpu_python_attempts": cpu_attempts,
+            "selection_policy": "fallback_cpu",
+            "normalized_request": normalized_request,
+        }
+        reason = "missing" if directml_detail == "missing" and cpu_detail == "missing" else "broken"
         return None, reason, info
 
     if device_norm == "mps" and _is_darwin_arm64():
@@ -2279,6 +2366,10 @@ def _resolve_benchmark_drumsep_helper_device(
     print(f"bench_drumsep_helper_device_requested={raw or 'none'}", file=sys.stderr)
 
     if not raw:
+        if os.name == "nt" and runtime_kind_lower == "directml" and normalized_request in {"auto", "gpu"}:
+            print("bench_drumsep_helper_device_applied=directml", file=sys.stderr)
+            print("bench_drumsep_helper_device_ignored_reason=auto_directml_default", file=sys.stderr)
+            return "directml", "auto_directml_default"
         if os.name == "nt" and runtime_kind_lower == "directml" and normalized_request.startswith("directml"):
             print("bench_drumsep_helper_device_applied=directml", file=sys.stderr)
             print("bench_drumsep_helper_device_ignored_reason=explicit_directml_default", file=sys.stderr)

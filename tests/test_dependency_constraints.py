@@ -3702,6 +3702,69 @@ def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(
     assert info["selection_policy"] == "auto_prefer_cuda"
 
 
+def test_drumsep_runtime_selector_prefers_directml_on_windows_when_runtime_is_verified(tmp_path):
+    module = _load_audio_separator_process_module()
+    module.sys.platform = "win32"
+    base = tmp_path
+    directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
+    directml_python.parent.mkdir(parents=True, exist_ok=True)
+    directml_python.write_text("", encoding="utf-8")
+
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        assert path == directml_python
+        assert require_directml is True
+        return (
+            True,
+            "ok",
+            {
+                "versions": {"torch": "2.12.0"},
+                "directml_available": True,
+                "directml_device_count": 1,
+                "onnxruntime_providers": ["DmlExecutionProvider", "CPUExecutionProvider"],
+            },
+        )
+
+    module._verify_drumsep_runtime = fake_verify
+    selected, kind, info = module._select_drumsep_runtime("auto", base)
+    assert selected == directml_python
+    assert kind == "directml"
+    assert info["selection_policy"] == "auto_prefer_directml"
+    assert info["fallback_reason"] == ""
+
+
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path):
+    module = _load_audio_separator_process_module()
+    module.sys.platform = "win32"
+    base = tmp_path
+    directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
+    cpu_python = base / ".venv-drumsep" / "Scripts" / "python.exe"
+    directml_python.parent.mkdir(parents=True, exist_ok=True)
+    cpu_python.parent.mkdir(parents=True, exist_ok=True)
+    directml_python.write_text("", encoding="utf-8")
+    cpu_python.write_text("", encoding="utf-8")
+
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        if path == directml_python:
+            assert require_directml is True
+            return (
+                False,
+                "onnxruntime_dml_provider_missing",
+                {
+                    "directml_available": True,
+                    "directml_device_count": 1,
+                    "onnxruntime_providers": ["CPUExecutionProvider"],
+                },
+            )
+        return (True, "ok", {"versions": {"torch": "2.12.0"}})
+
+    module._verify_drumsep_runtime = fake_verify
+    selected, kind, info = module._select_drumsep_runtime("auto", base)
+    assert selected == cpu_python
+    assert kind == "cpu"
+    assert info["selection_policy"] == "fallback_cpu"
+    assert info["fallback_reason"] == "directml_skipped:onnxruntime_dml_provider_missing"
+
+
 def test_drumsep_runtime_selector_reports_missing_when_both_absent(tmp_path):
     module = _load_audio_separator_process_module()
     selected, kind, info = module._select_drumsep_runtime("auto", tmp_path)
@@ -3709,6 +3772,8 @@ def test_drumsep_runtime_selector_reports_missing_when_both_absent(tmp_path):
     assert kind == "missing"
     if module.sys.platform == "darwin":
         assert info["mps_detail"] == "missing"
+    elif module.os.name == "nt":
+        assert info["directml_detail"] == "missing"
     else:
         assert info["rocm_detail"] == "missing"
     assert info["cpu_detail"] == "missing"
