@@ -646,6 +646,26 @@ def test_gpu_scheduler_policy_defaults_to_cap4_for_capable_backends():
     assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap4"' in script
     assert '"scheduler_dks_extract_stage1_normal_gpu_cap4"' in script
     assert '"scheduler_normal_gpu_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_windows_cuda_cap2"' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_windows_cuda_cap2"' in script
+
+
+def test_windows_cuda_scheduler_uses_cuda_state_and_directml_fallback_markers():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'function schedulerRuntimeStateFile(kind)' in script
+    assert 'return "drumsep_runtime_cuda.env"' in script
+    assert 'return "drumsep_runtime_directml.env"' in script
+    assert 'function schedulerRuntimePythonDefaultForKind(kind)' in script
+    assert 'tostring(state and state.DRUMSEP_CUDA_PYTHON or "")' in script
+    assert 'tostring(state and state.DRUMSEP_DIRECTML_PYTHON or "")' in script
+    assert 'schedulerRuntimeStateOk(state, "DRUMSEP_CUDA_RUNTIME_STATUS", "STATUS")' in script
+    assert 'or (state and state.ORT_CUDA_PROVIDER)' in script
+    assert 'or explicitAvailable == "ok"' in script
+    assert 'function schedulerRuntimeHasDirectmlCapability(state, runtimePython, capabilityState)' in script
+    assert 'schedulerRuntimeStateOk(state, "DRUMSEP_DIRECTML_RUNTIME_STATUS", "STATUS")' in script
+    assert 'return "directml", "fallback_directml"' in script
+    assert 'return "directml", "explicit_directml"' in script
 
 
 def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logged():
@@ -804,6 +824,8 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
     assert 'return "cpu", "bench_helper_cuda_fallback_cpu"' in script
     assert 'return "cuda", "explicit_cuda"' in script
     assert 'return "cuda", "auto_prefer_cuda"' in script
+    assert 'return "directml", "explicit_directml"' in script
+    assert 'return "directml", "fallback_directml"' in script
     assert 'drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(' in script
     assert "            requestedStage2ModelArg\n        )" in script
     assert 'isDrumKitMultiRun and schedulerRoute == "dks_direct"' in script
@@ -820,6 +842,7 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
     assert 'multiTrackQueue.drumsepSchedulerBackend = drumsepSchedulerBackend' in script
     assert 'multiTrackQueue.drumsepSchedulerPolicy = drumsepSchedulerPolicy' in script
     assert 'multiTrackQueue.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback and "yes" or "no"' in script
+    assert 'drumsepStage2SchedulerBackend = select(1, predictDrumsepSchedulerRuntime(' in script
     assert 'drumsep_scheduler_backend=' in script
     assert 'drumsep_scheduler_policy=' in script
     assert 'drumsep_scheduler_uses_cpu_fallback=' in script
@@ -949,10 +972,12 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'schedulerBackend = "cpu"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_windows_cuda_cap2"' in script
     assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_dks_direct_unknown_cap1"' in script
     assert '"scheduler_dks_direct_" .. cpuParallelFallbackReason() .. "_cap1"' in script
     assert '"scheduler_dks_extract_stage1_normal_gpu_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_extract_stage1_windows_cuda_cap2"' in script
     assert 'policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"' in script
     assert '"scheduler_dks_extract_stage1_normal_" .. cpuParallelFallbackReason() .. "_cap1"' in script
     assert '"scheduler_normal_gpu_cap4"' in script
@@ -5334,15 +5359,20 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
     assert 'local runtimeDevicesForUi = directDksRoute and buildDirectDksDeviceList() or RUNTIME_DEVICES' in script
-    assert 'stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env"' in script
+    assert 'stateDir .. PATH_SEP .. schedulerRuntimeStateFile("rocm")' in script
+    assert 'stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cuda")' in script
+    assert 'stateDir .. PATH_SEP .. schedulerRuntimeStateFile("directml")' in script
     assert 'local function isOkState(state, primaryKey, fallbackKey)' in script
     assert 'local function resolveRuntimePython(state, defaultPath)' in script
     assert 'local rocmReady = isOkState(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")' in script
     assert 'local rocmPython = resolveRuntimePython(rocmState, defaultRuntimePython(".venv-drumsep-rocm"))' in script
     assert 'local cpuPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))' in script
+    assert 'local cudaPython = resolveRuntimePython(cudaState, defaultRuntimePython(".venv-drumsep-cuda"))' in script
+    assert 'local directmlPython = resolveRuntimePython(directmlState, defaultRuntimePython(".venv-drumsep-directml"))' in script
     assert 'local capabilityState = readEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}' in script
-    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)' in script
-    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cpuState, capabilityState)' in script
+    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)' in script
+    assert 'local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)' in script
+    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)' in script
     assert 'rocmReady = rocmReady and rocmPython ~= ""' in script
     assert 'local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""' in script
     assert 'rocmState.DRUMSEP_ROCM_DEVICE_NAMES' in script

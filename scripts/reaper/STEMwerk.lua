@@ -10425,8 +10425,10 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local stateDir = runtime and runtime.runtimeState or nil
         if not stateDir or stateDir == "" then return nil end
 
-        local rocmState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {}
-        local cpuState = readEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
+        local rocmState = readEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("rocm")) or {}
+        local cpuState = readEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cpu")) or {}
+        local cudaState = readEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cuda")) or {}
+        local directmlState = readEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("directml")) or {}
         local capabilityState = readEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}
         local devices = {}
         local function add(id, name, devType, descKey)
@@ -10480,8 +10482,11 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local rocmDeviceNames = tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "")
         local rocmPython = resolveRuntimePython(rocmState, defaultRuntimePython(".venv-drumsep-rocm"))
         local cpuPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))
-        local cudaReady = schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)
-        local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cpuState, capabilityState)
+        local cudaPython = resolveRuntimePython(cudaState, defaultRuntimePython(".venv-drumsep-cuda"))
+        local directmlPython = resolveRuntimePython(directmlState, defaultRuntimePython(".venv-drumsep-directml"))
+        local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)
+        local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)
+        local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)
         rocmReady = rocmReady and rocmPython ~= ""
         local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""
         local mpsAvailable = false
@@ -10497,10 +10502,10 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
             end
         end
 
-        if rocmReady or cpuReady then
+        if rocmReady or cpuReady or cudaReady or directmlReady then
             add("auto", "Auto", "auto", "device_auto_dks_desc")
         end
-        if cpuReady or rocmReady then
+        if cpuReady or rocmReady or cudaReady or directmlReady then
             add("cpu", "CPU", "cpu", "device_cpu_desc")
         end
         if mpsAvailable and cpuReady then
@@ -14523,8 +14528,38 @@ function schedulerRuntimePythonDefault(dirname)
     return base .. PATH_SEP .. dirname .. PATH_SEP .. "bin" .. PATH_SEP .. "python"
 end
 
+function schedulerRuntimeStateFile(kind)
+    local runtimeKind = string.lower(tostring(kind or "cpu"))
+    if runtimeKind == "rocm" then
+        return "drumsep_runtime_rocm.env"
+    end
+    if runtimeKind == "directml" then
+        return "drumsep_runtime_directml.env"
+    end
+    if runtimeKind == "cuda" and OS == "Windows" then
+        return "drumsep_runtime_cuda.env"
+    end
+    return "drumsep_runtime.env"
+end
+
+function schedulerRuntimePythonDefaultForKind(kind)
+    local runtimeKind = string.lower(tostring(kind or "cpu"))
+    if runtimeKind == "rocm" then
+        return schedulerRuntimePythonDefault(".venv-drumsep-rocm")
+    end
+    if runtimeKind == "directml" then
+        return schedulerRuntimePythonDefault(".venv-drumsep-directml")
+    end
+    if runtimeKind == "cuda" and OS == "Windows" then
+        return schedulerRuntimePythonDefault(".venv-drumsep-cuda")
+    end
+    return schedulerRuntimePythonDefault(".venv-drumsep")
+end
+
 function schedulerResolveRuntimePython(state, defaultPath)
     local candidates = {
+        tostring(state and state.DRUMSEP_CUDA_PYTHON or ""),
+        tostring(state and state.DRUMSEP_DIRECTML_PYTHON or ""),
         tostring(state and state.PYTHON_PATH or ""),
         tostring(state and state.VENV_PYTHON_PATH or ""),
         tostring(state and state.VENV_PYTHON or ""),
@@ -14577,7 +14612,9 @@ function schedulerSplitDeviceNameList(raw)
 end
 
 function schedulerRuntimeHasCudaCapability(state, runtimePython, capabilityState)
-    if not schedulerRuntimeStateOk(state, "DRUMSEP_RUNTIME_STATUS", "STATUS") or runtimePython == "" then
+    local runtimeOk = schedulerRuntimeStateOk(state, "DRUMSEP_CUDA_RUNTIME_STATUS", "STATUS")
+        or schedulerRuntimeStateOk(state, "DRUMSEP_RUNTIME_STATUS", "STATUS")
+    if not runtimeOk or runtimePython == "" then
         return false
     end
     local backend = string.lower(tostring(state and state.BACKEND or ""))
@@ -14586,10 +14623,13 @@ function schedulerRuntimeHasCudaCapability(state, runtimePython, capabilityState
         tostring(
             (state and (state.DRUMSEP_CUDA_AVAILABLE or state.CUDA_AVAILABLE))
             or (capabilityState and capabilityState.CUDA_AVAILABLE)
+            or (state and state.TORCH_CUDA_STATUS)
+            or (state and state.ORT_CUDA_PROVIDER)
             or ""
         )
     )
     local backendLooksCuda = explicitAvailable == "true"
+        or explicitAvailable == "ok"
         or backend == "cuda"
         or profile:find("cuda", 1, true) ~= nil
     if not backendLooksCuda then
@@ -14598,12 +14638,39 @@ function schedulerRuntimeHasCudaCapability(state, runtimePython, capabilityState
     if hasRuntimeSchedulerDeviceType("cuda") then
         return true
     end
-    local stateNames = schedulerSplitDeviceNameList(state and (state.DRUMSEP_CUDA_DEVICE_NAMES or state.DRUMSEP_DEVICE_NAMES) or "")
+    local stateNames = schedulerSplitDeviceNameList(
+        state and (state.DRUMSEP_CUDA_DEVICE_NAMES or state.DRUMSEP_DEVICE_NAMES or state.CUDA_DEVICE_ID or state.CUDA_DEVICE) or ""
+    )
     if #stateNames > 0 then
         return true
     end
     local capabilityNames = schedulerSplitDeviceNameList(capabilityState and capabilityState.DEVICE_NAMES or "")
     return #capabilityNames > 0
+end
+
+function schedulerRuntimeHasDirectmlCapability(state, runtimePython, capabilityState)
+    local runtimeOk = schedulerRuntimeStateOk(state, "DRUMSEP_DIRECTML_RUNTIME_STATUS", "STATUS")
+    if not runtimeOk or runtimePython == "" then
+        return false
+    end
+    local backend = string.lower(tostring(state and state.BACKEND or ""))
+    local profile = string.lower(tostring(state and state.PROFILE or ""))
+    local explicitAvailable = string.lower(
+        tostring(
+            (state and state.ORT_DIRECTML_PROVIDER)
+            or (state and state.TORCH_DIRECTML_STATUS)
+            or (capabilityState and capabilityState.ORT_DIRECTML_PROVIDER)
+            or ""
+        )
+    )
+    if explicitAvailable == "ok" then
+        return true
+    end
+    if backend == "directml" or profile:find("directml", 1, true) ~= nil then
+        return true
+    end
+    local stateNames = schedulerSplitDeviceNameList(state and (state.DIRECTML_DEVICE or state.DIRECTML_DEVICE_ID) or "")
+    return #stateNames > 0
 end
 
 function schedulerRuntimeCudaDeviceNames(state, capabilityState)
@@ -14688,9 +14755,9 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
             local runtime = getRuntimePaths and getRuntimePaths() or nil
             local stateDir = runtime and runtime.runtimeState or ""
             local rocmState = stateDir ~= ""
-                and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {})
+                and (readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("rocm")) or {})
                 or {}
-            local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefault(".venv-drumsep-rocm"))
+            local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefaultForKind("rocm"))
             local rocmReady = schedulerRuntimeStateOk(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
                 and rocmPython ~= ""
                 and string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
@@ -14698,19 +14765,19 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
             if rocmReady then
                 return "rocm", "bench_helper_rocm"
             end
-        elseif normalizedRequest ~= "cpu" and OS == "Linux" and benchHelperDevice == "cuda"
+        elseif normalizedRequest ~= "cpu" and (OS == "Linux" or OS == "Windows") and benchHelperDevice == "cuda"
             and hasRuntimeSchedulerDeviceType("cuda")
         then
             local runtime = getRuntimePaths and getRuntimePaths() or nil
             local stateDir = runtime and runtime.runtimeState or ""
-            local cpuState = stateDir ~= ""
-                and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {})
+            local cudaState = stateDir ~= ""
+                and (readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cuda")) or {})
                 or {}
             local capabilityState = stateDir ~= ""
                 and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {})
                 or {}
-            local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
-            if schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState) then
+            local cudaPython = schedulerResolveRuntimePython(cudaState, schedulerRuntimePythonDefaultForKind("cuda"))
+            if schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState) then
                 return "cuda", "bench_helper_cuda"
             end
             return "cpu", "bench_helper_cuda_fallback_cpu"
@@ -14720,23 +14787,33 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
         local runtime = getRuntimePaths and getRuntimePaths() or nil
         local stateDir = runtime and runtime.runtimeState or ""
         local rocmState = stateDir ~= ""
-            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {})
+            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("rocm")) or {})
             or {}
         local cpuState = stateDir ~= ""
-            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {})
+            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cpu")) or {})
+            or {}
+        local cudaState = stateDir ~= ""
+            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cuda")) or {})
+            or {}
+        local directmlState = stateDir ~= ""
+            and (readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("directml")) or {})
             or {}
         local capabilityState = stateDir ~= ""
             and (readSchedulerEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {})
             or {}
-        local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefault(".venv-drumsep-rocm"))
-        local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
+        local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefaultForKind("rocm"))
+        local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefaultForKind("cpu"))
+        local cudaPython = schedulerResolveRuntimePython(cudaState, schedulerRuntimePythonDefaultForKind("cuda"))
+        local directmlPython = schedulerResolveRuntimePython(directmlState, schedulerRuntimePythonDefaultForKind("directml"))
         local rocmReady = OS == "Linux"
             and schedulerRuntimeStateOk(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
             and rocmPython ~= ""
             and string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
             and tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "") ~= ""
-        local cudaReady = OS == "Linux"
-            and schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)
+        local cudaReady = (OS == "Linux" or OS == "Windows")
+            and schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)
+        local directmlReady = OS == "Windows"
+            and schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)
         if explicitRocm and rocmReady then
             return "rocm", "explicit_rocm"
         end
@@ -14755,6 +14832,12 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
         if normalizedRequest == "gpu" and cudaReady and not explicitRocm then
             return "cuda", "gpu_prefer_cuda"
         end
+        if rawRequest == "directml" and directmlReady then
+            return "directml", "explicit_directml"
+        end
+        if (normalizedRequest == "auto" or normalizedRequest == "gpu") and directmlReady then
+            return "directml", "fallback_directml"
+        end
         return "cpu", "fallback_cpu"
     end
 
@@ -14768,20 +14851,26 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
         return "", normalizedRequest == "gpu" and "gpu_prefer_rocm" or "auto_prefer_rocm"
     end
 
-    local rocmState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime_rocm.env") or {}
-    local cpuState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "drumsep_runtime.env") or {}
+    local rocmState = readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("rocm")) or {}
+    local cpuState = readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cpu")) or {}
+    local cudaState = readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cuda")) or {}
+    local directmlState = readSchedulerEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("directml")) or {}
     local capabilityState = readSchedulerEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}
-    local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefault(".venv-drumsep-rocm"))
-    local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefault(".venv-drumsep"))
+    local rocmPython = schedulerResolveRuntimePython(rocmState, schedulerRuntimePythonDefaultForKind("rocm"))
+    local cpuPython = schedulerResolveRuntimePython(cpuState, schedulerRuntimePythonDefaultForKind("cpu"))
+    local cudaPython = schedulerResolveRuntimePython(cudaState, schedulerRuntimePythonDefaultForKind("cuda"))
+    local directmlPython = schedulerResolveRuntimePython(directmlState, schedulerRuntimePythonDefaultForKind("directml"))
     local rocmReady = schedulerRuntimeStateOk(rocmState, "DRUMSEP_ROCM_RUNTIME_STATUS", "STATUS")
         and rocmPython ~= ""
         and string.lower(tostring(rocmState.DRUMSEP_ROCM_CUDA_AVAILABLE or "")) == "true"
         and tostring(rocmState.DRUMSEP_ROCM_DEVICE_NAMES or "") ~= ""
     local cpuReady = schedulerRuntimeStateOk(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS")
         and cpuPython ~= ""
-    local cudaReady = OS == "Linux"
+    local cudaReady = (OS == "Linux" or OS == "Windows")
         and not explicitRocm
-        and schedulerRuntimeHasCudaCapability(cpuState, cpuPython, capabilityState)
+        and schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)
+    local directmlReady = OS == "Windows"
+        and schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)
 
     if rocmReady then
         return "rocm", normalizedRequest == "gpu" and "gpu_prefer_rocm" or "auto_prefer_rocm"
@@ -14791,6 +14880,9 @@ function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)
     end
     if cudaReady then
         return "cuda", normalizedRequest == "gpu" and "gpu_prefer_cuda" or "auto_prefer_cuda"
+    end
+    if directmlReady then
+        return "directml", "fallback_directml"
     end
     if cpuReady then
         return "cpu", "fallback_cpu"
@@ -18261,7 +18353,10 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     if route == "dks_direct" then
         if backend == "gpu" then
             policy.sequentialMode = false
-            if opts.longWorkload then
+            if OS == "Windows" and tostring(opts.drumsepSchedulerBackend or "") == "cuda" then
+                policy.cap = math.min(jobCount, 2)
+                policy.reason = "scheduler_dks_direct_windows_cuda_cap2"
+            elseif opts.longWorkload then
                 policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_LONG_MAX_PARALLEL)
                 policy.reason = "scheduler_dks_direct_gpu_long_cap4"
             else
@@ -18290,10 +18385,15 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     -- is managed separately in audio_separator_process.py.
     if backend == "gpu" then
         policy.sequentialMode = false
-        policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
-        policy.reason = (route == "dks_extract")
-            and "scheduler_dks_extract_stage1_normal_gpu_cap4"
-            or "scheduler_normal_gpu_cap4"
+        if route == "dks_extract" and OS == "Windows" and tostring(opts.drumsepStage2SchedulerBackend or "") == "cuda" then
+            policy.cap = math.min(jobCount, 2)
+            policy.reason = "scheduler_dks_extract_stage1_windows_cuda_cap2"
+        else
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_GPU_MAX_PARALLEL)
+            policy.reason = (route == "dks_extract")
+                and "scheduler_dks_extract_stage1_normal_gpu_cap4"
+                or "scheduler_normal_gpu_cap4"
+        end
         return policy
     end
 
@@ -19236,6 +19336,7 @@ _sep.runSingleTrackSeparation = function(trackList)
     local drumsepSchedulerBackend = ""
     local drumsepSchedulerPolicy = ""
     local drumsepSchedulerUsesCpuFallback = false
+    local drumsepStage2SchedulerBackend = ""
     if isDrumKitMultiRun and schedulerRoute == "dks_direct" then
         drumsepSchedulerBackend, drumsepSchedulerPolicy = predictDrumsepSchedulerRuntime(
             effectiveRunDevice(),
@@ -19251,12 +19352,24 @@ _sep.runSingleTrackSeparation = function(trackList)
             schedulerBackend = "cpu"
         elseif drumsepSchedulerPolicy == "bench_helper_rocm" then
             schedulerBackend = "gpu"
+        elseif drumsepSchedulerBackend == "cuda" then
+            schedulerBackend = "gpu"
+        elseif drumsepSchedulerBackend == "directml" then
+            schedulerBackend = "directml"
         end
+    elseif isDrumKitMultiRun and schedulerRoute == "dks_extract" then
+        drumsepStage2SchedulerBackend = select(1, predictDrumsepSchedulerRuntime(
+            effectiveRunDevice(),
+            "dks_direct",
+            requestedStage2ModelArg
+        ))
     end
     local schedulerPolicy = _sep.resolveSchedulerConcurrencyPolicy({
         route = schedulerRoute,
         stage = schedulerStage,
         backend = schedulerBackend,
+        drumsepSchedulerBackend = drumsepSchedulerBackend,
+        drumsepStage2SchedulerBackend = drumsepStage2SchedulerBackend,
         requestedDevice = effectiveRunDevice(),
         requestedParallel = requestedParallel,
         jobCount = #trackJobs,
