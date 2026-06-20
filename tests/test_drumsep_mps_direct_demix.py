@@ -30,6 +30,22 @@ def _load_helper():
     return _load_module(DRUMSEP_HELPER, "stemwerk_drumsep_process_mps_direct_demix_test")
 
 
+class _OsProxy:
+    def __init__(self, real_os, *, name: str):
+        self._real_os = real_os
+        self.name = name
+        self.pathsep = ":" if name == "posix" else real_os.pathsep
+
+    def __getattr__(self, attr):
+        return getattr(self._real_os, attr)
+
+
+def _set_posix_platform(module, monkeypatch, sys_platform: str, machine: str = "x86_64"):
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="posix"))
+    monkeypatch.setattr(module.sys, "platform", sys_platform)
+    monkeypatch.setattr(module.platform, "machine", lambda: machine)
+
+
 def _valid_runtime_info():
     return {
         "kind": "mps",
@@ -149,6 +165,7 @@ def test_auto_linux_and_rocm_do_not_activate_direct_demix(monkeypatch):
 
 def test_benchmark_helper_device_defaults_to_cpu_and_rejects_invalid(monkeypatch, capsys):
     module = _load_audio_process()
+    _set_posix_platform(module, monkeypatch, "linux")
     monkeypatch.delenv(module.BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV, raising=False)
     assert module._resolve_benchmark_drumsep_helper_device("auto", "rocm") == ("rocm", "auto_rocm_default")
     assert module._resolve_benchmark_drumsep_helper_device("cuda:0", "rocm") == ("rocm", "explicit_rocm_default")
@@ -281,13 +298,13 @@ def test_explicit_mps_runtime_selection_uses_normal_runtime_candidates(tmp_path,
     shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     shared_python.chmod(0o755)
     (state_dir / "drumsep_runtime.env").write_text(f"PYTHON_PATH={shared_python}\n", encoding="utf-8")
-    monkeypatch.setattr(module.sys, "platform", "darwin")
-    monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
+    _set_posix_platform(module, monkeypatch, "darwin", "arm64")
 
-    def fake_verify(path, require_gpu=False, require_mps=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_directml=False):
         assert path == shared_python
         assert require_gpu is False
         assert require_mps is True
+        assert require_directml is False
         return True, "ok", {
             "mps_built": True,
             "mps_available": True,
@@ -322,11 +339,11 @@ def test_drumsep_runtime_selector_prefers_mps_for_auto_on_apple_silicon(tmp_path
     shared_python.parent.mkdir(parents=True, exist_ok=True)
     shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     shared_python.chmod(0o755)
-    monkeypatch.setattr(module.sys, "platform", "darwin")
-    monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
+    _set_posix_platform(module, monkeypatch, "darwin", "arm64")
 
-    def fake_verify(path, require_gpu=False, require_mps=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_directml=False):
         assert path == shared_python
+        assert require_directml is False
         if require_mps:
             return True, "ok", {"mps_built": True, "mps_available": True, "versions": {"audio-separator": "0.23.0"}}
         return True, "ok", {"versions": {"audio-separator": "0.23.0"}}
@@ -345,11 +362,11 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_direct_demix_when_mps_missin
     shared_python.parent.mkdir(parents=True, exist_ok=True)
     shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     shared_python.chmod(0o755)
-    monkeypatch.setattr(module.sys, "platform", "darwin")
-    monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
+    _set_posix_platform(module, monkeypatch, "darwin", "arm64")
 
-    def fake_verify(path, require_gpu=False, require_mps=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_directml=False):
         assert path == shared_python
+        assert require_directml is False
         if require_mps:
             return False, "mps_not_available", {"versions": {"audio-separator": "0.23.0"}}
         return True, "ok", {"versions": {"audio-separator": "0.23.0"}}

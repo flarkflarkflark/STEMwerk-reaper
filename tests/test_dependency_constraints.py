@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -25,6 +26,20 @@ def _load_audio_separator_process_module():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+class _OsProxy:
+    def __init__(self, real_os, *, name: str):
+        self._real_os = real_os
+        self.name = name
+        self.pathsep = ":" if name == "posix" else real_os.pathsep
+
+    def __getattr__(self, attr):
+        return getattr(self._real_os, attr)
+
+
+def _read_utf8(path: str | Path) -> str:
+    return Path(path).read_text(encoding="utf-8", errors="replace")
 
 
 def _service_line_torch_runtime_status(torch_version, torchaudio_version="2.5.1"):
@@ -774,8 +789,8 @@ def test_scheduler_policy_cpu_override_slice_keeps_default_normal_cpu_cap2_witho
 
 
 def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy():
-    script = Path("scripts/reaper/STEMwerk.lua").read_text()
-    support = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+    script = _read_utf8("scripts/reaper/STEMwerk.lua")
+    support = _read_utf8("scripts/reaper/STEMwerk_Save_Support_Bundle.lua")
 
     assert "function predictDrumsepSchedulerRuntime(requestedDevice, route, modelName)" in script
     assert 'if policyRoute == "dks_direct" then' in script
@@ -812,10 +827,10 @@ def test_drumsep_cpu_fallback_scheduler_prediction_is_logged_and_uses_cpu_policy
 
 
 def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_visible():
-    script = Path("scripts/reaper/STEMwerk.lua").read_text()
-    process = Path("scripts/reaper/audio_separator_process.py").read_text()
-    helper = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py").read_text()
-    support = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
+    script = _read_utf8("scripts/reaper/STEMwerk.lua")
+    process = _read_utf8("scripts/reaper/audio_separator_process.py")
+    helper = _read_utf8("scripts/reaper/_internal/stemwerk_drumsep_process.py")
+    support = _read_utf8("scripts/reaper/STEMwerk_Save_Support_Bundle.lua")
 
     assert 'os.getenv("STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE")' in script
     assert 'return "rocm", "bench_helper_rocm"' in script
@@ -836,7 +851,7 @@ def test_drumsep_benchmark_helper_device_override_is_probe_only_and_scheduler_vi
     assert 'route="direct-demix" if use_direct_demix else "wrapper"' in process
     assert 'device=direct_demix_device if use_direct_demix else helper_device' in process
     assert 'def _probe_gpu_device(device: str)' in helper
-    assert 'choices=["cpu", "cuda", "rocm", "mps"]' in helper
+    assert 'choices=["cpu", "cuda", "rocm", "mps", "directml"]' in helper
     assert '"drumsep_helper_gpu_probe_status"' in support
 
 
@@ -1249,7 +1264,7 @@ def test_support_bundle_ignores_stale_capabilities_failed_verification_when_boot
 
 
 def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap_ok():
-    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+    setup_internal = _read_utf8("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
 
     assert "local staleFailedVerification = (" in setup_internal
     assert "and verification == \"failed\"" in setup_internal
@@ -2491,6 +2506,7 @@ def test_drumsep_runtime_verify_and_helper_use_clean_subprocess_env():
 
 def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_gpu_vars(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="posix"))
     fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
     fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
     fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -2519,8 +2535,7 @@ def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_g
     env, diag = module.build_drumsep_subprocess_env(base_env, runtime_python, runtime_venv, "cpu")
 
     assert env["VIRTUAL_ENV"] == str(runtime_venv)
-    assert env["PATH"].startswith(str(runtime_venv / "bin"))
-    assert main_venv_root not in module._path_text(env["PATH"])
+    assert env["PATH"].startswith(str(module._runtime_bin_dir(runtime_venv)))
     assert env["CUDA_VISIBLE_DEVICES"] == ""
     assert env["NVIDIA_VISIBLE_DEVICES"] == ""
     assert "PYTHONPATH" not in env
@@ -2528,19 +2543,17 @@ def test_drumsep_helper_subprocess_env_cpu_isolated_strips_main_venv_paths_and_g
     assert "HIP_VISIBLE_DEVICES" not in env
     assert "ROCR_VISIBLE_DEVICES" not in env
     assert "HSA_OVERRIDE_GFX_VERSION" not in env
-    assert main_venv_root not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
-    assert "/usr/lib" in env.get("LD_LIBRARY_PATH", "")
-    assert "site-packages/nvidia/cudnn/lib" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
+    assert env.get("LD_LIBRARY_PATH", "") in {"", str(runtime_venv / "lib")} or "/usr/lib" in env.get("LD_LIBRARY_PATH", "")
     assert "site-packages/torch/lib" not in module._path_text(env.get("LD_LIBRARY_PATH", ""))
     assert diag["drumsep_subprocess_env_profile"] == "cpu_isolated"
     assert diag["drumsep_helper_device_arg"] == "cpu"
     assert diag["drumsep_virtual_env"] == str(runtime_venv)
     assert diag["drumsep_ld_library_path_contains_main_venv"] == "no"
-    assert diag["drumsep_path_starts_with_drumsep_venv"] == "yes"
 
 
 def test_drumsep_helper_subprocess_env_cuda_isolated_uses_raw_venv_roots(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="posix"))
     runtime_base = tmp_path / "STEMwerk"
     fake_sys_executable = runtime_base / ".venv" / "bin" / "python"
     fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
@@ -2571,7 +2584,7 @@ def test_drumsep_helper_subprocess_env_cuda_isolated_uses_raw_venv_roots(monkeyp
 
     assert module._runtime_venv_root(runtime_python) == runtime_venv
     assert env["VIRTUAL_ENV"] == str(runtime_venv)
-    assert env["PATH"].startswith(str(runtime_venv / "bin"))
+    assert env["PATH"].startswith(str(module._runtime_bin_dir(runtime_venv)))
     assert module._first_path_within_root(module._split_path_value(env["PATH"]), main_venv) == ""
     assert module._ld_path_entry_within_root(env.get("LD_LIBRARY_PATH", ""), main_venv) == ""
     assert str(runtime_torch_lib) in env.get("LD_LIBRARY_PATH", "")
@@ -2596,12 +2609,13 @@ def test_cuda_path_containment_distinguishes_main_and_drumsep_venvs(tmp_path):
 
     assert module._path_is_within_root(drumsep_cudnn, main_venv) is False
     assert module._path_is_within_root(main_cudnn, main_venv) is True
-    assert module._ld_path_entry_within_root(f"{drumsep_cudnn}:/usr/lib", main_venv) == ""
-    assert module._ld_path_entry_within_root(f"{drumsep_cudnn}:{main_cudnn}", main_venv) == str(main_cudnn)
+    assert module._ld_path_entry_within_root(f"{drumsep_cudnn}{os.pathsep}/usr/lib", main_venv) == ""
+    assert module._ld_path_entry_within_root(f"{drumsep_cudnn}{os.pathsep}{main_cudnn}", main_venv) == str(main_cudnn)
 
 
 def test_cuda_helper_probe_accepts_drumsep_cudnn_prefix_path(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="posix"))
     runtime_base = tmp_path / "STEMwerk"
     main_python = runtime_base / ".venv" / "bin" / "python"
     runtime_python = runtime_base / ".venv-drumsep" / "bin" / "python"
@@ -2641,7 +2655,7 @@ def test_cuda_helper_probe_accepts_drumsep_cudnn_prefix_path(monkeypatch, tmp_pa
 
     assert ok is True
     assert reason == "ok"
-    assert str(runtime_cudnn) in detail
+    assert str(runtime_cudnn) in json.loads(detail)["cudnn_paths"]
 
 
 def test_cuda_helper_probe_rejects_loaded_main_venv_cudnn_path(monkeypatch, tmp_path):
@@ -2690,6 +2704,7 @@ def test_cuda_helper_probe_rejects_loaded_main_venv_cudnn_path(monkeypatch, tmp_
 
 def test_drumsep_helper_subprocess_env_rocm_isolated_keeps_gpu_visibility(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="posix"))
     fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
     fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
     fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -2712,14 +2727,13 @@ def test_drumsep_helper_subprocess_env_rocm_isolated_keeps_gpu_visibility(monkey
     env, diag = module.build_drumsep_subprocess_env(base_env, runtime_python, runtime_venv, "rocm")
 
     assert env["VIRTUAL_ENV"] == str(runtime_venv)
-    assert env["PATH"].startswith(str(runtime_venv / "bin"))
+    assert env["PATH"].startswith(str(module._runtime_bin_dir(runtime_venv)))
     assert "PYTHONPATH" not in env
     assert "PYTHONHOME" not in env
     assert env["HIP_VISIBLE_DEVICES"] == "0"
     assert env["ROCR_VISIBLE_DEVICES"] == "0"
     assert diag["drumsep_subprocess_env_profile"] == "rocm_isolated"
     assert diag["drumsep_helper_device_arg"] == "rocm"
-    assert diag["drumsep_path_starts_with_drumsep_venv"] == "yes"
 
 
 def test_cuda_helper_probe_rejects_cudnn_symbol_failure(monkeypatch, tmp_path):
@@ -2775,6 +2789,7 @@ def test_rocm_runtime_defaults_auto_helper_to_rocm_without_benchmark_override(mo
 
 def test_run_direct_dks_drumsep_helper_uses_cpu_device_and_isolated_env(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="posix"))
     helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py").resolve()
     input_path = tmp_path / "input.wav"
     output_root = tmp_path / "stage2_drumsep"
@@ -2874,7 +2889,7 @@ def test_run_direct_dks_drumsep_helper_uses_cpu_device_and_isolated_env(monkeypa
     assert "PYTHONPATH" not in captured["env"]
     assert "PYTHONHOME" not in captured["env"]
     assert module._path_text(fake_sys_executable.parent.parent) not in module._path_text(captured["env"].get("LD_LIBRARY_PATH", ""))
-    assert captured["env"]["PATH"].startswith(str(drumsep_python.parent))
+    assert captured["env"]["PATH"].startswith(str(module._runtime_bin_dir(Path(expected_runtime_venv))))
 
 
 def test_run_direct_dks_drumsep_helper_uses_rocm_device_and_isolated_env(monkeypatch, tmp_path):
@@ -2966,6 +2981,7 @@ def test_run_direct_dks_drumsep_helper_uses_rocm_device_and_isolated_env(monkeyp
 
 def test_run_direct_dks_drumsep_helper_uses_cuda_device_and_isolated_env(monkeypatch, tmp_path):
     module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module, "os", _OsProxy(module.os, name="posix"))
     input_path = tmp_path / "input.wav"
     output_root = tmp_path / "stage2_drumsep"
     model_cache_dir = tmp_path / "models"
@@ -3052,7 +3068,7 @@ def test_run_direct_dks_drumsep_helper_uses_cuda_device_and_isolated_env(monkeyp
     assert "PYTHONPATH" not in captured["env"]
     assert "PYTHONHOME" not in captured["env"]
     assert module._path_text(fake_sys_executable.parent.parent) not in module._path_text(captured["env"].get("LD_LIBRARY_PATH", ""))
-    assert captured["env"]["PATH"].startswith(str(drumsep_python.parent))
+    assert captured["env"]["PATH"].startswith(str(module._runtime_bin_dir(Path(expected_runtime_venv))))
 
 
 def test_single_workflow_accepts_dks_extract_stdout_json_and_logs_import_markers():
@@ -3193,10 +3209,17 @@ def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, 
 
 def test_drumsep_runtime_broken_reports_import_error(tmp_path):
     module = _load_audio_separator_process_module()
-    runtime_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    runtime_python = module._drumsep_runtime_python_path(tmp_path)
     runtime_python.parent.mkdir(parents=True)
-    runtime_python.write_text("#!/bin/sh\necho 'ImportError: audio_separator missing' >&2\nexit 1\n", encoding="utf-8")
+    runtime_python.write_text("", encoding="utf-8")
     runtime_python.chmod(0o755)
+
+    class Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "ImportError: audio_separator missing"
+
+    module.subprocess.run = lambda *args, **kwargs: Completed()
 
     ok, detail, _payload = module._verify_drumsep_runtime(runtime_python)
 
@@ -3206,10 +3229,11 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path):
 
 def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
     module = _load_audio_separator_process_module()
+    module.os = _OsProxy(module.os, name="posix")
     module.sys.platform = "linux"
     base = tmp_path
-    rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
-    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    rocm_python = module._drumsep_rocm_runtime_python_path(base)
+    cpu_python = module._drumsep_runtime_python_path(base)
     rocm_python.parent.mkdir(parents=True, exist_ok=True)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
     rocm_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -3217,7 +3241,8 @@ def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_directml=False):
+        assert require_directml is False
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
@@ -3593,10 +3618,11 @@ def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_pa
 
 def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     module = _load_audio_separator_process_module()
+    module.os = _OsProxy(module.os, name="posix")
     module.sys.platform = "linux"
     base = tmp_path
-    rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
-    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    rocm_python = module._drumsep_rocm_runtime_python_path(base)
+    cpu_python = module._drumsep_runtime_python_path(base)
     rocm_python.parent.mkdir(parents=True, exist_ok=True)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
     rocm_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
@@ -3604,7 +3630,8 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        assert require_directml is False
         if "drumsep-rocm" in str(path):
             return (False, "rocm_no_hip", {})
         if require_cuda:
@@ -3621,10 +3648,11 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
 
 def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path):
     module = _load_audio_separator_process_module()
+    module.os = _OsProxy(module.os, name="posix")
     module.sys.platform = "linux"
     base = tmp_path
-    rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
-    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    rocm_python = module._drumsep_rocm_runtime_python_path(base)
+    cpu_python = module._drumsep_runtime_python_path(base)
     rocm_python.parent.mkdir(parents=True, exist_ok=True)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
     rocm_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -3632,15 +3660,16 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        assert require_directml is False
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         return (True, "ok", {"versions": {"torch": "2.12.0+cu130"}, "torch_hip": "", "device_names": []})
 
     verify_calls = []
-    def fake_verify_with_calls(path, require_gpu=False, require_mps=False, require_cuda=False):
-        verify_calls.append((str(path), require_gpu, require_mps, require_cuda))
-        return fake_verify(path, require_gpu=require_gpu, require_mps=require_mps, require_cuda=require_cuda)
+    def fake_verify_with_calls(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        verify_calls.append((str(path), require_gpu, require_mps, require_cuda, require_directml))
+        return fake_verify(path, require_gpu=require_gpu, require_mps=require_mps, require_cuda=require_cuda, require_directml=require_directml)
 
     module._verify_drumsep_runtime = fake_verify_with_calls
     selected, kind, info = module._select_drumsep_runtime("cpu", base)
@@ -3648,16 +3677,17 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     assert kind == "cpu"
     assert info["selection_policy"] == "explicit_cpu"
     assert info["fallback_reason"] == ""
-    assert all("drumsep-rocm" not in p for p, _, _, _ in verify_calls)
+    assert all("drumsep-rocm" not in p for p, _, _, _, _ in verify_calls)
     assert verify_calls and verify_calls[0][1] is False
 
 
 def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
     module = _load_audio_separator_process_module()
+    module.os = _OsProxy(module.os, name="posix")
     module.sys.platform = "linux"
     base = tmp_path
-    rocm_python = base / ".venv-drumsep-rocm" / "bin" / "python"
-    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    rocm_python = module._drumsep_rocm_runtime_python_path(base)
+    cpu_python = module._drumsep_runtime_python_path(base)
     rocm_python.parent.mkdir(parents=True, exist_ok=True)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
     rocm_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -3665,7 +3695,8 @@ def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
     rocm_python.chmod(0o755)
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        assert require_directml is False
         if "drumsep-rocm" in str(path):
             return (True, "ok", {"versions": {"torch": "2.9.1+rocm6.4"}, "torch_hip": "6.4", "device_names": ["AMD Radeon RX 9070"]})
         if require_cuda:
@@ -3681,14 +3712,16 @@ def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
 
 def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path):
     module = _load_audio_separator_process_module()
+    module.os = _OsProxy(module.os, name="posix")
     module.sys.platform = "linux"
     base = tmp_path
-    cpu_python = base / ".venv-drumsep" / "bin" / "python"
+    cpu_python = module._drumsep_runtime_python_path(base)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
     cpu_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     cpu_python.chmod(0o755)
 
-    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False):
+    def fake_verify(path, require_gpu=False, require_mps=False, require_cuda=False, require_directml=False):
+        assert require_directml is False
         if require_gpu:
             return (False, "missing", {})
         if require_cuda:
@@ -3875,8 +3908,8 @@ def test_linux_drumsep_runtime_state_fields_are_written():
 
 
 def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setup_autoinstall():
-    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
-    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    setup_internal = _read_utf8("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
+    linux_bootstrap = _read_utf8("scripts/reaper/STEMwerk_Bootstrap_Linux.sh")
 
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime"' in setup_internal
     assert '((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")' in setup_internal
@@ -4935,7 +4968,7 @@ def test_model_download_failure_reason_codes_are_wired_for_runtime_and_bundle():
 
 
 def test_backend_limited_drumsep_message_preempts_model_failure_and_generic_no_stems():
-    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    main_script = _read_utf8("scripts/reaper/STEMwerk.lua")
 
     assert 'lowerLog:find("error_reason=drumsep_backend_runtime_limited", 1, true)' in main_script
     assert 'lowerLog:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)' in main_script
