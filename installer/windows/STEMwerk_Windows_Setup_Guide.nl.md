@@ -13,9 +13,15 @@ De Windows-installer heeft:
 
 In de normale Windows-flow is deze installer de bootstrap-stap.
 
-## Offline installer-varianten (GPU)
+## Installer-terminologie
 
-Als je een offline bundled installer hebt gedownload, vertelt de bestandsnaam welke GPU-runtime is meegeleverd:
+- `offline installer`: kleine installer/downloader die nog internet nodig kan hebben om runtime- of modelassets op te halen
+- `bundled installer`: bevat Python en FFmpeg
+- `volledige offline installer`: compleet pakket bedoeld voor installatie/gebruik zonder internet
+
+## Volledige offline installer-varianten (GPU)
+
+Als je een volledige offline / bundled installer hebt gedownload, vertelt de bestandsnaam welke GPU-runtime is meegeleverd:
 
 - `offline-bundled-nvidia`: CUDA-wheels voor NVIDIA-GPU's.
 - `offline-bundled-amd`: DirectML-wheels voor AMD/Intel-GPU's.
@@ -24,9 +30,9 @@ Als de installer geen GPU-runtime kan verifiëren, valt STEMwerk terug op CPU.
 
 Offline NVIDIA-opmerking (context issue #11):
 - Als processing online wel werkt maar offline niet, controleer of modellen aanwezig zijn in `%LOCALAPPDATA%\\STEMwerk\\models`.
-- Offline bundled installers worden nu alleen als `allmodels`-varianten uitgebracht voor de Demucs/core-modelcache.
+- Bestaande `allmodels` volledige offline assets worden nu gebruikt voor de Demucs/core-modelcache.
 - In bundled/offline installers is de pre-setup optie "modelcache opschonen" bewust uitgeschakeld om net meegeleverde modelpayloads niet te verwijderen.
-- Dit zijn in de 2.3-release geen complete offline DrumSep/Drum Kit-bundels; DrumSep-runtime en modelassets lopen via de setup/runtime-route.
+- Dit zijn in de 2.3-release geen complete offline DrumSep/Drum Kit-bundels; DrumSep-runtime en modelassets lopen via de setup/runtime-route, tenzij een specifieke volledige offline asset expliciet anders zegt.
 
 ## Wat je nu doet
 

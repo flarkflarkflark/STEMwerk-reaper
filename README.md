@@ -82,7 +82,7 @@ For most users, internet is needed on first install for:
 
 After runtime setup is complete and your model is cached, normal separation is typically offline.
 
-Windows release assets may also include bundled or offline-oriented installers for specific stable versions. The bundled installer includes Python + FFmpeg, but it can still require backend package or model downloads on first use. Existing offline/allmodels Windows assets cover the core Demucs model cache and related runtime payloads, but they are not complete DrumSep/Drum Kit offline bundles. Drum Kit/DrumSep runtime and model assets in the 2.3 release line are handled through the setup/runtime flow. Large offline allmodels installers are hosted separately on Google Drive because they are too large for GitHub release assets.
+Windows release assets may also include offline installers, bundled installers, or larger offline/full asset variants for specific stable versions. In this terminology, the smaller offline installer path is still a downloader-style installer and can require internet for backend package or model downloads. Bundled installers include Python + FFmpeg, but they can still require backend package or model downloads on first use. Existing allmodels/Demucs core model-cache assets are not complete DrumSep/Drum Kit offline/full bundles. Drum Kit/DrumSep runtime and model assets in the 2.3 release line are handled through the setup/runtime flow unless a specific full/offline asset explicitly says otherwise. Large offline/full allmodels-style assets are hosted separately on Google Drive because they are too large for GitHub release assets.
 
 You should still run `STEMwerk-SETUP.lua` when asked to verify or repair the runtime inside REAPER.
 
@@ -115,9 +115,9 @@ Windows is the primary validated path for the `v2.2.2.2` release.
 For most existing users with a working STEMwerk setup, ReaPack is the preferred update path for the REAPER scripts/actions on Windows, macOS and Linux.
 
 - **New Windows users**: `STEMwerk-Setup-2.2.2.2.exe`
-- **Windows users who want embedded Python/FFmpeg**: `STEMwerk-Setup-2.2.2.2-bundled.exe`
-- **Existing Windows users who do not use ReaPack or need installer-side repair/update**: `STEMwerk-2.2.2.2-offline-patch.exe`
-- **Windows users who want bundled core Demucs model cache assets**: use the Google Drive allmodels installers from the [v2.2.2.2 release page](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2)
+- **Windows users who want a bundled installer with Python + FFmpeg included**: `STEMwerk-Setup-2.2.2.2-bundled.exe`
+- **Existing Windows users who do not use ReaPack or need the smaller offline installer/update path**: `STEMwerk-2.2.2.2-offline-patch.exe`
+- **Windows users who need a complete offline/full asset with bundled core Demucs model-cache payloads**: use the Google Drive allmodels installers from the [v2.2.2.2 release page](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.2.2.2)
 - **Linux users**: use ReaPack for scripts/actions, or use AppImage/`.deb`/`.rpm`/Arch packages for package-based installs
 - **macOS users**: use ReaPack or the Linux/macOS script package, then run `STEMwerk: Setup` if the backend runtime needs checking/rebuilding
 
@@ -127,7 +127,7 @@ For most existing users with a working STEMwerk setup, ReaPack is the preferred 
 |---|---|---:|
 | `STEMwerk-Setup-2.2.2.2.exe` | Windows standard installer | 3.33 MB |
 | `STEMwerk-Setup-2.2.2.2-bundled.exe` | Windows bundled installer (Python + FFmpeg included) | 133 MB |
-| `STEMwerk-2.2.2.2-offline-patch.exe` | Windows offline patch/update helper | 3.42 MB |
+| `STEMwerk-2.2.2.2-offline-patch.exe` | Windows smaller offline installer/update helper | 3.42 MB |
 | `STEMwerk-2.2.2.2-x86_64.AppImage` | Linux portable build | 1.21 MB |
 | `stemwerk_2.2.2.2_amd64.deb` | Debian/Ubuntu package | 0.93 MB |
 | `stemwerk-2.2.2.2-1.noarch.rpm` | RPM package | 0.95 MB |
@@ -137,8 +137,8 @@ Linux packages were repacked after publish to remove non-runtime source toolbar 
 
 GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user installer download.
 
-### Large offline allmodels installers (Google Drive)
-These Windows installers bundle core Demucs model-cache assets plus related runtime payloads. They should not be described as complete DrumSep/Drum Kit offline installers. In the 2.3 release line, DrumSep runtime and model assets are still managed through setup/runtime routes. These larger installers are hosted on Google Drive because they are too large for GitHub release assets.
+### Large offline/full allmodels installers (Google Drive)
+These Windows assets are the larger offline/full installer class: they bundle core Demucs model-cache assets plus related runtime payloads and are intended for no-internet install/use within that Demucs/core scope. They should not be described as complete DrumSep/Drum Kit offline/full installers. In the 2.3 release line, DrumSep runtime and model assets are still managed through setup/runtime routes unless a specific full/offline asset explicitly says otherwise. These larger installers are hosted on Google Drive because they are too large for GitHub release assets.
 
 | File | Target | Size | Download |
 |---|---|---:|---|
@@ -316,6 +316,5 @@ Before tagging/releases:
 ## License / author
 MIT License.
 Author: flarkAUDIO (flarkaudio@pm.me)
-
 
 

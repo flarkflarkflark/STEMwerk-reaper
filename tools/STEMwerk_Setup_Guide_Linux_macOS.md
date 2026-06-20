@@ -23,7 +23,7 @@ This is the new cross-platform STEMwerk installer for Linux and macOS. It provid
 - PySimpleGUI (will be installed automatically in the venv)
 - ffmpeg (recommended, for full functionality)
 
-Supported managed Python downloads currently cover Linux x86_64 glibc, macOS x86_64, and macOS arm64. Linux/macOS package and setup flows in the 2.3 release line are script/setup delivery paths, not full offline runtime/model bundles. Other Linux/macOS platforms need a supported Python 3.10-3.12 runtime installed manually.
+Supported managed Python downloads currently cover Linux x86_64 glibc, macOS x86_64, and macOS arm64. In 2.3 terminology, Linux/macOS package and setup flows are script/setup delivery paths, not full offline runtime/model bundles. They are closer to smaller offline/downloader-style setup paths than to complete offline/full installers. Other Linux/macOS platforms need a supported Python 3.10-3.12 runtime installed manually.
 
 ## Troubleshooting
 - All output is shown live in the log window

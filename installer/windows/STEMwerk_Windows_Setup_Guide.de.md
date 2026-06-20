@@ -13,9 +13,15 @@ Der Windows-Installer hat:
 
 Im normalen Windows-Ablauf ist dieser Installer der Bootstrap-Schritt.
 
-## Offline-Installer-Varianten (GPU)
+## Installer-Terminologie
 
-Wenn du einen offline bundled Installer heruntergeladen hast, zeigt der Dateiname, welche GPU-Runtime enthalten ist:
+- `Offline-Installer`: kleiner Installer/Downloader, der benoetigte Runtime- oder Modell-Komponenten noch aus dem Internet laden kann
+- `gebuendelter Installer`: enthaelt Python und FFmpeg
+- `vollstaendiger Offline-Installer`: Komplettpaket fuer Installation/Nutzung ohne Internet
+
+## Vollstaendige Offline-Installer-Varianten (GPU)
+
+Wenn du einen vollstaendigen Offline-/bundled Installer heruntergeladen hast, zeigt der Dateiname, welche GPU-Runtime enthalten ist:
 
 - `offline-bundled-nvidia`: CUDA-Wheels für NVIDIA-GPUs.
 - `offline-bundled-amd`: DirectML-Wheels für AMD/Intel-GPUs.
@@ -24,9 +30,9 @@ Wenn der Installer keine GPU-Runtime verifizieren kann, fällt STEMwerk auf CPU 
 
 Offline-NVIDIA-Hinweis (Kontext Issue #11):
 - Wenn Processing online funktioniert, offline aber fehlschlägt, prüfen, ob Modelle unter `%LOCALAPPDATA%\\STEMwerk\\models` vorhanden sind.
-- Offline bundled Installer werden jetzt nur noch als `allmodels`-Varianten fuer den Demucs/Core-Modell-Cache ausgeliefert.
+- Bestehende `allmodels`-Full-Offline-Assets werden derzeit fuer den Demucs/Core-Modell-Cache verwendet.
 - In bundled/offline Installern ist die Vorab-Option "Modell-Cache bereinigen" bewusst deaktiviert, damit frisch gebündelte Modell-Payloads nicht gelöscht werden.
-- In der 2.3-Release-Linie sind das keine vollstaendigen DrumSep/Drum-Kit-Offline-Bundles; DrumSep-Runtime und Modell-Assets laufen weiter ueber den Setup-/Runtime-Pfad.
+- In der 2.3-Release-Linie sind das keine vollstaendigen DrumSep/Drum-Kit-Offline-Bundles; DrumSep-Runtime und Modell-Assets laufen weiter ueber den Setup-/Runtime-Pfad, sofern eine spezifische Full-Offline-Asset-Beschreibung nicht ausdruecklich etwas anderes sagt.
 
 ## Nächste Schritte
 

@@ -10,19 +10,25 @@ The Windows installer:
 - prepared the STEMwerk runtime under your local Windows profile
 - created or updated the Python environment used by STEMwerk
 - checked FFmpeg and the core runtime Python packages
-- in bundled/offline variants, can include runtime wheels and core model payloads
+- in bundled or offline/full variants, can include runtime wheels and core model payloads
 
 The Windows installer remains the recommended fresh-install/bootstrap route.
 
-## Offline installer flavors (GPU)
+## Installer terminology
 
-If you downloaded an offline bundled installer, the filename tells you which runtime flavor is bundled:
+- `offline installer`: smaller installer/downloader style; it may still require internet to fetch runtime or model assets
+- `bundled installer`: includes Python + FFmpeg
+- `offline/full installer`: larger complete package intended for no-internet install/use
+
+## Offline/full installer flavors (GPU)
+
+If you downloaded an offline/full bundled installer, the filename tells you which runtime flavor is bundled:
 
 - `offline-bundled-nvidia`: CUDA wheel payload for NVIDIA GPUs
 - `offline-bundled-amd`: DirectML wheel payload for AMD/Intel GPUs
 - CPU/fallback paths are included where applicable for runtime repair
 
-Offline bundled installers are currently distributed as `allmodels` variants for the core Demucs model cache. They are not complete DrumSep/Drum Kit offline bundles in the 2.3 release line.
+Existing `allmodels` offline/full assets are currently distributed around the core Demucs model cache. They are not complete DrumSep/Drum Kit offline/full bundles in the 2.3 release line.
 
 Samplerate/runtime note:
 
