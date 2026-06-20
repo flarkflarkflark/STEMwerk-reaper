@@ -51,6 +51,8 @@ $drumsepModelFileName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059
 $drumsepModelYamlName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 $drumsepModelCkptUrl = "https://huggingface.co/KitsuneX07/Music_Source_Sepetration_Models/resolve/8309883c6b3fecc360fff24c932dcc588f8c23c2/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt?download=true"
 $drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+$drumsepModelCkptMinimumBytes = 104857600
+$drumsepModelYamlMinimumBytes = 128
 $torchVersion = "2.4.1"
 $torchVisionVersion = "0.19.1"
 $torchCudaSuffix = "+cu121"
@@ -466,6 +468,106 @@ function InstallFfmpegDirect {
     return $null
 }
 
+function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
+    $ffmpegCandidates = @(
+        (Join-Path $RuntimeBase "bin\ffmpeg.exe"),
+        (Join-Path $RuntimeBase "ffmpeg\bin\ffmpeg.exe"),
+        (Join-Path $localAppData "Programs\ffmpeg\bin\ffmpeg.exe"),
+        (Join-Path $localAppData "ffmpeg\bin\ffmpeg.exe"),
+        "C:\ffmpeg\bin\ffmpeg.exe",
+        (Join-Path $programFiles "FFmpeg\bin\ffmpeg.exe"),
+        (Join-Path $programFiles "ffmpeg\bin\ffmpeg.exe"),
+        (Join-Path $programFilesX86 "FFmpeg\bin\ffmpeg.exe")
+    )
+
+    foreach ($p in $ffmpegCandidates) {
+        if ($p -and (Test-Path $p)) {
+            if (IsFfmpegShim $p) {
+                LogProgress ("Ignoring shim FFmpeg path: " + $p)
+            } else {
+                return $p
+            }
+        }
+    }
+
+    $runtimeFfmpegRoot = Join-Path $RuntimeBase "ffmpeg"
+    if (Test-Path $runtimeFfmpegRoot) {
+        try {
+            $runtimeFfmpeg = Get-ChildItem -Path $runtimeFfmpegRoot -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($runtimeFfmpeg -and $runtimeFfmpeg.FullName) {
+                if (IsFfmpegShim $runtimeFfmpeg.FullName) {
+                    LogProgress ("Ignoring shim FFmpeg path: " + $runtimeFfmpeg.FullName)
+                } else {
+                    return $runtimeFfmpeg.FullName
+                }
+            }
+        } catch {
+        }
+    }
+
+    $cmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
+    if ($cmd) {
+        if (IsFfmpegShim $cmd.Source) {
+            LogProgress ("Ignoring shim FFmpeg path: " + $cmd.Source)
+        } else {
+            return $cmd.Source
+        }
+    }
+
+    if ($AllowInstall) {
+        LogProgress "FFmpeg not found; downloading and installing"
+        $installedFfmpeg = InstallFfmpegDirect
+        if ($installedFfmpeg -and (Test-Path $installedFfmpeg) -and -not (IsFfmpegShim $installedFfmpeg)) {
+            return $installedFfmpeg
+        }
+        if ($installedFfmpeg) {
+            LogProgress ("FFmpeg path missing after install: " + $installedFfmpeg)
+        }
+    }
+
+    return $null
+}
+
+function InvokeWithResolvedFfmpegEnvironment([string]$FfmpegPath, [scriptblock]$Action) {
+    if ([string]::IsNullOrWhiteSpace($FfmpegPath)) {
+        return (& $Action)
+    }
+
+    $ffmpegDir = Split-Path -Parent $FfmpegPath
+    $previousStemwerkFfmpeg = $env:STEMWERK_FFMPEG_PATH
+    $previousFfmpeg = $env:FFMPEG_PATH
+    $previousImageio = $env:IMAGEIO_FFMPEG_EXE
+    $previousPath = $env:PATH
+
+    try {
+        $env:STEMWERK_FFMPEG_PATH = $FfmpegPath
+        $env:FFMPEG_PATH = $FfmpegPath
+        $env:IMAGEIO_FFMPEG_EXE = $FfmpegPath
+        if (-not [string]::IsNullOrWhiteSpace($ffmpegDir)) {
+            $pathParts = @()
+            if (-not [string]::IsNullOrWhiteSpace($env:PATH)) {
+                $pathParts = @($env:PATH -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+            $alreadyPresent = $false
+            foreach ($part in $pathParts) {
+                if ($part.TrimEnd('\') -ieq $ffmpegDir.TrimEnd('\')) {
+                    $alreadyPresent = $true
+                    break
+                }
+            }
+            if (-not $alreadyPresent) {
+                $env:PATH = $ffmpegDir + ";" + $env:PATH
+            }
+        }
+        return (& $Action)
+    } finally {
+        $env:STEMWERK_FFMPEG_PATH = $previousStemwerkFfmpeg
+        $env:FFMPEG_PATH = $previousFfmpeg
+        $env:IMAGEIO_FFMPEG_EXE = $previousImageio
+        $env:PATH = $previousPath
+    }
+}
+
 function IsFfmpegShim([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     $p = $Path.ToLowerInvariant().Trim().Trim('"').Trim("'").Replace("/", "\")
@@ -828,6 +930,9 @@ function WriteDrumsepState([string]$State, [string]$ModelStatus, [string]$Reason
     $drumsepPython = GetDrumsepRuntimePythonPath
     $modelFile = GetDrumsepModelFilePath
     $modelYaml = GetDrumsepModelYamlPath
+    if ($ModelStatus -eq "missing" -and (Test-Path $modelFile) -and (Test-Path $modelYaml)) {
+        $ModelStatus = "ok"
+    }
     $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     $lines = @(
         "STATUS=$State",
@@ -883,6 +988,9 @@ function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string
     $drumsepPython = GetDrumsepDirectmlRuntimePythonPath
     $modelFile = GetDrumsepModelFilePath
     $modelYaml = GetDrumsepModelYamlPath
+    if ($ModelStatus -eq "missing" -and (Test-Path $modelFile) -and (Test-Path $modelYaml)) {
+        $ModelStatus = "ok"
+    }
     $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     $audioSeparatorVersionValue = ""
     $numpyVersionValue = ""
@@ -1030,6 +1138,48 @@ function EnsureDrumsepDownloadChecks([string]$ModelDir) {
 function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label, [long]$MinimumBytes = 1) {
     if ([string]::IsNullOrWhiteSpace($Url) -or [string]::IsNullOrWhiteSpace($TargetPath)) { return $false }
     $tmpPath = $TargetPath + ".part"
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    $preferCurl = ($curl -and $MinimumBytes -ge 104857600)
+
+    if ($preferCurl) {
+        try {
+            Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+            LogProgress ("Downloading " + $Label + " with curl (preferred for large assets): " + $Url)
+            $curlExit = RunHidden $curl.Source @(
+                "-L",
+                "--fail",
+                "--retry", "3",
+                "--retry-delay", "5",
+                "--retry-all-errors",
+                "--connect-timeout", "30",
+                "--max-time", "1800",
+                "-o", $tmpPath,
+                $Url
+            ) ("Download " + $Label + " via curl")
+            if ($curlExit -ne 0) {
+                LogLine ("curl download failed for " + $Label + " exit=" + $curlExit + " url=" + $Url)
+                Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+            if (-not (Test-Path $tmpPath)) {
+                LogLine ("curl download missing output for " + $Label + " url=" + $Url)
+                return $false
+            }
+            $curlBytes = (Get-Item $tmpPath).Length
+            if ($curlBytes -lt $MinimumBytes) {
+                LogLine ("curl download too small for " + $Label + " bytes=" + $curlBytes + " minimum=" + $MinimumBytes + " url=" + $Url)
+                Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+            Move-Item -Path $tmpPath -Destination $TargetPath -Force
+            return $true
+        } catch {
+            LogLine ("curl download exception for " + $Label + ": " + $_.Exception.Message + " url=" + $Url)
+            Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+    }
+
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
@@ -1041,24 +1191,40 @@ function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label
             Move-Item -Path $tmpPath -Destination $TargetPath -Force
             return $true
         } catch {
-            LogLine ("Invoke-WebRequest failed for " + $Label + " attempt " + $attempt + ": " + $_.Exception.Message)
+            LogLine ("Invoke-WebRequest failed for " + $Label + " attempt " + $attempt + ": " + $_.Exception.Message + " url=" + $Url)
             Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds ([Math]::Min(5 * $attempt, 15))
         }
     }
 
-    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($curl) {
         try {
             Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
             LogProgress ("Retrying " + $Label + " with curl: " + $Url)
-            RunHidden $curl.Source @("-L", "--retry", "3", "--retry-all-errors", "-o", $tmpPath, $Url) ("Download " + $Label + " via curl") | Out-Null
-            if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpPath) -and ((Get-Item $tmpPath).Length -ge $MinimumBytes)) {
+            $curlExit = RunHidden $curl.Source @(
+                "-L",
+                "--fail",
+                "--retry", "3",
+                "--retry-delay", "5",
+                "--retry-all-errors",
+                "--connect-timeout", "30",
+                "--max-time", "300",
+                "-o", $tmpPath,
+                $Url
+            ) ("Download " + $Label + " via curl")
+            if ($curlExit -eq 0 -and (Test-Path $tmpPath) -and ((Get-Item $tmpPath).Length -ge $MinimumBytes)) {
                 Move-Item -Path $tmpPath -Destination $TargetPath -Force
                 return $true
             }
+            if ($curlExit -ne 0) {
+                LogLine ("curl download failed for " + $Label + " exit=" + $curlExit + " url=" + $Url)
+            } elseif (Test-Path $tmpPath) {
+                LogLine ("curl download too small for " + $Label + " bytes=" + (Get-Item $tmpPath).Length + " minimum=" + $MinimumBytes + " url=" + $Url)
+            } else {
+                LogLine ("curl download missing output for " + $Label + " url=" + $Url)
+            }
         } catch {
-            LogLine ("curl download failed for " + $Label + ": " + $_.Exception.Message)
+            LogLine ("curl download exception for " + $Label + ": " + $_.Exception.Message + " url=" + $Url)
         }
         Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
     }
@@ -1076,8 +1242,8 @@ function EnsureDrumsepAssets([string]$ModelDir) {
     }
 
     $assets = @(
-        @{ Path = (Join-Path $ModelDir $drumsepModelFileName); Url = $drumsepModelCkptUrl; Label = "DrumSep model checkpoint"; MinimumBytes = 10485760 },
-        @{ Path = (Join-Path $ModelDir $drumsepModelYamlName); Url = $drumsepModelYamlUrl; Label = "DrumSep model YAML"; MinimumBytes = 128 }
+        @{ Path = (Join-Path $ModelDir $drumsepModelFileName); Url = $drumsepModelCkptUrl; Label = "DrumSep model checkpoint"; MinimumBytes = $drumsepModelCkptMinimumBytes },
+        @{ Path = (Join-Path $ModelDir $drumsepModelYamlName); Url = $drumsepModelYamlUrl; Label = "DrumSep model YAML"; MinimumBytes = $drumsepModelYamlMinimumBytes }
     )
     foreach ($asset in $assets) {
         if (Test-Path $asset.Path) {
@@ -1167,6 +1333,13 @@ function VerifyDrumsepDirectmlRuntime([string]$PythonPath) {
         return "model_missing"
     }
 
+    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall
+    if ([string]::IsNullOrWhiteSpace($resolvedFfmpeg) -or -not (Test-Path $resolvedFfmpeg)) {
+        LogLine "DrumSep DirectML verify could not resolve FFmpeg"
+        return "ffmpeg_missing"
+    }
+    LogProgress ("DrumSep DirectML verify using FFmpeg: " + $resolvedFfmpeg)
+
     $verifyCode = @"
 import importlib
 import importlib.metadata as metadata
@@ -1227,12 +1400,15 @@ sep = Separator(model_file_dir=r"$modelDir", output_dir=".", output_format="wav"
 sep.load_model("$drumsepModelFileName")
 print("DRUMSEP_DIRECTML_VERIFY ok device=" + str(device) + " provider=DmlExecutionProvider")
 "@
-    RunHidden $PythonPath @("-c", $verifyCode) "Verify DrumSep DirectML runtime" | Out-Null
+    InvokeWithResolvedFfmpegEnvironment $resolvedFfmpeg {
+        RunHidden $PythonPath @("-c", $verifyCode) "Verify DrumSep DirectML runtime" | Out-Null
+    } | Out-Null
     if ($LASTEXITCODE -eq 0) { return "ok" }
     if ($LASTEXITCODE -eq 2) { return "torch_directml_no_device" }
     if ($LASTEXITCODE -eq 3) { return "directml_tensor_failed" }
     if ($LASTEXITCODE -eq 4) { return "directml_conv_failed" }
     if ($LASTEXITCODE -eq 5) { return "dml_provider_missing" }
+    if ($LASTEXITCODE -eq 9009) { return "ffmpeg_missing" }
     return "verify_failed"
 }
 
@@ -1365,6 +1541,8 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
             WriteDrumsepDirectmlState "error" "missing" "model_missing"
         } elseif ($verifyResult -eq "python_missing") {
             WriteDrumsepDirectmlState "error" "missing" "python_missing"
+        } elseif ($verifyResult -eq "ffmpeg_missing") {
+            WriteDrumsepDirectmlState "error" "ok" "ffmpeg_missing"
         } elseif ($verifyResult -eq "torch_directml_no_device") {
             WriteDrumsepDirectmlState "error" "ok" "torch_directml_no_device"
         } elseif ($verifyResult -eq "directml_tensor_failed") {

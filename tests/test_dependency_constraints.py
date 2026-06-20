@@ -4181,6 +4181,17 @@ def test_windows_bootstrap_has_drumsep_directml_runtime_mode_and_state_fields():
     assert 'DIRECTML_DEVICE=' in script
     assert 'DIRECTML_DEVICE_COUNT=' in script
     assert 'ORT_DIRECTML_PROVIDER=' in script
+    assert 'function ResolveWindowsFfmpegPath' in script
+    assert 'function InvokeWithResolvedFfmpegEnvironment' in script
+    assert 'DrumSep DirectML verify using FFmpeg: ' in script
+    assert '$env:IMAGEIO_FFMPEG_EXE = $FfmpegPath' in script
+    assert 'WriteDrumsepDirectmlState "error" "ok" "ffmpeg_missing"' in script
+    assert '$drumsepModelCkptMinimumBytes = 104857600' in script
+    assert 'Downloading " + $Label + " with curl (preferred for large assets): ' in script
+    assert '"--connect-timeout", "30"' in script
+    assert '"--max-time", "1800"' in script
+    assert 'curl download failed for " + $Label + " exit=' in script
+    assert 'Invoke-WebRequest failed for " + $Label + " attempt " + $attempt + ": " + $_.Exception.Message + " url=" + $Url' in script
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
