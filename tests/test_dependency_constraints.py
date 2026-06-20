@@ -5571,3 +5571,21 @@ def test_linux_auto_prefers_rx9070_and_ignores_skipped_780m():
 
     assert preferred is not None
     assert preferred["id"] == "cuda:0"
+
+
+def test_windows_normal_device_ui_shows_explicit_cuda_label():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    device_section = script.split('local function buildDeviceUiLabel(dev)', 1)[1].split('-- Apply friendly names from deviceMap', 1)[0]
+
+    assert 'local function windowsExplicitGpuLabel(dev, gpuCount)' in script
+    assert 'local function nvidiaShortName(base)' in script
+    assert 'return short .. suffix' in script
+    assert 'return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA") .. suffix' in script
+    assert 'if backend == "DML" then' in script
+    assert 'return "AMD DirectML" .. suffix .. " (" .. base .. ")"' in script
+    assert 'local explicit = windowsExplicitGpuLabel(dev, gpuCount)' in script
+    assert 'if explicit ~= "" then' in script
+    assert 'return explicit' in script
+    assert 'if gpuCount <= 1 then' not in device_section
+    assert 'return "GPU"' not in device_section
+    assert 'return "GPU" .. tostring(idx)' not in device_section

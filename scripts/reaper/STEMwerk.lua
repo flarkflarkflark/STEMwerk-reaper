@@ -10823,6 +10823,53 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         return b
     end
 
+    local function nvidiaShortName(base)
+        if not base or base == "" then return base end
+        local b = tostring(base)
+        local rtx = b:match("RTX%s*%d+")
+        if rtx then return rtx end
+        local gtx = b:match("GTX%s*%d+")
+        if gtx then return gtx end
+        local quadro = b:match("Quadro%s+[%w%-]+")
+        if quadro then return quadro end
+        return b
+    end
+
+    local function windowsExplicitGpuLabel(dev, gpuCount)
+        if not dev then return "" end
+        local backend = deviceBackendPrefix(dev)
+        local base = sanitizeFriendlyName(dev.fullName or dev.name or dev.id) or ""
+        if base == "" or isPlaceholderName(base) then
+            base = sanitizeFriendlyName(dev.name or dev.id) or ""
+        end
+        local idx = tonumber(tostring(dev.id or ""):match(":(%d+)$")) or 0
+        local suffix = gpuCount > 1 and (" " .. tostring(idx)) or ""
+
+        if backend == "CUDA" then
+            local short = nvidiaShortName(base)
+            if base ~= "" and not isPlaceholderName(base) then
+                return short .. suffix
+            end
+            return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA") .. suffix
+        end
+        if backend == "ROCm" then
+            local short = rocmShortName(base)
+            if short and short ~= "" then
+                return short
+            end
+        end
+        if backend == "DML" then
+            if base ~= "" and not isPlaceholderName(base) then
+                if isAmdGpuName(base) then
+                    return "AMD DirectML" .. suffix .. " (" .. base .. ")"
+                end
+                return "DirectML" .. suffix .. " (" .. base .. ")"
+            end
+            return "DirectML" .. suffix
+        end
+        return ""
+    end
+
     local function buildDeviceUiLabel(dev)
         if not dev then return "" end
         if dev.id == "auto" or dev.id == "cpu" then
@@ -10835,11 +10882,10 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
                     gpuCount = gpuCount + 1
                 end
             end
-            if gpuCount <= 1 then
-                return "GPU"
+            local explicit = windowsExplicitGpuLabel(dev, gpuCount)
+            if explicit ~= "" then
+                return explicit
             end
-            local idx = tonumber(tostring(dev.id):match(":(%d+)$")) or 0
-            return "GPU" .. tostring(idx)
         end
         local base = sanitizeFriendlyName(dev.fullName or dev.name or dev.id) or ""
         if base == "" or isPlaceholderName(base) then

@@ -99,6 +99,113 @@ local function sanitizeFriendlyName(name)
     return lbl
 end
 
+local function isPlaceholderGpuName(name)
+    local n = tostring(name or ""):lower()
+    if n == "" then return true end
+    if n:match("^cuda%s*%d*$") then return true end
+    if n:match("^cuda%s*gpu%s*%d*$") then return true end
+    if n:match("^directml%s*%d*$") then return true end
+    if n:match("^directml%s*gpu%s*%d*$") then return true end
+    if n:match("^gpu%s*%d*$") then return true end
+    return false
+end
+
+local function isAmdGpuName(name)
+    local n = string.lower(tostring(name or ""))
+    if n == "" then return false end
+    return n:find("amd", 1, true) or n:find("radeon", 1, true) or n:find("gfx", 1, true)
+end
+
+local function rocmShortName(base)
+    if not base or base == "" then return base end
+    local b = tostring(base)
+    local rx = b:match("RX%s*%d+")
+    if rx then return rx end
+    local rad = b:match("Radeon%s+RX%s*%d+") or b:match("Radeon%s+[%w%-]+")
+    if rad then return rad end
+    local amd = b:match("AMD%s+Radeon%s+[%w%-]+")
+    if amd then
+        return amd:gsub("^AMD%s+", "")
+    end
+    return b
+end
+
+local function nvidiaShortName(base)
+    if not base or base == "" then return base end
+    local b = tostring(base)
+    local rtx = b:match("RTX%s*%d+")
+    if rtx then return rtx end
+    local gtx = b:match("GTX%s*%d+")
+    if gtx then return gtx end
+    local quadro = b:match("Quadro%s+[%w%-]+")
+    if quadro then return quadro end
+    return b
+end
+
+local function isGpuLikeDevice(dev)
+    if not dev or not dev.id then return false end
+    local id = tostring(dev.id or "")
+    return dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$")
+end
+
+local function deviceBackendPrefix(dev)
+    if not dev or not dev.id then return nil end
+    local id = tostring(dev.id or "")
+    if dev.type == "directml" or id:match("^directml") then return "DML" end
+    if dev.type == "cuda" or id:match("^cuda") then
+        if OS == "Linux" then
+            local nm = dev.fullName or dev.name or ""
+            if isAmdGpuName(nm) then
+                return "ROCm"
+            end
+        end
+        return "CUDA"
+    end
+    return nil
+end
+
+local function buildRuntimeGpuUiLabel(dev, gpuCount)
+    if not dev then return "" end
+    local backend = deviceBackendPrefix(dev)
+    local base = sanitizeFriendlyName(dev.fullName or dev.name or dev.id) or ""
+    if base == "" or isPlaceholderGpuName(base) then
+        base = sanitizeFriendlyName(dev.name or dev.id) or ""
+    end
+    local idx = tonumber(tostring(dev.id or ""):match(":(%d+)$")) or 0
+    local suffix = gpuCount > 1 and (" " .. tostring(idx)) or ""
+
+    if OS == "Windows" then
+        if backend == "CUDA" then
+            local short = nvidiaShortName(base)
+            if base ~= "" and not isPlaceholderGpuName(base) then
+                return short .. suffix
+            end
+            return "NVIDIA CUDA" .. suffix
+        end
+        if backend == "DML" then
+            if base ~= "" and not isPlaceholderGpuName(base) then
+                if isAmdGpuName(base) then
+                    return "AMD DirectML" .. suffix .. " (" .. base .. ")"
+                end
+                return "DirectML" .. suffix .. " (" .. base .. ")"
+            end
+            return "DirectML" .. suffix
+        end
+    end
+
+    if backend == "ROCm" then
+        local short = rocmShortName(base)
+        if short and short ~= "" then
+            return short
+        end
+    end
+
+    if base == "" or isPlaceholderGpuName(base) then
+        base = "GPU" .. tostring(idx)
+    end
+    return base
+end
+
 local function parseDeviceListFromPythonOutput(out)
     if not out or out == "" then return nil, nil end
     local devices = {}
@@ -334,67 +441,9 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
 
     local gpuOptionCount = 0
     for _, dev in ipairs(devices) do
-        local id = tostring(dev.id or "")
-        if dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$") or id == "cuda" or id == "directml" then
+        if isGpuLikeDevice(dev) then
             gpuOptionCount = gpuOptionCount + 1
         end
-    end
-
-    local function compactGpuLabel(id)
-        local sid = tostring(id or "")
-        if OS == "Windows" and gpuOptionCount <= 1 and (sid:match("^cuda") or sid:match("^directml")) then
-            return "GPU"
-        end
-        local idx = sid:match(":(%d+)$")
-        if idx then
-            return "GPU" .. idx
-        end
-        if sid == "cuda" or sid == "directml" then
-            return "GPU"
-        end
-        return sid
-    end
-
-    local function isPlaceholderGpuName(name)
-        local n = tostring(name or ""):lower()
-        if n == "" then return true end
-        if n:match("^cuda%s*%d*$") then return true end
-        if n:match("^cuda%s*gpu%s*%d*$") then return true end
-        if n:match("^directml%s*%d*$") then return true end
-        if n:match("^directml%s*gpu%s*%d*$") then return true end
-        if n:match("^gpu%s*%d*$") then return true end
-        return false
-    end
-
-    local function sanitizeFriendlyName(name)
-        if not name then return name end
-        local raw = tostring(name)
-        local lbl = raw
-        lbl = lbl:gsub("^%s+", "")
-        lbl = lbl:gsub("%(%s*[Tt][Mm]%s*%)", "")
-        lbl = lbl:gsub("%(%s*[Rr]%s*%)", "")
-        lbl = lbl:gsub("[Aa][Mm][Dd]%s*[Rr]adeon%s*", "")
-        lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*[Gg]e[Ff]orce%s*", "")
-        lbl = lbl:gsub("[Nn][Vv][Ii][Dd][Ii][Aa]%s*", "")
-        lbl = lbl:gsub("[Ii][Nn][Tt][Ee][Ll]%s*", "")
-        lbl = lbl:gsub("%(%s*[Ee]xternal%s*%)", "eGPU")
-        lbl = lbl:gsub("%(%s*[Ii]nternal%s*%)", "iGPU")
-        lbl = lbl:gsub("%s*[Ll]aptop%s*[Gg]PU%s*$", "")
-        lbl = lbl:gsub("%s*[Gg]raphics%s*$", "")
-        lbl = lbl:gsub("%s*[Gg]PU%s*$", "")
-        lbl = lbl:gsub("%s+", " ")
-        lbl = lbl:gsub("^%s+", ""):gsub("%s+$", "")
-        if lbl == "" or lbl:match("^%(%s*[Tt][Mm]%s*%)$") or #lbl < 3 then
-            local fallback = raw
-            fallback = fallback:gsub("%(%s*[Tt][Mm]%s*%)", "")
-            fallback = fallback:gsub("%(%s*[Rr]%s*%)", "")
-            fallback = fallback:gsub("^%s+", ""):gsub("%s+$", "")
-            fallback = fallback:gsub("^[Aa][Mm][Dd]%s+", "")
-            fallback = fallback:gsub("^[Nn][Vv][Ii][Dd][Ii][Aa]%s+", "")
-            fallback = fallback:gsub("%s+", " ")
-            lbl = fallback ~= "" and fallback or raw
-        end
-        return lbl
     end
 
     local function loadDeviceMap()
@@ -483,15 +532,8 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
         if mapped then
             d.fullName = mapped
         end
-        if d.id and (d.id:match("^cuda:%d+$") or d.id:match("^directml:%d+$") or d.type == "cuda" or d.type == "directml") then
-            local short = sanitizeFriendlyName(d.fullName or d.name)
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = sanitizeFriendlyName(d.name)
-            end
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = compactGpuLabel(d.id)
-            end
-            d.uiName = short
+        if isGpuLikeDevice(d) then
+            d.uiName = buildRuntimeGpuUiLabel(d, gpuOptionCount)
         else
             d.uiName = d.name
         end
@@ -681,7 +723,7 @@ function DEVICE_RUNTIME.startRuntimeDeviceProbeAsync(force)
             return false
         end
 
-        psScript:write("$ErrorActionPreference='SilentlyContinue'\n")
+        psScript:write("$ErrorActionPreference='Stop'\n")
         psScript:write("$py='" .. escPsSingle(PYTHON_PATH) .. "'\n")
         psScript:write("$sep='" .. escPsSingle(SEPARATOR_SCRIPT) .. "'\n")
         psScript:write("$out='" .. escPsSingle(outFile) .. "'\n")
@@ -689,11 +731,23 @@ function DEVICE_RUNTIME.startRuntimeDeviceProbeAsync(force)
         psScript:write("$done='" .. escPsSingle(doneFile) .. "'\n")
         psScript:write("$outLast='" .. escPsSingle(C.script_path .. "probe_out_last.txt") .. "'\n")
         psScript:write("$rcLast='" .. escPsSingle(C.script_path .. "probe_rc_last.txt") .. "'\n")
-        psScript:write("$arg1=@('-u',$sep,'--list-devices-machine')\n")
-        psScript:write("$arg2=@('-u',$sep,'--list-devices')\n")
-        psScript:write("$p=Start-Process -FilePath $py -ArgumentList $arg1 -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $out\n")
-        psScript:write("$exitCode=$p.ExitCode\n")
-        psScript:write("if ($exitCode -ne 0) { $p=Start-Process -FilePath $py -ArgumentList $arg2 -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $out; $exitCode=$p.ExitCode }\n")
+        psScript:write("$cmd1='\"' + $py + '\" -u \"' + $sep + '\" --list-devices-machine > \"' + $out + '\" 2>&1'\n")
+        psScript:write("$cmd2='\"' + $py + '\" -u \"' + $sep + '\" --list-devices > \"' + $out + '\" 2>&1'\n")
+        psScript:write("$exitCode=1\n")
+        psScript:write("try {\n")
+        psScript:write("  Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue\n")
+        psScript:write("  cmd.exe /d /c $cmd1\n")
+        psScript:write("  $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 1 }\n")
+        psScript:write("  if ($exitCode -ne 0) {\n")
+        psScript:write("    Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue\n")
+        psScript:write("    cmd.exe /d /c $cmd2\n")
+        psScript:write("    $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 1 }\n")
+        psScript:write("  }\n")
+        psScript:write("} catch {\n")
+        psScript:write("  ($_ | Out-String) | Out-File -LiteralPath $out -Encoding utf8\n")
+        psScript:write("  if ($null -eq $exitCode) { $exitCode = 1 }\n")
+        psScript:write("}\n")
+        psScript:write("if (-not (Test-Path -LiteralPath $out)) { '' | Out-File -LiteralPath $out -Encoding utf8 }\n")
         psScript:write("Set-Content -Path $rc -Value $exitCode -Encoding ascii\n")
         psScript:write("Set-Content -Path $done -Value 'DONE' -Encoding ascii\n")
         psScript:write("Copy-Item -LiteralPath $out -Destination $outLast -Force -ErrorAction SilentlyContinue\n")
@@ -1069,32 +1123,9 @@ if env.get('directml_possible'):
 
     local gpuOptionCount = 0
     for _, dev in ipairs(devices) do
-        local id = tostring(dev.id or "")
-        if dev.type == "cuda" or dev.type == "directml" or id:match("^cuda:%d+$") or id:match("^directml:%d+$") or id == "cuda" or id == "directml" then
+        if isGpuLikeDevice(dev) then
             gpuOptionCount = gpuOptionCount + 1
         end
-    end
-
-    local function compactGpuLabel(id)
-        local sid = tostring(id or "")
-        if OS == "Windows" and gpuOptionCount <= 1 and (sid:match("^cuda") or sid:match("^directml")) then
-            return "GPU"
-        end
-        local idx = sid:match(":(%d+)$")
-        if idx then return "GPU" .. idx end
-        if sid == "cuda" or sid == "directml" then return "GPU" end
-        return sid
-    end
-
-    local function isPlaceholderGpuName(name)
-        local n = tostring(name or ""):lower()
-        if n == "" then return true end
-        if n:match("^cuda%s*%d*$") then return true end
-        if n:match("^cuda%s*gpu%s*%d*$") then return true end
-        if n:match("^directml%s*%d*$") then return true end
-        if n:match("^directml%s*gpu%s*%d*$") then return true end
-        if n:match("^gpu%s*%d*$") then return true end
-        return false
     end
 
     if OS ~= "Windows" then
@@ -1130,15 +1161,8 @@ if env.get('directml_possible'):
 
     for _, d in ipairs(devices) do
         d.fullName = d.name
-        if d.id and (d.id:match("^cuda:%d+$") or d.id:match("^directml:%d+$") or d.type == "cuda" or d.type == "directml") then
-            local short = sanitizeFriendlyName(d.fullName or d.name)
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = sanitizeFriendlyName(d.name)
-            end
-            if not short or short == "" or isPlaceholderGpuName(short) then
-                short = compactGpuLabel(d.id)
-            end
-            d.uiName = short
+        if isGpuLikeDevice(d) then
+            d.uiName = buildRuntimeGpuUiLabel(d, gpuOptionCount)
         else
             d.uiName = d.name
         end
