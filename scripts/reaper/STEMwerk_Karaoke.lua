@@ -1,6 +1,6 @@
 -- @description Stemwerk: Karaoke
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.2.2.2.11
+-- @version 2.3.0.0
 -- @changelog
 --   Quick preset: vocals removed.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
