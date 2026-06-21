@@ -829,7 +829,7 @@ print("STEMWERK_CORE_MODEL_PREFETCH ok")
     return ($after.fast -eq "ok" -and $after.quality -eq "ok" -and $after.sixstem -eq "ok")
 }
 
-function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [string]$DrumsepModelStatus, [hashtable]$CoreStatus, [string]$Detail) {
+function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [string]$DrumsepModelStatus, [hashtable]$CoreStatus, [string]$Detail, [string]$MainRuntimeStatus = "") {
     $readyPath = GetReadyToGoStatePath
     $modelDir = if ($CoreStatus -and $CoreStatus.Contains("model_dir")) { [string]$CoreStatus["model_dir"] } else { Join-Path $RuntimeBase "models" }
     $fastStatus = if ($CoreStatus -and $CoreStatus.Contains("fast")) { [string]$CoreStatus["fast"] } else { "missing" }
@@ -839,6 +839,7 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
     $runtimeStatusValue = if ([string]::IsNullOrWhiteSpace($RuntimeStatus)) { "missing" } else { $RuntimeStatus }
     $drumsepModelValue = if ([string]::IsNullOrWhiteSpace($DrumsepModelStatus)) { "missing" } else { $DrumsepModelStatus }
     $detailValue = if ([string]::IsNullOrWhiteSpace($Detail)) { "" } else { $Detail }
+    $mainRuntimeStatus = if ([string]::IsNullOrWhiteSpace($MainRuntimeStatus)) { $runtimeStatusValue } else { $MainRuntimeStatus }
     $readyStatus = "ok"
     if ($fastStatus -ne "ok" -or $qualityStatus -ne "ok" -or $sixStemStatus -ne "ok" -or $drumsepModelValue -ne "ok") {
         $readyStatus = "missing"
@@ -853,6 +854,7 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
         "READY_TO_GO_STATUS=$readyStatus",
         "READY_TO_GO_DETAIL=$detailValue",
         "READY_TO_GO_LAST_CHECK_UTC=$timestamp",
+        "MAIN_RUNTIME_STATUS=$mainRuntimeStatus",
         "CORE_MODEL_CACHE_DIR=$modelDir",
         "CORE_MODEL_FAST_STATUS=$fastStatus",
         "CORE_MODEL_QUALITY_STATUS=$qualityStatus",
@@ -902,6 +904,220 @@ function GetReadyToGoRuntimeState([string]$BackendName) {
         }
     }
     return $result
+}
+
+function ReadEnvMap([string]$Path) {
+    $result = @{}
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        return $result
+    }
+    foreach ($line in Get-Content $Path -ErrorAction SilentlyContinue) {
+        if ($line -match "^([^=]+)=(.*)$") {
+            $result[$matches[1]] = $matches[2]
+        }
+    }
+    return $result
+}
+
+function GetMainRuntimePythonPath {
+    $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
+    $capState = ReadEnvMap $capPath
+    $pythonPath = [string]$capState["PYTHON_PATH"]
+    if (-not [string]::IsNullOrWhiteSpace($pythonPath) -and (Test-Path $pythonPath)) {
+        return $pythonPath
+    }
+    if (Test-Path $venvPy) {
+        return $venvPy
+    }
+    return $null
+}
+
+function ProbeMainRuntimeReady([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) {
+        return @{ Status = "missing"; Detail = "python_missing" }
+    }
+    $probeBackend = if ([string]::IsNullOrWhiteSpace($BackendName)) { "cpu" } else { $BackendName }
+    $probeResultPath = Join-Path $RuntimeBase "state\\main_runtime_ready_probe.txt"
+    if (Test-Path $probeResultPath) {
+        Remove-Item -Path $probeResultPath -Force -ErrorAction SilentlyContinue
+    }
+    $probeCode = @'
+import os
+from pathlib import Path
+
+result_path = Path(os.environ["STEMWERK_MAIN_READY_RESULT"])
+backend = os.environ.get("STEMWERK_BACKEND", "cpu")
+errors = []
+for mod_name in ("audio_separator", "onnxruntime", "stemwerk_core"):
+    try:
+        __import__(mod_name)
+    except Exception as exc:
+        errors.append(mod_name + "_import_failed:" + str(exc))
+try:
+    import torch
+    if backend == "cuda":
+        if not bool(torch.cuda.is_available()) or int(torch.cuda.device_count()) <= 0:
+            errors.append("cuda_runtime_probe_failed")
+except Exception as exc:
+    errors.append("torch_import_failed:" + str(exc))
+if errors:
+    result_path.write_text("broken|" + ";".join(errors), encoding="utf-8")
+else:
+    result_path.write_text("ok", encoding="utf-8")
+'@
+    $previousBackend = $env:STEMWERK_BACKEND
+    $previousResultPath = $env:STEMWERK_MAIN_READY_RESULT
+    try {
+        $env:STEMWERK_BACKEND = $probeBackend
+        $env:STEMWERK_MAIN_READY_RESULT = $probeResultPath
+        RunHidden $PythonPath @("-c", $probeCode) "Probe main runtime ready" | Out-Null
+    } finally {
+        $env:STEMWERK_BACKEND = $previousBackend
+        $env:STEMWERK_MAIN_READY_RESULT = $previousResultPath
+    }
+    $probeText = ""
+    if (Test-Path $probeResultPath) {
+        $probeText = ([string](Get-Content $probeResultPath -ErrorAction SilentlyContinue | Select-Object -First 1)).Trim()
+    }
+    if ($LASTEXITCODE -eq 0 -and $probeText -eq "ok") {
+        LogProgress ("Main runtime ready probe passed: " + $PythonPath)
+        return @{ Status = "ok"; Detail = "main_runtime_ok" }
+    }
+    if ($probeText -like "broken|*") {
+        $detail = $probeText.Substring(7)
+        LogProgress ("Main runtime ready probe failed: " + $detail)
+        return @{ Status = "broken"; Detail = $detail }
+    }
+    LogProgress "Main runtime ready probe could not determine status"
+    return @{ Status = "broken"; Detail = "probe_failed" }
+}
+
+function VerifyExistingReadyRuntime([string]$PreferredBackend) {
+    $preferred = if ([string]::IsNullOrWhiteSpace($PreferredBackend)) { "cpu" } else { $PreferredBackend }
+    if ($preferred -eq "cuda") {
+        $cudaStatus = VerifyDrumsepCudaRuntime (GetDrumsepCudaRuntimePythonPath)
+        if ($cudaStatus.Status -eq "ok") {
+            return GetReadyToGoRuntimeState "cuda"
+        }
+        $directmlStatus = VerifyDrumsepDirectmlRuntime (GetDrumsepDirectmlRuntimePythonPath)
+        if ($directmlStatus -eq "ok") {
+            return GetReadyToGoRuntimeState "directml"
+        }
+        $cpuStatus = VerifyDrumsepRuntime (GetDrumsepRuntimePythonPath)
+        if ($cpuStatus -eq "ok") {
+            return GetReadyToGoRuntimeState "cpu"
+        }
+        $existing = GetReadyToGoRuntimeState "cuda"
+        if ($existing.RuntimeStatus -ne "missing") { return $existing }
+        $existing = GetReadyToGoRuntimeState "directml"
+        if ($existing.RuntimeStatus -ne "missing") { return $existing }
+        return GetReadyToGoRuntimeState "cpu"
+    }
+    if ($preferred -eq "directml") {
+        $directmlStatus = VerifyDrumsepDirectmlRuntime (GetDrumsepDirectmlRuntimePythonPath)
+        if ($directmlStatus -eq "ok") {
+            return GetReadyToGoRuntimeState "directml"
+        }
+        $cpuStatus = VerifyDrumsepRuntime (GetDrumsepRuntimePythonPath)
+        if ($cpuStatus -eq "ok") {
+            return GetReadyToGoRuntimeState "cpu"
+        }
+        $cudaStatus = VerifyDrumsepCudaRuntime (GetDrumsepCudaRuntimePythonPath)
+        if ($cudaStatus.Status -eq "ok") {
+            return GetReadyToGoRuntimeState "cuda"
+        }
+        $existing = GetReadyToGoRuntimeState "directml"
+        if ($existing.RuntimeStatus -ne "missing") { return $existing }
+        $existing = GetReadyToGoRuntimeState "cpu"
+        if ($existing.RuntimeStatus -ne "missing") { return $existing }
+        return GetReadyToGoRuntimeState "cuda"
+    }
+    $cpuStatus = VerifyDrumsepRuntime (GetDrumsepRuntimePythonPath)
+    if ($cpuStatus -eq "ok") {
+        return GetReadyToGoRuntimeState "cpu"
+    }
+    $cudaStatus = VerifyDrumsepCudaRuntime (GetDrumsepCudaRuntimePythonPath)
+    if ($cudaStatus.Status -eq "ok") {
+        return GetReadyToGoRuntimeState "cuda"
+    }
+    $directmlStatus = VerifyDrumsepDirectmlRuntime (GetDrumsepDirectmlRuntimePythonPath)
+    if ($directmlStatus -eq "ok") {
+        return GetReadyToGoRuntimeState "directml"
+    }
+    $existing = GetReadyToGoRuntimeState "cpu"
+    if ($existing.RuntimeStatus -ne "missing") { return $existing }
+    $existing = GetReadyToGoRuntimeState "cuda"
+    if ($existing.RuntimeStatus -ne "missing") { return $existing }
+    return GetReadyToGoRuntimeState "directml"
+}
+
+function RunReadyToGoVerifyOnly {
+    WriteBootstrapGuard "running" "ready_to_go_verify"
+    $script:StepIndex = 0
+    $script:StepTotal = 3
+    Step "ready_to_go_prepare" "Preparing ready-to-go verify"
+
+    $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
+    $capState = ReadEnvMap $capPath
+    $readyBackend = [string]$capState["BACKEND"]
+    if ([string]::IsNullOrWhiteSpace($readyBackend)) { $readyBackend = $backend }
+    if ([string]::IsNullOrWhiteSpace($readyBackend)) { $readyBackend = "cpu" }
+    $mainPython = GetMainRuntimePythonPath
+
+    Step "ready_to_go_verify" "Verifying existing runtimes"
+    $mainProbe = ProbeMainRuntimeReady $mainPython $readyBackend
+    $mainReadyStatus = [string]$mainProbe.Status
+    $mainReadyDetail = [string]$mainProbe.Detail
+
+    $resolvedFfmpeg = ResolveWindowsFfmpegPath
+    if ($resolvedFfmpeg -and (Test-Path $resolvedFfmpeg)) {
+        LogProgress ("ffmpeg_existing_ok=" + $resolvedFfmpeg)
+        LogProgress "ffmpeg_download_skipped=existing_ok"
+    } else {
+        LogProgress "ffmpeg_existing_ok=missing"
+    }
+
+    $readyRuntimeState = VerifyExistingReadyRuntime $readyBackend
+    $readyRuntime = [string]$readyRuntimeState.RuntimeKind
+    $readyRuntimeStatus = [string]$readyRuntimeState.RuntimeStatus
+    $readyDrumsepModelStatus = [string]$readyRuntimeState.DrumsepModelStatus
+    $readyDetail = [string]$readyRuntimeState.Detail
+    if ([string]::IsNullOrWhiteSpace($readyDetail)) {
+        $readyDetail = $mainReadyDetail
+    } elseif ($mainReadyStatus -ne "ok") {
+        $readyDetail = "main_runtime_${mainReadyStatus}:$mainReadyDetail;drumsep:$readyDetail"
+    }
+    $readyCoreStatus = VerifyCoreModelCache (GetDrumsepModelDir)
+
+    Step "ready_to_go_write" "Writing ready-to-go state"
+    if ($mainReadyStatus -eq "ok" -and $readyRuntimeStatus -eq "ok") {
+        $status = "ok"
+        $statusReason = ""
+    } else {
+        $status = "deps_failed"
+        $statusReason = "ready_to_go_verify_only"
+    }
+    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainReadyStatus
+    $readyStatePath = GetReadyToGoStatePath
+    $normalizedReadyStatePath = [System.IO.Path]::GetFullPath($readyStatePath)
+    $normalizedStateFile = if ([string]::IsNullOrWhiteSpace($StateFile)) { "" } else { [System.IO.Path]::GetFullPath($StateFile) }
+    LogProgress ("ready_to_go_state_file=" + $readyStatePath)
+    LogProgress "ready_to_go_state_written=1"
+    $readyState = ReadEnvMap $readyStatePath
+    LogProgress ("ready_to_go_status=" + [string]$readyState["READY_TO_GO_STATUS"])
+    if ($normalizedStateFile -and ($normalizedStateFile -ieq $normalizedReadyStatePath)) {
+        LogProgress "ready_to_go_state_persists_in_state_file=1"
+    } else {
+        WriteState $status $statusReason
+    }
+    if ($status -eq "ok") {
+        WriteBootstrapGuard "ok" "completed"
+        LogProgress "Ready-to-go verify finished successfully"
+        exit 0
+    }
+    WriteBootstrapGuard "failed" $statusReason
+    LogProgress ("Ready-to-go verify finished with status=" + $mainReadyStatus + " detail=" + $readyDetail)
+    exit 1
 }
 
 function InstallAudioRuntimeDependencies([string]$PythonPath, [string]$BackendName) {
@@ -2071,6 +2287,10 @@ if ($Mode -eq "drumsep-runtime" -or $Mode -eq "drumsep-cuda-runtime" -or $Mode -
     exit 0
 }
 
+if ($Mode -eq "ready-to-go-verify") {
+    RunReadyToGoVerifyOnly
+}
+
 Step "step_1_runtime" "runtime initialization"
 LogProgress "Runtime directories prepared"
 WriteBootstrapGuard "running" "bootstrap_running"
@@ -2190,51 +2410,12 @@ if (-not $python) {
 
 Step "step_3_ffmpeg" "ffmpeg detection/install"
 LogProgress "Searching for FFmpeg"
-$ffmpegCandidates = @(
-    (Join-Path $RuntimeBase "bin\\ffmpeg.exe"),
-    (Join-Path $RuntimeBase "ffmpeg\\bin\\ffmpeg.exe"),
-    (Join-Path $localAppData "Programs\\ffmpeg\\bin\\ffmpeg.exe"),
-    (Join-Path $localAppData "ffmpeg\\bin\\ffmpeg.exe"),
-    "C:\\ffmpeg\\bin\\ffmpeg.exe",
-    (Join-Path $programFiles "FFmpeg\\bin\\ffmpeg.exe"),
-    (Join-Path $programFiles "ffmpeg\\bin\\ffmpeg.exe"),
-    (Join-Path $programFilesX86 "FFmpeg\\bin\\ffmpeg.exe")
-)
-
-foreach ($p in $ffmpegCandidates) {
-    if ($p -and (Test-Path $p)) {
-        if (IsFfmpegShim $p) {
-            LogProgress ("Ignoring shim FFmpeg path: " + $p)
-        } else {
-            $ffmpeg = $p
-            break
-        }
-    }
-}
-
-if (-not $ffmpeg) {
-    $cmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
-    if ($cmd) {
-        if (IsFfmpegShim $cmd.Source) {
-            LogProgress ("Ignoring shim FFmpeg path: " + $cmd.Source)
-        } else {
-            $ffmpeg = $cmd.Source
-        }
-    }
-}
-
-if (-not $ffmpeg) {
-    LogProgress "FFmpeg not found; downloading and installing"
-    $ffmpeg = InstallFfmpegDirect
-}
-
-if ($ffmpeg -and (IsFfmpegShim $ffmpeg)) {
-    LogProgress ("Ignoring shim FFmpeg path: " + $ffmpeg)
-    $ffmpeg = $null
-}
-if ($ffmpeg -and -not (Test-Path $ffmpeg)) {
-    LogProgress ("FFmpeg path missing after install: " + $ffmpeg)
-    $ffmpeg = $null
+$ffmpeg = ResolveWindowsFfmpegPath
+if ($ffmpeg -and (Test-Path $ffmpeg)) {
+    LogProgress ("ffmpeg_existing_ok=" + $ffmpeg)
+    LogProgress "ffmpeg_download_skipped=existing_ok"
+} else {
+    $ffmpeg = ResolveWindowsFfmpegPath -AllowInstall
 }
 
 if ($ffmpeg) {
@@ -2378,10 +2559,11 @@ if (Test-Path $venvPy) {
     if ($status -ne "ok" -and [string]::IsNullOrWhiteSpace($readyDetail)) {
         $readyDetail = $statusReason
     }
-    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail
+    $mainRuntimeStatus = if ($status -eq "ok") { "ok" } else { "broken" }
+    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainRuntimeStatus
 } else {
     LogProgress "Skipping core install (Python venv unavailable)"
-    WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable"
+    WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable" "missing"
 }
 
 $lines = @()

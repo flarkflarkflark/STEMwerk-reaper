@@ -5751,3 +5751,41 @@ def test_linux_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_ru
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify"' in setup_internal
     assert 'appendSetupLog(runtime, "Mode: ready-to-go-verify", false)' in setup_internal
     assert 'appendSetupLog(runtime, "Non-destructive: verify cached models/runtimes and write ready_to_go.env only", false)' in setup_internal
+
+
+def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_runtime_states():
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
+
+    assert 'if ($Mode -eq "ready-to-go-verify") {' in windows_bootstrap
+    assert "RunReadyToGoVerifyOnly" in windows_bootstrap
+    assert 'function ProbeMainRuntimeReady' in windows_bootstrap
+    assert 'function VerifyExistingReadyRuntime' in windows_bootstrap
+    assert 'function GetMainRuntimePythonPath' in windows_bootstrap
+    assert 'function ReadEnvMap' in windows_bootstrap
+    assert '"MAIN_RUNTIME_STATUS=$mainRuntimeStatus"' in windows_bootstrap
+    assert 'LogProgress ("ready_to_go_state_file=" + $readyStatePath)' in windows_bootstrap
+    assert 'LogProgress "ready_to_go_state_written=1"' in windows_bootstrap
+    assert 'LogProgress ("ready_to_go_status=" + [string]$readyState["READY_TO_GO_STATUS"])' in windows_bootstrap
+    assert '$normalizedReadyStatePath = [System.IO.Path]::GetFullPath($readyStatePath)' in windows_bootstrap
+    assert '$normalizedStateFile = if ([string]::IsNullOrWhiteSpace($StateFile)) { "" } else { [System.IO.Path]::GetFullPath($StateFile) }' in windows_bootstrap
+    assert 'if ($normalizedStateFile -and ($normalizedStateFile -ieq $normalizedReadyStatePath)) {' in windows_bootstrap
+    assert 'LogProgress "ready_to_go_state_persists_in_state_file=1"' in windows_bootstrap
+    assert 'WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainReadyStatus' in windows_bootstrap
+    assert '$env:STEMWERK_BACKEND = $probeBackend' in windows_bootstrap
+    assert '$probeResultPath = Join-Path $RuntimeBase "state\\\\main_runtime_ready_probe.txt"' in windows_bootstrap
+    assert 'for mod_name in ("audio_separator", "onnxruntime", "stemwerk_core"):' in windows_bootstrap
+    assert 'RunHidden $PythonPath @("-c", $probeCode) "Probe main runtime ready" | Out-Null' in windows_bootstrap
+    assert 'if ($LASTEXITCODE -eq 0 -and $probeText -eq "ok") {' in windows_bootstrap
+    assert 'WriteBootstrapGuard "running" "ready_to_go_verify"' in windows_bootstrap
+    assert '$resolvedFfmpeg = ResolveWindowsFfmpegPath' in windows_bootstrap
+    assert 'LogProgress ("ffmpeg_existing_ok=" + $resolvedFfmpeg)' in windows_bootstrap
+    assert 'LogProgress "ffmpeg_download_skipped=existing_ok"' in windows_bootstrap
+    assert "ResolveWindowsFfmpegPath -AllowInstall" in windows_bootstrap
+    assert windows_bootstrap.index('$ffmpeg = ResolveWindowsFfmpegPath') < windows_bootstrap.index('$ffmpeg = ResolveWindowsFfmpegPath -AllowInstall'), (
+        "Windows repair must probe existing FFmpeg before downloading"
+    )
+
+    assert 'local isReadyToGoVerify = mode == "ready-to-go-verify"' in setup_internal
+    assert 'local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepCudaRuntime and "drumsep_runtime_cuda.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or (isReadyToGoVerify and "ready_to_go.env") or "bootstrap.env")' in setup_internal
+    assert 'local launchMode = (isDrumsepRuntime or isDrumsepCudaRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime or isReadyToGoVerify) and mode or "repair"' in setup_internal

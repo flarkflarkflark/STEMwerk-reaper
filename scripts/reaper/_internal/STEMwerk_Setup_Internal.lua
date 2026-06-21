@@ -2196,9 +2196,10 @@ local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
     local isDrumsepCudaRuntime = mode == "drumsep-cuda-runtime"
     local isDrumsepRocmRuntime = mode == "drumsep-rocm-runtime"
     local isDrumsepDirectmlRuntime = mode == "drumsep-directml-runtime"
-    local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepCudaRuntime and "drumsep_runtime_cuda.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or "bootstrap.env")
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepCudaRuntime and "drumsep_cuda_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or (isDrumsepDirectmlRuntime and "drumsep_directml_install.log") or "bootstrap.log")
-    local pidFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.pid") or (isDrumsepCudaRuntime and "drumsep_cuda_runtime.pid") or (isDrumsepRocmRuntime and "drumsep_rocm_runtime.pid") or (isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid") or "bootstrap.pid")
+    local isReadyToGoVerify = mode == "ready-to-go-verify"
+    local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepCudaRuntime and "drumsep_runtime_cuda.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or (isReadyToGoVerify and "ready_to_go.env") or "bootstrap.env")
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepCudaRuntime and "drumsep_cuda_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or (isDrumsepDirectmlRuntime and "drumsep_directml_install.log") or (isReadyToGoVerify and "ready_to_go_verify.log") or "bootstrap.log")
+    local pidFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.pid") or (isDrumsepCudaRuntime and "drumsep_cuda_runtime.pid") or (isDrumsepRocmRuntime and "drumsep_rocm_runtime.pid") or (isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid") or (isReadyToGoVerify and "ready_to_go_verify.pid") or "bootstrap.pid")
     local scriptPath = PATH_HELPER.getBootstrapScriptPath(INSTALL_ROOT, OS, PATH_SEP)
     local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     ensureDir(runtime.runtimeState)
@@ -2220,7 +2221,7 @@ local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
         return false
     end
 
-    local launchMode = (isDrumsepRuntime or isDrumsepCudaRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime) and mode or "repair"
+    local launchMode = (isDrumsepRuntime or isDrumsepCudaRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime or isReadyToGoVerify) and mode or "repair"
     local powershellPath = os.getenv("SystemRoot")
     if powershellPath and powershellPath ~= "" then
         powershellPath = powershellPath .. "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
