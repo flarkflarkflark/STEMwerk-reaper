@@ -5567,7 +5567,7 @@ end
 
 startLinuxSetup = function(runtime, separatorScript, mode)
     mode = tostring(mode or "repair")
-    if mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" then
+    if mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify" then
         mode = "repair"
     end
     local isDrumsepRuntime = mode == "drumsep-runtime"
@@ -5590,6 +5590,11 @@ startLinuxSetup = function(runtime, separatorScript, mode)
         appendSetupLog(runtime, "Drum Kit Split ROCm runtime setup started (" .. setupUiLabel() .. ")", true)
         appendSetupLog(runtime, "Mode: drumsep-rocm-runtime", false)
         appendSetupLog(runtime, "Target runtime: " .. tostring(runtime.base .. PATH_SEP .. ".venv-drumsep-rocm"), false)
+        appendSetupLog(runtime, "Keeping main runtime unchanged: " .. tostring(runtime.venvDir), false)
+    elseif mode == "ready-to-go-verify" then
+        appendSetupLog(runtime, "Ready-to-go verify started (" .. setupUiLabel() .. ")", true)
+        appendSetupLog(runtime, "Mode: ready-to-go-verify", false)
+        appendSetupLog(runtime, "Non-destructive: verify cached models/runtimes and write ready_to_go.env only", false)
         appendSetupLog(runtime, "Keeping main runtime unchanged: " .. tostring(runtime.venvDir), false)
     elseif mode == "rebuild-venv" then
         appendSetupLog(runtime, "Setup run started (" .. setupUiLabel() .. ")", true)

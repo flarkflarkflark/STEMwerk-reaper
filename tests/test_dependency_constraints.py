@@ -5671,7 +5671,8 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert "ensure_drumsep_assets" in linux_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' in linux_bootstrap
     assert 'set_status "deps_failed" "drumsep_ready_runtime_failed"' in linux_bootstrap
-    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"' in linux_bootstrap
+    assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in linux_bootstrap
+    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok"' in linux_bootstrap
 
     assert "ready_to_go_state_file()" in macos_bootstrap
     assert "ensure_core_model_cache" in macos_bootstrap
@@ -5691,3 +5692,20 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert "## Pre-release live smoke plan" in release_notes
     assert "READY_TO_GO_SMOKE_PASS" in release_notes
     assert "PRE_RELEASE_SMOKE_MATRIX_BLOCKED" in release_notes
+
+
+def test_linux_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_runtime_states():
+    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text(encoding="utf-8")
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
+
+    assert 'if [ "${MODE}" = "ready-to-go-verify" ]; then' in linux_bootstrap
+    assert "run_ready_to_go_verify_only()" in linux_bootstrap
+    assert 'verify_existing_ready_runtime "${READY_BACKEND}" || true' in linux_bootstrap
+    assert 'probe_main_runtime_ready "$(main_runtime_python)" "${BACKEND}"' in linux_bootstrap
+    assert 'log_step "Existing DrumSep runtime detected; running verification before reinstall"' in linux_bootstrap
+    assert 'log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"' in linux_bootstrap
+    assert 'MODE="ready-to-go-verify"' not in linux_bootstrap
+
+    assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify"' in setup_internal
+    assert 'appendSetupLog(runtime, "Mode: ready-to-go-verify", false)' in setup_internal
+    assert 'appendSetupLog(runtime, "Non-destructive: verify cached models/runtimes and write ready_to_go.env only", false)' in setup_internal

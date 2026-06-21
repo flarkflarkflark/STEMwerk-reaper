@@ -83,6 +83,10 @@ ready_to_go_state_file() {
   printf "%s/state/ready_to_go.env\n" "${RUNTIME_BASE}"
 }
 
+main_runtime_python() {
+  printf "%s/.venv/bin/python\n" "${RUNTIME_BASE}"
+}
+
 verify_core_model_cache() {
   _model_dir="${1:-$(model_cache_dir)}"
   _fast="missing"
@@ -156,22 +160,39 @@ write_ready_to_go_state() {
   _runtime_status="${2:-missing}"
   _drumsep_model_status="${3:-missing}"
   _detail="${4:-}"
+  _main_runtime_status="${5:-ok}"
   _core="$(verify_core_model_cache)"
   _model_dir="$(printf "%s\n" "${_core}" | awk -F= '/^model_dir=/{print $2; exit}')"
   _fast="$(printf "%s\n" "${_core}" | awk -F= '/^fast=/{print $2; exit}')"
   _quality="$(printf "%s\n" "${_core}" | awk -F= '/^quality=/{print $2; exit}')"
   _sixstem="$(printf "%s\n" "${_core}" | awk -F= '/^sixstem=/{print $2; exit}')"
   _ready="ok"
+  case "${_main_runtime_status}" in
+    broken|verify_failed|runtime_verify_failed) _ready="broken" ;;
+    ok) ;;
+    *) _ready="missing" ;;
+  esac
+  case "${_runtime_status}" in
+    ok|skipped) ;;
+    broken|load_failed|verify_failed|install_failed|disk_space_insufficient)
+      _ready="broken"
+      ;;
+    *)
+      if [ "${_ready}" = "ok" ]; then
+        _ready="missing"
+      fi
+      ;;
+  esac
   if [ "${_fast}" != "ok" ] || [ "${_quality}" != "ok" ] || [ "${_sixstem}" != "ok" ] || [ "${_drumsep_model_status}" != "ok" ]; then
-    _ready="missing"
-  fi
-  if [ "${_runtime_status}" != "ok" ] && [ "${_runtime_status}" != "skipped" ]; then
-    _ready="missing"
+    if [ "${_ready}" = "ok" ]; then
+      _ready="missing"
+    fi
   fi
   {
     echo "READY_TO_GO_STATUS=${_ready}"
     echo "READY_TO_GO_DETAIL=${_detail}"
     echo "READY_TO_GO_LAST_CHECK_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
+    echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"
     echo "CORE_MODEL_CACHE_DIR=${_model_dir}"
     echo "CORE_MODEL_FAST_STATUS=${_fast}"
     echo "CORE_MODEL_QUALITY_STATUS=${_quality}"
@@ -180,6 +201,195 @@ write_ready_to_go_state() {
     echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"
     echo "DRUMSEP_READY_MODEL_STATUS=${_drumsep_model_status}"
   } > "$(ready_to_go_state_file)"
+}
+
+probe_main_runtime_ready() {
+  _py="${1:-$(main_runtime_python)}"
+  _backend="${2:-${BACKEND:-cpu}}"
+  [ -x "${_py}" ] || {
+    printf "missing|python_missing"
+    return 1
+  }
+  _probe="$(STEMWERK_BACKEND="${_backend}" "${_py}" - <<'PY' 2>/dev/null || true
+import os
+
+backend = os.environ.get("STEMWERK_BACKEND", "cpu")
+errors = []
+for mod_name in ("audio_separator", "onnxruntime", "stemwerk_core", "torchaudio"):
+    try:
+        __import__(mod_name)
+    except Exception as exc:
+        errors.append(mod_name + "_import_failed:" + str(exc))
+try:
+    import torch
+    ver = str(getattr(torch, "__version__", "0.0.0"))
+    core = ver.split("+", 1)[0]
+    try:
+        major, minor = [int(x) for x in core.split(".")[:2]]
+    except Exception:
+        major, minor = 999, 999
+    hip = getattr(getattr(torch, "version", None), "hip", None)
+    cuda_available = bool(torch.cuda.is_available())
+    cuda_count = int(torch.cuda.device_count()) if cuda_available else 0
+    names = []
+    if cuda_available:
+        for idx in range(cuda_count):
+            try:
+                names.append(str(torch.cuda.get_device_name(idx)))
+            except Exception:
+                pass
+    dev_text = "|".join(names).lower()
+    allow_rocm7_gfx1201 = (
+        backend == "rocm"
+        and (major, minor) == (2, 10)
+        and hip is not None
+        and cuda_available
+        and cuda_count > 0
+        and ("rx 9070" in dev_text or "gfx1201" in dev_text)
+    )
+    if (major > 2 or (major == 2 and minor >= 6)) and not allow_rocm7_gfx1201:
+        errors.append("torch_too_new_for_demucs:" + ver)
+    if backend == "rocm" and not (hip is not None and cuda_available and cuda_count > 0):
+        errors.append("rocm_runtime_probe_failed")
+    if backend == "cuda" and not (cuda_available and cuda_count > 0):
+        errors.append("cuda_runtime_probe_failed")
+except Exception as exc:
+    errors.append("torch_import_failed:" + str(exc))
+if errors:
+    print("broken|" + ";".join(errors))
+else:
+    print("ok")
+PY
+)"
+  case "${_probe}" in
+    ok)
+      log_step "Main runtime ready probe passed: ${_py}"
+      printf "ok"
+      return 0
+      ;;
+    broken\|*)
+      log_step "Main runtime ready probe failed: ${_probe#broken|}"
+      printf "%s" "${_probe}"
+      return 1
+      ;;
+    *)
+      log_step "Main runtime ready probe could not determine status"
+      printf "broken|probe_failed"
+      return 1
+      ;;
+  esac
+}
+
+load_ready_runtime_state() {
+  _kind="${1:-cpu}"
+  if [ "${_kind}" = "rocm" ] && [ -f "$(drumsep_rocm_state_file)" ]; then
+    READY_RUNTIME_KIND="rocm"
+    READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
+    READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_ROCM_MODEL_STATUS=/{print $2; exit} /^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
+    READY_DETAIL="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
+    return 0
+  fi
+  if [ -f "$(drumsep_state_file)" ]; then
+    READY_RUNTIME_KIND="cpu"
+    READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
+    READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
+    READY_DETAIL="$(awk -F= '/^DRUMSEP_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_state_file)")"
+    return 0
+  fi
+  return 1
+}
+
+verify_existing_ready_runtime() {
+  _preferred="${1:-cpu}"
+  if [ "${_preferred}" = "rocm" ]; then
+    if verify_drumsep_rocm_runtime; then
+      load_ready_runtime_state "rocm"
+      return 0
+    fi
+    if verify_drumsep_runtime; then
+      load_ready_runtime_state "cpu"
+      return 0
+    fi
+    load_ready_runtime_state "rocm" || load_ready_runtime_state "cpu" || true
+    return 1
+  fi
+  if verify_drumsep_runtime; then
+    load_ready_runtime_state "cpu"
+    return 0
+  fi
+  if verify_drumsep_rocm_runtime; then
+    load_ready_runtime_state "rocm"
+    return 0
+  fi
+  load_ready_runtime_state "cpu" || load_ready_runtime_state "rocm" || true
+  return 1
+}
+
+run_ready_to_go_verify_only() {
+  STEP_TOTAL="3"
+  set_progress "1" "${STEP_TOTAL}" "Preparing ready-to-go verify"
+  READY_RUNTIME_KIND="cpu"
+  READY_RUNTIME_STATUS="missing"
+  READY_DRUMSEP_MODEL_STATUS="missing"
+  READY_DETAIL=""
+  MAIN_READY_STATUS="missing"
+  MAIN_READY_DETAIL="python_missing"
+  READY_BACKEND="cpu"
+  if [ "${BACKEND}" = "rocm" ]; then
+    READY_BACKEND="rocm"
+  fi
+
+  set_progress "2" "${STEP_TOTAL}" "Verifying existing runtimes"
+  _main_probe="$(probe_main_runtime_ready "$(main_runtime_python)" "${BACKEND}")"
+  if [ "${_main_probe}" = "ok" ]; then
+    MAIN_READY_STATUS="ok"
+    MAIN_READY_DETAIL="main_runtime_ok"
+  else
+    case "${_main_probe}" in
+      missing\|*)
+        MAIN_READY_STATUS="missing"
+        MAIN_READY_DETAIL="${_main_probe#missing|}"
+        ;;
+      broken\|*)
+        MAIN_READY_STATUS="broken"
+        MAIN_READY_DETAIL="${_main_probe#broken|}"
+        ;;
+      *)
+        MAIN_READY_STATUS="broken"
+        MAIN_READY_DETAIL="${_main_probe}"
+        ;;
+    esac
+  fi
+
+  verify_existing_ready_runtime "${READY_BACKEND}" || true
+  if [ -z "${READY_DETAIL}" ]; then
+    READY_DETAIL="${MAIN_READY_DETAIL}"
+  elif [ "${MAIN_READY_STATUS}" != "ok" ]; then
+    READY_DETAIL="main_runtime_${MAIN_READY_STATUS}:${MAIN_READY_DETAIL};drumsep:${READY_DETAIL}"
+  fi
+
+  set_progress "3" "${STEP_TOTAL}" "Writing ready-to-go state"
+  if [ "${MAIN_READY_STATUS}" = "ok" ] && [ "${READY_RUNTIME_STATUS}" = "ok" ]; then
+    STATUS="ok"
+    STATUS_REASON=""
+  else
+    STATUS="deps_failed"
+    STATUS_REASON="ready_to_go_verify_only"
+    RUNTIME_VERIFY_DETAIL="${READY_DETAIL}"
+    PYTHON_PATH=""
+  fi
+  write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${MAIN_READY_STATUS}"
+  if [ -n "${STATE_FILE}" ]; then
+    log_stage "Writing bootstrap.env"
+    write_state
+  fi
+  if [ "${MAIN_READY_STATUS}" = "ok" ] && [ "${READY_RUNTIME_STATUS}" = "ok" ]; then
+    log_stage "Ready-to-go verify finished"
+    log "Ready-to-go verify finished successfully"
+    exit 0
+  fi
+  log "Ready-to-go verify finished with status=${MAIN_READY_STATUS} detail=${READY_DETAIL}"
+  exit 1
 }
 
 drumsep_state_file() {
@@ -996,6 +1206,14 @@ install_drumsep_runtime() {
   log_stage "Installing optional DrumSep runtime"
   log_step "DrumSep runtime path: ${RUNTIME_BASE}/.venv-drumsep"
   log_step "DrumSep install log: ${_drumsep_log}"
+  if [ -x "${_drumsep_py}" ]; then
+    log_step "Existing DrumSep runtime detected; running verification before reinstall"
+    if verify_drumsep_runtime; then
+      log_step "Existing DrumSep runtime verified; skipping reinstall"
+      return 0
+    fi
+    log_step "Existing DrumSep runtime failed verification; rebuilding"
+  fi
   STEP_TOTAL="4"
   set_progress "1" "${STEP_TOTAL}" "Creating DrumSep runtime"
   rm -rf "${RUNTIME_BASE}/.venv-drumsep"
@@ -1327,6 +1545,10 @@ elif [ "${ROCM_MODE}" -eq 1 ]; then
   CORE_EXTRA="[rocm]"
   PROFILE="linux-rocm"
   BACKEND="rocm"
+fi
+
+if [ "${MODE}" = "ready-to-go-verify" ]; then
+  run_ready_to_go_verify_only
 fi
 
 set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
@@ -2401,15 +2623,13 @@ if [ "${READY_RUNTIME_KIND}" = "rocm" ] && [ -f "$(drumsep_rocm_state_file)" ]; 
   READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
   READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_ROCM_MODEL_STATUS=/{print $2; exit} /^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
   READY_DETAIL="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
-elif [ -f "$(drumsep_state_file)" ]; then
-  READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
-  READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
-  READY_DETAIL="$(awk -F= '/^DRUMSEP_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_state_file)")"
+else
+  load_ready_runtime_state "cpu" || true
 fi
 if [ -z "${READY_RUNTIME_STATUS}" ]; then READY_RUNTIME_STATUS="missing"; fi
 if [ -z "${READY_DRUMSEP_MODEL_STATUS}" ]; then READY_DRUMSEP_MODEL_STATUS="missing"; fi
 if [ -z "${READY_DETAIL}" ]; then READY_DETAIL="${STATUS_REASON}"; fi
-write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"
+write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok"
 
 if [ -n "${STATE_FILE}" ]; then
   log_stage "Writing bootstrap.env"
