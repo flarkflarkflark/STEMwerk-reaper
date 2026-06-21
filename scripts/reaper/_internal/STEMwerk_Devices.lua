@@ -203,6 +203,30 @@ local function buildRuntimeGpuUiLabel(dev, gpuCount)
     return base
 end
 
+local function runtimeDeviceListSignature(devices)
+    local parts = {}
+    for _, dev in ipairs(devices or {}) do
+        parts[#parts + 1] = table.concat({
+            tostring(dev and dev.id or ""),
+            tostring(dev and dev.uiName or dev and dev.name or ""),
+            tostring(dev and dev.fullName or dev and dev.name or ""),
+            tostring(dev and dev.type or ""),
+            tostring(dev and dev.descKey or ""),
+        }, "|")
+    end
+    return table.concat(parts, "\n")
+end
+
+local function markDeviceUiSource(source)
+    RUNTIME_DEVICE_UI_SEED_SOURCE = source
+    debugLog("device_ui_seed_source=" .. tostring(source or ""))
+end
+
+local function markDeviceUiRefreshReason(reason)
+    RUNTIME_DEVICE_UI_REFRESH_REASON = reason
+    debugLog("device_ui_refresh_reason=" .. tostring(reason or ""))
+end
+
 local function parseDeviceListFromPythonOutput(out)
     if not out or out == "" then return nil, nil end
     local devices = {}
@@ -548,6 +572,14 @@ function DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, now, opt
         end
     end
 
+    local previousSignature = runtimeDeviceListSignature(RUNTIME_DEVICES)
+    local nextSignature = runtimeDeviceListSignature(devices)
+    if previousSignature == nextSignature then
+        markDeviceUiRefreshReason("unchanged")
+    else
+        markDeviceUiRefreshReason("changed")
+    end
+
     RUNTIME_DEVICES = devices
     RUNTIME_DEVICE_NOTE_KEY = buildDeviceNoteFromEnvJson(envJson, devices)
     RUNTIME_DEVICE_LAST_PROBE = now
@@ -691,6 +723,7 @@ function DEVICE_RUNTIME.startRuntimeDeviceProbeAsync(force)
 
     if not RUNTIME_DEVICES then
         RUNTIME_DEVICES = DEVICE_RUNTIME.runtimeDeviceSafeList()
+        markDeviceUiSource("fallback")
     end
     RUNTIME_DEVICE_NOTE_KEY = "device_note_probing"
 
@@ -928,6 +961,7 @@ function DEVICE_RUNTIME.applyFreshDeviceProbeCache(opts)
     end
     RUNTIME_DEVICE_SKIP_NOTE = skipNote
     DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, os.time(), opts)
+    markDeviceUiSource("probe")
     debugLog("Device probe cache applied ttl_seconds=" .. tostring(DEVICE_PROBE_CACHE_TTL_SECONDS))
     return true, "fresh"
 end
@@ -1226,6 +1260,7 @@ function DEVICE_RUNTIME.applyCachedRuntimeDevices(opts)
     end
     RUNTIME_DEVICE_SKIP_NOTE = skipNote
     DEVICE_RUNTIME.applyRuntimeDevicesFromParsed(devices, envJson, os.time(), opts)
+    markDeviceUiSource("runtime_state")
     if cap.kv and cap.kv.PROFILE then
         debugLog("Capabilities profile=" .. tostring(cap.kv.PROFILE) .. " backend=" .. tostring(cap.kv.BACKEND))
     end

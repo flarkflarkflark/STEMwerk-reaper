@@ -1283,6 +1283,8 @@ RUNTIME_DEVICE_NOTE_KEY = nil
 RUNTIME_DEVICE_SKIP_NOTE = nil
 RUNTIME_DEVICE_PROBE_DEBUG = nil
 RUNTIME_DEVICE_PROBE = nil
+RUNTIME_DEVICE_UI_SEED_SOURCE = nil
+RUNTIME_DEVICE_UI_REFRESH_REASON = nil
 
 -- Available models
 local MODELS = {
@@ -13427,13 +13429,22 @@ showStemSelectionDialog = function()
     -- Keep startup non-blocking: seed a safe device list immediately and do runtime probing
     -- only after the window is already visible.
     local cacheOpts = nil
-    if OS == "Windows" and getTrustedWindowsRuntimeState and getTrustedWindowsRuntimeState() then
-        cacheOpts = { skipQuickBench = true }
+    local trustedWindowsRuntime = nil
+    if OS == "Windows" and getTrustedWindowsRuntimeState then
+        trustedWindowsRuntime = getTrustedWindowsRuntimeState()
+        if trustedWindowsRuntime then
+            applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
+            cacheOpts = { skipQuickBench = true }
+        end
     end
-    local cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)
     local liveProbeCacheApplied, liveProbeCacheReason = applyFreshDeviceProbeCache(cacheOpts)
+    local cachedDevicesApplied = false
+    if not liveProbeCacheApplied then
+        cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)
+    end
     if not cachedDevicesApplied and not RUNTIME_DEVICES then
         RUNTIME_DEVICES = runtimeDeviceSafeList()
+        RUNTIME_DEVICE_UI_SEED_SOURCE = "fallback"
     end
 
     local dialogW, dialogH, posX, posY = GUI.applyLiveGeometry(840, 600)

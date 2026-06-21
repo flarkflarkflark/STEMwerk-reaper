@@ -5711,6 +5711,35 @@ def test_windows_directml_short_labels_keep_technical_tooltip_mapping():
     assert 'backend_prefix .. ": " .. backend_label' in script
 
 
+def test_windows_startup_prefers_fresh_probe_cache_before_generic_capability_devices():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    devices = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
+
+    assert 'trustedWindowsRuntime = getTrustedWindowsRuntimeState()' in script
+    assert 'applyTrustedWindowsRuntimeState(trustedWindowsRuntime)' in script
+    assert 'local liveProbeCacheApplied, liveProbeCacheReason = applyFreshDeviceProbeCache(cacheOpts)' in script
+    assert 'if not liveProbeCacheApplied then' in script
+    assert 'cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)' in script
+    assert 'RUNTIME_DEVICE_UI_SEED_SOURCE = "fallback"' in script
+    assert 'function DEVICE_RUNTIME.applyFreshDeviceProbeCache(opts)' in devices
+    assert 'markDeviceUiSource("probe")' in devices
+    assert 'markDeviceUiSource("runtime_state")' in devices
+    assert 'return nil, "python_changed"' in devices
+
+
+def test_runtime_device_ui_refresh_marks_changed_vs_unchanged_lists():
+    devices = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
+
+    assert 'local function runtimeDeviceListSignature(devices)' in devices
+    assert 'RUNTIME_DEVICE_UI_SEED_SOURCE = source' in devices
+    assert 'RUNTIME_DEVICE_UI_REFRESH_REASON = reason' in devices
+    assert 'device_ui_seed_source=' in devices
+    assert 'device_ui_refresh_reason=' in devices
+    assert 'if previousSignature == nextSignature then' in devices
+    assert 'markDeviceUiRefreshReason("unchanged")' in devices
+    assert 'markDeviceUiRefreshReason("changed")' in devices
+
+
 def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle():
     windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
     linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text(encoding="utf-8")
