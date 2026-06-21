@@ -184,10 +184,7 @@ local function buildRuntimeGpuUiLabel(dev, gpuCount)
         end
         if backend == "DML" then
             if base ~= "" and not isPlaceholderGpuName(base) then
-                if isAmdGpuName(base) then
-                    return "AMD DirectML" .. suffix .. " (" .. base .. ")"
-                end
-                return "DirectML" .. suffix .. " (" .. base .. ")"
+                return base
             end
             return "DirectML" .. suffix
         end

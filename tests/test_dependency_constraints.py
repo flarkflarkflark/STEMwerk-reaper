@@ -5401,6 +5401,7 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)' in script
     assert 'local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)' in script
     assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)' in script
+    assert 'local directmlDeviceNames = schedulerRuntimeDirectmlDeviceNames(directmlState, capabilityState)' in script
     assert 'rocmReady = rocmReady and rocmPython ~= ""' in script
     assert 'local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""' in script
     assert 'rocmState.DRUMSEP_ROCM_DEVICE_NAMES' in script
@@ -5410,6 +5411,20 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'if mpsAvailable and cpuReady then' in script
     assert 'add("mps", "Apple MPS", "mps", "device_mps_desc")' in script
     assert 'add("auto", "Auto", "auto", "device_auto_dks_desc")' in script
+    assert 'if directmlReady then' in script
+    assert 'add("directml:" .. tostring(idx), rawName, "directml", "device_directml_desc")' in script
+    assert 'add("directml:0", "DirectML 0", "directml", "device_directml_desc")' in script
+
+
+def test_scheduler_runtime_directml_device_names_prefers_friendly_names_and_ignores_privateuseone_ids():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'function schedulerRuntimeDirectmlDeviceNames(state, capabilityState)' in script
+    assert 'state and (state.DRUMSEP_DIRECTML_DEVICE_NAMES or state.DRUMSEP_DEVICE_NAMES or state.DIRECTML_DEVICE_NAMES)' in script
+    assert 'if lower == "directml" or lower:match("^directml:%d+$") or lower:match("^privateuseone:%d+$") then' in script
+    assert 'if devType == "directml" or id:match("^directml:") then' in script
+    assert 'addName(dev.fullName or dev.name or dev.uiName or "")' in script
+    assert 'for _, rawName in ipairs(schedulerSplitDeviceNameList(capabilityState and capabilityState.DEVICE_NAMES or "")) do' in script
     assert 'd.uiName = T("device_mps_label") or "Apple MPS"' in script
     assert 'SETTINGS.device = directDksRoute and "auto" or "cpu"' in script
 
@@ -5666,19 +5681,34 @@ def test_linux_auto_prefers_rx9070_and_ignores_skipped_780m():
 def test_windows_normal_device_ui_shows_explicit_cuda_label():
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
     device_section = script.split('local function buildDeviceUiLabel(dev)', 1)[1].split('-- Apply friendly names from deviceMap', 1)[0]
+    devices_module = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
 
     assert 'local function windowsExplicitGpuLabel(dev, gpuCount)' in script
     assert 'local function nvidiaShortName(base)' in script
     assert 'return short .. suffix' in script
     assert 'return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA") .. suffix' in script
     assert 'if backend == "DML" then' in script
-    assert 'return "AMD DirectML" .. suffix .. " (" .. base .. ")"' in script
+    assert 'return base' in script
+    assert 'return "AMD DirectML" .. suffix .. " (" .. base .. ")"' not in script
     assert 'local explicit = windowsExplicitGpuLabel(dev, gpuCount)' in script
     assert 'if explicit ~= "" then' in script
     assert 'return explicit' in script
     assert 'if gpuCount <= 1 then' not in device_section
     assert 'return "GPU"' not in device_section
     assert 'return "GPU" .. tostring(idx)' not in device_section
+    assert 'local function buildRuntimeGpuUiLabel(dev, gpuCount)' in devices_module
+    assert 'return base' in devices_module
+    assert 'return "AMD DirectML" .. suffix .. " (" .. base .. ")"' not in devices_module
+
+
+def test_windows_directml_short_labels_keep_technical_tooltip_mapping():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'lbl = lbl:gsub("([Rr][Xx])(%d%d%d%d+)", "%1 %2")' in script
+    assert 'lbl = lbl:gsub("%s*[Gg]raphics%s*$", "")' in script
+    assert 'return base' in script
+    assert 'tip = tostring(tip or "") .. "\\n\\n" .. tostring(device.id) .. " - " .. tostring(device.fullName)' in script
+    assert 'backend_prefix .. ": " .. backend_label' in script
 
 
 def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle():

@@ -10487,6 +10487,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)
         local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)
         local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)
+        local directmlDeviceNames = schedulerRuntimeDirectmlDeviceNames(directmlState, capabilityState)
         rocmReady = rocmReady and rocmPython ~= ""
         local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""
         local mpsAvailable = false
@@ -10534,6 +10535,16 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
             end
             if idx == 0 then
                 add("cuda:0", "GPU 0", "cuda", "device_cuda_desc")
+            end
+        end
+        if directmlReady then
+            local idx = 0
+            for _, rawName in ipairs(directmlDeviceNames) do
+                add("directml:" .. tostring(idx), rawName, "directml", "device_directml_desc")
+                idx = idx + 1
+            end
+            if idx == 0 then
+                add("directml:0", "DirectML 0", "directml", "device_directml_desc")
             end
         end
 
@@ -10865,10 +10876,7 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         end
         if backend == "DML" then
             if base ~= "" and not isPlaceholderName(base) then
-                if isAmdGpuName(base) then
-                    return "AMD DirectML" .. suffix .. " (" .. base .. ")"
-                end
-                return "DirectML" .. suffix .. " (" .. base .. ")"
+                return base
             end
             return "DirectML" .. suffix
         end
@@ -14693,6 +14701,38 @@ function schedulerRuntimeCudaDeviceNames(state, capabilityState)
         local id = string.lower(tostring(dev and dev.id or ""))
         local devType = string.lower(tostring(dev and dev.type or ""))
         if devType == "cuda" or id:match("^cuda:") then
+            addName(dev.fullName or dev.name or dev.uiName or "")
+        end
+    end
+    for _, rawName in ipairs(schedulerSplitDeviceNameList(capabilityState and capabilityState.DEVICE_NAMES or "")) do
+        addName(rawName)
+    end
+    return names
+end
+
+function schedulerRuntimeDirectmlDeviceNames(state, capabilityState)
+    local names = {}
+    local seen = {}
+    local function addName(rawName)
+        local trimmed = tostring(rawName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local lower = trimmed:lower()
+        if trimmed == "" or lower == "auto" or lower == "cpu" or seen[lower] then
+            return
+        end
+        if lower == "directml" or lower:match("^directml:%d+$") or lower:match("^privateuseone:%d+$") then
+            return
+        end
+        seen[lower] = true
+        names[#names + 1] = trimmed
+    end
+
+    for _, rawName in ipairs(schedulerSplitDeviceNameList(state and (state.DRUMSEP_DIRECTML_DEVICE_NAMES or state.DRUMSEP_DEVICE_NAMES or state.DIRECTML_DEVICE_NAMES) or "")) do
+        addName(rawName)
+    end
+    for _, dev in ipairs(RUNTIME_DEVICES or {}) do
+        local id = string.lower(tostring(dev and dev.id or ""))
+        local devType = string.lower(tostring(dev and dev.type or ""))
+        if devType == "directml" or id:match("^directml:") then
             addName(dev.fullName or dev.name or dev.uiName or "")
         end
     end
