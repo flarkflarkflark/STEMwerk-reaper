@@ -1753,6 +1753,34 @@ def test_linux_torch_stack_install_propagates_pip_failures_before_runtime_pins()
     assert script.index('if [ "${_pip_rc}" -ne 0 ]; then') < script.index("enforce_runtime_python_pins")
 
 
+def test_linux_repair_skips_torch_pin_reapply_after_successful_same_run_install():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'TORCH_STACK_INSTALLED_THIS_RUN=0' in script
+    assert 'if verify_current_torch_stack "${VENV_PY}" "${BACKEND}" "before_reapply"; then' in script
+    assert 'if [ "${TORCH_STACK_INSTALLED_THIS_RUN}" = "1" ]; then' in script
+    assert 'TORCH_PIN_REAPPLY_REASON="already_installed_this_run"' in script
+    assert 'log_step "torch_pin_reapply_skipped=already_installed_this_run"' in script
+    assert 'TORCH_PIN_REAPPLY_REASON="current_stack_already_matches_requested_pin"' in script
+    assert 'log_step "torch_pin_reapply_skipped=current_stack_already_matches_requested_pin"' in script
+    assert 'TORCH_PIN_REAPPLY_REASON="current_stack_verify_failed"' in script
+    assert 'log_stage "Re-applying pinned torch stack"' in script
+    assert script.index('torch_pin_reapply_skipped=already_installed_this_run') < script.index('log_stage "Re-applying pinned torch stack"')
+
+
+def test_linux_torch_stack_verify_helper_checks_backend_and_all_three_packages():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert "verify_current_torch_stack()" in script
+    assert "import torchvision" in script
+    assert "import torchaudio" in script
+    assert 'if core(torchvision_ver) != expected_torchvision:' in script
+    assert 'if expected_backend == "rocm" and (hip is None or str(hip) == ""):' in script
+    assert 'if expected_backend == "cuda" and (cuda is None or str(cuda) == ""):' in script
+    assert 'log_step "torch_stack_verify_after_install=ok context=${_label} detail=${_probe}"' in script
+    assert 'log_step "torch_stack_verify_after_install=failed context=${_label} detail=${_probe}"' in script
+
+
 def test_linux_constraints_use_public_torch_versions_and_runtime_pins():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
@@ -5700,11 +5728,25 @@ def test_linux_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_ru
 
     assert 'if [ "${MODE}" = "ready-to-go-verify" ]; then' in linux_bootstrap
     assert "run_ready_to_go_verify_only()" in linux_bootstrap
+    assert "ready_to_go_output_file()" in linux_bootstrap
+    assert '_out_file="$(ready_to_go_output_file)"' in linux_bootstrap
+    assert 'echo "READY_TO_GO_STATUS=${_ready}"' in linux_bootstrap
+    assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in linux_bootstrap
+    assert 'echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"' in linux_bootstrap
+    assert 'log_step "ready_to_go_state_written=1"' in linux_bootstrap
+    assert 'log_step "ready_to_go_state_file=${_out_file}"' in linux_bootstrap
+    assert 'log_step "ready_to_go_status=${_ready}"' in linux_bootstrap
+    assert 'READY_STATE_FILE="$(ready_to_go_output_file)"' in linux_bootstrap
+    assert 'if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then' in linux_bootstrap
+    assert 'log_step "ready_to_go_state_persists_in_state_file=1"' in linux_bootstrap
+    assert 'STATE_FILE=""' in linux_bootstrap
     assert 'verify_existing_ready_runtime "${READY_BACKEND}" || true' in linux_bootstrap
     assert 'probe_main_runtime_ready "$(main_runtime_python)" "${BACKEND}"' in linux_bootstrap
     assert 'log_step "Existing DrumSep runtime detected; running verification before reinstall"' in linux_bootstrap
     assert 'log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"' in linux_bootstrap
     assert 'MODE="ready-to-go-verify"' not in linux_bootstrap
+    assert 'if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" != "${READY_STATE_FILE}" ]; then' in linux_bootstrap
+    assert linux_bootstrap.index('write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${MAIN_READY_STATUS}"') < linux_bootstrap.index('if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then')
 
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify"' in setup_internal
     assert 'appendSetupLog(runtime, "Mode: ready-to-go-verify", false)' in setup_internal

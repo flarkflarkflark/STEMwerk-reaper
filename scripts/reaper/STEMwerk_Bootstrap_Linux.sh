@@ -83,6 +83,17 @@ ready_to_go_state_file() {
   printf "%s/state/ready_to_go.env\n" "${RUNTIME_BASE}"
 }
 
+ready_to_go_output_file() {
+  case "${STATE_FILE:-}" in
+    */ready_to_go.env|ready_to_go.env)
+      printf "%s\n" "${STATE_FILE}"
+      ;;
+    *)
+      ready_to_go_state_file
+      ;;
+  esac
+}
+
 main_runtime_python() {
   printf "%s/.venv/bin/python\n" "${RUNTIME_BASE}"
 }
@@ -161,6 +172,7 @@ write_ready_to_go_state() {
   _drumsep_model_status="${3:-missing}"
   _detail="${4:-}"
   _main_runtime_status="${5:-ok}"
+  _out_file="$(ready_to_go_output_file)"
   _core="$(verify_core_model_cache)"
   _model_dir="$(printf "%s\n" "${_core}" | awk -F= '/^model_dir=/{print $2; exit}')"
   _fast="$(printf "%s\n" "${_core}" | awk -F= '/^fast=/{print $2; exit}')"
@@ -200,7 +212,10 @@ write_ready_to_go_state() {
     echo "DRUMSEP_READY_RUNTIME=${_runtime_kind}"
     echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"
     echo "DRUMSEP_READY_MODEL_STATUS=${_drumsep_model_status}"
-  } > "$(ready_to_go_state_file)"
+  } > "${_out_file}"
+  log_step "ready_to_go_state_file=${_out_file}"
+  log_step "ready_to_go_state_written=1"
+  log_step "ready_to_go_status=${_ready}"
 }
 
 probe_main_runtime_ready() {
@@ -378,8 +393,13 @@ run_ready_to_go_verify_only() {
     RUNTIME_VERIFY_DETAIL="${READY_DETAIL}"
     PYTHON_PATH=""
   fi
+  READY_STATE_FILE="$(ready_to_go_output_file)"
   write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${MAIN_READY_STATUS}"
-  if [ -n "${STATE_FILE}" ]; then
+  if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then
+    log_step "ready_to_go_state_persists_in_state_file=1"
+    STATE_FILE=""
+  fi
+  if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" != "${READY_STATE_FILE}" ]; then
     log_stage "Writing bootstrap.env"
     write_state
   fi
@@ -1341,6 +1361,7 @@ install_linux_torch_stack() {
   _mode="$1"
   _index="${2:-}"
   _pip_rc=1
+  TORCH_STACK_INSTALLED_THIS_RUN=0
   log_step "Uninstalling existing torch/vision/audio before ${_mode} torch install"
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
   case "${_mode}" in
@@ -1367,7 +1388,14 @@ install_linux_torch_stack() {
     log_step "${_mode} torch pip install failed with exit code ${_pip_rc}"
     return 1
   fi
-  enforce_runtime_python_pins || set_status "deps_failed" "runtime_python_pins_failed"
+  enforce_runtime_python_pins || return 1
+  if verify_current_torch_stack "${VENV_PY}" "${_mode}" "after_install"; then
+    TORCH_STACK_INSTALLED_THIS_RUN=1
+    TORCH_STACK_VERIFY_AFTER_INSTALL="ok"
+    return 0
+  fi
+  TORCH_STACK_VERIFY_AFTER_INSTALL="failed"
+  return 1
 }
 
 assert_pinned_torch_stack() {
@@ -1403,6 +1431,57 @@ PY
   esac
   log_step "Pinned torch assertion failed: ${_probe}"
   printf "STEMwerk bootstrap failed: expected torch=%s and torchaudio=%s after setup.\n" "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}" "${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}" >&2
+  return 1
+}
+
+verify_current_torch_stack() {
+  _venv_py="$1"
+  _backend="$2"
+  _label="${3:-current}"
+  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+expected_torch = "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}"
+expected_torchvision = "${ACTIVE_TORCHVISION_VERSION:-${PINNED_TORCHVISION_VERSION}}"
+expected_torchaudio = "${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}"
+expected_backend = "${_backend}"
+def core(ver):
+    return str(ver).split("+", 1)[0]
+try:
+    import torch
+    import torchvision
+    import torchaudio
+except Exception as exc:
+    print("error|import|" + str(exc))
+    raise SystemExit(0)
+torch_ver = getattr(torch, "__version__", "")
+torchvision_ver = getattr(torchvision, "__version__", "")
+torchaudio_ver = getattr(torchaudio, "__version__", "")
+if core(torch_ver) != expected_torch:
+    print("bad|torch_version|" + torch_ver)
+    raise SystemExit(0)
+if core(torchvision_ver) != expected_torchvision:
+    print("bad|torchvision_version|" + torchvision_ver)
+    raise SystemExit(0)
+if core(torchaudio_ver) != expected_torchaudio:
+    print("bad|torchaudio_version|" + torchaudio_ver)
+    raise SystemExit(0)
+hip = getattr(getattr(torch, "version", None), "hip", None)
+cuda = getattr(getattr(torch, "version", None), "cuda", None)
+if expected_backend == "rocm" and (hip is None or str(hip) == ""):
+    print("bad|backend|missing_rocm_hip")
+    raise SystemExit(0)
+if expected_backend == "cuda" and (cuda is None or str(cuda) == ""):
+    print("bad|backend|missing_cuda_version")
+    raise SystemExit(0)
+print("ok|" + torch_ver + "|" + torchvision_ver + "|" + torchaudio_ver + "|backend=" + expected_backend)
+PY
+)"
+  case "${_probe}" in
+    ok\|*)
+      log_step "torch_stack_verify_after_install=ok context=${_label} detail=${_probe}"
+      return 0
+      ;;
+  esac
+  log_step "torch_stack_verify_after_install=failed context=${_label} detail=${_probe}"
   return 1
 }
 
@@ -1449,6 +1528,9 @@ mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "$
 
 STATUS="ok"
 STATUS_REASON=""
+TORCH_STACK_INSTALLED_THIS_RUN=0
+TORCH_STACK_VERIFY_AFTER_INSTALL="not_run"
+TORCH_PIN_REAPPLY_REASON="not_needed"
 PYTHON=""
 FFMPEG=""
 VENV_PY=""
@@ -2300,22 +2382,34 @@ PY
       set_status "deps_failed" "audio_separator_install_failed"
     fi
     if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then
-      log_stage "Re-applying pinned torch stack"
-      case "${BACKEND}" in
-        rocm)
-          if [ -n "${SELECTED_TORCH_INDEX}" ]; then
-            install_linux_torch_stack "rocm" "${SELECTED_TORCH_INDEX}" || set_status "deps_failed" "torch_pin_repair_failed"
-          else
+      if verify_current_torch_stack "${VENV_PY}" "${BACKEND}" "before_reapply"; then
+        if [ "${TORCH_STACK_INSTALLED_THIS_RUN}" = "1" ]; then
+          TORCH_PIN_REAPPLY_REASON="already_installed_this_run"
+          log_step "torch_pin_reapply_skipped=already_installed_this_run"
+        else
+          TORCH_PIN_REAPPLY_REASON="current_stack_already_matches_requested_pin"
+          log_step "torch_pin_reapply_skipped=current_stack_already_matches_requested_pin"
+        fi
+      else
+        TORCH_PIN_REAPPLY_REASON="current_stack_verify_failed"
+        log_step "torch_pin_reapply_reason=${TORCH_PIN_REAPPLY_REASON}"
+        log_stage "Re-applying pinned torch stack"
+        case "${BACKEND}" in
+          rocm)
+            if [ -n "${SELECTED_TORCH_INDEX}" ]; then
+              install_linux_torch_stack "rocm" "${SELECTED_TORCH_INDEX}" || set_status "deps_failed" "torch_pin_repair_failed"
+            else
+              install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
+            fi
+            ;;
+          cuda)
+            install_linux_torch_stack "cuda" || set_status "deps_failed" "torch_pin_repair_failed"
+            ;;
+          *)
             install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
-          fi
-          ;;
-        cuda)
-          install_linux_torch_stack "cuda" || set_status "deps_failed" "torch_pin_repair_failed"
-          ;;
-        *)
-          install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_pin_repair_failed"
-          ;;
-      esac
+            ;;
+        esac
+      fi
       if ! assert_pinned_torch_stack "${VENV_PY}"; then
         set_status "deps_failed" "torch_pin_assert_failed"
       fi
@@ -2629,9 +2723,15 @@ fi
 if [ -z "${READY_RUNTIME_STATUS}" ]; then READY_RUNTIME_STATUS="missing"; fi
 if [ -z "${READY_DRUMSEP_MODEL_STATUS}" ]; then READY_DRUMSEP_MODEL_STATUS="missing"; fi
 if [ -z "${READY_DETAIL}" ]; then READY_DETAIL="${STATUS_REASON}"; fi
+READY_STATE_FILE="$(ready_to_go_output_file)"
 write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok"
 
-if [ -n "${STATE_FILE}" ]; then
+if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then
+  log_step "ready_to_go_state_persists_in_state_file=1"
+  STATE_FILE=""
+fi
+
+if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" != "${READY_STATE_FILE}" ]; then
   log_stage "Writing bootstrap.env"
   write_state
 fi
