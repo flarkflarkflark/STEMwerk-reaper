@@ -36,42 +36,47 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 
 ## Pre-release live smoke plan
 
-- Release must stay blocked until live smoke evidence is captured per available target system with support bundles and latest run ids.
-- Required systems before release:
-  - Windows NVIDIA RTX 3060 / CUDA: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
-  - Linux AMD RX 9070 / ROCm: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
-  - macOS Apple Silicon / MPS: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
-  - Windows AMD DirectML / RX 9070: `READY_TO_GO_SMOKE_PASS` or `READY_TO_GO_SMOKE_PASS_WITH_NOTES` if available before release
-  - Linux NVIDIA CUDA laptop: optional if available, otherwise `NOT_TESTED`
-- Per system, prove after Setup/Repair/Prepare Ready-to-Go:
-  - `ready_to_go.env` exists
-  - `READY_TO_GO_STATUS=ok`
-  - `CORE_MODEL_FAST_STATUS=ok`
-  - `CORE_MODEL_QUALITY_STATUS=ok`
-  - `CORE_MODEL_6STEM_STATUS=ok`
-  - `DRUMSEP_READY_MODEL_STATUS=ok`
-  - matching DrumSep runtime status is `ok`
-  - first real run does not trigger a large Demucs, DrumSep, or runtime download/rebuild
-- Minimal workflow smokes per system:
-  - Normal stems: auto/default, one short audio item
-  - Direct Kit / Z: auto/default, one short audio item, expect six drum outputs
-  - Kit Split / X: auto/default, one short audio item, expect stage1 normal drums extraction, stage2 DrumSep, and six drum outputs
-- Log/support-bundle download prevention checks:
-  - no new Demucs model download on first run
-  - no DrumSep CKPT/YAML download on first run
-  - no `drumsep_model_download_failed`
-  - no `drumsep_cache_error`
-  - no runtime rebuild/download on first run
-- Report per system:
-  - exact system/OS/backend
-  - setup command or action
-  - support bundle path
-  - latest run id and workflow ids
-  - timings and output validation
-  - requested/effective device
-  - ready-to-go markers and status lines
-  - proof that first run did not perform a large download
-  - warnings, regressions, and final verdict
+- Tested commit: `e82fb7a5afea93f4c5b50387efa1015d1d4a90f6`
+- Smoke matrix verdict: `PRE_RELEASE_SMOKE_MATRIX_PASS_WITH_NOTES`
+- Platform verdicts:
+  - Linux AMD/ROCm: `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - macOS Apple Silicon/MPS: `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - Windows NVIDIA CUDA: `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - Windows AMD DirectML: `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+- Runtime/UI notes:
+  - Windows DirectML UI labels now show `RX 9070` and `780M` instead of generic DirectML entries.
+  - Windows DirectML startup no longer flashes a transient generic `DirectML`/`GPU` button when cached named devices are available.
+- Release blockers:
+  - No current runtime/workflow blocker remains in the smoke matrix.
+  - Remaining notes are cache/support-bundle/history/test-environment notes, not runtime blockers.
+- Matrix evidence:
+  - Linux AMD/ROCm
+    - support bundle: `/home/flark/.config/REAPER/STEMwerk-support-bundles/STEMwerk-support-bundle-20260621-050157(.zip)`
+    - key runs: Normal `/tmp/STEMwerk_1782010650_17415638_1`; Direct Kit `/tmp/STEMwerk_1782010735_17500740_1`; Kit Split `/tmp/STEMwerk_1782010809_17574772_1`
+    - first-run download evidence: no workflow-first-run Demucs, DrumSep, or runtime redownload/rebuild observed after ready-to-go preparation
+    - notes: verdict `LINUX_ROCM_READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - macOS Apple Silicon/MPS
+    - support bundle: `/Users/flark/Library/Application Support/REAPER/STEMwerk-support-bundles/STEMwerk-support-bundle-20260621-130344(.zip)`
+    - key runs: Normal `STEMwerk_1782039594_1782039594734_1`; Direct Kit `STEMwerk_1782039643_1782039643467_1`; Kit Split `STEMwerk_1782039700_1782039700676_1`
+    - first-run download evidence: no workflow-first-run Demucs, DrumSep, or runtime redownload/rebuild observed after ready-to-go preparation
+    - notes: verdict `MACOS_MPS_READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - Windows NVIDIA CUDA
+    - support bundle: `C:\Users\Administrator\AppData\Roaming\REAPER\STEMwerk-support-bundles\STEMwerk-support-bundle-20260621-141524(.zip)`
+    - key runs: Normal `C:\Users\Administrator\AppData\Local\Temp\STEMwerk_1782043814_2699765_1`; Direct Kit `C:\Users\Administrator\AppData\Local\Temp\STEMwerk_1782043884_2769127_1`; Kit Split `C:\Users\Administrator\AppData\Local\Temp\STEMwerk_1782043947_2831897_1`
+    - first-run download evidence: setup/verify proved Windows ready state without redownloading assets before smoke workflows
+    - notes: verdict `WINDOWS_NVIDIA_CUDA_READY_TO_GO_SMOKE_PASS_WITH_NOTES`
+  - Windows AMD DirectML
+    - support bundle: `C:\Users\Administrator\AppData\Roaming\REAPER\STEMwerk-support-bundles\STEMwerk-support-bundle-20260621-224334(.zip)`
+    - key runs: Normal `C:\Users\Administrator\AppData\Local\Temp\STEMwerk_1782074547_39966221_1` (`DONE/0`, `normal/stems`, `selected/effective directml:0`, outputs `4/4`); Direct Kit `STEMwerk_1781920635_28708640_1`, `STEMwerk_1781918283_26356207_1`; Kit Split `STEMwerk_1781878333_14341624_1`
+    - first-run download evidence: native REAPER smoke completed without workflow-first-run Demucs, DrumSep, or runtime redownload/rebuild
+    - notes: Kit Split evidence recorded under `runtime_runs/diagnostics`, `workflow_source=dks_extract`, stage2 `DmlExecutionProvider`; verdict `WINDOWS_AMD_DIRECTML_NATIVE_REAPER_SMOKE_PASS_WITH_NOTES`
+- Still not done:
+  - final asset rebuild from `e82fb7a5afea93f4c5b50387efa1015d1d4a90f6`
+  - final artifact verification
+  - tag
+  - GitHub release
+  - ReaPack publish
+  - installer publish
 - Release verdict values:
   - `PRE_RELEASE_SMOKE_MATRIX_PASS`
   - `PRE_RELEASE_SMOKE_MATRIX_PASS_WITH_NOTES`
