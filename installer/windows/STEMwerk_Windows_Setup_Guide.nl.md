@@ -13,7 +13,8 @@ De Windows-installer heeft:
 
 In de normale Windows-flow is deze installer de bootstrap-stap.
 
-Voor `2.3.0.0` pre-release validatie: gebruik installers die opnieuw zijn gebouwd vanaf `e06507c99e6e336cbbf36892a39c97876d10daa0` of later. Oudere builds vanaf `21a59cd` zijn stale na de Windows ready-to-go fix.
+Voor `2.3.0.0` pre-release validatie: gebruik installers die opnieuw zijn gebouwd vanaf `95013e6d8e9e3bf6cda0456264612153678ed1c0` of later. Oudere builds vanaf `21a59cd`, `e06507c` en `328c614` zijn stale/superseded in de huidige Windows 2.3-lijn.
+Deze finale Windows-follow-up herstelt normal CPU multi-item `cap2` scheduling en houdt DrumSep ready-state / `ready_to_go` reporting consistent na verify.
 
 ## Installer-terminologie
 
@@ -117,4 +118,4 @@ Gebruik op Windows `STEMwerk: Setup` alleen als REAPER-side support- of herstelp
 
 Voor een verse Windows-installatie is de installer de juiste setup-route.
 
-Voor release-validatie van 2.3.0.0 geldt daarnaast: keur geen oudere `21a59cd`-installer goed; rebuild eerst vanaf `e06507c` of later.
+Voor release-validatie van 2.3.0.0 geldt daarnaast: keur geen oudere `21a59cd`-, `e06507c`- of `328c614`-installer goed; gebruik `95013e6` of later.

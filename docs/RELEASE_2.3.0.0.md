@@ -27,13 +27,15 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 - Preserved Windows DirectML runtime support and DirectML fallback.
 - Hardened Windows DrumSep runtime setup and state reporting.
 - Improved Windows NVIDIA device/runtime selection and scheduler markers.
-- Fixed the last Windows installer ready-to-go blocker in `e06507c99e6e336cbbf36892a39c97876d10daa0`.
+- Fixed the Windows installer ready-to-go blocker in `e06507c99e6e336cbbf36892a39c97876d10daa0`, then finalized the current 2.3 release-candidate basis in `95013e6d8e9e3bf6cda0456264612153678ed1c0`.
 - Installer license text is now aligned to `2.3.0.0` / `2026-06-22`.
 - Normal/core Demucs aliases are now translated to concrete `audio-separator 0.24.4` model ids before load/prefetch: `htdemucs.yaml`, `htdemucs_ft.yaml`, `htdemucs_6s.yaml`.
 - Windows capabilities writes are now atomic; stale `capabilities.env` is removed on write failure.
 - Required capabilities write failures now force `STATUS=deps_failed` / `REASON=capabilities_write_failed` instead of leaving contradictory ready-state markers behind.
 - Unsupported internal model ids are now classified as `model_mapping_failed` rather than as internet/DNS/proxy download failures.
 - Direct Kit success dialogs no longer leak the placeholder-style `result method line` text.
+- Windows normal CPU multi-item processing now restores the intended `cap2` scheduler policy for the `normal` route instead of falling back to the generic low-resource sequential gate.
+- Windows DrumSep ready-state writers now persist to the dedicated runtime state files, so `ready_to_go` reporting no longer remains `missing` after successful DrumSep verify.
 
 ## Diagnostics and support bundles
 
@@ -44,7 +46,7 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 ## Pre-release live smoke plan
 
 - Tested commit before final Windows installer fix: `e82fb7a5afea93f4c5b50387efa1015d1d4a90f6`
-- Final 2.3.0.0 release-candidate code basis: `e06507c99e6e336cbbf36892a39c97876d10daa0`
+- Final 2.3.0.0 release-candidate code basis: `95013e6d8e9e3bf6cda0456264612153678ed1c0`
 - Smoke matrix verdict: `PRE_RELEASE_SMOKE_MATRIX_PASS_WITH_NOTES`
 - Platform verdicts:
   - Linux AMD/ROCm: `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
@@ -79,7 +81,7 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
     - first-run download evidence: native REAPER smoke completed without workflow-first-run Demucs, DrumSep, or runtime redownload/rebuild
     - notes: Kit Split evidence recorded under `runtime_runs/diagnostics`, `workflow_source=dks_extract`, stage2 `DmlExecutionProvider`; verdict `WINDOWS_AMD_DIRECTML_NATIVE_REAPER_SMOKE_PASS_WITH_NOTES`
 - Still not done:
-  - final asset rebuild from `e06507c99e6e336cbbf36892a39c97876d10daa0`
+  - final asset rebuild from `95013e6d8e9e3bf6cda0456264612153678ed1c0`
   - final artifact verification
   - tag
   - GitHub release
@@ -92,7 +94,7 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 
 ## Known notes
 
-- All Linux and Windows artifacts generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a` are stale after `e06507c` and must be rebuilt before any 2.3.0.0 release action.
+- All Linux and Windows artifacts generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a`, `e06507c99e6e336cbbf36892a39c97876d10daa0`, or `328c614c8adcdc8244c8bb9bf601083907f29032` are stale and superseded by artifacts rebuilt from `95013e6d8e9e3bf6cda0456264612153678ed1c0`.
 - In 2.3 terminology, smaller offline installers can still download required runtime/model assets, while bundled installers include Python + FFmpeg. Existing allmodels/Demucs core assets are not complete DrumSep/Drum Kit offline/full bundles. DrumSep runtimes and model assets are handled by setup/runtime routes unless a specific full/offline asset explicitly says otherwise.
 - Windows DrumSep CUDA cap4 is not the default in 2.3; it remains an advanced/post-2.3 performance topic.
 - Windows Kit Split stage2 remains cap1 where Windows locking/fcntl support is unavailable.

@@ -25,7 +25,7 @@ This is the new cross-platform STEMwerk installer for Linux and macOS. It provid
 
 Supported managed Python downloads currently cover Linux x86_64 glibc, macOS x86_64, and macOS arm64. In 2.3 terminology, Linux/macOS package and setup flows are script/setup delivery paths, not full offline runtime/model bundles. They are closer to smaller offline/downloader-style setup paths than to complete offline/full installers. Other Linux/macOS platforms need a supported Python 3.10-3.12 runtime installed manually.
 
-Release-note caveat for `2.3.0.0`: the final release-candidate code basis is `e06507c99e6e336cbbf36892a39c97876d10daa0`. Earlier Linux/Windows artifacts generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a` are stale after the Windows installer fix and must be rebuilt before release.
+Release-note caveat for `2.3.0.0`: the final release-candidate code basis is `95013e6d8e9e3bf6cda0456264612153678ed1c0`. That final Windows follow-up restores normal CPU multi-item `cap2` scheduling and fixes DrumSep ready-state persistence so `ready_to_go` no longer remains missing after verify. Earlier Linux/Windows artifacts generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a`, `e06507c99e6e336cbbf36892a39c97876d10daa0`, or `328c614c8adcdc8244c8bb9bf601083907f29032` are stale and must be rebuilt from `95013e6d8e9e3bf6cda0456264612153678ed1c0` or later before release.
 
 ## Troubleshooting
 - All output is shown live in the log window

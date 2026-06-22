@@ -14,7 +14,8 @@ The Windows installer:
 
 The Windows installer remains the recommended fresh-install/bootstrap route.
 
-For `2.3.0.0` pre-release verification, use installers rebuilt from `e06507c99e6e336cbbf36892a39c97876d10daa0` or later. Earlier `21a59cd` builds are stale after the Windows ready-to-go fix.
+For `2.3.0.0` pre-release verification, use installers rebuilt from `95013e6d8e9e3bf6cda0456264612153678ed1c0` or later. Earlier `21a59cd`, `e06507c`, and `328c614` builds are stale/superseded on the current Windows 2.3 candidate line.
+This final Windows follow-up restores normal CPU multi-item `cap2` scheduling and keeps DrumSep ready-state / `ready_to_go` reporting consistent after verify.
 
 ## Installer terminology
 
@@ -60,7 +61,7 @@ Bundled-model cleanup note:
 - `STEMwerk: Setup` is now the in-REAPER status/repair center after installation.
 - Use Setup for: `Check only`, `Repair`, `Rebuild venv`, `Save Support Bundle`, `Open logs folder`, and `Open runtime folder`.
 - Re-run the installer mainly when script payload itself is missing/damaged, or when you need to reinstall bundled payloads.
-- If you are validating a 2.3.0.0 pre-release installer, do not sign off an older `21a59cd` build; rebuild from `e06507c` or later first.
+- If you are validating a 2.3.0.0 pre-release installer, do not sign off an older `21a59cd`, `e06507c`, or `328c614` build; use `95013e6` or later.
 
 ## When something is missing
 

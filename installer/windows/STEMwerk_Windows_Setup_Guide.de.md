@@ -13,7 +13,8 @@ Der Windows-Installer hat:
 
 Im normalen Windows-Ablauf ist dieser Installer der Bootstrap-Schritt.
 
-Fuer die `2.3.0.0`-Pre-Release-Validierung nur Installer verwenden, die aus `e06507c99e6e336cbbf36892a39c97876d10daa0` oder spaeter neu gebaut wurden. Aeltere Builds aus `21a59cd` sind nach dem Windows-Ready-to-go-Fix veraltet.
+Fuer die `2.3.0.0`-Pre-Release-Validierung nur Installer verwenden, die aus `95013e6d8e9e3bf6cda0456264612153678ed1c0` oder spaeter neu gebaut wurden. Aeltere Builds aus `21a59cd`, `e06507c` und `328c614` sind in der aktuellen Windows-2.3-Linie veraltet/ersetzt.
+Dieses finale Windows-Follow-up stellt das normale CPU-Multi-Item-`cap2`-Scheduling wieder her und haelt DrumSep-Ready-State-/`ready_to_go`-Reporting nach erfolgreicher Verifikation konsistent.
 
 ## Installer-Terminologie
 
@@ -117,4 +118,4 @@ Unter Windows `STEMwerk: Setup` nur als REAPER-seitigen Support-/Reparaturpfad n
 
 Für eine frische Windows-Installation ist der Installer der richtige Setup-Weg.
 
-Fuer die 2.3.0.0-Release-Validierung gilt ausserdem: keinen aelteren `21a59cd`-Installer freigeben; zuerst aus `e06507c` oder spaeter neu bauen.
+Fuer die 2.3.0.0-Release-Validierung gilt ausserdem: keinen aelteren `21a59cd`-, `e06507c`- oder `328c614`-Installer freigeben; `95013e6` oder spaeter verwenden.
