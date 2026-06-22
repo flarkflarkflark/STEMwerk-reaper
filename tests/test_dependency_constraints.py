@@ -625,12 +625,13 @@ def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
     assert 'if OS == "Linux" then' in script
     assert "local minCpuForParallel = 8" in script
     assert "local minRamGiBForParallel = 8" in script
+    assert 'if route == "normal" then' in script
+    assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL)' in script
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
     assert 'return "cpu_threads_low"' in script
     assert 'return "cpu_threads_unknown"' in script
     assert 'return "cpu_ram_low"' in script
     assert 'return "cpu_ram_unknown"' in script
-    assert 'policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))' in script
     assert 'policy.reason = "directml_multi_track"' in script
     assert 'timing:workers_launched count=' in script
     assert ' .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none")' in script
@@ -996,7 +997,8 @@ def test_normal_cpu_policy_cap2_slice_keeps_other_backend_caps_unchanged():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
     assert 'if backend == "cpu" then' in script
-    assert 'policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))' in script
+    assert 'if route == "normal" then' in script
+    assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL)' in script
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
     assert 'if backend == "directml" then' in script
     assert 'policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL' in script
@@ -5820,6 +5822,9 @@ def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_
     assert "RunReadyToGoVerifyOnly" in windows_bootstrap
     assert 'function ProbeMainRuntimeReady' in windows_bootstrap
     assert 'function VerifyExistingReadyRuntime' in windows_bootstrap
+    assert 'function GetDrumsepRuntimeStatePath' in windows_bootstrap
+    assert 'function GetDrumsepDirectmlRuntimeStatePath' in windows_bootstrap
+    assert 'function GetDrumsepCudaRuntimeStatePath' in windows_bootstrap
     assert 'function GetMainRuntimePythonPath' in windows_bootstrap
     assert 'function ReadEnvMap' in windows_bootstrap
     assert '"MAIN_RUNTIME_STATUS=$mainRuntimeStatus"' in windows_bootstrap
@@ -5837,6 +5842,9 @@ def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_
     assert 'RunHidden $PythonPath @("-c", $probeCode) "Probe main runtime ready" | Out-Null' in windows_bootstrap
     assert 'if ($LASTEXITCODE -eq 0 -and $probeText -eq "ok") {' in windows_bootstrap
     assert 'WriteBootstrapGuard "running" "ready_to_go_verify"' in windows_bootstrap
+    assert '$lines | Out-File -FilePath (GetDrumsepRuntimeStatePath) -Encoding ascii' in windows_bootstrap
+    assert '$lines | Out-File -FilePath (GetDrumsepDirectmlRuntimeStatePath) -Encoding ascii' in windows_bootstrap
+    assert '$lines | Out-File -FilePath (GetDrumsepCudaRuntimeStatePath) -Encoding ascii' in windows_bootstrap
     assert '$resolvedFfmpeg = ResolveWindowsFfmpegPath' in windows_bootstrap
     assert 'LogProgress ("ffmpeg_existing_ok=" + $resolvedFfmpeg)' in windows_bootstrap
     assert 'LogProgress "ffmpeg_download_skipped=existing_ok"' in windows_bootstrap
@@ -5848,6 +5856,17 @@ def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_
     assert 'local isReadyToGoVerify = mode == "ready-to-go-verify"' in setup_internal
     assert 'local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepCudaRuntime and "drumsep_runtime_cuda.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or (isReadyToGoVerify and "ready_to_go.env") or "bootstrap.env")' in setup_internal
     assert 'local launchMode = (isDrumsepRuntime or isDrumsepCudaRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime or isReadyToGoVerify) and mode or "repair"' in setup_internal
+
+
+def test_windows_drumsep_runtime_writers_persist_to_dedicated_state_files():
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+
+    assert 'return Join-Path $RuntimeBase "state\\\\drumsep_runtime.env"' in windows_bootstrap
+    assert 'return Join-Path $RuntimeBase "state\\\\drumsep_runtime_directml.env"' in windows_bootstrap
+    assert 'return Join-Path $RuntimeBase "state\\\\drumsep_runtime_cuda.env"' in windows_bootstrap
+    assert '$lines | Out-File -FilePath (GetDrumsepRuntimeStatePath) -Encoding ascii' in windows_bootstrap
+    assert '$lines | Out-File -FilePath (GetDrumsepDirectmlRuntimeStatePath) -Encoding ascii' in windows_bootstrap
+    assert '$lines | Out-File -FilePath (GetDrumsepCudaRuntimeStatePath) -Encoding ascii' in windows_bootstrap
 
 
 def test_windows_bootstrap_prefetch_uses_concrete_demucs_model_ids():

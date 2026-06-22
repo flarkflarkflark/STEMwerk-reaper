@@ -1300,6 +1300,18 @@ function GetDrumsepModelYamlPath {
     return Join-Path (GetDrumsepModelDir) $drumsepModelYamlName
 }
 
+function GetDrumsepRuntimeStatePath {
+    return Join-Path $RuntimeBase "state\\drumsep_runtime.env"
+}
+
+function GetDrumsepDirectmlRuntimeStatePath {
+    return Join-Path $RuntimeBase "state\\drumsep_runtime_directml.env"
+}
+
+function GetDrumsepCudaRuntimeStatePath {
+    return Join-Path $RuntimeBase "state\\drumsep_runtime_cuda.env"
+}
+
 function WriteDrumsepState([string]$State, [string]$ModelStatus, [string]$Reason) {
     $drumsepPython = GetDrumsepRuntimePythonPath
     $modelFile = GetDrumsepModelFilePath
@@ -1355,7 +1367,7 @@ for env_key, dist_name in (
         }
     }
 
-    $lines | Out-File -FilePath $StateFile -Encoding ascii
+    $lines | Out-File -FilePath (GetDrumsepRuntimeStatePath) -Encoding ascii
 }
 
 function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string]$Reason) {
@@ -1427,7 +1439,7 @@ function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string
         "ORT_AVAILABLE_PROVIDERS=$ortAvailableProvidersValue"
     )
 
-    $lines | Out-File -FilePath $StateFile -Encoding ascii
+    $lines | Out-File -FilePath (GetDrumsepDirectmlRuntimeStatePath) -Encoding ascii
 }
 
 function WriteDrumsepCudaState([string]$State, [string]$ModelStatus, [string]$Reason, [hashtable]$Probe = $null, [string]$FfmpegPath = "") {
@@ -1485,7 +1497,7 @@ function WriteDrumsepCudaState([string]$State, [string]$ModelStatus, [string]$Re
         "FFMPEG_STATUS=$ffmpegStatusValue",
         "FFMPEG_PATH=$FfmpegPath"
     )
-    $lines | Out-File -FilePath $StateFile -Encoding ascii
+    $lines | Out-File -FilePath (GetDrumsepCudaRuntimeStatePath) -Encoding ascii
 }
 
 function TestWindowsCudaCapableHost {

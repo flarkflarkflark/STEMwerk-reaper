@@ -18451,16 +18451,14 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     end
 
     if backend == "cpu" then
-        if cpuParallelAllowed() then
-            local adaptiveCap = math.max(1, math.floor(cpuCount / 2))
+        if route == "normal" then
             policy.sequentialMode = false
-            if route == "dks_extract" then
-                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL)
-                policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"
-            else
-                policy.cap = math.min(jobCount, math.min(adaptiveCap, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL))
-                policy.reason = "scheduler_normal_cpu_cap2"
-            end
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL)
+            policy.reason = "scheduler_normal_cpu_cap2"
+        elseif cpuParallelAllowed() then
+            policy.sequentialMode = false
+            policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL)
+            policy.reason = "scheduler_dks_extract_stage1_normal_cpu_cap2"
         else
             policy.sequentialMode = true
             if route == "dks_extract" then
