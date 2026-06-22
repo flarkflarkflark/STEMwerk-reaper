@@ -1794,7 +1794,9 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
     if SW_LOG and SW_LOG.classifyModelFailure then
         local failure = SW_LOG.classifyModelFailure(logSnippet, stdoutSnippet)
         if failure then
-            local msg = "Model download/load failed.\n"
+            local msg = ((failure.error_class == "model_mapping_failed")
+                    and "Model setup failed.\n"
+                    or "Model download/load failed.\n")
                 .. tostring(failure.error_hint or "Model download failed or timed out. Check your internet connection and retry.")
                 .. "\n\nModel cache folder:\n"
                 .. modelCachePathHint()
@@ -9409,7 +9411,7 @@ function buildResultMessageLines()
         local line2 = string.format(T("result_stats") or "Time: %s | Speed: %s realtime | Mode: %s", timeStr, speedStr, runtimeMode)
         local methodLabel = resolveResultMethodLabel(data)
         if methodLabel ~= "" then
-            line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+            line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
         end
         table.insert(lines, line1)
         table.insert(lines, line2)
@@ -9448,7 +9450,7 @@ function buildResultMessageLines()
         end
         local methodLabel = resolveResultMethodLabel(data)
         if methodLabel ~= "" then
-            line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+            line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
         end
         table.insert(lines, line1)
         table.insert(lines, line2)
@@ -9523,13 +9525,13 @@ function buildResultMessageLines()
             local speedStr = string.format("%.2fx", speed)
             local line2 = string.format(T("result_time_speed_line") or "Time: %s | Speed: %s realtime", timeStr, speedStr)
             if methodLabel ~= "" then
-                line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+                line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
             end
             table.insert(lines, line2)
         else
             local line2 = string.format(T("result_time_line") or "Time: %s", timeStr)
             if methodLabel ~= "" then
-                line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)
+                line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)
             end
             table.insert(lines, line2)
         end
@@ -16197,7 +16199,7 @@ function drawProgressWindow()
 
     local leftParts = { string.format("%s: %d:%02d%s", mtTime, elapsedMins, elapsedSecs, etaText), modelDisplay }
     if singleTrackMethodLabel ~= "" then
-        leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)
+        leftParts[#leftParts + 1] = string.format(trSafeValue("result_method_line", "Method: %s"), singleTrackMethodLabel)
     end
     local rightParts = {}
     if currentLabel and currentLabel ~= "" then

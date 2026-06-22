@@ -3550,6 +3550,14 @@ def _classify_model_failure_text(text: str) -> Optional[Dict[str, str]]:
     lower = str(text or "").lower()
     if not lower:
         return None
+    if "not found in supported model files" in lower and "model file" in lower:
+        return {
+            "error_class": "model_mapping_failed",
+            "error_hint": "Normal model setup failed internally. Save a Support Bundle and run Setup/Repair before retrying.",
+            "model_cache_hint": "This is not an internet/DNS/proxy failure. STEMwerk passed an unsupported internal model id to audio-separator.",
+            "model_url": "",
+            "model_path": "",
+        }
 
     has_timeout = any(
         token in lower

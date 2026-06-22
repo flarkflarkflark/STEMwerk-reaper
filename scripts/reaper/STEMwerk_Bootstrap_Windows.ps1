@@ -200,7 +200,21 @@ function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$Backen
     $lines += "AUDIO_SEPARATOR=$AudioSeparatorValue"
     $lines += "STEMWERK_CORE=$StemwerkCoreValue"
     $lines += "DEVICE_NAMES="
-    $lines | Out-File -FilePath $Path -Encoding ascii
+    $tmpPath = $Path + ".tmp"
+    try {
+        $parent = Split-Path -Parent $Path
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        }
+        $lines | Out-File -FilePath $tmpPath -Encoding ascii
+        Move-Item -Force -Path $tmpPath -Destination $Path
+        return $true
+    } catch {
+        LogLine ("WARN: failed to write capabilities file: " + $Path + " (" + $_.Exception.Message + ")")
+        Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $Path -Force -ErrorAction SilentlyContinue
+        return $false
+    }
 }
 
 function Set-Progress([string]$Reason, [string]$Message) {
@@ -813,11 +827,12 @@ function EnsureCoreModelCache([string]$PythonPath, [string]$ModelDir) {
     $prefetchCode = @"
 import os
 from audio_separator.separator import Separator
+from stemwerk_core.models import resolve_audio_separator_model_id
 
 model_dir = r"$ModelDir"
 for model_name in ("htdemucs", "htdemucs_ft", "htdemucs_6s"):
     sep = Separator(model_file_dir=model_dir, output_dir=".", output_format="wav")
-    sep.load_model(model_name)
+    sep.load_model(resolve_audio_separator_model_id(model_name))
 print("STEMWERK_CORE_MODEL_PREFETCH ok")
 "@
     RunHidden $PythonPath @("-c", $prefetchCode) "Prefetch core model cache" | Out-Null
@@ -2589,7 +2604,10 @@ if ($RuntimeBase) {
     $stemwerkCoreValue = if ($stemwerkCoreOk) { "ok" } else { "missing" }
     $pythonValue = if ($python) { $python } else { "" }
     $ffmpegValue = if ($ffmpeg) { $ffmpeg } else { "" }
-    WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue
+    $wroteCapabilities = WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue
+    if (-not $wroteCapabilities) {
+        Set-Status "deps_failed" "capabilities_write_failed"
+    }
 
     $guardStatus = if ($status -eq "ok") { "ok" } else { "failed" }
     $guardReason = if ($status -eq "ok") { "completed" } else { $statusReason }

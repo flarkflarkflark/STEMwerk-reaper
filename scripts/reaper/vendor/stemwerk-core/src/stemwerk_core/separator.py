@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import yaml
 
 from .devices import select_device
-from .models import resolve_model_name
+from .models import resolve_audio_separator_model_id, resolve_model_name
 from .progress import ProgressCallback
 
 
@@ -135,6 +135,7 @@ def _resolve_audio_separator_model_name(separator: Any, model_name: str) -> str:
     requested = str(model_name or "").strip()
     if not _is_demucs_model_alias(requested):
         return requested
+    preferred = resolve_audio_separator_model_id(requested)
 
     supported_model_files_grouped: Dict[str, Any] = {}
     try:
@@ -144,21 +145,17 @@ def _resolve_audio_separator_model_name(separator: Any, model_name: str) -> str:
     except Exception:
         supported_model_files_grouped = {}
 
-    if _supported_model_contains(supported_model_files_grouped, requested):
-        return requested
-
-    yaml_candidate = requested if requested.lower().endswith(".yaml") else f"{requested}.yaml"
-    if _supported_model_contains(supported_model_files_grouped, yaml_candidate):
-        return yaml_candidate
+    if _supported_model_contains(supported_model_files_grouped, preferred):
+        return preferred
 
     model_file_dir = Path(str(getattr(separator, "model_file_dir", "") or _default_model_cache_dir()))
-    if (model_file_dir / yaml_candidate).is_file():
+    if (model_file_dir / preferred).is_file():
         warnings.warn(
-            f"Demucs identifier '{requested}' is absent from the audio-separator catalog; using local asset '{yaml_candidate}'."
+            f"Demucs identifier '{requested}' is absent from the audio-separator catalog; using local asset '{preferred}'."
         )
-        return yaml_candidate
+        return preferred
 
-    return requested
+    return preferred
 
 
 def _should_load_local_demucs_asset(requested_model_name: str, resolved_model_name: str, separator: Any) -> bool:
@@ -438,6 +435,7 @@ class StemSeparator:
                     f"audio-separator {audio_ver} treats Demucs identifiers as UVR models; skipping load_model('{demucs_name}')."
                 )
             else:
+                load_model_name = model_name
                 try:
                     load_model_name = _resolve_audio_separator_model_name(separator, model_name)
                     if _should_load_local_demucs_asset(model_name, load_model_name, separator):
@@ -449,10 +447,14 @@ class StemSeparator:
                         separator.load_model(load_model_name)
                 except Exception as exc:
                     msg = str(exc).lower()
-                    fallback = model_name[:-5] if str(model_name).endswith(".yaml") else ""
+                    fallback = model_name
+                    if str(load_model_name).lower().endswith(".yaml"):
+                        fallback = str(Path(str(load_model_name)).stem)
+                    elif str(model_name).endswith(".yaml"):
+                        fallback = model_name[:-5]
                     if fallback and ("unsupported model file" in msg or "uvr model data" in msg):
                         warnings.warn(
-                            f"Model '{model_name}' was rejected by audio-separator; retrying as '{fallback}'."
+                            f"Model '{load_model_name}' was rejected by audio-separator; retrying as '{fallback}'."
                         )
                         try:
                             separator.load_model(fallback)

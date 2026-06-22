@@ -1,6 +1,6 @@
 STEMwerk License Agreement
-Version: 2.2.2.2
-Date: 2026-05-17
+Version: 2.3.0.0
+Date: 2026-06-22
 
 ======================================================================
 1. STEMwerk License (MIT)

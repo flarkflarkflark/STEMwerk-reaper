@@ -32,6 +32,14 @@ def test_model_download_failed_dns_classification():
     assert result["error_class"] == "model_download_failed"
 
 
+def test_unsupported_internal_model_id_is_not_classified_as_network_failure():
+    text = "ValueError: Model file htdemucs not found in supported model files"
+    result = mod._classify_model_failure_text(text)
+    assert result is not None
+    assert result["error_class"] == "model_mapping_failed"
+    assert "not an internet" in result["model_cache_hint"]
+
+
 def test_ordinary_no_stems_not_model_download_classified():
     text = "No stems were created. exit_code=1"
     assert mod._classify_model_failure_text(text) is None

@@ -8,7 +8,7 @@ CORE_SRC = ROOT / "scripts" / "reaper" / "vendor" / "stemwerk-core" / "src"
 if str(CORE_SRC) not in sys.path:
     sys.path.insert(0, str(CORE_SRC))
 
-from stemwerk_core.models import resolve_model_name
+from stemwerk_core.models import resolve_audio_separator_model_id, resolve_model_name
 from stemwerk_core.separator import _resolve_audio_separator_model_name
 
 
@@ -23,7 +23,13 @@ def test_unknown_model_names_pass_through():
     assert resolve_model_name("MDX23C-DrumSep-aufr33-jarredou.ckpt") == "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 
 
-def test_demucs_model_loader_uses_identifier_when_catalog_supports_it():
+def test_demucs_model_ids_map_to_yaml_assets_for_audio_separator():
+    assert resolve_audio_separator_model_id("htdemucs") == "htdemucs.yaml"
+    assert resolve_audio_separator_model_id("htdemucs_ft") == "htdemucs_ft.yaml"
+    assert resolve_audio_separator_model_id("htdemucs_6s") == "htdemucs_6s.yaml"
+
+
+def test_demucs_model_loader_prefers_yaml_even_when_catalog_lists_alias():
     class FakeSeparator:
         model_file_dir = str(CORE_SRC)
 
@@ -31,7 +37,7 @@ def test_demucs_model_loader_uses_identifier_when_catalog_supports_it():
         def list_supported_model_files():
             return {"Demucs": {"Demucs v4: htdemucs": {"htdemucs": "https://example.invalid/htdemucs"}}}
 
-    assert _resolve_audio_separator_model_name(FakeSeparator(), "htdemucs") == "htdemucs"
+    assert _resolve_audio_separator_model_name(FakeSeparator(), "htdemucs") == "htdemucs.yaml"
 
 
 def test_demucs_model_loader_uses_local_yaml_when_catalog_only_has_yaml(tmp_path):

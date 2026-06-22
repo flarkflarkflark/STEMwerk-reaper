@@ -2824,10 +2824,17 @@ local function parseSupportRunText(entry, text)
         or lowerAll:find("temporary failure in name resolution", 1, true) or lowerAll:find("name or service not known", 1, true)
         or lowerAll:find("certificate verify failed", 1, true)
     local hasChecksum = lowerAll:find("invalid checksum", 1, true) or (lowerAll:find("checksum", 1, true) and lowerAll:find(".th", 1, true))
+    local hasUnsupportedModelId = lowerAll:find("not found in supported model files", 1, true) and lowerAll:find("model file", 1, true)
     if hasTimeout or hasDownload or hasChecksum then
         entry._sawModelFailureEvidence = (entry._sawModelFailureEvidence or 0) + 1
     end
-    if hasChecksum and tostring(entry.error_class or "unknown") == "unknown" then
+    if hasUnsupportedModelId and tostring(entry.error_class or "unknown") == "unknown" then
+        kvAssignLast(entry, "error_class", "model_mapping_failed")
+        kvAssignLast(entry, "error_hint", "Normal model setup failed internally. Save a Support Bundle and run Setup/Repair before retrying.")
+        kvAssignLast(entry, "model_cache_hint", "This is not an internet/DNS/proxy failure. STEMwerk passed an unsupported internal model id to audio-separator.")
+        setRunResult(entry, "fail", 5)
+        entry._clearFailures = (entry._clearFailures or 0) + 1
+    elseif hasChecksum and tostring(entry.error_class or "unknown") == "unknown" then
         kvAssignLast(entry, "error_class", "model_checksum_failed")
         kvAssignLast(entry, "error_hint", "Cached model file appears corrupted. Delete/redownload model cache.")
         kvAssignLast(entry, "model_cache_hint", "Delete corrupted/partial files in the STEMwerk models folder and retry.")

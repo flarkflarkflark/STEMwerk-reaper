@@ -337,6 +337,16 @@ function SW_LOG.classifyModelFailure(logText, stdoutText)
     local modelPath = extractFirst("([^\r\n]*%.th)")
     local modelUrl = extractFirst("(https?://[%w%._%-%/%?=&]+)")
 
+    if lower:find("not found in supported model files", 1, true) and lower:find("model file", 1, true) then
+        return {
+            error_class = "model_mapping_failed",
+            error_hint = "Normal model setup failed internally. Save a Support Bundle and run Setup/Repair before retrying.",
+            model_cache_hint = "This is not an internet/DNS/proxy failure. STEMwerk passed an unsupported internal model id to audio-separator.",
+            model_path = nil,
+            model_url = nil,
+            reason = "model_load_failed",
+        }
+    end
     if hasChecksum and hasModelFile then
         return {
             error_class = "model_checksum_failed",

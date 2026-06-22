@@ -4563,7 +4563,7 @@ def test_single_track_footer_hides_normal_route_badge_and_shows_method_line():
     assert 'local singleTrackMethodLabel = ""' in script
     assert 'singleTrackMethodLabel = "CPU"' in script
     assert 'singleTrackMethodLabel = "GPU"' in script
-    assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
+    assert 'leftParts[#leftParts + 1] = string.format(trSafeValue("result_method_line", "Method: %s"), singleTrackMethodLabel)' in script
     assert 'return trSafeValue("route_badge_normal", "Normal STEMwerk")' in script
 
 
@@ -4576,7 +4576,7 @@ def test_single_track_footer_uses_shared_runtime_resolution_without_rocm_cuda_re
     assert 'local mtCancel = T("mt_cancel") or "ESC=cancel"' in script
     assert 'local footerMethod = sanitizeUserFacingMethodLabel(footerDeviceDetail)' in script
     assert 'elseif footerMethod ~= "" or tostring(footerDeviceDetail or "") ~= "" then' in script
-    assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
+    assert 'leftParts[#leftParts + 1] = string.format(trSafeValue("result_method_line", "Method: %s"), singleTrackMethodLabel)' in script
     assert 'local mtSeg = T("mt_seg") or "Seg"' not in script
     assert 'summaryLeft = summaryLeft .. " | " .. segText' not in script
     assert 'return formatUserFacingProcessingDeviceLabel(' in script
@@ -4705,7 +4705,7 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert "if not isDrumKitWorkflowActive() then" in script
     assert "if not isDrumKitWorkflowActive() then" in script
     assert 'local singleTrackMethodLabel = ""' in script
-    assert 'leftParts[#leftParts + 1] = string.format(T("result_method_line") or "Method: %s", singleTrackMethodLabel)' in script
+    assert 'leftParts[#leftParts + 1] = string.format(trSafeValue("result_method_line", "Method: %s"), singleTrackMethodLabel)' in script
     assert 'local segText = string.format("%s: %s", mtSeg, "30")' not in script
     assert "progress_drumsep_cpu_fallback = " in langs
     assert "progress_drumsep_helper_cpu = " in langs
@@ -5510,9 +5510,9 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'if methodLabel == "CPU" then return "CPU" end' in script
     assert 'if methodLabel ~= "" then return "GPU" end' in script
     assert 'return sanitizeUserFacingMethodLabel(data and data.methodLabel or "")' in script
-    assert 'string.format(T("result_method_line") or "Method: %s", methodLabel)' in script
+    assert 'string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)' in script
     assert 'local methodLabel = resolveSingleTrackMethodLabel(data)' in script
-    assert 'line2 = line2 .. " | " .. string.format(T("result_method_line") or "Method: %s", methodLabel)' in script
+    assert 'line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)' in script
     assert 'resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")' in script
     assert 'if (not data.methodLabel or data.methodLabel == "") and data.backend == "gpu" then' in script
     assert 'data.methodLabel = sanitizeUserFacingMethodLabel("gpu")' in script
@@ -5848,3 +5848,27 @@ def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_
     assert 'local isReadyToGoVerify = mode == "ready-to-go-verify"' in setup_internal
     assert 'local stateFile = runtime.runtimeState .. PATH_SEP .. ((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepCudaRuntime and "drumsep_runtime_cuda.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or (isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env") or (isReadyToGoVerify and "ready_to_go.env") or "bootstrap.env")' in setup_internal
     assert 'local launchMode = (isDrumsepRuntime or isDrumsepCudaRuntime or isDrumsepRocmRuntime or isDrumsepDirectmlRuntime or isReadyToGoVerify) and mode or "repair"' in setup_internal
+
+
+def test_windows_bootstrap_prefetch_uses_concrete_demucs_model_ids():
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+
+    assert 'from stemwerk_core.models import resolve_audio_separator_model_id' in windows_bootstrap
+    assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in windows_bootstrap
+
+
+def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstrap():
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+
+    assert '$tmpPath = $Path + ".tmp"' in windows_bootstrap
+    assert 'LogLine ("WARN: failed to write capabilities file: " + $Path + " (" + $_.Exception.Message + ")")' in windows_bootstrap
+    assert 'Remove-Item -Path $Path -Force -ErrorAction SilentlyContinue' in windows_bootstrap
+    assert 'Set-Status "deps_failed" "capabilities_write_failed"' in windows_bootstrap
+
+
+def test_windows_installer_license_text_matches_23_release():
+    text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
+
+    assert "Version: 2.3.0.0" in text
+    assert "Date: 2026-06-22" in text
+    assert "Version: 2.2.2" not in text
