@@ -12,6 +12,12 @@ These are **packaging helpers** so you can download installers from GitHub and t
 - Linux (Fedora/RHEL/openSUSE): `stemwerk-<version>-1.noarch.rpm` (rpmbuild)
 - Linux (Arch): `stemwerk-<version>-1-any.pkg.tar.zst` (makepkg)
 
+Release-note caveat for the current `2.3.0.0` line:
+
+- final release-candidate code basis is `e06507c99e6e336cbbf36892a39c97876d10daa0`
+- any Linux/Windows artifacts or manifests generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a` are stale after the Windows installer ready-to-go fix and must be rebuilt before release/publish
+- do not "fix up" checked-in `dist/` outputs by hand; rebuild from source when release work resumes
+
 The canonical release version is stored in the repo root `VERSION` file.
 For release tags, the workflow enforces: tag `vX.Y.Z` must match `VERSION`.
 Keep ReaPack metadata and script headers in sync with `VERSION` by running `python tools/version_sync.py --write` before tagging.

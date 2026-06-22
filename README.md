@@ -8,8 +8,15 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 ## What is STEMwerk-reaper?
 STEMwerk-reaper is a REAPER script that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend (audio-separator/Demucs) and keeps processing on your machine.
 
-### Stable release note
-This README describes the current public stable release, `v2.2.2.2`. Future development continues on separate branches, but the features documented here reflect the current stable release line.
+### Release status note
+This README still points to the current public stable release, `v2.2.2.2`, for end-user download links.
+
+For the current `2.3.0.0` release candidate:
+
+- final code basis: `e06507c99e6e336cbbf36892a39c97876d10daa0`
+- Windows installer ready-to-go blocker is fixed in that commit
+- all Linux and Windows artifacts built from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a` are stale and must be rebuilt before any `2.3.0.0` release/publish step
+- see [docs/RELEASE_2.3.0.0.md](docs/RELEASE_2.3.0.0.md) for the 2.3 release-line notes
 
 `v2.2.2.2` is a reliability and packaging parity release on top of the `2.2.2.x` UI/workflow line.
 
@@ -83,6 +90,8 @@ For most users, internet is needed on first install for:
 After runtime setup is complete and your model is cached, normal separation is typically offline.
 
 Windows release assets may also include offline installers, bundled installers, or larger offline/full asset variants for specific stable versions. In this terminology, the smaller offline installer path is still a downloader-style installer and can require internet for backend package or model downloads. Bundled installers include Python + FFmpeg, but they can still require backend package or model downloads on first use. Existing allmodels/Demucs core model-cache assets are not complete DrumSep/Drum Kit offline/full bundles. Drum Kit/DrumSep runtime and model assets in the 2.3 release line are handled through the setup/runtime flow unless a specific full/offline asset explicitly says otherwise. Large offline/full allmodels-style assets are hosted separately on Google Drive because they are too large for GitHub release assets.
+
+For the unreleased `2.3.0.0` artifact set, do not treat any installer/package built from `21a59cd` as final; those artifacts are stale after the Windows installer fix in `e06507c`.
 
 You should still run `STEMwerk-SETUP.lua` when asked to verify or repair the runtime inside REAPER.
 
@@ -316,5 +325,4 @@ Before tagging/releases:
 ## License / author
 MIT License.
 Author: flarkAUDIO (flarkaudio@pm.me)
-
 

@@ -13,11 +13,15 @@ De Windows-installer heeft:
 
 In de normale Windows-flow is deze installer de bootstrap-stap.
 
+Voor `2.3.0.0` pre-release validatie: gebruik installers die opnieuw zijn gebouwd vanaf `e06507c99e6e336cbbf36892a39c97876d10daa0` of later. Oudere builds vanaf `21a59cd` zijn stale na de Windows ready-to-go fix.
+
 ## Installer-terminologie
 
 - `offline installer`: kleine installer/downloader die nog internet nodig kan hebben om runtime- of modelassets op te halen
 - `bundled installer`: bevat Python en FFmpeg
 - `volledige offline installer`: compleet pakket bedoeld voor installatie/gebruik zonder internet
+
+In de 2.3-release moet "volledige offline installer" nog steeds precies gelezen worden: bestaande `allmodels`-varianten dekken de core Demucs-cache, niet automatisch een complete DrumSep/Drum Kit offline runtime-bundel.
 
 ## Volledige offline installer-varianten (GPU)
 
@@ -112,3 +116,5 @@ Support-/herstelpaden:
 Gebruik op Windows `STEMwerk: Setup` alleen als REAPER-side support- of herstelpad na installatie.
 
 Voor een verse Windows-installatie is de installer de juiste setup-route.
+
+Voor release-validatie van 2.3.0.0 geldt daarnaast: keur geen oudere `21a59cd`-installer goed; rebuild eerst vanaf `e06507c` of later.

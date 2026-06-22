@@ -13,11 +13,15 @@ Der Windows-Installer hat:
 
 Im normalen Windows-Ablauf ist dieser Installer der Bootstrap-Schritt.
 
+Fuer die `2.3.0.0`-Pre-Release-Validierung nur Installer verwenden, die aus `e06507c99e6e336cbbf36892a39c97876d10daa0` oder spaeter neu gebaut wurden. Aeltere Builds aus `21a59cd` sind nach dem Windows-Ready-to-go-Fix veraltet.
+
 ## Installer-Terminologie
 
 - `Offline-Installer`: kleiner Installer/Downloader, der benoetigte Runtime- oder Modell-Komponenten noch aus dem Internet laden kann
 - `gebuendelter Installer`: enthaelt Python und FFmpeg
 - `vollstaendiger Offline-Installer`: Komplettpaket fuer Installation/Nutzung ohne Internet
+
+In der 2.3-Release-Linie muss "vollstaendiger Offline-Installer" trotzdem praezise gelesen werden: bestehende `allmodels`-Varianten decken den Demucs/Core-Cache ab, aber nicht automatisch ein vollstaendiges DrumSep/Drum-Kit-Offline-Runtime-Bundle.
 
 ## Vollstaendige Offline-Installer-Varianten (GPU)
 
@@ -112,3 +116,5 @@ Support-/Reparaturpfade:
 Unter Windows `STEMwerk: Setup` nur als REAPER-seitigen Support-/Reparaturpfad nach der Installation verwenden.
 
 Für eine frische Windows-Installation ist der Installer der richtige Setup-Weg.
+
+Fuer die 2.3.0.0-Release-Validierung gilt ausserdem: keinen aelteren `21a59cd`-Installer freigeben; zuerst aus `e06507c` oder spaeter neu bauen.
