@@ -669,6 +669,14 @@ def test_windows_cuda_scheduler_uses_cuda_state_and_directml_fallback_markers():
     assert 'return "directml", "explicit_directml"' in script
 
 
+def test_scheduler_cuda_runtime_files_are_platform_agnostic_for_linux_dks_routes():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'if runtimeKind == "cuda" then' in script
+    assert 'return schedulerRuntimePythonDefault(".venv-drumsep-cuda")' in script
+    assert 'if runtimeKind == "cuda" and OS == "Windows" then' not in script
+
+
 def test_runtime_scheduler_benchmark_gpu_cap_override_is_benchmark_only_and_logged():
     script = Path("scripts/reaper/STEMwerk.lua").read_text()
 
@@ -4729,10 +4737,11 @@ def test_drumkit_progress_footer_shows_resolved_runtime_without_raw_keys():
     assert 'return formatUserFacingProcessingDeviceLabel(' in script
     assert 'progressState._deviceName' in script
     assert 'local raw = tostring(rawDevice or ""):gsub("^%s+", ""):gsub("%s+$", "")' in script
+    assert 'local resolved = formatUserFacingProcessingDeviceLabel(' in script
     assert 'return trSafeValue("footer_device_rocm_label", "AMD ROCm")' in script
     assert 'return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")' in script
     assert 'return trSafeValue("footer_device_cpu_label", "CPU")' in script
-    assert 'if lower:match("^cuda:%d+") then return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA") end' in script
+    assert 'if resolved == rocmLabel or resolved == "DirectML" or resolved == mpsLabel or resolved == cpuLabel then' in script
     assert 'compactProgressDeviceToken(deviceDetail, deviceDetail)' in script
     assert 'progressState._stage2Runtime,' in script
     assert 'progressState._stage1Runtime,' in script
@@ -4747,10 +4756,15 @@ def test_result_and_progress_labels_prefer_explicit_runtime_over_cuda_device_tok
     assert 'data and data.stage2Runtime,' in script
     assert 'data and data.stage1Runtime,' in script
     assert 'data and data.backendRuntime,' in script
+    assert 'local explicitLabel = formatUserFacingProcessingDeviceLabel(' in script
+    assert 'if explicitLabel == rocmLabel or explicitLabel == cudaLabel or explicitLabel == "DirectML" or explicitLabel == mpsLabel or explicitLabel == cpuLabel then' in script
+    explicit_label_block = script.split('local explicitLabel = formatUserFacingProcessingDeviceLabel(', 1)[1].split('local rocmLabel =', 1)[0]
+    assert 'data and data.methodLabel' not in explicit_label_block
     assert 'if runtimeSelected == "rocm" or deviceRequest == "rocm" then' in script
     assert 'return sanitizeUserFacingMethodLabel("rocm")' in script
     assert 'function sanitizeUserFacingMethodLabel(candidate)' in script
     assert 'return formatUserFacingProcessingDeviceLabel(candidate)' in script
+    assert 'if sawCudaToken and sawAmdRocmLike and not sawNvidiaCuda then' in script
     assert 'if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then' in script
     assert 'if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then' in script
     assert 'return trSafeValue("device_mps_label", "Apple MPS")' in script
@@ -4766,7 +4780,8 @@ def test_result_and_progress_labels_prefer_explicit_runtime_over_cuda_device_tok
     assert 'progressState._stage1Runtime,' in script
     assert 'progressState._backendRuntime,' in script
     assert 'local backendRuntime = line:match("backend_runtime=([%w_:%-]+)")' in script
-    assert 'if n >= 200 then break end' in script
+    assert 'function parseRuntimeMetadataFromLogFile(logFile, maxLines)' in script
+    assert 'if lineCap > 0 and n >= lineCap then break end' in script
 
 
 def test_multitrack_progress_scroll_uses_mouse_wheel_delta_tracking():
@@ -5516,7 +5531,9 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'local methodLabel = resolveSingleTrackMethodLabel(data)' in script
     assert 'line2 = line2 .. " | " .. string.format(trSafeValue("result_method_line", "Method: %s"), methodLabel)' in script
     assert 'resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")' in script
-    assert 'if (not data.methodLabel or data.methodLabel == "") and data.backend == "gpu" then' in script
+    assert 'local resolvedMethod = resolveResultMethodLabel(data)' in script
+    assert 'if resolvedMethod ~= "" then' in script
+    assert 'data.methodLabel = tostring(resolvedMethod)' in script
     assert 'data.methodLabel = sanitizeUserFacingMethodLabel("gpu")' in script
     assert 'return trSafeValue("footer_device_auto_cpu_intent", "Auto [CPU]")' in script
     assert 'return trSafeValue("footer_device_auto_gpu_intent", "Auto [GPU]")' in script
@@ -5525,15 +5542,76 @@ def test_result_window_keeps_method_line_and_uses_runtime_metadata_sanitizer():
     assert 'if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then' in script
     assert 'progressState._effectiveDevice = info.effectiveDevice' in script
     assert 'progressState._stage2Device or progressState._stage1Device or progressState._effectiveDevice' in script
+    assert 'resultData.deviceName = tostring(progressState._deviceName or resultData.deviceName or "")' in script
+
+
+def test_linux_rocm_labels_do_not_collapse_to_nvidia_when_device_id_is_cuda_token():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'function parseRuntimeMetadataFromLogFile(logFile, maxLines)' in script
+    assert 'progressState._backendRuntime,' in script
+    assert 'progressState._runtimeDeviceNames,' in script
+    assert 'local previewDeviceName = line:match("normal_workflow_backend_preview_name=([^\\r\\n]+)")' in script
+    assert 'info.devName = previewDeviceName' in script
+    assert 'local backend = line:match("^backend=([%w_:%-]+)")' in script
+    assert 'info.backendRuntime = backend' in script
+    assert 'local drumsepTorchHip = line:match("drumsep_torch_hip=([^\\r\\n]+)")' in script
+    assert 'info.runtimeSelected = "rocm"' in script
+    assert 'if lower:match("^cuda:%d+") or lower == "cuda" then' in script
+    assert 'if resolved == rocmLabel or resolved == "DirectML" or resolved == mpsLabel or resolved == cpuLabel then' in script
+    assert 'if sawCudaToken and sawAmdRocmLike and not sawNvidiaCuda then' in script
+    assert 'data and data.backendRuntime,' in script
+    assert 'data and data.effectiveDevice,' in script
+    assert 'data and data.deviceName' in script
+    assert 'if explicitLabel == rocmLabel or explicitLabel == cudaLabel or explicitLabel == "DirectML" or explicitLabel == mpsLabel or explicitLabel == cpuLabel then' in script
+    assert 'progressState._deviceName = info.devName or progressState._deviceName' in script
+    assert 'progressState._backendRuntime = info.backendRuntime or progressState._backendRuntime' in script
+    assert 'progressState._runtimeSelected = info.runtimeSelected or progressState._runtimeSelected' in script
+
+
+def test_normal_workflow_parser_reads_backend_preview_name_for_live_rocm_labels():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    py_script = Path("scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+
+    assert 'print(f"normal_workflow_backend_preview_device={preview_device_id}", file=sys.stderr)' in py_script
+    assert 'print(f"normal_workflow_backend_preview_name={preview_device_name}", file=sys.stderr)' in py_script
+    assert 'print(f"backend={backend}", file=sys.stderr)' in py_script
+    assert 'local previewDeviceId = line:match("normal_workflow_backend_preview_device=([%w%-%_:%.]+)")' in script
+    assert 'local previewDeviceName = line:match("normal_workflow_backend_preview_name=([^\\r\\n]+)")' in script
+    assert 'if previewDeviceName and previewDeviceName ~= "" and (not info.devName or info.devName == "") then' in script
+    assert 'local backend = line:match("^backend=([%w_:%-]+)")' in script
+    assert 'local drumsepTorchHip = line:match("drumsep_torch_hip=([^\\r\\n]+)")' in script
+
+
+def test_linux_setup_existing_runtime_view_uses_compact_top_right_mode_summary():
+    setup_script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
+
+    assert 'local function compactModeSummaryLabel(choice)' in setup_script
+    assert 'if id == "support-bundle" then return "Save bundle" end' in setup_script
+    assert 'if id == "open-logs" then return "Open logs" end' in setup_script
+    assert 'if id == "drumsep-rocm-runtime" then return "DrumKit ROCm" end' in setup_script
+    assert 'local topColGap = math.max(12, linuxLineHeight(10))' in setup_script
+    assert 'local leftColW = bodyW - summaryW - topColGap' in setup_script
+    assert 'local summaryX = bodyX + leftColW + topColGap' in setup_script
+    assert 'local summaryY = bodyY' in setup_script
+    assert 'drawLinuxPanel(summaryX, midPanelY, summaryW, midPanelH' in setup_script
+    assert 'gfx.drawstr("Modes")' in setup_script
+    assert 'local summaryLabel = compactModeSummaryLabel(c)' in setup_script
+    assert 'summaryLabel .. " · " .. tostring(c.sub or "")' not in setup_script
+    assert 'ellipsizeToWidth(summaryLabel, summaryInnerW - 22' in setup_script
+    assert 'local headerBottom = math.max(y, midPanelY + midPanelH)' in setup_script
+    assert 'layout.btnY = math.max(layout.btnY, headerBottom + headerGap)' in setup_script
 
 
 def test_multi_track_footer_and_result_use_observed_job_runtime():
     script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
 
     assert "function updateMultiTrackJobRuntimeMetadata(job)" in script
-    assert 'runtimeSelected = line:match("drumsep_runtime_selected=([%w_:%-]+)") or runtimeSelected' in script
-    assert 'helperDevice = line:match("drumsep_helper_device_arg=([%w_:%-]+)") or helperDevice' in script
-    assert 'directDemixDevice = line:match("direct_demix_device=([%w_:%-]+)") or directDemixDevice' in script
+    assert 'local info = parseRuntimeMetadataFromLogFile(job.logFile, 400)' in script
+    assert 'info.backendRuntime,' in script
+    assert 'info.directDemixDevice,' in script
+    assert 'info.drumsepHelperDeviceArg,' in script
+    assert 'info.effectiveDevice' in script
     assert "updateMultiTrackJobRuntimeMetadata(job)" in script
     assert "job and job.runtimeSelected" in script
     assert "multiTrackQueue and multiTrackQueue.runtimeSelected" in script
@@ -5541,9 +5619,25 @@ def test_multi_track_footer_and_result_use_observed_job_runtime():
     assert 'if requestedDevice == "auto" and predictedDrumsepBackend ~= "" and not runtimeConfirmed then' in script
     assert "job.runtimeMetadataConfirmed = true" in script
     assert "multiTrackQueue.runtimeMetadataConfirmed = true" in script
+    assert 'job.deviceName = info.devName or job.deviceName' in script
+    assert 'multiTrackQueue.deviceName = job.deviceName' in script
     assert 'resultData.runtimeSelected = tostring(multiTrackQueue.runtimeSelected or "")' in script
     assert 'resultData.backendRuntime = tostring(multiTrackQueue.backendRuntime or "")' in script
     assert 'resultData.effectiveDevice = tostring(multiTrackQueue.effectiveDevice or multiTrackQueue.drumsepHelperDeviceArg or "")' in script
+    assert 'resultData.deviceName = tostring(multiTrackQueue.deviceName or "")' in script
+    assert 'logNormalFinalMethodDiagnostics("normal_completion", resultData, resultData.methodLabel)' in script
+
+
+def test_normal_completion_logs_backend_aware_final_method_inputs():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local function logNormalFinalMethodDiagnostics(tag, data, resolvedLabel)' in script
+    assert 'SW_LOG.logExecResult(prefix .. "_label_input_device="' in script
+    assert 'SW_LOG.logExecResult(prefix .. "_label_input_device_name="' in script
+    assert 'SW_LOG.logExecResult(prefix .. "_label_input_backend="' in script
+    assert 'SW_LOG.logExecResult(prefix .. "_label_input_runtime_selected="' in script
+    assert 'SW_LOG.logExecResult(prefix .. "_label_resolved="' in script
+    assert 'logNormalFinalMethodDiagnostics("normal_final", resultData, resultData.methodLabel)' in script
 
 
 def test_result_window_hides_user_facing_reason_lines_for_backend_tokens():
@@ -5575,6 +5669,21 @@ def test_direct_dks_device_labels_keep_runtime_ids_unchanged():
 
     assert 'add("cuda:" .. tostring(idx), trimmed, "cuda", "device_cuda_desc")' in script
     assert 'add("cuda:0", "GPU 0", "cuda", "device_cuda_desc")' in script
+
+
+def test_direct_dks_linux_cuda_device_list_reads_dedicated_cuda_state_and_runtime():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local cudaState = readEnvFile(stateDir .. PATH_SEP .. schedulerRuntimeStateFile("cuda")) or {}' in script
+    assert 'local cudaPython = resolveRuntimePython(cudaState, defaultRuntimePython(".venv-drumsep-cuda"))' in script
+    assert 'local genericCudaPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))' in script
+    assert 'local cudaStateForUi = cudaState' in script
+    assert 'and schedulerRuntimeHasCudaCapability(cpuState, genericCudaPython, capabilityState)' in script
+    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaStateForUi, cudaPythonForUi, capabilityState)' in script
+    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaStateForUi, capabilityState)' in script
+    assert 'if runtimeKind == "cuda" then' in script
+    assert 'return "drumsep_runtime_cuda.env"' in script
+    assert 'return schedulerRuntimePythonDefault(".venv-drumsep-cuda")' in script
 
 
 def test_direct_dks_integrated_amd_filter_uses_raw_runtime_name():

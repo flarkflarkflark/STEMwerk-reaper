@@ -1087,6 +1087,23 @@ end
 
 function formatUserFacingProcessingDeviceLabel(...)
     local candidates = { ... }
+    local sawCudaToken = false
+    local sawNvidiaCuda = false
+    local sawAmdRocmLike = false
+    for _, candidate in ipairs(candidates) do
+        local lower = tostring(candidate or ""):lower()
+        if lower == "cuda" or lower:match("^cuda:%d+") then
+            sawCudaToken = true
+        end
+        if lower:find("nvidia", 1, true) or lower:find("geforce", 1, true)
+            or lower:match("%f[%a]rtx%s*%d") or lower:match("%f[%a]gtx%s*%d")
+        then
+            sawNvidiaCuda = true
+        end
+        if lower:find("radeon", 1, true) or lower:find("amd ", 1, true) or lower:match("%f[%a]rx%s*%d") then
+            sawAmdRocmLike = true
+        end
+    end
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
         if lower == "mps" or lower:find("apple mps", 1, true) or lower:find("mps", 1, true) then
@@ -1104,6 +1121,9 @@ function formatUserFacingProcessingDeviceLabel(...)
         if lower == "directml" or lower:find("directml", 1, true) then
             return "DirectML"
         end
+    end
+    if sawCudaToken and sawAmdRocmLike and not sawNvidiaCuda then
+        return trSafeValue("footer_device_rocm_label", "AMD ROCm")
     end
     for _, candidate in ipairs(candidates) do
         local lower = tostring(candidate or ""):lower()
@@ -9231,13 +9251,11 @@ function attachResultRuntimeMetadata(data)
         end
     end
 
-    if (not data.methodLabel or data.methodLabel == "") and data.backend == "gpu" then
-        local resolved = resolveResultMethodLabel(data)
-        if resolved ~= "" then
-            data.methodLabel = tostring(resolved)
-        else
-            data.methodLabel = sanitizeUserFacingMethodLabel("gpu")
-        end
+    local resolvedMethod = resolveResultMethodLabel(data)
+    if resolvedMethod ~= "" then
+        data.methodLabel = tostring(resolvedMethod)
+    elseif (not data.methodLabel or data.methodLabel == "") and data.backend == "gpu" then
+        data.methodLabel = sanitizeUserFacingMethodLabel("gpu")
     end
 
     return data
@@ -9289,6 +9307,22 @@ function resolveResultMethodLabel(data)
         data and data.backendRuntime,
         data and data.effectiveDevice
     )
+    local explicitLabel = formatUserFacingProcessingDeviceLabel(
+        data and data.backendRuntime,
+        data and data.runtimeSelected,
+        data and data.stage2Runtime,
+        data and data.stage1Runtime,
+        data and data.effectiveDevice,
+        data and data.deviceName
+    )
+    local rocmLabel = trSafeValue("footer_device_rocm_label", "AMD ROCm")
+    local cudaLabel = trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")
+    local cpuLabel = trSafeValue("footer_device_cpu_label", "CPU")
+    local mpsLabel = trSafeValue("device_mps_label", "Apple MPS")
+
+    if explicitLabel == rocmLabel or explicitLabel == cudaLabel or explicitLabel == "DirectML" or explicitLabel == mpsLabel or explicitLabel == cpuLabel then
+        return explicitLabel
+    end
 
     if backend == "directml" or deviceRequest:find("directml", 1, true) or runtimeSelected:find("directml", 1, true) then
         return sanitizeUserFacingMethodLabel("directml")
@@ -9316,6 +9350,17 @@ function resolveSingleTrackMethodLabel(data)
     if methodLabel == "CPU" then return "CPU" end
     if methodLabel ~= "" then return "GPU" end
     return ""
+end
+
+local function logNormalFinalMethodDiagnostics(tag, data, resolvedLabel)
+    if isDrumKitWorkflowActive() then return end
+    if not SW_LOG or type(SW_LOG.logExecResult) ~= "function" then return end
+    local prefix = tostring(tag or "normal_final")
+    SW_LOG.logExecResult(prefix .. "_label_input_device=" .. tostring(data and data.effectiveDevice or ""), nil, "")
+    SW_LOG.logExecResult(prefix .. "_label_input_device_name=" .. tostring(data and data.deviceName or ""), nil, "")
+    SW_LOG.logExecResult(prefix .. "_label_input_backend=" .. tostring(data and data.backendRuntime or data and data.backend or ""), nil, "")
+    SW_LOG.logExecResult(prefix .. "_label_input_runtime_selected=" .. tostring(data and data.runtimeSelected or ""), nil, "")
+    SW_LOG.logExecResult(prefix .. "_label_resolved=" .. tostring(resolvedLabel or ""), nil, "")
 end
 
 function buildResultMessageLines()
@@ -10487,10 +10532,19 @@ local function drawDeviceColumn(col4X, deviceColW, contentTop, btnH, commonBtnFo
         local rocmPython = resolveRuntimePython(rocmState, defaultRuntimePython(".venv-drumsep-rocm"))
         local cpuPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))
         local cudaPython = resolveRuntimePython(cudaState, defaultRuntimePython(".venv-drumsep-cuda"))
+        local genericCudaPython = resolveRuntimePython(cpuState, defaultRuntimePython(".venv-drumsep"))
         local directmlPython = resolveRuntimePython(directmlState, defaultRuntimePython(".venv-drumsep-directml"))
-        local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)
+        local cudaStateForUi = cudaState
+        local cudaPythonForUi = cudaPython
+        if not schedulerRuntimeHasCudaCapability(cudaStateForUi, cudaPythonForUi, capabilityState)
+            and schedulerRuntimeHasCudaCapability(cpuState, genericCudaPython, capabilityState)
+        then
+            cudaStateForUi = cpuState
+            cudaPythonForUi = genericCudaPython
+        end
+        local cudaReady = schedulerRuntimeHasCudaCapability(cudaStateForUi, cudaPythonForUi, capabilityState)
         local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)
-        local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)
+        local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaStateForUi, capabilityState)
         local directmlDeviceNames = schedulerRuntimeDirectmlDeviceNames(directmlState, capabilityState)
         rocmReady = rocmReady and rocmPython ~= ""
         local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""
@@ -14436,6 +14490,143 @@ progressState = {
     workflowSource = "",
 }
 
+function parseRuntimeMetadataFromLogFile(logFile, maxLines)
+    local info = {}
+    local f = io.open(logFile or "", "r")
+    if not f then return info end
+    local lineCap = tonumber(maxLines) or 0
+    local n = 0
+    for line in f:lines() do
+        n = n + 1
+        local id, name = line:match("^Selected device:%s*([%w%-%_:%.]+)%s*%((.+)%)")
+        if id then
+            info.devId = id
+            info.devName = name
+        end
+        local preferredId, preferredName = line:match("auto_selected_preferred=([%w%-%_:%.]+)%s*%((.+)%)")
+        if preferredId then
+            info.devId = preferredId
+            info.devName = preferredName
+        end
+        local previewDeviceId = line:match("normal_workflow_backend_preview_device=([%w%-%_:%.]+)")
+        if previewDeviceId and (not info.devId or info.devId == "") then
+            info.devId = previewDeviceId
+        end
+        local previewDeviceName = line:match("normal_workflow_backend_preview_name=([^\r\n]+)")
+        if previewDeviceName and previewDeviceName ~= "" and (not info.devName or info.devName == "") then
+            info.devName = previewDeviceName
+        end
+        local backend = line:match("^backend=([%w_:%-]+)")
+        if backend and backend ~= "" then
+            info.backendRuntime = backend
+            if (not info.runtimeSelected or info.runtimeSelected == "") and backend ~= "gpu" then
+                info.runtimeSelected = backend
+            end
+        end
+        local effectiveDevice = line:match("effective_device=([%w_:%-]+)")
+        if effectiveDevice then
+            info.effectiveDevice = effectiveDevice
+        end
+        local torchVersion = line:match("torch_version=([^%s]+)")
+        if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then
+            info.runtimeSelected = "rocm"
+            info.torchVersion = torchVersion
+            if not info.backendRuntime or info.backendRuntime == "" then
+                info.backendRuntime = "rocm"
+            end
+        end
+        local drumsepTorchHip = line:match("drumsep_torch_hip=([^\r\n]+)")
+        if drumsepTorchHip and drumsepTorchHip ~= "" then
+            info.runtimeSelected = "rocm"
+            info.drumsepTorchHip = drumsepTorchHip
+            if not info.backendRuntime or info.backendRuntime == "" then
+                info.backendRuntime = "rocm"
+            end
+        end
+        local idx, name2 = line:match("^STEMWERK:%s*torch%.cuda%.set_device%((%d+)%)%s*%-%>%s*current_device=%d+%s*%((.+)%)")
+        if idx then
+            info.devId = "cuda:" .. idx
+            info.devName = name2
+        end
+        local selected = line:match("drumsep_runtime_selected=([%w_:%-]+)")
+        if selected then
+            info.runtimeSelected = selected
+        end
+        local drumsepSelectionPolicy = line:match("drumsep_runtime_selection_policy=([%w_:%-]+)")
+        if drumsepSelectionPolicy then
+            info.drumsepRuntimeSelectionPolicy = drumsepSelectionPolicy
+        end
+        local drumsepSubprocessEnvProfile = line:match("drumsep_subprocess_env_profile=([%w_:%-]+)")
+        if drumsepSubprocessEnvProfile then
+            info.drumsepSubprocessEnvProfile = drumsepSubprocessEnvProfile
+        end
+        local drumsepHelperDeviceArg = line:match("drumsep_helper_device_arg=([%w_:%-]+)")
+        if drumsepHelperDeviceArg then
+            info.drumsepHelperDeviceArg = drumsepHelperDeviceArg
+        end
+        local directDemixDevice = line:match("direct_demix_device=([%w_:%-]+)")
+        if directDemixDevice then
+            info.directDemixDevice = directDemixDevice
+            info.effectiveDevice = directDemixDevice
+            info.stage2Device = directDemixDevice
+            if not info.backendRuntime or info.backendRuntime == "" then
+                info.backendRuntime = directDemixDevice
+            end
+        end
+        local drumsepFallbackReason = line:match("drumsep_runtime_fallback_reason=([^\r\n]+)")
+        if drumsepFallbackReason then
+            info.drumsepRuntimeFallbackReason = drumsepFallbackReason
+        end
+        local req = line:match("normalized_device_request=([%w_:%-]+)")
+        if req then
+            info.normalizedRequest = req
+        end
+        local gpu = line:match("drumsep_gpu_capable=([%w_:%-]+)")
+        if gpu then
+            info.gpuCapable = gpu
+        end
+        local names = line:match("drumsep_device_names=(.+)")
+        if names and names ~= "" then
+            info.runtimeDeviceNames = names
+        end
+        local s1r = line:match("dks_extract_stage1_runtime=([%w_:%-]+)")
+        if s1r then
+            info.stage1Runtime = s1r
+        end
+        local s1d = line:match("dks_extract_stage1_device=([%w_:%-]+)")
+        if s1d then
+            info.stage1Device = s1d
+        end
+        local s2r = line:match("dks_extract_stage2_runtime=([%w_:%-]+)")
+        if s2r then
+            info.stage2Runtime = s2r
+        end
+        local s2d = line:match("dks_extract_stage2_device=([%w_:%-]+)")
+        if s2d then
+            info.stage2Device = s2d
+        end
+        local backendRuntime = line:match("backend_runtime=([%w_:%-]+)")
+        if backendRuntime then
+            info.backendRuntime = backendRuntime
+        end
+        local drumsepSchedulerBackend = line:match("drumsep_scheduler_backend=([%w_:%-]+)")
+        if drumsepSchedulerBackend then
+            info.drumsepSchedulerBackend = drumsepSchedulerBackend
+        end
+        local drumsepSchedulerPolicy = line:match("drumsep_scheduler_policy=([%w_:%-]+)")
+        if drumsepSchedulerPolicy then
+            info.drumsepSchedulerPolicy = drumsepSchedulerPolicy
+        end
+        local drumsepSchedulerUsesCpuFallback = line:match("drumsep_scheduler_uses_cpu_fallback=([%w_:%-]+)")
+        if drumsepSchedulerUsesCpuFallback then
+            info.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback
+        end
+        if lineCap > 0 and n >= lineCap then break end
+    end
+    f:close()
+    return info
+end
+
 isDrumKitWorkflowActive = function()
     return safeDrumKitWorkflowActive()
 end
@@ -14505,12 +14696,29 @@ function compactProgressDeviceToken(rawDevice, friendlyDetail)
     local raw = tostring(rawDevice or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local lower = raw:lower()
     if lower == "" then return "" end
+    local resolved = formatUserFacingProcessingDeviceLabel(
+        progressState._runtimeSelected,
+        progressState._stage2Runtime,
+        progressState._stage1Runtime,
+        progressState._backendRuntime,
+        progressState._deviceName,
+        progressState._runtimeDeviceNames,
+        friendlyDetail,
+        raw
+    )
+    local rocmLabel = trSafeValue("footer_device_rocm_label", "AMD ROCm")
+    local cudaLabel = trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")
+    local cpuLabel = trSafeValue("footer_device_cpu_label", "CPU")
+    local mpsLabel = trSafeValue("device_mps_label", "Apple MPS")
     if lower == "cpu" then return trSafeValue("footer_device_cpu_label", "CPU") end
     if lower == "rocm" or lower:find("rocm", 1, true) or lower:find("hip", 1, true) then
         return trSafeValue("footer_device_rocm_label", "AMD ROCm")
     end
     if lower:match("^cuda:%d+") or lower == "cuda" then
-        return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA")
+        if resolved == rocmLabel or resolved == "DirectML" or resolved == mpsLabel or resolved == cpuLabel then
+            return resolved
+        end
+        return cudaLabel
     end
     if lower:find("directml", 1, true) then return "DirectML" end
     if lower == "mps" then return trSafeValue("device_mps_label", "Apple MPS") end
@@ -14521,7 +14729,12 @@ function compactProgressDeviceToken(rawDevice, friendlyDetail)
         return friendly
     end
     -- Prevent leakage of raw backend IDs like cuda:0 if no friendly detail was found
-    if lower:match("^cuda:%d+") then return trSafeValue("footer_device_cuda_label", "NVIDIA CUDA") end
+    if lower:match("^cuda:%d+") then
+        if resolved == rocmLabel or resolved == "DirectML" or resolved == mpsLabel or resolved == cpuLabel then
+            return resolved
+        end
+        return cudaLabel
+    end
     return raw
 end
 
@@ -14557,7 +14770,7 @@ function schedulerRuntimeStateFile(kind)
     if runtimeKind == "directml" then
         return "drumsep_runtime_directml.env"
     end
-    if runtimeKind == "cuda" and OS == "Windows" then
+    if runtimeKind == "cuda" then
         return "drumsep_runtime_cuda.env"
     end
     return "drumsep_runtime.env"
@@ -14571,7 +14784,7 @@ function schedulerRuntimePythonDefaultForKind(kind)
     if runtimeKind == "directml" then
         return schedulerRuntimePythonDefault(".venv-drumsep-directml")
     end
-    if runtimeKind == "cuda" and OS == "Windows" then
+    if runtimeKind == "cuda" then
         return schedulerRuntimePythonDefault(".venv-drumsep-cuda")
     end
     return schedulerRuntimePythonDefault(".venv-drumsep")
@@ -15276,42 +15489,28 @@ multiTrackQueue = {
 
 function updateMultiTrackJobRuntimeMetadata(job)
     if not job or not job.logFile or job.logFile == "" then return end
-    local f = io.open(job.logFile, "r")
-    if not f then return end
-
-    local runtimeSelected = ""
-    local backendRuntime = ""
-    local effectiveDevice = ""
-    local helperDevice = ""
-    local directDemixDevice = ""
-    for line in f:lines() do
-        runtimeSelected = line:match("drumsep_runtime_selected=([%w_:%-]+)") or runtimeSelected
-        backendRuntime = line:match("backend_runtime=([%w_:%-]+)") or backendRuntime
-        effectiveDevice = line:match("effective_device=([%w_:%-]+)") or effectiveDevice
-        helperDevice = line:match("drumsep_helper_device_arg=([%w_:%-]+)") or helperDevice
-        directDemixDevice = line:match("direct_demix_device=([%w_:%-]+)") or directDemixDevice
-    end
-    f:close()
-
+    local info = parseRuntimeMetadataFromLogFile(job.logFile, 400)
     local observed = preferredRuntimeSelection(
-        runtimeSelected,
-        directDemixDevice,
-        helperDevice,
-        effectiveDevice,
-        ""
+        info.runtimeSelected,
+        info.backendRuntime,
+        info.directDemixDevice,
+        info.drumsepHelperDeviceArg,
+        info.effectiveDevice
     )
     if observed == "" then return end
 
     job.runtimeMetadataConfirmed = true
     job.runtimeSelected = observed
-    job.backendRuntime = backendRuntime ~= "" and backendRuntime or observed
-    job.effectiveDevice = directDemixDevice ~= "" and directDemixDevice
-        or (effectiveDevice ~= "" and effectiveDevice or helperDevice)
-    job.drumsepHelperDeviceArg = helperDevice
+    job.backendRuntime = info.backendRuntime ~= "" and info.backendRuntime or observed
+    job.effectiveDevice = info.directDemixDevice ~= "" and info.directDemixDevice
+        or (info.effectiveDevice ~= "" and info.effectiveDevice or info.drumsepHelperDeviceArg)
+    job.drumsepHelperDeviceArg = info.drumsepHelperDeviceArg
+    job.deviceName = info.devName or job.deviceName
     multiTrackQueue.runtimeSelected = job.runtimeSelected
     multiTrackQueue.backendRuntime = job.backendRuntime
     multiTrackQueue.effectiveDevice = job.effectiveDevice
     multiTrackQueue.drumsepHelperDeviceArg = job.drumsepHelperDeviceArg
+    multiTrackQueue.deviceName = job.deviceName
     multiTrackQueue.runtimeMetadataConfirmed = true
 end
 
@@ -15399,132 +15598,26 @@ function drawProgressWindow()
     -- We update at most ~2x/sec to keep it cheap.
     if progressState.logFile and (not progressState._deviceInfoLastAt or (os.clock() - progressState._deviceInfoLastAt) > 0.5) then
         progressState._deviceInfoLastAt = os.clock()
-        local info = {}
-        local f = io.open(progressState.logFile, "r")
-        if f then
-            local n = 0
-            for line in f:lines() do
-                n = n + 1
-                -- Example: Selected device: cuda:0 (AMD Radeon RX 9070)
-                local id, name = line:match("^Selected device:%s*([%w%-%_:%.]+)%s*%((.+)%)")
-                if id then
-                    info.devId = id
-                    info.devName = name
-                end
-                local preferredId, preferredName = line:match("auto_selected_preferred=([%w%-%_:%.]+)%s*%((.+)%)")
-                if preferredId then
-                    info.devId = preferredId
-                    info.devName = preferredName
-                end
-                local effectiveDevice = line:match("effective_device=([%w_:%-]+)")
-                if effectiveDevice then
-                    info.effectiveDevice = effectiveDevice
-                end
-                local torchVersion = line:match("torch_version=([^%s]+)")
-                if torchVersion and tostring(torchVersion):lower():find("rocm", 1, true) then
-                    info.runtimeSelected = "rocm"
-                end
-                -- Example: STEMWERK: torch.cuda.set_device(1) -> current_device=1 (AMD Radeon 780M Graphics)
-                local idx, name2 = line:match("^STEMWERK:%s*torch%.cuda%.set_device%((%d+)%)%s*%-%>%s*current_device=%d+%s*%((.+)%)")
-                if idx then
-                    info.devId = "cuda:" .. idx
-                    info.devName = name2
-                end
-                local selected = line:match("drumsep_runtime_selected=([%w_:%-]+)")
-                if selected then
-                    info.runtimeSelected = selected
-                end
-                local drumsepSelectionPolicy = line:match("drumsep_runtime_selection_policy=([%w_:%-]+)")
-                if drumsepSelectionPolicy then
-                    info.drumsepRuntimeSelectionPolicy = drumsepSelectionPolicy
-                end
-                local drumsepSubprocessEnvProfile = line:match("drumsep_subprocess_env_profile=([%w_:%-]+)")
-                if drumsepSubprocessEnvProfile then
-                    info.drumsepSubprocessEnvProfile = drumsepSubprocessEnvProfile
-                end
-                local drumsepHelperDeviceArg = line:match("drumsep_helper_device_arg=([%w_:%-]+)")
-                if drumsepHelperDeviceArg then
-                    info.drumsepHelperDeviceArg = drumsepHelperDeviceArg
-                end
-                local directDemixDevice = line:match("direct_demix_device=([%w_:%-]+)")
-                if directDemixDevice then
-                    info.effectiveDevice = directDemixDevice
-                    info.stage2Device = directDemixDevice
-                    if not info.backendRuntime or info.backendRuntime == "" then
-                        info.backendRuntime = directDemixDevice
-                    end
-                end
-                local drumsepFallbackReason = line:match("drumsep_runtime_fallback_reason=([^\r\n]+)")
-                if drumsepFallbackReason then
-                    info.drumsepRuntimeFallbackReason = drumsepFallbackReason
-                end
-                local req = line:match("normalized_device_request=([%w_:%-]+)")
-                if req then
-                    info.normalizedRequest = req
-                end
-                local gpu = line:match("drumsep_gpu_capable=([%w_:%-]+)")
-                if gpu then
-                    info.gpuCapable = gpu
-                end
-                local names = line:match("drumsep_device_names=(.+)")
-                if names and names ~= "" then
-                    info.runtimeDeviceNames = names
-                end
-                local s1r = line:match("dks_extract_stage1_runtime=([%w_:%-]+)")
-                if s1r then
-                    info.stage1Runtime = s1r
-                end
-                local s1d = line:match("dks_extract_stage1_device=([%w_:%-]+)")
-                if s1d then
-                    info.stage1Device = s1d
-                end
-                local s2r = line:match("dks_extract_stage2_runtime=([%w_:%-]+)")
-                if s2r then
-                    info.stage2Runtime = s2r
-                end
-                local s2d = line:match("dks_extract_stage2_device=([%w_:%-]+)")
-                if s2d then
-                    info.stage2Device = s2d
-                end
-                local backendRuntime = line:match("backend_runtime=([%w_:%-]+)")
-                if backendRuntime then
-                    info.backendRuntime = backendRuntime
-                end
-                local drumsepSchedulerBackend = line:match("drumsep_scheduler_backend=([%w_:%-]+)")
-                if drumsepSchedulerBackend then
-                    info.drumsepSchedulerBackend = drumsepSchedulerBackend
-                end
-                local drumsepSchedulerPolicy = line:match("drumsep_scheduler_policy=([%w_:%-]+)")
-                if drumsepSchedulerPolicy then
-                    info.drumsepSchedulerPolicy = drumsepSchedulerPolicy
-                end
-                local drumsepSchedulerUsesCpuFallback = line:match("drumsep_scheduler_uses_cpu_fallback=([%w_:%-]+)")
-                if drumsepSchedulerUsesCpuFallback then
-                    info.drumsepSchedulerUsesCpuFallback = drumsepSchedulerUsesCpuFallback
-                end
-                if n >= 200 then break end
-            end
-            f:close()
-        end
-        progressState._deviceId = info.devId
-        progressState._deviceName = info.devName
-        progressState._runtimeSelected = info.runtimeSelected
-        progressState._normalizedDeviceRequest = info.normalizedRequest
-        progressState._backendRuntime = info.backendRuntime
-        progressState._effectiveDevice = info.effectiveDevice
-        progressState._runtimeGpuCapable = info.gpuCapable
-        progressState._runtimeDeviceNames = info.runtimeDeviceNames
-        progressState._stage1Runtime = info.stage1Runtime
-        progressState._stage1Device = info.stage1Device
-        progressState._stage2Runtime = info.stage2Runtime
-        progressState._stage2Device = info.stage2Device
-        progressState._drumsepRuntimeSelectionPolicy = info.drumsepRuntimeSelectionPolicy
-        progressState._drumsepSubprocessEnvProfile = info.drumsepSubprocessEnvProfile
-        progressState._drumsepHelperDeviceArg = info.drumsepHelperDeviceArg
-        progressState._drumsepRuntimeFallbackReason = info.drumsepRuntimeFallbackReason
-        progressState._drumsepSchedulerBackend = info.drumsepSchedulerBackend
-        progressState._drumsepSchedulerPolicy = info.drumsepSchedulerPolicy
-        progressState._drumsepSchedulerUsesCpuFallback = info.drumsepSchedulerUsesCpuFallback
+        local info = parseRuntimeMetadataFromLogFile(progressState.logFile, 400)
+        progressState._deviceId = info.devId or progressState._deviceId
+        progressState._deviceName = info.devName or progressState._deviceName
+        progressState._runtimeSelected = info.runtimeSelected or progressState._runtimeSelected
+        progressState._normalizedDeviceRequest = info.normalizedRequest or progressState._normalizedDeviceRequest
+        progressState._backendRuntime = info.backendRuntime or progressState._backendRuntime
+        progressState._effectiveDevice = info.effectiveDevice or progressState._effectiveDevice
+        progressState._runtimeGpuCapable = info.gpuCapable or progressState._runtimeGpuCapable
+        progressState._runtimeDeviceNames = info.runtimeDeviceNames or progressState._runtimeDeviceNames
+        progressState._stage1Runtime = info.stage1Runtime or progressState._stage1Runtime
+        progressState._stage1Device = info.stage1Device or progressState._stage1Device
+        progressState._stage2Runtime = info.stage2Runtime or progressState._stage2Runtime
+        progressState._stage2Device = info.stage2Device or progressState._stage2Device
+        progressState._drumsepRuntimeSelectionPolicy = info.drumsepRuntimeSelectionPolicy or progressState._drumsepRuntimeSelectionPolicy
+        progressState._drumsepSubprocessEnvProfile = info.drumsepSubprocessEnvProfile or progressState._drumsepSubprocessEnvProfile
+        progressState._drumsepHelperDeviceArg = info.drumsepHelperDeviceArg or progressState._drumsepHelperDeviceArg
+        progressState._drumsepRuntimeFallbackReason = info.drumsepRuntimeFallbackReason or progressState._drumsepRuntimeFallbackReason
+        progressState._drumsepSchedulerBackend = info.drumsepSchedulerBackend or progressState._drumsepSchedulerBackend
+        progressState._drumsepSchedulerPolicy = info.drumsepSchedulerPolicy or progressState._drumsepSchedulerPolicy
+        progressState._drumsepSchedulerUsesCpuFallback = info.drumsepSchedulerUsesCpuFallback or progressState._drumsepSchedulerUsesCpuFallback
     end
 
     -- === THEME TOGGLE (top right) ===
@@ -17816,13 +17909,15 @@ function processStemsResult(stems)
             progressState._stage2Runtime,
             progressState._stage1Runtime,
             progressState._backendRuntime,
-            progressState._stage2Device or progressState._stage1Device
+            progressState._stage2Device or progressState._stage1Device or progressState._effectiveDevice or resultData.effectiveDevice
         ) or resultData.runtimeSelected or "")
         resultData.stage2Runtime = tostring(progressState._stage2Runtime or resultData.stage2Runtime or "")
         resultData.stage1Runtime = tostring(progressState._stage1Runtime or resultData.stage1Runtime or "")
         resultData.backendRuntime = tostring(progressState._backendRuntime or resultData.backendRuntime or "")
+        resultData.deviceName = tostring(progressState._deviceName or resultData.deviceName or "")
         resultData.effectiveDevice = tostring(progressState._stage2Device or progressState._stage1Device or progressState._effectiveDevice or resultData.effectiveDevice or "")
         resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")
+        logNormalFinalMethodDiagnostics("normal_final", resultData, resultData.methodLabel)
     end
 
     reaper.UpdateArrange()
@@ -22380,7 +22475,10 @@ _sep.processAllStemsResult = function()
     resultData.runtimeSelected = tostring(multiTrackQueue.runtimeSelected or "")
     resultData.backendRuntime = tostring(multiTrackQueue.backendRuntime or "")
     resultData.effectiveDevice = tostring(multiTrackQueue.effectiveDevice or multiTrackQueue.drumsepHelperDeviceArg or "")
+    resultData.deviceName = tostring(multiTrackQueue.deviceName or "")
     resultData.action = actionData
+    resultData.methodLabel = tostring(resolveResultMethodLabel(resultData) or resultData.methodLabel or "")
+    logNormalFinalMethodDiagnostics("normal_completion", resultData, resultData.methodLabel)
 
     -- Cleanup temp working files (keep stem WAVs for REAPER references).
     if multiTrackQueue.jobs then

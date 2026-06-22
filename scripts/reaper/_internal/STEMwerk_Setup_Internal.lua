@@ -5789,6 +5789,43 @@ local function existingRuntimeSetupMenuTick()
         return lines
     end
 
+    local function ellipsizeToWidth(text, maxWidth, fontName, fontSize, fontFlags)
+        local raw = tostring(text or "")
+        local width = math.max(24, tonumber(maxWidth) or 24)
+        gfx.setfont(1, fontName or "Arial", fontSize or linuxFontSize(11), fontFlags or 0)
+        if gfx.measurestr(raw) <= width then
+            return raw
+        end
+        local ellipsis = "..."
+        local trimmed = raw
+        while #trimmed > 1 do
+            trimmed = trimmed:sub(1, #trimmed - 1)
+            local candidate = trimmed .. ellipsis
+            if gfx.measurestr(candidate) <= width then
+                return candidate
+            end
+        end
+        return ellipsis
+    end
+
+    local function compactModeSummaryLabel(choice)
+        local id = tostring(choice and choice.id or "")
+        if id == "verify" then return "Check only" end
+        if id == "repair" then return "Repair" end
+        if id == "rebuild-venv" then return "Rebuild venv" end
+        if id == "support-bundle" then return "Save bundle" end
+        if id == "open-logs" then return "Open logs" end
+        if id == "open-runtime" then return "Open runtime" end
+        if id == "drumsep-runtime" then return "DrumKit CPU" end
+        if id == "drumsep-rocm-runtime" then return "DrumKit ROCm" end
+        if id == "drumsep-cuda-runtime" then return "DrumKit CUDA" end
+        if id == "drumsep-directml-runtime" then return "DrumKit DML" end
+        if id == "delete-models" then return "Delete models" end
+        if id == "delete-runtime" then return "Delete runtime" end
+        if id == "cancel" then return "Cancel" end
+        return tostring(choice and choice.label or ""):gsub("%.%.%.$", "")
+    end
+
     -- Zoom controls: Ctrl+wheel, +/- and 0 use shared persisted scale helpers.
     local wheel = gfx.mouse_wheel or 0
     local lastWheel = m.lastMouseWheel or 0
@@ -5862,8 +5899,6 @@ local function existingRuntimeSetupMenuTick()
         }
     end
 
-    local layout = buildButtonLayout(cols, showSubs)
-
     local footerText = string.format("Ctrl+wheel zooms text. Use +/- or 0 for text size. Esc = cancel.  Text %.0f%%", scale * 100)
     if compact then
         footerText = string.format("Ctrl+wheel / +/- / 0. Esc = cancel.  Text %.0f%%", scale * 100)
@@ -5878,29 +5913,55 @@ local function existingRuntimeSetupMenuTick()
     local tooltipTextH = linuxLineHeight(14)
     local tooltipBoxH = tooltipTextH + 4
     local tooltipY = footerY - math.max(6, linuxLineHeight(6)) - tooltipBoxH
+    local layout = buildButtonLayout(cols, showSubs)
     local rows = math.ceil(#choices / layout.cols)
     local btnBlockH = (rows * layout.btnH) + ((rows - 1) * btnGapY)
-    layout.btnY = tooltipY - math.max(8, linuxLineHeight(8)) - btnBlockH
-    local infoBottom = layout.btnY - math.max(8, linuxLineHeight(8))
+    local minButtonGap = math.max(8, linuxLineHeight(8))
+    layout.btnY = tooltipY - minButtonGap - btnBlockH
+    local infoBottom = layout.btnY - minButtonGap
+
+    local topColGap = math.max(12, linuxLineHeight(10))
+    local summaryMinW = linuxLineHeight(176)
+    local summaryMaxW = math.min(linuxLineHeight(220), math.floor(bodyW * 0.34))
+    local summaryW = math.max(summaryMinW, math.floor(bodyW * 0.29))
+    summaryW = math.min(summaryW, summaryMaxW)
+    local minLeftColW = math.max(linuxLineHeight(240), math.floor(bodyW * 0.52))
+    local maxSummaryFromBody = math.max(linuxLineHeight(132), bodyW - minLeftColW - topColGap)
+    summaryW = math.min(summaryW, maxSummaryFromBody)
+    local leftColW = bodyW - summaryW - topColGap
+    if leftColW < minLeftColW then
+        leftColW = minLeftColW
+        summaryW = bodyW - leftColW - topColGap
+    end
+    if summaryW < linuxLineHeight(132) then
+        summaryW = linuxLineHeight(132)
+        leftColW = bodyW - summaryW - topColGap
+    end
+    local summaryX = bodyX + leftColW + topColGap
+    local summaryY = bodyY
+    local summaryInnerW = summaryW - 24
+    local summaryChars = math.max(12, math.floor(summaryInnerW / math.max(6, linuxFontSize(10) * 0.54)))
 
     -- Info content is drawn only when it fits; this prevents overlap in tiny windows.
     local y = bodyY
-    drawStemwerkInline(bodyX, y, linuxFontSize(22), "", "werk Setup [" .. setupUiLabel() .. "]")
+    local titleText = "werk Setup [" .. setupUiLabel() .. "]"
+    titleText = ellipsizeToWidth(titleText, leftColW, "Arial Bold", linuxFontSize(22), 0)
+    drawStemwerkInline(bodyX, y, linuxFontSize(22), "", titleText)
     y = y + linuxLineHeight(30)
 
     gfx.setfont(1, "Arial Bold", linuxFontSize(14))
     gfx.set(0.92, 0.92, 0.94, 1)
     gfx.x = bodyX
     gfx.y = y
-    gfx.drawstr("Existing runtime found. Choose what to do:")
+    gfx.drawstr(ellipsizeToWidth("Existing runtime found. Choose what to do:", leftColW, "Arial Bold", linuxFontSize(14), 0))
     y = y + linuxLineHeight(26)
 
     if not tiny then
-        local runtimeChars = math.max(18, math.floor((bodyW - 28) / math.max(6, linuxFontSize(12) * 0.58)))
+        local runtimeChars = math.max(18, math.floor((leftColW - 28) / math.max(6, linuxFontSize(12) * 0.58)))
         local runtimeLines = cappedWrap(tostring(m.runtime.base), runtimeChars, compact and 1 or 3)
         local pathBoxH = linuxLineHeight(18) + (#runtimeLines * linuxLineHeight(15)) + 14
         if y + pathBoxH <= infoBottom then
-            drawLinuxPanel(bodyX, y, bodyW, pathBoxH, { 0.06, 0.06, 0.07, 1 }, { 0.19, 0.19, 0.22, 1 })
+            drawLinuxPanel(bodyX, y, leftColW, pathBoxH, { 0.06, 0.06, 0.07, 1 }, { 0.19, 0.19, 0.22, 1 })
             gfx.setfont(1, "Arial", linuxFontSize(12))
             gfx.set(0.55, 0.57, 0.62, 1)
             gfx.x = bodyX + 14
@@ -5923,7 +5984,7 @@ local function existingRuntimeSetupMenuTick()
         gfx.setfont(1, "Arial", linuxFontSize(12))
         local modelLabel = "Models: "
         local modelLabelW = gfx.measurestr(modelLabel)
-        local modelChars = math.max(16, math.floor((bodyW - modelLabelW) / math.max(6, linuxFontSize(12) * 0.58)))
+        local modelChars = math.max(16, math.floor((leftColW - modelLabelW) / math.max(6, linuxFontSize(12) * 0.58)))
         local modelLines = cappedWrap(tostring(m.modelDir), modelChars, compact and 1 or 2)
         local modelH = math.max(1, #modelLines) * linuxLineHeight(16)
         if y + modelH <= infoBottom then
@@ -5982,10 +6043,10 @@ local function existingRuntimeSetupMenuTick()
             gfx.set(o.needsRepair and 0.97 or 0.55, o.needsRepair and 0.80 or 0.57, o.needsRepair and 0.15 or 0.62, 1)
             gfx.x = bodyX
             gfx.y = y
-            gfx.drawstr(statusLine)
+            gfx.drawstr(ellipsizeToWidth(statusLine, leftColW, "Arial", linuxFontSize(12), 0))
             y = y + linuxLineHeight(16)
         end
-        local rowChars = math.max(18, math.floor((bodyW - 20) / math.max(6, linuxFontSize(11) * 0.56)))
+        local rowChars = math.max(18, math.floor((leftColW - 20) / math.max(6, linuxFontSize(11) * 0.56)))
         gfx.setfont(1, "Arial", linuxFontSize(11))
         gfx.set(0.78, 0.80, 0.84, 1)
         for _, line in ipairs(rows) do
@@ -6006,7 +6067,7 @@ local function existingRuntimeSetupMenuTick()
         gfx.set(0.97, 0.80, 0.15, 1)
         gfx.x = bodyX
         gfx.y = y
-        gfx.drawstr("Update detected — Repair recommended to apply new dependencies.")
+        gfx.drawstr(ellipsizeToWidth("Update detected - Repair recommended to apply new dependencies.", leftColW, "Arial Bold", linuxFontSize(12), 0))
         y = y + linuxLineHeight(18)
     end
 
@@ -6015,7 +6076,7 @@ local function existingRuntimeSetupMenuTick()
         gfx.set(0.38, 0.72, 0.46, 1)
         gfx.x = bodyX
         gfx.y = y
-        gfx.drawstr("Models are kept in Check only, Repair, and Rebuild venv.")
+        gfx.drawstr(ellipsizeToWidth("Models are kept in Check only, Repair, and Rebuild venv.", leftColW, "Arial", linuxFontSize(12), 0))
         y = y + linuxLineHeight(18)
     end
 
@@ -6024,7 +6085,7 @@ local function existingRuntimeSetupMenuTick()
         gfx.set(0.90, 0.52, 0.24, 1)
         gfx.x = bodyX
         gfx.y = y
-        gfx.drawstr("Delete models... and Delete runtime... are destructive advanced actions.")
+        gfx.drawstr(ellipsizeToWidth("Delete models... and Delete runtime... are destructive advanced actions.", leftColW, "Arial", linuxFontSize(12), 0))
         y = y + linuxLineHeight(18)
     end
 
@@ -6034,20 +6095,19 @@ local function existingRuntimeSetupMenuTick()
             gfx.set(0.97, 0.80, 0.15, 1)
             gfx.x = bodyX
             gfx.y = y
-            gfx.drawstr("Update detected — run Repair to apply changes")
+            gfx.drawstr(ellipsizeToWidth("Update detected - run Repair to apply changes", leftColW, "Arial Bold", linuxFontSize(13), 0))
         else
             gfx.set(0.20, 0.92, 0.28, 1)
             gfx.x = bodyX
             gfx.y = y
-            gfx.drawstr("Existing runtime detected - choose an action below")
+            gfx.drawstr(ellipsizeToWidth("Existing runtime detected - choose an action below", leftColW, "Arial Bold", linuxFontSize(13), 0))
         end
         y = y + linuxLineHeight(22)
     end
 
-    -- Mid panel: content-sized summary box (no empty space).
-    local midPanelY = y + linuxLineHeight(6)
-    local midPanelAvailH = (footerY - math.max(10, linuxLineHeight(10))) - midPanelY
-    local perItem = linuxLineHeight(16)
+    -- True two-column header: runtime/status info on the left, compact Modes legend on the right.
+    local midPanelY = summaryY
+    local perItem = linuxLineHeight(14)
     local cv = m.currentVersion or ""
     local lv = m.lastSetupVersion or ""
     local verRow = ""
@@ -6059,46 +6119,59 @@ local function existingRuntimeSetupMenuTick()
         end
     end
     local hasVerRow = verRow ~= ""
-    local contentH = 12 + linuxLineHeight(18)
-        + (hasVerRow and linuxLineHeight(16) or 0)
-        + #choices * perItem
-        + 10
-    local midPanelH = math.min(contentH, midPanelAvailH)
+    local summaryRows = {}
+    for i, c in ipairs(choices) do
+        local summaryLabel = compactModeSummaryLabel(c)
+        summaryRows[#summaryRows + 1] = {
+            accent = c.accent,
+            text = ellipsizeToWidth(summaryLabel, summaryInnerW - 22, "Arial", linuxFontSize(10), 0),
+        }
+    end
+    local headerGap = math.max(10, linuxLineHeight(8))
+    local summaryMaxH = math.max(linuxLineHeight(52), infoBottom - summaryY)
+    local baseSummaryH = 10 + linuxLineHeight(16) + (hasVerRow and linuxLineHeight(14) or 0) + 8
+    local maxRowsThatFit = math.max(1, math.floor((summaryMaxH - baseSummaryH) / perItem))
+    local shown = math.min(#summaryRows, maxRowsThatFit)
+    local contentH = 10 + linuxLineHeight(16)
+        + (hasVerRow and linuxLineHeight(14) or 0)
+        + (shown * perItem)
+        + 8
+    local midPanelH = contentH
     if midPanelH >= linuxLineHeight(40) then
-        drawLinuxPanel(bodyX, midPanelY, bodyW, midPanelH, { 0.06, 0.06, 0.07, 1 }, { 0.22, 0.22, 0.24, 1 })
+        drawLinuxPanel(summaryX, midPanelY, summaryW, midPanelH, { 0.06, 0.06, 0.07, 1 }, { 0.22, 0.22, 0.24, 1 })
 
-        local iy = midPanelY + 12
-        gfx.setfont(1, "Arial Bold", linuxFontSize(13))
+        local iy = midPanelY + 10
+        gfx.setfont(1, "Arial Bold", linuxFontSize(12))
         gfx.set(0.92, 0.92, 0.94, 1)
-        gfx.x = bodyX + 12
+        gfx.x = summaryX + 12
         gfx.y = iy
-        gfx.drawstr("Mode summary")
-        iy = iy + linuxLineHeight(18)
+        gfx.drawstr("Modes")
+        iy = iy + linuxLineHeight(16)
 
-        if hasVerRow and iy + linuxLineHeight(16) <= midPanelY + midPanelH - 10 then
-            gfx.setfont(1, "Arial", linuxFontSize(11))
+        if hasVerRow and iy + linuxLineHeight(14) <= midPanelY + midPanelH - 8 then
+            gfx.setfont(1, "Arial", linuxFontSize(10))
             gfx.set(m.updateDetected and 0.97 or 0.45, m.updateDetected and 0.80 or 0.47, m.updateDetected and 0.15 or 0.54, 1)
-            gfx.x = bodyX + 12
+            gfx.x = summaryX + 12
             gfx.y = iy
-            gfx.drawstr(verRow)
-            iy = iy + linuxLineHeight(16)
+            gfx.drawstr(ellipsizeToWidth(verRow, summaryInnerW, "Arial", linuxFontSize(10), 0))
+            iy = iy + linuxLineHeight(14)
         end
 
-        local maxItems = math.max(1, math.floor(((midPanelY + midPanelH - 10) - iy) / perItem))
-        local shown = math.min(#choices, maxItems)
         for i = 1, shown do
-            local c = choices[i]
-            local summaryLabel = tostring(c.label or ""):gsub("%.%.%.$", "")
-            gfx.set(c.accent[1], c.accent[2], c.accent[3], 1)
-            gfx.rect(bodyX + 12, iy + 4, 6, math.max(6, linuxLineHeight(6)), 1)
-            gfx.setfont(1, "Arial", linuxFontSize(12))
+            local row = summaryRows[i]
+            gfx.set(row.accent[1], row.accent[2], row.accent[3], 1)
+            gfx.rect(summaryX + 12, iy + 4, 5, math.max(5, linuxLineHeight(5)), 1)
+            gfx.setfont(1, "Arial", linuxFontSize(10))
             gfx.set(0.82, 0.84, 0.88, 1)
-            gfx.x = bodyX + 24
+            gfx.x = summaryX + 22
             gfx.y = iy
-            gfx.drawstr(summaryLabel .. " - " .. c.sub)
+            gfx.drawstr(row.text)
             iy = iy + perItem
         end
     end
+
+    local headerBottom = math.max(y, midPanelY + midPanelH)
+    layout.btnY = math.max(layout.btnY, headerBottom + headerGap)
 
     local hoveredChoice = nil
     local chosen = nil
