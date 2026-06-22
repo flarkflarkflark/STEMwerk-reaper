@@ -59,6 +59,7 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=classic
 PrivilegesRequired=lowest
+RestartIfNeededByRun=no
 DisableWelcomePage=no
 LicenseFile=STEMwerk_License_Agreement.txt
 ShowLanguageDialog=auto

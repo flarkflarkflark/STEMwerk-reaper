@@ -5891,3 +5891,12 @@ def test_windows_installer_license_text_matches_23_release():
     assert "Version: 2.3.0.0" in text
     assert "Date: 2026-06-22" in text
     assert "Version: 2.2.2" not in text
+
+
+def test_windows_installer_keeps_finish_actions_without_forcing_restart_page():
+    script = Path("installer/windows/STEMwerk.iss").read_text(encoding="utf-8")
+
+    assert "RestartIfNeededByRun=no" in script
+    assert "AlwaysRestart=yes" not in script
+    assert 'Description: "{cm:RunOpenGuide}"; Flags: postinstall shellexec skipifsilent' in script
+    assert 'Description: "{cm:RunOpenLog}"; Flags: postinstall skipifsilent unchecked' in script
