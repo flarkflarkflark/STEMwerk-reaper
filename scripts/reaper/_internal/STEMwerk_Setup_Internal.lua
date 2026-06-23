@@ -505,6 +505,23 @@ end
 local setExt
 local getExt
 
+I18N = dofile(RAW_SCRIPT_DIR .. "STEMwerk_I18N.lua")
+T = I18N.T
+UI_CONTROLS = dofile(RAW_SCRIPT_DIR .. "STEMwerk_UI_Controls.lua")
+dofile(RAW_SCRIPT_DIR .. "STEMwerk_UI.lua")
+
+SETTINGS = SETTINGS or {
+    darkMode = true,
+    themePreset = "reaper_native",
+    language = "en",
+    visualFX = true,
+    tooltips = true,
+}
+
+GUI = GUI or {
+    uiClickedThisFrame = false,
+}
+
 local function runtimeLooksPresent(runtime)
     if not runtime or not runtime.base or runtime.base == "" then return false end
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
@@ -545,6 +562,57 @@ getExt = function(key)
     end
     return ""
 end
+
+function loadSetupUiSettings()
+    local darkMode = getExt("darkMode")
+    if darkMode ~= "" then
+        SETTINGS.darkMode = (darkMode == "1")
+    end
+    local themePreset = getExt("themePreset")
+    if themePreset ~= "" then
+        SETTINGS.themePreset = normalizeThemePreset(themePreset)
+    else
+        SETTINGS.themePreset = normalizeThemePreset(SETTINGS.themePreset)
+    end
+    local language = tostring(getExt("language") or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+    if language == "nl" or language == "de" or language == "en" then
+        SETTINGS.language = language
+    end
+    local visualFX = getExt("visualFX")
+    if visualFX ~= "" then
+        SETTINGS.visualFX = (visualFX == "1")
+    end
+    local tooltips = getExt("tooltips")
+    if tooltips ~= "" then
+        SETTINGS.tooltips = (tooltips == "1")
+    end
+end
+
+saveSettings = function()
+    if not reaper or not reaper.SetExtState then
+        return
+    end
+    reaper.SetExtState(EXT_SECTION, "darkMode", SETTINGS.darkMode and "1" or "0", true)
+    reaper.SetExtState(EXT_SECTION, "themePreset", tostring(SETTINGS.themePreset or "reaper_native"), true)
+    reaper.SetExtState(EXT_SECTION, "language", tostring(SETTINGS.language or "en"), true)
+    reaper.SetExtState(EXT_SECTION, "visualFX", SETTINGS.visualFX and "1" or "0", true)
+    reaper.SetExtState(EXT_SECTION, "tooltips", SETTINGS.tooltips and "1" or "0", true)
+end
+
+function setLanguage(code)
+    local lang = tostring(code or "en"):lower()
+    if lang ~= "nl" and lang ~= "de" then
+        lang = "en"
+    end
+    SETTINGS.language = lang
+    I18N.setLanguage(lang)
+    saveSettings()
+    return true
+end
+
+loadSetupUiSettings()
+setLanguage(SETTINGS.language)
+updateTheme()
 
 trim = function(s)
     if s == nil then return "" end
@@ -3665,18 +3733,19 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
 end
 
 local function drawButton(label, x, y, w, h, style)
-    local bg = { 0.2, 0.2, 0.2, 1 }
-    local border = { 1, 1, 1, 1 }
+    local bg = setupThemeColor("buttonBg", { 0.2, 0.2, 0.2 })
+    local border = setupThemeColor("border", { 1, 1, 1 })
+    local text = setupThemeColor("buttonText", { 1, 1, 1 })
     if style == "primary" then
-        bg = { 0.96, 0.48, 0.10, 1 }
-        border = { 1, 0.78, 0.40, 1 }
+        bg = setupThemeColor("buttonPrimaryBg", { 0.96, 0.48, 0.10 })
+        border = setupThemeColor("accent", { 1, 0.78, 0.40 })
     end
-    gfx.set(bg[1], bg[2], bg[3], bg[4])
+    gfx.set(bg[1], bg[2], bg[3], 1)
     gfx.rect(x, y, w, h, 1)
-    gfx.set(border[1], border[2], border[3], border[4])
+    gfx.set(border[1], border[2], border[3], 1)
     gfx.rect(x, y, w, h, 0)
     gfx.setfont(1, "Arial", linuxFontSize(13))
-    gfx.set(1, 1, 1, 1)
+    gfx.set(text[1], text[2], text[3], 1)
     gfx.x = x + 8
     gfx.y = y + math.max(2, math.floor((h - linuxLineHeight(13)) / 2))
     gfx.drawstr(label)
@@ -4154,6 +4223,87 @@ end
 
 local function setupUiLabel()
     return setupPlatformLabel()
+end
+
+function setupThemeColor(key, fallback)
+    local colors = ACTIVE_THEME and ACTIVE_THEME.colors or nil
+    local value = colors and colors[key]
+    if type(value) == "table" then
+        return value
+    end
+    return fallback
+end
+
+function setupText(key, fallback)
+    local value = T and T(key)
+    if value and value ~= key then
+        return tostring(value)
+    end
+    return tostring(fallback or key)
+end
+
+function setupChoiceLabel(choiceId)
+    local key = ({
+        ["verify"] = "setup_choice_verify_label",
+        ["repair"] = "setup_choice_repair_label",
+        ["rebuild-venv"] = "setup_choice_rebuild_venv_label",
+        ["support-bundle"] = "setup_choice_support_bundle_label",
+        ["open-logs"] = "setup_choice_open_logs_label",
+        ["open-runtime"] = "setup_choice_open_runtime_label",
+        ["drumsep-runtime"] = "setup_choice_drumsep_runtime_label",
+        ["drumsep-rocm-runtime"] = "setup_choice_drumsep_rocm_runtime_label",
+        ["drumsep-cuda-runtime"] = "setup_choice_drumsep_cuda_runtime_label",
+        ["drumsep-directml-runtime"] = "setup_choice_drumsep_directml_runtime_label",
+        ["delete-models"] = "setup_choice_delete_models_label",
+        ["delete-runtime"] = "setup_choice_delete_runtime_label",
+        ["cancel"] = "setup_choice_cancel_label",
+    })[tostring(choiceId or "")]
+    return key and setupText(key, tostring(choiceId or "")) or tostring(choiceId or "")
+end
+
+function setupChoiceSubtitle(choiceId)
+    local key = ({
+        ["verify"] = "setup_choice_verify_sub",
+        ["repair"] = "setup_choice_repair_sub",
+        ["rebuild-venv"] = "setup_choice_rebuild_venv_sub",
+        ["support-bundle"] = "setup_choice_support_bundle_sub",
+        ["open-logs"] = "setup_choice_open_logs_sub",
+        ["open-runtime"] = "setup_choice_open_runtime_sub",
+        ["drumsep-runtime"] = "setup_choice_drumsep_runtime_sub",
+        ["drumsep-rocm-runtime"] = "setup_choice_drumsep_rocm_runtime_sub",
+        ["drumsep-cuda-runtime"] = "setup_choice_drumsep_cuda_runtime_sub",
+        ["drumsep-directml-runtime"] = "setup_choice_drumsep_directml_runtime_sub",
+        ["delete-models"] = "setup_choice_delete_models_sub",
+        ["delete-runtime"] = "setup_choice_delete_runtime_sub",
+        ["cancel"] = "setup_choice_cancel_sub",
+    })[tostring(choiceId or "")]
+    return key and setupText(key, "") or ""
+end
+
+function setupSummaryLabel(choiceId, fallback)
+    local key = ({
+        ["verify"] = "setup_summary_check_only",
+        ["repair"] = "setup_summary_repair",
+        ["rebuild-venv"] = "setup_summary_rebuild_venv",
+        ["support-bundle"] = "setup_summary_save_bundle",
+        ["open-logs"] = "setup_summary_open_logs",
+        ["open-runtime"] = "setup_summary_open_runtime",
+        ["drumsep-runtime"] = "setup_summary_drumkit_cpu",
+        ["drumsep-rocm-runtime"] = "setup_summary_drumkit_rocm",
+        ["drumsep-cuda-runtime"] = "setup_summary_drumkit_cuda",
+        ["drumsep-directml-runtime"] = "setup_summary_drumkit_dml",
+        ["delete-models"] = "setup_summary_delete_models",
+        ["delete-runtime"] = "setup_summary_delete_runtime",
+        ["cancel"] = "setup_summary_cancel",
+    })[tostring(choiceId or "")]
+    return key and setupText(key, fallback or tostring(choiceId or "")) or tostring(fallback or choiceId or "")
+end
+
+function refreshSetupMenuChoiceLabels(menu)
+    for _, choice in ipairs((menu and menu.choices) or {}) do
+        choice.label = setupChoiceLabel(choice.id)
+        choice.sub = setupChoiceSubtitle(choice.id)
+    end
 end
 
 local function drawLinuxStepLegend(x, y, w, state, logLines)
@@ -5763,6 +5913,7 @@ end
 local function existingRuntimeSetupMenuTick()
     if not SETUP_MENU then return end
     local m = SETUP_MENU
+    refreshSetupMenuChoiceLabels(m)
     enforceSetupWindowMinimum(m)
     local w, h = gfx.w, gfx.h
 
@@ -5810,19 +5961,19 @@ local function existingRuntimeSetupMenuTick()
 
     local function compactModeSummaryLabel(choice)
         local id = tostring(choice and choice.id or "")
-        if id == "verify" then return "Check only" end
-        if id == "repair" then return "Repair" end
-        if id == "rebuild-venv" then return "Rebuild venv" end
-        if id == "support-bundle" then return "Save bundle" end
-        if id == "open-logs" then return "Open logs" end
-        if id == "open-runtime" then return "Open runtime" end
-        if id == "drumsep-runtime" then return "DrumKit CPU" end
-        if id == "drumsep-rocm-runtime" then return "DrumKit ROCm" end
-        if id == "drumsep-cuda-runtime" then return "DrumKit CUDA" end
-        if id == "drumsep-directml-runtime" then return "DrumKit DML" end
-        if id == "delete-models" then return "Delete models" end
-        if id == "delete-runtime" then return "Delete runtime" end
-        if id == "cancel" then return "Cancel" end
+        if id == "verify" then return setupSummaryLabel(id, "Check only") end
+        if id == "repair" then return setupSummaryLabel(id, "Repair") end
+        if id == "rebuild-venv" then return setupSummaryLabel(id, "Rebuild venv") end
+        if id == "support-bundle" then return setupSummaryLabel(id, "Save bundle") end
+        if id == "open-logs" then return setupSummaryLabel(id, "Open logs") end
+        if id == "open-runtime" then return setupSummaryLabel(id, "Open runtime") end
+        if id == "drumsep-runtime" then return setupSummaryLabel(id, "DrumKit CPU") end
+        if id == "drumsep-rocm-runtime" then return setupSummaryLabel(id, "DrumKit ROCm") end
+        if id == "drumsep-cuda-runtime" then return setupSummaryLabel(id, "DrumKit CUDA") end
+        if id == "drumsep-directml-runtime" then return setupSummaryLabel(id, "DrumKit DML") end
+        if id == "delete-models" then return setupSummaryLabel(id, "Delete models") end
+        if id == "delete-runtime" then return setupSummaryLabel(id, "Delete runtime") end
+        if id == "cancel" then return setupSummaryLabel(id, "Cancel") end
         return tostring(choice and choice.label or ""):gsub("%.%.%.$", "")
     end
 
@@ -5842,11 +5993,24 @@ local function existingRuntimeSetupMenuTick()
     end
 
     -- Background
-    gfx.set(0.03, 0.03, 0.04, 1)
+    local themeAppBg = setupThemeColor("appBg", { 0.03, 0.03, 0.04 })
+    local themeAccent = setupThemeColor("accent", { 0.97, 0.55, 0.05 })
+    local themePanelBg = setupThemeColor("panelBg", { 0.08, 0.08, 0.09 })
+    local themeCardBg = setupThemeColor("cardBg", { 0.06, 0.06, 0.07 })
+    local themeBorder = setupThemeColor("border", { 0.26, 0.26, 0.29 })
+    local themeText = setupThemeColor("textPrimary", { 0.92, 0.92, 0.94 })
+    local themeTextSecondary = setupThemeColor("textSecondary", { 0.55, 0.57, 0.62 })
+    local themeTextMuted = setupThemeColor("textMuted", { 0.40, 0.42, 0.46 })
+    local themeTooltipBg = setupThemeColor("tooltipBg", { 0.14, 0.14, 0.15 })
+    local themeTooltipBorder = setupThemeColor("tooltipBorder", { 0.26, 0.26, 0.30 })
+    local themeTooltipText = setupThemeColor("tooltipText", { 0.85, 0.87, 0.90 })
+    local themeButtonBg = setupThemeColor("buttonBg", { 0.16, 0.16, 0.17 })
+    local themeButtonHover = setupThemeColor("buttonHoverBg", { 0.24, 0.24, 0.26 })
+    gfx.set(themeAppBg[1], themeAppBg[2], themeAppBg[3], 1)
     gfx.rect(0, 0, w, h, 1)
-    gfx.set(0.97, 0.55, 0.05, 1)
+    gfx.set(themeAccent[1], themeAccent[2], themeAccent[3], 1)
     gfx.rect(0, 0, w, math.max(8, linuxLineHeight(8)), 1)
-    drawLinuxPanel(panelX, panelY, panelW, panelH, { 0.08, 0.08, 0.09, 1 }, { 0.26, 0.26, 0.29, 1 })
+    drawLinuxPanel(panelX, panelY, panelW, panelH, { themePanelBg[1], themePanelBg[2], themePanelBg[3], 1 }, { themeBorder[1], themeBorder[2], themeBorder[3], 1 })
 
     local scale = m.fontScale or 1.0
     local compact = (w < 760 or h < 460 or scale >= 2.6)
@@ -5899,9 +6063,9 @@ local function existingRuntimeSetupMenuTick()
         }
     end
 
-    local footerText = string.format("Ctrl+wheel zooms text. Use +/- or 0 for text size. Esc = cancel.  Text %.0f%%", scale * 100)
+    local footerText = string.format(setupText("setup_footer_zoom", "Ctrl+wheel zooms text. Use +/- or 0 for text size. Esc = cancel.  Text %.0f%%"), scale * 100)
     if compact then
-        footerText = string.format("Ctrl+wheel / +/- / 0. Esc = cancel.  Text %.0f%%", scale * 100)
+        footerText = string.format(setupText("setup_footer_zoom_compact", "Ctrl+wheel / +/- / 0. Esc = cancel.  Text %.0f%%"), scale * 100)
     end
     gfx.setfont(1, "Arial", linuxFontSize(11))
     local footerChars = math.max(16, math.floor(bodyW / math.max(6, linuxFontSize(11) * 0.56)))
@@ -5921,6 +6085,26 @@ local function existingRuntimeSetupMenuTick()
     local infoBottom = layout.btnY - minButtonGap
 
     local topColGap = math.max(12, linuxLineHeight(10))
+    local utilityState = m.utilityControlsState or {}
+    local utilityGap = math.max(8, linuxLineHeight(8))
+    local utilitySize = math.max(linuxLineHeight(18), 18)
+    local utilityY = panelY + math.max(8, linuxLineHeight(6))
+    GUI.uiClickedThisFrame = false
+    UI_CONTROLS.drawUtilityControls({
+        S = function(v) return math.max(1, math.floor((v * scale) + 0.5)) end,
+        w = w - panelX,
+        mx = gfx.mouse_x,
+        my = gfx.mouse_y,
+        mouseDown = (gfx.mouse_cap & 1) == 1,
+        rightMouseDown = (gfx.mouse_cap & 2) == 2,
+        state = utilityState,
+        iconScale = 0.66,
+        themeSize = utilitySize,
+        themeY = utilityY,
+        setLanguageFn = setLanguage,
+    })
+    m.utilityControlsState = utilityState
+    local utilityBottom = utilityY + utilitySize
     local summaryMinW = linuxLineHeight(176)
     local summaryMaxW = math.min(linuxLineHeight(220), math.floor(bodyW * 0.34))
     local summaryW = math.max(summaryMinW, math.floor(bodyW * 0.29))
@@ -5938,7 +6122,7 @@ local function existingRuntimeSetupMenuTick()
         leftColW = bodyW - summaryW - topColGap
     end
     local summaryX = bodyX + leftColW + topColGap
-    local summaryY = bodyY
+    local summaryY = utilityBottom + utilityGap
     local summaryInnerW = summaryW - 24
     local summaryChars = math.max(12, math.floor(summaryInnerW / math.max(6, linuxFontSize(10) * 0.54)))
 
@@ -5950,10 +6134,10 @@ local function existingRuntimeSetupMenuTick()
     y = y + linuxLineHeight(30)
 
     gfx.setfont(1, "Arial Bold", linuxFontSize(14))
-    gfx.set(0.92, 0.92, 0.94, 1)
+    gfx.set(themeText[1], themeText[2], themeText[3], 1)
     gfx.x = bodyX
     gfx.y = y
-    gfx.drawstr(ellipsizeToWidth("Existing runtime found. Choose what to do:", leftColW, "Arial Bold", linuxFontSize(14), 0))
+    gfx.drawstr(ellipsizeToWidth(setupText("setup_existing_runtime_found", "Existing runtime found. Choose what to do:"), leftColW, "Arial Bold", linuxFontSize(14), 0))
     y = y + linuxLineHeight(26)
 
     if not tiny then
@@ -5961,14 +6145,14 @@ local function existingRuntimeSetupMenuTick()
         local runtimeLines = cappedWrap(tostring(m.runtime.base), runtimeChars, compact and 1 or 3)
         local pathBoxH = linuxLineHeight(18) + (#runtimeLines * linuxLineHeight(15)) + 14
         if y + pathBoxH <= infoBottom then
-            drawLinuxPanel(bodyX, y, leftColW, pathBoxH, { 0.06, 0.06, 0.07, 1 }, { 0.19, 0.19, 0.22, 1 })
+            drawLinuxPanel(bodyX, y, leftColW, pathBoxH, { themeCardBg[1], themeCardBg[2], themeCardBg[3], 1 }, { themeBorder[1], themeBorder[2], themeBorder[3], 1 })
             gfx.setfont(1, "Arial", linuxFontSize(12))
-            gfx.set(0.55, 0.57, 0.62, 1)
+            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
             gfx.x = bodyX + 14
             gfx.y = y + 6
-            gfx.drawstr("Runtime:")
+            gfx.drawstr(setupText("setup_runtime_label", "Runtime:"))
             gfx.setfont(1, "Courier New", linuxFontSize(12))
-            gfx.set(0.86, 0.88, 0.92, 1)
+            gfx.set(themeText[1], themeText[2], themeText[3], 1)
             local pathY = y + 6 + linuxLineHeight(16)
             for _, line in ipairs(runtimeLines) do
                 gfx.x = bodyX + 14
@@ -5982,17 +6166,17 @@ local function existingRuntimeSetupMenuTick()
 
     if not tiny then
         gfx.setfont(1, "Arial", linuxFontSize(12))
-        local modelLabel = "Models: "
+        local modelLabel = setupText("setup_models_label", "Models: ")
         local modelLabelW = gfx.measurestr(modelLabel)
         local modelChars = math.max(16, math.floor((leftColW - modelLabelW) / math.max(6, linuxFontSize(12) * 0.58)))
         local modelLines = cappedWrap(tostring(m.modelDir), modelChars, compact and 1 or 2)
         local modelH = math.max(1, #modelLines) * linuxLineHeight(16)
         if y + modelH <= infoBottom then
-            gfx.set(0.55, 0.57, 0.62, 1)
+            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
             gfx.x = bodyX
             gfx.y = y
             gfx.drawstr(modelLabel)
-            gfx.set(0.80, 0.82, 0.86, 1)
+            gfx.set(themeText[1], themeText[2], themeText[3], 1)
             for i, line in ipairs(modelLines) do
                 gfx.x = bodyX + modelLabelW
                 gfx.y = y + ((i - 1) * linuxLineHeight(16))
@@ -6008,13 +6192,13 @@ local function existingRuntimeSetupMenuTick()
         local cv = m.currentVersion or ""
         local lv = m.lastSetupVersion or ""
         if cv ~= "" or lv ~= "" then
-            local verLabel = "Setup script: v" .. (cv ~= "" and cv or "?")
+            local verLabel = setupText("setup_script_label", "Setup script") .. ": v" .. (cv ~= "" and cv or "?")
             if lv ~= "" then
-                verLabel = verLabel .. "   Last run: v" .. lv
+                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Last run") .. ": v" .. lv
             else
-                verLabel = verLabel .. "   Last run: (unknown)"
+                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Last run") .. ": " .. setupText("setup_unknown", "(unknown)")
             end
-            gfx.set(0.55, 0.57, 0.62, 1)
+            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
             gfx.x = bodyX
             gfx.y = y
             gfx.drawstr(verLabel)
@@ -6067,7 +6251,7 @@ local function existingRuntimeSetupMenuTick()
         gfx.set(0.97, 0.80, 0.15, 1)
         gfx.x = bodyX
         gfx.y = y
-        gfx.drawstr(ellipsizeToWidth("Update detected - Repair recommended to apply new dependencies.", leftColW, "Arial Bold", linuxFontSize(12), 0))
+        gfx.drawstr(ellipsizeToWidth(setupText("setup_update_detected_repair_recommended", "Update detected - Repair recommended to apply new dependencies."), leftColW, "Arial Bold", linuxFontSize(12), 0))
         y = y + linuxLineHeight(18)
     end
 
@@ -6076,7 +6260,7 @@ local function existingRuntimeSetupMenuTick()
         gfx.set(0.38, 0.72, 0.46, 1)
         gfx.x = bodyX
         gfx.y = y
-        gfx.drawstr(ellipsizeToWidth("Models are kept in Check only, Repair, and Rebuild venv.", leftColW, "Arial", linuxFontSize(12), 0))
+        gfx.drawstr(ellipsizeToWidth(setupText("setup_models_kept_notice", "Models are kept in Check only, Repair, and Rebuild venv."), leftColW, "Arial", linuxFontSize(12), 0))
         y = y + linuxLineHeight(18)
     end
 
@@ -6085,7 +6269,7 @@ local function existingRuntimeSetupMenuTick()
         gfx.set(0.90, 0.52, 0.24, 1)
         gfx.x = bodyX
         gfx.y = y
-        gfx.drawstr(ellipsizeToWidth("Delete models... and Delete runtime... are destructive advanced actions.", leftColW, "Arial", linuxFontSize(12), 0))
+        gfx.drawstr(ellipsizeToWidth(setupText("setup_destructive_actions_notice", "Delete models... and Delete runtime... are destructive advanced actions."), leftColW, "Arial", linuxFontSize(12), 0))
         y = y + linuxLineHeight(18)
     end
 
@@ -6095,12 +6279,12 @@ local function existingRuntimeSetupMenuTick()
             gfx.set(0.97, 0.80, 0.15, 1)
             gfx.x = bodyX
             gfx.y = y
-            gfx.drawstr(ellipsizeToWidth("Update detected - run Repair to apply changes", leftColW, "Arial Bold", linuxFontSize(13), 0))
+            gfx.drawstr(ellipsizeToWidth(setupText("setup_update_detected_choose_action", "Update detected - run Repair to apply changes"), leftColW, "Arial Bold", linuxFontSize(13), 0))
         else
             gfx.set(0.20, 0.92, 0.28, 1)
             gfx.x = bodyX
             gfx.y = y
-            gfx.drawstr(ellipsizeToWidth("Existing runtime detected - choose an action below", leftColW, "Arial Bold", linuxFontSize(13), 0))
+            gfx.drawstr(ellipsizeToWidth(setupText("setup_existing_runtime_choose_action", "Existing runtime detected - choose an action below"), leftColW, "Arial Bold", linuxFontSize(13), 0))
         end
         y = y + linuxLineHeight(22)
     end
@@ -6112,10 +6296,10 @@ local function existingRuntimeSetupMenuTick()
     local lv = m.lastSetupVersion or ""
     local verRow = ""
     if cv ~= "" then
-        verRow = "Script v" .. cv
+        verRow = setupText("setup_script_short_label", "Script") .. " v" .. cv
         if lv ~= "" then
-            verRow = verRow .. "  |  Last setup v" .. lv
-            if m.updateDetected then verRow = verRow .. "  ← update" end
+            verRow = verRow .. "  |  " .. setupText("setup_last_setup_short_label", "Last setup") .. " v" .. lv
+            if m.updateDetected then verRow = verRow .. "  <- " .. setupText("setup_update_short", "update") end
         end
     end
     local hasVerRow = verRow ~= ""
@@ -6138,14 +6322,14 @@ local function existingRuntimeSetupMenuTick()
         + 8
     local midPanelH = contentH
     if midPanelH >= linuxLineHeight(40) then
-        drawLinuxPanel(summaryX, midPanelY, summaryW, midPanelH, { 0.06, 0.06, 0.07, 1 }, { 0.22, 0.22, 0.24, 1 })
+        drawLinuxPanel(summaryX, midPanelY, summaryW, midPanelH, { themeCardBg[1], themeCardBg[2], themeCardBg[3], 1 }, { themeBorder[1], themeBorder[2], themeBorder[3], 1 })
 
         local iy = midPanelY + 10
         gfx.setfont(1, "Arial Bold", linuxFontSize(12))
-        gfx.set(0.92, 0.92, 0.94, 1)
+        gfx.set(themeText[1], themeText[2], themeText[3], 1)
         gfx.x = summaryX + 12
         gfx.y = iy
-        gfx.drawstr("Modes")
+        gfx.drawstr(setupText("setup_modes_title", "Modes"))
         iy = iy + linuxLineHeight(16)
 
         if hasVerRow and iy + linuxLineHeight(14) <= midPanelY + midPanelH - 8 then
@@ -6162,7 +6346,7 @@ local function existingRuntimeSetupMenuTick()
             gfx.set(row.accent[1], row.accent[2], row.accent[3], 1)
             gfx.rect(summaryX + 12, iy + 4, 5, math.max(5, linuxLineHeight(5)), 1)
             gfx.setfont(1, "Arial", linuxFontSize(10))
-            gfx.set(0.82, 0.84, 0.88, 1)
+            gfx.set(themeText[1], themeText[2], themeText[3], 1)
             gfx.x = summaryX + 22
             gfx.y = iy
             gfx.drawstr(row.text)
@@ -6185,14 +6369,14 @@ local function existingRuntimeSetupMenuTick()
 
         local acc = c.accent
         local topH = math.max(5, linuxLineHeight(5))
-        gfx.set(0.16, 0.16, 0.17, 1)
+        gfx.set(themeButtonBg[1], themeButtonBg[2], themeButtonBg[3], 1)
         gfx.rect(bx, by, layout.btnW, layout.btnH, 1)
-        gfx.set(0.28, 0.28, 0.30, 1)
+        gfx.set(themeBorder[1], themeBorder[2], themeBorder[3], 1)
         gfx.rect(bx, by, layout.btnW, layout.btnH, 0)
         gfx.set(acc[1], acc[2], acc[3], hot and 1.0 or 0.72)
         gfx.rect(bx, by, layout.btnW, topH, 1)
         if hot then
-            gfx.set(acc[1], acc[2], acc[3], 0.25)
+            gfx.set(themeButtonHover[1], themeButtonHover[2], themeButtonHover[3], 0.90)
             gfx.rect(bx + 1, by + topH + 1, layout.btnW - 2, layout.btnH - topH - 2, 1)
         end
 
@@ -6201,7 +6385,7 @@ local function existingRuntimeSetupMenuTick()
         local contentY = by + math.max(6, math.floor((layout.btnH - contentH) / 2))
 
         gfx.setfont(1, "Arial Bold", linuxFontSize(14))
-        gfx.set(1, 1, 1, 1)
+        gfx.set(themeText[1], themeText[2], themeText[3], 1)
         local lw = gfx.measurestr(c.label)
         gfx.x = bx + math.floor((layout.btnW - lw) / 2)
         gfx.y = contentY
@@ -6209,7 +6393,7 @@ local function existingRuntimeSetupMenuTick()
 
         if #subLines > 0 then
             gfx.setfont(1, "Arial", linuxFontSize(10))
-            gfx.set(0.84, 0.84, 0.86, hot and 0.98 or 0.70)
+            gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], hot and 0.98 or 0.80)
             local subY = contentY + layout.labelH + layout.innerGap
             for _, line in ipairs(subLines) do
                 local sw = gfx.measurestr(line)
@@ -6229,11 +6413,11 @@ local function existingRuntimeSetupMenuTick()
         local tipLines = cappedWrap(tip, tipChars, 1)
         local tipY = tooltipY + math.max(1, math.floor((tooltipBoxH - tooltipTextH) / 2))
         if tooltipY >= bodyY then
-            gfx.set(0.14, 0.14, 0.15, 0.98)
+            gfx.set(themeTooltipBg[1], themeTooltipBg[2], themeTooltipBg[3], 0.98)
             gfx.rect(bodyX, tooltipY, bodyW, tooltipBoxH, 1)
-            gfx.set(0.26, 0.26, 0.30, 1)
+            gfx.set(themeTooltipBorder[1], themeTooltipBorder[2], themeTooltipBorder[3], 1)
             gfx.rect(bodyX, tooltipY, bodyW, tooltipBoxH, 0)
-            gfx.set(0.85, 0.87, 0.90, 1)
+            gfx.set(themeTooltipText[1], themeTooltipText[2], themeTooltipText[3], 1)
             gfx.x = bodyX + 6
             gfx.y = tipY
             gfx.drawstr(tipLines[1] or "")
@@ -6241,7 +6425,7 @@ local function existingRuntimeSetupMenuTick()
     end
 
     gfx.setfont(1, "Arial", linuxFontSize(11))
-    gfx.set(0.40, 0.42, 0.46, 1)
+    gfx.set(themeTextMuted[1], themeTextMuted[2], themeTextMuted[3], 1)
     local footerLineY = footerY
     for _, line in ipairs(footerLines) do
         gfx.x = bodyX
@@ -6295,9 +6479,9 @@ local function existingRuntimeSetupMenuTick()
         local isRuntime = modal.kind == "runtime"
         local title
         if modal.step == 1 then
-            title = isRuntime and "Delete runtime - Full reset?" or "Delete downloaded models?"
+            title = isRuntime and setupText("setup_delete_runtime_title", "Delete runtime - Full reset?") or setupText("setup_delete_models_title", "Delete downloaded models?")
         else
-            title = "Final confirmation"
+            title = setupText("setup_final_confirmation", "Final confirmation")
         end
         gfx.setfont(1, "Arial Bold", linuxFontSize(15))
         gfx.set(0.95, 0.95, 0.96, 1)
@@ -6309,25 +6493,25 @@ local function existingRuntimeSetupMenuTick()
         gfx.setfont(1, "Arial", linuxFontSize(12))
         gfx.set(0.84, 0.86, 0.90, 1)
         local bodyLines = {
-            "Path: " .. tostring(modal.runtimeDir or ""),
-            "Estimated size: " .. tostring(modal.sizeText or "unknown"),
+            setupText("setup_path_label", "Path:") .. " " .. tostring(modal.runtimeDir or ""),
+            setupText("setup_estimated_size_label", "Estimated size:") .. " " .. tostring(modal.sizeText or setupText("setup_unknown_plain", "unknown")),
             "",
         }
         if modal.step == 1 then
             if isRuntime then
-                bodyLines[#bodyLines + 1] = "This deletes runtime, .venv, state, logs, and downloaded models."
-                bodyLines[#bodyLines + 1] = "This cannot be undone."
+                bodyLines[#bodyLines + 1] = setupText("setup_delete_runtime_warn_1", "This deletes runtime, .venv, state, logs, and downloaded models.")
+                bodyLines[#bodyLines + 1] = setupText("setup_delete_runtime_warn_2", "This cannot be undone.")
             else
-                bodyLines[#bodyLines + 1] = "This deletes only the downloaded model cache."
-                bodyLines[#bodyLines + 1] = "Models will be downloaded again when needed."
+                bodyLines[#bodyLines + 1] = setupText("setup_delete_models_warn_1", "This deletes only the downloaded model cache.")
+                bodyLines[#bodyLines + 1] = setupText("setup_delete_models_warn_2", "Models will be downloaded again when needed.")
             end
         else
             if isRuntime then
-                bodyLines[#bodyLines + 1] = "Delete runtime - Full reset now?"
+                bodyLines[#bodyLines + 1] = setupText("setup_delete_runtime_now", "Delete runtime - Full reset now?")
             else
-                bodyLines[#bodyLines + 1] = "Delete downloaded models now?"
+                bodyLines[#bodyLines + 1] = setupText("setup_delete_models_now", "Delete downloaded models now?")
             end
-            bodyLines[#bodyLines + 1] = "Setup will reopen with live progress after deletion."
+            bodyLines[#bodyLines + 1] = setupText("setup_delete_reopen_notice", "Setup will reopen with live progress after deletion.")
         end
         for _, line in ipairs(bodyLines) do
             gfx.x = tx
@@ -6344,8 +6528,8 @@ local function existingRuntimeSetupMenuTick()
         local bx1 = bx2 - bGap - bW
         modalYes = { x = bx1, y = by, w = bW, h = bH }
         modalNo = { x = bx2, y = by, w = bW, h = bH }
-        drawButton((modal.step == 1) and "Yes" or "Delete", modalYes.x, modalYes.y, modalYes.w, modalYes.h)
-        drawButton("Cancel", modalNo.x, modalNo.y, modalNo.w, modalNo.h)
+        drawButton((modal.step == 1) and setupText("yes", "Yes") or setupText("setup_delete_button_label", "Delete"), modalYes.x, modalYes.y, modalYes.w, modalYes.h)
+        drawButton(setupText("cancel", "Cancel"), modalNo.x, modalNo.y, modalNo.w, modalNo.h)
     end
 
     local ch = gfx.getchar()
@@ -6517,24 +6701,25 @@ local function startExistingRuntimeSetupMenu(runtime, separatorScript)
     end
 
     local choices = {
-        { id = "verify",       label = "Check only",   sub = "Fast check, no reinstall",         accent = { 0.22, 0.70, 0.50 } },
-        { id = "repair",       label = "Repair",        sub = "Rerun setup, keep models",          accent = { 0.92, 0.55, 0.10 } },
-        { id = "rebuild-venv", label = "Rebuild venv",  sub = "Recreate Python env, keep models", accent = { 0.45, 0.52, 0.90 } },
-        { id = "support-bundle", label = "Save Support Bundle", sub = "Collect logs and diagnostics, no changes", accent = { 0.26, 0.60, 0.88 } },
-        { id = "open-logs",    label = "Open logs folder", sub = "Open runtime logs", accent = { 0.35, 0.56, 0.82 } },
-        { id = "open-runtime", label = "Open runtime folder", sub = "Open runtime base", accent = { 0.35, 0.56, 0.82 } },
+        { id = "verify", accent = { 0.22, 0.70, 0.50 } },
+        { id = "repair", accent = { 0.92, 0.55, 0.10 } },
+        { id = "rebuild-venv", accent = { 0.45, 0.52, 0.90 } },
+        { id = "support-bundle", accent = { 0.26, 0.60, 0.88 } },
+        { id = "open-logs", accent = { 0.35, 0.56, 0.82 } },
+        { id = "open-runtime", accent = { 0.35, 0.56, 0.82 } },
     }
     if OS == "Windows" then
-        choices[#choices + 1] = { id = "drumsep-cuda-runtime", label = "Drum Kit Split CUDA runtime", sub = "Install/repair optional NVIDIA CUDA Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
-        choices[#choices + 1] = { id = "drumsep-directml-runtime", label = "Drum Kit Split DirectML runtime", sub = "Install/repair optional DirectML Drum Kit runtime", accent = { 0.12, 0.58, 0.76 } }
+        choices[#choices + 1] = { id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }
+        choices[#choices + 1] = { id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }
     end
     if OS ~= "Windows" then
-        choices[#choices + 1] = { id = "drumsep-runtime", label = "Drum Kit Split runtime", sub = "Install/repair optional Drum Kit runtime", accent = { 0.22, 0.62, 0.70 } }
-        choices[#choices + 1] = { id = "drumsep-rocm-runtime", label = "Drum Kit Split ROCm runtime", sub = "Install/repair optional Drum Kit ROCm runtime", accent = { 0.16, 0.56, 0.78 } }
-        choices[#choices + 1] = { id = "delete-models",label = "Delete models...", sub = "Cache reset; re-download when needed",  accent = { 0.88, 0.28, 0.28 } }
-        choices[#choices + 1] = { id = "delete-runtime",label = "Delete runtime...", sub = "Full reset; removes venv + models", accent = { 0.82, 0.22, 0.22 } }
+        choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
+        choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+        choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
+        choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
     end
-    choices[#choices + 1] = { id = "cancel", label = "Cancel", sub = "Exit without changes", accent = { 0.38, 0.38, 0.42 } }
+    choices[#choices + 1] = { id = "cancel", accent = { 0.38, 0.38, 0.42 } }
+    refreshSetupMenuChoiceLabels({ choices = choices })
 
     SETUP_MENU = {
         runtime         = runtime,

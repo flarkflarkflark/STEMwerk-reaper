@@ -5663,6 +5663,8 @@ local function drawUtilityNativeHelpWindow()
         return hover
     end
 
+    helpState.utilityControlsState = helpState.utilityControlsState or {}
+
     local _iconScale = 1.0
     local _themeSize = math.max(HS(18), math.floor(HS(22) * _iconScale + 0.5))
     local _helpUC = {
@@ -5671,7 +5673,9 @@ local function drawUtilityNativeHelpWindow()
         mx = mx, my = my,
         mouseDown = mouseDown,
         rightMouseDown = rightMouseDown,
-        state = helpState,
+        -- Keep top-right control edge detection isolated from native Help tab
+        -- clicks so a control helper update cannot consume tab activation.
+        state = helpState.utilityControlsState,
         setLanguageFn = setLanguage,
         themeX = w - _themeSize - HS(10),
         themeY = HS(8),
@@ -6190,6 +6194,8 @@ local function drawArtGallery()
         tabX = tabX + tabWidths[i]
     end
 
+    helpState.utilityControlsState = helpState.utilityControlsState or {}
+
     local topRightControlsCtx = {
         profile = "help",
         w = w,
@@ -6199,7 +6205,7 @@ local function drawArtGallery()
         my = my,
         mouseDown = mouseDown,
         rightMouseDown = rightMouseDown,
-        state = helpState,
+        state = helpState.utilityControlsState,
         controlsOpacity = controlsOpacity,
         iconScale = iconScale,
         themeX = themeX,
@@ -8254,11 +8260,12 @@ local function drawMessageWindow()
     local fxHover = false
 
     if _msgUtility then
+        messageWindowState.utilityControlsState = messageWindowState.utilityControlsState or {}
         local _uc = {
             S = PS, w = w, mx = mx, my = my,
             mouseDown = mouseDown,
             rightMouseDown = rightMouseDown,
-            state = messageWindowState,
+            state = messageWindowState.utilityControlsState,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
         }
@@ -9012,7 +9019,8 @@ function drawResultWindowControls(ctx)
     ctx.S = ctx.PS
     ctx.setLanguageFn = setLanguage
     ctx.updateControlsOpacityFn = updateControlsOpacity
-    ctx.state = resultWindowState
+    resultWindowState.utilityControlsState = resultWindowState.utilityControlsState or {}
+    ctx.state = resultWindowState.utilityControlsState
     UI_CONTROLS.drawTopRightControls(ctx)
 end
 
@@ -12097,13 +12105,14 @@ function renderTopRightControls(ctx)
 
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
     if utilityMode then
+        GUI.utilityControlsState = GUI.utilityControlsState or {}
         UI_CONTROLS.drawUtilityControls({
             S = S,
             w = gfx.w,
             mx = gfx.mouse_x, my = gfx.mouse_y,
             mouseDown = mouseDown,
             rightMouseDown = ctx.rightMouseDown,
-            state = GUI,
+            state = GUI.utilityControlsState,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
         })
@@ -15633,11 +15642,12 @@ function drawProgressWindow()
     local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(progressState, mouseInControls)
 
     if utilityMode then
+        progressState.utilityControlsState = progressState.utilityControlsState or {}
         local _uc = {
             S = PS, w = w, mx = mx, my = my,
             mouseDown = mouseDown,
             rightMouseDown = rightMouseDown,
-            state = progressState,
+            state = progressState.utilityControlsState,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
         }
@@ -20335,11 +20345,12 @@ function drawMultiTrackProgressWindow()
     local controlsOpacity = utilityMode and 1.0 or updateControlsOpacity(multiTrackQueue, mouseInControls)
 
     if utilityMode then
+        multiTrackQueue.utilityControlsState = multiTrackQueue.utilityControlsState or {}
         local _uc = {
             S = PS, w = w, mx = mx, my = my,
             mouseDown = mouseDown,
             rightMouseDown = rightMouseDown,
-            state = multiTrackQueue,
+            state = multiTrackQueue.utilityControlsState,
             setLanguageFn = setLanguage,
             themeX = themeX, themeY = themeY, themeSize = themeSize,
         }

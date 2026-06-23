@@ -32,6 +32,18 @@ function M.getArch()
     return arch
 end
 
+local SYSTEM_OS = rawget(_G, "OS") or M.getOS()
+local SYSTEM_PATH_SEP = rawget(_G, "PATH_SEP")
+    or ((package.config and package.config:sub(1, 1)) or (SYSTEM_OS == "Windows" and "\\" or "/"))
+
+local function currentOS()
+    return rawget(_G, "OS") or SYSTEM_OS
+end
+
+local function currentPathSep()
+    return rawget(_G, "PATH_SEP") or SYSTEM_PATH_SEP
+end
+
 function M.isAbsolutePath(p)
     if not p or p == "" then return false end
     if p:match("^%a:[/\\]") then return true end -- Windows drive
@@ -63,7 +75,7 @@ end
 
 -- Get home directory (cross-platform)
 function M.getHome()
-    if OS == "Windows" then
+    if currentOS() == "Windows" then
         return os.getenv("USERPROFILE") or "C:\\Users\\Default"
     end
     return os.getenv("HOME") or "/tmp"
@@ -85,7 +97,7 @@ end
 
 -- Get temp directory (cross-platform)
 function M.getTempDir()
-    if OS == "Windows" then
+    if currentOS() == "Windows" then
         return os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
     end
     local flatpakTemp = M.getFlatpakTempBase()
@@ -99,7 +111,7 @@ function M.makeDir(path)
         reaper.RecursiveCreateDirectory(path, 0)
         return
     end
-    if OS == "Windows" then
+    if currentOS() == "Windows" then
         os.execute('mkdir "' .. path .. '" 2>nul')
     else
         os.execute('mkdir -p "' .. path .. '"')
@@ -108,13 +120,13 @@ end
 
 -- Suppress stderr (cross-platform)
 function M.suppressStderr()
-    return OS == "Windows" and " 2>nul" or " 2>/dev/null"
+    return currentOS() == "Windows" and " 2>nul" or " 2>/dev/null"
 end
 
 function M.normalizePath(p)
     if not p then return "" end
     local norm = tostring(p)
-    if OS == "Windows" then
+    if currentOS() == "Windows" then
         norm = norm:gsub("/", "\\")
         norm = norm:lower()
     else
@@ -129,7 +141,7 @@ function M.pathJoin(a, b)
     if last == "/" or last == "\\" then
         return a .. b
     end
-    return a .. PATH_SEP .. b
+    return a .. currentPathSep() .. b
 end
 
 function M.parseExecProcessResult(result)
@@ -156,10 +168,10 @@ function M.exec_capture(cmd, timeoutMs)
         if out ~= "" then
             return tonumber(rc) or -1, out
         end
-        if M.isFlatpak() and OS ~= "Windows" then
+        if M.isFlatpak() and currentOS() ~= "Windows" then
             debugLog("exec_capture: ExecProcess empty -> flatpak sandbox file fallback")
             local home = os.getenv("HOME") or ""
-            local sep = PATH_SEP or "/"
+            local sep = currentPathSep()
             local cachePath = home .. sep .. ".cache" .. sep .. "stemwerk_exec_out.txt"
             local inner = "mkdir -p $HOME/.cache && " .. cmd .. " > $HOME/.cache/stemwerk_exec_out.txt 2>&1"
             local sandboxCmd = "sh -lc " .. M.shellQuoteSingle(inner)
@@ -209,7 +221,7 @@ end
 function M.execHidden(cmd)
     debugLog("execHidden called")
     debugLog("  Command: " .. cmd:sub(1, 200) .. (cmd:len() > 200 and ".." or ""))
-    if OS == "Windows" then
+    if currentOS() == "Windows" then
         local directCmd = tostring(cmd or "")
         directCmd = directCmd:gsub("%s+2>nul%s*$", "")
 

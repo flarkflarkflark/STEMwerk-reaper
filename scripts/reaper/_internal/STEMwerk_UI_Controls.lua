@@ -192,6 +192,11 @@ local function drawUtilityControlsCore(ctx)
         GUI.tooltipX = ctx.tooltipX
         GUI.tooltipY = ctx.tooltipY
     end
+
+    -- Persist per-frame edge state inside the shared helper so callers do not
+    -- need to mirror mouse-down bookkeeping just to prevent repeated cycling.
+    state.wasMouseDown = mouseDown
+    state.wasRightMouseDown = rightMouseDown
 end
 
 local function drawHelpControls(ctx)
@@ -327,6 +332,8 @@ local function drawHelpControls(ctx)
     ctx.tooltipText = tooltipText
     ctx.tooltipX = tooltipX
     ctx.tooltipY = tooltipY
+    state.wasMouseDown = mouseDown
+    state.wasRightMouseDown = rightMouseDown
 end
 
 local function drawResultControls(ctx)
@@ -491,6 +498,8 @@ local function drawResultControls(ctx)
     ctx.tooltipText = tooltipText
     ctx.tooltipX = tooltipX
     ctx.tooltipY = tooltipY
+    state.wasMouseDown = mouseDown
+    state.wasRightMouseDown = rightMouseDown
 end
 
 function M.drawTopRightControls(ctx)

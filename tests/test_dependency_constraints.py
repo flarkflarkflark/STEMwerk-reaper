@@ -1715,6 +1715,19 @@ def test_rebuild_venv_safety_reports_canonical_failure_without_using_raw_output_
     assert "terminate called without an active exception/.venv" not in script
 
 
+def test_system_helper_resolves_path_separator_without_caller_global():
+    from pathlib import Path
+
+    script = Path("scripts/reaper/_internal/STEMwerk_System.lua").read_text()
+    setup_script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'local SYSTEM_PATH_SEP = rawget(_G, "PATH_SEP")' in script
+    assert 'or ((package.config and package.config:sub(1, 1)) or (SYSTEM_OS == "Windows" and "\\\\" or "/"))' in script
+    assert 'local function currentPathSep()' in script
+    assert 'return a .. currentPathSep() .. b' in script
+    assert 'I18N = dofile(RAW_SCRIPT_DIR .. "STEMwerk_I18N.lua")' in setup_script
+
+
 def test_command_path_noise_is_ignored_for_python_resolution():
     from pathlib import Path
 
@@ -3982,8 +3995,9 @@ def test_linux_setup_exposes_explicit_drumsep_runtime_action_without_normal_setu
     assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime"' in setup_internal
     assert '((isDrumsepRuntime and "drumsep_runtime.env") or (isDrumsepRocmRuntime and "drumsep_runtime_rocm.env") or "bootstrap.env")' in setup_internal
     assert '((isDrumsepRuntime and "drumsep_install.log") or (isDrumsepRocmRuntime and "drumsep_rocm_install.log") or "bootstrap.log")' in setup_internal
-    assert '{ id = "drumsep-runtime", label = "Drum Kit Split runtime"' in setup_internal
-    assert '{ id = "drumsep-rocm-runtime", label = "Drum Kit Split ROCm runtime"' in setup_internal
+    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }' in setup_internal
+    assert 'refreshSetupMenuChoiceLabels({ choices = choices })' in setup_internal
     assert 'startLinuxSetup(runtime, separatorScript, chosen)' in setup_internal
     assert 'if [ "${MODE}" = "drumsep-runtime" ]; then' in linux_bootstrap
     assert 'write_drumsep_state "install_failed" "missing" "python_missing"' in linux_bootstrap
@@ -3999,11 +4013,12 @@ def test_windows_setup_exposes_directml_drumsep_runtime_action_and_state_files()
     assert '(isDrumsepCudaRuntime and "drumsep_runtime_cuda.env")' in setup_internal
     assert '(isDrumsepCudaRuntime and "drumsep_cuda_install.log")' in setup_internal
     assert '(isDrumsepCudaRuntime and "drumsep_cuda_runtime.pid")' in setup_internal
-    assert '{ id = "drumsep-cuda-runtime", label = "Drum Kit Split CUDA runtime"' in setup_internal
+    assert '{ id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_runtime_directml.env")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_install.log")' in setup_internal
     assert '(isDrumsepDirectmlRuntime and "drumsep_directml_runtime.pid")' in setup_internal
-    assert '{ id = "drumsep-directml-runtime", label = "Drum Kit Split DirectML runtime"' in setup_internal
+    assert '{ id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }' in setup_internal
+    assert 'refreshSetupMenuChoiceLabels({ choices = choices })' in setup_internal
     assert 'startWindowsSetup(runtime, separatorScript, chosen, true)' in setup_internal
 
 
@@ -5585,22 +5600,60 @@ def test_normal_workflow_parser_reads_backend_preview_name_for_live_rocm_labels(
 
 def test_linux_setup_existing_runtime_view_uses_compact_top_right_mode_summary():
     setup_script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    controls_script = Path("scripts/reaper/_internal/STEMwerk_UI_Controls.lua").read_text(encoding="utf-8")
 
     assert 'local function compactModeSummaryLabel(choice)' in setup_script
-    assert 'if id == "support-bundle" then return "Save bundle" end' in setup_script
-    assert 'if id == "open-logs" then return "Open logs" end' in setup_script
-    assert 'if id == "drumsep-rocm-runtime" then return "DrumKit ROCm" end' in setup_script
+    assert 'if id == "support-bundle" then return setupSummaryLabel(id, "Save bundle") end' in setup_script
+    assert 'if id == "open-logs" then return setupSummaryLabel(id, "Open logs") end' in setup_script
+    assert 'if id == "drumsep-rocm-runtime" then return setupSummaryLabel(id, "DrumKit ROCm") end' in setup_script
+    assert 'UI_CONTROLS = dofile(RAW_SCRIPT_DIR .. "STEMwerk_UI_Controls.lua")' in setup_script
+    assert 'UI_CONTROLS.drawUtilityControls({' in setup_script
+    assert 'setLanguageFn = setLanguage,' in setup_script
     assert 'local topColGap = math.max(12, linuxLineHeight(10))' in setup_script
+    assert 'local utilityBottom = utilityY + utilitySize' in setup_script
     assert 'local leftColW = bodyW - summaryW - topColGap' in setup_script
     assert 'local summaryX = bodyX + leftColW + topColGap' in setup_script
-    assert 'local summaryY = bodyY' in setup_script
+    assert 'local summaryY = utilityBottom + utilityGap' in setup_script
     assert 'drawLinuxPanel(summaryX, midPanelY, summaryW, midPanelH' in setup_script
-    assert 'gfx.drawstr("Modes")' in setup_script
+    assert 'gfx.drawstr(setupText("setup_modes_title", "Modes"))' in setup_script
     assert 'local summaryLabel = compactModeSummaryLabel(c)' in setup_script
     assert 'summaryLabel .. " · " .. tostring(c.sub or "")' not in setup_script
     assert 'ellipsizeToWidth(summaryLabel, summaryInnerW - 22' in setup_script
     assert 'local headerBottom = math.max(y, midPanelY + midPanelH)' in setup_script
     assert 'layout.btnY = math.max(layout.btnY, headerBottom + headerGap)' in setup_script
+    assert 'setup_summary_drumkit_rocm = "DrumKit ROCm"' in langs
+    assert 'setup_modes_title = "Modes"' in langs
+    assert 'setup_modes_title = "Modi"' in langs
+    assert 'state.wasMouseDown = mouseDown' in controls_script
+    assert 'state.wasRightMouseDown = rightMouseDown' in controls_script
+    assert 'setup_summary_check_only = "Controle"' in langs
+    assert 'setup_summary_check_only = "Prüfen"' in langs
+    assert 'setup_choice_open_logs_label = "Logs-map openen"' in langs
+    assert 'setup_choice_open_logs_label = "Logs öffnen"' in langs
+
+
+def test_native_help_tabs_keep_dedicated_control_click_state():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'helpState.utilityControlsState = helpState.utilityControlsState or {}' in script
+    assert 'state = helpState.utilityControlsState,' in script
+    assert 'if hover and mouseDown and not helpState.wasMouseDown then clickedTab = i end' in script
+
+
+def test_ui_click_state_matrix_uses_dedicated_top_right_control_substates():
+    script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'GUI.utilityControlsState = GUI.utilityControlsState or {}' in script
+    assert 'state = GUI.utilityControlsState,' in script
+    assert 'resultWindowState.utilityControlsState = resultWindowState.utilityControlsState or {}' in script
+    assert 'ctx.state = resultWindowState.utilityControlsState' in script
+    assert 'messageWindowState.utilityControlsState = messageWindowState.utilityControlsState or {}' in script
+    assert 'state = messageWindowState.utilityControlsState,' in script
+    assert 'progressState.utilityControlsState = progressState.utilityControlsState or {}' in script
+    assert 'state = progressState.utilityControlsState,' in script
+    assert 'multiTrackQueue.utilityControlsState = multiTrackQueue.utilityControlsState or {}' in script
+    assert 'state = multiTrackQueue.utilityControlsState,' in script
 
 
 def test_multi_track_footer_and_result_use_observed_job_runtime():
