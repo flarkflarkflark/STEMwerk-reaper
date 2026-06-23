@@ -230,7 +230,7 @@ en = {
 
         -- Processing
         parallel = "Parallel",
-        mt_parallel_cap = "cap %d",
+        mt_parallel_cap = "Parallel cap %d",
         sequential = "Sequential",
         processing = "Processing...",
         starting = "Starting...",
@@ -948,7 +948,7 @@ en = {
 
         -- Processing
         parallel = "Parallel",
-        mt_parallel_cap = "limiet %d",
+        mt_parallel_cap = "Parallel limiet %d",
         sequential = "Sequentieel",
         processing = "Verwerken...",
         starting = "Starten...",
@@ -1666,7 +1666,7 @@ en = {
 
         -- Processing
         parallel = "Parallel",
-        mt_parallel_cap = "Limit %d",
+        mt_parallel_cap = "Parallel-Limit %d",
         sequential = "Sequentiell",
         processing = "Verarbeitung...",
         starting = "Starten...",

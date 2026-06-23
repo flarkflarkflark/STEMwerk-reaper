@@ -4429,9 +4429,9 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'progress_stage_starting_drum_kit_runtime = "Preparing Kit Split stage 2..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Kit Split stap 2 voorbereiden..."' in langs
     assert 'progress_stage_starting_drum_kit_runtime = "Kit Split Stufe 2 vorbereiten..."' in langs
-    assert 'mt_parallel_cap = "cap %d"' in langs
-    assert 'mt_parallel_cap = "limiet %d"' in langs
-    assert 'mt_parallel_cap = "Limit %d"' in langs
+    assert 'mt_parallel_cap = "Parallel cap %d"' in langs
+    assert 'mt_parallel_cap = "Parallel limiet %d"' in langs
+    assert 'mt_parallel_cap = "Parallel-Limit %d"' in langs
     assert 'progress_stage_label_1_of_2 = "Stage 1/2"' in langs
     assert 'progress_stage_label_2_of_2 = "Stage 2/2"' in langs
     assert 'progress_stage_label_1_of_2 = "Stap 1/2"' in langs
@@ -5601,8 +5601,11 @@ def test_normal_workflow_parser_reads_backend_preview_name_for_live_rocm_labels(
 def test_linux_setup_existing_runtime_view_uses_compact_top_right_mode_summary():
     setup_script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
     langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    root_langs = Path("i18n/languages.lua").read_text(encoding="utf-8")
     controls_script = Path("scripts/reaper/_internal/STEMwerk_UI_Controls.lua").read_text(encoding="utf-8")
 
+    assert 'local humanized = keyText:gsub("_", " ")' in setup_script
+    assert 'if value ~= "" and value ~= keyText and value ~= humanized then' in setup_script
     assert 'local function compactModeSummaryLabel(choice)' in setup_script
     assert 'if id == "support-bundle" then return setupSummaryLabel(id, "Save bundle") end' in setup_script
     assert 'if id == "open-logs" then return setupSummaryLabel(id, "Open logs") end' in setup_script
@@ -5625,12 +5628,16 @@ def test_linux_setup_existing_runtime_view_uses_compact_top_right_mode_summary()
     assert 'setup_summary_drumkit_rocm = "DrumKit ROCm"' in langs
     assert 'setup_modes_title = "Modes"' in langs
     assert 'setup_modes_title = "Modi"' in langs
+    assert 'setup_modes_title = "Modes"' in root_langs
+    assert 'setup_existing_runtime_found = "Existing runtime found. Choose what to do:"' in root_langs
+    assert 'setup_footer_zoom = "Ctrl+wheel zooms text. Use +/- or 0 for text size. Esc = cancel.  Text %.0f%%"' in root_langs
     assert 'state.wasMouseDown = mouseDown' in controls_script
     assert 'state.wasRightMouseDown = rightMouseDown' in controls_script
     assert 'setup_summary_check_only = "Controle"' in langs
     assert 'setup_summary_check_only = "Prüfen"' in langs
     assert 'setup_choice_open_logs_label = "Logs-map openen"' in langs
     assert 'setup_choice_open_logs_label = "Logs öffnen"' in langs
+    assert langs == root_langs
 
 
 def test_native_help_tabs_keep_dedicated_control_click_state():

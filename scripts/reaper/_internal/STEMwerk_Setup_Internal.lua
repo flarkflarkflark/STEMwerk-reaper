@@ -4236,10 +4236,15 @@ end
 
 function setupText(key, fallback)
     local value = T and T(key)
-    if value and value ~= key then
-        return tostring(value)
+    local keyText = tostring(key or "")
+    local humanized = keyText:gsub("_", " ")
+    if value ~= nil then
+        value = tostring(value)
+        if value ~= "" and value ~= keyText and value ~= humanized then
+            return value
+        end
     end
-    return tostring(fallback or key)
+    return tostring(fallback or keyText)
 end
 
 function setupChoiceLabel(choiceId)
