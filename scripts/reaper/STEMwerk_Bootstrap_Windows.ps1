@@ -73,6 +73,7 @@ $python = $null
 $ffmpeg = $null
 $venvPy = Join-Path $RuntimeBase ".venv\\Scripts\\python.exe"
 $installerMode = ($env:STEMWERK_INSTALLER -eq "1")
+$offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bundledRuntimeDir = Join-Path $scriptRoot "_bundled"
 $pythonInstallerFileName = "python-3.11.8-amd64.exe"
@@ -83,6 +84,8 @@ $bundledPythonInstaller = Join-Path $bundledRuntimeDir ("python\\" + $pythonInst
 $bundledFfmpegZip = Join-Path $bundledRuntimeDir ("ffmpeg\\" + $ffmpegArchiveFileName)
 $script:FfmpegSource = "missing"
 $bundledWheelsDir = Join-Path $bundledRuntimeDir "wheels"
+$bundledDrumsepWheelsDir = Join-Path $bundledRuntimeDir "drumsep-wheels"
+$bundledDrumsepModelsDir = Join-Path $bundledRuntimeDir "drumsep-models"
 $bundledCoreDir = Join-Path $scriptRoot "vendor\\stemwerk-core"
 $bundledJuliusDir = Join-Path $scriptRoot "vendor\\julius"
 $constraintsDir = Join-Path $scriptRoot "constraints"
@@ -91,6 +94,11 @@ $cudaConstraints = Join-Path $constraintsDir "cuda.txt"
 $directmlConstraints = Join-Path $constraintsDir "directml.txt"
 $allowPypiCore = ($env:STEMWERK_ALLOW_PYPI_CORE -eq "1")
 $supportedPythonText = "3.11 or 3.12"
+$script:DrumsepOfflinePayloadStatus = if ($offlineBundledAllmodelsMode) { "pending" } else { "" }
+$script:DrumsepOfflinePayloadSource = if ($offlineBundledAllmodelsMode) { "bundled" } else { "" }
+$script:DrumsepOfflinePayloadReason = ""
+$script:DrumsepModelSource = ""
+$script:DrumsepRuntimeWheelSource = ""
 
 function TestCoreSourceBundle([string]$Root) {
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
@@ -651,11 +659,33 @@ function HasBundledWheels {
     return ($null -ne $wheel)
 }
 
-function GetPipOfflineArgs {
-    if (HasBundledWheels) {
-        return @("--no-index", "--find-links", $bundledWheelsDir)
+function HasBundledDrumsepWheels {
+    if ([string]::IsNullOrWhiteSpace($bundledDrumsepWheelsDir)) { return $false }
+    if (-not (Test-Path $bundledDrumsepWheelsDir)) { return $false }
+    $wheel = Get-ChildItem -Path $bundledDrumsepWheelsDir -Filter "*.whl" -Recurse | Select-Object -First 1
+    return ($null -ne $wheel)
+}
+
+function GetPipOfflineArgsForDirs([string[]]$FindLinksDirs) {
+    $args = @()
+    $existing = @()
+    foreach ($dir in $FindLinksDirs) {
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and (Test-Path $dir)) {
+            $existing += $dir
+        }
     }
-    return @()
+    if ($existing.Count -eq 0) {
+        return $args
+    }
+    $args += "--no-index"
+    foreach ($dir in $existing) {
+        $args += @("--find-links", $dir)
+    }
+    return $args
+}
+
+function GetPipOfflineArgs {
+    return (GetPipOfflineArgsForDirs @($bundledWheelsDir))
 }
 
 function InstallWithPip([string]$PythonPath, [string[]]$InstallArgs, [string]$Description) {
@@ -663,6 +693,14 @@ function InstallWithPip([string]$PythonPath, [string[]]$InstallArgs, [string]$De
     $args += GetPipOfflineArgs
     $args += $InstallArgs
     RunHidden $PythonPath $args $Description | Out-Null
+}
+
+function InstallWithPipOfflineSources([string]$PythonPath, [string[]]$InstallArgs, [string]$Description, [string[]]$FindLinksDirs) {
+    $args = @("-m", "pip", "install")
+    $args += GetPipOfflineArgsForDirs $FindLinksDirs
+    $args += $InstallArgs
+    RunHidden $PythonPath $args $Description | Out-Null
+    return ($LASTEXITCODE -eq 0)
 }
 
 function InstallWithPipAllowOnlineFallback([string]$PythonPath, [string[]]$InstallArgs, [string]$Description) {
@@ -681,6 +719,54 @@ function InstallWithPipAllowOnlineFallback([string]$PythonPath, [string[]]$Insta
     $args += $InstallArgs
     RunHidden $PythonPath $args ($label + " (online fallback)") | Out-Null
     return ($LASTEXITCODE -eq 0)
+}
+
+function SetDrumsepOfflinePayloadState([string]$Status, [string]$Reason, [string]$ModelSource = "", [string]$WheelSource = "") {
+    $script:DrumsepOfflinePayloadStatus = $Status
+    $script:DrumsepOfflinePayloadReason = $Reason
+    if (-not [string]::IsNullOrWhiteSpace($ModelSource)) { $script:DrumsepModelSource = $ModelSource }
+    if (-not [string]::IsNullOrWhiteSpace($WheelSource)) { $script:DrumsepRuntimeWheelSource = $WheelSource }
+}
+
+function TestBundledDrumsepModelsAvailable {
+    foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName)) {
+        if (-not (Test-Path (Join-Path $bundledDrumsepModelsDir $name))) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function CopyBundledDrumsepAssets([string]$ModelDir) {
+    if (-not (TestBundledDrumsepModelsAvailable)) {
+        SetDrumsepOfflinePayloadState "missing" "missing_bundled_drumsep_models"
+        LogLine "Offline installer is missing bundled DrumSep model assets."
+        return $false
+    }
+    try {
+        New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
+        foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName)) {
+            $src = Join-Path $bundledDrumsepModelsDir $name
+            $dest = Join-Path $ModelDir $name
+            Copy-Item -Path $src -Destination $dest -Force
+        }
+        SetDrumsepOfflinePayloadState "ok" "bundled" "bundled" $script:DrumsepRuntimeWheelSource
+        return $true
+    } catch {
+        SetDrumsepOfflinePayloadState "missing" "bundled_model_copy_failed"
+        LogLine ("Bundled DrumSep model copy failed: " + $_.Exception.Message)
+        return $false
+    }
+}
+
+function InstallBundledDrumsepPackages([string]$PythonPath, [string[]]$InstallArgs, [string]$Description) {
+    if (-not (HasBundledDrumsepWheels)) {
+        SetDrumsepOfflinePayloadState "missing" "missing_bundled_drumsep_wheels" "" "missing"
+        LogLine "Offline installer is missing bundled DrumSep wheel payload."
+        return $false
+    }
+    SetDrumsepOfflinePayloadState "ok" "bundled" $script:DrumsepModelSource "bundled"
+    return (InstallWithPipOfflineSources $PythonPath $InstallArgs $Description @($bundledWheelsDir, $bundledDrumsepWheelsDir))
 }
 
 function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
@@ -1347,6 +1433,11 @@ function WriteDrumsepState([string]$State, [string]$ModelStatus, [string]$Reason
         "DRUMSEP_MODEL_STATUS=$ModelStatus",
         "DRUMSEP_MODEL_FILE=$modelFile",
         "DRUMSEP_MODEL_YAML=$modelYaml",
+        "DRUMSEP_OFFLINE_PAYLOAD_STATUS=$script:DrumsepOfflinePayloadStatus",
+        "DRUMSEP_OFFLINE_PAYLOAD_SOURCE=$script:DrumsepOfflinePayloadSource",
+        "DRUMSEP_OFFLINE_PAYLOAD_REASON=$script:DrumsepOfflinePayloadReason",
+        "DRUMSEP_MODEL_SOURCE=$script:DrumsepModelSource",
+        "DRUMSEP_RUNTIME_WHEEL_SOURCE=$script:DrumsepRuntimeWheelSource",
         "DRUMSEP_AUDIO_SEPARATOR_VERSION=",
         "DRUMSEP_NUMPY_VERSION=",
         "DRUMSEP_TORCH_VERSION=",
@@ -1438,6 +1529,11 @@ function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string
         "DRUMSEP_DIRECTML_MODEL_STATUS=$ModelStatus",
         "DRUMSEP_DIRECTML_MODEL_FILE=$modelFile",
         "DRUMSEP_DIRECTML_MODEL_YAML=$modelYaml",
+        "DRUMSEP_OFFLINE_PAYLOAD_STATUS=$script:DrumsepOfflinePayloadStatus",
+        "DRUMSEP_OFFLINE_PAYLOAD_SOURCE=$script:DrumsepOfflinePayloadSource",
+        "DRUMSEP_OFFLINE_PAYLOAD_REASON=$script:DrumsepOfflinePayloadReason",
+        "DRUMSEP_MODEL_SOURCE=$script:DrumsepModelSource",
+        "DRUMSEP_RUNTIME_WHEEL_SOURCE=$script:DrumsepRuntimeWheelSource",
         "DRUMSEP_DIRECTML_AUDIO_SEPARATOR_VERSION=$audioSeparatorVersionValue",
         "DRUMSEP_DIRECTML_NUMPY_VERSION=$numpyVersionValue",
         "DRUMSEP_DIRECTML_TORCH_VERSION=$torchVersionValue",
@@ -1501,6 +1597,11 @@ function WriteDrumsepCudaState([string]$State, [string]$ModelStatus, [string]$Re
         "DRUMSEP_CUDA_MODEL_STATUS=$ModelStatus",
         "DRUMSEP_CUDA_MODEL_FILE=$modelFile",
         "DRUMSEP_CUDA_MODEL_YAML=$modelYaml",
+        "DRUMSEP_OFFLINE_PAYLOAD_STATUS=$script:DrumsepOfflinePayloadStatus",
+        "DRUMSEP_OFFLINE_PAYLOAD_SOURCE=$script:DrumsepOfflinePayloadSource",
+        "DRUMSEP_OFFLINE_PAYLOAD_REASON=$script:DrumsepOfflinePayloadReason",
+        "DRUMSEP_MODEL_SOURCE=$script:DrumsepModelSource",
+        "DRUMSEP_RUNTIME_WHEEL_SOURCE=$script:DrumsepRuntimeWheelSource",
         "DRUMSEP_CUDA_AUDIO_SEPARATOR_VERSION=$audioSeparatorVersionValue",
         "DRUMSEP_CUDA_TORCH_VERSION=$torchVersionValue",
         "DRUMSEP_CUDA_TORCHVISION_VERSION=$torchVisionVersionValue",
@@ -1717,6 +1818,10 @@ function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label
 
 function EnsureDrumsepAssets([string]$ModelDir) {
     if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Installing bundled Drum Kit model assets..."
+        return (CopyBundledDrumsepAssets $ModelDir)
+    }
     try {
         New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
     } catch {
@@ -2022,7 +2127,7 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepState "running" "missing" "package_install"
-    if (-not (InstallWithPipAllowOnlineFallback $drumsepPython @(
+    $drumsepCpuInstallArgs = @(
         "--upgrade",
         "audio-separator==$drumsepAudioSeparatorVersion",
         "numpy==$drumsepNumpyVersion",
@@ -2033,7 +2138,15 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
         "torch==$drumsepTorchVersion",
         "torchvision==$drumsepTorchVisionVersion",
         "numba==$drumsepNumbaVersion"
-    ) "Install DrumSep packages")) {
+    )
+    $installOk = $false
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Installing bundled Drum Kit runtime..."
+        $installOk = InstallBundledDrumsepPackages $drumsepPython $drumsepCpuInstallArgs "Installing bundled Drum Kit runtime..."
+    } else {
+        $installOk = InstallWithPipAllowOnlineFallback $drumsepPython $drumsepCpuInstallArgs "Install DrumSep packages"
+    }
+    if (-not $installOk) {
         WriteDrumsepState "install_failed" "missing" "package_install_failed"
         return $false
     }
@@ -2045,6 +2158,9 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepState "running" "ok" "verify_runtime"
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Verifying bundled Drum Kit runtime..."
+    }
     $verifyResult = VerifyDrumsepRuntime $drumsepPython
     if ($verifyResult -ne "ok") {
         if ($verifyResult -eq "model_missing") {
@@ -2058,6 +2174,9 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepState "ok" "ok" "ok"
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Drum Kit Splitter ready."
+    }
     return $true
 }
 
@@ -2098,7 +2217,7 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepDirectmlState "running" "missing" "package_install"
-    if (-not (InstallWithPipAllowOnlineFallback $drumsepPython @(
+    $drumsepDirectmlInstallArgs = @(
         "--upgrade",
         "--prefer-binary",
         "-c", $directmlConstraints,
@@ -2112,7 +2231,15 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
         "torchvision==$torchVisionVersion",
         "torch-directml==$torchDirectMlVersion",
         "onnxruntime-directml==$onnxRuntimeDirectMlVersion"
-    ) "Install DrumSep DirectML packages")) {
+    )
+    $installOk = $false
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Installing bundled Drum Kit runtime..."
+        $installOk = InstallBundledDrumsepPackages $drumsepPython $drumsepDirectmlInstallArgs "Installing bundled Drum Kit runtime..."
+    } else {
+        $installOk = InstallWithPipAllowOnlineFallback $drumsepPython $drumsepDirectmlInstallArgs "Install DrumSep DirectML packages"
+    }
+    if (-not $installOk) {
         WriteDrumsepDirectmlState "install_failed" "missing" "package_install_failed"
         return $false
     }
@@ -2124,6 +2251,9 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepDirectmlState "running" "ok" "verify_runtime"
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Verifying bundled Drum Kit runtime..."
+    }
     $verifyResult = VerifyDrumsepDirectmlRuntime $drumsepPython
     if ($verifyResult -ne "ok") {
         if ($verifyResult -eq "model_missing") {
@@ -2147,6 +2277,9 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepDirectmlState "ok" "ok" "ok"
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Drum Kit Splitter ready."
+    }
     return $true
 }
 
@@ -2192,16 +2325,33 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepCudaState "running" "missing" "package_install"
-    if (-not (InstallWithPipAllowOnlineFallback $drumsepPython @(
+    $drumsepCudaInstallArgs = @(
         "--upgrade",
         "--prefer-binary",
-        "--extra-index-url", $pytorchCudaIndex,
         "audio-separator==$drumsepAudioSeparatorVersion",
         "torch==$torchVersion$torchCudaSuffix",
         "torchvision==$torchVisionVersion$torchCudaSuffix",
         "torchaudio==$torchAudioVersion$torchCudaSuffix",
         "onnxruntime-gpu==$onnxRuntimeGpuVersion"
-    ) "Install DrumSep CUDA packages")) {
+    )
+    $installOk = $false
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Installing bundled Drum Kit runtime..."
+        $installOk = InstallBundledDrumsepPackages $drumsepPython $drumsepCudaInstallArgs "Installing bundled Drum Kit runtime..."
+    } else {
+        $drumsepCudaInstallArgs = @(
+            "--upgrade",
+            "--prefer-binary",
+            "--extra-index-url", $pytorchCudaIndex,
+            "audio-separator==$drumsepAudioSeparatorVersion",
+            "torch==$torchVersion$torchCudaSuffix",
+            "torchvision==$torchVisionVersion$torchCudaSuffix",
+            "torchaudio==$torchAudioVersion$torchCudaSuffix",
+            "onnxruntime-gpu==$onnxRuntimeGpuVersion"
+        )
+        $installOk = InstallWithPipAllowOnlineFallback $drumsepPython $drumsepCudaInstallArgs "Install DrumSep CUDA packages"
+    }
+    if (-not $installOk) {
         WriteDrumsepCudaState "error" "missing" "package_install_failed"
         return $false
     }
@@ -2213,6 +2363,9 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepCudaState "running" "ok" "verify_runtime"
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Verifying bundled Drum Kit runtime..."
+    }
     $verifyResult = VerifyDrumsepCudaRuntime $drumsepPython
     if ($verifyResult.Status -ne "ok") {
         WriteDrumsepCudaState "error" "ok" ("probe_failed:" + $verifyResult.Status) $verifyResult.Probe $verifyResult.FfmpegPath
@@ -2220,6 +2373,9 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
     }
 
     WriteDrumsepCudaState "ok" "ok" "ok" $verifyResult.Probe $verifyResult.FfmpegPath
+    if ($offlineBundledAllmodelsMode) {
+        LogProgress "Drum Kit Splitter ready."
+    }
     return $true
 }
 

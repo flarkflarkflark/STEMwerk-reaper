@@ -1,7 +1,8 @@
 param(
     [string]$RuntimeBase = "",
     [switch]$CleanRuntime,
-    [switch]$CleanModels
+    [switch]$CleanModels,
+    [switch]$OfflineBundledAllmodels
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -67,6 +68,9 @@ if (-not (Test-Path $bootstrap)) {
 }
 
 $env:STEMWERK_INSTALLER = "1"
+if ($OfflineBundledAllmodels.IsPresent) {
+    $env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS = "1"
+}
 
 LogLine "Installer bootstrap started" $logFile
 LogLine ("RUNTIME_BASE=" + $RuntimeBase) $logFile

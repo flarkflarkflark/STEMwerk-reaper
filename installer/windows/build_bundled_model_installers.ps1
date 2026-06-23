@@ -10,6 +10,7 @@ $repoDir = Resolve-Path (Join-Path $rootDir "..\\..")
 $issPath = Join-Path $repoDir "installer\\windows\\STEMwerk.iss"
 $distDir = Join-Path $rootDir "dist"
 $payloadDir = Join-Path $rootDir "payload"
+$drumsepPrepScript = Join-Path $repoDir "tools\\build_windows_drumsep_payload.py"
 
 $rawVersion = Get-Content (Join-Path $repoDir "VERSION") -Raw
 $version = $rawVersion.Trim()
@@ -110,7 +111,7 @@ function Resolve-ModelStamp {
     return $stamp
 }
 
-function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$WheelSubdir, [string]$OfflineTag) {
+function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$WheelSubdir, [string]$DrumsepWheelSubdir, [string]$DrumsepModelSubdir, [string]$OfflineTag) {
     $baseName = "STEMwerk-Setup-$version"
     $tempOutDir = Join-Path $payloadDir ("_tmp-out-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $tempOutDir | Out-Null
@@ -119,6 +120,9 @@ function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$Wheel
     $env:STEMWERK_VERSION = $version
     $env:STEMWERK_MODEL_PAYLOAD_SUBDIR = $PayloadSubdir
     $env:STEMWERK_WHEEL_PAYLOAD_SUBDIR = $WheelSubdir
+    $env:STEMWERK_DRUMSEP_WHEEL_PAYLOAD_SUBDIR = $DrumsepWheelSubdir
+    $env:STEMWERK_DRUMSEP_MODEL_PAYLOAD_SUBDIR = $DrumsepModelSubdir
+    $env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS = "1"
 
     Write-Host "Building variant: allmodels (payload: $PayloadSubdir)"
     & $IsccPath "/O$($tempOutDir)" "/F$($baseName)" $issPath | Out-Null
@@ -131,23 +135,26 @@ function Build-Variant([string]$IsccPath, [string]$PayloadSubdir, [string]$Wheel
     Remove-Item -Path $tempOutDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-function Build-Flavor([string]$Name, [string]$WheelSubdir, [string]$OfflineTag, [string]$IncludeCuda, [string]$IncludeDirectml, [string]$Stamp) {
+function Build-Flavor([string]$Name, [string]$WheelSubdir, [string]$DrumsepWheelSubdir, [string]$OfflineTag, [string]$IncludeCuda, [string]$IncludeDirectml, [string]$Stamp) {
     Write-Host "Preparing offline wheelhouse for $Name..."
     $env:STEMWERK_WHEELHOUSE_SUBDIR = $WheelSubdir
     $env:STEMWERK_INCLUDE_CUDA_WHEELS = $IncludeCuda
     $env:STEMWERK_INCLUDE_DIRECTML_WHEELS = $IncludeDirectml
     & (Join-Path $rootDir "fetch_runtime_assets.ps1")
 
-    Build-Variant $isccPath "models-$Stamp-allmodels" $WheelSubdir $OfflineTag
+    Build-Variant $isccPath "models-$Stamp-allmodels" $WheelSubdir $DrumsepWheelSubdir "drumsep-models" $OfflineTag
 }
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 $isccPath = Resolve-IsccPath
 $stampValue = Resolve-ModelStamp
 
-Build-Flavor "nvidia" "wheels-nvidia" "offline-bundled-nvidia-gpu" "1" "0" $stampValue
-Build-Flavor "amd" "wheels-directml" "offline-bundled-amd-gpu" "0" "1" $stampValue
-Build-Flavor "cpu" "wheels-cpu" "offline-bundled-cpu" "0" "0" $stampValue
+$modelSrc = if ($env:STEMWERK_MODEL_CACHE_DIR) { $env:STEMWERK_MODEL_CACHE_DIR } else { Join-Path $env:LOCALAPPDATA "STEMwerk\\models" }
+& python $drumsepPrepScript "--payload-root" $payloadDir "--model-src" $modelSrc
+
+Build-Flavor "nvidia" "wheels-nvidia" "drumsep-wheels-nvidia" "offline-bundled-nvidia-gpu" "1" "0" $stampValue
+Build-Flavor "amd" "wheels-directml" "drumsep-wheels-directml" "offline-bundled-amd-gpu" "0" "1" $stampValue
+Build-Flavor "cpu" "wheels-cpu" "drumsep-wheels-cpu" "offline-bundled-cpu" "0" "0" $stampValue
 
 Write-Host ""
 Write-Host "Build complete. Generated installers in: $distDir"

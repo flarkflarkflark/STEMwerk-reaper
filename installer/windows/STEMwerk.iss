@@ -23,6 +23,8 @@
 
 #define ModelPayloadSubdir GetEnv('STEMWERK_MODEL_PAYLOAD_SUBDIR')
 #define WheelPayloadSubdir GetEnv('STEMWERK_WHEEL_PAYLOAD_SUBDIR')
+#define DrumsepWheelPayloadSubdir GetEnv('STEMWERK_DRUMSEP_WHEEL_PAYLOAD_SUBDIR')
+#define DrumsepModelPayloadSubdir GetEnv('STEMWERK_DRUMSEP_MODEL_PAYLOAD_SUBDIR')
 
 #if BundleRuntime == "1"
   #define MinimumFreeSpaceMB "12288"
@@ -112,6 +114,12 @@ Source: "payload\ffmpeg\ffmpeg-release-essentials.zip"; DestDir: "{app}\_bundled
   #endif
 #if WheelPayloadSubdir != ""
 Source: "payload\{#WheelPayloadSubdir}\*"; DestDir: "{app}\_bundled\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+#endif
+#if DrumsepWheelPayloadSubdir != ""
+Source: "payload\{#DrumsepWheelPayloadSubdir}\*"; DestDir: "{app}\_bundled\drumsep-wheels"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+#endif
+#if DrumsepModelPayloadSubdir != ""
+Source: "payload\{#DrumsepModelPayloadSubdir}\*"; DestDir: "{app}\_bundled\drumsep-models"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 #endif
 #if ModelPayloadSubdir != ""
 Source: "payload\{#ModelPayloadSubdir}\*"; DestDir: "{localappdata}\STEMwerk\models"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
@@ -292,6 +300,13 @@ begin
   #if BundleRuntime != "1"
   if WizardIsTaskSelected('cleanup_models') then
     Result := Result + ' -CleanModels';
+  #endif
+  #if BundleRuntime == "1"
+  #if DrumsepWheelPayloadSubdir != ""
+  #if DrumsepModelPayloadSubdir != ""
+  Result := Result + ' -OfflineBundledAllmodels';
+  #endif
+  #endif
   #endif
 end;
 

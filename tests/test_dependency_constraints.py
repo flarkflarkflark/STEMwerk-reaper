@@ -4304,6 +4304,62 @@ def test_windows_bootstrap_has_drumsep_directml_runtime_mode_and_state_fields():
     assert 'Invoke-WebRequest failed for " + $Label + " attempt " + $attempt + ": " + $_.Exception.Message + " url=" + $Url' in script
 
 
+def test_windows_offline_drumsep_payload_builder_and_inno_wiring_present():
+    shell = Path("installer/windows/build_bundled_model_installers.sh").read_text()
+    ps1 = Path("installer/windows/build_bundled_model_installers.ps1").read_text()
+    iss = Path("installer/windows/STEMwerk.iss").read_text()
+    prep = Path("tools/build_windows_drumsep_payload.py").read_text()
+
+    assert 'tools/build_windows_drumsep_payload.py' in shell
+    assert 'STEMWERK_DRUMSEP_WHEEL_PAYLOAD_SUBDIR' in shell
+    assert 'STEMWERK_DRUMSEP_MODEL_PAYLOAD_SUBDIR' in shell
+    assert 'STEMWERK_OFFLINE_BUNDLED_ALLMODELS=1' in shell
+    assert 'drumsep-wheels-nvidia' in shell
+    assert 'drumsep-wheels-directml' in shell
+    assert 'drumsep-wheels-cpu' in shell
+
+    assert '$env:STEMWERK_DRUMSEP_WHEEL_PAYLOAD_SUBDIR' in ps1
+    assert '$env:STEMWERK_DRUMSEP_MODEL_PAYLOAD_SUBDIR' in ps1
+    assert '$env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS = "1"' in ps1
+
+    assert "#define DrumsepWheelPayloadSubdir GetEnv('STEMWERK_DRUMSEP_WHEEL_PAYLOAD_SUBDIR')" in iss
+    assert "#define DrumsepModelPayloadSubdir GetEnv('STEMWERK_DRUMSEP_MODEL_PAYLOAD_SUBDIR')" in iss
+    assert 'DestDir: "{app}\\_bundled\\drumsep-wheels"' in iss
+    assert 'DestDir: "{app}\\_bundled\\drumsep-models"' in iss
+    assert "Result := Result + ' -OfflineBundledAllmodels';" in iss
+
+    assert 'drumsep-wheels-nvidia' in prep
+    assert 'audio-separator==0.34.1' in prep
+    assert 'torchaudio==2.4.1+cu121' in prep
+    assert 'torch-directml==0.2.5.dev240914' in prep
+    assert 'torch==2.12.0' in prep
+
+
+def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+    installer = Path("installer/windows/STEMwerk_Installer_Windows.ps1").read_text()
+
+    assert '$offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")' in script
+    assert '$bundledDrumsepWheelsDir = Join-Path $bundledRuntimeDir "drumsep-wheels"' in script
+    assert '$bundledDrumsepModelsDir = Join-Path $bundledRuntimeDir "drumsep-models"' in script
+    assert 'function HasBundledDrumsepWheels' in script
+    assert 'function InstallWithPipOfflineSources' in script
+    assert 'function InstallBundledDrumsepPackages' in script
+    assert 'InstallWithPipOfflineSources $PythonPath $InstallArgs $Description @($bundledWheelsDir, $bundledDrumsepWheelsDir)' in script
+    assert 'LogProgress "Installing bundled Drum Kit runtime..."' in script
+    assert 'LogProgress "Installing bundled Drum Kit model assets..."' in script
+    assert 'LogProgress "Verifying bundled Drum Kit runtime..."' in script
+    assert 'Offline installer is missing bundled DrumSep wheel payload.' in script
+    assert 'Offline installer is missing bundled DrumSep model assets.' in script
+    assert 'DRUMSEP_OFFLINE_PAYLOAD_STATUS=$script:DrumsepOfflinePayloadStatus' in script
+    assert 'DRUMSEP_OFFLINE_PAYLOAD_SOURCE=$script:DrumsepOfflinePayloadSource' in script
+    assert 'DRUMSEP_MODEL_SOURCE=$script:DrumsepModelSource' in script
+    assert 'DRUMSEP_RUNTIME_WHEEL_SOURCE=$script:DrumsepRuntimeWheelSource' in script
+    assert 'LogProgress "Drum Kit Splitter ready."' in script
+    assert '[switch]$OfflineBundledAllmodels' in installer
+    assert '$env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS = "1"' in installer
+
+
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
