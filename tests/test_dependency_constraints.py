@@ -6015,6 +6015,8 @@ def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_
     assert '$lines | Out-File -FilePath (GetDrumsepDirectmlRuntimeStatePath) -Encoding ascii' in windows_bootstrap
     assert '$lines | Out-File -FilePath (GetDrumsepCudaRuntimeStatePath) -Encoding ascii' in windows_bootstrap
     assert '$resolvedFfmpeg = ResolveWindowsFfmpegPath' in windows_bootstrap
+    assert 'LogStatusDetail "FFmpeg already installed"' in windows_bootstrap
+    assert 'LogProgress "FFMPEG_SOURCE=existing"' in windows_bootstrap
     assert 'LogProgress ("ffmpeg_existing_ok=" + $resolvedFfmpeg)' in windows_bootstrap
     assert 'LogProgress "ffmpeg_download_skipped=existing_ok"' in windows_bootstrap
     assert "ResolveWindowsFfmpegPath -AllowInstall" in windows_bootstrap
@@ -6043,6 +6045,39 @@ def test_windows_bootstrap_prefetch_uses_concrete_demucs_model_ids():
 
     assert 'from stemwerk_core.models import resolve_audio_separator_model_id' in windows_bootstrap
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in windows_bootstrap
+
+
+def test_windows_ffmpeg_status_text_is_context_aware_for_existing_bundled_and_download_paths():
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+    windows_iss = Path("installer/windows/STEMwerk.iss").read_text(encoding="utf-8")
+
+    assert '$script:FfmpegSource = "missing"' in windows_bootstrap
+    assert '$script:FfmpegSource = "bundled"' in windows_bootstrap
+    assert '$script:FfmpegSource = "download"' in windows_bootstrap
+    assert '$script:FfmpegSource = "existing"' in windows_bootstrap
+    assert 'LogStatusDetail "Installing bundled FFmpeg..."' in windows_bootstrap
+    assert 'LogStatusDetail "Extracting bundled FFmpeg..."' in windows_bootstrap
+    assert 'LogStatusDetail "Downloading FFmpeg..."' in windows_bootstrap
+    assert 'LogStatusDetail "Extracting FFmpeg..."' in windows_bootstrap
+    assert 'LogProgress "FFMPEG_SOURCE=bundled"' in windows_bootstrap
+    assert 'LogProgress "FFMPEG_SOURCE=download"' in windows_bootstrap
+    assert 'LogProgress "FFMPEG_SOURCE=existing"' in windows_bootstrap
+    assert 'LogProgress "FFmpeg not found; preparing install"' in windows_bootstrap
+    assert 'LogProgress "FFmpeg not found; downloading and installing"' not in windows_bootstrap
+    assert 'LogProgress ("Bundled FFmpeg archive ready: " + $zipMb + " MB")' in windows_bootstrap
+    assert 'LogProgress ("Downloaded FFmpeg archive: " + $zipMb + " MB")' in windows_bootstrap
+    assert 'LogProgress "Extracting bundled FFmpeg archive (this can take a moment)"' in windows_bootstrap
+    assert 'LogProgress "Extracting FFmpeg archive (this can take a moment)"' in windows_bootstrap
+    assert 'if ($script:FfmpegSource) { $lines += "FFMPEG_SOURCE=$script:FfmpegSource" }' in windows_bootstrap
+
+    assert "Detail = 'Installing bundled FFmpeg...'" in windows_iss
+    assert "Detail = 'Extracting bundled FFmpeg...'" in windows_iss
+    assert "Detail = 'Downloading FFmpeg...'" in windows_iss
+    assert "Detail = 'Extracting FFmpeg...'" in windows_iss
+    assert "Detail = 'FFmpeg already installed'" in windows_iss
+    assert 'RestartIfNeededByRun=no' in windows_iss
+    assert 'english.RunOpenGuide=Open Windows setup guide' in windows_iss
+    assert 'english.RunOpenLog=Open setup log' in windows_iss
 
 
 def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstrap():

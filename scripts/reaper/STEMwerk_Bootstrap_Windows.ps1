@@ -81,6 +81,7 @@ $ffmpegArchiveFileName = "ffmpeg-release-essentials.zip"
 $ffmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegArchiveFileName"
 $bundledPythonInstaller = Join-Path $bundledRuntimeDir ("python\\" + $pythonInstallerFileName)
 $bundledFfmpegZip = Join-Path $bundledRuntimeDir ("ffmpeg\\" + $ffmpegArchiveFileName)
+$script:FfmpegSource = "missing"
 $bundledWheelsDir = Join-Path $bundledRuntimeDir "wheels"
 $bundledCoreDir = Join-Path $scriptRoot "vendor\\stemwerk-core"
 $bundledJuliusDir = Join-Path $scriptRoot "vendor\\julius"
@@ -449,7 +450,10 @@ function InstallPythonDirect {
 function InstallFfmpegDirect {
     $zipPath = Join-Path $RuntimeBase "ffmpeg\\ffmpeg.zip"
     if (Test-Path $bundledFfmpegZip) {
+        $script:FfmpegSource = "bundled"
         try {
+            LogStatusDetail "Installing bundled FFmpeg..."
+            LogProgress "FFMPEG_SOURCE=bundled"
             LogProgress ("Using bundled FFmpeg archive: " + $bundledFfmpegZip)
             Copy-Item -Path $bundledFfmpegZip -Destination $zipPath -Force
         } catch {
@@ -457,7 +461,10 @@ function InstallFfmpegDirect {
             return $null
         }
     } else {
+        $script:FfmpegSource = "download"
         try {
+            LogStatusDetail "Downloading FFmpeg..."
+            LogProgress "FFMPEG_SOURCE=download"
             LogProgress ("Downloading FFmpeg (gyan.dev release): " + $ffmpegArchiveUrl)
             Invoke-WebRequest -Uri $ffmpegArchiveUrl -OutFile $zipPath -UseBasicParsing | Out-Null
         } catch {
@@ -468,10 +475,20 @@ function InstallFfmpegDirect {
     if (Test-Path $zipPath) {
         $zipSize = (Get-Item $zipPath).Length
         $zipMb = [Math]::Round($zipSize / 1MB, 1)
-        LogProgress ("Downloaded FFmpeg archive: " + $zipMb + " MB")
+        if ($script:FfmpegSource -eq "bundled") {
+            LogProgress ("Bundled FFmpeg archive ready: " + $zipMb + " MB")
+        } else {
+            LogProgress ("Downloaded FFmpeg archive: " + $zipMb + " MB")
+        }
     }
     try {
-        LogProgress "Extracting FFmpeg archive (this can take a moment)"
+        if ($script:FfmpegSource -eq "bundled") {
+            LogStatusDetail "Extracting bundled FFmpeg..."
+            LogProgress "Extracting bundled FFmpeg archive (this can take a moment)"
+        } else {
+            LogStatusDetail "Extracting FFmpeg..."
+            LogProgress "Extracting FFmpeg archive (this can take a moment)"
+        }
         Expand-Archive -Path $zipPath -DestinationPath (Join-Path $RuntimeBase "ffmpeg") -Force
     } catch {
         LogLine "FFmpeg extract failed"
@@ -531,7 +548,7 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
     }
 
     if ($AllowInstall) {
-        LogProgress "FFmpeg not found; downloading and installing"
+        LogProgress "FFmpeg not found; preparing install"
         $installedFfmpeg = InstallFfmpegDirect
         if ($installedFfmpeg -and (Test-Path $installedFfmpeg) -and -not (IsFfmpegShim $installedFfmpeg)) {
             return $installedFfmpeg
@@ -2439,6 +2456,9 @@ Step "step_3_ffmpeg" "ffmpeg detection/install"
 LogProgress "Searching for FFmpeg"
 $ffmpeg = ResolveWindowsFfmpegPath
 if ($ffmpeg -and (Test-Path $ffmpeg)) {
+    $script:FfmpegSource = "existing"
+    LogStatusDetail "FFmpeg already installed"
+    LogProgress "FFMPEG_SOURCE=existing"
     LogProgress ("ffmpeg_existing_ok=" + $ffmpeg)
     LogProgress "ffmpeg_download_skipped=existing_ok"
 } else {
@@ -2602,6 +2622,7 @@ if ($backendReason) { $lines += "BACKEND_REASON=$backendReason" }
 if ($python) { $lines += "PYTHON_PATH=$python" }
 if (Test-Path $venvPy) { $lines += "VENV_PYTHON=$venvPy" }
 if ($ffmpeg) { $lines += "FFMPEG_PATH=$ffmpeg" }
+if ($script:FfmpegSource) { $lines += "FFMPEG_SOURCE=$script:FfmpegSource" }
 if ($installerMode) { $lines += "INSTALLER=1" }
 if ($RuntimeBase) { $lines += "RUNTIME_BASE=$RuntimeBase" }
 

@@ -486,6 +486,31 @@ begin
       'Installing Python for the STEMwerk runtime.',
       'Python voor de STEMwerk-runtime wordt geinstalleerd.',
       'Python fuer die STEMwerk-Runtime wird installiert.')
+  else if Detail = 'Installing bundled FFmpeg...' then
+    Result := LText(
+      'Installing bundled FFmpeg...',
+      'Meegeleverde FFmpeg wordt geinstalleerd...',
+      'Gebuendeltes FFmpeg wird installiert...')
+  else if Detail = 'Extracting bundled FFmpeg...' then
+    Result := LText(
+      'Extracting bundled FFmpeg...',
+      'Meegeleverde FFmpeg wordt uitgepakt...',
+      'Gebuendeltes FFmpeg wird entpackt...')
+  else if Detail = 'Downloading FFmpeg...' then
+    Result := LText(
+      'Downloading FFmpeg...',
+      'FFmpeg wordt gedownload...',
+      'FFmpeg wird heruntergeladen...')
+  else if Detail = 'Extracting FFmpeg...' then
+    Result := LText(
+      'Extracting FFmpeg...',
+      'FFmpeg wordt uitgepakt...',
+      'FFmpeg wird entpackt...')
+  else if Detail = 'FFmpeg already installed' then
+    Result := LText(
+      'FFmpeg already installed',
+      'FFmpeg is al geinstalleerd',
+      'FFmpeg ist bereits installiert')
   else if Detail = 'Installing separator runtime packages.' then
     Result := LText(
       'Installing separator runtime packages.',
