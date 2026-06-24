@@ -18481,9 +18481,20 @@ _sep.resolveSchedulerConcurrencyPolicy = function(opts)
     end
 
     if backend == "directml" then
-        policy.sequentialMode = true
-        policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
-        policy.reason = "directml_multi_track"
+        if route == "dks_direct" then
+            policy.sequentialMode = false
+            if opts.longWorkload then
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_LONG_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_direct_directml_long_cap4"
+            else
+                policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_SHORT_MAX_PARALLEL)
+                policy.reason = "scheduler_dks_direct_directml_cap4"
+            end
+        else
+            policy.sequentialMode = true
+            policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL
+            policy.reason = "directml_multi_track"
+        end
         return policy
     end
 

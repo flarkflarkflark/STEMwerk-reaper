@@ -633,6 +633,8 @@ def test_runtime_adaptive_cpu_parallel_policy_present_and_gpu_paths_unchanged():
     assert 'return "cpu_ram_low"' in script
     assert 'return "cpu_ram_unknown"' in script
     assert 'policy.reason = "directml_multi_track"' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_long_cap4"' in script
     assert 'timing:workers_launched count=' in script
     assert ' .. " reason=" .. tostring(multiTrackQueue.executionModeReason or multiTrackQueue.forceSequentialReason or "none")' in script
 
@@ -645,6 +647,8 @@ def test_gpu_scheduler_policy_defaults_to_cap4_for_capable_backends():
     assert "DKS_DIRECT_GPU_LONG_MAX_PARALLEL = 4" in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_long_cap4"' in script
     assert '"scheduler_dks_extract_stage1_normal_gpu_cap4"' in script
     assert '"scheduler_normal_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_dks_direct_windows_cuda_cap2"' in script
@@ -981,6 +985,8 @@ def test_scheduler_policy_route_backend_defaults_are_explicit():
     assert 'schedulerBackend = "cpu"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_cap4"' in script
     assert 'policy.reason = "scheduler_dks_direct_gpu_long_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_long_cap4"' in script
     assert 'policy.reason = "scheduler_dks_direct_windows_cuda_cap2"' in script
     assert 'policy.reason = "scheduler_dks_direct_cpu_cap2"' in script
     assert 'policy.reason = "scheduler_dks_direct_unknown_cap1"' in script
@@ -1009,6 +1015,10 @@ def test_normal_cpu_policy_cap2_slice_keeps_other_backend_caps_unchanged():
     assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_CPU_MAX_PARALLEL)' in script
     assert 'policy.reason = "scheduler_normal_cpu_cap2"' in script
     assert 'if backend == "directml" then' in script
+    assert 'if route == "dks_direct" then' in script
+    assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.DKS_DIRECT_GPU_SHORT_MAX_PARALLEL)' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_cap4"' in script
+    assert 'policy.reason = "scheduler_dks_direct_directml_long_cap4"' in script
     assert 'policy.cap = _sep.SCHEDULER_POLICY.NORMAL_DIRECTML_MAX_PARALLEL' in script
     assert 'if backend == "mps" then' in script
     assert 'policy.cap = math.min(jobCount, _sep.SCHEDULER_POLICY.NORMAL_MPS_MAX_PARALLEL)' in script
