@@ -6055,6 +6055,8 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert "ready_to_go_state_file()" in macos_bootstrap
     assert "ensure_core_model_cache" in macos_bootstrap
     assert "ensure_drumsep_assets" in macos_bootstrap
+    assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' not in macos_bootstrap
+    assert '  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1\nfrom audio_separator.separator import Separator' in macos_bootstrap
     assert 'from stemwerk_core.models import resolve_audio_separator_model_id' in macos_bootstrap
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in macos_bootstrap
     assert 'log "core_model_prefetch_skipped=non_blocking_prefetch_failure"' in macos_bootstrap

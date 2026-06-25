@@ -117,7 +117,7 @@ ensure_core_model_cache() {
       return 0
       ;;
   esac
-  STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 from audio_separator.separator import Separator
 from stemwerk_core.models import resolve_audio_separator_model_id
 
