@@ -2111,6 +2111,7 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "other_network_list_new" in script
     assert "def _ensure_runtime_download_checks_has_drumsep(" in script
     assert "mdx23c_download_list" in script
+    assert "checks_data = {}" in script
     assert "DIRECT_DKS_MODEL_DEAD_CKPT_URL" in script
     assert "DIRECT_DKS_MODEL_MIRROR_CKPT_URL" in script
     assert "def _preferred_direct_dks_asset_url(" in script
@@ -6063,13 +6064,17 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'if detail_path:' in macos_bootstrap
     assert 'from stemwerk_core.models import resolve_audio_separator_model_id' in macos_bootstrap
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in macos_bootstrap
-    assert 'log "core_model_prefetch_skipped=non_blocking_prefetch_failure"' in macos_bootstrap
+    assert 'READY_MAIN_RUNTIME_STATUS="missing"' in macos_bootstrap
+    assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in macos_bootstrap
+    assert 'READY_DETAIL="core_model_download_failed"' in macos_bootstrap
+    assert 'log "core_model_prefetch_failed=core_model_download_failed"' in macos_bootstrap
+    assert 'set_status "deps_failed" "core_model_download_failed"' in macos_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in macos_bootstrap
     assert 'DRUMSEP_PREFETCH_DETAIL="$(cat "${_detail_file}" 2>/dev/null || true)"' in macos_bootstrap
     assert 'log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"' in macos_bootstrap
     assert 'set_status "deps_failed" "drumsep_model_download_failed"' in macos_bootstrap
     assert 'set_status "deps_failed" "drumsep_model_prefetch_failed"' in macos_bootstrap
-    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"' in macos_bootstrap
+    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}"' in macos_bootstrap
 
     assert 'local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"' in setup_internal
     assert 'if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end' in setup_internal

@@ -1283,7 +1283,7 @@ def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_nam
         elif source_checks_path and source_checks_path.exists():
             checks_data = _read_json_file(source_checks_path)
         else:
-            return False, "runtime_download_checks_missing"
+            checks_data = {}
     except Exception as exc:
         return False, f"download_checks_read_failed:{exc}"
 

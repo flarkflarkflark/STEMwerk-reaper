@@ -176,6 +176,7 @@ write_ready_to_go_state() {
   _runtime_status="${2:-missing}"
   _drumsep_model_status="${3:-missing}"
   _detail="${4:-}"
+  _main_runtime_status="${5:-ok}"
   _core="$(verify_core_model_cache)"
   _model_dir="$(printf "%s\n" "${_core}" | awk -F= '/^model_dir=/{print $2; exit}')"
   _fast="$(printf "%s\n" "${_core}" | awk -F= '/^fast=/{print $2; exit}')"
@@ -188,10 +189,14 @@ write_ready_to_go_state() {
   if [ "${_runtime_status}" != "ok" ] && [ "${_runtime_status}" != "skipped" ]; then
     _ready="missing"
   fi
+  if [ "${_main_runtime_status}" != "ok" ]; then
+    _ready="missing"
+  fi
   {
     echo "READY_TO_GO_STATUS=${_ready}"
     echo "READY_TO_GO_DETAIL=${_detail}"
     echo "READY_TO_GO_LAST_CHECK_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
+    echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"
     echo "CORE_MODEL_CACHE_DIR=${_model_dir}"
     echo "CORE_MODEL_FAST_STATUS=${_fast}"
     echo "CORE_MODEL_QUALITY_STATUS=${_quality}"
@@ -1255,13 +1260,19 @@ fi
 READY_RUNTIME_KIND="cpu"
 READY_RUNTIME_STATUS="missing"
 READY_DRUMSEP_MODEL_STATUS="missing"
+READY_MAIN_RUNTIME_STATUS="missing"
 READY_DETAIL="${STATUS_REASON}"
 if [ "${MAC_ARCH}" = "arm64" ]; then
   READY_RUNTIME_KIND="mps"
 fi
+if [ "${STATUS}" = "ok" ] && [ "${FINAL_RUNTIME_VERIFIED:-no}" = "yes" ]; then
+  READY_MAIN_RUNTIME_STATUS="ok"
+fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   if ! ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"; then
-    log "core_model_prefetch_skipped=non_blocking_prefetch_failure"
+    READY_DETAIL="core_model_download_failed"
+    log "core_model_prefetch_failed=core_model_download_failed"
+    set_status "deps_failed" "core_model_download_failed"
   fi
 fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
@@ -1285,7 +1296,7 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     esac
   fi
 fi
-write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"
+write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}"
 
 if [ -n "${STATE_FILE}" ]; then
   write_state
