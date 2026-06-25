@@ -5993,10 +5993,15 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
 
     assert "ensure_core_model_cache" in linux_bootstrap
     assert "ensure_drumsep_assets" in linux_bootstrap
-    assert 'set_status "deps_failed" "core_model_prefetch_failed"' in linux_bootstrap
+    assert 'from stemwerk_core.models import resolve_audio_separator_model_id' in linux_bootstrap
+    assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in linux_bootstrap
+    assert 'CORE_MODEL_PREFETCH_STATUS="skipped"' in linux_bootstrap
+    assert 'log_step "core_model_prefetch_skipped=${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
+    assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in linux_bootstrap
     assert 'set_status "deps_failed" "drumsep_ready_runtime_failed"' in linux_bootstrap
     assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in linux_bootstrap
-    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok"' in linux_bootstrap
+    assert 'echo "CORE_MODEL_PREFETCH_STATUS=${_core_prefetch_status}"' in linux_bootstrap
+    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
 
     assert "ready_to_go_state_file()" in macos_bootstrap
     assert "ensure_core_model_cache" in macos_bootstrap

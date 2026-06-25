@@ -34,6 +34,8 @@ RUNTIME_BASE=""
 STATE_FILE=""
 LOG_FILE=""
 MODE="repair"
+CORE_MODEL_PREFETCH_STATUS="missing"
+CORE_MODEL_PREFETCH_DETAIL=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -127,11 +129,12 @@ ensure_core_model_cache() {
   esac
   "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 from audio_separator.separator import Separator
+from stemwerk_core.models import resolve_audio_separator_model_id
 
 model_dir = r"${_model_dir}"
 for model_name in ("htdemucs", "htdemucs_ft", "htdemucs_6s"):
     sep = Separator(model_file_dir=model_dir, output_dir=".", output_format="wav")
-    sep.load_model(model_name)
+    sep.load_model(resolve_audio_separator_model_id(model_name))
 print("STEMWERK_CORE_MODEL_PREFETCH ok")
 PY
   [ $? -eq 0 ] || return 1
@@ -172,6 +175,8 @@ write_ready_to_go_state() {
   _drumsep_model_status="${3:-missing}"
   _detail="${4:-}"
   _main_runtime_status="${5:-ok}"
+  _core_prefetch_status="${6:-${CORE_MODEL_PREFETCH_STATUS:-missing}}"
+  _core_prefetch_detail="${7:-${CORE_MODEL_PREFETCH_DETAIL:-}}"
   _out_file="$(ready_to_go_output_file)"
   _core="$(verify_core_model_cache)"
   _model_dir="$(printf "%s\n" "${_core}" | awk -F= '/^model_dir=/{print $2; exit}')"
@@ -195,8 +200,13 @@ write_ready_to_go_state() {
       fi
       ;;
   esac
-  if [ "${_fast}" != "ok" ] || [ "${_quality}" != "ok" ] || [ "${_sixstem}" != "ok" ] || [ "${_drumsep_model_status}" != "ok" ]; then
+  if [ "${_drumsep_model_status}" != "ok" ]; then
     if [ "${_ready}" = "ok" ]; then
+      _ready="missing"
+    fi
+  fi
+  if [ "${_fast}" != "ok" ] || [ "${_quality}" != "ok" ] || [ "${_sixstem}" != "ok" ]; then
+    if [ "${_core_prefetch_status}" != "skipped" ] && [ "${_ready}" = "ok" ]; then
       _ready="missing"
     fi
   fi
@@ -209,6 +219,8 @@ write_ready_to_go_state() {
     echo "CORE_MODEL_FAST_STATUS=${_fast}"
     echo "CORE_MODEL_QUALITY_STATUS=${_quality}"
     echo "CORE_MODEL_6STEM_STATUS=${_sixstem}"
+    echo "CORE_MODEL_PREFETCH_STATUS=${_core_prefetch_status}"
+    echo "CORE_MODEL_PREFETCH_DETAIL=${_core_prefetch_detail}"
     echo "DRUMSEP_READY_RUNTIME=${_runtime_kind}"
     echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"
     echo "DRUMSEP_READY_MODEL_STATUS=${_drumsep_model_status}"
@@ -2696,8 +2708,13 @@ READY_RUNTIME_STATUS="missing"
 READY_DRUMSEP_MODEL_STATUS="missing"
 READY_DETAIL="${STATUS_REASON}"
 if [ "${STATUS}" = "ok" ] && [ "${FINAL_OK}" -eq 1 ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
-  if ! ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"; then
-    set_status "deps_failed" "core_model_prefetch_failed"
+  if ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"; then
+    CORE_MODEL_PREFETCH_STATUS="ok"
+    CORE_MODEL_PREFETCH_DETAIL=""
+  else
+    CORE_MODEL_PREFETCH_STATUS="skipped"
+    CORE_MODEL_PREFETCH_DETAIL="non_blocking_prefetch_failure"
+    log_step "core_model_prefetch_skipped=${CORE_MODEL_PREFETCH_DETAIL}"
   fi
 fi
 if [ "${STATUS}" = "ok" ] && [ "${FINAL_OK}" -eq 1 ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
@@ -2724,7 +2741,7 @@ if [ -z "${READY_RUNTIME_STATUS}" ]; then READY_RUNTIME_STATUS="missing"; fi
 if [ -z "${READY_DRUMSEP_MODEL_STATUS}" ]; then READY_DRUMSEP_MODEL_STATUS="missing"; fi
 if [ -z "${READY_DETAIL}" ]; then READY_DETAIL="${STATUS_REASON}"; fi
 READY_STATE_FILE="$(ready_to_go_output_file)"
-write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok"
+write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"
 
 if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then
   log_step "ready_to_go_state_persists_in_state_file=1"
