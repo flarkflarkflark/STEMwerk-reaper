@@ -2142,6 +2142,10 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "DRUMSEP_RUNTIME_ROCM_DIRNAME = \".venv-drumsep-rocm\"" in script
     assert "DRUMSEP_RUNTIME_GUIDANCE = \"Run Setup/Repair Drum Kit Split runtime.\"" in script
     assert "def _drumsep_runtime_python_path(" in script
+    assert "def _main_runtime_python_path(" in script
+    assert "def _macos_ready_drumsep_main_runtime_candidates(" in script
+    assert "DRUMSEP_READY_RUNTIME_STATUS" in script
+    assert "DRUMSEP_READY_MODEL_STATUS" in script
     assert "def _drumsep_rocm_runtime_python_path(" in script
     assert "def _verify_drumsep_runtime(" in script
     assert "def _select_drumsep_runtime(" in script
@@ -3994,6 +3998,8 @@ def test_drumkit_direct_dks_mode_wires_lua_launch_and_failure_mapping():
     assert 'file = "hi-hat.wav"' in main_script
     assert "activateWorkflowStemSet(isDirectDKS)" in main_script
     assert "Run Setup/Repair Drum Kit Split runtime." in main_script
+    assert "Run Setup/Repair to install the Apple MPS Drum Kit Split runtime." in main_script
+    assert 'elseif OS == "Linux" then' in main_script
     assert "error_stage=stage2_model_load" in main_script
     assert "error_reason=drumsep_model_runtime_unsupported" in main_script
     assert "not found in supported model files" in main_script

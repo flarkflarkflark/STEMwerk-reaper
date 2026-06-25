@@ -1692,9 +1692,14 @@ local function buildKnownSeparationFailureMessage(logSnippet, exitCode, cmdLine,
         local headline = reason == "drumsep_runtime_broken"
             and "Drum Kit Split runtime is broken."
             or "Drum Kit Split runtime is not installed."
+        local runtimeGuidance = "Run Setup/Repair Drum Kit Split runtime.\n"
+        if OS == "macOS" then
+            runtimeGuidance = "Run Setup/Repair to install the Apple MPS Drum Kit Split runtime.\n"
+        elseif OS == "Linux" then
+            runtimeGuidance = runtimeGuidance .. "Optional GPU path: Setup/Repair Drum Kit Split ROCm runtime.\n"
+        end
         local msg = headline .. "\n"
-            .. "Run Setup/Repair Drum Kit Split runtime.\n"
-            .. "Optional GPU path: Setup/Repair Drum Kit Split ROCm runtime.\n"
+            .. runtimeGuidance
             .. "Reason: " .. tostring(reason)
             .. (detail ~= "" and ("\nDetail: " .. tostring(detail)) or "")
             .. "\nerror_stage=stage2_runtime\n"

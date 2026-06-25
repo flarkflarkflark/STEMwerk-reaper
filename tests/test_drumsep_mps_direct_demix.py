@@ -336,10 +336,20 @@ def test_wrapper_0230_backend_limit_remains_when_override_is_inactive():
 
 def test_drumsep_runtime_selector_prefers_mps_for_auto_on_apple_silicon(tmp_path, monkeypatch):
     module = _load_audio_process()
-    shared_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    shared_python = tmp_path / ".venv" / "bin" / "python"
     shared_python.parent.mkdir(parents=True, exist_ok=True)
     shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     shared_python.chmod(0o755)
+    (state_dir / "ready_to_go.env").write_text(
+        "READY_TO_GO_STATUS=ok\n"
+        "MAIN_RUNTIME_STATUS=ok\n"
+        "DRUMSEP_READY_RUNTIME=mps\n"
+        "DRUMSEP_READY_RUNTIME_STATUS=ok\n"
+        "DRUMSEP_READY_MODEL_STATUS=ok\n",
+        encoding="utf-8",
+    )
     _set_posix_platform(module, monkeypatch, "darwin", "arm64")
 
     def fake_verify(path, require_gpu=False, require_mps=False, require_directml=False):
@@ -359,10 +369,20 @@ def test_drumsep_runtime_selector_prefers_mps_for_auto_on_apple_silicon(tmp_path
 
 def test_drumsep_runtime_selector_falls_back_to_cpu_direct_demix_when_mps_missing(tmp_path, monkeypatch):
     module = _load_audio_process()
-    shared_python = tmp_path / ".venv-drumsep" / "bin" / "python"
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    shared_python = tmp_path / ".venv" / "bin" / "python"
     shared_python.parent.mkdir(parents=True, exist_ok=True)
     shared_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     shared_python.chmod(0o755)
+    (state_dir / "ready_to_go.env").write_text(
+        "READY_TO_GO_STATUS=ok\n"
+        "MAIN_RUNTIME_STATUS=ok\n"
+        "DRUMSEP_READY_RUNTIME=mps\n"
+        "DRUMSEP_READY_RUNTIME_STATUS=ok\n"
+        "DRUMSEP_READY_MODEL_STATUS=ok\n",
+        encoding="utf-8",
+    )
     _set_posix_platform(module, monkeypatch, "darwin", "arm64")
 
     def fake_verify(path, require_gpu=False, require_mps=False, require_directml=False):

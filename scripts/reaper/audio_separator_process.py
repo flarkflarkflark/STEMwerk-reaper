@@ -1737,6 +1737,14 @@ def _drumsep_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     return runtime_dir / "bin" / "python"
 
 
+def _main_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    runtime_dir = base / ".venv"
+    if os.name == "nt":
+        return runtime_dir / "Scripts" / "python.exe"
+    return runtime_dir / "bin" / "python"
+
+
 def _drumsep_rocm_runtime_python_path(runtime_base: Optional[Path] = None) -> Path:
     base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
     runtime_dir = base / DRUMSEP_RUNTIME_ROCM_DIRNAME
@@ -1789,6 +1797,31 @@ def _drumsep_runtime_state(runtime_base: Optional[Path] = None, kind: str = "cpu
     else:
         state_name = "drumsep_runtime.env"
     return _read_env_file(base / "state" / state_name)
+
+
+def _ready_to_go_state(runtime_base: Optional[Path] = None) -> Dict[str, str]:
+    base = runtime_base or (_runtime_base_candidates()[0] if _runtime_base_candidates() else Path.home() / ".local" / "share" / "STEMwerk")
+    return _read_env_file(base / "state" / "ready_to_go.env")
+
+
+def _macos_ready_drumsep_main_runtime_candidates(runtime_base: Optional[Path] = None) -> List[Path]:
+    if not _is_darwin_arm64():
+        return []
+    ready = _ready_to_go_state(runtime_base)
+    runtime_kind = str(ready.get("DRUMSEP_READY_RUNTIME") or "").strip().lower()
+    runtime_status = str(ready.get("DRUMSEP_READY_RUNTIME_STATUS") or "").strip().lower()
+    model_status = str(ready.get("DRUMSEP_READY_MODEL_STATUS") or "").strip().lower()
+    main_status = str(ready.get("MAIN_RUNTIME_STATUS") or "").strip().lower()
+    ready_status = str(ready.get("READY_TO_GO_STATUS") or "").strip().lower()
+    if (
+        runtime_kind in {"mps", "cpu"}
+        and runtime_status == "ok"
+        and model_status == "ok"
+        and main_status == "ok"
+        and ready_status == "ok"
+    ):
+        return [_main_runtime_python_path(runtime_base)]
+    return []
 
 
 def _drumsep_state_python_candidates(state: Dict[str, str], fallback: Path) -> List[Path]:
@@ -2036,6 +2069,9 @@ def _select_drumsep_runtime(
     )
     rocm_candidates = _drumsep_state_python_candidates(rocm_state, _drumsep_rocm_runtime_python_path(runtime_base))
     cpu_candidates = _drumsep_state_python_candidates(cpu_state, _drumsep_runtime_python_path(runtime_base))
+    macos_ready_candidates = _macos_ready_drumsep_main_runtime_candidates(runtime_base)
+    if macos_ready_candidates:
+        cpu_candidates = list(macos_ready_candidates)
     cuda_python = cuda_candidates[0]
     directml_python = directml_candidates[0]
     rocm_python = rocm_candidates[0]
