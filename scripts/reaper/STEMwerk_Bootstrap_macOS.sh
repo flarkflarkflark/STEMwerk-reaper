@@ -141,7 +141,7 @@ ensure_drumsep_assets() {
   [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
   mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
   _detail_file="$(mktemp "${TMPDIR:-/tmp}/stemwerk-drumsep-prefetch.XXXXXX")" || return 1
-  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+  STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
 import os
 from pathlib import Path
@@ -155,7 +155,9 @@ ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
     module.DIRECT_DKS_MODEL_ALIAS,
     Path(r"${_model_dir}"),
 )
-Path(os.environ["STEMWERK_DRUMSEP_DETAIL_FILE"]).write_text(str(detail or ""), encoding="utf-8")
+detail_path = os.environ.get("STEMWERK_DRUMSEP_DETAIL_FILE", "").strip()
+if detail_path:
+    Path(detail_path).write_text(str(detail or ""), encoding="utf-8")
 if not ok:
     raise SystemExit(str(detail or "drumsep_prefetch_failed"))
 print("STEMWERK_DRUMSEP_MODEL_PREFETCH ok")
