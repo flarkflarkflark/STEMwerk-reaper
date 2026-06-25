@@ -3453,6 +3453,55 @@ def test_direct_dks_preflight_rewrites_dead_ckpt_url_and_downloads_assets(tmp_pa
     assert persisted_sources[yaml_name] == yaml_url
 
 
+def test_direct_dks_preflight_uses_builtin_catalog_fallback_when_download_checks_are_missing(tmp_path, monkeypatch):
+    module = _load_audio_separator_process_module()
+    model_cache_dir = tmp_path / "fresh model cache"
+    monkeypatch.setattr(module, "_find_repo_download_checks_path", lambda: None)
+
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def read(self) -> bytes:
+            return self.payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    payloads = {
+        module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL: b"fresh-ckpt-bytes",
+        module.DIRECT_DKS_MODEL_YAML_URL: b"audio:\n  dim_f: 1024\nmodel:\n  act: gelu\ntraining:\n  instruments:\n    - Kick\n",
+    }
+
+    def fake_urlopen(url, timeout=120):
+        requests.append((str(url), timeout))
+        return FakeResponse(payloads[str(url)])
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    ok, requested_model, resolved_model, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        model_cache_dir,
+    )
+
+    assert ok is True
+    assert requested_model == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved_model == module.DIRECT_DKS_MODEL_FILENAME
+    assert detail is None
+    assert [url for url, _timeout in requests] == [module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL, module.DIRECT_DKS_MODEL_YAML_URL]
+    runtime_checks = json.loads((model_cache_dir / "download_checks.json").read_text(encoding="utf-8"))
+    written_entry = runtime_checks["mdx23c_download_list"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
+    assert written_entry == {module.DIRECT_DKS_MODEL_FILENAME: module.DIRECT_DKS_MODEL_YAML}
+    persisted_sources = runtime_checks["other_network_list_new"][module.DIRECT_DKS_MODEL_ENTRY_NAME]
+    assert persisted_sources[module.DIRECT_DKS_MODEL_FILENAME] == module.DIRECT_DKS_MODEL_MIRROR_CKPT_URL
+    assert persisted_sources[module.DIRECT_DKS_MODEL_YAML] == module.DIRECT_DKS_MODEL_YAML_URL
+
+
 def test_direct_dks_preflight_skips_download_when_assets_already_exist(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     model_cache_dir = tmp_path / "model cache with spaces"
@@ -6010,6 +6059,9 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in macos_bootstrap
     assert 'log "core_model_prefetch_skipped=non_blocking_prefetch_failure"' in macos_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in macos_bootstrap
+    assert 'DRUMSEP_PREFETCH_DETAIL="$(cat "${_detail_file}" 2>/dev/null || true)"' in macos_bootstrap
+    assert 'log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"' in macos_bootstrap
+    assert 'set_status "deps_failed" "drumsep_model_download_failed"' in macos_bootstrap
     assert 'set_status "deps_failed" "drumsep_model_prefetch_failed"' in macos_bootstrap
     assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"' in macos_bootstrap
 

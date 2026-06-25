@@ -117,7 +117,7 @@ ensure_core_model_cache() {
       return 0
       ;;
   esac
-  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+  STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 from audio_separator.separator import Separator
 from stemwerk_core.models import resolve_audio_separator_model_id
 
@@ -140,8 +140,10 @@ ensure_drumsep_assets() {
   _model_dir="${2:-$(model_cache_dir)}"
   [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
   mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  _detail_file="$(mktemp "${TMPDIR:-/tmp}/stemwerk-drumsep-prefetch.XXXXXX")" || return 1
   "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
+import os
 from pathlib import Path
 
 script_path = Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"
@@ -153,10 +155,18 @@ ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
     module.DIRECT_DKS_MODEL_ALIAS,
     Path(r"${_model_dir}"),
 )
+Path(os.environ["STEMWERK_DRUMSEP_DETAIL_FILE"]).write_text(str(detail or ""), encoding="utf-8")
 if not ok:
     raise SystemExit(str(detail or "drumsep_prefetch_failed"))
 print("STEMWERK_DRUMSEP_MODEL_PREFETCH ok")
 PY
+  _rc=$?
+  DRUMSEP_PREFETCH_DETAIL=""
+  if [ -f "${_detail_file}" ]; then
+    DRUMSEP_PREFETCH_DETAIL="$(cat "${_detail_file}" 2>/dev/null || true)"
+  fi
+  rm -f "${_detail_file}" 2>/dev/null || true
+  [ "${_rc}" -eq 0 ]
 }
 
 write_ready_to_go_state() {
@@ -1258,10 +1268,19 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     READY_DRUMSEP_MODEL_STATUS="ok"
     READY_DETAIL="ok"
   else
+    log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"
     READY_RUNTIME_STATUS="missing"
     READY_DRUMSEP_MODEL_STATUS="missing"
-    READY_DETAIL="drumsep_model_prefetch_failed"
-    set_status "deps_failed" "drumsep_model_prefetch_failed"
+    case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+      asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
+        READY_DETAIL="drumsep_model_download_failed"
+        set_status "deps_failed" "drumsep_model_download_failed"
+        ;;
+      *)
+        READY_DETAIL="drumsep_model_prefetch_failed"
+        set_status "deps_failed" "drumsep_model_prefetch_failed"
+        ;;
+    esac
   fi
 fi
 write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}"

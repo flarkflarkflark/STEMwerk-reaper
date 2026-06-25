@@ -42,6 +42,7 @@ MPS_SEGMENT_POLICY = "universal_safe_segment_2"
 DRUMSEP_RUNTIME_LIMIT_REASON = "audio_separator_mdxc_runtime_primary_secondary_only"
 DIRECT_DKS_MODEL_ALIAS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 DIRECT_DKS_MODEL_FILENAME = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+DIRECT_DKS_MODEL_YAML = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 DIRECT_DKS_MODEL_ENTRY_NAME = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 DIRECT_DKS_MODEL_DEAD_CKPT_URL = (
     "https://github.com/jarredou/models/releases/download/"
@@ -52,6 +53,11 @@ DIRECT_DKS_MODEL_MIRROR_CKPT_URL = (
     "https://huggingface.co/Sucial/MSST-WebUI/resolve/main/"
     "All_Models/multi_stem_models/"
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+)
+DIRECT_DKS_MODEL_YAML_URL = (
+    "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+    "mdx_model_data/mdx_c_configs/"
+    "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 )
 DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"
 DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"
@@ -1219,6 +1225,13 @@ def _runtime_download_checks_path(model_cache_dir: Path) -> Path:
     return model_cache_dir / "download_checks.json"
 
 
+def _builtin_direct_dks_asset_map() -> Dict[str, str]:
+    return {
+        DIRECT_DKS_MODEL_FILENAME: DIRECT_DKS_MODEL_MIRROR_CKPT_URL,
+        DIRECT_DKS_MODEL_YAML: DIRECT_DKS_MODEL_YAML_URL,
+    }
+
+
 def _resolve_direct_dks_model_catalog_entry(requested_model: str, model_cache_dir: Path) -> Tuple[str, Dict[str, str], Optional[Path], List[str], str]:
     requested = str(requested_model or "").strip()
     if requested and requested != DIRECT_DKS_MODEL_ALIAS and requested != DIRECT_DKS_MODEL_FILENAME:
@@ -1257,7 +1270,8 @@ def _resolve_direct_dks_model_catalog_entry(requested_model: str, model_cache_di
             return resolved_default, {}, path, checked_paths, "catalog_entry_empty"
         return resolved_default, normalized, path, checked_paths, "ok"
 
-    return resolved_default, {}, None, checked_paths, "catalog_entry_missing"
+    fallback_assets = _builtin_direct_dks_asset_map()
+    return resolved_default, fallback_assets, None, checked_paths, "builtin_fallback"
 
 
 def _ensure_runtime_download_checks_has_drumsep(model_cache_dir: Path, entry_name: str, entry_payload: Dict[str, str], source_checks_path: Optional[Path]) -> Tuple[bool, str]:
