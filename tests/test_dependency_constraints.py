@@ -357,6 +357,9 @@ def test_macos_setup_internal_reports_torch_drift_repair_guidance():
     assert "torch_too_new_for_demucs" in script
     assert "torch_pin_repair_failed" in script
     assert "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in script
+    assert 'elseif lower == "core_model_download_failed" then' in script
+    assert "Core model download/cache failed during setup. Check network, FFmpeg, and model cache permissions." in script
+    assert 'if trim(state.STATUS_REASON or "") ~= "core_model_download_failed" and (hasError("torch_too_new_for_demucs") or hasError("torch_runtime_unsupported")) then' in script
 
 
 def test_setup_internal_postbootstrap_helpers_are_locally_bound():
@@ -6058,7 +6061,9 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert "ensure_drumsep_assets" in macos_bootstrap
     core_section = macos_bootstrap.split("ensure_drumsep_assets()", 1)[0]
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' not in core_section
-    assert '  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1\nfrom audio_separator.separator import Separator' in macos_bootstrap
+    assert 'core_model_prefetch_ffmpeg_path=${_prefetch_ffmpeg_path}' in macos_bootstrap
+    assert 'core_model_prefetch_path_prefix=${_prefetch_ffmpeg_dir}' in macos_bootstrap
+    assert 'PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
     assert 'STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1' in macos_bootstrap
     assert 'detail_path = os.environ.get("STEMWERK_DRUMSEP_DETAIL_FILE", "").strip()' in macos_bootstrap
     assert 'if detail_path:' in macos_bootstrap

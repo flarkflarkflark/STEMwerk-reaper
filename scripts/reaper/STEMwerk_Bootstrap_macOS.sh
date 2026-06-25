@@ -117,7 +117,19 @@ ensure_core_model_cache() {
       return 0
       ;;
   esac
-  "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
+  _prefetch_path="${PATH:-}"
+  _prefetch_ffmpeg_path="${FFMPEG:-}"
+  if [ -n "${_prefetch_ffmpeg_path}" ] && [ -x "${_prefetch_ffmpeg_path}" ]; then
+    _prefetch_ffmpeg_dir="$(CDPATH= cd -- "$(dirname "${_prefetch_ffmpeg_path}")" 2>/dev/null && pwd -P || dirname "${_prefetch_ffmpeg_path}")"
+    _prefetch_path="${_prefetch_ffmpeg_dir}:${_prefetch_path}"
+    log "core_model_prefetch_ffmpeg_path=${_prefetch_ffmpeg_path}"
+    log "core_model_prefetch_path_prefix=${_prefetch_ffmpeg_dir}"
+  else
+    _prefetch_ffmpeg_path=""
+    log "core_model_prefetch_ffmpeg_path=missing"
+    log "core_model_prefetch_path_prefix=none"
+  fi
+  PATH="${_prefetch_path}" FFMPEG_PATH="${_prefetch_ffmpeg_path}" STEMWERK_FFMPEG_PATH="${_prefetch_ffmpeg_path}" IMAGEIO_FFMPEG_EXE="${_prefetch_ffmpeg_path}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 from audio_separator.separator import Separator
 from stemwerk_core.models import resolve_audio_separator_model_id
 

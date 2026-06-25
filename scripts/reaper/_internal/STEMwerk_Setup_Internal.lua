@@ -711,6 +711,8 @@ local function prettySetupReason(reason)
             part = "audio-separator runtime verification failed"
         elseif lower == "audio_separator_missing_after_setup" then
             part = "audio-separator is missing after setup"
+        elseif lower == "core_model_download_failed" then
+            part = "Core model download/cache failed during setup. Check network, FFmpeg, and model cache permissions."
         elseif lower == "torch_pin_repair_failed" then
             part = "macOS Torch pin repair failed; run Rebuild venv/Repair to install the pinned torch stack"
         elseif lower == "torch_pin_assert_failed" then
@@ -2951,7 +2953,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             finalMessage[#finalMessage + 1] = "System Python is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild."
         end
     end
-    if hasError("torch_too_new_for_demucs") or hasError("torch_runtime_unsupported") then
+    if trim(state.STATUS_REASON or "") ~= "core_model_download_failed" and (hasError("torch_too_new_for_demucs") or hasError("torch_runtime_unsupported")) then
         local torchVersion = trim(verification.torchVersion or "")
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Unsupported Torch runtime detected: torch "
