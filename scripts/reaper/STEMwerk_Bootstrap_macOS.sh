@@ -119,11 +119,12 @@ ensure_core_model_cache() {
   esac
   "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 from audio_separator.separator import Separator
+from stemwerk_core.models import resolve_audio_separator_model_id
 
 model_dir = r"${_model_dir}"
 for model_name in ("htdemucs", "htdemucs_ft", "htdemucs_6s"):
     sep = Separator(model_file_dir=model_dir, output_dir=".", output_format="wav")
-    sep.load_model(model_name)
+    sep.load_model(resolve_audio_separator_model_id(model_name))
 print("STEMWERK_CORE_MODEL_PREFETCH ok")
 PY
   [ $? -eq 0 ] || return 1
@@ -1248,7 +1249,7 @@ if [ "${MAC_ARCH}" = "arm64" ]; then
 fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   if ! ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"; then
-    set_status "deps_failed" "core_model_prefetch_failed"
+    log "core_model_prefetch_skipped=non_blocking_prefetch_failure"
   fi
 fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
