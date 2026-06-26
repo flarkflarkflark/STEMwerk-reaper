@@ -4482,9 +4482,11 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert "BOOTSTRAP_REQUIREMENTS = (" in script
     assert "TORCH_REQUIREMENTS = (" in script
     assert "TARGET_PLATFORM_ARGS = [" in script
+    assert "TORCH_PLATFORM_ARGS = [" in script
     assert '"--only-binary=:all:"' in script
     assert '"manylinux2014_x86_64"' in script
     assert '"manylinux_2_28_x86_64"' in script
+    assert '"linux_x86_64"' in script
     assert '"--python-version"' in script
     assert '"312"' in script
     assert '"--abi"' in script
@@ -4495,6 +4497,8 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert 'def requirement_name(requirement: str) -> str:' in script
     assert 'def uses_torch_index(requirement: str) -> bool:' in script
     assert 'return requirement_name(requirement) in TORCH_REQUIREMENTS' in script
+    assert 'if uses_torch_index(requirement):' in script
+    assert 'cmd += TORCH_PLATFORM_ARGS' in script
     assert 'if spec.index_url and uses_torch_index(requirement):' in script
     assert '*TARGET_PLATFORM_ARGS' in script
 
@@ -4512,6 +4516,8 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"onnxruntime"' not in torch_requirements_block
     assert '"samplerate"' not in torch_requirements_block
     assert '"onnxruntime"' in main_cpu_block
+    assert '"torch==2.5.1"' in main_cpu_block
+    assert '"torch==2.5.1+cpu"' not in main_cpu_block
 
     assert '"linux-x86_64-cp312"' in payload_builder
 

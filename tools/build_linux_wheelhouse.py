@@ -53,6 +53,11 @@ TARGET_PLATFORM_ARGS = [
     "cp312",
 ]
 
+TORCH_PLATFORM_ARGS = [
+    "--platform",
+    "linux_x86_64",
+]
+
 
 @dataclass(frozen=True)
 class WheelhouseSpec:
@@ -164,6 +169,8 @@ def uses_torch_index(requirement: str) -> bool:
 
 def run_pip_download(requirement: str, out_dir: Path, spec: WheelhouseSpec) -> None:
     cmd = [sys.executable, "-m", "pip", "download", "--dest", str(out_dir), "--no-deps", *TARGET_PLATFORM_ARGS]
+    if uses_torch_index(requirement):
+        cmd += TORCH_PLATFORM_ARGS
     if spec.index_url and uses_torch_index(requirement):
         cmd += ["--index-url", spec.index_url]
     if spec.extra_index_url and uses_torch_index(requirement):
