@@ -4556,6 +4556,43 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
     assert 'rsync -a --delete "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
     assert 'cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF' in script
     assert 'payload_status=missing' in script
+
+
+def test_macos_payload_builder_declares_expected_layout_and_manifest():
+    script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
+
+    assert '"platform": "macos-apple-silicon"' in script
+    assert '"runtime_policy": "mps_preferred_cpu_fallback"' in script
+    assert 'output_dir / "ffmpeg"' in script
+    assert 'output_dir / "wheels"' in script
+    assert 'output_dir / "models"' in script
+    assert 'output_dir / "drumsep"' in script
+    assert '(output_dir / "manifest.json").write_text' in script
+
+
+def test_macos_payload_builder_uses_apple_silicon_cp312_wheel_downloads():
+    script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
+
+    assert '"macosx_11_0_arm64"' in script
+    assert '"312"' in script
+    assert '"cp312"' in script
+    assert '"audio-separator==0.23.0"' in script
+    assert '"torch==2.5.1"' in script
+    assert '"torchaudio==2.5.1"' in script
+    assert '"onnxruntime-silicon"' in script
+    assert 'subprocess.run(cmd, check=True)' in script
+
+
+def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
+    script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
+
+    assert 'default="/opt/homebrew/bin/ffmpeg"' in script
+    assert 'default="/opt/homebrew/bin/ffprobe"' in script
+    assert 'Library" / "Application Support" / "STEMwerk" / "models"' in script
+    assert 'Missing required {label}' in script
+    assert '"ffmpeg binary"' in script
+    assert '"core model payload file"' in script
+    assert '"drumsep payload file"' in script
     assert Path("installer/linux/payload/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl").is_file()
 
 
