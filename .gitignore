@@ -27,6 +27,7 @@ installer/windows/payload/
 installer/macos/dist/
 installer/macos/build/
 installers/
+scripts/reaper/_bundled/
 scripts/reaper/__pycache__/
 scripts/reaper/vendor/stemwerk-core/build/
 scripts/reaper/vendor/stemwerk-core/src/*.egg-info/
