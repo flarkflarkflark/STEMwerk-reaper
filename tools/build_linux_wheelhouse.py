@@ -22,6 +22,12 @@ BOOTSTRAP_REQUIREMENTS = (
     "wheel",
 )
 
+TORCH_REQUIREMENTS = (
+    "torch",
+    "torchaudio",
+    "torchvision",
+)
+
 TARGET_ENV = {
     "sys_platform": "linux",
     "platform_system": "Linux",
@@ -146,11 +152,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def requirement_name(requirement: str) -> str:
+    return canonicalize_name(Requirement(requirement).name)
+
+
+def uses_torch_index(requirement: str) -> bool:
+    return requirement_name(requirement) in TORCH_REQUIREMENTS
+
+
 def run_pip_download(requirement: str, out_dir: Path, spec: WheelhouseSpec) -> None:
     cmd = [sys.executable, "-m", "pip", "download", "--dest", str(out_dir), "--no-deps", *PLATFORM_ARGS]
-    if spec.index_url:
+    if spec.index_url and uses_torch_index(requirement):
         cmd += ["--index-url", spec.index_url]
-    if spec.extra_index_url:
+    if spec.extra_index_url and uses_torch_index(requirement):
         cmd += ["--extra-index-url", spec.extra_index_url]
     cmd.append(requirement)
     subprocess.run(cmd, check=True)
@@ -218,8 +232,7 @@ def main() -> int:
         if requirement in seen_specs:
             continue
         seen_specs.add(requirement)
-        req_obj = Requirement(requirement)
-        name_key = canonicalize_name(req_obj.name)
+        name_key = requirement_name(requirement)
         if name_key in resolved_names:
             continue
 

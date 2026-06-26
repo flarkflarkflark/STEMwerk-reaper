@@ -1770,7 +1770,7 @@ def test_linux_managed_flow_installs_audio_separator_runtime_deps_after_torch():
     assert '"numba==${PINNED_NUMBA_VERSION}"' in script
     assert 'log_stage "Checking/installing audio_separator"' in script
     assert 'Installing audio-separator 0.23.0 with constraints (torch pinned)' in script
-    assert '"${VENV_PY}" -m pip install --no-deps "${PACKAGE}"' in script
+    assert 'pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"' in script
     assert script.index('install_linux_torch_stack "cpu"') < script.index('log_stage "Checking/installing audio_separator"')
     assert script.index('log_stage "Checking/installing audio_separator"') < script.index("Final verification")
 
@@ -1877,7 +1877,7 @@ def test_linux_genuine_no_python_case_still_uses_python_missing():
 def test_linux_no_deps_audio_separator_fallback_requires_runtime_deps():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
-    assert '"${VENV_PY}" -m pip install --no-deps "${PACKAGE}"' in script
+    assert 'pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"' in script
     assert "verify_audio_separator_runtime_deps || audio_install_rc=1" in script
     assert 'log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"' in script
     assert 'audio_repair_attempted=1' in script
@@ -1887,7 +1887,7 @@ def test_linux_no_deps_audio_separator_fallback_requires_runtime_deps():
     assert "AUDIO_SEPARATOR_DEPS_COMPLETE=\"no\"" in script
     assert "BACKEND_DEPS_COMPLETE=\"no\"" in script
     assert "audio_separator_dep_import_failed:" in script
-    assert script.index('"${VENV_PY}" -m pip install --no-deps "${PACKAGE}"') < script.index("verify_audio_separator_runtime_deps || audio_install_rc=1")
+    assert script.index('pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"') < script.index("verify_audio_separator_runtime_deps || audio_install_rc=1")
     assert "Skipping torch pin repair and ONNX install after audio-separator dependency failure" in script
     assert 'if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then' in script
     assert script.index('set_status "deps_failed" "audio_separator_install_failed"') < script.index('if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then')
@@ -4479,15 +4479,28 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     script = Path("tools/build_linux_wheelhouse.py").read_text()
 
     assert "BOOTSTRAP_REQUIREMENTS = (" in script
+    assert "TORCH_REQUIREMENTS = (" in script
     assert 'def run_bootstrap_downloads(out_dir: Path) -> None:' in script
     assert 'run_bootstrap_downloads(out_dir)' in script
     assert 'for requirement in BOOTSTRAP_REQUIREMENTS:' in script
-    assert '["--index-url", spec.index_url]' in script
+    assert 'def requirement_name(requirement: str) -> str:' in script
+    assert 'def uses_torch_index(requirement: str) -> bool:' in script
+    assert 'return requirement_name(requirement) in TORCH_REQUIREMENTS' in script
+    assert 'if spec.index_url and uses_torch_index(requirement):' in script
 
     main_cpu_block = script.split('("main", "cpu"): WheelhouseSpec(', 1)[1].split('),', 1)[0]
     assert '"pip"' not in main_cpu_block
     assert '"setuptools"' not in main_cpu_block
     assert '"wheel"' not in main_cpu_block
+    assert '"audio-separator==0.23.0"' in main_cpu_block
+
+    torch_requirements_block = script.split("TORCH_REQUIREMENTS = (", 1)[1].split(")", 1)[0]
+    assert '"torch"' in torch_requirements_block
+    assert '"torchaudio"' in torch_requirements_block
+    assert '"torchvision"' in torch_requirements_block
+    assert '"audio-separator"' not in torch_requirements_block
+    assert '"onnxruntime"' not in torch_requirements_block
+    assert '"samplerate"' not in torch_requirements_block
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
