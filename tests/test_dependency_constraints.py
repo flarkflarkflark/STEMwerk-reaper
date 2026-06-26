@@ -4567,20 +4567,26 @@ def test_macos_payload_builder_declares_expected_layout_and_manifest():
     assert 'output_dir / "wheels"' in script
     assert 'output_dir / "models"' in script
     assert 'output_dir / "drumsep"' in script
+    assert 'ensure_wheelhouse_complete(output_dir / "wheels")' in script
     assert '(output_dir / "manifest.json").write_text' in script
 
 
-def test_macos_payload_builder_uses_apple_silicon_cp312_wheel_downloads():
+def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
 
-    assert '"macosx_11_0_arm64"' in script
-    assert '"312"' in script
-    assert '"cp312"' in script
+    assert 'Path("/opt/homebrew/bin/python3.12")' in script
+    assert 'Path("/usr/local/bin/python3.12")' in script
+    assert 'if version == (3, 12):' in script
+    assert 'raise RuntimeError("Missing native Python 3.12 interpreter for macOS Apple Silicon payload wheel downloads")' in script
     assert '"audio-separator==0.23.0"' in script
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
     assert '"onnxruntime-silicon"' in script
-    assert 'subprocess.run(cmd, check=True)' in script
+    assert '"--only-binary=:all:"' in script
+    assert '"--find-links"' in script
+    assert '"--platform"' not in script
+    assert '"--abi"' not in script
+    assert 'subprocess.run(cmd, check=True, env=command_env())' in script
     assert 'DIFFQ_REQUIREMENT = "diffq==0.2.4"' in script
     assert 'ensure_diffq_wheel(output_dir / "wheels")' in script
 
@@ -4595,6 +4601,8 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert '"ffmpeg binary"' in script
     assert '"core model payload file"' in script
     assert '"drumsep payload file"' in script
+    assert 'Incomplete wheelhouse for offline Apple Silicon payload' in script
+    assert 'REQUIRED_WHEEL_PREFIXES = (' in script
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -49,17 +50,19 @@ MAIN_REQUIREMENTS = (
 
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
 
-TARGET_PLATFORM_ARGS = [
-    "--only-binary=:all:",
-    "--platform",
-    "macosx_11_0_arm64",
-    "--python-version",
-    "312",
-    "--implementation",
-    "cp",
-    "--abi",
-    "cp312",
-]
+REQUIRED_WHEEL_PREFIXES = (
+    "audio_separator-",
+    "diffq-",
+    "llvmlite-",
+    "numba-",
+    "numpy-",
+    "onnxruntime-",
+    "onnxruntime_silicon-",
+    "scipy-",
+    "torch-",
+    "torchaudio-",
+    "torchvision-",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -106,42 +109,75 @@ def copy_ffmpeg(ffmpeg_path: Path, ffprobe_path: Path, dest_root: Path) -> None:
     shutil.copy2(ffprobe_path, dest_root / "ffprobe")
 
 
-def run_pip_download(requirements: tuple[str, ...], wheels_dir: Path, constraints_file: Path) -> None:
+def command_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+    return env
+
+
+def python_version(python_executable: str) -> tuple[int, int]:
+    cmd = [
+        python_executable,
+        "-c",
+        "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')",
+    ]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True, env=command_env())
+    major, minor = result.stdout.strip().split(".", 1)
+    return int(major), int(minor)
+
+
+def payload_python() -> str:
+    candidates = (
+        Path.home() / "Library" / "Application Support" / "STEMwerk" / ".venv" / "bin" / "python",
+        Path("/opt/homebrew/bin/python3.12"),
+        Path("/usr/local/bin/python3.12"),
+        Path(sys.executable),
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        version = python_version(str(candidate))
+        if version == (3, 12):
+            return str(candidate)
+    raise RuntimeError("Missing native Python 3.12 interpreter for macOS Apple Silicon payload wheel downloads")
+
+
+def run_pip_download(requirements: tuple[str, ...], wheels_dir: Path, constraints_file: Path, python_executable: str) -> None:
     wheels_dir.mkdir(parents=True, exist_ok=True)
     for requirement in requirements:
         cmd = [
-            sys.executable,
+            python_executable,
             "-m",
             "pip",
             "download",
             "--dest",
             str(wheels_dir),
-            *TARGET_PLATFORM_ARGS,
+            "--only-binary=:all:",
             "--find-links",
             str(wheels_dir),
         ]
         if constraints_file.is_file() and requirement not in BOOTSTRAP_REQUIREMENTS:
             cmd += ["-c", str(constraints_file)]
         cmd.append(requirement)
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=command_env())
 
 
 def wheel_builder_python() -> str:
-    candidates = (
-        Path.home() / "Library" / "Application Support" / "STEMwerk" / ".venv" / "bin" / "python",
-        Path(sys.executable),
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    return sys.executable
+    return payload_python()
 
 
 def ensure_diffq_wheel(wheels_dir: Path) -> None:
     if any(wheels_dir.glob("diffq-*.whl")):
         return
     cmd = [wheel_builder_python(), "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheels_dir), DIFFQ_REQUIREMENT]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=command_env())
+
+
+def ensure_wheelhouse_complete(wheels_dir: Path) -> None:
+    missing = [prefix for prefix in REQUIRED_WHEEL_PREFIXES if not any(wheels_dir.glob(f"{prefix}*.whl"))]
+    if missing:
+        missing_list = ", ".join(missing)
+        raise RuntimeError(f"Incomplete wheelhouse for offline Apple Silicon payload: missing {missing_list}")
 
 
 def write_manifest(output_dir: Path, version: str) -> None:
@@ -167,14 +203,16 @@ def main() -> int:
     ffmpeg_path = Path(args.ffmpeg).expanduser().resolve()
     ffprobe_path = Path(args.ffprobe).expanduser().resolve()
     constraints_file = (repo_root / args.constraints).resolve()
+    python_executable = payload_python()
 
     reset_dir(output_dir)
     copy_ffmpeg(ffmpeg_path, ffprobe_path, output_dir / "ffmpeg")
     try:
-        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file)
+        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file, python_executable)
     except subprocess.CalledProcessError:
         ensure_diffq_wheel(output_dir / "wheels")
-        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file)
+        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file, python_executable)
+    ensure_wheelhouse_complete(output_dir / "wheels")
     copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
     copy_files(model_cache, output_dir / "drumsep", DRUMSEP_FILES, "drumsep payload file")
     write_manifest(output_dir, args.version)
