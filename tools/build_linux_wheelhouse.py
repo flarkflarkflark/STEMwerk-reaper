@@ -224,6 +224,27 @@ def copy_extra_wheels(dest_dir: Path, wheel_dirs: Iterable[str]) -> None:
             shutil.copy2(wheel, dest_dir / wheel.name)
 
 
+def wheel_distribution_name(wheel_path: Path) -> Optional[str]:
+    with zipfile.ZipFile(wheel_path, "r") as zf:
+        metadata_name = next((name for name in zf.namelist() if name.endswith(".dist-info/METADATA")), None)
+        if not metadata_name:
+            return None
+        data = zf.read(metadata_name).decode("utf-8", errors="ignore")
+    for line in data.splitlines():
+        if line.startswith("Name:"):
+            return canonicalize_name(line.split(":", 1)[1].strip())
+    return None
+
+
+def preloaded_wheel_names(out_dir: Path) -> Dict[str, str]:
+    names: Dict[str, str] = {}
+    for wheel_path in sorted(out_dir.glob("*.whl")):
+        dist_name = wheel_distribution_name(wheel_path)
+        if dist_name:
+            names.setdefault(dist_name, wheel_path.name)
+    return names
+
+
 def main() -> int:
     args = parse_args()
     spec = SPECS[(args.runtime, args.backend)]
@@ -234,7 +255,7 @@ def main() -> int:
 
     queue: List[str] = list(spec.requirements)
     seen_specs: Set[str] = set()
-    resolved_names: Dict[str, str] = {}
+    resolved_names: Dict[str, str] = preloaded_wheel_names(out_dir)
 
     while queue:
         requirement = queue.pop(0)

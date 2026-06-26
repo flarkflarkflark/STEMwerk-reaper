@@ -4496,11 +4496,14 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert 'for requirement in BOOTSTRAP_REQUIREMENTS:' in script
     assert 'def requirement_name(requirement: str) -> str:' in script
     assert 'def uses_torch_index(requirement: str) -> bool:' in script
+    assert 'def wheel_distribution_name(wheel_path: Path) -> Optional[str]:' in script
+    assert 'def preloaded_wheel_names(out_dir: Path) -> Dict[str, str]:' in script
     assert 'return requirement_name(requirement) in TORCH_REQUIREMENTS' in script
     assert 'if uses_torch_index(requirement):' in script
     assert 'cmd += TORCH_PLATFORM_ARGS' in script
     assert 'if spec.index_url and uses_torch_index(requirement):' in script
     assert '*TARGET_PLATFORM_ARGS' in script
+    assert 'resolved_names: Dict[str, str] = preloaded_wheel_names(out_dir)' in script
 
     main_cpu_block = script.split('("main", "cpu"): WheelhouseSpec(', 1)[1].split('),', 1)[0]
     assert '"pip"' not in main_cpu_block
@@ -4520,6 +4523,7 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"torch==2.5.1+cpu"' not in main_cpu_block
 
     assert '"linux-x86_64-cp312"' in payload_builder
+    assert Path("installer/linux/payload/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl").is_file()
 
 
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
