@@ -4581,7 +4581,8 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert '"audio-separator==0.23.0"' in script
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
-    assert '"onnxruntime-silicon"' in script
+    assert '"onnxruntime"' in script
+    assert '"onnxruntime-silicon"' not in script
     assert '"--only-binary=:all:"' in script
     assert '"--find-links"' in script
     assert '"--platform"' not in script

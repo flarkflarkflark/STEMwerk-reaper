@@ -44,7 +44,6 @@ MAIN_REQUIREMENTS = (
     "audio-separator==0.23.0",
     "llvmlite==0.42.0",
     "numba==0.59.1",
-    "onnxruntime-silicon",
     "onnxruntime",
 )
 
@@ -57,7 +56,6 @@ REQUIRED_WHEEL_PREFIXES = (
     "numba-",
     "numpy-",
     "onnxruntime-",
-    "onnxruntime_silicon-",
     "scipy-",
     "torch-",
     "torchaudio-",
