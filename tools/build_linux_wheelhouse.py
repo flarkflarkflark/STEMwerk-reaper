@@ -39,10 +39,12 @@ TARGET_ENV = {
     "extra": "",
 }
 
-PLATFORM_ARGS = [
+TARGET_PLATFORM_ARGS = [
     "--only-binary=:all:",
     "--platform",
     "manylinux2014_x86_64",
+    "--platform",
+    "manylinux_2_28_x86_64",
     "--python-version",
     "312",
     "--implementation",
@@ -161,7 +163,7 @@ def uses_torch_index(requirement: str) -> bool:
 
 
 def run_pip_download(requirement: str, out_dir: Path, spec: WheelhouseSpec) -> None:
-    cmd = [sys.executable, "-m", "pip", "download", "--dest", str(out_dir), "--no-deps", *PLATFORM_ARGS]
+    cmd = [sys.executable, "-m", "pip", "download", "--dest", str(out_dir), "--no-deps", *TARGET_PLATFORM_ARGS]
     if spec.index_url and uses_torch_index(requirement):
         cmd += ["--index-url", spec.index_url]
     if spec.extra_index_url and uses_torch_index(requirement):
@@ -172,7 +174,7 @@ def run_pip_download(requirement: str, out_dir: Path, spec: WheelhouseSpec) -> N
 
 def run_bootstrap_downloads(out_dir: Path) -> None:
     for requirement in BOOTSTRAP_REQUIREMENTS:
-        cmd = [sys.executable, "-m", "pip", "download", "--dest", str(out_dir), "--no-deps", *PLATFORM_ARGS, requirement]
+        cmd = [sys.executable, "-m", "pip", "download", "--dest", str(out_dir), "--no-deps", *TARGET_PLATFORM_ARGS, requirement]
         subprocess.run(cmd, check=True)
 
 
