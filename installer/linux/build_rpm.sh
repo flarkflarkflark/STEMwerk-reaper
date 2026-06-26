@@ -9,6 +9,8 @@ RPMTOP="$BUILD_DIR/rpmbuild"
 source "$ROOT_DIR/installer/linux/stage_payload.sh"
 
 VERSION="${STEMWERK_VERSION:-}"
+VARIANT="${STEMWERK_LINUX_VARIANT:-online-minimal}"
+OUTPUT_SUFFIX="${STEMWERK_OUTPUT_SUFFIX:-}"
 
 if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
@@ -43,6 +45,11 @@ rpmbuild \
   -ba "$RPMTOP/SPECS/stemwerk.spec"
 
 # Copy RPM(s)
-find "$RPMTOP/RPMS" -type f -name "*.rpm" -maxdepth 3 -print -exec cp -f {} "$OUT_DIR/" \;
+find "$RPMTOP/RPMS" -type f -name "*.rpm" -maxdepth 3 | while read -r rpm_file; do
+  base_name="$(basename "$rpm_file")"
+  ext=".rpm"
+  stem="${base_name%$ext}"
+  cp -f "$rpm_file" "$OUT_DIR/${stem}${OUTPUT_SUFFIX}${ext}"
+done
 
-echo "Built RPM(s) in: $OUT_DIR"
+echo "Built variant ${VARIANT} RPM(s) in: $OUT_DIR"

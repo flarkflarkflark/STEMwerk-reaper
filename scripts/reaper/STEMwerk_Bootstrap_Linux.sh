@@ -3,6 +3,7 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
+BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled"
 PINNED_TORCH_VERSION="2.5.1"
 PINNED_TORCHAUDIO_VERSION="2.5.1"
 PINNED_TORCHVISION_VERSION="0.20.1"
@@ -81,6 +82,69 @@ model_cache_dir() {
   fi
 }
 
+bundled_main_wheelhouse_dir() {
+  if [ -d "${BUNDLED_PAYLOAD_DIR}/wheels/main" ]; then
+    printf "%s/wheels/main\n" "${BUNDLED_PAYLOAD_DIR}"
+    return 0
+  fi
+  return 1
+}
+
+bundled_drumsep_wheelhouse_dir() {
+  if [ -d "${BUNDLED_PAYLOAD_DIR}/drumsep-wheels" ]; then
+    printf "%s/drumsep-wheels\n" "${BUNDLED_PAYLOAD_DIR}"
+    return 0
+  fi
+  return 1
+}
+
+append_find_links_args() {
+  _scope="$1"
+  shift
+  _dirs=""
+  case "${_scope}" in
+    main)
+      _dir="$(bundled_main_wheelhouse_dir || true)"
+      [ -n "${_dir}" ] && _dirs="${_dir}"
+      ;;
+    drumsep)
+      _dir="$(bundled_drumsep_wheelhouse_dir || true)"
+      [ -n "${_dir}" ] && _dirs="${_dir}"
+      ;;
+  esac
+  if [ -z "${_dirs}" ]; then
+    return 0
+  fi
+  set -- "$@" --no-index --find-links "${_dirs}"
+  printf "%s\n" "$*"
+}
+
+pip_install_with_scope() {
+  _scope="$1"
+  _py="$2"
+  shift 2
+  _dir=""
+  case "${_scope}" in
+    main) _dir="$(bundled_main_wheelhouse_dir || true)" ;;
+    drumsep) _dir="$(bundled_drumsep_wheelhouse_dir || true)" ;;
+  esac
+  if [ -n "${_dir}" ]; then
+    "${_py}" -m pip install --no-index --find-links "${_dir}" "$@"
+    return $?
+  fi
+  "${_py}" -m pip install "$@"
+}
+
+copy_bundled_models_to_cache() {
+  _src_dir="$1"
+  _dest_dir="${2:-$(model_cache_dir)}"
+  [ -d "${_src_dir}" ] || return 0
+  mkdir -p "${_dest_dir}" >/dev/null 2>&1 || return 1
+  find "${_src_dir}" -maxdepth 1 -type f | while read -r _file; do
+    cp -f "${_file}" "${_dest_dir}/"
+  done
+}
+
 ready_to_go_state_file() {
   printf "%s/state/ready_to_go.env\n" "${RUNTIME_BASE}"
 }
@@ -120,6 +184,7 @@ ensure_core_model_cache() {
   _model_dir="${2:-$(model_cache_dir)}"
   [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
   mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/models" "${_model_dir}" || return 1
   _status="$(verify_core_model_cache "${_model_dir}")"
   case "${_status}" in
     *$'\nfast=ok'$'\n'*$'quality=ok'$'\n'*$'sixstem=ok'*|*fast=ok*quality=ok*sixstem=ok*)
@@ -150,6 +215,7 @@ ensure_drumsep_assets() {
   _model_dir="${2:-$(model_cache_dir)}"
   [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
   mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models" "${_model_dir}" || return 1
   "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
 from pathlib import Path
@@ -707,6 +773,7 @@ is_managed_python_312_linux_x86_64() {
 find_managed_diffq_wheel() {
   for wheel_dir in \
     "${SCRIPT_DIR}/vendor/wheels/linux-x86_64-cp312" \
+    "${BUNDLED_PAYLOAD_DIR}/wheels/main" \
     "${SCRIPT_DIR}/../../installer/linux/payload/wheels/linux-x86_64-cp312" \
     "${RUNTIME_BASE}/wheels/linux-x86_64-cp312" \
     "${RUNTIME_BASE}/cache/wheels"
@@ -1180,13 +1247,13 @@ install_drumsep_rocm_runtime() {
   fi
 
   set_progress "2" "${STEP_TOTAL}" "Upgrading ROCm runtime pip"
-  if ! "${_py}" -m pip install --no-cache-dir --upgrade pip setuptools wheel >> "${_log}" 2>&1; then
+  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --upgrade pip setuptools wheel >> "${_log}" 2>&1; then
     write_drumsep_rocm_state "install_failed" "missing" "pip_upgrade_failed"
     return 1
   fi
 
   set_progress "3" "${STEP_TOTAL}" "Installing ROCm torch stack"
-  if ! "${_py}" -m pip install --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}" \
+  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}" \
     "torch==${DRUMSEP_ROCM_TORCH_VERSION}" \
     "torchvision==${DRUMSEP_ROCM_TORCHVISION_VERSION}" \
     "torchaudio==${DRUMSEP_ROCM_TORCHAUDIO_VERSION}" >> "${_log}" 2>&1; then
@@ -1195,12 +1262,12 @@ install_drumsep_rocm_runtime() {
   fi
 
   set_progress "4" "${STEP_TOTAL}" "Installing DrumSep packages"
-  if ! "${_py}" -m pip install --no-cache-dir --no-deps \
+  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps \
     "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" >> "${_log}" 2>&1; then
     write_drumsep_rocm_state "install_failed" "missing" "audio_separator_install_failed"
     return 1
   fi
-  if ! "${_py}" -m pip install --no-cache-dir \
+  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir \
     "numpy==${DRUMSEP_NUMPY_VERSION}" \
     "onnxruntime==${DRUMSEP_ONNXRUNTIME_VERSION}" \
     "onnx==${DRUMSEP_ONNX_VERSION}" \
@@ -1259,13 +1326,13 @@ install_drumsep_runtime() {
   fi
 
   set_progress "2" "${STEP_TOTAL}" "Upgrading DrumSep pip"
-  if ! "${_drumsep_py}" -m pip install --upgrade pip setuptools wheel >> "${_drumsep_log}" 2>&1; then
+  if ! pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel >> "${_drumsep_log}" 2>&1; then
     write_drumsep_state "install_failed" "missing" "pip_upgrade_failed"
     return 1
   fi
 
   set_progress "3" "${STEP_TOTAL}" "Installing DrumSep packages"
-  if ! "${_drumsep_py}" -m pip install \
+  if ! pip_install_with_scope drumsep "${_drumsep_py}" \
     "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" \
     "numpy==${DRUMSEP_NUMPY_VERSION}" \
     "onnxruntime==${DRUMSEP_ONNXRUNTIME_VERSION}" \
@@ -1354,7 +1421,7 @@ PY
 }
 
 linux_torch_install_args() {
-  printf '"torch==%s" "torchvision==%s" "torchaudio==%s"' \
+  printf 'torch==%s torchvision==%s torchaudio==%s' \
     "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}" \
     "${ACTIVE_TORCHVISION_VERSION:-${PINNED_TORCHVISION_VERSION}}" \
     "${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}"
@@ -1379,18 +1446,33 @@ install_linux_torch_stack() {
   case "${_mode}" in
     cpu)
       log_step "Torch source index: https://download.pytorch.org/whl/cpu (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
-      eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url https://download.pytorch.org/whl/cpu $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
-      _pip_rc=$?
+      if bundled_main_wheelhouse_dir >/dev/null 2>&1; then
+        pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args) >> "${LOG_FILE}" 2>&1
+        _pip_rc=$?
+      else
+        eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url https://download.pytorch.org/whl/cpu $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+        _pip_rc=$?
+      fi
       ;;
     rocm)
       log_step "Torch source index: ${_index} (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
-      eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url \"${_index}\" $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
-      _pip_rc=$?
+      if bundled_main_wheelhouse_dir >/dev/null 2>&1; then
+        pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args) >> "${LOG_FILE}" 2>&1
+        _pip_rc=$?
+      else
+        eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url \"${_index}\" $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+        _pip_rc=$?
+      fi
       ;;
     cuda)
       log_step "Torch source index: default pip index (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
-      eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
-      _pip_rc=$?
+      if bundled_main_wheelhouse_dir >/dev/null 2>&1; then
+        pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args) >> "${LOG_FILE}" 2>&1
+        _pip_rc=$?
+      else
+        eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
+        _pip_rc=$?
+      fi
       ;;
     *)
       return 1
@@ -1502,7 +1584,7 @@ enforce_runtime_python_pins() {
     return 1
   fi
   log_step "Enforcing runtime Python deps: numpy==${PINNED_NUMPY_VERSION} numba==${PINNED_NUMBA_VERSION} llvmlite==${PINNED_LLVM_VERSION}"
-  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+  pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir \
     "numpy==${PINNED_NUMPY_VERSION}" \
     "llvmlite==${PINNED_LLVM_VERSION}" \
     "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1
@@ -1997,7 +2079,7 @@ else
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     clear_stale_python_backend_reason
     log_step "Upgrading pip/setuptools/wheel"
-    "${VENV_PY}" -m pip install --upgrade pip setuptools wheel >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
+    pip_install_with_scope main "${VENV_PY}" --upgrade pip setuptools wheel >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     log_step "Selected profile=${PROFILE} backend=${BACKEND}"
     log_step "Installing pinned STEMwerk backend packages..."
 
@@ -2252,9 +2334,9 @@ PY
       log_step "Installing stemwerk-core from ${CORE_TARGET_DESC}: ${INSTALL_TARGET}"
       if [ -n "${CONSTRAINTS_FILE}" ]; then
         log_step "Installing stemwerk-core with constraints (torch pinned)"
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${INSTALL_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
+        pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" "${INSTALL_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       else
-        "${VENV_PY}" -m pip install "${INSTALL_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
+        pip_install_with_scope main "${VENV_PY}" "${INSTALL_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       fi
     else
       log_step "stemwerk-core source bundle is missing or incomplete"
@@ -2274,9 +2356,9 @@ PY
       BACKEND_REASON="backend_install_failed"
       if [ -n "${CONSTRAINTS_FILE}" ]; then
         log_step "Installing stemwerk-core with constraints (torch pinned)"
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
+        pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       else
-        "${VENV_PY}" -m pip install "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
+        pip_install_with_scope main "${VENV_PY}" "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1 || core_install_rc=$?
       fi
     fi
     if [ "${core_install_rc}" -ne 0 ]; then
@@ -2305,15 +2387,15 @@ PY
       if [ -n "${CONSTRAINTS_FILE}" ]; then
         log_step "Installing audio-separator 0.23.0 with constraints (torch pinned)"
         if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
-          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+          pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
         else
-          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+          pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
         fi
       else
         if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
-          "${VENV_PY}" -m pip install --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+          pip_install_with_scope main "${VENV_PY}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
         else
-          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+          pip_install_with_scope main "${VENV_PY}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
         fi
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
@@ -2330,9 +2412,9 @@ PY
       audio_install_rc=0
       : > "${audio_install_log}" || true
       if [ -n "${CONSTRAINTS_FILE}" ]; then
-        "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
       else
-        "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
+        pip_install_with_scope main "${VENV_PY}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
@@ -2342,7 +2424,7 @@ PY
       fi
       log_step "audio-separator dependency install failed; retrying package install without dependency resolution"
       audio_install_rc=0
-      "${VENV_PY}" -m pip install --no-deps "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
+      pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
     elif [ "${audio_install_rc}" -ne 0 ]; then
       log_step "Managed wheel path required for Linux managed Python 3.12; skipping no-deps fallback"
     fi
@@ -2368,15 +2450,15 @@ PY
       if [ "${audio_repair_rc}" -eq 0 ]; then
         if [ -n "${CONSTRAINTS_FILE}" ]; then
           if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
-            "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+            pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
           else
-            "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+            pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
           fi
         else
           if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
-            "${VENV_PY}" -m pip install --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+            pip_install_with_scope main "${VENV_PY}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
           else
-            "${VENV_PY}" -m pip install "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
+            pip_install_with_scope main "${VENV_PY}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_repair_rc=$?
           fi
         fi
       fi
@@ -2432,9 +2514,9 @@ PY
       if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
         log_step "Installing ${ONNX_PACKAGE}"
         if [ -n "${CONSTRAINTS_FILE}" ]; then
-          "${VENV_PY}" -m pip install -c "${CONSTRAINTS_FILE}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
+          pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
         else
-          "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
+          pip_install_with_scope main "${VENV_PY}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1 || onnx_install_rc=$?
         fi
       fi
       if [ "${onnx_install_rc}" -ne 0 ]; then

@@ -10,6 +10,8 @@ source "$ROOT_DIR/installer/linux/stage_payload.sh"
 
 VERSION="${STEMWERK_VERSION:-}"
 ARCH="${STEMWERK_DEB_ARCH:-amd64}"
+VARIANT="${STEMWERK_LINUX_VARIANT:-online-minimal}"
+OUTPUT_SUFFIX="${STEMWERK_OUTPUT_SUFFIX:-}"
 
 if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
@@ -78,7 +80,7 @@ EOF
 chmod 0755 "$PKG_ROOT/DEBIAN/postinst"
 
 # Build deb
-DEB_FILE="$OUT_DIR/stemwerk_${VERSION}_${ARCH}.deb"
+DEB_FILE="$OUT_DIR/stemwerk_${VERSION}_${ARCH}${OUTPUT_SUFFIX}.deb"
 dpkg-deb --build "$PKG_ROOT" "$DEB_FILE"
 
-echo "Built: $DEB_FILE"
+echo "Built variant ${VARIANT}: $DEB_FILE"

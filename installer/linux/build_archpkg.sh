@@ -9,6 +9,8 @@ WORK_DIR="$BUILD_DIR/work"
 source "$ROOT_DIR/installer/linux/stage_payload.sh"
 
 VERSION="${STEMWERK_VERSION:-}"
+VARIANT="${STEMWERK_LINUX_VARIANT:-online-minimal}"
+OUTPUT_SUFFIX="${STEMWERK_OUTPUT_SUFFIX:-}"
 
 if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
@@ -49,6 +51,9 @@ docker run --rm \
 
 # Copy output package
 dist_pkg="$(ls -1 "$WORK_DIR"/*.pkg.tar.zst | head -n 1)"
-cp -f "$dist_pkg" "$OUT_DIR/"
+base_name="$(basename "$dist_pkg")"
+ext=".pkg.tar.zst"
+stem="${base_name%$ext}"
+cp -f "$dist_pkg" "$OUT_DIR/${stem}${OUTPUT_SUFFIX}${ext}"
 
-echo "Built: $OUT_DIR/$(basename "$dist_pkg")"
+echo "Built variant ${VARIANT}: $OUT_DIR/${stem}${OUTPUT_SUFFIX}${ext}"

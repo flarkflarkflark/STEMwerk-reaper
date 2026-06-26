@@ -9,6 +9,8 @@ APPDIR="$BUILD_DIR/AppDir"
 source "$ROOT_DIR/installer/linux/stage_payload.sh"
 
 VERSION="${STEMWERK_VERSION:-}"
+VARIANT="${STEMWERK_LINUX_VARIANT:-online-minimal}"
+OUTPUT_SUFFIX="${STEMWERK_OUTPUT_SUFFIX:-}"
 
 if [[ -z "$VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
@@ -186,8 +188,8 @@ fi
 # appimagetool sometimes can't infer architecture from an AppDir; force it explicitly.
 # (Don't rely on runner env which can be unset/empty.)
 export ARCH="x86_64"
-"$APPIMAGETOOL_CMD" "$APPDIR" "STEMwerk-$VERSION-x86_64.AppImage"
+"$APPIMAGETOOL_CMD" "$APPDIR" "STEMwerk-$VERSION-x86_64${OUTPUT_SUFFIX}.AppImage"
 popd >/dev/null
 
-mv -f "$BUILD_DIR/STEMwerk-$VERSION-x86_64.AppImage" "$OUT_DIR/"
-echo "Built: $OUT_DIR/STEMwerk-$VERSION-x86_64.AppImage"
+mv -f "$BUILD_DIR/STEMwerk-$VERSION-x86_64${OUTPUT_SUFFIX}.AppImage" "$OUT_DIR/"
+echo "Built variant ${VARIANT}: $OUT_DIR/STEMwerk-$VERSION-x86_64${OUTPUT_SUFFIX}.AppImage"

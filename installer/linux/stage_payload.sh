@@ -32,4 +32,19 @@ copy_linux_payload() {
     "$root_dir/README.md" \
     "$root_dir/LICENSE" \
     "$dest_dir/"
+
+  local variant="${STEMWERK_LINUX_VARIANT:-online-minimal}"
+  local bundle_dir="${STEMWERK_BUNDLED_PAYLOAD_DIR:-}"
+  if [[ "$variant" != "online-minimal" && -z "$bundle_dir" ]]; then
+    echo "Variant $variant requires STEMWERK_BUNDLED_PAYLOAD_DIR." >&2
+    return 1
+  fi
+  if [[ -n "$bundle_dir" ]]; then
+    if [[ ! -d "$bundle_dir" ]]; then
+      echo "Missing bundled payload directory: $bundle_dir" >&2
+      return 1
+    fi
+    mkdir -p "$dest_dir/_bundled"
+    rsync -a --delete "$bundle_dir/" "$dest_dir/_bundled/"
+  fi
 }

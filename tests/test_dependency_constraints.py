@@ -4429,6 +4429,52 @@ def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
     assert '$env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS = "1"' in installer
 
 
+def test_linux_variant_matrix_scripts_and_payload_builder_present():
+    rebuild = Path("installer/linux/rebuild_linux_artifacts.sh").read_text()
+    appimage = Path("installer/linux/build_appimage.sh").read_text()
+    deb = Path("installer/linux/build_deb.sh").read_text()
+    rpm = Path("installer/linux/build_rpm.sh").read_text()
+    arch = Path("installer/linux/build_archpkg.sh").read_text()
+    stage = Path("installer/linux/stage_payload.sh").read_text()
+    payload_builder = Path("tools/build_linux_variant_payload.py").read_text()
+    wheel_builder = Path("tools/build_linux_wheelhouse.py").read_text()
+
+    assert "--matrix" in rebuild
+    assert "offline-bundled-cuda-allmodels" in rebuild
+    assert "offline-bundled-rocm-allmodels" in rebuild
+    assert "offline-bundled-cpu-allmodels" in rebuild
+    assert "tools/build_linux_variant_payload.py" in rebuild
+    assert "STEMWERK_BUNDLED_PAYLOAD_DIR" in rebuild
+
+    assert 'STEMwerk-$VERSION-x86_64${OUTPUT_SUFFIX}.AppImage' in appimage
+    assert 'stemwerk_${VERSION}_${ARCH}${OUTPUT_SUFFIX}.deb' in deb
+    assert '${stem}${OUTPUT_SUFFIX}${ext}' in rpm
+    assert '${stem}${OUTPUT_SUFFIX}${ext}' in arch
+    assert 'Variant $variant requires STEMWERK_BUNDLED_PAYLOAD_DIR.' in stage
+    assert 'mkdir -p "$dest_dir/_bundled"' in stage
+
+    assert "model_allowlist.txt" in payload_builder
+    assert 'build_wheelhouse(repo_root, "drumsep", spec["backend"]' in payload_builder
+    assert 'offline-bundled-rocm-allmodels' in payload_builder
+    assert '("drumsep", "rocm")' in wheel_builder
+    assert '("main", "cuda")' in wheel_builder
+
+
+def test_linux_bootstrap_uses_bundled_payloads_for_models_and_offline_pip():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled"' in script
+    assert 'bundled_main_wheelhouse_dir()' in script
+    assert 'bundled_drumsep_wheelhouse_dir()' in script
+    assert 'pip_install_with_scope()' in script
+    assert 'copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/models"' in script
+    assert 'copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models"' in script
+    assert 'pip_install_with_scope main "${VENV_PY}" --upgrade pip setuptools wheel' in script
+    assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
+    assert '"${BUNDLED_PAYLOAD_DIR}/wheels/main" \\' in script
+
+
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
