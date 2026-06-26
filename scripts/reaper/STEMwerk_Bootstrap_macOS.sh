@@ -3,6 +3,7 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
+BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled/macos/apple-silicon"
 MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
@@ -66,6 +67,57 @@ resolve_python_candidate() {
       esac
       ;;
   esac
+}
+
+bundled_payload_available() {
+  [ "${MAC_ARCH:-unknown}" = "arm64" ] && [ -d "${BUNDLED_PAYLOAD_DIR}" ]
+}
+
+bundled_ffmpeg_path() {
+  for _p in \
+    "${BUNDLED_PAYLOAD_DIR}/ffmpeg/ffmpeg" \
+    "${BUNDLED_PAYLOAD_DIR}/ffmpeg/bin/ffmpeg"
+  do
+    if [ -x "${_p}" ]; then
+      printf "%s\n" "${_p}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+bundled_wheels_dir() {
+  [ -d "${BUNDLED_PAYLOAD_DIR}/wheels" ] || return 1
+  printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/wheels"
+}
+
+bundled_models_dir() {
+  [ -d "${BUNDLED_PAYLOAD_DIR}/models" ] || return 1
+  printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/models"
+}
+
+bundled_drumsep_dir() {
+  [ -d "${BUNDLED_PAYLOAD_DIR}/drumsep" ] || return 1
+  printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/drumsep"
+}
+
+copy_bundled_models_to_cache() {
+  _src="$1"
+  _dest="${2:-$(model_cache_dir)}"
+  [ -n "${_src}" ] && [ -d "${_src}" ] || return 1
+  mkdir -p "${_dest}" >/dev/null 2>&1 || return 1
+  cp -R "${_src}/." "${_dest}/" >> "${LOG_FILE}" 2>&1 || return 1
+}
+
+install_with_optional_bundled_wheels() {
+  _py="$1"
+  shift
+  if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
+    MACOS_BUNDLED_WHEELHOUSE_STATUS="ok"
+    "${_py}" -m pip install --no-index --find-links "${BUNDLED_WHEELS_DIR}" "$@"
+    return $?
+  fi
+  "${_py}" -m pip install "$@"
 }
 
 command_path() {
@@ -518,12 +570,12 @@ for name in ("torch", "torchvision", "torchaudio"):
 PY
   log "Installing pinned torch stack (${PINNED_TORCH_STACK_LABEL}): torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
-  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+  install_with_optional_bundled_wheels "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir \
     "numpy==${PINNED_NUMPY_VERSION}" \
     "torch==${PINNED_TORCH_VERSION}" \
     "torchvision==${PINNED_TORCHVISION_VERSION}" \
     "torchaudio==${PINNED_TORCHAUDIO_VERSION}" >> "${LOG_FILE}" 2>&1
-  "${VENV_PY}" -m pip install --upgrade --force-reinstall --no-cache-dir \
+  install_with_optional_bundled_wheels "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir \
     "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1
 }
 
@@ -835,6 +887,11 @@ write_state() {
       echo "SYSTEM_PYTHON_PATH=${SYSTEM_PYTHON_PATH}"
       echo "SYSTEM_PYTHON_VERSION=${SYSTEM_PYTHON_VERSION}"
       echo "SYSTEM_PYTHON_USED=${SYSTEM_PYTHON_USED}"
+      echo "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"
+      echo "MACOS_BUNDLED_FFMPEG_STATUS=${MACOS_BUNDLED_FFMPEG_STATUS}"
+      echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
+      echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
+      echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
@@ -931,6 +988,18 @@ if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
   rm -rf "${RUNTIME_BASE}/.venv"
 fi
 
+if bundled_payload_available; then
+  MACOS_BUNDLED_PAYLOAD_STATUS="present"
+  BUNDLED_WHEELS_DIR="$(bundled_wheels_dir || true)"
+  [ -n "${BUNDLED_WHEELS_DIR}" ] && MACOS_BUNDLED_WHEELHOUSE_STATUS="present"
+  [ -n "$(bundled_models_dir || true)" ] && MACOS_BUNDLED_MODELS_STATUS="present"
+  [ -n "$(bundled_drumsep_dir || true)" ] && MACOS_BUNDLED_DRUMSEP_STATUS="present"
+fi
+log "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"
+log "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
+log "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
+log "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
+
 mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 STATUS="ok"
@@ -984,6 +1053,12 @@ AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
 SYSTEM_PYTHON_PATH=""
 SYSTEM_PYTHON_VERSION=""
 SYSTEM_PYTHON_USED="no"
+MACOS_BUNDLED_PAYLOAD_STATUS="missing"
+MACOS_BUNDLED_FFMPEG_STATUS="missing"
+MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
+MACOS_BUNDLED_MODELS_STATUS="missing"
+MACOS_BUNDLED_DRUMSEP_STATUS="missing"
+BUNDLED_WHEELS_DIR=""
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
@@ -1108,9 +1183,9 @@ else
   fi
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
-    "${VENV_PY}" -m pip install --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
+    install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     log "Installing pinned STEMwerk backend packages..."
-    "${VENV_PY}" -m pip install "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+    install_with_optional_bundled_wheels "${VENV_PY}" "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
     if ! install_pinned_torch_stack; then
       if [ "${MAC_ARCH}" = "x86_64" ]; then
         log "Intel macOS CPU fallback dependency install failed during initial torch stack setup"
@@ -1139,7 +1214,7 @@ else
     fi
 
     log "Preinstalling numba/llvmlite (macOS wheels)"
-    "${VENV_PY}" -m pip install --only-binary=:all: "llvmlite==0.42.0" "numba==0.59.1" >> "${LOG_FILE}" 2>&1 || \
+    install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==0.42.0" "numba==0.59.1" >> "${LOG_FILE}" 2>&1 || \
       log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
     if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
@@ -1147,9 +1222,9 @@ else
         : > "${_audio_tmp_log}" || true
         if [ -f "${MACOS_CONSTRAINTS_FILE}" ]; then
           log "Installing ${PACKAGE} with macOS constraints from ${MACOS_CONSTRAINTS_FILE}"
-          "${VENV_PY}" -m pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
+          install_with_optional_bundled_wheels "${VENV_PY}" -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
         else
-          "${VENV_PY}" -m pip install "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
+          install_with_optional_bundled_wheels "${VENV_PY}" "${PACKAGE}" >> "${_audio_tmp_log}" 2>&1
         fi
         _audio_rc=$?
         cat "${_audio_tmp_log}" >> "${LOG_FILE}" 2>/dev/null || true
@@ -1189,11 +1264,11 @@ else
 
     if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then
       log "Installing ${ONNX_PACKAGE}"
-      if ! "${VENV_PY}" -m pip install "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1; then
+      if ! install_with_optional_bundled_wheels "${VENV_PY}" "${ONNX_PACKAGE}" >> "${LOG_FILE}" 2>&1; then
         if [ -n "${ONNX_FALLBACK_PACKAGE}" ] && [ "${ONNX_FALLBACK_PACKAGE}" != "${ONNX_PACKAGE}" ]; then
           log "WARN: ${ONNX_PACKAGE} install failed; falling back to ${ONNX_FALLBACK_PACKAGE}"
           printf "WARN: %s install failed; falling back to %s\n" "${ONNX_PACKAGE}" "${ONNX_FALLBACK_PACKAGE}" >&2
-          "${VENV_PY}" -m pip install "${ONNX_FALLBACK_PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "onnxruntime_install_failed"
+          install_with_optional_bundled_wheels "${VENV_PY}" "${ONNX_FALLBACK_PACKAGE}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "onnxruntime_install_failed"
         else
           set_status "deps_failed" "onnxruntime_install_failed"
         fi
@@ -1203,6 +1278,13 @@ else
 fi
 
 set_progress "3" "${STEP_TOTAL}" "Checking FFmpeg"
+
+_bundled_ffmpeg="$(bundled_ffmpeg_path || true)"
+if [ -n "${_bundled_ffmpeg}" ] && [ -x "${_bundled_ffmpeg}" ]; then
+  FFMPEG="${_bundled_ffmpeg}"
+  MACOS_BUNDLED_FFMPEG_STATUS="ok"
+fi
+log "MACOS_BUNDLED_FFMPEG_STATUS=${MACOS_BUNDLED_FFMPEG_STATUS}"
 
 for p in \
   "${RUNTIME_BASE}/bin/ffmpeg" \
@@ -1214,6 +1296,9 @@ for p in \
   "/usr/local/opt/ffmpeg/bin/ffmpeg" \
   "/usr/bin/ffmpeg"
 do
+  if [ -n "${FFMPEG}" ]; then
+    break
+  fi
   if [ -x "$p" ]; then
     FFMPEG="$p"
     break
@@ -1281,6 +1366,14 @@ if [ "${STATUS}" = "ok" ] && [ "${FINAL_RUNTIME_VERIFIED:-no}" = "yes" ]; then
   READY_MAIN_RUNTIME_STATUS="ok"
 fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  _bundled_models_dir="$(bundled_models_dir || true)"
+  if [ -n "${_bundled_models_dir}" ]; then
+    if copy_bundled_models_to_cache "${_bundled_models_dir}" "$(model_cache_dir)"; then
+      MACOS_BUNDLED_MODELS_STATUS="seeded"
+    else
+      MACOS_BUNDLED_MODELS_STATUS="copy_failed"
+    fi
+  fi
   if ! ensure_core_model_cache "${VENV_PY}" "$(model_cache_dir)"; then
     READY_DETAIL="core_model_download_failed"
     log "core_model_prefetch_failed=core_model_download_failed"
@@ -1288,6 +1381,14 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   fi
 fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  _bundled_drumsep_dir="$(bundled_drumsep_dir || true)"
+  if [ -n "${_bundled_drumsep_dir}" ]; then
+    if copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"; then
+      MACOS_BUNDLED_DRUMSEP_STATUS="seeded"
+    else
+      MACOS_BUNDLED_DRUMSEP_STATUS="copy_failed"
+    fi
+  fi
   if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
     READY_RUNTIME_STATUS="ok"
     READY_DRUMSEP_MODEL_STATUS="ok"

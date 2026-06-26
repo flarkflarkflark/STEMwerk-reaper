@@ -244,7 +244,7 @@ def test_macos_bootstrap_repairs_after_audio_separator_install():
     from pathlib import Path
 
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
-    audio_install_marker = 'pip install -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"'
+    audio_install_marker = 'install_with_optional_bundled_wheels "${VENV_PY}" -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"'
     repair_marker = 'set_status "deps_failed" "torch_pin_repair_failed"'
 
     assert 'PINNED_NUMPY_VERSION="1.26.4"' in script
@@ -4593,6 +4593,56 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert '"ffmpeg binary"' in script
     assert '"core model payload file"' in script
     assert '"drumsep payload file"' in script
+
+
+def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled/macos/apple-silicon"' in script
+    assert 'bundled_payload_available()' in script
+    assert 'bundled_ffmpeg_path()' in script
+    assert 'bundled_wheels_dir()' in script
+    assert 'bundled_models_dir()' in script
+    assert 'bundled_drumsep_dir()' in script
+    assert 'copy_bundled_models_to_cache()' in script
+    assert 'install_with_optional_bundled_wheels()' in script
+
+
+def test_macos_bootstrap_records_bundled_payload_status_markers():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'MACOS_BUNDLED_PAYLOAD_STATUS="missing"' in script
+    assert 'MACOS_BUNDLED_FFMPEG_STATUS="missing"' in script
+    assert 'MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"' in script
+    assert 'MACOS_BUNDLED_MODELS_STATUS="missing"' in script
+    assert 'MACOS_BUNDLED_DRUMSEP_STATUS="missing"' in script
+    assert 'echo "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"' in script
+    assert 'echo "MACOS_BUNDLED_FFMPEG_STATUS=${MACOS_BUNDLED_FFMPEG_STATUS}"' in script
+    assert 'echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"' in script
+    assert 'echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"' in script
+    assert 'echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"' in script
+
+
+def test_macos_bootstrap_prefers_bundled_ffmpeg_and_offline_wheelhouse():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert '_bundled_ffmpeg="$(bundled_ffmpeg_path || true)"' in script
+    assert 'FFMPEG="${_bundled_ffmpeg}"' in script
+    assert 'MACOS_BUNDLED_FFMPEG_STATUS="ok"' in script
+    assert '"${_py}" -m pip install --no-index --find-links "${BUNDLED_WHEELS_DIR}" "$@"' in script
+    assert 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip' in script
+    assert 'install_with_optional_bundled_wheels "${VENV_PY}" -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"' in script
+
+
+def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert '_bundled_models_dir="$(bundled_models_dir || true)"' in script
+    assert 'copy_bundled_models_to_cache "${_bundled_models_dir}" "$(model_cache_dir)"' in script
+    assert 'MACOS_BUNDLED_MODELS_STATUS="seeded"' in script
+    assert '_bundled_drumsep_dir="$(bundled_drumsep_dir || true)"' in script
+    assert 'copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
+    assert 'MACOS_BUNDLED_DRUMSEP_STATUS="seeded"' in script
     assert Path("installer/linux/payload/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl").is_file()
 
 
