@@ -47,6 +47,8 @@ MAIN_REQUIREMENTS = (
     "onnxruntime",
 )
 
+DIFFQ_REQUIREMENT = "diffq==0.2.4"
+
 TARGET_PLATFORM_ARGS = [
     "--only-binary=:all:",
     "--platform",
@@ -115,11 +117,31 @@ def run_pip_download(requirements: tuple[str, ...], wheels_dir: Path, constraint
             "--dest",
             str(wheels_dir),
             *TARGET_PLATFORM_ARGS,
+            "--find-links",
+            str(wheels_dir),
         ]
         if constraints_file.is_file() and requirement not in BOOTSTRAP_REQUIREMENTS:
             cmd += ["-c", str(constraints_file)]
         cmd.append(requirement)
         subprocess.run(cmd, check=True)
+
+
+def wheel_builder_python() -> str:
+    candidates = (
+        Path.home() / "Library" / "Application Support" / "STEMwerk" / ".venv" / "bin" / "python",
+        Path(sys.executable),
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return sys.executable
+
+
+def ensure_diffq_wheel(wheels_dir: Path) -> None:
+    if any(wheels_dir.glob("diffq-*.whl")):
+        return
+    cmd = [wheel_builder_python(), "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheels_dir), DIFFQ_REQUIREMENT]
+    subprocess.run(cmd, check=True)
 
 
 def write_manifest(output_dir: Path, version: str) -> None:
@@ -148,7 +170,11 @@ def main() -> int:
 
     reset_dir(output_dir)
     copy_ffmpeg(ffmpeg_path, ffprobe_path, output_dir / "ffmpeg")
-    run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file)
+    try:
+        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file)
+    except subprocess.CalledProcessError:
+        ensure_diffq_wheel(output_dir / "wheels")
+        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file)
     copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
     copy_files(model_cache, output_dir / "drumsep", DRUMSEP_FILES, "drumsep payload file")
     write_manifest(output_dir, args.version)

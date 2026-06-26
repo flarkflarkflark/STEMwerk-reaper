@@ -4581,6 +4581,8 @@ def test_macos_payload_builder_uses_apple_silicon_cp312_wheel_downloads():
     assert '"torchaudio==2.5.1"' in script
     assert '"onnxruntime-silicon"' in script
     assert 'subprocess.run(cmd, check=True)' in script
+    assert 'DIFFQ_REQUIREMENT = "diffq==0.2.4"' in script
+    assert 'ensure_diffq_wheel(output_dir / "wheels")' in script
 
 
 def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
