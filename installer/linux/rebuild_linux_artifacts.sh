@@ -79,13 +79,13 @@ done
 
 variant_suffix() {
   case "$1" in
-    online-minimal) printf "" ;;
-    bundled) printf "-bundled" ;;
-    offline-bundled-cuda-allmodels) printf "-offline-bundled-nvidia-gpu-allmodels" ;;
-    offline-bundled-rocm-allmodels) printf "-offline-bundled-amd-gpu-allmodels" ;;
-    offline-bundled-cpu-allmodels) printf "-offline-bundled-cpu-allmodels" ;;
+    online-minimal) printf '%s' "" ;;
+    bundled) printf '%s' "-bundled" ;;
+    offline-bundled-cuda-allmodels) printf '%s' "-offline-bundled-nvidia-gpu-allmodels" ;;
+    offline-bundled-rocm-allmodels) printf '%s' "-offline-bundled-amd-gpu-allmodels" ;;
+    offline-bundled-cpu-allmodels) printf '%s' "-offline-bundled-cpu-allmodels" ;;
     *)
-      echo "Unknown Linux variant: $1" >&2
+      echo "ERROR: unknown Linux artifact variant: $1" >&2
       return 1
       ;;
   esac
