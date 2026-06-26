@@ -16,6 +16,12 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 
+BOOTSTRAP_REQUIREMENTS = (
+    "pip",
+    "setuptools",
+    "wheel",
+)
+
 TARGET_ENV = {
     "sys_platform": "linux",
     "platform_system": "Linux",
@@ -50,9 +56,6 @@ class WheelhouseSpec:
 SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ("main", "cpu"): WheelhouseSpec(
         requirements=(
-            "pip",
-            "setuptools",
-            "wheel",
             "audio-separator==0.23.0",
             "numpy==1.26.4",
             "numba==0.59.1",
@@ -66,9 +69,6 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("main", "cuda"): WheelhouseSpec(
         requirements=(
-            "pip",
-            "setuptools",
-            "wheel",
             "audio-separator[gpu]==0.23.0",
             "numpy==1.26.4",
             "numba==0.59.1",
@@ -81,9 +81,6 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("main", "rocm"): WheelhouseSpec(
         requirements=(
-            "pip",
-            "setuptools",
-            "wheel",
             "audio-separator==0.23.0",
             "numpy==1.26.4",
             "numba==0.59.1",
@@ -97,9 +94,6 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("drumsep", "cpu"): WheelhouseSpec(
         requirements=(
-            "pip",
-            "setuptools",
-            "wheel",
             "audio-separator==0.34.1",
             "numpy==2.4.6",
             "onnxruntime==1.26.0",
@@ -113,9 +107,6 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("drumsep", "cuda"): WheelhouseSpec(
         requirements=(
-            "pip",
-            "setuptools",
-            "wheel",
             "audio-separator==0.34.1",
             "numpy==2.4.6",
             "onnxruntime-gpu==1.24.4",
@@ -130,9 +121,6 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("drumsep", "rocm"): WheelhouseSpec(
         requirements=(
-            "pip",
-            "setuptools",
-            "wheel",
             "audio-separator==0.34.1",
             "numpy==2.4.6",
             "onnxruntime==1.26.0",
@@ -166,6 +154,12 @@ def run_pip_download(requirement: str, out_dir: Path, spec: WheelhouseSpec) -> N
         cmd += ["--extra-index-url", spec.extra_index_url]
     cmd.append(requirement)
     subprocess.run(cmd, check=True)
+
+
+def run_bootstrap_downloads(out_dir: Path) -> None:
+    for requirement in BOOTSTRAP_REQUIREMENTS:
+        cmd = [sys.executable, "-m", "pip", "download", "--dest", str(out_dir), "--no-deps", *PLATFORM_ARGS, requirement]
+        subprocess.run(cmd, check=True)
 
 
 def extract_requirements_from_wheel(wheel_path: Path) -> List[Requirement]:
@@ -213,6 +207,7 @@ def main() -> int:
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     copy_extra_wheels(out_dir, args.extra_wheel_dir)
+    run_bootstrap_downloads(out_dir)
 
     queue: List[str] = list(spec.requirements)
     seen_specs: Set[str] = set()

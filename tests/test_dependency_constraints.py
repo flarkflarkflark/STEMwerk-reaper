@@ -4475,6 +4475,21 @@ def test_linux_bootstrap_uses_bundled_payloads_for_models_and_offline_pip():
     assert '"${BUNDLED_PAYLOAD_DIR}/wheels/main" \\' in script
 
 
+def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_index():
+    script = Path("tools/build_linux_wheelhouse.py").read_text()
+
+    assert "BOOTSTRAP_REQUIREMENTS = (" in script
+    assert 'def run_bootstrap_downloads(out_dir: Path) -> None:' in script
+    assert 'run_bootstrap_downloads(out_dir)' in script
+    assert 'for requirement in BOOTSTRAP_REQUIREMENTS:' in script
+    assert '["--index-url", spec.index_url]' in script
+
+    main_cpu_block = script.split('("main", "cpu"): WheelhouseSpec(', 1)[1].split('),', 1)[0]
+    assert '"pip"' not in main_cpu_block
+    assert '"setuptools"' not in main_cpu_block
+    assert '"wheel"' not in main_cpu_block
+
+
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
