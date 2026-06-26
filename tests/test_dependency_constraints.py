@@ -4523,6 +4523,39 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"torch==2.5.1+cpu"' not in main_cpu_block
 
     assert '"linux-x86_64-cp312"' in payload_builder
+
+
+def test_macos_build_script_supports_package_variants_without_wiping_dist():
+    script = Path("installer/macos/build_pkg.sh").read_text()
+
+    assert 'VARIANT="online"' in script
+    assert '--variant online|bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels' in script
+    assert 'bundled-apple-silicon)' in script
+    assert 'offline-bundled-apple-silicon-mps-allmodels)' in script
+    assert 'STAGE="$ROOT_DIR/installer/macos/build/$VARIANT/root"' in script
+    assert 'mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper"' in script
+    assert 'rm -rf "$STAGE"' in script
+    assert 'rm -rf "$OUT_DIR"' not in script
+    assert 'OUTPUT_PKG="$OUT_DIR/STEMwerk-$VERSION$OUTPUT_SUFFIX.pkg"' in script
+    assert 'Built: $OUTPUT_PKG' in script
+
+
+def test_macos_build_script_uses_expected_variant_artifact_names():
+    script = Path("installer/macos/build_pkg.sh").read_text()
+
+    assert 'OUTPUT_SUFFIX="-bundled-apple-silicon"' in script
+    assert 'OUTPUT_SUFFIX="-offline-bundled-apple-silicon-mps-allmodels"' in script
+    assert 'OUTPUT_PKG="$OUT_DIR/STEMwerk-$VERSION$OUTPUT_SUFFIX.pkg"' in script
+
+
+def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_it():
+    script = Path("installer/macos/build_pkg.sh").read_text()
+
+    assert 'BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"' in script
+    assert 'rm -rf "$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"' in script
+    assert 'rsync -a --delete "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
+    assert 'cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF' in script
+    assert 'payload_status=missing' in script
     assert Path("installer/linux/payload/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl").is_file()
 
 
