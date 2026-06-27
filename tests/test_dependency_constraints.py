@@ -4632,6 +4632,12 @@ def test_macos_bootstrap_records_bundled_payload_status_markers():
     assert 'echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"' in script
     assert 'echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"' in script
     assert 'echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"' in script
+    assert script.index('MACOS_BUNDLED_PAYLOAD_STATUS="missing"') < script.index("if bundled_payload_available; then")
+    assert script.index('MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"') < script.index("if bundled_payload_available; then")
+    assert script.index('MACOS_BUNDLED_PAYLOAD_STATUS="present"') < script.index('mkdir -p "${RUNTIME_BASE}/state"')
+    assert script.index('MACOS_BUNDLED_PAYLOAD_STATUS="present"') < script.index('log "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"')
+    assert script.rindex('MACOS_BUNDLED_PAYLOAD_STATUS="missing"') < script.index("if bundled_payload_available; then")
+    assert script.rindex('MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"') < script.index("if bundled_payload_available; then")
 
 
 def test_macos_bootstrap_prefers_bundled_ffmpeg_and_offline_wheelhouse():

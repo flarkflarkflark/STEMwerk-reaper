@@ -988,6 +988,13 @@ if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
   rm -rf "${RUNTIME_BASE}/.venv"
 fi
 
+MACOS_BUNDLED_PAYLOAD_STATUS="missing"
+MACOS_BUNDLED_FFMPEG_STATUS="missing"
+MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
+MACOS_BUNDLED_MODELS_STATUS="missing"
+MACOS_BUNDLED_DRUMSEP_STATUS="missing"
+BUNDLED_WHEELS_DIR=""
+
 if bundled_payload_available; then
   MACOS_BUNDLED_PAYLOAD_STATUS="present"
   BUNDLED_WHEELS_DIR="$(bundled_wheels_dir || true)"
@@ -1053,12 +1060,6 @@ AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
 SYSTEM_PYTHON_PATH=""
 SYSTEM_PYTHON_VERSION=""
 SYSTEM_PYTHON_USED="no"
-MACOS_BUNDLED_PAYLOAD_STATUS="missing"
-MACOS_BUNDLED_FFMPEG_STATUS="missing"
-MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
-MACOS_BUNDLED_MODELS_STATUS="missing"
-MACOS_BUNDLED_DRUMSEP_STATUS="missing"
-BUNDLED_WHEELS_DIR=""
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
