@@ -4102,9 +4102,9 @@ def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins()
     assert "drumsep_rocm_disk_preflight()" in script
     assert "resolve_drumsep_rocm_tmpdir()" in script
     assert 'write_drumsep_rocm_state "disk_space_insufficient" "missing"' in script
-    assert '"${_py}" -m pip install --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
     assert '"torch==${DRUMSEP_ROCM_TORCH_VERSION}"' in script
-    assert '"${_py}" -m pip install --no-cache-dir --no-deps' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps' in script
     assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
     assert '"${_py}" -m pip check' in script
     assert "verify_drumsep_rocm_runtime()" in script
@@ -4481,6 +4481,7 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
 
     assert "BOOTSTRAP_REQUIREMENTS = (" in script
     assert "TORCH_REQUIREMENTS = (" in script
+    assert "TORCH_INDEX_REQUIREMENTS = TORCH_REQUIREMENTS + (" in script
     assert "TARGET_PLATFORM_ARGS = [" in script
     assert "TORCH_PLATFORM_ARGS = [" in script
     assert '"--only-binary=:all:"' in script
@@ -4498,7 +4499,7 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert 'def uses_torch_index(requirement: str) -> bool:' in script
     assert 'def wheel_distribution_name(wheel_path: Path) -> Optional[str]:' in script
     assert 'def preloaded_wheel_names(out_dir: Path) -> Dict[str, str]:' in script
-    assert 'return requirement_name(requirement) in TORCH_REQUIREMENTS' in script
+    assert 'return requirement_name(requirement) in TORCH_INDEX_REQUIREMENTS' in script
     assert 'if uses_torch_index(requirement):' in script
     assert 'cmd += TORCH_PLATFORM_ARGS' in script
     assert 'if spec.index_url and uses_torch_index(requirement):' in script
@@ -4518,9 +4519,34 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"audio-separator"' not in torch_requirements_block
     assert '"onnxruntime"' not in torch_requirements_block
     assert '"samplerate"' not in torch_requirements_block
+    torch_index_block = script.split("TORCH_INDEX_REQUIREMENTS = TORCH_REQUIREMENTS + (", 1)[1].split(")", 1)[0]
+    assert '"pytorch-triton-rocm"' in torch_index_block
+    assert '"triton"' in torch_index_block
+    assert '"nvidia-cublas"' in torch_index_block
+    assert '"cuda-toolkit"' in torch_index_block
     assert '"onnxruntime"' in main_cpu_block
     assert '"torch==2.5.1"' in main_cpu_block
     assert '"torch==2.5.1+cpu"' not in main_cpu_block
+
+    drumsep_cpu_block = script.split('("drumsep", "cpu"): WheelhouseSpec(', 1)[1].split('("drumsep", "cuda"): WheelhouseSpec(', 1)[0]
+    assert '"audio-separator==0.34.1"' in drumsep_cpu_block
+    assert '"onnxruntime==1.26.0"' in drumsep_cpu_block
+    assert '"torch==2.12.0+cpu"' in drumsep_cpu_block
+    assert '"torchvision==0.27.0+cpu"' in drumsep_cpu_block
+    assert '"https://download.pytorch.org/whl/cpu"' in drumsep_cpu_block
+    assert '"torch==2.12.0",' not in drumsep_cpu_block
+    assert '"torchvision==0.27.0",' not in drumsep_cpu_block
+
+    drumsep_rocm_block = script.split('("drumsep", "rocm"): WheelhouseSpec(', 1)[1].split("}", 1)[0]
+    assert '"torch==2.9.1+rocm6.4"' in drumsep_rocm_block
+    assert '"torchvision==0.24.1+rocm6.4"' in drumsep_rocm_block
+    assert '"https://download.pytorch.org/whl/rocm6.4"' in drumsep_rocm_block
+
+    drumsep_cuda_block = script.split('("drumsep", "cuda"): WheelhouseSpec(', 1)[1].split('("drumsep", "rocm"): WheelhouseSpec(', 1)[0]
+    assert '"onnxruntime-gpu==1.24.4"' in drumsep_cuda_block
+    assert '"torch==2.4.1+cu121"' in drumsep_cuda_block
+    assert '"torchvision==0.19.1+cu121"' in drumsep_cuda_block
+    assert '"https://download.pytorch.org/whl/cu121"' in drumsep_cuda_block
 
     assert '"linux-x86_64-cp312"' in payload_builder
     assert Path("installer/linux/payload/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl").is_file()

@@ -28,6 +28,18 @@ TORCH_REQUIREMENTS = (
     "torchvision",
 )
 
+TORCH_INDEX_REQUIREMENTS = TORCH_REQUIREMENTS + (
+    "pytorch-triton-rocm",
+    "triton",
+    "cuda-bindings",
+    "cuda-toolkit",
+    "nvidia-cublas",
+    "nvidia-cudnn-cu13",
+    "nvidia-cusparselt-cu13",
+    "nvidia-nccl-cu13",
+    "nvidia-nvshmem-cu13",
+)
+
 TARGET_ENV = {
     "sys_platform": "linux",
     "platform_system": "Linux",
@@ -113,10 +125,11 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "onnx==1.21.0",
             "onnx2torch==1.5.15",
             "onnx2torch-py313==1.6.0",
-            "torch==2.12.0",
-            "torchvision==0.27.0",
+            "torch==2.12.0+cpu",
+            "torchvision==0.27.0+cpu",
             "numba==0.65.1",
         ),
+        index_url="https://download.pytorch.org/whl/cpu",
     ),
     ("drumsep", "cuda"): WheelhouseSpec(
         requirements=(
@@ -164,7 +177,7 @@ def requirement_name(requirement: str) -> str:
 
 
 def uses_torch_index(requirement: str) -> bool:
-    return requirement_name(requirement) in TORCH_REQUIREMENTS
+    return requirement_name(requirement) in TORCH_INDEX_REQUIREMENTS
 
 
 def run_pip_download(requirement: str, out_dir: Path, spec: WheelhouseSpec) -> None:
