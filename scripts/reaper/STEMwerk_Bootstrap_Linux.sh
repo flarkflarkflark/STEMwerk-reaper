@@ -98,24 +98,45 @@ bundled_drumsep_wheelhouse_dir() {
   return 1
 }
 
+bundled_shared_wheelhouse_dir() {
+  if [ -d "${BUNDLED_PAYLOAD_DIR}/wheels/shared" ]; then
+    printf "%s/wheels/shared\n" "${BUNDLED_PAYLOAD_DIR}"
+    return 0
+  fi
+  return 1
+}
+
+bundled_scope_wheelhouse_dirs() {
+  _scope="$1"
+  _shared_dir="$(bundled_shared_wheelhouse_dir || true)"
+  case "${_scope}" in
+    main)
+      _scope_dir="$(bundled_main_wheelhouse_dir || true)"
+      ;;
+    drumsep)
+      _scope_dir="$(bundled_drumsep_wheelhouse_dir || true)"
+      ;;
+    *)
+      _scope_dir=""
+      ;;
+  esac
+  [ -n "${_shared_dir}" ] && printf "%s\n" "${_shared_dir}"
+  [ -n "${_scope_dir}" ] && printf "%s\n" "${_scope_dir}"
+}
+
 append_find_links_args() {
   _scope="$1"
   shift
-  _dirs=""
-  case "${_scope}" in
-    main)
-      _dir="$(bundled_main_wheelhouse_dir || true)"
-      [ -n "${_dir}" ] && _dirs="${_dir}"
-      ;;
-    drumsep)
-      _dir="$(bundled_drumsep_wheelhouse_dir || true)"
-      [ -n "${_dir}" ] && _dirs="${_dir}"
-      ;;
-  esac
-  if [ -z "${_dirs}" ]; then
+  _has_dirs="no"
+  for _dir in $(bundled_scope_wheelhouse_dirs "${_scope}"); do
+    [ -n "${_dir}" ] || continue
+    set -- "$@" --find-links "${_dir}"
+    _has_dirs="yes"
+  done
+  if [ "${_has_dirs}" != "yes" ]; then
     return 0
   fi
-  set -- "$@" --no-index --find-links "${_dirs}"
+  set -- "$@" --no-index
   printf "%s\n" "$*"
 }
 
@@ -123,16 +144,17 @@ pip_install_with_scope() {
   _scope="$1"
   _py="$2"
   shift 2
-  _dir=""
-  case "${_scope}" in
-    main) _dir="$(bundled_main_wheelhouse_dir || true)" ;;
-    drumsep) _dir="$(bundled_drumsep_wheelhouse_dir || true)" ;;
-  esac
-  if [ -n "${_dir}" ]; then
-    "${_py}" -m pip install --no-index --find-links "${_dir}" "$@"
-    return $?
+  _set_find_links="no"
+  set -- "${_py}" -m pip install "$@"
+  for _dir in $(bundled_scope_wheelhouse_dirs "${_scope}"); do
+    [ -n "${_dir}" ] || continue
+    set -- "$@" --find-links "${_dir}"
+    _set_find_links="yes"
+  done
+  if [ "${_set_find_links}" = "yes" ]; then
+    set -- "$@" --no-index
   fi
-  "${_py}" -m pip install "$@"
+  "$@"
 }
 
 copy_bundled_models_to_cache() {
@@ -773,6 +795,7 @@ is_managed_python_312_linux_x86_64() {
 find_managed_diffq_wheel() {
   for wheel_dir in \
     "${SCRIPT_DIR}/vendor/wheels/linux-x86_64-cp312" \
+    "${BUNDLED_PAYLOAD_DIR}/wheels/shared" \
     "${BUNDLED_PAYLOAD_DIR}/wheels/main" \
     "${SCRIPT_DIR}/../../installer/linux/payload/wheels/linux-x86_64-cp312" \
     "${RUNTIME_BASE}/wheels/linux-x86_64-cp312" \

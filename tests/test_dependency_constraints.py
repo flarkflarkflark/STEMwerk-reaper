@@ -28,6 +28,14 @@ def _load_audio_separator_process_module():
     return module
 
 
+def _load_module_from_path(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 class _OsProxy:
     def __init__(self, real_os, *, name: str):
         self._real_os = real_os
@@ -4466,13 +4474,81 @@ def test_linux_bootstrap_uses_bundled_payloads_for_models_and_offline_pip():
     assert 'BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled"' in script
     assert 'bundled_main_wheelhouse_dir()' in script
     assert 'bundled_drumsep_wheelhouse_dir()' in script
+    assert 'bundled_shared_wheelhouse_dir()' in script
+    assert 'bundled_scope_wheelhouse_dirs()' in script
     assert 'pip_install_with_scope()' in script
     assert 'copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/models"' in script
     assert 'copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models"' in script
     assert 'pip_install_with_scope main "${VENV_PY}" --upgrade pip setuptools wheel' in script
     assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
     assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
+    assert '"${BUNDLED_PAYLOAD_DIR}/wheels/shared"' in script
     assert '"${BUNDLED_PAYLOAD_DIR}/wheels/main" \\' in script
+    assert 'set -- "$@" --find-links "${_dir}"' in script
+    assert 'set -- "$@" --no-index' in script
+
+
+def test_linux_bootstrap_supports_shared_wheelhouse_for_both_scopes():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    main_scope = script.split("bundled_scope_wheelhouse_dirs() {", 1)[1].split("append_find_links_args()", 1)[0]
+    assert '_shared_dir="$(bundled_shared_wheelhouse_dir || true)"' in main_scope
+    assert '_scope_dir="$(bundled_main_wheelhouse_dir || true)"' in main_scope
+    assert '_scope_dir="$(bundled_drumsep_wheelhouse_dir || true)"' in main_scope
+    assert '[ -n "${_shared_dir}" ] && printf "%s\\n" "${_shared_dir}"' in main_scope
+    assert '[ -n "${_scope_dir}" ] && printf "%s\\n" "${_scope_dir}"' in main_scope
+
+    diffq_block = script.split("find_managed_diffq_wheel() {", 1)[1].split("install_managed_diffq_wheel()", 1)[0]
+    assert '"${BUNDLED_PAYLOAD_DIR}/wheels/shared" \\' in diffq_block
+
+
+def test_linux_variant_payload_builder_dedupes_identical_shared_wheels(tmp_path):
+    module = _load_module_from_path("linux_variant_payload_dedupe_test", Path("tools/build_linux_variant_payload.py"))
+
+    output_dir = tmp_path / "payload"
+    main_dir = output_dir / "wheels" / "main"
+    drumsep_dir = output_dir / "drumsep-wheels"
+    shared_dir = output_dir / "wheels" / "shared"
+    main_dir.mkdir(parents=True)
+    drumsep_dir.mkdir(parents=True)
+
+    duplicate_content = b"same-wheel"
+    main_duplicate = main_dir / "torch-dup.whl"
+    drumsep_duplicate = drumsep_dir / "torch-dup.whl"
+    main_duplicate.write_bytes(duplicate_content)
+    drumsep_duplicate.write_bytes(duplicate_content)
+    (drumsep_dir / "drumsep-only.whl").write_bytes(b"drumsep-only")
+
+    deduped = module.dedupe_variant_wheels(output_dir)
+
+    assert deduped == ["torch-dup.whl"]
+    assert not main_duplicate.exists()
+    assert not drumsep_duplicate.exists()
+    assert (shared_dir / "torch-dup.whl").read_bytes() == duplicate_content
+    assert (drumsep_dir / "drumsep-only.whl").exists()
+
+
+def test_linux_variant_payload_builder_keeps_same_name_different_hash_wheels_separate(tmp_path):
+    module = _load_module_from_path("linux_variant_payload_hash_safety_test", Path("tools/build_linux_variant_payload.py"))
+
+    output_dir = tmp_path / "payload"
+    main_dir = output_dir / "wheels" / "main"
+    drumsep_dir = output_dir / "drumsep-wheels"
+    shared_dir = output_dir / "wheels" / "shared"
+    main_dir.mkdir(parents=True)
+    drumsep_dir.mkdir(parents=True)
+
+    main_duplicate = main_dir / "torch-dup.whl"
+    drumsep_duplicate = drumsep_dir / "torch-dup.whl"
+    main_duplicate.write_bytes(b"main-wheel")
+    drumsep_duplicate.write_bytes(b"drumsep-wheel")
+
+    deduped = module.dedupe_variant_wheels(output_dir)
+
+    assert deduped == []
+    assert main_duplicate.exists()
+    assert drumsep_duplicate.exists()
+    assert not shared_dir.exists()
 
 
 def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_index():

@@ -93,6 +93,47 @@ def copy_required_files(src_root: Path, dest_root: Path, files: tuple[str, ...])
         shutil.copy2(src, dest_root / name)
 
 
+def file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def dedupe_shared_wheels(*wheel_dirs: Path, shared_dir: Path) -> list[str]:
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    wheel_map: dict[str, list[Path]] = {}
+    for wheel_dir in wheel_dirs:
+        if not wheel_dir.is_dir():
+            continue
+        for wheel_path in sorted(wheel_dir.glob("*.whl")):
+            wheel_map.setdefault(wheel_path.name, []).append(wheel_path)
+
+    deduped: list[str] = []
+    for wheel_name, paths in sorted(wheel_map.items()):
+        if len(paths) < 2:
+            continue
+        baseline = paths[0]
+        baseline_size = baseline.stat().st_size
+        baseline_digest = file_digest(baseline)
+        for other in paths[1:]:
+            if other.stat().st_size != baseline_size:
+                break
+            if file_digest(other) != baseline_digest:
+                break
+        else:
+            shared_path = shared_dir / wheel_name
+            shutil.move(str(baseline), shared_path)
+            for duplicate in paths[1:]:
+                duplicate.unlink()
+            deduped.append(wheel_name)
+
+    if not any(shared_dir.iterdir()):
+        shared_dir.rmdir()
+    return deduped
+
+
 def write_allowlist(path: Path, entries: tuple[str, ...]) -> None:
     path.write_text("\n".join(entries) + "\n", encoding="utf-8")
 
@@ -128,6 +169,14 @@ def build_wheelhouse(repo_root: Path, runtime: str, backend: str, output_dir: Pa
     subprocess.run(cmd, check=True)
 
 
+def dedupe_variant_wheels(output_dir: Path) -> list[str]:
+    return dedupe_shared_wheels(
+        output_dir / "wheels" / "main",
+        output_dir / "drumsep-wheels",
+        shared_dir=output_dir / "wheels" / "shared",
+    )
+
+
 def main() -> int:
     args = parse_args()
     repo_root = Path(args.repo_root).resolve()
@@ -146,6 +195,9 @@ def main() -> int:
     if spec["include_drumsep"]:
         copy_required_files(model_cache, output_dir / "drumsep-models", DRUMSEP_MODEL_FILES)
         build_wheelhouse(repo_root, "drumsep", spec["backend"], output_dir / "drumsep-wheels")
+        deduped = dedupe_variant_wheels(output_dir)
+        if deduped:
+            print(f"Deduped shared wheels ({len(deduped)}): {', '.join(deduped)}")
 
     write_manifest(output_dir / "payload-manifest.txt", output_dir)
     print(f"Prepared Linux payload variant {args.variant} at {output_dir}")
