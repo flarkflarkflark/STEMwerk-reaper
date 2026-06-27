@@ -576,6 +576,46 @@ PY
   return 1
 }
 
+pinned_torch_stack_already_ok() {
+  _venv_py="$1"
+  [ -x "${_venv_py}" ] || return 1
+  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+from importlib.metadata import PackageNotFoundError, version
+
+expected = {
+    "numpy": "${PINNED_NUMPY_VERSION}",
+    "torch": "${PINNED_TORCH_VERSION}",
+    "torchvision": "${PINNED_TORCHVISION_VERSION}",
+    "torchaudio": "${PINNED_TORCHAUDIO_VERSION}",
+}
+
+def core(ver):
+    return str(ver).split("+", 1)[0]
+
+missing = []
+bad = []
+for name, want in expected.items():
+    try:
+        got = version(name)
+    except PackageNotFoundError:
+        missing.append(name)
+        continue
+    if core(got) != want:
+        bad.append(f"{name}:{got}")
+
+if missing or bad:
+    print("bad|missing=" + ",".join(missing) + ";bad=" + ",".join(bad))
+else:
+    print("ok")
+PY
+)"
+  case "${_probe}" in
+    ok) return 0 ;;
+    *) log "Pinned torch stack needs install: ${_probe}" ;;
+  esac
+  return 1
+}
+
 install_pinned_torch_stack() {
   TORCH_PIN_APPLIED="1"
   log "torch pin applied: true (${PINNED_TORCH_STACK_LABEL})"
@@ -587,6 +627,10 @@ for name in ("torch", "torchvision", "torchaudio"):
     except PackageNotFoundError:
         print(f"pre_pin_{name}=missing")
 PY
+  if pinned_torch_stack_already_ok "${VENV_PY}"; then
+    log "Pinned torch stack already satisfies ${PINNED_TORCH_STACK_LABEL}; skipping reinstall"
+    return 0
+  fi
   log "Installing pinned torch stack (${PINNED_TORCH_STACK_LABEL}): torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
   "${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio >> "${LOG_FILE}" 2>&1 || true
   install_with_optional_bundled_wheels "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir \
@@ -1392,10 +1436,14 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "torch_pin_assert_failed"
   fi
-  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then
+  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then
+    case "${STATUS_REASON}" in
+      torch_install_failed|torch_pin_repair_failed|torch_pin_assert_failed)
     STATUS="ok"
     STATUS_REASON=""
-    log "Cleared stale STATUS from earlier pinned runtime assertion failure after final runtime verification success"
+        log "Cleared stale STATUS from earlier pinned torch failure after final runtime verification success"
+        ;;
+    esac
   fi
 fi
 

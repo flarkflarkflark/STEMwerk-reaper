@@ -5691,18 +5691,30 @@ def test_macos_bootstrap_clears_stale_torch_pin_assert_failure_after_final_runti
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     assert 'FINAL_RUNTIME_VERIFIED="yes"' in script
-    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then' in script
+    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then' in script
+    assert 'torch_install_failed|torch_pin_repair_failed|torch_pin_assert_failed)' in script
     assert 'STATUS="ok"' in script
     assert 'STATUS_REASON=""' in script
-    assert 'Cleared stale STATUS from earlier pinned runtime assertion failure after final runtime verification success' in script
+    assert 'Cleared stale STATUS from earlier pinned torch failure after final runtime verification success' in script
 
 
 def test_macos_bootstrap_only_clears_stale_torch_pin_status_after_real_final_checks():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     line_no = lambda needle: next(i for i, line in enumerate(script.splitlines(), 1) if needle in line)
-    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then') > line_no('if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then')
-    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS_REASON}" = "torch_pin_assert_failed" ]; then') > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
+    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then')
+    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
+
+
+def test_macos_bootstrap_skips_reinstall_when_pinned_torch_stack_already_ok():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert "pinned_torch_stack_already_ok()" in script
+    assert 'if pinned_torch_stack_already_ok "${VENV_PY}"; then' in script
+    assert "Pinned torch stack already satisfies" in script
+    skip_block = script.split('if pinned_torch_stack_already_ok "${VENV_PY}"; then', 1)[1].split("  fi\n", 1)[0]
+    assert 'return 0' in skip_block
+    assert script.index('if pinned_torch_stack_already_ok "${VENV_PY}"; then') < script.index('"${VENV_PY}" -m pip uninstall -y torch torchvision torchaudio')
 
 
 def test_macos_bootstrap_samplerate_repair_attempt_status_is_monotonic_yes():
