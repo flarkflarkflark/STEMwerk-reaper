@@ -48,6 +48,7 @@ MAIN_REQUIREMENTS = (
 )
 
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
+SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"
 
 REQUIRED_WHEEL_PREFIXES = (
     "pip-",
@@ -64,6 +65,10 @@ REQUIRED_WHEEL_PREFIXES = (
     "torch-",
     "torchaudio-",
     "torchvision-",
+)
+
+REQUIRED_WHEEL_PATTERNS = (
+    "samplerate-0.2.4-*.whl",
 )
 
 
@@ -185,8 +190,26 @@ def ensure_diffq_wheel(wheels_dir: Path) -> None:
     subprocess.run(cmd, check=True, env=command_env())
 
 
+def ensure_samplerate_repair_wheel(wheels_dir: Path) -> None:
+    if any(wheels_dir.glob("samplerate-0.2.4-*.whl")):
+        return
+    cmd = [
+        wheel_builder_python(),
+        "-m",
+        "pip",
+        "download",
+        "--dest",
+        str(wheels_dir),
+        "--only-binary=:all:",
+        "--no-deps",
+        SAMPLERATE_REPAIR_REQUIREMENT,
+    ]
+    subprocess.run(cmd, check=True, env=command_env())
+
+
 def ensure_wheelhouse_complete(wheels_dir: Path) -> None:
     missing = [prefix for prefix in REQUIRED_WHEEL_PREFIXES if not any(wheels_dir.glob(f"{prefix}*.whl"))]
+    missing += [pattern for pattern in REQUIRED_WHEEL_PATTERNS if not any(wheels_dir.glob(pattern))]
     if missing:
         missing_list = ", ".join(missing)
         raise RuntimeError(f"Incomplete wheelhouse for offline Apple Silicon payload: missing {missing_list}")
@@ -243,6 +266,7 @@ def main() -> int:
     except subprocess.CalledProcessError:
         ensure_diffq_wheel(output_dir / "wheels")
         run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file, python_executable)
+    ensure_samplerate_repair_wheel(output_dir / "wheels")
     build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)
     ensure_wheelhouse_complete(output_dir / "wheels")
     copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")

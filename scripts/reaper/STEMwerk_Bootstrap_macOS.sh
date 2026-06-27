@@ -435,7 +435,11 @@ repair_samplerate_if_arch_mismatch() {
     return 1
   fi
 
-  _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"
+  if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"
+  else
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"
+  fi
   _guard_rc=$?
   [ -n "${_guard_out}" ] && printf "%s\n" "${_guard_out}" >> "${LOG_FILE}"
   _guard_before_samplerate_import="unknown"

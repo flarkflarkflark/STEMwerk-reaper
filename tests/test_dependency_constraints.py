@@ -4585,6 +4585,7 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
     assert '"onnxruntime"' in script
+    assert 'SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"' in script
     assert '"onnxruntime-silicon"' not in script
     assert '"--only-binary=:all:"' in script
     assert '"--find-links"' in script
@@ -4593,6 +4594,7 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert 'subprocess.run(cmd, check=True, env=command_env())' in script
     assert 'DIFFQ_REQUIREMENT = "diffq==0.2.4"' in script
     assert 'ensure_diffq_wheel(output_dir / "wheels")' in script
+    assert 'ensure_samplerate_repair_wheel(output_dir / "wheels")' in script
 
 
 def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
@@ -4609,6 +4611,8 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert '"drumsep payload file"' in script
     assert 'Incomplete wheelhouse for offline Apple Silicon payload' in script
     assert 'REQUIRED_WHEEL_PREFIXES = (' in script
+    assert 'REQUIRED_WHEEL_PATTERNS = (' in script
+    assert '"samplerate-0.2.4-*.whl"' in script
     assert '"stemwerk_core-"' in script
     assert '"--no-build-isolation"' in script
     assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
@@ -5638,12 +5642,16 @@ def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64()
     assert "repair_samplerate_if_arch_mismatch" in script
     assert "stemwerk_samplerate_guard.py" in script
     assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"' in script
+    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"' in script
     assert '_guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"' not in script
     assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
     assert "samplerate_arch_mismatch_requires_runtime_rebuild" in script
     assert "samplerate_reinstall_failed" in script
     assert 'f"samplerate=={args.repair_version}"' in guard
+    assert 'parser.add_argument("--find-links", action="append", default=[])' in guard
+    assert 'install_args.append("--no-index")' in guard
+    assert 'install_args.extend(["--find-links", link_dir])' in guard
     assert "--no-deps" in guard
     assert "samplerate_dylib_not_found_after_repair_but_import_ok" in guard
     assert "after_audio_separator_import" in guard

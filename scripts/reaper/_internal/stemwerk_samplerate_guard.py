@@ -189,6 +189,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--repair-version", default="0.2.4")
+    parser.add_argument("--find-links", action="append", default=[])
     args = parser.parse_args()
 
     mac_arch = platform.machine()
@@ -216,14 +217,18 @@ def main() -> int:
     _print_diag("arch_match", "no")
 
     _run_pip(args.python, "uninstall", "-y", "samplerate")
-    rc = _run_pip(
-        args.python,
+    install_args = [
         "install",
         "--force-reinstall",
         "--no-cache-dir",
         "--no-deps",
-        f"samplerate=={args.repair_version}",
-    )
+    ]
+    if args.find_links:
+        install_args.append("--no-index")
+        for link_dir in args.find_links:
+            install_args.extend(["--find-links", link_dir])
+    install_args.append(f"samplerate=={args.repair_version}")
+    rc = _run_pip(args.python, *install_args)
     if rc != 0:
         _print_diag("error", "samplerate_reinstall_failed")
         return 21
