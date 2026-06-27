@@ -91,6 +91,21 @@ bundled_wheels_dir() {
   printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/wheels"
 }
 
+bundled_managed_python_dir() {
+  [ -d "${BUNDLED_PAYLOAD_DIR}/python" ] || return 1
+  printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/python"
+}
+
+bundled_stemwerk_core_wheel() {
+  [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ] || return 1
+  for _wheel in "${BUNDLED_WHEELS_DIR}"/stemwerk_core-*.whl; do
+    [ -f "${_wheel}" ] || continue
+    printf "%s\n" "${_wheel}"
+    return 0
+  done
+  return 1
+}
+
 bundled_models_dir() {
   [ -d "${BUNDLED_PAYLOAD_DIR}/models" ] || return 1
   printf "%s\n" "${BUNDLED_PAYLOAD_DIR}/models"
@@ -931,6 +946,13 @@ resolve_core_target() {
   CORE_TARGET_DESC=""
   CORE_SUPPORTS_EXTRAS=0
 
+  _bundled_core_wheel="$(bundled_stemwerk_core_wheel || true)"
+  if [ -n "${_bundled_core_wheel}" ]; then
+    CORE_TARGET="${_bundled_core_wheel}"
+    CORE_TARGET_DESC="bundled wheel"
+    return 0
+  fi
+
   if [ -n "${STEMWERK_CORE_PATH:-}" ] && [ -e "${STEMWERK_CORE_PATH}" ]; then
     if is_core_source_bundle "${STEMWERK_CORE_PATH}"; then
       CORE_TARGET="${STEMWERK_CORE_PATH}"
@@ -955,6 +977,20 @@ resolve_core_target() {
   fi
 
   return 1
+}
+
+install_stemwerk_core_target() {
+  _py="$1"
+  _target="$2"
+  _desc="$3"
+  case "${_desc}" in
+    *source*)
+      install_with_optional_bundled_wheels "${_py}" --no-build-isolation --no-deps "${_target}"
+      ;;
+    *)
+      install_with_optional_bundled_wheels "${_py}" --no-deps "${_target}"
+      ;;
+  esac
 }
 
 if [ -z "${RUNTIME_BASE}" ]; then
@@ -1139,6 +1175,8 @@ if [ -z "${PYTHON}" ]; then
   if [ -n "${FIRST_UNSUPPORTED_PYTHON_PATH}" ] && [ -n "${FIRST_UNSUPPORTED_PYTHON_VERSION}" ]; then
     if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
       PYTHON_MESSAGE="STEMwerk managed Python is not available for this platform yet."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "offline_local_payload_missing" ]; then
+      PYTHON_MESSAGE="Offline bundled installer is missing a local STEMwerk-managed Python runtime payload."
     elif [ "${MANAGED_PYTHON_ERROR}" = "sha256_mismatch" ]; then
       PYTHON_MESSAGE="Managed Python download failed verification and was not installed."
     elif [ "${MANAGED_PYTHON_ERROR}" = "download_failed" ] || [ "${MANAGED_PYTHON_ERROR}" = "download_tool_missing" ]; then
@@ -1152,6 +1190,8 @@ if [ -z "${PYTHON}" ]; then
   else
     if [ "${MANAGED_PYTHON_ERROR}" = "unsupported_platform" ]; then
       PYTHON_MESSAGE="STEMwerk managed Python is not available for this platform yet."
+    elif [ "${MANAGED_PYTHON_ERROR}" = "offline_local_payload_missing" ]; then
+      PYTHON_MESSAGE="Offline bundled installer is missing a local STEMwerk-managed Python runtime payload."
     elif [ "${MANAGED_PYTHON_ERROR}" = "sha256_mismatch" ]; then
       PYTHON_MESSAGE="Managed Python download failed verification and was not installed."
     elif [ "${MANAGED_PYTHON_ERROR}" = "download_failed" ] || [ "${MANAGED_PYTHON_ERROR}" = "download_tool_missing" ]; then
@@ -1198,7 +1238,7 @@ else
     resolve_core_target || true
     if [ -n "${CORE_TARGET:-}" ]; then
       log "Installing stemwerk-core from ${CORE_TARGET_DESC}: ${CORE_TARGET}"
-      if ! "${VENV_PY}" -m pip install "${CORE_TARGET}" >> "${LOG_FILE}" 2>&1; then
+      if ! install_stemwerk_core_target "${VENV_PY}" "${CORE_TARGET}" "${CORE_TARGET_DESC}" >> "${LOG_FILE}" 2>&1; then
         log "stemwerk-core install failed; aborting macOS bootstrap before secondary dependency installation"
         set_status "deps_failed" "stemwerk_core_install_failed"
         write_state

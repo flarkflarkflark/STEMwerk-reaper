@@ -437,6 +437,7 @@ def test_macos_bootstrap_reports_unsupported_python_without_python_missing_ambig
     assert "System Python ${FIRST_UNSUPPORTED_PYTHON_VERSION} is unsupported. STEMwerk will use its managed Python runtime for Repair/Rebuild." in script
     assert 'set_status "missing_python" "managed_python_unavailable"' in script
     assert "STEMwerk could not download its managed Python runtime. Check your internet connection or use a bundled/offline installer." in script
+    assert "Offline bundled installer is missing a local STEMwerk-managed Python runtime payload." in script
     assert "SUPPORTED_PYTHON_FOUND=no" in script
     assert "SUPPORTED_PYTHON_RANGE=3.10-3.12" in script
 
@@ -1457,12 +1458,14 @@ def test_managed_python_failure_messages_are_specific():
     mac_script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     download_failure = "STEMwerk could not download its managed Python runtime. Check your internet connection or use a bundled/offline installer."
+    offline_payload_missing = "Offline bundled installer is missing a local STEMwerk-managed Python runtime payload."
     unsupported = "STEMwerk managed Python is not available for this platform yet."
     sha_failure = "Managed Python download failed verification and was not installed."
     assert linux_script.index("Attempting STEMwerk-managed Python runtime acquisition") < linux_script.index(download_failure)
     assert mac_script.index("Attempting STEMwerk-managed Python runtime acquisition") < mac_script.index(download_failure)
     assert unsupported in linux_script
     assert unsupported in mac_script
+    assert offline_payload_missing in mac_script
     assert sha_failure in linux_script
     assert sha_failure in mac_script
     assert "Unsupported Python found: ${UNSUPPORTED_PYTHON_VERSION}. Install Python" not in linux_script
@@ -4597,13 +4600,19 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
 
     assert 'default="/opt/homebrew/bin/ffmpeg"' in script
     assert 'default="/opt/homebrew/bin/ffprobe"' in script
+    assert 'default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "python")' in script
     assert 'Library" / "Application Support" / "STEMwerk" / "models"' in script
     assert 'Missing required {label}' in script
     assert '"ffmpeg binary"' in script
+    assert '"managed Python runtime payload"' in script
     assert '"core model payload file"' in script
     assert '"drumsep payload file"' in script
     assert 'Incomplete wheelhouse for offline Apple Silicon payload' in script
     assert 'REQUIRED_WHEEL_PREFIXES = (' in script
+    assert '"stemwerk_core-"' in script
+    assert '"--no-build-isolation"' in script
+    assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
+    assert 'build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)' in script
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
@@ -4612,6 +4621,8 @@ def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
     assert 'BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled/macos/apple-silicon"' in script
     assert 'bundled_payload_available()' in script
     assert 'bundled_ffmpeg_path()' in script
+    assert 'bundled_managed_python_dir()' in script
+    assert 'bundled_stemwerk_core_wheel()' in script
     assert 'bundled_wheels_dir()' in script
     assert 'bundled_models_dir()' in script
     assert 'bundled_drumsep_dir()' in script
@@ -4647,8 +4658,20 @@ def test_macos_bootstrap_prefers_bundled_ffmpeg_and_offline_wheelhouse():
     assert 'FFMPEG="${_bundled_ffmpeg}"' in script
     assert 'MACOS_BUNDLED_FFMPEG_STATUS="ok"' in script
     assert '"${_py}" -m pip install --no-index --find-links "${BUNDLED_WHEELS_DIR}" "$@"' in script
+    assert 'bundled_managed_python_dir()' in script
     assert 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip' in script
     assert 'install_with_optional_bundled_wheels "${VENV_PY}" -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"' in script
+    assert 'Offline bundled installer is missing a local STEMwerk-managed Python runtime payload.' in script
+
+
+def test_macos_bootstrap_prefers_bundled_stemwerk_core_wheel_and_avoids_build_isolation_for_source_fallback():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert '_bundled_core_wheel="$(bundled_stemwerk_core_wheel || true)"' in script
+    assert 'CORE_TARGET_DESC="bundled wheel"' in script
+    assert 'install_with_optional_bundled_wheels "${_py}" --no-deps "${_target}"' in script
+    assert 'install_with_optional_bundled_wheels "${_py}" --no-build-isolation --no-deps "${_target}"' in script
+    assert 'install_stemwerk_core_target "${VENV_PY}" "${CORE_TARGET}" "${CORE_TARGET_DESC}"' in script
 
 
 def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():

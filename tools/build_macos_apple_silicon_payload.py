@@ -50,6 +50,9 @@ MAIN_REQUIREMENTS = (
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
 
 REQUIRED_WHEEL_PREFIXES = (
+    "pip-",
+    "setuptools-",
+    "wheel-",
     "audio_separator-",
     "diffq-",
     "llvmlite-",
@@ -57,6 +60,7 @@ REQUIRED_WHEEL_PREFIXES = (
     "numpy-",
     "onnxruntime-",
     "scipy-",
+    "stemwerk_core-",
     "torch-",
     "torchaudio-",
     "torchvision-",
@@ -73,6 +77,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--ffmpeg", default="/opt/homebrew/bin/ffmpeg")
     parser.add_argument("--ffprobe", default="/opt/homebrew/bin/ffprobe")
+    parser.add_argument(
+        "--managed-python",
+        default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "python"),
+    )
     parser.add_argument(
         "--constraints",
         default="scripts/reaper/constraints/macos.txt",
@@ -105,6 +113,12 @@ def copy_ffmpeg(ffmpeg_path: Path, ffprobe_path: Path, dest_root: Path) -> None:
     dest_root.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ffmpeg_path, dest_root / "ffmpeg")
     shutil.copy2(ffprobe_path, dest_root / "ffprobe")
+
+
+def copy_tree(src_root: Path, dest_root: Path, label: str) -> None:
+    if not src_root.is_dir():
+        raise FileNotFoundError(f"Missing required {label}: {src_root}")
+    shutil.copytree(src_root, dest_root)
 
 
 def command_env() -> dict[str, str]:
@@ -178,6 +192,23 @@ def ensure_wheelhouse_complete(wheels_dir: Path) -> None:
         raise RuntimeError(f"Incomplete wheelhouse for offline Apple Silicon payload: missing {missing_list}")
 
 
+def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> None:
+    if any(wheels_dir.glob("stemwerk_core-*.whl")):
+        return
+    cmd = [
+        python_executable,
+        "-m",
+        "pip",
+        "wheel",
+        "--no-deps",
+        "--no-build-isolation",
+        "--wheel-dir",
+        str(wheels_dir),
+        str(repo_root / "scripts" / "reaper" / "vendor" / "stemwerk-core"),
+    ]
+    subprocess.run(cmd, check=True, env=command_env())
+
+
 def write_manifest(output_dir: Path, version: str) -> None:
     manifest = {
         "platform": "macos-apple-silicon",
@@ -185,6 +216,7 @@ def write_manifest(output_dir: Path, version: str) -> None:
         "runtime_policy": "mps_preferred_cpu_fallback",
         "contains": {
             "ffmpeg": True,
+            "python": True,
             "wheels": True,
             "core_models": True,
             "drumsep": True,
@@ -200,6 +232,7 @@ def main() -> int:
     model_cache = Path(args.model_cache).expanduser().resolve()
     ffmpeg_path = Path(args.ffmpeg).expanduser().resolve()
     ffprobe_path = Path(args.ffprobe).expanduser().resolve()
+    managed_python_dir = Path(args.managed_python).expanduser().resolve()
     constraints_file = (repo_root / args.constraints).resolve()
     python_executable = payload_python()
 
@@ -210,7 +243,9 @@ def main() -> int:
     except subprocess.CalledProcessError:
         ensure_diffq_wheel(output_dir / "wheels")
         run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file, python_executable)
+    build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)
     ensure_wheelhouse_complete(output_dir / "wheels")
+    copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")
     copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
     copy_files(model_cache, output_dir / "drumsep", DRUMSEP_FILES, "drumsep payload file")
     write_manifest(output_dir, args.version)

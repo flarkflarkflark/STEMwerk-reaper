@@ -238,6 +238,7 @@ install_managed_python_runtime() {
   managed_log "Attempting STEMwerk-managed Python runtime acquisition"
   for src in \
     "${STEMWERK_MANAGED_PYTHON_SOURCE:-}" \
+    "$(bundled_managed_python_dir 2>/dev/null || true)" \
     "${SCRIPT_DIR}/python" \
     "${SCRIPT_DIR}/runtime/python" \
     "${SCRIPT_DIR}/_runtime/python" \
@@ -266,6 +267,13 @@ install_managed_python_runtime() {
       rm -rf "${RUNTIME_BASE}/python.tmp"
     fi
   done
+
+  if [ "${STEMWERK_OFFLINE:-0}" = "1" ]; then
+    MANAGED_PYTHON_STATUS="failed"
+    MANAGED_PYTHON_ERROR="offline_local_payload_missing"
+    managed_log "Offline bundled installer is missing a local STEMwerk-managed Python runtime payload."
+    return 1
+  fi
 
   if ! managed_python_detect_platform; then
     MANAGED_PYTHON_STATUS="failed"
