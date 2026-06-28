@@ -478,8 +478,8 @@ en = {
         -- Preset tooltips
         tooltip_preset_karaoke = "Everything except vocals",
         tooltip_preset_all = "Select all available stems",
-        tooltip_preset_drumkit = "Direct Kit splits audio directly into Kick, Snare, Toms, Hi-Hat, Ride and Crash.",
-        tooltip_preset_edks = "Split drums into kit parts: kick, snare, toms, hi-hat, ride and crash.",
+        tooltip_preset_drumkit = "For drum-only tracks or samples. Splits the drum signal directly into kit parts.",
+        tooltip_preset_edks = "Quality mode for full mixes. Separates drums first, then splits them into kit parts.",
         tooltip_preset_vocals = "Select only Vocals stem",
         tooltip_preset_drums = "Select only Drums stem",
         tooltip_preset_bass = "Select only Bass stem",
@@ -1198,8 +1198,8 @@ en = {
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles behalve zang",
         tooltip_preset_all = "Selecteer alle beschikbare stems",
-        tooltip_preset_drumkit = "Direct Kit splitst audio direct naar Kick, Snare, Toms, Hi-Hat, Ride en Crash.",
-        tooltip_preset_edks = "Splitst drums in kitdelen: kick, snare, toms, hi-hat, ride en crash.",
+        tooltip_preset_drumkit = "Voor drum-only tracks of samples. Splitst het drumsignaal direct in kitdelen.",
+        tooltip_preset_edks = "Kwaliteitsmodus voor volledige mixes. Isoleert eerst drums en splitst daarna in kitdelen.",
         tooltip_preset_vocals = "Selecteer alleen Zang stem",
         tooltip_preset_drums = "Selecteer alleen Drums stem",
         tooltip_preset_bass = "Selecteer alleen Bas stem",
@@ -1914,8 +1914,8 @@ en = {
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles ausser Gesang",
         tooltip_preset_all = "Alle verfügbaren Stems auswählen",
-        tooltip_preset_drumkit = "Direct Kit teilt Audio direkt in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf.",
-        tooltip_preset_edks = "Teilt Drums in Kit-Teile: Kick, Snare, Toms, Hi-Hat, Ride und Crash.",
+        tooltip_preset_drumkit = "Für reine Drum-Tracks oder Samples. Teilt das Drum-Signal direkt in Kit-Teile.",
+        tooltip_preset_edks = "Qualitätsmodus für komplette Mixes. Separiert zuerst Drums und teilt sie dann in Kit-Teile.",
         tooltip_preset_vocals = "Nur Gesang Stem auswählen",
         tooltip_preset_drums = "Nur Schlagzeug Stem auswählen",
         tooltip_preset_bass = "Nur Bass Stem auswählen",

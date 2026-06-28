@@ -12525,7 +12525,7 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("workflow_drumkit_label", "Direct Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "Direct drum-kit separation: Kick, Snare, Toms, Hi-Hat, Ride, Crash."),
+        trSafe("workflow_drumkit_label", "Direct Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "For drum-only tracks or samples. Splits the drum signal directly into kit parts."),
         "Z", {170, 150, 240}
     )
     presetY = presetY + presetStep
@@ -12533,7 +12533,7 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Split drums into kit parts: kick, snare, toms, hi-hat, ride and crash."),
+        trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Quality mode for full mixes. Separates drums first, then splits them into kit parts."),
         "X", {150, 132, 228}
     )
     presetY = presetY + presetSectionGap

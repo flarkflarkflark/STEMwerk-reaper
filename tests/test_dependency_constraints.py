@@ -4786,13 +4786,13 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'workflow_edks_label = "Kit Split"' in langs
     assert 'workflow_edks_short_label = "Kit Split"' in langs
     assert 'drum_stems_label = "Drum Stems:"' in langs
-    assert 'tooltip_preset_drumkit = "Direct Kit splits audio directly into Kick, Snare, Toms, Hi-Hat, Ride and Crash."' in langs
-    assert 'tooltip_preset_edks = "Split drums into kit parts: kick, snare, toms, hi-hat, ride and crash."' in langs
-    assert 'tooltip_preset_drumkit = "Direct Kit splitst audio direct naar Kick, Snare, Toms, Hi-Hat, Ride en Crash."' in langs
+    assert 'tooltip_preset_drumkit = "For drum-only tracks or samples. Splits the drum signal directly into kit parts."' in langs
+    assert 'tooltip_preset_edks = "Quality mode for full mixes. Separates drums first, then splits them into kit parts."' in langs
+    assert 'tooltip_preset_drumkit = "Voor drum-only tracks of samples. Splitst het drumsignaal direct in kitdelen."' in langs
     assert 'tooltip_preset_edks = "Twee-staps kit-split voor meer gedetailleerdere drumscheiding."' not in langs
-    assert 'tooltip_preset_edks = "Splitst drums in kitdelen: kick, snare, toms, hi-hat, ride en crash."' in langs
-    assert 'tooltip_preset_drumkit = "Direct Kit teilt Audio direkt in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf."' in langs
-    assert 'tooltip_preset_edks = "Teilt Drums in Kit-Teile: Kick, Snare, Toms, Hi-Hat, Ride und Crash."' in langs
+    assert 'tooltip_preset_edks = "Kwaliteitsmodus voor volledige mixes. Isoleert eerst drums en splitst daarna in kitdelen."' in langs
+    assert 'tooltip_preset_drumkit = "Für reine Drum-Tracks oder Samples. Teilt das Drum-Signal direkt in Kit-Teile."' in langs
+    assert 'tooltip_preset_edks = "Qualitätsmodus für komplette Mixes. Separiert zuerst Drums und teilt sie dann in Kit-Teile."' in langs
     assert 'tooltip_stem_drumkit_kick = "Kick drum / bass drum"' in langs
     assert 'tooltip_stem_drumkit_snare = "Snare drum"' in langs
     assert 'tooltip_stem_drumkit_toms = "Toms"' in langs
@@ -4875,8 +4875,8 @@ def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     assert 'and stem.name' in main_script
     assert 'local tooltipKey = ((dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT) or (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT))' in main_script
     assert 'and (drumStemTooltipKeys[stem.name] or "tooltip_stem_other")' in main_script
-    assert 'trSafe("workflow_drumkit_label", "Direct Kit") .. "\\n" .. trSafe("tooltip_preset_drumkit", "Direct drum-kit separation: Kick, Snare, Toms, Hi-Hat, Ride, Crash.")' in main_script
-    assert 'trSafe("workflow_edks_label", "Kit Split") .. "\\n" .. trSafe("tooltip_preset_edks", "Split drums into kit parts: kick, snare, toms, hi-hat, ride and crash.")' in main_script
+    assert 'trSafe("workflow_drumkit_label", "Direct Kit") .. "\\n" .. trSafe("tooltip_preset_drumkit", "For drum-only tracks or samples. Splits the drum signal directly into kit parts.")' in main_script
+    assert 'trSafe("workflow_edks_label", "Kit Split") .. "\\n" .. trSafe("tooltip_preset_edks", "Quality mode for full mixes. Separates drums first, then splits them into kit parts.")' in main_script
     assert 'if model.id == "htdemucs"' in main_script
     assert 'modelDisplayName = trSafe("model_label_expanded", "Expanded")' in main_script
     assert 'if (dialogWorkflowSource == DKS_WORKFLOW.SOURCE_DIRECT or dialogWorkflowSource == DKS_WORKFLOW.SOURCE_EXTRACT) and model.id == "htdemucs_6s" then' in main_script
