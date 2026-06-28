@@ -12533,7 +12533,7 @@ function renderMainColumns(ctx)
     if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
     setTooltipWithShortcut(
         col1X, presetY, colW, btnH,
-        trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Two-stage drum-kit split for more detailed drum separation."),
+        trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Split drums into kit parts: kick, snare, toms, hi-hat, ride and crash."),
         "X", {150, 132, 228}
     )
     presetY = presetY + presetSectionGap
