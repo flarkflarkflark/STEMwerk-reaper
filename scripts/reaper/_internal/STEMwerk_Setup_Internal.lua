@@ -716,9 +716,9 @@ local function prettySetupReason(reason)
         elseif lower == "torch_pin_repair_failed" then
             part = "macOS Torch pin repair failed; run Rebuild venv/Repair to install the pinned torch stack"
         elseif lower == "torch_pin_assert_failed" then
-            part = "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+            part = "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
-            part = "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+            part = "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "torchaudio_missing_for_demucs" then
             part = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "backend_runtime_install_failed" then
@@ -767,7 +767,7 @@ local function prettyCheckError(err)
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
     if lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
-        return "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+        return "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
     end
     if lower == "torchaudio_missing_for_demucs" then
         return "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
@@ -2958,7 +2958,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Unsupported Torch runtime detected: torch "
             .. (torchVersion ~= "" and torchVersion or "unknown")
-            .. ". STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+            .. ". STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
     end
     if hasError("torchaudio_missing_for_demucs") then
         finalMessage[#finalMessage + 1] = ""

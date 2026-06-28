@@ -930,7 +930,7 @@ function M.ensureDependenciesInteractive()
             if err == "samplerate_missing" then hasSamplerate = true end
             if err == "stemwerk_core_missing" then hasCore = true end
             if err == "torch_too_new_for_demucs" then
-                missing[#missing + 1] = "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
+                missing[#missing + 1] = "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
             end
             if err == "torchaudio_missing_for_demucs" then
                 missing[#missing + 1] = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."

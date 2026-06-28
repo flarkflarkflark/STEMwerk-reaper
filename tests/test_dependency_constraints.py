@@ -356,10 +356,23 @@ def test_macos_setup_internal_reports_torch_drift_repair_guidance():
 
     assert "torch_too_new_for_demucs" in script
     assert "torch_pin_repair_failed" in script
-    assert "Unsupported Torch runtime detected. STEMwerk 2.2.2.2.x requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in script
+    assert "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." in script
     assert 'elseif lower == "core_model_download_failed" then' in script
     assert "Core model download/cache failed during setup. Check network, FFmpeg, and model cache permissions." in script
     assert 'if trim(state.STATUS_REASON or "") ~= "core_model_download_failed" and (hasError("torch_too_new_for_demucs") or hasError("torch_runtime_unsupported")) then' in script
+
+
+def test_macos_setup_runtime_messages_do_not_ship_stale_2222_version_text():
+    from pathlib import Path
+
+    shipped_scripts = [
+        Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua"),
+        Path("scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua"),
+    ]
+
+    for script_path in shipped_scripts:
+        script = script_path.read_text()
+        assert "STEMwerk 2.2.2.2.x requires" not in script
 
 
 def test_setup_internal_postbootstrap_helpers_are_locally_bound():
