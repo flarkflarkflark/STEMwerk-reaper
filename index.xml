@@ -77,10 +77,10 @@
         <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
 
-        <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/languages.lua</source>
-        <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/stemwerk_language_wrapper.lua</source>
-        <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/__init__.py</source>
-        <source file="../i18n/language_checks.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/i18n/language_checks.py</source>
+        <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/languages.lua</source>
+        <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/stemwerk_language_wrapper.lua</source>
+        <source file="../i18n/__init__.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/__init__.py</source>
+        <source file="../i18n/language_checks.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/language_checks.py</source>
 
         <source file="../assets/toolbar_icons/README.txt" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/README.txt</source>
         <source file="../assets/toolbar_icons/single/stemwerk_all_stems_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_all_stems_24.png</source>

@@ -1495,6 +1495,8 @@ def test_reapack_payload_includes_managed_python_runtime_files():
     assert "STEMwerk_Bootstrap_macOS.sh" in index
     assert "_internal/STEMwerk_Managed_Python.lua" in index
     assert "_internal/STEMwerk_Managed_Python.sh" in index
+    assert "scripts/reaper/i18n/languages.lua" in index
+    assert "scripts/reaper/i18n/stemwerk_language_wrapper.lua" in index
 
 
 def test_managed_python_manifest_pins_astral_python_31213():
