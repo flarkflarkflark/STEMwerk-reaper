@@ -27,7 +27,7 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 - Preserved Windows DirectML runtime support and DirectML fallback.
 - Hardened Windows DrumSep runtime setup and state reporting.
 - Improved Windows NVIDIA device/runtime selection and scheduler markers.
-- Fixed the Windows installer ready-to-go blocker in `e06507c99e6e336cbbf36892a39c97876d10daa0`, then finalized the current 2.3 release-candidate basis in `95013e6d8e9e3bf6cda0456264612153678ed1c0`.
+- Fixed the Windows installer ready-to-go blocker in `e06507c99e6e336cbbf36892a39c97876d10daa0`, followed by the final verified 2.3 release source and artifact pass documented below.
 - Installer license text is now aligned to `2.3.0.0` / `2026-06-22`.
 - Normal/core Demucs aliases are now translated to concrete `audio-separator 0.24.4` model ids before load/prefetch: `htdemucs.yaml`, `htdemucs_ft.yaml`, `htdemucs_6s.yaml`.
 - Windows capabilities writes are now atomic; stale `capabilities.env` is removed on write failure.
@@ -43,10 +43,18 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 - Support bundles now include `ready_to_go.env` markers for prefetched core model cache state and DrumSep ready/runtime state.
 - Processing summaries report runtime/backend, output validation, and pass/fail state more accurately.
 
-## Pre-release live smoke plan
+## Final source and artifact basis
 
-- Tested commit before final Windows installer fix: `e82fb7a5afea93f4c5b50387efa1015d1d4a90f6`
-- Final 2.3.0.0 release-candidate code basis: `95013e6d8e9e3bf6cda0456264612153678ed1c0`
+- Final source HEAD: `6efdf0152ba1db057f15a3e9e8ec72969f8c2b57`
+- Runtime/UI basis: `5c9ab966988d44430a27b666a9a5310e2276b7ba`
+- Build-tool fixes after runtime/UI basis:
+  - `2547cf40ee860d112463011a8d1b53d9fd02662c`
+  - `6efdf0152ba1db057f15a3e9e8ec72969f8c2b57`
+- Final artifact manifest: `/mnt/PRODUCTION/stemwerk-build-evidence/stemwerk-linux-windows-final-build-5c9ab96-20260629-035955/STEMwerk-2.3.0.0-crossplatform-artifacts-6efdf015-FINAL-ROCM-DEB-EXCLUDED.txt`
+- Artifact verification status:
+  - Linux adjusted set verified: `20 files / 19 artifacts`
+  - Windows verified unchanged: `6/6`
+  - macOS public artifacts verified
 - Smoke matrix verdict: `PRE_RELEASE_SMOKE_MATRIX_PASS_WITH_NOTES`
 - Platform verdicts:
   - Linux AMD/ROCm: `READY_TO_GO_SMOKE_PASS_WITH_NOTES`
@@ -80,21 +88,33 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
     - key runs: Normal `C:\Users\Administrator\AppData\Local\Temp\STEMwerk_1782074547_39966221_1` (`DONE/0`, `normal/stems`, `selected/effective directml:0`, outputs `4/4`); Direct Kit `STEMwerk_1781920635_28708640_1`, `STEMwerk_1781918283_26356207_1`; Kit Split `STEMwerk_1781878333_14341624_1`
     - first-run download evidence: native REAPER smoke completed without workflow-first-run Demucs, DrumSep, or runtime redownload/rebuild
     - notes: Kit Split evidence recorded under `runtime_runs/diagnostics`, `workflow_source=dks_extract`, stage2 `DmlExecutionProvider`; verdict `WINDOWS_AMD_DIRECTML_NATIVE_REAPER_SMOKE_PASS_WITH_NOTES`
-- Still not done:
-  - final asset rebuild from `95013e6d8e9e3bf6cda0456264612153678ed1c0`
-  - final artifact verification
+
+## Publication exceptions
+
+- Linux ROCm/AMD offline allmodels `.deb` is excluded.
+  - reason: `dpkg-deb: error: ar member size 10310026300 too large`
+  - use the Linux ROCm offline `AppImage`, `RPM`, or `pkg.tar.zst` instead
+- macOS `STEMwerk-2.3.0.0-bundled-apple-silicon.pkg` is excluded.
+  - reason: redundant/misleading; payload effectively identical to offline allmodels
+- macOS publication set:
+  - publish `STEMwerk-2.3.0.0.pkg`
+  - publish `STEMwerk-2.3.0.0-offline-bundled-apple-silicon-mps-allmodels.pkg`
+
+## Publication state
+
+- Artifact build and verification: done
+- Upload plan:
+  - smaller/normal artifacts to GitHub
+  - large offline installers to Google Drive
+- Still not performed:
   - tag
   - GitHub release
   - ReaPack publish
-  - installer publish
-- Release verdict values:
-  - `PRE_RELEASE_SMOKE_MATRIX_PASS`
-  - `PRE_RELEASE_SMOKE_MATRIX_PASS_WITH_NOTES`
-  - `PRE_RELEASE_SMOKE_MATRIX_BLOCKED`
+  - installer upload/publish
 
 ## Known notes
 
-- All Linux and Windows artifacts generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a`, `e06507c99e6e336cbbf36892a39c97876d10daa0`, or `328c614c8adcdc8244c8bb9bf601083907f29032` are stale and superseded by artifacts rebuilt from `95013e6d8e9e3bf6cda0456264612153678ed1c0`.
+- All Linux and Windows artifacts generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a`, `e06507c99e6e336cbbf36892a39c97876d10daa0`, or `328c614c8adcdc8244c8bb9bf601083907f29032` are stale and superseded by the final verified artifact set documented in the manifest above.
 - In 2.3 terminology, smaller offline installers can still download required runtime/model assets, while bundled installers include Python + FFmpeg. Existing allmodels/Demucs core assets are not complete DrumSep/Drum Kit offline/full bundles. DrumSep runtimes and model assets are handled by setup/runtime routes unless a specific full/offline asset explicitly says otherwise.
 - Windows DrumSep CUDA cap4 is not the default in 2.3; it remains an advanced/post-2.3 performance topic.
 - Windows Kit Split stage2 remains cap1 where Windows locking/fcntl support is unavailable.
