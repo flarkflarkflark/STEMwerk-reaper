@@ -261,8 +261,27 @@ write_ready_to_go_state() {
   _fast="$(printf "%s\n" "${_core}" | awk -F= '/^fast=/{print $2; exit}')"
   _quality="$(printf "%s\n" "${_core}" | awk -F= '/^quality=/{print $2; exit}')"
   _sixstem="$(printf "%s\n" "${_core}" | awk -F= '/^sixstem=/{print $2; exit}')"
+  _drumsep_status="ready"
+  _dks_supported="true"
+  _normal_stems_supported="false"
+  if [ "${_main_runtime_status}" = "ok" ] && [ "${_fast}" = "ok" ] && [ "${_quality}" = "ok" ] && [ "${_sixstem}" = "ok" ]; then
+    _normal_stems_supported="true"
+  fi
+  if [ "${MAC_ARCH}" = "x86_64" ] && [ "${_detail}" = "unsupported_mac_intel" ]; then
+    _drumsep_status="unsupported_mac_intel"
+    _dks_supported="false"
+  elif [ "${_runtime_status}" = "ok" ] && [ "${_drumsep_model_status}" = "ok" ]; then
+    _drumsep_status="ready"
+  elif [ "${_runtime_status}" = "skipped" ] || [ "${_drumsep_model_status}" = "skipped" ]; then
+    _drumsep_status="skipped"
+  else
+    _drumsep_status="missing"
+  fi
   _ready="ok"
-  if [ "${_fast}" != "ok" ] || [ "${_quality}" != "ok" ] || [ "${_sixstem}" != "ok" ] || [ "${_drumsep_model_status}" != "ok" ]; then
+  if [ "${_fast}" != "ok" ] || [ "${_quality}" != "ok" ] || [ "${_sixstem}" != "ok" ]; then
+    _ready="missing"
+  fi
+  if [ "${_drumsep_model_status}" != "ok" ] && [ "${_drumsep_model_status}" != "skipped" ]; then
     _ready="missing"
   fi
   if [ "${_runtime_status}" != "ok" ] && [ "${_runtime_status}" != "skipped" ]; then
@@ -283,6 +302,9 @@ write_ready_to_go_state() {
     echo "DRUMSEP_READY_RUNTIME=${_runtime_kind}"
     echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"
     echo "DRUMSEP_READY_MODEL_STATUS=${_drumsep_model_status}"
+    echo "DRUMSEP_STATUS=${_drumsep_status}"
+    echo "DKS_SUPPORTED=${_dks_supported}"
+    echo "NORMAL_STEMS_SUPPORTED=${_normal_stems_supported}"
   } > "$(ready_to_go_state_file)"
 }
 
@@ -1482,24 +1504,31 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
       MACOS_BUNDLED_DRUMSEP_STATUS="copy_failed"
     fi
   fi
-  if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
-    READY_RUNTIME_STATUS="ok"
-    READY_DRUMSEP_MODEL_STATUS="ok"
-    READY_DETAIL="ok"
+  if [ "${MAC_ARCH}" = "x86_64" ]; then
+    READY_RUNTIME_STATUS="skipped"
+    READY_DRUMSEP_MODEL_STATUS="skipped"
+    READY_DETAIL="unsupported_mac_intel"
+    log "drumsep_ready_status=unsupported_mac_intel"
   else
-    log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"
-    READY_RUNTIME_STATUS="missing"
-    READY_DRUMSEP_MODEL_STATUS="missing"
-    case "${DRUMSEP_PREFETCH_DETAIL:-}" in
-      asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
-        READY_DETAIL="drumsep_model_download_failed"
-        set_status "deps_failed" "drumsep_model_download_failed"
-        ;;
-      *)
-        READY_DETAIL="drumsep_model_prefetch_failed"
-        set_status "deps_failed" "drumsep_model_prefetch_failed"
-        ;;
-    esac
+    if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
+      READY_RUNTIME_STATUS="ok"
+      READY_DRUMSEP_MODEL_STATUS="ok"
+      READY_DETAIL="ok"
+    else
+      log "drumsep_model_prefetch_detail=${DRUMSEP_PREFETCH_DETAIL:-unknown}"
+      READY_RUNTIME_STATUS="missing"
+      READY_DRUMSEP_MODEL_STATUS="missing"
+      case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+        asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
+          READY_DETAIL="drumsep_model_download_failed"
+          set_status "deps_failed" "drumsep_model_download_failed"
+          ;;
+        *)
+          READY_DETAIL="drumsep_model_prefetch_failed"
+          set_status "deps_failed" "drumsep_model_prefetch_failed"
+          ;;
+      esac
+    fi
   fi
 fi
 write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}"

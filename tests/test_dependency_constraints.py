@@ -1399,6 +1399,21 @@ def test_verify_only_keeps_mps_unavailable_as_informational_reason_for_intel_mac
     assert "backendReason = backendReason" in setup_internal
 
 
+def test_setup_internal_writes_drumsep_policy_capabilities():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
+
+    assert 'f:write("DRUMSEP_STATUS=" .. tostring(data.drumsepStatus or "") .. "\\n")' in setup_internal
+    assert 'f:write("DKS_SUPPORTED=" .. tostring(data.dksSupported or "") .. "\\n")' in setup_internal
+    assert 'f:write("NORMAL_STEMS_SUPPORTED=" .. tostring(data.normalStemsSupported or "") .. "\\n")' in setup_internal
+    assert "function resolveDrumsepPolicyState(readyState, profile, backend)" in setup_internal
+    assert 'drumsepStatus = "unsupported_mac_intel"' in setup_internal
+    assert 'dksSupported = drumsepStatus == "unsupported_mac_intel" and "false" or "true"' in setup_internal
+    assert 'normalStemsSupported = "true"' in setup_internal
+    assert 'drumsepStatus = drumsepStatus,' in setup_internal
+    assert 'dksSupported = dksSupported,' in setup_internal
+    assert 'normalStemsSupported = normalStemsSupported,' in setup_internal
+
+
 def test_verify_only_avoids_torch_runtime_unsupported_for_verified_intel_macos_cpu_fallback():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
@@ -1497,6 +1512,18 @@ def test_reapack_payload_includes_managed_python_runtime_files():
     assert "_internal/STEMwerk_Managed_Python.sh" in index
     assert "scripts/reaper/i18n/languages.lua" in index
     assert "scripts/reaper/i18n/stemwerk_language_wrapper.lua" in index
+
+
+def test_intel_mac_drumsep_policy_blocks_dks_before_runtime_setup():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+
+    assert 'local function intelMacDrumsepUnsupported()' in main_script
+    assert 'return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")' in main_script
+    assert 'trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")' in main_script
+    assert '"drumsep_intel_mac_unsupported_body",' in main_script
+    assert 'if isDrumKitWorkflow and intelMacDrumsepUnsupported() then' in main_script
+    assert 'showIntelMacDrumsepUnsupportedMessage()' in main_script
+    assert main_script.index('if isDrumKitWorkflow and intelMacDrumsepUnsupported() then') < main_script.index('if isDirectDKS then')
 
 
 def test_managed_python_manifest_pins_astral_python_31213():
@@ -4713,6 +4740,11 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
     assert '_bundled_drumsep_dir="$(bundled_drumsep_dir || true)"' in script
     assert 'copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
     assert 'MACOS_BUNDLED_DRUMSEP_STATUS="seeded"' in script
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in script
+    assert 'READY_RUNTIME_STATUS="skipped"' in script
+    assert 'READY_DRUMSEP_MODEL_STATUS="skipped"' in script
+    assert 'READY_DETAIL="unsupported_mac_intel"' in script
+    assert 'log "drumsep_ready_status=unsupported_mac_intel"' in script
     assert Path("installer/linux/payload/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl").is_file()
 
 
@@ -4733,6 +4765,12 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumsep_backend_limited_title = "Drum Kit-backend wordt nog niet ondersteund."' in langs
     assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstuetzt."' in langs
     assert 'drumsep_backend_limited_body = "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split."' in langs
+    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split unavailable on Intel Mac"' in langs
+    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform."' in langs
+    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split niet beschikbaar op Intel Mac"' in langs
+    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is in deze release niet ingeschakeld op Intel Mac. Normale CPU-stems zijn beschikbaar. Gebruik voor Drum Kit Split Apple Silicon of een ondersteund GPU/versneld platform."' in langs
+    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfuegbar"' in langs
+    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfuegbar. Verwende fuer Drum Kit Split Apple Silicon oder eine unterstuetzte GPU-/beschleunigte Plattform."' in langs
     assert 'drumkit_result_track_many = "drum tracks"' in langs
     assert 'drumkit_result_track_many = "drumtracks"' in langs
     assert 'drumkit_result_track_many = "Drum-Tracks"' in langs
@@ -6389,6 +6427,9 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'set_status "deps_failed" "drumsep_model_download_failed"' in macos_bootstrap
     assert 'set_status "deps_failed" "drumsep_model_prefetch_failed"' in macos_bootstrap
     assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}"' in macos_bootstrap
+    assert 'echo "DRUMSEP_STATUS=${_drumsep_status}"' in macos_bootstrap
+    assert 'echo "DKS_SUPPORTED=${_dks_supported}"' in macos_bootstrap
+    assert 'echo "NORMAL_STEMS_SUPPORTED=${_normal_stems_supported}"' in macos_bootstrap
 
     assert 'local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"' in setup_internal
     assert 'if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end' in setup_internal
@@ -6396,6 +6437,12 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
 
     assert 'local readyStatePath = joinPath(runtimeStateDir, "ready_to_go.env")' in support_script
     assert 'appendKey(lines, "ready_to_go_status"' in support_script
+    assert 'appendKey(lines, "drumsep_status"' in support_script
+    assert 'appendKey(lines, "dks_supported"' in support_script
+    assert 'appendKey(lines, "normal_stems_supported"' in support_script
+    assert 'appendKey(diagnostics, "Capability drumsep_status"' in support_script
+    assert 'appendKey(diagnostics, "Capability dks_supported"' in support_script
+    assert 'appendKey(diagnostics, "Capability normal_stems_supported"' in support_script
     assert 'collectExpectedFileStatus(statusLines, "ready_to_go.env", readyToGoEnvPath)' in support_script
     assert 'modelDir = getModelCacheDir()' in support_script
 

@@ -9055,6 +9055,19 @@ function trSafeValue(key, fallback)
     return value
 end
 
+local function intelMacDrumsepUnsupported()
+    return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")
+end
+
+local function showIntelMacDrumsepUnsupportedMessage()
+    local title = trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
+    local body = trSafeValue(
+        "drumsep_intel_mac_unsupported_body",
+        "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform."
+    )
+    SW_SETUP.showMessageBox(title, body, 0)
+end
+
 function renderResultTitleArea(ctx)
     local w, PS = ctx.w, ctx.PS
     local utilityMode = type(isThemeUtilityMode) == "function" and isThemeUtilityMode()
@@ -22568,6 +22581,12 @@ function runSeparationWorkflow()
     end
     if workflowSourceState ~= "" then
         reaper.DeleteExtState(EXT_SECTION, "active_workflow_source", false)
+    end
+    if isDrumKitWorkflow and intelMacDrumsepUnsupported() then
+        debugLog("Intel Mac DrumSep/DKS policy block: workflow aborted before runtime setup")
+        showIntelMacDrumsepUnsupportedMessage()
+        isProcessingActive = false
+        return
     end
     if isDirectDKS then
         runOptions = DKS_WORKFLOW.buildDirectRunOptions()

@@ -745,6 +745,8 @@ local function prettySetupReason(reason)
             part = "Runtime directory write test failed"
         elseif lower == "execution_policy_restricted" then
             part = "PowerShell execution policy is restrictive for script execution"
+        elseif lower == "unsupported_mac_intel" then
+            part = "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation remains available."
         end
         local key = part:lower()
         if key ~= "" and not seen[key] then
@@ -1586,6 +1588,9 @@ local function writeCapabilities(path, data, deviceOut)
     f:write("ROCM_DETECTED_DEVICES=" .. tostring(data.rocmDetectedDevices or "") .. "\n")
     f:write("ROCM_SELECTED_DEVICE=" .. tostring(data.rocmSelectedDevice or "") .. "\n")
     f:write("ROCM_FALLBACK_REASON=" .. tostring(data.rocmFallbackReason or "") .. "\n")
+    f:write("DRUMSEP_STATUS=" .. tostring(data.drumsepStatus or "") .. "\n")
+    f:write("DKS_SUPPORTED=" .. tostring(data.dksSupported or "") .. "\n")
+    f:write("NORMAL_STEMS_SUPPORTED=" .. tostring(data.normalStemsSupported or "") .. "\n")
     f:write("DEVICE_NAMES=" .. tostring(data.deviceNames or "") .. "\n")
     if data.envJson and data.envJson ~= "" then
         f:write("ENV_JSON=" .. tostring(data.envJson) .. "\n")
@@ -1606,6 +1611,54 @@ local function writeCapabilities(path, data, deviceOut)
         return false, renameErr
     end
     return true
+end
+
+function readReadyState(runtime)
+    if not runtime or not runtime.runtimeState or runtime.runtimeState == "" then
+        return {}
+    end
+    return parseStateFile(runtime.runtimeState .. PATH_SEP .. "ready_to_go.env")
+end
+
+function resolveDrumsepPolicyState(readyState, profile, backend)
+    readyState = readyState or {}
+    local drumsepStatus = trim(readyState.DRUMSEP_STATUS or "")
+    local dksSupported = trim(readyState.DKS_SUPPORTED or "")
+    local normalStemsSupported = trim(readyState.NORMAL_STEMS_SUPPORTED or "")
+    local readyDetail = trim(readyState.READY_TO_GO_DETAIL or "")
+    local runtimeStatus = trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "")
+    local modelStatus = trim(readyState.DRUMSEP_READY_MODEL_STATUS or "")
+    local mainRuntimeStatus = trim(readyState.MAIN_RUNTIME_STATUS or "")
+
+    if drumsepStatus == "" and OS == "macOS"
+        and MAC_ARCH == "x86_64"
+        and profile == "mac-cpu"
+        and backend == "cpu"
+        and (readyDetail == "unsupported_mac_intel" or runtimeStatus == "skipped" or modelStatus == "skipped")
+    then
+        drumsepStatus = "unsupported_mac_intel"
+    end
+    if drumsepStatus == "" then
+        if runtimeStatus == "ok" and modelStatus == "ok" then
+            drumsepStatus = "ready"
+        elseif runtimeStatus == "skipped" or modelStatus == "skipped" then
+            drumsepStatus = "skipped"
+        else
+            drumsepStatus = "missing"
+        end
+    end
+
+    if dksSupported == "" then
+        dksSupported = drumsepStatus == "unsupported_mac_intel" and "false" or "true"
+    end
+    if normalStemsSupported == "" then
+        if mainRuntimeStatus == "ok" or trim(readyState.READY_TO_GO_STATUS or "") == "ok" then
+            normalStemsSupported = "true"
+        else
+            normalStemsSupported = "false"
+        end
+    end
+    return drumsepStatus, dksSupported, normalStemsSupported
 end
 
 local function updateBootstrapEnv(path, kv)
@@ -2768,6 +2821,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     if verificationSuccess and trim(state.BACKEND_DEPS_COMPLETE or "") == "yes" then
         backendDepsReason = ""
     end
+    local readyState = readReadyState(runtime)
+    local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
 
     ensureDir(runtime.runtimeState)
     local capPath = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
@@ -2840,6 +2895,9 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         rocmDetectedDevices = state.ROCM_DETECTED_DEVICES or "",
         rocmSelectedDevice = state.ROCM_SELECTED_DEVICE or "",
         rocmFallbackReason = state.ROCM_FALLBACK_REASON or "",
+        drumsepStatus = drumsepStatus,
+        dksSupported = dksSupported,
+        normalStemsSupported = normalStemsSupported,
         envJson = envJson,
     }, deviceOut)
     if not wroteCaps then
@@ -2909,6 +2967,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         if OS == "macOS" and MAC_ARCH == "x86_64" and profile == "mac-cpu" and backend == "cpu" then
             finalMessage[#finalMessage + 1] = "Setup completed using Intel macOS CPU fallback."
             finalMessage[#finalMessage + 1] = "MPS is unavailable on Intel Macs; CPU processing is expected."
+            finalMessage[#finalMessage + 1] = "Drum Kit Split is not enabled on Intel Macs in this release."
         end
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Python path: " .. tostring(verification.pythonPath)
@@ -5614,6 +5673,8 @@ verifyExistingSetup = function(runtime, separatorScript)
         if not c.ok then allOk = false end
     end
 
+    local readyState = readReadyState(runtime)
+    local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
     writeCapabilities(capFile, {
         profile = profile,
         backend = backend,
@@ -5675,6 +5736,9 @@ verifyExistingSetup = function(runtime, separatorScript)
         rocmDetectedDevices = state.ROCM_DETECTED_DEVICES or "",
         rocmSelectedDevice = state.ROCM_SELECTED_DEVICE or "",
         rocmFallbackReason = state.ROCM_FALLBACK_REASON or "",
+        drumsepStatus = drumsepStatus,
+        dksSupported = dksSupported,
+        normalStemsSupported = normalStemsSupported,
         envJson = envJson,
     }, deviceOut)
 
