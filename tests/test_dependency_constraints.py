@@ -4542,6 +4542,13 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"torch==2.5.1"' in main_cpu_block
     assert '"torch==2.5.1+cpu"' not in main_cpu_block
 
+    drumsep_cpu_block = script.split('("drumsep", "cpu"): WheelhouseSpec(', 1)[1].split('("drumsep", "cuda")', 1)[0]
+    assert '"torch==2.12.0+cpu"' in drumsep_cpu_block
+    assert '"torchvision==0.27.0+cpu"' in drumsep_cpu_block
+    assert 'index_url="https://download.pytorch.org/whl/cpu"' in drumsep_cpu_block
+    assert "nvidia-cublas" not in drumsep_cpu_block
+    assert "cuda-toolkit" not in drumsep_cpu_block
+
     assert '"linux-x86_64-cp312"' in payload_builder
 
 

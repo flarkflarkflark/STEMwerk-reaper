@@ -117,10 +117,11 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "onnx==1.21.0",
             "onnx2torch==1.5.15",
             "onnx2torch-py313==1.6.0",
-            "torch==2.12.0",
-            "torchvision==0.27.0",
+            "torch==2.12.0+cpu",
+            "torchvision==0.27.0+cpu",
             "numba==0.65.1",
         ),
+        index_url="https://download.pytorch.org/whl/cpu",
     ),
     ("drumsep", "cuda"): WheelhouseSpec(
         requirements=(
