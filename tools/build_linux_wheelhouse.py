@@ -28,6 +28,10 @@ TORCH_REQUIREMENTS = (
     "torchvision",
 )
 
+TORCH_INDEX_DEPENDENCY_PREFIXES = (
+    "pytorch-triton",
+)
+
 TARGET_ENV = {
     "sys_platform": "linux",
     "platform_system": "Linux",
@@ -164,7 +168,8 @@ def requirement_name(requirement: str) -> str:
 
 
 def uses_torch_index(requirement: str) -> bool:
-    return requirement_name(requirement) in TORCH_REQUIREMENTS
+    name = requirement_name(requirement)
+    return name in TORCH_REQUIREMENTS or any(name.startswith(prefix) for prefix in TORCH_INDEX_DEPENDENCY_PREFIXES)
 
 
 def run_pip_download(requirement: str, out_dir: Path, spec: WheelhouseSpec) -> None:

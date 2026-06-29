@@ -4497,6 +4497,7 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
 
     assert "BOOTSTRAP_REQUIREMENTS = (" in script
     assert "TORCH_REQUIREMENTS = (" in script
+    assert "TORCH_INDEX_DEPENDENCY_PREFIXES = (" in script
     assert "TARGET_PLATFORM_ARGS = [" in script
     assert "TORCH_PLATFORM_ARGS = [" in script
     assert '"--only-binary=:all:"' in script
@@ -4514,7 +4515,10 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert 'def uses_torch_index(requirement: str) -> bool:' in script
     assert 'def wheel_distribution_name(wheel_path: Path) -> Optional[str]:' in script
     assert 'def preloaded_wheel_names(out_dir: Path) -> Dict[str, str]:' in script
-    assert 'return requirement_name(requirement) in TORCH_REQUIREMENTS' in script
+    assert 'name = requirement_name(requirement)' in script
+    assert 'name in TORCH_REQUIREMENTS' in script
+    assert 'TORCH_INDEX_DEPENDENCY_PREFIXES' in script
+    assert 'name.startswith(prefix)' in script
     assert 'if uses_torch_index(requirement):' in script
     assert 'cmd += TORCH_PLATFORM_ARGS' in script
     assert 'if spec.index_url and uses_torch_index(requirement):' in script
