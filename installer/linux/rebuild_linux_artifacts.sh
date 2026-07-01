@@ -95,7 +95,19 @@ build_variant() {
   local variant="$1"
   local suffix
   local payload_dir=""
+  local variant_targets=("${targets[@]}")
   suffix="$(variant_suffix "$variant")"
+
+  if [[ "$variant" == "offline-bundled-rocm-allmodels" ]]; then
+    local filtered_targets=()
+    local target=""
+    for target in "${variant_targets[@]}"; do
+      if [[ "$target" != "deb" ]]; then
+        filtered_targets+=("$target")
+      fi
+    done
+    variant_targets=("${filtered_targets[@]}")
+  fi
 
   if [[ "$variant" != "online-minimal" ]]; then
     payload_dir="$(mktemp -d "/tmp/stemwerk-linux-payload-${variant//[^A-Za-z0-9]/_}-XXXXXX")"
@@ -108,17 +120,17 @@ build_variant() {
   if [[ -n "${selected[deb]:-}" ]]; then
     rm -f "$OUT_DIR"/stemwerk_"$VERSION"_*"${suffix}".deb
   fi
-  if [[ -n "${selected[rpm]:-}" ]]; then
+  if [[ " ${variant_targets[*]} " == *" rpm "* ]]; then
     rm -f "$OUT_DIR"/stemwerk-"$VERSION"-*"${suffix}".rpm
   fi
-  if [[ -n "${selected[appimage]:-}" ]]; then
+  if [[ " ${variant_targets[*]} " == *" appimage "* ]]; then
     rm -f "$OUT_DIR"/STEMwerk-"$VERSION"-*"${suffix}".AppImage
   fi
-  if [[ -n "${selected[arch]:-}" ]]; then
+  if [[ " ${variant_targets[*]} " == *" arch "* ]]; then
     rm -f "$OUT_DIR"/stemwerk-"$VERSION"-*"${suffix}".pkg.tar.zst
   fi
 
-  for target in "${targets[@]}"; do
+  for target in "${variant_targets[@]}"; do
     case "$target" in
       deb)
         STEMWERK_LINUX_VARIANT="$variant" STEMWERK_OUTPUT_SUFFIX="$suffix" STEMWERK_BUNDLED_PAYLOAD_DIR="$payload_dir" bash "$ROOT_DIR/installer/linux/build_deb.sh"
@@ -134,6 +146,10 @@ build_variant() {
         ;;
     esac
   done
+
+  if [[ "$variant" == "offline-bundled-rocm-allmodels" && -n "${selected[deb]:-}" ]]; then
+    echo "Skipping Debian package for $variant: dpkg-deb cannot emit the >10GB ROCm offline allmodels artifact."
+  fi
 
   if [[ -n "$payload_dir" && -d "$payload_dir" ]]; then
     rm -rf "$payload_dir"
