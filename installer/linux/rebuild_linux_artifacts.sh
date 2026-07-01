@@ -110,7 +110,7 @@ build_variant() {
   fi
 
   if [[ "$variant" != "online-minimal" ]]; then
-    payload_dir="$(mktemp -d "/tmp/stemwerk-linux-payload-${variant//[^A-Za-z0-9]/_}-XXXXXX")"
+    payload_dir="$(mktemp -d "${TMPDIR:-/tmp}/stemwerk-linux-payload-${variant//[^A-Za-z0-9]/_}-XXXXXX")"
     python3 "$ROOT_DIR/tools/build_linux_variant_payload.py" \
       --variant "$variant" \
       --repo-root "$ROOT_DIR" \

@@ -4512,6 +4512,7 @@ def test_linux_rebuild_matrix_skips_rocm_offline_deb_but_keeps_other_targets():
     assert 'if [[ "$target" != "deb" ]]; then' in rebuild
     assert 'Skipping Debian package for $variant: dpkg-deb cannot emit the >10GB ROCm offline allmodels artifact.' in rebuild
     assert 'rm -f "$OUT_DIR"/stemwerk_"$VERSION"_*"${suffix}".deb' in rebuild
+    assert 'payload_dir="$(mktemp -d "${TMPDIR:-/tmp}/stemwerk-linux-payload-${variant//[^A-Za-z0-9]/_}-XXXXXX")"' in rebuild
 
 
 def test_linux_bootstrap_uses_bundled_payloads_for_models_and_offline_pip():
