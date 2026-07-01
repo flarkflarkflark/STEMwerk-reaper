@@ -571,6 +571,9 @@ def test_linux_bootstrap_gfx1201_prefers_rocm7_stack_not_251_pin():
     assert 'if [ "${ROCM_GFX1201}" -eq 1 ] && [ "${rocm_fail_reason}" = "rocm_wheel_not_found" ]; then' in script
     assert 'rocm_fail_reason="rocm7_stack_unavailable_for_gfx1201"' in script
     assert 'TORCH_RUNTIME_POLICY="rocm_gfx1201_allow_2_10_rocm7"' in script
+    assert script.index('ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"') < script.index('install_linux_torch_stack "cpu" || true')
+    assert script.index('ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"') < script.index('install_linux_torch_stack "cpu" || true')
+    assert script.index('ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"') < script.index('install_linux_torch_stack "cpu" || true')
 
 
 def test_linux_bootstrap_gfx1201_requires_rx9070_or_gfx1201_device_visibility():
@@ -4528,6 +4531,13 @@ def test_linux_bootstrap_uses_bundled_payloads_for_models_and_offline_pip():
     assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
     assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
     assert '"${BUNDLED_PAYLOAD_DIR}/wheels/main" \\' in script
+    assert "bundled_main_has_required_torch_stack()" in script
+    assert 'log_step "Bundled main wheelhouse does not contain the requested torch stack; using CPU index fallback"' in script
+    assert 'log_step "Bundled main wheelhouse does not contain the requested torch stack; using ROCm index fallback"' in script
+    assert 'log_step "Bundled main wheelhouse does not contain the requested torch stack; using default pip index fallback"' in script
+    assert '[ -f "${_dir}/torch-${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}-"*.whl ] || return 1' in script
+    assert '[ -f "${_dir}/torchvision-${ACTIVE_TORCHVISION_VERSION:-${PINNED_TORCHVISION_VERSION}}-"*.whl ] || return 1' in script
+    assert '[ -f "${_dir}/torchaudio-${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}-"*.whl ] || return 1' in script
 
 
 def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_index():

@@ -1427,6 +1427,15 @@ linux_torch_install_args() {
     "${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}"
 }
 
+bundled_main_has_required_torch_stack() {
+  _dir="$(bundled_main_wheelhouse_dir || true)"
+  [ -n "${_dir}" ] || return 1
+  [ -f "${_dir}/torch-${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}-"*.whl ] || return 1
+  [ -f "${_dir}/torchvision-${ACTIVE_TORCHVISION_VERSION:-${PINNED_TORCHVISION_VERSION}}-"*.whl ] || return 1
+  [ -f "${_dir}/torchaudio-${ACTIVE_TORCHAUDIO_VERSION:-${PINNED_TORCHAUDIO_VERSION}}-"*.whl ] || return 1
+  return 0
+}
+
 log_nvidia_packages() {
   NVIDIA_PKGS="$("${VENV_PY}" -m pip list 2>/dev/null | awk '/^nvidia-/{print $1"=="$2}')"
   if [ -n "${NVIDIA_PKGS}" ]; then
@@ -1446,30 +1455,33 @@ install_linux_torch_stack() {
   case "${_mode}" in
     cpu)
       log_step "Torch source index: https://download.pytorch.org/whl/cpu (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
-      if bundled_main_wheelhouse_dir >/dev/null 2>&1; then
+      if bundled_main_has_required_torch_stack; then
         pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args) >> "${LOG_FILE}" 2>&1
         _pip_rc=$?
       else
+        log_step "Bundled main wheelhouse does not contain the requested torch stack; using CPU index fallback"
         eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url https://download.pytorch.org/whl/cpu $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
         _pip_rc=$?
       fi
       ;;
     rocm)
       log_step "Torch source index: ${_index} (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
-      if bundled_main_wheelhouse_dir >/dev/null 2>&1; then
+      if bundled_main_has_required_torch_stack; then
         pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args) >> "${LOG_FILE}" 2>&1
         _pip_rc=$?
       else
+        log_step "Bundled main wheelhouse does not contain the requested torch stack; using ROCm index fallback"
         eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir --index-url \"${_index}\" $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
         _pip_rc=$?
       fi
       ;;
     cuda)
       log_step "Torch source index: default pip index (torch/torchaudio pinned to ${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}})"
-      if bundled_main_wheelhouse_dir >/dev/null 2>&1; then
+      if bundled_main_has_required_torch_stack; then
         pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args) >> "${LOG_FILE}" 2>&1
         _pip_rc=$?
       else
+        log_step "Bundled main wheelhouse does not contain the requested torch stack; using default pip index fallback"
         eval "\"${VENV_PY}\" -m pip install --upgrade --force-reinstall --no-cache-dir $(linux_torch_install_args)" >> "${LOG_FILE}" 2>&1
         _pip_rc=$?
       fi
@@ -2280,10 +2292,10 @@ EOF
         fi
         ROCM_FALLBACK_REASON="${rocm_fail_reason}"
         log_step "ROCm torch install/probe failed; falling back to CPU (reason=${rocm_fail_reason})"
-        install_linux_torch_stack "cpu" || true
         ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
         ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
         ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
+        install_linux_torch_stack "cpu" || true
         TORCH_RUNTIME_POLICY="service_line_default_torch_lt_2_6"
         PROFILE="linux-cpu"
         BACKEND="cpu"
