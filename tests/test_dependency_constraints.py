@@ -4147,9 +4147,9 @@ def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins()
     assert "drumsep_rocm_disk_preflight()" in script
     assert "resolve_drumsep_rocm_tmpdir()" in script
     assert 'write_drumsep_rocm_state "disk_space_insufficient" "missing"' in script
-    assert '"${_py}" -m pip install --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
     assert '"torch==${DRUMSEP_ROCM_TORCH_VERSION}"' in script
-    assert '"${_py}" -m pip install --no-cache-dir --no-deps' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps' in script
     assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
     assert '"${_py}" -m pip check' in script
     assert "verify_drumsep_rocm_runtime()" in script
@@ -4543,6 +4543,50 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"manylinux2014_x86_64"' in script
     assert '"manylinux_2_28_x86_64"' in script
     assert '"linux_x86_64"' in script
+
+
+def test_linux_main_wheelhouse_pins_scipy_below_numpy_2_breakpoint():
+    script = Path("tools/build_linux_wheelhouse.py").read_text()
+
+    assert '("main", "cpu")' in script
+    assert '("main", "cuda")' in script
+    assert '("main", "rocm")' in script
+    assert script.count('"scipy==1.17.1"') >= 3
+    assert '"numpy==1.26.4"' in script
+
+
+def test_linux_rocm_main_wheelhouse_skips_bundled_torch_transitives():
+    script = Path("tools/build_linux_wheelhouse.py").read_text()
+
+    assert 'skipped_dependency_names=(' in script
+    assert '"torch"' in script
+    assert '"torchaudio"' in script
+    assert '"torchvision"' in script
+    assert '"pytorch-triton-rocm"' in script
+    assert 'if dep_name in skipped_dependency_names:' in script
+
+
+def test_linux_stage_payload_copies_runtime_python_files(tmp_path):
+    dest_dir = tmp_path / "payload"
+    subprocess.run(
+        [
+            "bash",
+            "-lc",
+            f'source installer/linux/stage_payload.sh && copy_linux_payload "$PWD" "{dest_dir}"',
+        ],
+        check=True,
+        cwd=Path.cwd(),
+    )
+
+    assert (dest_dir / "audio_separator_process.py").is_file()
+    assert (dest_dir / "_internal" / "stemwerk_drumsep_process.py").is_file()
+    assert (dest_dir / "vendor" / "stemwerk-core" / "pyproject.toml").is_file()
+
+
+def test_linux_wheelhouse_builder_targets_cp312_manylinux_and_uses_name_preload():
+    script = Path("tools/build_linux_wheelhouse.py").read_text()
+    payload_builder = Path("tools/build_linux_variant_payload.py").read_text()
+
     assert '"--python-version"' in script
     assert '"312"' in script
     assert '"--abi"' in script

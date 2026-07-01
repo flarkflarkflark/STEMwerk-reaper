@@ -68,6 +68,7 @@ class WheelhouseSpec:
     requirements: tuple[str, ...]
     index_url: Optional[str] = None
     extra_index_url: Optional[str] = None
+    skipped_dependency_names: tuple[str, ...] = ()
 
 
 SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
@@ -77,6 +78,7 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "numpy==1.26.4",
             "numba==0.59.1",
             "llvmlite==0.42.0",
+            "scipy==1.17.1",
             "onnxruntime",
             "torch==2.5.1",
             "torchvision==0.20.1",
@@ -90,6 +92,7 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "numpy==1.26.4",
             "numba==0.59.1",
             "llvmlite==0.42.0",
+            "scipy==1.17.1",
             "onnxruntime",
             "torch==2.5.1",
             "torchvision==0.20.1",
@@ -102,12 +105,21 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
             "numpy==1.26.4",
             "numba==0.59.1",
             "llvmlite==0.42.0",
+            "scipy==1.17.1",
             "onnxruntime",
-            "torch==2.9.1+rocm6.4",
-            "torchvision==0.24.1+rocm6.4",
-            "torchaudio==2.9.1+rocm6.4",
         ),
         index_url="https://download.pytorch.org/whl/rocm6.4",
+        # The Linux bootstrap selects the main ROCm torch stack dynamically
+        # at install time. Do not bake a mismatched service-line torch set into
+        # the main ROCm wheelhouse or pip repair will resolve against the wrong
+        # local wheels and duplicate multi-GB torch payloads in the AppImage.
+        skipped_dependency_names=(
+            "torch",
+            "torchaudio",
+            "torchvision",
+            "pytorch-triton",
+            "pytorch-triton-rocm",
+        ),
     ),
     ("drumsep", "cpu"): WheelhouseSpec(
         requirements=(
@@ -254,6 +266,7 @@ def preloaded_wheel_names(out_dir: Path) -> Dict[str, str]:
 def main() -> int:
     args = parse_args()
     spec = SPECS[(args.runtime, args.backend)]
+    skipped_dependency_names = {canonicalize_name(name) for name in spec.skipped_dependency_names}
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     copy_extra_wheels(out_dir, args.extra_wheel_dir)
@@ -285,6 +298,8 @@ def main() -> int:
             if not requirement_applies(dep):
                 continue
             dep_name = canonicalize_name(dep.name)
+            if dep_name in skipped_dependency_names:
+                continue
             if dep_name in resolved_names:
                 continue
             queue.append(requirement_to_spec(dep))
