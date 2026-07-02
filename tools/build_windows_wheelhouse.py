@@ -31,6 +31,8 @@ TARGET_ENV = {
     "extra": "",
 }
 
+CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
+
 SKIP_DEP_NAMES = {
     "diffq",      # non-Windows dependency
     "julius",     # no reliable win_amd64 wheel on index
@@ -218,7 +220,10 @@ def main() -> int:
             continue
 
         before = set(out_dir.glob("*.whl"))
-        pip_download(spec, out_dir, args)
+        if "+cu121" in spec:
+            pip_download_with_index(spec, out_dir, args, CUDA_INDEX_URL)
+        else:
+            pip_download(spec, out_dir, args)
         new_wheels = find_new_wheels(before, out_dir)
 
         if not new_wheels:
@@ -239,12 +244,6 @@ def main() -> int:
             if dep_name in resolved_names:
                 continue
             queue.append(requirement_to_spec(dep))
-
-            # Bundle CUDA wheels explicitly so offline CUDA installs can succeed.
-            if int(args.include_cuda_wheels) == 1:
-                cuda_index = "https://download.pytorch.org/whl/cu121"
-                pip_download_with_index("torch==2.4.1+cu121", out_dir, args, cuda_index)
-                pip_download_with_index("torchvision==0.19.1+cu121", out_dir, args, cuda_index)
 
     print(f"Wheelhouse ready at {out_dir}")
     print(f"Total wheels: {len(list(out_dir.glob('*.whl')))}")

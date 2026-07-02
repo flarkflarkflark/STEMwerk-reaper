@@ -4465,6 +4465,9 @@ def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_c
     assert 'else:' in script
     assert '"torch==2.4.1"' in script
     assert '"torchvision==0.19.1"' in script
+    assert 'CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"' in script
+    assert 'if "+cu121" in spec:' in script
+    assert "pip_download_with_index(spec, out_dir, args, CUDA_INDEX_URL)" in script
 
 
 def test_windows_bootstrap_cuda_runtime_preserves_cu121_local_version_suffix():
