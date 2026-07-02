@@ -4453,6 +4453,31 @@ def test_windows_offline_drumsep_payload_builder_and_inno_wiring_present():
     assert 'torch==2.12.0' in prep
 
 
+def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_uninstall():
+    iss = Path("installer/windows/STEMwerk.iss").read_text(encoding="utf-8")
+    patch_iss = Path("installer/windows/STEMwerk_Offline_Patch.iss").read_text(encoding="utf-8")
+    bundled_shell = Path("installer/windows/build_bundled_installer.sh").read_text(encoding="utf-8")
+    bundled_models_shell = Path("installer/windows/build_bundled_model_installers.sh").read_text(encoding="utf-8")
+    online_ps1 = Path("installer/windows/build_online_installers.ps1").read_text(encoding="utf-8")
+    patch_shell = Path("installer/windows/build_offline_patch_installer.sh").read_text(encoding="utf-8")
+
+    assert "[UninstallDelete]" in iss
+    assert 'Type: filesandordirs; Name: "{localappdata}\\STEMwerk"' in iss
+    assert 'Type: filesandordirs; Name: "{userappdata}\\REAPER\\Scripts\\STEMwerk-reaper"' in iss
+    assert 'Type: files; Name: "{userappdata}\\REAPER\\Scripts\\STEMwerk.lua"' in iss
+    assert 'Type: files; Name: "{userappdata}\\REAPER\\Scripts\\STEMwerk_Drum_Kit_Split.lua"' in iss
+    assert 'Type: files; Name: "{userappdata}\\REAPER\\Scripts\\STEMwerk_Save_Support_Bundle.lua"' in iss
+
+    assert 'DefaultDirName={userappdata}\\REAPER\\Scripts\\STEMwerk-reaper' in iss
+    assert 'AppId={{9A6BDA0D-6A2A-4B36-9C3B-1D4C77E5D0A3}' in iss
+    assert 'STEMwerk.iss' in bundled_shell
+    assert 'STEMwerk.iss' in bundled_models_shell
+    assert 'installer\\\\windows\\\\STEMwerk.iss' in online_ps1
+
+    assert 'Uninstallable=no' in patch_iss
+    assert 'STEMwerk_Offline_Patch.iss' in patch_shell
+
+
 def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_consistent():
     script = Path("tools/build_windows_wheelhouse.py").read_text()
 

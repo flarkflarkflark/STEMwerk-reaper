@@ -136,6 +136,13 @@ Source: "STEMwerk_License_Agreement.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\TODO.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
+[UninstallDelete]
+Type: filesandordirs; Name: "{localappdata}\STEMwerk"
+Type: filesandordirs; Name: "{userappdata}\REAPER\Scripts\STEMwerk-reaper"
+Type: files; Name: "{userappdata}\REAPER\Scripts\STEMwerk.lua"
+Type: files; Name: "{userappdata}\REAPER\Scripts\STEMwerk_Drum_Kit_Split.lua"
+Type: files; Name: "{userappdata}\REAPER\Scripts\STEMwerk_Save_Support_Bundle.lua"
+
 [Icons]
 Name: "{userprograms}\STEMwerk\Open install folder"; Filename: "{app}"
 Name: "{userprograms}\STEMwerk\{cm:RunOpenGuide}"; Filename: "{code:GetLocalizedGuidePath}"
@@ -1483,38 +1490,16 @@ begin
 
   MsgBox(
     LText(
-      'Uninstall always removes STEMwerk scripts from the REAPER Scripts folder.' + #13#10 + #13#10 +
-      'Next you can choose whether runtime components should also be removed.',
-      'De-installatie verwijdert altijd STEMwerk scripts uit de REAPER Scripts-map.' + #13#10 + #13#10 +
-      'Hierna kies je of runtime-componenten ook verwijderd moeten worden.',
-      'Die Deinstallation entfernt immer STEMwerk Skripte aus dem REAPER-Scripts-Ordner.' + #13#10 + #13#10 +
-      'Als Nächstes kann gewählt werden, ob Runtime-Komponenten ebenfalls entfernt werden sollen.'),
+      'Uninstall removes STEMwerk-owned runtime data under %LOCALAPPDATA%\\STEMwerk and the STEMwerk REAPER scripts folder.' + #13#10 + #13#10 +
+      'Generic REAPER configuration and unrelated user files are left intact.',
+      'De-installatie verwijdert STEMwerk-eigen runtimedata onder %LOCALAPPDATA%\\STEMwerk en de STEMwerk REAPER Scripts-map.' + #13#10 + #13#10 +
+      'Algemene REAPER-configuratie en niet-gerelateerde gebruikersbestanden blijven intact.',
+      'Die Deinstallation entfernt STEMwerk-eigene Runtime-Daten unter %LOCALAPPDATA%\\STEMwerk und den STEMwerk-REAPER-Scripts-Ordner.' + #13#10 + #13#10 +
+      'Allgemeine REAPER-Konfiguration und nicht zugehoerige Benutzerdaten bleiben erhalten.'),
     mbInformation, MB_OK);
 
-  UninstallCleanupRuntime :=
-    MsgBox(
-      LText('Also remove runtime environment under:',
-        'Ook runtime-omgeving verwijderen onder:',
-        'Runtime-Umgebung ebenfalls entfernen unter:') + #13#10 +
-      GetRuntimeBasePath + #13#10 + #13#10 +
-      LText('This removes logs/cache and local runtime folders (.venv, python, ffmpeg, bin).',
-        'Dit verwijdert logs/cache en lokale runtime-mappen (.venv, python, ffmpeg, bin).',
-        'Dies entfernt Logs/Cache und lokale Runtime-Ordner (.venv, python, ffmpeg, bin).'),
-      mbConfirmation, MB_YESNO) = IDYES;
-
+  UninstallCleanupRuntime := False;
   UninstallCleanupModels := False;
-  if UninstallCleanupRuntime then
-  begin
-    UninstallCleanupModels :=
-      MsgBox(
-        LText('Also remove cached AI models?',
-          'Ook gecachete AI-modellen verwijderen?',
-          'Auch zwischengespeicherte AI-Modelle entfernen?') + #13#10 +
-        LText('This frees disk space but requires re-download on first use.',
-          'Dit maakt schijfruimte vrij maar vereist herdownload bij eerste gebruik.',
-          'Das schafft Speicherplatz, erfordert aber einen erneuten Download bei erster Nutzung.'),
-        mbConfirmation, MB_YESNO) = IDYES;
-  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
