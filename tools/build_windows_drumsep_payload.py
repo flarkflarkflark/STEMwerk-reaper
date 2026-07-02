@@ -67,6 +67,7 @@ BACKENDS = (
         extra_index_url="https://download.pytorch.org/whl/cu121",
         requirements=(
             "audio-separator==0.34.1",
+            "onnxruntime==1.26.0",
             "torch==2.4.1+cu121",
             "torchvision==0.19.1+cu121",
             "torchaudio==2.4.1+cu121",

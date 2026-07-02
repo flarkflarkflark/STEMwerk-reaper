@@ -4447,9 +4447,48 @@ def test_windows_offline_drumsep_payload_builder_and_inno_wiring_present():
 
     assert 'drumsep-wheels-nvidia' in prep
     assert 'audio-separator==0.34.1' in prep
+    assert 'onnxruntime==1.26.0' in prep
     assert 'torchaudio==2.4.1+cu121' in prep
     assert 'torch-directml==0.2.5.dev240914' in prep
     assert 'torch==2.12.0' in prep
+
+
+def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_consistent():
+    script = Path("tools/build_windows_wheelhouse.py").read_text()
+
+    assert "def seeded_requirements(include_cuda: bool, include_directml: bool)" in script
+    assert '"llvmlite==0.48.0"' in script
+    assert '"numba==0.66.0"' in script
+    assert 'if include_cuda:' in script
+    assert '"torch==2.4.1+cu121"' in script
+    assert '"torchvision==0.19.1+cu121"' in script
+    assert 'else:' in script
+    assert '"torch==2.4.1"' in script
+    assert '"torchvision==0.19.1"' in script
+
+
+def test_windows_bootstrap_cuda_runtime_preserves_cu121_local_version_suffix():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text()
+
+    assert '$torchCudaSuffix = "+cu121"' in script
+    assert '$torchCudaReq = "torch==$torchVersion$torchCudaSuffix"' in script
+    assert '$torchVisionCudaReq = "torchvision==$torchVisionVersion$torchCudaSuffix"' in script
+    assert '"torch==$torchVersion$torchCudaSuffix"' in script
+    assert '"torchvision==$torchVisionVersion$torchCudaSuffix"' in script
+    assert '"torchaudio==$torchAudioVersion$torchCudaSuffix"' in script
+
+
+def test_windows_nvidia_offline_drumsep_payload_carries_required_runtime_wheels():
+    prep = Path("tools/build_windows_drumsep_payload.py").read_text()
+
+    nvidia_block = prep.split('backend="nvidia"', 1)[1].split('BackendSpec(', 1)[0]
+    assert 'output_dir="drumsep-wheels-nvidia"' in nvidia_block
+    assert '"audio-separator==0.34.1"' in nvidia_block
+    assert '"onnxruntime==1.26.0"' in nvidia_block
+    assert '"onnxruntime-gpu==1.24.4"' in nvidia_block
+    assert '"torch==2.4.1+cu121"' in nvidia_block
+    assert '"torchvision==0.19.1+cu121"' in nvidia_block
+    assert '"torchaudio==2.4.1+cu121"' in nvidia_block
 
 
 def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():

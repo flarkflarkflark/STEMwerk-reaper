@@ -140,7 +140,7 @@ def requirement_to_spec(req: Requirement) -> str:
     return req.name
 
 
-def seeded_requirements(include_directml: bool) -> Iterable[str]:
+def seeded_requirements(include_cuda: bool, include_directml: bool) -> Iterable[str]:
     # Keep versions aligned with Windows bootstrap defaults.
     requirements = [
         "pip",
@@ -152,9 +152,10 @@ def seeded_requirements(include_directml: bool) -> Iterable[str]:
         "diffq-fixed>=0.2",
         "einops>=0.7",
         "librosa>=0.10",
-        "llvmlite<0.48,>=0.47.0dev0",
+        "llvmlite==0.48.0",
         "ml_collections",
         "MarkupSafe>=2.0",
+        "numba==0.66.0",
         "numpy<2",
         "onnx>=1.14",
         "onnx2torch>=1.5",
@@ -169,10 +170,18 @@ def seeded_requirements(include_directml: bool) -> Iterable[str]:
         "samplerate==0.1.0",
         "tqdm",
         "onnxruntime==1.24.4",
-        "torch==2.4.1",
-        "torchvision==0.19.1",
         "audio-separator==0.24.4",
     ]
+    if include_cuda:
+        requirements += [
+            "torch==2.4.1+cu121",
+            "torchvision==0.19.1+cu121",
+        ]
+    else:
+        requirements += [
+            "torch==2.4.1",
+            "torchvision==0.19.1",
+        ]
     if include_directml:
         requirements += [
             "torch-directml==0.2.5.dev240914",
@@ -186,7 +195,12 @@ def main() -> int:
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    queue: List[str] = list(seeded_requirements(include_directml=bool(args.include_directml_wheels)))
+    queue: List[str] = list(
+        seeded_requirements(
+            include_cuda=bool(args.include_cuda_wheels),
+            include_directml=bool(args.include_directml_wheels),
+        )
+    )
     seen_specs: Set[str] = set()
     resolved_names: Dict[str, str] = {}
 
