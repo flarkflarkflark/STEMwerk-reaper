@@ -23,6 +23,8 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 
 ## Windows setup/runtime
 
+- `STEMwerk-2.3.0.0-update-patch.exe` is the smaller update path for an existing STEMwerk installation.
+- This patch is not a full offline all-models installer; for fully offline setup, use one of the offline bundled allmodels installers.
 - Added Windows DrumSep CUDA runtime support via a dedicated CUDA runtime environment.
 - Preserved Windows DirectML runtime support and DirectML fallback.
 - Hardened Windows DrumSep runtime setup and state reporting.

@@ -1,4 +1,4 @@
-#define MyAppName "STEMwerk Offline Patch"
+#define MyAppName "STEMwerk Update Patch"
 #define MyAppPublisher "flarkAUDIO <flarkaudio@pm.me>"
 #define MyAppURL "https://github.com/flarkflarkflark/STEMwerk"
 
@@ -38,7 +38,7 @@ WizardSmallImageFile=..\assets\stemwerk-wizard-small-logo.bmp
 DefaultDirName={userappdata}\REAPER\Scripts\STEMwerk-reaper
 DisableProgramGroupPage=yes
 OutputDir=dist
-OutputBaseFilename=STEMwerk-{#MyAppVersion}-offline-patch
+OutputBaseFilename=STEMwerk-{#MyAppVersion}-update-patch
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -233,7 +233,7 @@ begin
   if not InstallRootLooksValid(DefaultDir) then
   begin
     SuppressibleMsgBox(
-      'This patch updates an existing STEMwerk offline installation.' + #13#10 + #13#10 +
+      'This patch updates an existing STEMwerk installation.' + #13#10 + #13#10 +
       'Select your current STEMwerk install folder in the next step.' + #13#10 +
       'Accepted folder markers are either:' + #13#10 +
       '- Modern: STEMwerk.lua + i18n\\languages.lua' + #13#10 +
@@ -354,9 +354,9 @@ end;
 
 procedure InitializeWizard;
 begin
-  WizardForm.WelcomeLabel1.Caption := 'STEMwerk offline patch';
+  WizardForm.WelcomeLabel1.Caption := 'STEMwerk update patch';
   WizardForm.WelcomeLabel2.Caption :=
-    'This small patch updates an existing offline STEMwerk install without replacing your bundled models or runtime.';
+    'Use this patch to update an existing STEMwerk installation. This patch is not a full offline all-models installer. For fully offline setup, use one of the offline bundled allmodels installers.';
   WizardForm.FinishedHeadingLabel.Caption := 'Patch applied successfully';
   WizardForm.FinishedLabel.Caption := BuildPatchFinishedSummary;
 
