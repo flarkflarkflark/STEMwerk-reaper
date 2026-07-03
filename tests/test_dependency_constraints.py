@@ -4533,6 +4533,8 @@ def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
     assert 'LogProgress "Installing bundled Drum Kit runtime..."' in script
     assert 'LogProgress "Installing bundled Drum Kit model assets..."' in script
     assert 'LogProgress "Verifying bundled Drum Kit runtime..."' in script
+    assert 'Step "step_5_drumkit" "drum kit runtime and offline models"' in script
+    assert 'LogStatusDetail "Preparing Drum Kit separation runtime and offline models. This can take several minutes..."' in script
     assert 'Offline installer is missing bundled DrumSep wheel payload.' in script
     assert 'Offline installer is missing bundled DrumSep model assets.' in script
     assert 'DRUMSEP_OFFLINE_PAYLOAD_STATUS=$script:DrumsepOfflinePayloadStatus' in script
@@ -6723,7 +6725,7 @@ def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
     assert "Version: 2.3.0.0" in text
-    assert "Date: 2026-06-22" in text
+    assert "Date: 2026-07-03" in text
     assert "Version: 2.2.2" not in text
 
 
@@ -6734,3 +6736,54 @@ def test_windows_installer_keeps_finish_actions_without_forcing_restart_page():
     assert "AlwaysRestart=yes" not in script
     assert 'Description: "{cm:RunOpenGuide}"; Flags: postinstall shellexec skipifsilent' in script
     assert 'Description: "{cm:RunOpenLog}"; Flags: postinstall skipifsilent unchecked' in script
+
+
+def test_windows_cpu_offline_drumkit_wheelhouse_keeps_numba_and_llvmlite_compatible():
+    prep = Path("tools/build_windows_drumsep_payload.py").read_text(encoding="utf-8")
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+
+    cpu_block = prep.split('backend="cpu"', 1)[1].split("),", 1)[0]
+    assert '"llvmlite==0.47.0"' in cpu_block
+    assert '"numba==0.65.1"' in cpu_block
+    assert '$drumsepLlvmliteVersion = "0.47.0"' in bootstrap
+    assert '"llvmlite==$drumsepLlvmliteVersion"' in bootstrap
+    assert '"numba==$drumsepNumbaVersion"' in bootstrap
+
+
+def test_windows_installer_uses_five_step_progress_and_drumkit_finish_copy():
+    script = Path("installer/windows/STEMwerk.iss").read_text(encoding="utf-8")
+
+    assert "StepLabelW: TNewStaticText;" in script
+    assert "StepTrackW: TPanel;" in script
+    assert "StepFillW: TPanel;" in script
+    assert "StepLabelW.Caption := '5. Drum Kit';" in script
+    assert "SetStepLabelState(StepLabelW, Step = 5, RGBColor(255, 180, 90));" in script
+    assert "SetStepBarState(StepTrackW, StepFillW, 5, Step, RGBColor(255, 180, 90));" in script
+    assert "FindLastPos('[5/5]', Text)" in script
+    assert "FindLastPos('[4/5]', Text)" in script
+    assert "FindLastPos('[3/5]', Text)" in script
+    assert "FindLastPos('[2/5]', Text)" in script
+    assert "FindLastPos('[1/5]', Text)" in script
+    assert "What was installed:" in script
+    assert "Installed locations:" in script
+    assert "Next step:" in script
+    assert "%APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper" in script
+    assert "%LOCALAPPDATA%\\STEMwerk" in script
+
+
+def test_windows_setup_guides_are_release_clean_and_describe_offline_allmodels_payloads():
+    for path in (
+        Path("installer/windows/STEMwerk_Windows_Setup_Guide.md"),
+        Path("installer/windows/STEMwerk_Windows_Setup_Guide.nl.md"),
+        Path("installer/windows/STEMwerk_Windows_Setup_Guide.de.md"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "95013e6" not in text
+        assert "21a59cd" not in text
+        assert "e06507c" not in text
+        assert "328c614" not in text
+        assert "pre-release" not in text.lower()
+        assert "offline-bundled-cpu-allmodels" in text
+        assert "offline-bundled-nvidia-allmodels" in text
+        assert "offline-bundled-amd-allmodels" in text
+        assert "Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts." in text or "De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPER-scripts." in text or "Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REAPER-Skripte." in text

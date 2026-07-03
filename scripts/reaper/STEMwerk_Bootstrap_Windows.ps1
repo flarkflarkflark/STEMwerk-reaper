@@ -42,6 +42,7 @@ $drumsepOnnx2TorchVersion = "1.5.15"
 $drumsepOnnx2TorchPy313Version = "1.6.0"
 $drumsepTorchVersion = "2.12.0"
 $drumsepTorchVisionVersion = "0.27.0"
+$drumsepLlvmliteVersion = "0.47.0"
 $drumsepNumbaVersion = "0.65.1"
 $drumsepDirectMlLibrosaVersion = "0.11.0"
 $drumsepDirectMlSamplerateVersion = "0.1.0"
@@ -241,7 +242,7 @@ function Set-Progress([string]$Reason, [string]$Message) {
 }
 
 $script:StepIndex = 0
-$script:StepTotal = 4
+$script:StepTotal = 5
 function Step([string]$Reason, [string]$Label) {
     $script:StepIndex = $script:StepIndex + 1
     if ($script:StepIndex -gt $script:StepTotal) { $script:StepIndex = $script:StepTotal }
@@ -2137,6 +2138,7 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
         "onnx2torch-py313==$drumsepOnnx2TorchPy313Version",
         "torch==$drumsepTorchVersion",
         "torchvision==$drumsepTorchVisionVersion",
+        "llvmlite==$drumsepLlvmliteVersion",
         "numba==$drumsepNumbaVersion"
     )
     $installOk = $false
@@ -2746,6 +2748,8 @@ if (Test-Path $venvPy) {
         }
     }
     if ($status -eq "ok") {
+        Step "step_5_drumkit" "drum kit runtime and offline models"
+        LogStatusDetail "Preparing Drum Kit separation runtime and offline models. This can take several minutes..."
         $drumsepReadyOk = switch ($readyRuntime) {
             "cuda" { InstallDrumsepCudaRuntime $python }
             "directml" { InstallDrumsepDirectmlRuntime $python }

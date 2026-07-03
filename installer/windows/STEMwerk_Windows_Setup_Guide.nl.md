@@ -1,100 +1,106 @@
 # STEMwerk Windows Setup-handleiding
 
-Deze handleiding is voor de Windows-installerbuild van STEMwerk.
+Deze handleiding hoort bij de Windows-installer van STEMwerk 2.3.0.0.
 
 ## Wat de installer zojuist heeft gedaan
 
 De Windows-installer heeft:
 
-- de STEMwerk REAPER-scripts naar je REAPER Scripts-map gekopieerd
-- de STEMwerk-runtime onder je lokale Windows-profiel voorbereid
-- de Python-omgeving die STEMwerk gebruikt aangemaakt of bijgewerkt
-- FFmpeg gecontroleerd en de kernpakketten voor Python geïnstalleerd
+- de STEMwerk REAPER-scripts geinstalleerd
+- de STEMwerk-runtime voorbereid onder `%LOCALAPPDATA%\STEMwerk`
+- de Python-omgeving van STEMwerk aangemaakt of bijgewerkt
+- FFmpeg en de kernpakketten van de runtime gecontroleerd
+- meegeleverde Drum Kit-runtime en offline modelpayloads geinstalleerd wanneer die in deze installer zitten
 
-In de normale Windows-flow is deze installer de bootstrap-stap.
+De Windows-installer blijft de aanbevolen route voor een eerste installatie en voor herstel op Windows.
 
-Voor `2.3.0.0` pre-release validatie: gebruik installers die opnieuw zijn gebouwd vanaf `95013e6d8e9e3bf6cda0456264612153678ed1c0` of later. Oudere builds vanaf `21a59cd`, `e06507c` en `328c614` zijn stale/superseded in de huidige Windows 2.3-lijn.
-Deze finale Windows-follow-up herstelt normal CPU multi-item `cap2` scheduling en houdt DrumSep ready-state / `ready_to_go` reporting consistent na verify.
+## Installertypen
 
-## Installer-terminologie
-
-- `offline installer`: kleine installer/downloader die nog internet nodig kan hebben om runtime- of modelassets op te halen
+- `online installer`: kleinere installer; die kan runtime- of modelassets downloaden wanneer dat nodig is
 - `bundled installer`: bevat Python en FFmpeg
-- `volledige offline installer`: compleet pakket bedoeld voor installatie/gebruik zonder internet
+- `offline-bundled ... allmodels installer`: bevat de meegeleverde runtimepayloads die nodig zijn voor een volledig offline installatie voor de doel-backend
 
-In de 2.3-release moet "volledige offline installer" nog steeds precies gelezen worden: bestaande `allmodels`-varianten dekken de core Demucs-cache, niet automatisch een complete DrumSep/Drum Kit offline runtime-bundel.
+## Offline allmodels-varianten
 
-## Volledige offline installer-varianten (GPU)
+Als je een offline allmodels-installer hebt gedownload, geeft de bestandsnaam de meegeleverde backend aan:
 
-Als je een volledige offline / bundled installer hebt gedownload, vertelt de bestandsnaam welke GPU-runtime is meegeleverd:
+- `offline-bundled-cpu-allmodels`: CPU Drum Kit-runtime en offline modellen
+- `offline-bundled-nvidia-allmodels`: NVIDIA/CUDA Drum Kit-runtime en offline modellen
+- `offline-bundled-amd-allmodels`: DirectML Drum Kit-runtime en offline modellen
 
-- `offline-bundled-nvidia`: CUDA-wheels voor NVIDIA-GPU's.
-- `offline-bundled-amd`: DirectML-wheels voor AMD/Intel-GPU's.
-
-Als de installer geen GPU-runtime kan verifiëren, valt STEMwerk terug op CPU.
-
-Offline NVIDIA-opmerking (context issue #11):
-- Als processing online wel werkt maar offline niet, controleer of modellen aanwezig zijn in `%LOCALAPPDATA%\\STEMwerk\\models`.
-- Bestaande `allmodels` volledige offline assets worden nu gebruikt voor de Demucs/core-modelcache.
-- In bundled/offline installers is de pre-setup optie "modelcache opschonen" bewust uitgeschakeld om net meegeleverde modelpayloads niet te verwijderen.
-- Dit zijn in de 2.3-release geen complete offline DrumSep/Drum Kit-bundels; DrumSep-runtime en modelassets lopen via de setup/runtime-route, tenzij een specifieke volledige offline asset expliciet anders zegt.
+Deze installers zijn bedoeld om volledig offline te kunnen afronden met alleen de meegeleverde wheels en payloads voor hun doel-runtime.
 
 ## Wat je nu doet
 
-1. Open REAPER.
-2. Open de Action List.
-3. Als STEMwerk nog niet zichtbaar is, gebruik `Actions -> ReaScript -> Load ReaScript...`.
-4. Ga naar `REAPER/Scripts/STEMwerk-reaper/`.
-5. Laad `STEMwerk.lua`.
-6. Start `Stemwerk: Main`.
+1. Start REAPER.
+2. Voer `STEMwerk: Setup` uit als je de runtime wilt controleren of herstellen.
+3. Gebruik `Check only` om de runtime te verifieren.
+4. Start `Stemwerk: Main` vanuit het Actions-menu voor normaal gebruik.
+5. Als acties ontbreken, laad dan scripts uit `REAPER/Scripts/STEMwerk-reaper/`.
+6. `STEMwerk_Setup_Toolbar.lua` is optioneel als je toolbar-snelkoppelingen wilt.
 
-Optioneel:
+## Setup en herstel
 
-- Laad `STEMwerk_Setup_Toolbar.lua` om de standaard STEMwerk-actions in de Action List te registreren.
-- Laad de snelle presets als je one-click acties wilt zoals Karaoke, Vocals Only, Drums Only, Bass Only of All Stems.
+Gebruik `STEMwerk: Setup` voor:
 
-## Belangrijke Windows-opmerking
+- `Check only`
+- `Repair`
+- `Rebuild venv`
+- `Save Support Bundle`
+- `Open logs folder`
+- `Open runtime folder`
 
-Op Windows vervangt `STEMwerk-SETUP.lua` de installer-bootstrap niet.
+Voer de installer vooral opnieuw uit als de geinstalleerde scriptpayload ontbreekt of beschadigd is, of als je meegeleverde payloads opnieuw wilt installeren.
 
-Als er iets ontbreekt of de runtime onvolledig is:
+De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPER-scripts.
 
-1. voer eerst de Windows-installer opnieuw uit
-2. controleer daarna zo nodig de setup-log
+## Wanneer er iets ontbreekt
+
+1. Run `STEMwerk: Setup`.
+2. Klik op `Check only`.
+3. Gebruik `Repair` of `Rebuild venv` als dat wordt aangeraden.
+4. Gebruik `Open logs folder` voor diepere troubleshooting.
+5. Gebruik `Save Support Bundle` als je hulp vraagt.
+6. Voer de installer alleen opnieuw uit als de installatiepayload zelf ontbreekt of beschadigd is.
+
+## Support bundles
+
+Support bundles worden opgeslagen in:
+
+`%APPDATA%\REAPER\STEMwerk-support-bundles\`
+
+Elke save maakt allebei aan:
+
+- `STEMwerk-support-bundle-YYYYMMDD-HHMMSS\`
+- `STEMwerk-support-bundle-YYYYMMDD-HHMMSS.zip`
+
+Voeg het `.zip`-bestand toe wanneer je support vraagt.
+
+Een support bundle bevat waar beschikbaar:
+
+- bootstrap/runtime-logs
+- state/capabilities-bestanden
+- recente run-logs/artifacts
+- `support_bundle_timings.txt`
+- `processing_summary.txt`
+
+Support bundles sluiten audio-, model-, wheel-, binary- en runtimepayloadbestanden bewust uit.
 
 ## Parallel vs Sequential (Multi-track)
 
-STEMwerk kan multi-track jobs parallel uitvoeren wanneer Parallel aan staat en er meer dan één job in de wachtrij staat.
+STEMwerk kan multi-track-jobs parallel verwerken wanneer Parallel aan staat en de gekozen backend/jobindeling dat ondersteunt.
 
-Het valt automatisch terug naar Sequential wanneer:
+Voor stabiliteit kan het terugvallen op Sequential, afhankelijk van backend, apparaatkeuze, jobindeling, tijdselectie/item-isolatie, of wanneer er maar een job in de wachtrij staat.
 
-- apparaat = expliciet `DirectML` en er meer dan één job in de wachtrij staat
-- apparaat = `auto` en er geen GPU-backend beschikbaar is
-- tijdselectie-verwerking het werk splitst in losse per-item jobs
-- er maar 1 job in de wachtrij staat
-
-Voorbeelden waar echt parallel wordt uitgevoerd:
-
-- Je selecteert 3 tracks met items, geen tijdselectie, Parallel aan, apparaat = `cuda:0`. -> 3 jobs tegelijk (per track).
-- Je selecteert 5 tracks, Parallel aan, apparaat = `auto`, en er wordt een GPU gedetecteerd. -> 5 jobs tegelijk.
-- Je selecteert meerdere items over meerdere tracks (geen tijdselectie), Parallel aan, apparaat = `cuda`. -> per-track jobs parallel.
-
-Voorbeelden waar het niet parallel draait:
-
-- Parallel aan, apparaat = expliciet `DirectML`, meer dan één job in de wachtrij -> sequential fallback ("DirectML multi-track stability mode").
-- Tijdselectie met meerdere items op één track -> per-item jobs -> sequential fallback ("Per-item multi-track isolation").
-- Parallel aan, apparaat = `auto`, maar geen GPU-backend -> sequential fallback ("Auto device, no GPU").
-- Slechts 1 job (1 track) -> per definitie sequential.
-
-Het voortgangsvenster toont de actieve modus en de reden wanneer een fallback gebeurt.
+Het voortgangsvenster toont de actieve modus en de fallbackreden wanneer zo'n fallback gebeurt.
 
 ## Open de setup-log
 
-De setup-log staat op:
+Bootstrap/setup-log:
 
 `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log`
 
-Gebruik deze als setup is mislukt, FFmpeg niet is gedetecteerd of runtime-pakketten niet volledig zijn geïnstalleerd.
+Gebruik de Setup-knoppen om logs of runtime-mappen direct te openen.
 
 ## Welke scripts je normaal gebruikt
 
@@ -106,16 +112,13 @@ Normaal gebruik:
 - `Stemwerk: Drums Only`
 - `Stemwerk: Bass Only`
 - `Stemwerk: All Stems`
-- `Stemwerk: Explode Takes (In Place)` (voor geselecteerde multi-take items)
+- `Stemwerk: Explode Takes (In Place)` voor geselecteerde multi-take-items
 
-Support-/herstelpaden:
+Support en herstel:
 
 - `STEMwerk: Setup`
+- `STEMwerk: Save Support Bundle`
 
-## Wanneer Setup gebruiken
+Optioneel gemak:
 
-Gebruik op Windows `STEMwerk: Setup` alleen als REAPER-side support- of herstelpad na installatie.
-
-Voor een verse Windows-installatie is de installer de juiste setup-route.
-
-Voor release-validatie van 2.3.0.0 geldt daarnaast: keur geen oudere `21a59cd`-, `e06507c`- of `328c614`-installer goed; gebruik `95013e6` of later.
+- `STEMwerk_Setup_Toolbar.lua`

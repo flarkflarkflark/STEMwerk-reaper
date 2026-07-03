@@ -1,67 +1,58 @@
 ﻿# STEMwerk Windows Setup Guide
 
-This guide is for the Windows installer build of STEMwerk.
+This guide is for the Windows installer build of STEMwerk 2.3.0.0.
 
 ## What the installer just did
 
 The Windows installer:
 
-- copied the STEMwerk REAPER scripts into your REAPER Scripts folder
-- prepared the STEMwerk runtime under your local Windows profile
+- installed the STEMwerk REAPER scripts
+- prepared the STEMwerk runtime under `%LOCALAPPDATA%\STEMwerk`
 - created or updated the Python environment used by STEMwerk
-- checked FFmpeg and the core runtime Python packages
-- in bundled or offline/full variants, can include runtime wheels and core model payloads
+- checked FFmpeg and the core runtime packages
+- installed bundled Drum Kit runtime and offline model payloads when included in the installer
 
-The Windows installer remains the recommended fresh-install/bootstrap route.
+The Windows installer remains the recommended fresh-install and repair route on Windows.
 
-For `2.3.0.0` pre-release verification, use installers rebuilt from `95013e6d8e9e3bf6cda0456264612153678ed1c0` or later. Earlier `21a59cd`, `e06507c`, and `328c614` builds are stale/superseded on the current Windows 2.3 candidate line.
-This final Windows follow-up restores normal CPU multi-item `cap2` scheduling and keeps DrumSep ready-state / `ready_to_go` reporting consistent after verify.
+## Installer types
 
-## Installer terminology
+- `online installer`: smaller installer; it can download runtime or model assets when needed
+- `bundled installer`: includes Python and FFmpeg
+- `offline-bundled ... allmodels installer`: includes the bundled runtime payloads needed for a fully offline install for its target backend
 
-- `offline installer`: smaller installer/downloader style; it may still require internet to fetch runtime or model assets
-- `bundled installer`: includes Python + FFmpeg
-- `offline/full installer`: larger complete package intended for no-internet install/use
+## Offline allmodels variants
 
-In the 2.3 release line, "offline/full" still needs to be read carefully: existing `allmodels` variants cover the core Demucs cache scope, not an unconditional complete DrumSep/Drum Kit offline runtime bundle.
+If you downloaded an offline allmodels installer, the filename indicates the bundled backend:
 
-## Offline/full installer flavors (GPU)
+- `offline-bundled-cpu-allmodels`: CPU Drum Kit runtime and offline models
+- `offline-bundled-nvidia-allmodels`: NVIDIA/CUDA Drum Kit runtime and offline models
+- `offline-bundled-amd-allmodels`: DirectML Drum Kit runtime and offline models
 
-If you downloaded an offline/full bundled installer, the filename tells you which runtime flavor is bundled:
-
-- `offline-bundled-nvidia`: CUDA wheel payload for NVIDIA GPUs
-- `offline-bundled-amd`: DirectML wheel payload for AMD/Intel GPUs
-- CPU/fallback paths are included where applicable for runtime repair
-
-Existing `allmodels` offline/full assets are currently distributed around the core Demucs model cache. They are not complete DrumSep/Drum Kit offline/full bundles in the 2.3 release line.
-
-Samplerate/runtime note:
-
-- Bundled/offline installers include restored `samplerate==0.1.0` wheel payloads for NVIDIA, AMD/DirectML, and CPU package sets.
-- If `samplerate` is missing, Setup/Repair should install it from bundled wheels where available.
-- Verification should not report `ok` before required runtime dependency checks pass.
-
-Bundled-model cleanup note:
-
-- In bundled/offline pre-setup flow, cleanup-models is intentionally disabled to avoid deleting freshly bundled model payloads.
-- Drum Kit/DrumSep runtimes and model assets in 2.3 are still handled through the setup/runtime flow after installation when needed.
+These installers are intended to complete setup fully offline from bundled wheels and payloads for their target runtime.
 
 ## What to do next
 
-1. Open REAPER.
-2. Run `STEMwerk: Setup` first if you want to check runtime status.
+1. Start REAPER.
+2. Run `STEMwerk: Setup` if you want to check or repair the runtime.
 3. Use `Check only` to verify runtime health.
-4. Run `Stemwerk: Main` for normal use.
+4. Run `Stemwerk: Main` from the Actions menu for normal use.
 5. If actions are missing, load scripts from `REAPER/Scripts/STEMwerk-reaper/`.
-6. Toolbar setup is optional: `STEMwerk_Setup_Toolbar.lua`.
+6. `STEMwerk_Setup_Toolbar.lua` is optional if you want a toolbar shortcut set.
 
-## Important Windows note
+## Setup and repair
 
-- The Windows installer remains the recommended fresh-install/bootstrap route.
-- `STEMwerk: Setup` is now the in-REAPER status/repair center after installation.
-- Use Setup for: `Check only`, `Repair`, `Rebuild venv`, `Save Support Bundle`, `Open logs folder`, and `Open runtime folder`.
-- Re-run the installer mainly when script payload itself is missing/damaged, or when you need to reinstall bundled payloads.
-- If you are validating a 2.3.0.0 pre-release installer, do not sign off an older `21a59cd`, `e06507c`, or `328c614` build; use `95013e6` or later.
+Use `STEMwerk: Setup` for:
+
+- `Check only`
+- `Repair`
+- `Rebuild venv`
+- `Save Support Bundle`
+- `Open logs folder`
+- `Open runtime folder`
+
+Re-run the installer mainly when the installed script payload is missing or damaged, or when you want to reinstall bundled payloads.
+
+Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts.
 
 ## When something is missing
 
@@ -70,7 +61,7 @@ Bundled-model cleanup note:
 3. Use `Repair` or `Rebuild venv` if recommended.
 4. Use `Open logs folder` if deeper troubleshooting is needed.
 5. Use `Save Support Bundle` when asking for help.
-6. Re-run the installer only if installation/script payload is missing or damaged.
+6. Re-run the installer only if the installation payload itself is missing or damaged.
 
 ## Support bundles
 
@@ -95,15 +86,11 @@ A support bundle includes, where available:
 
 Support bundles intentionally exclude audio, model, wheel, binary, and runtime payload files.
 
-Windows collection is speed-bounded; expensive probes/scans may appear as skipped-for-speed to keep Save Support Bundle responsive.
-
 ## Parallel vs Sequential (Multi-track)
 
 STEMwerk can process multi-track jobs in parallel when Parallel is enabled and the selected backend/job layout supports it.
 
 It may fall back to Sequential for stability depending on backend, device choice, job layout, time selection/item isolation, or when only one job is queued.
-
-Recent Windows DirectML builds can run parallel jobs where supported.
 
 The progress window shows the active mode and the fallback reason when a fallback happens.
 
@@ -113,11 +100,7 @@ Bootstrap/setup log:
 
 `%LOCALAPPDATA%\STEMwerk\logs\bootstrap.log`
 
-Use the Setup action buttons to open logs/runtime directly.
-
-Support bundle output path:
-
-`%APPDATA%\REAPER\STEMwerk-support-bundles\`
+Use the Setup action buttons to open logs or runtime folders directly.
 
 ## What scripts are for normal use
 
@@ -129,12 +112,12 @@ Normal use:
 - `Stemwerk: Drums Only`
 - `Stemwerk: Bass Only`
 - `Stemwerk: All Stems`
-- `Stemwerk: Explode Takes (In Place)` (for selected multi-take items)
+- `Stemwerk: Explode Takes (In Place)` for selected multi-take items
 
-Support / repair paths:
+Support and repair:
 
 - `STEMwerk: Setup`
-- `STEMwerk: Save Support Bundle` (action for `STEMwerk_Save_Support_Bundle.lua`)
+- `STEMwerk: Save Support Bundle`
 
 Optional setup convenience:
 

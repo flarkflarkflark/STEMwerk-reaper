@@ -108,6 +108,7 @@ BACKENDS = (
             "onnx2torch-py313==1.6.0",
             "torch==2.12.0",
             "torchvision==0.27.0",
+            "llvmlite==0.47.0",
             "numba==0.65.1",
         ),
     ),

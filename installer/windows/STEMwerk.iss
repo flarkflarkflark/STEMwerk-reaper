@@ -181,14 +181,17 @@ var
   StepLabelT: TNewStaticText;
   StepLabelE: TNewStaticText;
   StepLabelM: TNewStaticText;
+  StepLabelW: TNewStaticText;
   StepTrackS: TPanel;
   StepTrackT: TPanel;
   StepTrackE: TPanel;
   StepTrackM: TPanel;
+  StepTrackW: TPanel;
   StepFillS: TPanel;
   StepFillT: TPanel;
   StepFillE: TPanel;
   StepFillM: TPanel;
+  StepFillW: TPanel;
   LogTimerId: LongInt;
   LogTimerProc: LongWord;
   LastLogText: string;
@@ -360,20 +363,28 @@ begin
   #endif
   if CleanupLines = '' then
     CleanupLines := LText(
-      '- Kept existing runtime cache and models.',
-      '- Bestaande runtime-cache en modellen behouden.',
-      '- Vorhandener Runtime-Cache und Modelle beibehalten.') + #13#10;
+      '- Kept existing runtime data and cached models in place.',
+      '- Bestaande runtime-data en gecachte modellen behouden.',
+      '- Bestehende Runtime-Daten und zwischengespeicherte Modelle beibehalten.') + #13#10;
 
   Result :=
     LText('STEMwerk setup completed.', 'STEMwerk setup voltooid.', 'STEMwerk Setup abgeschlossen.') +
     ' (' + VersionTag + ')' + #13#10 + #13#10 +
-    LText('What was done:', 'Wat is gedaan:', 'Was wurde gemacht:') + #13#10 +
-    LText('- Installed/updated REAPER scripts in:', '- REAPER scripts geinstalleerd/bijgewerkt in:', '- REAPER-Skripte installiert/aktualisiert in:') + #13#10 +
-    '  ' + ExpandConstant('{app}') + #13#10 +
+    LText('What was installed:', 'Wat is geinstalleerd:', 'Was wurde installiert:') + #13#10 +
+    LText('- REAPER scripts', '- REAPER-scripts', '- REAPER-Skripte') + #13#10 +
+    LText('- STEMwerk runtime', '- STEMwerk-runtime', '- STEMwerk-Runtime') + #13#10 +
+    LText('- Required audio tools', '- Vereiste audiotools', '- Erforderliche Audiotools') + #13#10 +
+    LText('- Offline model/runtime payload, if included in this installer', '- Offline model-/runtime-payload, indien inbegrepen in deze installer', '- Offline-Modell-/Runtime-Payload, falls in diesem Installer enthalten') + #13#10 + #13#10 +
+    LText('Installed locations:', 'Geinstalleerde locaties:', 'Installierte Orte:') + #13#10 +
+    LText('- REAPER scripts:', '- REAPER-scripts:', '- REAPER-Skripte:') + #13#10 +
+    '  %APPDATA%\REAPER\Scripts\STEMwerk-reaper' + #13#10 +
+    LText('- Runtime data:', '- Runtime-data:', '- Runtime-Daten:') + #13#10 +
+    '  %LOCALAPPDATA%\STEMwerk' + #13#10 +
     CleanupLines +
-    LText('- Prepared runtime at %LOCALAPPDATA%\STEMwerk via bootstrap.',
-      '- Runtime onder %LOCALAPPDATA%\STEMwerk voorbereid via bootstrap.',
-      '- Runtime unter %LOCALAPPDATA%\STEMwerk per Bootstrap vorbereitet.') + #13#10 + #13#10 +
+    #13#10 +
+    LText('Next step:', 'Volgende stap:', 'Naechster Schritt:') + #13#10 +
+    LText('- Start REAPER and run STEMwerk from the Actions menu.', '- Start REAPER en voer STEMwerk uit vanuit het Actions-menu.', '- Starte REAPER und fuehre STEMwerk aus dem Actions-Menue aus.') + #13#10 +
+    LText('- Use STEMwerk: Setup if you want to check or repair the runtime.', '- Gebruik STEMwerk: Setup als je de runtime wilt controleren of herstellen.', '- Nutze STEMwerk: Setup, wenn du die Runtime pruefen oder reparieren moechtest.') + #13#10 + #13#10 +
     LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
     '  ' + GetLogPath;
 end;
@@ -403,8 +414,8 @@ begin
     'Die erste Einrichtung kann mehrere Minuten dauern.') + #13#10 +
     LText(
       'STEMwerk prepares the runtime, creates the Python environment, checks FFmpeg, and installs the core packages.',
-      'STEMwerk bereidt de runtime voor, maakt de Python-omgeving aan, controleert FFmpeg en installeert kernpakketten.',
-      'STEMwerk bereitet die Runtime vor, erstellt die Python-Umgebung, prüft FFmpeg und installiert Kernpakete.');
+      'STEMwerk bereidt de runtime voor, maakt de Python-omgeving aan, controleert FFmpeg, installeert kernpakketten en rondt Drum Kit offline-assets af.',
+      'STEMwerk bereitet die Runtime vor, erstellt die Python-Umgebung, prueft FFmpeg, installiert Kernpakete und richtet Drum-Kit-Offline-Assets ein.');
 end;
 
 function ExtractingStatusDetailText: string;
@@ -533,6 +544,11 @@ begin
       'FFmpeg already installed',
       'FFmpeg is al geinstalleerd',
       'FFmpeg ist bereits installiert')
+  else if Detail = 'Preparing Drum Kit separation runtime and offline models. This can take several minutes...' then
+    Result := LText(
+      'Preparing Drum Kit separation runtime and offline models. This can take several minutes...',
+      'Drum Kit-separatieruntime en offline modellen worden voorbereid. Dit kan enkele minuten duren...',
+      'Drum-Kit-Separator-Runtime und Offline-Modelle werden vorbereitet. Das kann mehrere Minuten dauern...')
   else if Detail = 'Installing separator runtime packages.' then
     Result := LText(
       'Installing separator runtime packages.',
@@ -635,19 +651,21 @@ begin
   Result := -1;
   UpperText := Uppercase(Text);
   if FindLastPos('BOOTSTRAP COMPLETE', UpperText) > 0 then Result := 100
-  else if (FindLastPos('[4/4]', Text) > 0) or (FindLastPos('STEP 4/4', UpperText) > 0) then Result := 78
-  else if (FindLastPos('[3/4]', Text) > 0) or (FindLastPos('STEP 3/4', UpperText) > 0) then Result := 58
-  else if (FindLastPos('[2/4]', Text) > 0) or (FindLastPos('STEP 2/4', UpperText) > 0) then Result := 38
-  else if (FindLastPos('[1/4]', Text) > 0) or (FindLastPos('STEP 1/4', UpperText) > 0) then Result := 18;
+  else if (FindLastPos('[5/5]', Text) > 0) or (FindLastPos('STEP 5/5', UpperText) > 0) then Result := 88
+  else if (FindLastPos('[4/5]', Text) > 0) or (FindLastPos('STEP 4/5', UpperText) > 0) then Result := 70
+  else if (FindLastPos('[3/5]', Text) > 0) or (FindLastPos('STEP 3/5', UpperText) > 0) then Result := 52
+  else if (FindLastPos('[2/5]', Text) > 0) or (FindLastPos('STEP 2/5', UpperText) > 0) then Result := 34
+  else if (FindLastPos('[1/5]', Text) > 0) or (FindLastPos('STEP 1/5', UpperText) > 0) then Result := 18;
 end;
 
 function ExtractBootstrapStep(const Text: string): Integer;
 begin
   Result := 0;
-  if (FindLastPos('[4/4]', Text) > 0) or (FindLastPos('STEP 4/4', Uppercase(Text)) > 0) then Result := 4
-  else if (FindLastPos('[3/4]', Text) > 0) or (FindLastPos('STEP 3/4', Uppercase(Text)) > 0) then Result := 3
-  else if (FindLastPos('[2/4]', Text) > 0) or (FindLastPos('STEP 2/4', Uppercase(Text)) > 0) then Result := 2
-  else if (FindLastPos('[1/4]', Text) > 0) or (FindLastPos('STEP 1/4', Uppercase(Text)) > 0) then Result := 1;
+  if (FindLastPos('[5/5]', Text) > 0) or (FindLastPos('STEP 5/5', Uppercase(Text)) > 0) then Result := 5
+  else if (FindLastPos('[4/5]', Text) > 0) or (FindLastPos('STEP 4/5', Uppercase(Text)) > 0) then Result := 4
+  else if (FindLastPos('[3/5]', Text) > 0) or (FindLastPos('STEP 3/5', Uppercase(Text)) > 0) then Result := 3
+  else if (FindLastPos('[2/5]', Text) > 0) or (FindLastPos('STEP 2/5', Uppercase(Text)) > 0) then Result := 2
+  else if (FindLastPos('[1/5]', Text) > 0) or (FindLastPos('STEP 1/5', Uppercase(Text)) > 0) then Result := 1;
 end;
 
 procedure SetStepLabelState(L: TNewStaticText; Active: Boolean; BaseColor: Integer);
@@ -695,10 +713,12 @@ begin
   SetStepLabelState(StepLabelT, Step = 2, RGBColor(100, 200, 255));
   SetStepLabelState(StepLabelE, Step = 3, RGBColor(150, 100, 255));
   SetStepLabelState(StepLabelM, Step = 4, RGBColor(100, 255, 150));
+  SetStepLabelState(StepLabelW, Step = 5, RGBColor(255, 180, 90));
   SetStepBarState(StepTrackS, StepFillS, 1, Step, RGBColor(255, 100, 100));
   SetStepBarState(StepTrackT, StepFillT, 2, Step, RGBColor(100, 200, 255));
   SetStepBarState(StepTrackE, StepFillE, 3, Step, RGBColor(150, 100, 255));
   SetStepBarState(StepTrackM, StepFillM, 4, Step, RGBColor(100, 255, 150));
+  SetStepBarState(StepTrackW, StepFillW, 5, Step, RGBColor(255, 180, 90));
 end;
 
 procedure UpdateProgressGauge(const Text: string);
@@ -1098,7 +1118,7 @@ begin
   y := WizardForm.StatusLabel.Top - ScaleY(18);
   PageW := WizardForm.InstallingPage.ClientWidth;
   ColumnGap := ScaleX(10);
-  ColumnW := (PageW - (ColumnGap * 3)) div 4;
+  ColumnW := (PageW - (ColumnGap * 4)) div 5;
 
   StatusPrefixLabel := TNewStaticText.Create(WizardForm);
   StatusPrefixLabel.Parent := WizardForm.InstallingPage;
@@ -1318,14 +1338,50 @@ begin
   StepFillM.BevelOuter := bvNone;
   StepFillM.Color := RGBColor(100, 255, 150);
 
+  StepLabelW := TNewStaticText.Create(WizardForm);
+  StepLabelW.Parent := WizardForm.InstallingPage;
+  StepLabelW.AutoSize := False;
+  StepLabelW.Width := ColumnW;
+  StepLabelW.Height := ScaleY(16);
+  StepLabelW.Font.Size := 9;
+  StepLabelW.Caption := '5. Drum Kit';
+  StepLabelW.Left := (ColumnW + ColumnGap) * 4;
+  StepLabelW.Top := StepTop;
+
+  StepTrackW := TPanel.Create(WizardForm);
+  StepTrackW.Parent := WizardForm.InstallingPage;
+  StepTrackW.Left := (ColumnW + ColumnGap) * 4;
+  StepTrackW.Top := BarTop;
+  StepTrackW.Width := ColumnW;
+  StepTrackW.Height := ScaleY(12);
+  StepTrackW.Caption := '';
+  StepTrackW.ParentBackground := False;
+  StepTrackW.BevelInner := bvNone;
+  StepTrackW.BevelOuter := bvNone;
+  StepTrackW.Color := RGBColor(232, 232, 232);
+
+  StepFillW := TPanel.Create(WizardForm);
+  StepFillW.Parent := StepTrackW;
+  StepFillW.Left := 0;
+  StepFillW.Top := 0;
+  StepFillW.Width := 0;
+  StepFillW.Height := StepTrackW.Height;
+  StepFillW.Caption := '';
+  StepFillW.ParentBackground := False;
+  StepFillW.BevelInner := bvNone;
+  StepFillW.BevelOuter := bvNone;
+  StepFillW.Color := RGBColor(255, 180, 90);
+
   StepTrackS.BringToFront;
   StepTrackT.BringToFront;
   StepTrackE.BringToFront;
   StepTrackM.BringToFront;
+  StepTrackW.BringToFront;
   StepLabelS.BringToFront;
   StepLabelT.BringToFront;
   StepLabelE.BringToFront;
   StepLabelM.BringToFront;
+  StepLabelW.BringToFront;
 
   WizardForm.ProgressGauge.Left := 0;
   WizardForm.ProgressGauge.Width := PageW;
