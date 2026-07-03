@@ -381,7 +381,6 @@ begin
     LText('- Runtime data:', '- Runtime-data:', '- Runtime-Daten:') + #13#10 +
     '  %LOCALAPPDATA%\STEMwerk' + #13#10 +
     CleanupLines +
-    #13#10 +
     LText('Next step:', 'Volgende stap:', 'Naechster Schritt:') + #13#10 +
     LText('- Start REAPER and run STEMwerk from the Actions menu.', '- Start REAPER en voer STEMwerk uit vanuit het Actions-menu.', '- Starte REAPER und fuehre STEMwerk aus dem Actions-Menue aus.') + #13#10 +
     LText('- Use STEMwerk: Setup if you want to check or repair the runtime.', '- Gebruik STEMwerk: Setup als je de runtime wilt controleren of herstellen.', '- Nutze STEMwerk: Setup, wenn du die Runtime pruefen oder reparieren moechtest.') + #13#10 + #13#10 +
