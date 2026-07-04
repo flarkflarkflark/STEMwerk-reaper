@@ -33,7 +33,7 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
 - Installer license text is now aligned to `2.3.0.0` / `2026-06-22`.
 - Normal/core Demucs aliases are now translated to concrete `audio-separator 0.24.4` model ids before load/prefetch: `htdemucs.yaml`, `htdemucs_ft.yaml`, `htdemucs_6s.yaml`.
 - Windows capabilities writes are now atomic; outdated `capabilities.env` is removed on write failure.
-- Required capabilities write failures now force `STATUS=deps_failed` / `REASON=capabilities_write_failed` instead of leaving contradictory ready-state markers behind.
+- Windows setup now reports runtime readiness more consistently after verification and repair steps complete.
 - Unsupported internal model ids are now classified as `model_mapping_failed` rather than as internet/DNS/proxy download failures.
 - Direct Kit success dialogs no longer leak the placeholder-style `result method line` text.
 - Windows normal CPU multi-item processing now restores the intended `cap2` scheduler policy for the `normal` route instead of falling back to the generic low-resource sequential gate.
