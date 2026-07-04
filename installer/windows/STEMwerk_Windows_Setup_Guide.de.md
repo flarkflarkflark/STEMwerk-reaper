@@ -25,8 +25,8 @@ Der Windows-Installer bleibt der empfohlene Weg fuer Erstinstallation und Repara
 Wenn du einen Offline-allmodels-Installer heruntergeladen hast, zeigt der Dateiname das gebuendelte Backend an:
 
 - `offline-bundled-cpu-allmodels`: CPU-Drum-Kit-Runtime und Offline-Modelle
-- `offline-bundled-nvidia-allmodels`: NVIDIA/CUDA-Drum-Kit-Runtime und Offline-Modelle
-- `offline-bundled-amd-allmodels`: DirectML-Drum-Kit-Runtime und Offline-Modelle
+- `offline-bundled-nvidia-gpu-allmodels`: NVIDIA/CUDA-Drum-Kit-Runtime und Offline-Modelle
+- `offline-bundled-amd-gpu-allmodels`: DirectML-Drum-Kit-Runtime und Offline-Modelle
 
 Diese Installer sollen die Einrichtung fuer ihre Ziel-Runtime vollstaendig offline nur aus den gebuendelten Wheels und Payloads abschliessen koennen.
 

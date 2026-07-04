@@ -5,4 +5,4 @@ Open REAPER and run STEMwerk.lua.
 
 Use STEMwerk-SETUP.lua only as a support or repair path if something is missing after installation.
 
-For 2.3.0.0 pre-release testing, use installers rebuilt from 95013e6 or later; earlier 21a59cd, e06507c, and 328c614 builds are stale/superseded on the final Windows 2.3 candidate line.
+For 2.3.0.0, use the current installer set and verify downloads with the published SHA256 values before installing.

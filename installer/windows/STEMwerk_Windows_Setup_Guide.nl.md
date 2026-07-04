@@ -25,8 +25,8 @@ De Windows-installer blijft de aanbevolen route voor een eerste installatie en v
 Als je een offline allmodels-installer hebt gedownload, geeft de bestandsnaam de meegeleverde backend aan:
 
 - `offline-bundled-cpu-allmodels`: CPU Drum Kit-runtime en offline modellen
-- `offline-bundled-nvidia-allmodels`: NVIDIA/CUDA Drum Kit-runtime en offline modellen
-- `offline-bundled-amd-allmodels`: DirectML Drum Kit-runtime en offline modellen
+- `offline-bundled-nvidia-gpu-allmodels`: NVIDIA/CUDA Drum Kit-runtime en offline modellen
+- `offline-bundled-amd-gpu-allmodels`: DirectML Drum Kit-runtime en offline modellen
 
 Deze installers zijn bedoeld om volledig offline te kunnen afronden met alleen de meegeleverde wheels en payloads voor hun doel-runtime.
 

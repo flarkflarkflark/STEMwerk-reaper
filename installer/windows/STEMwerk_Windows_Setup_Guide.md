@@ -25,8 +25,8 @@ The Windows installer remains the recommended fresh-install and repair route on 
 If you downloaded an offline allmodels installer, the filename indicates the bundled backend:
 
 - `offline-bundled-cpu-allmodels`: CPU Drum Kit runtime and offline models
-- `offline-bundled-nvidia-allmodels`: NVIDIA/CUDA Drum Kit runtime and offline models
-- `offline-bundled-amd-allmodels`: DirectML Drum Kit runtime and offline models
+- `offline-bundled-nvidia-gpu-allmodels`: NVIDIA/CUDA Drum Kit runtime and offline models
+- `offline-bundled-amd-gpu-allmodels`: DirectML Drum Kit runtime and offline models
 
 These installers are intended to complete setup fully offline from bundled wheels and payloads for their target runtime.
 
