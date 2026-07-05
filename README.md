@@ -18,6 +18,18 @@ For full release notes, asset checksums, and current download details, use the p
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
+## Screenshots
+Small cross-platform showcase from the current public `STEMwerk 2.3` release line.
+
+<p>
+  <img src="docs/assets/stemwerk-2.3-macos-kit-split.png" alt="STEMwerk 2.3 on macOS with Kit Split selected" width="48%">
+  <img src="docs/assets/stemwerk-2.3-linux-amd-rx9070-kit-split.png" alt="STEMwerk 2.3 on Linux with AMD RX 9070 and Kit Split selected" width="48%">
+</p>
+<p>
+  <img src="docs/assets/stemwerk-2.3-linux-nvidia-rtx3060-kit-split.png" alt="STEMwerk 2.3 on Linux with NVIDIA RTX 3060 and Kit Split selected" width="48%">
+  <img src="docs/assets/stemwerk-2.3-windows-kit-split.png" alt="STEMwerk 2.3 on Windows with Kit Split selected" width="48%">
+</p>
+
 ## What's new in 2.3.0.0
 - Direct Drum Kit and Drum Kit Split workflows for drum-focused separation.
 - Improved Windows, macOS, and Linux packaging for public installs and updates.
