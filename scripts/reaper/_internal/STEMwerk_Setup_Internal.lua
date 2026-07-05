@@ -4183,7 +4183,11 @@ end
 
 local function linuxCurrentStep(state)
     local idx = tonumber(trim(state.STEP_INDEX or ""))
-    if idx and idx >= 1 and idx <= 4 then
+    local total = tonumber(trim(state.STEP_TOTAL or ""))
+    if not total or total < 1 then
+        total = 5
+    end
+    if idx and idx >= 1 and idx <= total then
         if LINUX_SETUP and LINUX_SETUP.lastStepIndex and idx < LINUX_SETUP.lastStepIndex then
             return LINUX_SETUP.lastStepIndex
         end
@@ -4194,9 +4198,9 @@ local function linuxCurrentStep(state)
     end
     if trim(state.STATUS or "") == "ok" then
         if LINUX_SETUP then
-            LINUX_SETUP.lastStepIndex = 4
+            LINUX_SETUP.lastStepIndex = total
         end
-        return 4
+        return total
     end
     if LINUX_SETUP and LINUX_SETUP.lastStepIndex and LINUX_SETUP.lastStepIndex >= 1 then
         return LINUX_SETUP.lastStepIndex
@@ -4260,7 +4264,11 @@ local function linuxProgressPercent(state, logLines)
     end
     local idx = linuxCurrentStep(state)
     local activeFill = linuxActiveStepFill(state, logLines or {})
-    local segment = 100 / 4
+    local total = tonumber(trim(state.STEP_TOTAL or ""))
+    if not total or total < 1 then
+        total = 5
+    end
+    local segment = 100 / total
     local completed = (idx - 1) * segment
     local pct = completed + (activeFill * segment)
     if LINUX_SETUP then
@@ -4277,6 +4285,7 @@ local function linuxStageColor(stepIndex)
         { 100, 200, 255 },
         { 150, 100, 255 },
         { 100, 255, 100 },
+        { 255, 196, 80 },
     }
     local c = colors[tonumber(stepIndex or 0) or 0] or colors[4]
     return c[1] / 255, c[2] / 255, c[3] / 255
@@ -4376,22 +4385,28 @@ local function drawLinuxStepLegend(x, y, w, state, logLines)
     local labels = {
         "1. Runtime",
         "2. Python + venv",
-        "3. FFmpeg",
-        "4. Finalizing",
+        "3. STEMwerk runtime",
+        "4. FFmpeg",
+        "5. Drum Kit runtime",
     }
     local colors = {
         { 255, 100, 100 },
         { 100, 200, 255 },
         { 150, 100, 255 },
         { 100, 255, 100 },
+        { 255, 196, 80 },
     }
+    local total = tonumber(trim(state.STEP_TOTAL or ""))
+    if not total or total < 1 then
+        total = 5
+    end
     local currentStep = linuxCurrentStep(state)
     local done = trim(state.STATUS or "") == "ok"
     local gap = 14
-    local colW = math.floor((w - gap * 3) / 4)
+    local colW = math.floor((w - gap * (total - 1)) / total)
     local trackH = math.max(10, linuxLineHeight(10))
 
-    for i = 1, 4 do
+    for i = 1, total do
         local colX = x + ((i - 1) * (colW + gap))
         local c = colors[i]
         local isCompleted = done or i < currentStep
@@ -4597,7 +4612,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     end
     if finalSuccess then
         finalState.STATUS = "ok"
-        finalState.STEP_INDEX = "4"
+        finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or "5"
     end
 
     drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, finalState, logLines or {})

@@ -27,6 +27,10 @@ DRUMSEP_ROCM_TORCH_VERSION="2.9.1+rocm6.4"
 DRUMSEP_ROCM_TORCHVISION_VERSION="0.24.1+rocm6.4"
 DRUMSEP_ROCM_TORCHAUDIO_VERSION="2.9.1+rocm6.4"
 DRUMSEP_ROCM_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm6.4"
+DRUMSEP_ROCM7_GFX1201_TORCH_VERSION="2.10.0+rocm7.0"
+DRUMSEP_ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0+rocm7.0"
+DRUMSEP_ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0+rocm7.0"
+DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm7.0"
 DRUMSEP_ROCM_MIN_FREE_GB="20"
 DRUMSEP_MODEL_FILE="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DRUMSEP_MODEL_YAML="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
@@ -957,6 +961,53 @@ set_progress() {
   write_state
 }
 
+select_drumsep_rocm_torch_stack() {
+  DRUMSEP_ACTIVE_ROCM_TORCH_VERSION="${DRUMSEP_ROCM_TORCH_VERSION}"
+  DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION="${DRUMSEP_ROCM_TORCHVISION_VERSION}"
+  DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION="${DRUMSEP_ROCM_TORCHAUDIO_VERSION}"
+  DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL="${DRUMSEP_ROCM_TORCH_INDEX_URL}"
+  DRUMSEP_ACTIVE_ROCM_STACK_POLICY="rocm6_4_default"
+  _device_probe_py="$(main_runtime_python)"
+  if [ -x "${_device_probe_py}" ]; then
+    _gpu_probe="$("${_device_probe_py}" - <<'PY' 2>/dev/null || true
+try:
+    import torch
+    hip = str(getattr(getattr(torch, "version", None), "hip", "") or "")
+    cuda_available = bool(torch.cuda.is_available())
+    device_count = int(torch.cuda.device_count()) if cuda_available else 0
+    names = []
+    if cuda_available:
+        for i in range(device_count):
+            try:
+                names.append(str(torch.cuda.get_device_name(i)))
+            except Exception:
+                pass
+    print(f"hip={hip}")
+    print(f"cuda_available={'yes' if cuda_available else 'no'}")
+    print(f"device_count={device_count}")
+    print(f"device_names={'|'.join(names)}")
+except Exception:
+    pass
+PY
+)"
+    _hip="$(printf "%s\n" "${_gpu_probe}" | awk -F= '/^hip=/{print $2; exit}')"
+    _cuda_available="$(printf "%s\n" "${_gpu_probe}" | awk -F= '/^cuda_available=/{print $2; exit}')"
+    _device_count="$(printf "%s\n" "${_gpu_probe}" | awk -F= '/^device_count=/{print $2; exit}')"
+    _device_names="$(printf "%s\n" "${_gpu_probe}" | awk -F= '/^device_names=/{print $2; exit}')"
+    if [ -n "${_hip}" ] && [ "${_cuda_available}" = "yes" ] && [ "${_device_count:-0}" -gt 0 ] \
+      && printf "%s\n" "${_device_names}" | grep -Eiq "rx 9070|gfx1201"; then
+      DRUMSEP_ACTIVE_ROCM_TORCH_VERSION="${DRUMSEP_ROCM7_GFX1201_TORCH_VERSION}"
+      DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION="${DRUMSEP_ROCM7_GFX1201_TORCHVISION_VERSION}"
+      DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION="${DRUMSEP_ROCM7_GFX1201_TORCHAUDIO_VERSION}"
+      DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL="${DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL}"
+      DRUMSEP_ACTIVE_ROCM_STACK_POLICY="rocm7_gfx1201_align_main_runtime"
+    fi
+  fi
+  log_step "drumsep_rocm_stack_policy=${DRUMSEP_ACTIVE_ROCM_STACK_POLICY}"
+  log_step "drumsep_rocm_torch_index=${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}"
+  log_step "drumsep_rocm_torch_stack=torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION} torchvision==${DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION} torchaudio==${DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION}"
+}
+
 verify_drumsep_runtime() {
   _py="$(drumsep_runtime_python)"
   _model_dir="$(model_cache_dir)"
@@ -1235,6 +1286,7 @@ install_drumsep_rocm_runtime() {
   export TMPDIR="${DRUMSEP_ROCM_TMPDIR}"
 
   STEP_TOTAL="5"
+  select_drumsep_rocm_torch_stack
   set_progress "1" "${STEP_TOTAL}" "Creating DrumSep ROCm runtime"
   rm -rf "${RUNTIME_BASE}/.venv-drumsep-rocm"
   if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep-rocm" >> "${_log}" 2>&1; then
@@ -1253,10 +1305,10 @@ install_drumsep_rocm_runtime() {
   fi
 
   set_progress "3" "${STEP_TOTAL}" "Installing ROCm torch stack"
-  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}" \
-    "torch==${DRUMSEP_ROCM_TORCH_VERSION}" \
-    "torchvision==${DRUMSEP_ROCM_TORCHVISION_VERSION}" \
-    "torchaudio==${DRUMSEP_ROCM_TORCHAUDIO_VERSION}" >> "${_log}" 2>&1; then
+  if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}" \
+    "torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}" \
+    "torchvision==${DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION}" \
+    "torchaudio==${DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION}" >> "${_log}" 2>&1; then
     write_drumsep_rocm_state "install_failed" "missing" "rocm_torch_install_failed"
     return 1
   fi
@@ -1669,7 +1721,7 @@ AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
 CONSTRAINTS_FILE=""
 SELECTED_TORCH_INDEX=""
 STEP_INDEX=""
-STEP_TOTAL="4"
+STEP_TOTAL="5"
 STEP_LABEL=""
 VENV_CREATE_REASON=""
 MANAGED_PYTHON_ENABLED="yes"
@@ -2088,6 +2140,7 @@ else
     fi
   fi
   if [ "${STATUS}" = "ok" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     clear_stale_python_backend_reason
     log_step "Upgrading pip/setuptools/wheel"
@@ -2540,7 +2593,7 @@ PY
   fi
 fi
 
-set_progress "3" "${STEP_TOTAL}" "Checking FFmpeg"
+set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"
 log_stage "Checking/installing FFmpeg"
 for p in \
   "${RUNTIME_BASE}/bin/ffmpeg" \
@@ -2574,7 +2627,7 @@ if [ -z "${FFMPEG}" ] || ! "${FFMPEG}" -version >/dev/null 2>&1; then
   FINAL_OK=0
 fi
 
-set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
+set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"
 RUNTIME_STRICT_OK=1
 
 if [ -n "${PYTHON}" ] && [ -n "${VENV_PY}" ]; then

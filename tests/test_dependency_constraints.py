@@ -586,6 +586,41 @@ def test_linux_bootstrap_gfx1201_requires_rx9070_or_gfx1201_device_visibility():
     assert 'SELECTED_TORCH_STACK="torch==${ACTIVE_TORCH_VERSION}+$(basename "${idx}") torchvision==${ACTIVE_TORCHVISION_VERSION}+$(basename "${idx}") torchaudio==${ACTIVE_TORCHAUDIO_VERSION}+$(basename "${idx}")"' in script
 
 
+def test_linux_drumsep_rocm_runtime_aligns_gfx1201_with_rocm7_main_runtime_policy():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_VERSION="2.10.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm7.0"' in script
+    assert 'select_drumsep_rocm_torch_stack() {' in script
+    assert 'DRUMSEP_ACTIVE_ROCM_STACK_POLICY="rocm7_gfx1201_align_main_runtime"' in script
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_VERSION="${DRUMSEP_ROCM7_GFX1201_TORCH_VERSION}"' in script
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL="${DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL}"' in script
+    assert 'printf "%s\\n" "${_device_names}" | grep -Eiq "rx 9070|gfx1201"' in script
+    assert 'torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}' in script
+    assert 'torchvision==${DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION}' in script
+    assert 'torchaudio==${DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION}' in script
+
+
+def test_linux_setup_reports_five_top_level_steps_when_ready_runtime_runs():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    launcher = Path("scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh").read_text()
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'set_progress "1" "${STEP_TOTAL}" "Preparing runtime"' in bootstrap
+    assert 'set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"' in bootstrap
+    assert 'set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"' in bootstrap
+    assert 'set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"' in bootstrap
+    assert 'set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"' in bootstrap
+    assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
+    assert 'local segment = 100 / total' in setup_internal
+    assert '"3. STEMwerk runtime"' in setup_internal
+    assert '"4. FFmpeg"' in setup_internal
+    assert '"5. Drum Kit runtime"' in setup_internal
+
+
 def test_support_bundle_reports_rocm_selected_stack_and_devices():
     script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
 
@@ -4075,7 +4110,7 @@ def test_linux_drumsep_runtime_installer_is_isolated_and_pinned():
     assert 'DRUMSEP_NUMBA_VERSION="0.65.1"' in script
     assert 'printf "%s/.venv-drumsep/bin/python\\n" "${RUNTIME_BASE}"' in script
     assert '"${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep"' in script
-    assert '"${_drumsep_py}" -m pip install' in script
+    assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
     assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
     assert '"numpy==${DRUMSEP_NUMPY_VERSION}"' in script
     assert '"torch==${DRUMSEP_TORCH_VERSION}"' in script
@@ -4146,12 +4181,15 @@ def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins()
     assert 'DRUMSEP_ROCM_TORCHVISION_VERSION="0.24.1+rocm6.4"' in script
     assert 'DRUMSEP_ROCM_TORCHAUDIO_VERSION="2.9.1+rocm6.4"' in script
     assert 'DRUMSEP_ROCM_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm6.4"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_VERSION="2.10.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm7.0"' in script
     assert 'DRUMSEP_ROCM_MIN_FREE_GB="20"' in script
     assert "drumsep_rocm_disk_preflight()" in script
     assert "resolve_drumsep_rocm_tmpdir()" in script
     assert 'write_drumsep_rocm_state "disk_space_insufficient" "missing"' in script
-    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
-    assert '"torch==${DRUMSEP_ROCM_TORCH_VERSION}"' in script
+    assert 'select_drumsep_rocm_torch_stack() {' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}"' in script
+    assert '"torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}"' in script
     assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps' in script
     assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
     assert '"${_py}" -m pip check' in script
@@ -4598,7 +4636,7 @@ def test_linux_bootstrap_uses_bundled_payloads_for_models_and_offline_pip():
     assert 'copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models"' in script
     assert 'pip_install_with_scope main "${VENV_PY}" --upgrade pip setuptools wheel' in script
     assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
-    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}"' in script
     assert '"${BUNDLED_PAYLOAD_DIR}/wheels/main" \\' in script
     assert "bundled_main_has_required_torch_stack()" in script
     assert 'log_step "Bundled main wheelhouse does not contain the requested torch stack; using CPU index fallback"' in script
