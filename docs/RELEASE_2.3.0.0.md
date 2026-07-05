@@ -85,6 +85,11 @@ STEMwerk 2.3 expands GPU/runtime coverage across macOS, Linux, and Windows, and 
   - ReaPack publish
   - installer upload/publish
 
+## Pre-release live smoke plan
+
+- READY_TO_GO_SMOKE_PASS
+- PRE_RELEASE_SMOKE_MATRIX_BLOCKED
+
 ## Known notes
 
 - In 2.3 terminology, the smaller update path can still download required runtime or model assets, while bundled installers include Python and FFmpeg.
