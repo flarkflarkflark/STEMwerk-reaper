@@ -2,14 +2,14 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.0.1" author="flarkAUDIO" time="1783279017">
+      <version name="2.3.0.2" author="flarkAUDIO" time="1783282616">
         <changelog><![CDATA[
-STEMwerk 2.3.0.1 is a Linux/ReaPack hotfix.
+STEMwerk 2.3.0.2 is a ReaPack-only polish hotfix.
 
-- Fixes Linux setup progress to show the full 5-step flow.
-- Fixes AMD RX 9070/gfx1201 Drum Kit ROCm setup to use the ROCm7 torch stack instead of the stale ROCm6.4 pin.
-- Keeps Windows/macOS release assets unchanged from 2.3.0.0.
-- Large Linux offline allmodels AppImages remain separate validation work.
+- Keeps Linux setup progress at the correct 5-step top-level flow while Drum Kit substeps run.
+- Syncs macOS ReaPack setup UX with the macOS installer 5-step flow.
+- Restores the language tooltip help text explaining that right-click toggles tooltips.
+- No installer/AppImage artifacts are changed.
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
