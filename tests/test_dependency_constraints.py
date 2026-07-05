@@ -621,6 +621,39 @@ def test_linux_setup_reports_five_top_level_steps_when_ready_runtime_runs():
     assert '"5. Drum Kit runtime"' in setup_internal
 
 
+def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_rocm_runtime():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    launcher = Path("scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh").read_text()
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+    drumsep_install = bootstrap.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
+
+    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
+    assert 'if OS ~= "Windows" then' in setup_internal
+    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }' in setup_internal
+    assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify"' in setup_internal
+
+    assert 'clear_drumsep_substep_state() {' in bootstrap
+    assert 'set_drumsep_substep_progress() {' in bootstrap
+    assert 'echo "DRUMSEP_STEP_INDEX=${DRUMSEP_STEP_INDEX}"' in bootstrap
+    assert 'echo "DRUMSEP_STEP_TOTAL=${DRUMSEP_STEP_TOTAL}"' in bootstrap
+    assert 'echo "DRUMSEP_STEP_LABEL=${DRUMSEP_STEP_LABEL}"' in bootstrap
+    assert 'log "DRUMSEP STEP ${DRUMSEP_STEP_INDEX}/${DRUMSEP_STEP_TOTAL}: ${DRUMSEP_STEP_LABEL}"' in bootstrap
+    assert 'if [ "${MODE}" = "drumsep-runtime" ]; then' in bootstrap
+    assert '_drumsep_step_total="4"' in drumsep_install
+    assert '"torch==${DRUMSEP_TORCH_VERSION}"' in drumsep_install
+    assert '"torchvision==${DRUMSEP_TORCHVISION_VERSION}"' in drumsep_install
+    assert 'set_drumsep_substep_progress "1" "${_drumsep_step_total}" "Creating DrumSep runtime"' in drumsep_install
+    assert 'set_drumsep_substep_progress "4" "${_drumsep_step_total}" "Verifying DrumSep runtime"' in drumsep_install
+    assert 'set_progress "1" "${STEP_TOTAL}" "Creating DrumSep runtime"' not in drumsep_install
+    assert 'set_progress "4" "${STEP_TOTAL}" "Verifying DrumSep runtime"' not in drumsep_install
+    assert 'select_drumsep_rocm_torch_stack' not in drumsep_install
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_VERSION' not in drumsep_install
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL' not in drumsep_install
+    assert 'drumsep_rocm_runtime.env' not in drumsep_install
+
+
 def test_support_bundle_reports_rocm_selected_stack_and_devices():
     script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
 

@@ -685,6 +685,9 @@ write_state() {
       [ -n "${STEP_INDEX}" ] && echo "STEP_INDEX=${STEP_INDEX}"
       [ -n "${STEP_TOTAL}" ] && echo "STEP_TOTAL=${STEP_TOTAL}"
       [ -n "${STEP_LABEL}" ] && echo "STEP_LABEL=${STEP_LABEL}"
+      [ -n "${DRUMSEP_STEP_INDEX}" ] && echo "DRUMSEP_STEP_INDEX=${DRUMSEP_STEP_INDEX}"
+      [ -n "${DRUMSEP_STEP_TOTAL}" ] && echo "DRUMSEP_STEP_TOTAL=${DRUMSEP_STEP_TOTAL}"
+      [ -n "${DRUMSEP_STEP_LABEL}" ] && echo "DRUMSEP_STEP_LABEL=${DRUMSEP_STEP_LABEL}"
       [ -n "${PROFILE}" ] && echo "PROFILE=${PROFILE}"
       [ -n "${BACKEND}" ] && echo "BACKEND=${BACKEND}"
       [ -n "${BACKEND_REASON}" ] && echo "BACKEND_REASON=${BACKEND_REASON}"
@@ -958,6 +961,27 @@ set_progress() {
   STEP_TOTAL="$2"
   STEP_LABEL="$3"
   log "STEP ${STEP_INDEX}/${STEP_TOTAL}: ${STEP_LABEL}"
+  write_state
+}
+
+clear_drumsep_substep_state() {
+  DRUMSEP_STEP_INDEX=""
+  DRUMSEP_STEP_TOTAL=""
+  DRUMSEP_STEP_LABEL=""
+}
+
+set_drumsep_substep_progress() {
+  _drumsep_idx="$1"
+  _drumsep_total="$2"
+  _drumsep_label="$3"
+  if [ "${MODE}" = "drumsep-runtime" ]; then
+    set_progress "${_drumsep_idx}" "${_drumsep_total}" "${_drumsep_label}"
+    return 0
+  fi
+  DRUMSEP_STEP_INDEX="${_drumsep_idx}"
+  DRUMSEP_STEP_TOTAL="${_drumsep_total}"
+  DRUMSEP_STEP_LABEL="${_drumsep_label}"
+  log "DRUMSEP STEP ${DRUMSEP_STEP_INDEX}/${DRUMSEP_STEP_TOTAL}: ${DRUMSEP_STEP_LABEL}"
   write_state
 }
 
@@ -1353,6 +1377,7 @@ install_drumsep_rocm_runtime() {
 install_drumsep_runtime() {
   _drumsep_log="$(drumsep_log_file)"
   _drumsep_py="$(drumsep_runtime_python)"
+  _drumsep_step_total="4"
   : > "${_drumsep_log}" || true
   log_stage "Installing optional DrumSep runtime"
   log_step "DrumSep runtime path: ${RUNTIME_BASE}/.venv-drumsep"
@@ -1365,8 +1390,8 @@ install_drumsep_runtime() {
     fi
     log_step "Existing DrumSep runtime failed verification; rebuilding"
   fi
-  STEP_TOTAL="4"
-  set_progress "1" "${STEP_TOTAL}" "Creating DrumSep runtime"
+  clear_drumsep_substep_state
+  set_drumsep_substep_progress "1" "${_drumsep_step_total}" "Creating DrumSep runtime"
   rm -rf "${RUNTIME_BASE}/.venv-drumsep"
   if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep" >> "${_drumsep_log}" 2>&1; then
     write_drumsep_state "install_failed" "missing" "venv_create_failed"
@@ -1377,13 +1402,13 @@ install_drumsep_runtime() {
     return 1
   fi
 
-  set_progress "2" "${STEP_TOTAL}" "Upgrading DrumSep pip"
+  set_drumsep_substep_progress "2" "${_drumsep_step_total}" "Upgrading DrumSep pip"
   if ! pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel >> "${_drumsep_log}" 2>&1; then
     write_drumsep_state "install_failed" "missing" "pip_upgrade_failed"
     return 1
   fi
 
-  set_progress "3" "${STEP_TOTAL}" "Installing DrumSep packages"
+  set_drumsep_substep_progress "3" "${_drumsep_step_total}" "Installing DrumSep packages"
   if ! pip_install_with_scope drumsep "${_drumsep_py}" \
     "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" \
     "numpy==${DRUMSEP_NUMPY_VERSION}" \
@@ -1398,7 +1423,7 @@ install_drumsep_runtime() {
     return 1
   fi
 
-  set_progress "4" "${STEP_TOTAL}" "Verifying DrumSep runtime"
+  set_drumsep_substep_progress "4" "${_drumsep_step_total}" "Verifying DrumSep runtime"
   if ! ensure_drumsep_assets "${_drumsep_py}" "$(model_cache_dir)"; then
     write_drumsep_state "install_failed" "missing" "model_download_failed"
     return 1
@@ -1723,6 +1748,9 @@ SELECTED_TORCH_INDEX=""
 STEP_INDEX=""
 STEP_TOTAL="5"
 STEP_LABEL=""
+DRUMSEP_STEP_INDEX=""
+DRUMSEP_STEP_TOTAL=""
+DRUMSEP_STEP_LABEL=""
 VENV_CREATE_REASON=""
 MANAGED_PYTHON_ENABLED="yes"
 MANAGED_PYTHON_STATUS="missing"
