@@ -207,6 +207,29 @@ def test_progress_ui_labels_are_present_in_shipped_and_canonical_i18n():
                 )
 
 
+def test_language_tooltip_includes_right_click_hint_in_all_locales():
+    expected = {
+        "en": "Language. Right-click to toggle tooltips.",
+        "nl": "Taal. Rechtermuisklik om tooltips aan/uit te zetten.",
+        "de": "Sprache. Rechtsklick, um Tooltips ein-/auszuschalten.",
+    }
+    files = [
+        Path(__file__).parent.parent.parent / "i18n" / "languages.lua",
+        Path(__file__).parent.parent.parent / "scripts" / "reaper" / "i18n" / "languages.lua",
+    ]
+
+    for file_path in files:
+        for lang_code, expected_value in expected.items():
+            block = extract_language_block(file_path, lang_code)
+            assert block, f"Missing language block {lang_code!r} in {file_path}"
+            assert extract_string_value(block, "tooltip_lang") == expected_value, (
+                f"{file_path} {lang_code}.tooltip_lang drifted from expected language tooltip"
+            )
+            assert extract_string_value(block, "tooltip_change_language") == expected_value, (
+                f"{file_path} {lang_code}.tooltip_change_language drifted from expected language tooltip"
+            )
+
+
 def main():
     """Run all i18n tests."""
     print("Testing STEMwerk Language Files\n")
