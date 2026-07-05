@@ -621,6 +621,18 @@ def test_linux_setup_reports_five_top_level_steps_when_ready_runtime_runs():
     assert '"5. Drum Kit runtime"' in setup_internal
 
 
+def test_macos_setup_reports_five_top_level_steps_for_reapack_bootstrap():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'set_progress "1" "${STEP_TOTAL}" "Preparing runtime"' in bootstrap
+    assert 'set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"' in bootstrap
+    assert 'set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"' in bootstrap
+    assert 'set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"' in bootstrap
+    assert 'set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"' in bootstrap
+    assert 'set_progress "4" "${STEP_TOTAL}" "Finalizing setup"' not in bootstrap
+
+
 def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_rocm_runtime():
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
     launcher = Path("scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh").read_text()

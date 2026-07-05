@@ -1132,7 +1132,7 @@ PROFILE="mac-cpu"
 BACKEND="cpu"
 BACKEND_REASON=""
 STEP_INDEX=""
-STEP_TOTAL="4"
+STEP_TOTAL="5"
 STEP_LABEL=""
 SELECTED_PYTHON_VERSION=""
 FIRST_UNSUPPORTED_PYTHON_PATH=""
@@ -1293,6 +1293,7 @@ else
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
   fi
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     log "Installing pinned STEMwerk backend packages..."
@@ -1388,7 +1389,7 @@ else
   fi
 fi
 
-set_progress "3" "${STEP_TOTAL}" "Checking FFmpeg"
+set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"
 
 _bundled_ffmpeg="$(bundled_ffmpeg_path || true)"
 if [ -n "${_bundled_ffmpeg}" ] && [ -x "${_bundled_ffmpeg}" ]; then
@@ -1420,7 +1421,7 @@ if [ -z "${FFMPEG}" ]; then
   set_status "missing_ffmpeg" "ffmpeg_not_found"
 fi
 
-set_progress "4" "${STEP_TOTAL}" "Finalizing setup"
+set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"
 
 if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   FINAL_RUNTIME_VERIFIED="yes"
