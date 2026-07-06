@@ -9,12 +9,13 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 STEMwerk-reaper is a REAPER script package that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend and keeps processing on your machine.
 
 ## Release status
-This README describes the current public stable release: `STEMwerk 2.3.0.0`.
+This README describes the current public full GitHub release: `STEMwerk 2.3.0.0`.
 
-- GitHub Release: <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0>
+- Latest full GitHub release: <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0>
+- Latest ReaPack script hotfix: `2.3.0.2`
 - ReaPack index: <https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml>
 
-For full release notes, asset checksums, and current download details, use the published GitHub Release page.
+For full release notes, GitHub asset checksums, and current download details, use the published GitHub Release page.
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
@@ -97,31 +98,31 @@ Recommended free space:
 After install or update, use `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when runtime verification or repair is needed, then launch `STEMwerk: Main` (`STEMwerk.lua`).
 
 ### GitHub release assets for 2.3.0.0
-All current public GitHub downloads are on the release page:
+All current public GitHub downloads are on the release page for `2.3.0.0`:
 <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0>
 
-| File | Description |
-|---|---|
-| `STEMwerk-Setup-2.3.0.0.exe` | Windows standard installer |
-| `STEMwerk-Setup-2.3.0.0-bundled.exe` | Windows bundled installer |
-| `STEMwerk-2.3.0.0-update-patch.exe` | Windows update patch |
-| `STEMwerk-2.3.0.0.pkg` | macOS installer |
-| `STEMwerk-2.3.0.0-x86_64.AppImage` | Linux standard AppImage |
-| `STEMwerk-2.3.0.0-x86_64-bundled.AppImage` | Linux bundled AppImage |
-| `STEMWERK_2300_SHA256SUMS_CURRENT.txt` | Current public SHA256 manifest |
+| Download | Use | Size |
+|---|---|---:|
+| [STEMwerk-Setup-2.3.0.0.exe](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/2.3.0.0/STEMwerk-Setup-2.3.0.0.exe) | Windows standard installer | 3.85 MB / 3,845,263 bytes |
+| [STEMwerk-Setup-2.3.0.0-bundled.exe](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/2.3.0.0/STEMwerk-Setup-2.3.0.0-bundled.exe) | Windows bundled installer | 139.38 MB / 139,381,315 bytes |
+| [STEMwerk-2.3.0.0-update-patch.exe](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/2.3.0.0/STEMwerk-2.3.0.0-update-patch.exe) | Windows update / repair patch | 3.82 MB / 3,817,256 bytes |
+| [STEMwerk-2.3.0.0.pkg](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/2.3.0.0/STEMwerk-2.3.0.0.pkg) | macOS installer | 7.76 MB / 7,763,439 bytes |
+| [STEMwerk-2.3.0.0-x86_64.AppImage](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/2.3.0.0/STEMwerk-2.3.0.0-x86_64.AppImage) | Linux standard AppImage | 1.81 MB / 1,811,648 bytes |
+| [STEMwerk-2.3.0.0-x86_64-bundled.AppImage](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/2.3.0.0/STEMwerk-2.3.0.0-x86_64-bundled.AppImage) | Linux bundled AppImage | 433.15 MB / 433,145,024 bytes |
+| [STEMWERK_2300_SHA256SUMS_CURRENT.txt](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/2.3.0.0/STEMWERK_2300_SHA256SUMS_CURRENT.txt) | Current public SHA256 manifest | 7.97 KB / 7,968 bytes |
 
-GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user downloads.
+Use the SHA256 manifest above for the published GitHub assets. GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user downloads.
 
 ### Large offline allmodels installers
 The large offline allmodels installers for Windows and macOS are linked from release materials and are not attached to the GitHub Release.
 
-| File | Target | Size | SHA256 | Download |
-|---|---|---:|---|---|
-| `STEMwerk-Setup-2.3.0.0-offline-bundled-cpu-allmodels.exe` | Windows CPU | 1535981216 bytes | `a9a3825a2f6ee8e11d662913b352a68fb0a77e5fad792f462328f1cfcbae43fe` | [Google Drive](https://drive.google.com/file/d/1yfqURi2sllPPdIVu8RepaJmDQKuLyVWX/view?usp=drivesdk) |
-| `STEMwerk-Setup-2.3.0.0-offline-bundled-amd-gpu-allmodels.exe` | Windows AMD / DirectML | 1392439785 bytes | `072043e57e515aa6d928c8f1954770129605787583593070619aaba38b4ab7cd` | [Google Drive](https://drive.google.com/file/d/15Lpi_CjcjvZndqdpZevwA76wslcXASkm/view?usp=drivesdk) |
-| `STEMwerk-Setup-2.3.0.0-offline-bundled-nvidia-gpu-allmodels.exe` | Windows NVIDIA / CUDA | 3828446792 bytes | `a5a87ee20aed9a7d5f219b44d2144952b8c26435f6044b56f50e8c04f404ec42` | [Google Drive](https://drive.google.com/file/d/1mS_TmmXBlqPPBbJGZt_YoDC05N7DWZCh/view?usp=drivesdk) |
-| `STEMwerk-2.3.0.0-offline-bundled-intel-cpu-allmodels.pkg` | macOS Intel CPU | 1325151327 bytes | `46de2b9bb801635fc1df2e2a630f750f0f97530da089c9c8dc41f5caca24039d` | [Google Drive](https://drive.google.com/file/d/1PAjHndTmYgQkyJ9ZOEqHEUSRYxvCHmQ-/view?usp=drivesdk) |
-| `STEMwerk-2.3.0.0-offline-bundled-apple-silicon-mps-allmodels.pkg` | macOS Apple Silicon MPS | 1123438652 bytes | `f124bc425bf0462706dbe41e00409440ae6beeb94d2d512fa87e94d28c744b71` | [Google Drive](https://drive.google.com/file/d/1zIKV3BrYoNFjQzw34mTox7wV60nZ5bts/view?usp=drivesdk) |
+| Download | Target | Size | SHA256 |
+|---|---|---:|---|
+| [STEMwerk-Setup-2.3.0.0-offline-bundled-cpu-allmodels.exe](https://drive.google.com/file/d/1yfqURi2sllPPdIVu8RepaJmDQKuLyVWX/view?usp=drivesdk) | Windows CPU | 1.54 GB / 1,535,981,216 bytes | `a9a3825a2f6ee8e11d662913b352a68fb0a77e5fad792f462328f1cfcbae43fe` |
+| [STEMwerk-Setup-2.3.0.0-offline-bundled-amd-gpu-allmodels.exe](https://drive.google.com/file/d/15Lpi_CjcjvZndqdpZevwA76wslcXASkm/view?usp=drivesdk) | Windows AMD / DirectML | 1.39 GB / 1,392,439,785 bytes | `072043e57e515aa6d928c8f1954770129605787583593070619aaba38b4ab7cd` |
+| [STEMwerk-Setup-2.3.0.0-offline-bundled-nvidia-gpu-allmodels.exe](https://drive.google.com/file/d/1mS_TmmXBlqPPBbJGZt_YoDC05N7DWZCh/view?usp=drivesdk) | Windows NVIDIA / CUDA | 3.83 GB / 3,828,446,792 bytes | `a5a87ee20aed9a7d5f219b44d2144952b8c26435f6044b56f50e8c04f404ec42` |
+| [STEMwerk-2.3.0.0-offline-bundled-intel-cpu-allmodels.pkg](https://drive.google.com/file/d/1PAjHndTmYgQkyJ9ZOEqHEUSRYxvCHmQ-/view?usp=drivesdk) | macOS Intel CPU | 1.33 GB / 1,325,151,327 bytes | `46de2b9bb801635fc1df2e2a630f750f0f97530da089c9c8dc41f5caca24039d` |
+| [STEMwerk-2.3.0.0-offline-bundled-apple-silicon-mps-allmodels.pkg](https://drive.google.com/file/d/1zIKV3BrYoNFjQzw34mTox7wV60nZ5bts/view?usp=drivesdk) | macOS Apple Silicon MPS | 1.12 GB / 1,123,438,652 bytes | `f124bc425bf0462706dbe41e00409440ae6beeb94d2d512fa87e94d28c744b71` |
 
 Linux ordinary AppImages included in the public 2.3.0.0 release:
 - `STEMwerk-2.3.0.0-x86_64.AppImage`
