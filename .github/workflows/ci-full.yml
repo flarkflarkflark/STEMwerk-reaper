@@ -32,7 +32,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          python -m pip install pytest soundfile
+          python -m pip install pytest pyyaml soundfile
 
       - name: Quick script smoke tests
         run: |
