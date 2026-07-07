@@ -4455,7 +4455,7 @@ local function drawLinuxStepLegend(x, y, w, state, logLines)
     end
 end
 
-local function linuxDrawStatus(state, logLines, pidAlive, pid)
+function linuxDrawStatus(state, logLines, pidAlive, pid)
     local uiState = normalizeLinuxUiState(state, pidAlive)
     local lastLogLine = extractLastLogLine(logLines or {})
     local w, h = gfx.w, gfx.h
@@ -4541,7 +4541,7 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
     drawLinuxLogPanel(logX, logY, logW, logH, logLines, "Console wheel scrolls. Ctrl+wheel outside console zooms text. Use +/- or 0 for text size.")
 end
 
-local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
+function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local w, h = gfx.w, gfx.h
     gfx.set(0.03, 0.03, 0.04, 1)
     gfx.rect(0, 0, w, h, 1)
@@ -4723,10 +4723,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.drawstr(footerText)
 end
 
-local verifyExistingSetup
-local startLinuxSetup
-
-local function linuxSetupTick()
+function linuxSetupTick()
     if not LINUX_SETUP then return end
     if not gfx then return end
 
@@ -4938,6 +4935,8 @@ local function linuxSetupTick()
     end
     reaper.defer(linuxSetupTick)
 end
+
+do
 
 local function appendSetupLog(runtime, line, replace)
     if not runtime or not runtime.runtimeLogs then return end
@@ -6031,7 +6030,7 @@ end
 -- Deferred tick for the existing-runtime setup mode selection menu.
 -- Draws the window, handles input, and dispatches to verifyExistingSetup /
 -- startLinuxSetup / cancel. Never blocks the REAPER UI thread.
-local function existingRuntimeSetupMenuTick()
+function existingRuntimeSetupMenuTick()
     if not SETUP_MENU then return end
     local m = SETUP_MENU
     refreshSetupMenuChoiceLabels(m)
@@ -6802,85 +6801,101 @@ local function existingRuntimeSetupMenuTick()
     reaper.defer(existingRuntimeSetupMenuTick)
 end
 
--- Initializes the gfx window and kicks off the deferred menu tick.
--- Returns immediately; REAPER remains responsive while the menu is open.
-local function startExistingRuntimeSetupMenu(runtime, separatorScript)
-    local stateFileForVer = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
-    local storedState = fileExists(stateFileForVer) and parseStateFile(stateFileForVer) or {}
-    local lastSetupVersion = trim(storedState.STEMWERK_SETUP_VERSION or "")
-    local currentVersion = SETUP_VERSION or ""
-    local versionMatch = (lastSetupVersion == "" or lastSetupVersion == currentVersion)
-    local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
+do
+    function startExistingRuntimeSetupMenu(runtime, separatorScript)
+        local stateFileForVer = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+        local storedState = fileExists(stateFileForVer) and parseStateFile(stateFileForVer) or {}
+        local lastSetupVersion = trim(storedState.STEMWERK_SETUP_VERSION or "")
+        local currentVersion = SETUP_VERSION or ""
+        local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
 
-    local windowsOverview = nil
-    if OS == "Windows" then
-        windowsOverview = buildWindowsSetupOverview(runtime, currentVersion, lastSetupVersion)
+        local windowsOverview = nil
+        if OS == "Windows" then
+            windowsOverview = buildWindowsSetupOverview(runtime, currentVersion, lastSetupVersion)
+        end
+
+        local choices = {
+            { id = "verify", accent = { 0.22, 0.70, 0.50 } },
+            { id = "repair", accent = { 0.92, 0.55, 0.10 } },
+            { id = "rebuild-venv", accent = { 0.45, 0.52, 0.90 } },
+            { id = "support-bundle", accent = { 0.26, 0.60, 0.88 } },
+            { id = "open-logs", accent = { 0.35, 0.56, 0.82 } },
+            { id = "open-runtime", accent = { 0.35, 0.56, 0.82 } },
+        }
+        if OS == "Windows" then
+            choices[#choices + 1] = { id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }
+            choices[#choices + 1] = { id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }
+        end
+        if OS ~= "Windows" then
+            choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
+            choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+            choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
+            choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
+        end
+        choices[#choices + 1] = { id = "cancel", accent = { 0.38, 0.38, 0.42 } }
+        refreshSetupMenuChoiceLabels({ choices = choices })
+
+        SETUP_MENU = {
+            runtime         = runtime,
+            separatorScript = separatorScript,
+            modelDir        = getModelCacheDir(),
+            mouseWasDown    = false,
+            lastMouseWheel  = gfx.mouse_wheel or 0,
+            fontScale       = math.max(getLinuxSetupFontScale(), LINUX_SETUP_FONT_SCALE_DEFAULT),
+            currentVersion  = currentVersion,
+            lastSetupVersion = lastSetupVersion,
+            updateDetected  = updateDetected,
+            windowsOverview = windowsOverview,
+            choices = choices,
+        }
+        gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
+        reaper.defer(existingRuntimeSetupMenuTick)
     end
 
-    local choices = {
-        { id = "verify", accent = { 0.22, 0.70, 0.50 } },
-        { id = "repair", accent = { 0.92, 0.55, 0.10 } },
-        { id = "rebuild-venv", accent = { 0.45, 0.52, 0.90 } },
-        { id = "support-bundle", accent = { 0.26, 0.60, 0.88 } },
-        { id = "open-logs", accent = { 0.35, 0.56, 0.82 } },
-        { id = "open-runtime", accent = { 0.35, 0.56, 0.82 } },
-    }
-    if OS == "Windows" then
-        choices[#choices + 1] = { id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }
-        choices[#choices + 1] = { id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }
+    function shouldSkipMacBootstrap(runtime)
+        if OS ~= "macOS" then return false end
+        if not PATH_HELPER then return false end
+        local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
+        if not guardPath or guardPath == "" or not fileExists(guardPath) then return false end
+        local guard = readBootstrapGuard(guardPath)
+        if tostring(guard.STATUS or "") ~= "ok" or tostring(guard.REASON or "") ~= "completed" then
+            return false
+        end
+        local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+        if not fileExists(stateFile) then return false end
+        local state = parseStateFile(stateFile)
+        if not state or next(state) == nil then return false end
+        if state.RUNTIME_BASE and state.RUNTIME_BASE ~= "" and runtime.base and runtime.base ~= "" then
+            if not PATH_HELPER.pathEquals(state.RUNTIME_BASE, runtime.base, OS) then return false end
+        end
+        local verification = verifyRuntimePaths(state)
+        local ok = verification and verification.pythonOk and verification.ffmpegOk and #(verification.errors or {}) == 0
+        if not ok then return false end
+        local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+        return true, stateFile, logFile, state
     end
-    if OS ~= "Windows" then
-        choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
-        choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
-        choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
-        choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
-    end
-    choices[#choices + 1] = { id = "cancel", accent = { 0.38, 0.38, 0.42 } }
-    refreshSetupMenuChoiceLabels({ choices = choices })
 
-    SETUP_MENU = {
-        runtime         = runtime,
-        separatorScript = separatorScript,
-        modelDir        = getModelCacheDir(),
-        mouseWasDown    = false,
-        lastMouseWheel  = gfx.mouse_wheel or 0,
-        fontScale       = math.max(getLinuxSetupFontScale(), LINUX_SETUP_FONT_SCALE_DEFAULT),
-        currentVersion  = currentVersion,
-        lastSetupVersion = lastSetupVersion,
-        updateDetected  = updateDetected,
-        windowsOverview = windowsOverview,
-        choices = choices,
-    }
-    gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
-    reaper.defer(existingRuntimeSetupMenuTick)
-end
-
-local function shouldSkipMacBootstrap(runtime)
-    if OS ~= "macOS" then return false end
-    if not PATH_HELPER then return false end
-    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
-    if not guardPath or guardPath == "" or not fileExists(guardPath) then return false end
-    local guard = readBootstrapGuard(guardPath)
-    if tostring(guard.STATUS or "") ~= "ok" or tostring(guard.REASON or "") ~= "completed" then
-        return false
+    function showSkippedMacBootstrapFinalWindow(runtime, separatorScript)
+        local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
+        if not skip then
+            return false
+        end
+        local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
+        showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
+        return true
     end
-    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
-    if not fileExists(stateFile) then return false end
-    local state = parseStateFile(stateFile)
-    if not state or next(state) == nil then return false end
-    if state.RUNTIME_BASE and state.RUNTIME_BASE ~= "" and runtime.base and runtime.base ~= "" then
-        if not PATH_HELPER.pathEquals(state.RUNTIME_BASE, runtime.base, OS) then return false end
-    end
-    local verification = verifyRuntimePaths(state)
-    local ok = verification and verification.pythonOk and verification.ffmpegOk and #(verification.errors or {}) == 0
-    if not ok then return false end
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
-    return true, stateFile, logFile, state
-end
 
-local function main()
+    function finishBootstrapAndShow(runtime, separatorScript)
+        local bootstrapSuccess, stateFile, logFile, bootstrapState = runBootstrap(runtime)
+        local result = safePerformPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+        if OS == "Windows" then
+            showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+        else
+            showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
+        end
+    end
+
     local runtime = getRuntimePaths()
-    local hasRuntime = runtimeLooksPresent(runtime)
     setExt("runtimeBase", runtime.base)
     local separatorScript = SCRIPT_DIR .. "audio_separator_process.py"
     if fileExists(separatorScript) then
@@ -6893,40 +6908,28 @@ local function main()
     end
 
     if OS == "Linux" or OS == "macOS" then
-        if hasRuntime then
+        if runtimeLooksPresent(runtime) then
             startExistingRuntimeSetupMenu(runtime, separatorScript)
             return
         end
 
-        local intro =
+        if msgBox("STEMwerk Setup",
             "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
             .. "STEMwerk will prepare a runtime in:\n  " .. runtime.base .. "\n\n"
             .. "Downloaded models will be kept in:\n  " .. getModelCacheDir() .. "\n\n"
-            .. "Continue with first-time setup?"
-        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then
+            .. "Continue with first-time setup?", 4) ~= 6 then
             return
         end
 
-        if OS == "macOS" then
-            local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
-            if skip then
-                local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
-                showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
-                return
-            end
+        if OS == "macOS" and showSkippedMacBootstrapFinalWindow(runtime, separatorScript) then
+            return
         end
 
         startLinuxSetup(runtime, separatorScript, "repair")
         return
     end
 
-    local bootstrapSuccess, stateFile, logFile, bootstrapState = runBootstrap(runtime)
-    local result = safePerformPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
-    if OS == "Windows" then
-        showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
-    else
-        showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
-    end
+    finishBootstrapAndShow(runtime, separatorScript)
 end
 
-main()
+end

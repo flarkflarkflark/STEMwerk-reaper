@@ -61,6 +61,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          luac -p scripts/reaper/_internal/STEMwerk_Setup_Internal.lua
           luac -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
           luac -p tests/support/run_support_bundle_headless.lua
 
@@ -68,6 +69,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p scripts/reaper/_internal/STEMwerk_Setup_Internal.lua
           & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p scripts/reaper/STEMwerk_Save_Support_Bundle.lua
           & "C:\Program Files (x86)\Lua\5.1\luac.exe" -p tests/support/run_support_bundle_headless.lua
 

@@ -2041,6 +2041,9 @@ local function tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPa
         "import sys",
         "import zipfile",
         "",
+        "def normalize_arcname(path):",
+        "    return str(path or '').replace('\\\\', '/').strip('/')",
+        "",
         "bundle_dir = os.path.abspath(sys.argv[1])",
         "zip_path = os.path.abspath(sys.argv[2])",
         "parent = os.path.dirname(bundle_dir)",
@@ -2051,14 +2054,14 @@ local function tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPa
         "",
         "with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:",
         "    for root, dirs, files in os.walk(bundle_dir):",
-        "        rel_root = os.path.relpath(root, parent).replace('\\\\', '/')",
+        "        rel_root = normalize_arcname(os.path.relpath(root, parent))",
         "        if rel_root == '.':",
-        "            rel_root = base",
+        "            rel_root = normalize_arcname(base)",
         "        if not files and not dirs:",
         "            zf.writestr(rel_root.rstrip('/\\\\') + '/', '')",
         "        for name in files:",
         "            src = os.path.join(root, name)",
-        "            rel = os.path.relpath(src, parent).replace('\\\\', '/')",
+        "            rel = normalize_arcname(os.path.relpath(src, parent))",
         "            zf.write(src, rel)",
     }, "\n")
     if not writeFile(scriptPath, script, "wb") then
@@ -2123,10 +2126,10 @@ local function createZipArchive(bundleParent, bundleDir, bundleName, pythonPath)
     local errors = {}
     local ok, err, method
     if OS == "Windows" then
-        ok, err, method = tryCreateZipWithPowerShell(bundleDir, zipPath)
+        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
         if ok then return true, zipPath, "", method end
         errors[#errors + 1] = method .. ": " .. tostring(err)
-        ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)
+        ok, err, method = tryCreateZipWithPowerShell(bundleDir, zipPath)
         if ok then return true, zipPath, "", method end
         errors[#errors + 1] = method .. ": " .. tostring(err)
     elseif OS == "macOS" then
@@ -2163,11 +2166,14 @@ local function updateZipTimingFile(zipPath, bundleDir, timingPath, pythonPath)
         "import sys",
         "import zipfile",
         "",
+        "def normalize_arcname(path):",
+        "    return str(path or '').replace('\\\\', '/').strip('/')",
+        "",
         "zip_path = os.path.abspath(sys.argv[1])",
         "bundle_dir = os.path.abspath(sys.argv[2])",
         "timing_path = os.path.abspath(sys.argv[3])",
         "parent = os.path.dirname(bundle_dir)",
-        "arcname = os.path.relpath(timing_path, parent).replace('\\\\', '/')",
+        "arcname = normalize_arcname(os.path.relpath(timing_path, parent))",
         "with zipfile.ZipFile(zip_path, 'a', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:",
         "    zf.write(timing_path, arcname)",
     }, "\n")

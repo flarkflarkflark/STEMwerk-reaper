@@ -2,11 +2,14 @@
 
 import importlib.util
 import json
+import ntpath
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 
@@ -4568,8 +4571,8 @@ def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     assert 'script:write("unset PYTHONPATH PYTHONHOME\\n")' in main_script
     assert "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" in workflow_script
     assert 'script:write("unset PYTHONPATH PYTHONHOME\\n")' in workflow_script
-    assert "os.path.relpath(src, parent).replace('\\\\\\\\', '/')" in support_script
-    assert "os.path.relpath(timing_path, parent).replace('\\\\\\\\', '/')" in support_script
+    assert "normalize_arcname(os.path.relpath(src, parent))" in support_script
+    assert "normalize_arcname(os.path.relpath(timing_path, parent))" in support_script
 
 
 def test_drumkit_wrapper_selects_integrated_mode_and_extract_source():
@@ -4774,6 +4777,65 @@ def test_ci_fast_quick_script_smoke_installs_pyyaml():
     assert "Install test dependencies" in workflow
     assert "python -m pip install pytest pyyaml soundfile" in workflow
     assert "python scripts/reaper/audio_separator_process.py --list-models" in workflow
+
+
+def test_setup_internal_luac_compiles_under_reaper_limits():
+    luac = shutil.which("luac")
+    if not luac:
+        pytest.skip("luac not available")
+    result = subprocess.run(
+        [luac, "-p", "scripts/reaper/_internal/STEMwerk_Setup_Internal.lua"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_support_bundle_windows_zip_helper_prefers_python_and_writes_clean_entries(tmp_path):
+    script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
+
+    python_call = 'ok, err, method = tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPath)'
+    powershell_call = 'ok, err, method = tryCreateZipWithPowerShell(bundleDir, zipPath)'
+    assert script.index(python_call) < script.index(powershell_call)
+    assert "normalize_arcname(os.path.relpath(root, parent))" in script
+    assert "normalize_arcname(os.path.relpath(src, parent))" in script
+    assert "normalize_arcname(os.path.relpath(timing_path, parent))" in script
+
+    bundle_parent = tmp_path / "support"
+    bundle_dir = bundle_parent / "STEMwerk-support-bundle-20260707-181043"
+    nested_dir = bundle_dir / "nested"
+    nested_dir.mkdir(parents=True)
+
+    processing_summary = bundle_dir / "processing_summary.txt"
+    timings_path = nested_dir / "support_bundle_timings.txt"
+    processing_summary.write_text("summary ok\n", encoding="utf-8")
+    timings_path.write_text("timings ok\n", encoding="utf-8")
+
+    zip_path = tmp_path / "bundle.zip"
+    windows_parent = r"C:\Users\Ferro\AppData\Roaming\REAPER\STEMwerk-support-bundles"
+    windows_bundle = windows_parent + r"\STEMwerk-support-bundle-20260707-181043"
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        for root, _dirs, files in os.walk(bundle_dir):
+            root_path = Path(root)
+            rel_root = os.path.relpath(root_path, bundle_dir)
+            windows_root = windows_bundle if rel_root == "." else ntpath.join(windows_bundle, *Path(rel_root).parts)
+            if not files:
+                arc_dir = ntpath.relpath(windows_root, windows_parent).replace("\\", "/").strip("/")
+                zf.writestr(arc_dir + "/", "")
+            for name in files:
+                src = root_path / name
+                windows_src = ntpath.join(windows_root, name)
+                arcname = ntpath.relpath(windows_src, windows_parent).replace("\\", "/").strip("/")
+                zf.write(src, arcname)
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        assert zf.testzip() is None
+        names = zf.namelist()
+        assert all("\\" not in name for name in names)
+        assert "STEMwerk-support-bundle-20260707-181043/processing_summary.txt" in names
+        assert zf.read("STEMwerk-support-bundle-20260707-181043/processing_summary.txt").decode("utf-8") == "summary ok\n"
 
 
 def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_consistent():
