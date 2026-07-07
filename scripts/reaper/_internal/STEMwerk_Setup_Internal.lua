@@ -176,6 +176,18 @@ local function resolveSetupScriptsDir()
     return setupDir
 end
 
+local function normalizePlatformPath(path, preserveTrailing)
+    local value = tostring(path or "")
+    if value == "" then return "" end
+    if OS == "Windows" and PATH_HELPER and PATH_HELPER.normalizeWindowsPath then
+        return PATH_HELPER.normalizeWindowsPath(value, { preserveTrailing = preserveTrailing == true })
+    end
+    if preserveTrailing then
+        return value
+    end
+    return value:gsub("[/\\]+$", "")
+end
+
 local function launchMainStemwerkScript()
     local scriptsDir = resolveSetupScriptsDir()
     local mainScript = tostring(scriptsDir or "") .. "STEMwerk.lua"
@@ -439,7 +451,7 @@ end
 local function getRuntimeBase()
     local override = reaper and reaper.GetExtState and reaper.GetExtState(EXT_SECTION, "runtimeBase") or ""
     if override ~= "" then
-        return override
+        return normalizePlatformPath(override, false)
     end
     local home = getHome()
     local candidates = {}
@@ -458,15 +470,16 @@ local function getRuntimeBase()
         table.insert(candidates, home .. "/.local/share/STEMwerk")
     end
     for _, base in ipairs(candidates) do
+        base = normalizePlatformPath(base, false)
         if ensureWritableDir(base) then
             return base
         end
     end
-    return candidates[1] or (home .. PATH_SEP .. ".STEMwerk")
+    return normalizePlatformPath(candidates[1] or (home .. PATH_SEP .. ".STEMwerk"), false)
 end
 
 local function getRuntimePaths()
-    local base = getRuntimeBase()
+    local base = normalizePlatformPath(getRuntimeBase(), false)
     local runtimeRoot = base
     local runtimeState = base .. PATH_SEP .. "state"
     local runtimeLogs = base .. PATH_SEP .. "logs"
@@ -488,9 +501,9 @@ local function getModelCacheDir()
     if OS == "Windows" then
         local localAppData = os.getenv("LOCALAPPDATA") or ""
         if localAppData ~= "" then
-            return localAppData .. "\\STEMwerk\\models"
+            return normalizePlatformPath(localAppData .. "\\STEMwerk\\models", false)
         end
-        return home .. "\\AppData\\Local\\STEMwerk\\models"
+        return normalizePlatformPath(home .. "\\AppData\\Local\\STEMwerk\\models", false)
     elseif OS == "macOS" then
         return home .. "/Library/Application Support/STEMwerk/models"
     else
@@ -928,9 +941,9 @@ end
 local function resolvePath(raw)
     local value = stripQuotes(raw)
     if value == "" then return "" end
-    if isAbsolutePath(value) then return value end
+    if isAbsolutePath(value) then return normalizePlatformPath(value, false) end
     if value:find("[/\\]") then
-        return getScriptDir() .. value
+        return normalizePlatformPath(getScriptDir() .. value, false)
     end
     return value
 end
@@ -4183,7 +4196,11 @@ end
 
 local function linuxCurrentStep(state)
     local idx = tonumber(trim(state.STEP_INDEX or ""))
-    if idx and idx >= 1 and idx <= 4 then
+    local total = tonumber(trim(state.STEP_TOTAL or ""))
+    if not total or total < 1 then
+        total = 5
+    end
+    if idx and idx >= 1 and idx <= total then
         if LINUX_SETUP and LINUX_SETUP.lastStepIndex and idx < LINUX_SETUP.lastStepIndex then
             return LINUX_SETUP.lastStepIndex
         end
@@ -4194,9 +4211,9 @@ local function linuxCurrentStep(state)
     end
     if trim(state.STATUS or "") == "ok" then
         if LINUX_SETUP then
-            LINUX_SETUP.lastStepIndex = 4
+            LINUX_SETUP.lastStepIndex = total
         end
-        return 4
+        return total
     end
     if LINUX_SETUP and LINUX_SETUP.lastStepIndex and LINUX_SETUP.lastStepIndex >= 1 then
         return LINUX_SETUP.lastStepIndex
@@ -4260,7 +4277,11 @@ local function linuxProgressPercent(state, logLines)
     end
     local idx = linuxCurrentStep(state)
     local activeFill = linuxActiveStepFill(state, logLines or {})
-    local segment = 100 / 4
+    local total = tonumber(trim(state.STEP_TOTAL or ""))
+    if not total or total < 1 then
+        total = 5
+    end
+    local segment = 100 / total
     local completed = (idx - 1) * segment
     local pct = completed + (activeFill * segment)
     if LINUX_SETUP then
@@ -4277,6 +4298,7 @@ local function linuxStageColor(stepIndex)
         { 100, 200, 255 },
         { 150, 100, 255 },
         { 100, 255, 100 },
+        { 255, 196, 80 },
     }
     local c = colors[tonumber(stepIndex or 0) or 0] or colors[4]
     return c[1] / 255, c[2] / 255, c[3] / 255
@@ -4376,22 +4398,28 @@ local function drawLinuxStepLegend(x, y, w, state, logLines)
     local labels = {
         "1. Runtime",
         "2. Python + venv",
-        "3. FFmpeg",
-        "4. Finalizing",
+        "3. STEMwerk runtime",
+        "4. FFmpeg",
+        "5. Drum Kit runtime",
     }
     local colors = {
         { 255, 100, 100 },
         { 100, 200, 255 },
         { 150, 100, 255 },
         { 100, 255, 100 },
+        { 255, 196, 80 },
     }
+    local total = tonumber(trim(state.STEP_TOTAL or ""))
+    if not total or total < 1 then
+        total = 5
+    end
     local currentStep = linuxCurrentStep(state)
     local done = trim(state.STATUS or "") == "ok"
     local gap = 14
-    local colW = math.floor((w - gap * 3) / 4)
+    local colW = math.floor((w - gap * (total - 1)) / total)
     local trackH = math.max(10, linuxLineHeight(10))
 
-    for i = 1, 4 do
+    for i = 1, total do
         local colX = x + ((i - 1) * (colW + gap))
         local c = colors[i]
         local isCompleted = done or i < currentStep
@@ -4597,7 +4625,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     end
     if finalSuccess then
         finalState.STATUS = "ok"
-        finalState.STEP_INDEX = "4"
+        finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or "5"
     end
 
     drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, finalState, logLines or {})
@@ -4942,6 +4970,20 @@ local function normalizePathForSafety(path)
     local p = resolvePath(path or "")
     if p == "" then return "" end
     p = p:gsub("\\", "/")
+    local prefix = ""
+    local rest = p
+    if rest:match("^//%?/UNC/") then
+        prefix = "//?/UNC/"
+        rest = rest:sub(#prefix + 1)
+    elseif rest:match("^//%?/") then
+        prefix = "//?/"
+        rest = rest:sub(#prefix + 1)
+    elseif rest:match("^//") then
+        prefix = "//"
+        rest = rest:sub(3)
+    end
+    rest = rest:gsub("/+", "/")
+    p = prefix .. rest
     p = p:gsub("/+$", "")
     return p
 end
@@ -4995,6 +5037,14 @@ local function canonicalizeDir(path)
     local raw = resolvePath(path or "")
     if raw == "" then return nil, "empty_path" end
     if not pathExists(raw) then return nil, "path_missing" end
+    if OS == "Windows" then
+        local canon = normalizePathForSafety(raw)
+        if canon == "" then return nil, "canonical_empty" end
+        if not isAbsolutePath(canon) then
+            return nil, "canonical_not_absolute"
+        end
+        return canon, nil
+    end
     local cmd = 'cd ' .. quoteArg(raw) .. ' >/dev/null 2>&1 && pwd -P'
     local rc, out = execCapture(cmd, 4000)
     if rc == 0 then
@@ -6733,11 +6783,7 @@ local function existingRuntimeSetupMenuTick()
             end
         elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-cuda-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
             if OS == "Windows" then
-                if chosen == "drumsep-runtime" or chosen == "drumsep-cuda-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
-                    startWindowsSetup(runtime, separatorScript, chosen, true)
-                else
-                    windowsVerifyStart(runtime, separatorScript, true)
-                end
+                startWindowsSetup(runtime, separatorScript, chosen, true)
             else
                 gfx.quit()
                 startLinuxSetup(runtime, separatorScript, chosen)

@@ -13,23 +13,79 @@ function LogLine([string]$Message) {
     }
 }
 
+function Normalize-WindowsPath([string]$Path, [switch]$PreserveTrailingSeparator) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+
+    $value = $Path.Trim().Replace('/', '\')
+    $hadTrailing = $value.EndsWith('\')
+    $prefix = ""
+    $rest = $value
+
+    if ($value.StartsWith('\\?\UNC\')) {
+        $prefix = '\\?\UNC\'
+        $rest = $value.Substring($prefix.Length)
+    } elseif ($value.StartsWith('\\?\')) {
+        $prefix = '\\?\'
+        $rest = $value.Substring($prefix.Length)
+    } elseif ($value.StartsWith('\\')) {
+        $prefix = '\\'
+        $rest = $value.Substring(2)
+    }
+
+    $segments = @()
+    foreach ($segment in ($rest -split '\\+')) {
+        if ($segment -ne "") {
+            $segments += $segment
+        }
+    }
+    $normalized = $prefix + ($segments -join '\')
+
+    if ($PreserveTrailingSeparator.IsPresent) {
+        if ($hadTrailing -and -not $normalized.EndsWith('\')) {
+            $normalized += '\'
+        }
+    } elseif ($normalized.Length -gt 3) {
+        $normalized = $normalized.TrimEnd('\')
+    }
+
+    return $normalized
+}
+
+function Join-NormalizedWindowsPath([string]$BasePath, [string[]]$ChildParts) {
+    $current = $BasePath
+    foreach ($child in $ChildParts) {
+        if ([string]::IsNullOrWhiteSpace($child)) { continue }
+        if ([string]::IsNullOrWhiteSpace($current)) {
+            $current = $child
+        } else {
+            $current = Join-Path $current $child
+        }
+    }
+    return Normalize-WindowsPath $current
+}
+
 if ([string]::IsNullOrWhiteSpace($RuntimeBase)) {
     Write-Error "Missing runtime base"
     exit 1
 }
 
+$RuntimeBase = Normalize-WindowsPath $RuntimeBase
+
 if ([string]::IsNullOrWhiteSpace($StateFile)) {
-    $StateFile = Join-Path $RuntimeBase "state\\bootstrap.env"
+    $StateFile = Join-NormalizedWindowsPath $RuntimeBase @("state", "bootstrap.env")
 }
 if ([string]::IsNullOrWhiteSpace($LogFile)) {
-    $LogFile = Join-Path $RuntimeBase "logs\\bootstrap.log"
+    $LogFile = Join-NormalizedWindowsPath $RuntimeBase @("logs", "bootstrap.log")
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeBase "state") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeBase "logs") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeBase "bin") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeBase "ffmpeg") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeBase "python") | Out-Null
+$StateFile = Normalize-WindowsPath $StateFile
+$LogFile = Normalize-WindowsPath $LogFile
+
+New-Item -ItemType Directory -Force -Path (Join-NormalizedWindowsPath $RuntimeBase @("state")) | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-NormalizedWindowsPath $RuntimeBase @("logs")) | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-NormalizedWindowsPath $RuntimeBase @("bin")) | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")) | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-NormalizedWindowsPath $RuntimeBase @("python")) | Out-Null
 
 $status = "ok"
 $statusReason = ""
@@ -72,27 +128,27 @@ $backend = "cpu"
 $backendReason = ""
 $python = $null
 $ffmpeg = $null
-$venvPy = Join-Path $RuntimeBase ".venv\\Scripts\\python.exe"
+$venvPy = Join-NormalizedWindowsPath $RuntimeBase @(".venv", "Scripts", "python.exe")
 $installerMode = ($env:STEMWERK_INSTALLER -eq "1")
 $offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$bundledRuntimeDir = Join-Path $scriptRoot "_bundled"
+$bundledRuntimeDir = Join-NormalizedWindowsPath $scriptRoot @("_bundled")
 $pythonInstallerFileName = "python-3.11.8-amd64.exe"
 $pythonInstallerUrl = "https://www.python.org/ftp/python/3.11.8/$pythonInstallerFileName"
 $ffmpegArchiveFileName = "ffmpeg-release-essentials.zip"
 $ffmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegArchiveFileName"
-$bundledPythonInstaller = Join-Path $bundledRuntimeDir ("python\\" + $pythonInstallerFileName)
-$bundledFfmpegZip = Join-Path $bundledRuntimeDir ("ffmpeg\\" + $ffmpegArchiveFileName)
+$bundledPythonInstaller = Join-NormalizedWindowsPath $bundledRuntimeDir @("python", $pythonInstallerFileName)
+$bundledFfmpegZip = Join-NormalizedWindowsPath $bundledRuntimeDir @("ffmpeg", $ffmpegArchiveFileName)
 $script:FfmpegSource = "missing"
-$bundledWheelsDir = Join-Path $bundledRuntimeDir "wheels"
-$bundledDrumsepWheelsDir = Join-Path $bundledRuntimeDir "drumsep-wheels"
-$bundledDrumsepModelsDir = Join-Path $bundledRuntimeDir "drumsep-models"
-$bundledCoreDir = Join-Path $scriptRoot "vendor\\stemwerk-core"
-$bundledJuliusDir = Join-Path $scriptRoot "vendor\\julius"
-$constraintsDir = Join-Path $scriptRoot "constraints"
-$baseConstraints = Join-Path $constraintsDir "base.txt"
-$cudaConstraints = Join-Path $constraintsDir "cuda.txt"
-$directmlConstraints = Join-Path $constraintsDir "directml.txt"
+$bundledWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("wheels")
+$bundledDrumsepWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-wheels")
+$bundledDrumsepModelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-models")
+$bundledCoreDir = Join-NormalizedWindowsPath $scriptRoot @("vendor", "stemwerk-core")
+$bundledJuliusDir = Join-NormalizedWindowsPath $scriptRoot @("vendor", "julius")
+$constraintsDir = Join-NormalizedWindowsPath $scriptRoot @("constraints")
+$baseConstraints = Join-NormalizedWindowsPath $constraintsDir @("base.txt")
+$cudaConstraints = Join-NormalizedWindowsPath $constraintsDir @("cuda.txt")
+$directmlConstraints = Join-NormalizedWindowsPath $constraintsDir @("directml.txt")
 $allowPypiCore = ($env:STEMWERK_ALLOW_PYPI_CORE -eq "1")
 $supportedPythonText = "3.11 or 3.12"
 $script:DrumsepOfflinePayloadStatus = if ($offlineBundledAllmodelsMode) { "pending" } else { "" }
@@ -142,7 +198,7 @@ function LogStatusDetail([string]$Message) {
 
 function WriteBootstrapGuard([string]$GuardStatus, [string]$GuardReason) {
     if ([string]::IsNullOrWhiteSpace($RuntimeBase)) { return }
-    $guardPath = Join-Path $RuntimeBase "state\\bootstrap.guard"
+    $guardPath = Join-NormalizedWindowsPath $RuntimeBase @("state", "bootstrap.guard")
     $timestamp = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $scriptPath = $PSCommandPath
     $lines = @(
@@ -431,7 +487,7 @@ function LogUnsupportedPython([string]$Path) {
 }
 
 function InstallPythonDirect {
-    $pyInstaller = Join-Path $RuntimeBase "bin\\python-installer.exe"
+    $pyInstaller = Join-NormalizedWindowsPath $RuntimeBase @("bin", "python-installer.exe")
     if (Test-Path $bundledPythonInstaller) {
         try {
             LogProgress ("Using bundled Python installer: " + $bundledPythonInstaller)
@@ -451,13 +507,13 @@ function InstallPythonDirect {
     }
     LogProgress "Installing Python silently (per-user)"
     RunHidden $pyInstaller @("/quiet","InstallAllUsers=0","Include_test=0","Include_pip=1","PrependPath=0","Shortcuts=0") "Python installer" | Out-Null
-    $p11 = Join-Path $localAppData "Programs\\Python\\Python311\\python.exe"
+    $p11 = Join-NormalizedWindowsPath $localAppData @("Programs", "Python", "Python311", "python.exe")
     if (TestPython $p11) { return $p11 }
     return $null
 }
 
 function InstallFfmpegDirect {
-    $zipPath = Join-Path $RuntimeBase "ffmpeg\\ffmpeg.zip"
+    $zipPath = Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg", "ffmpeg.zip")
     if (Test-Path $bundledFfmpegZip) {
         $script:FfmpegSource = "bundled"
         try {
@@ -498,13 +554,13 @@ function InstallFfmpegDirect {
             LogStatusDetail "Extracting FFmpeg..."
             LogProgress "Extracting FFmpeg archive (this can take a moment)"
         }
-        Expand-Archive -Path $zipPath -DestinationPath (Join-Path $RuntimeBase "ffmpeg") -Force
+        Expand-Archive -Path $zipPath -DestinationPath (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")) -Force
     } catch {
         LogLine "FFmpeg extract failed"
         return $null
     }
     LogProgress "Searching extracted files for ffmpeg.exe"
-    $ff = Get-ChildItem -Path (Join-Path $RuntimeBase "ffmpeg") -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+    $ff = Get-ChildItem -Path (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")) -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
     if ($ff) { return $ff.FullName }
     LogLine "FFmpeg binary not found after extract"
     return $null
@@ -512,14 +568,14 @@ function InstallFfmpegDirect {
 
 function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
     $ffmpegCandidates = @(
-        (Join-Path $RuntimeBase "bin\ffmpeg.exe"),
-        (Join-Path $RuntimeBase "ffmpeg\bin\ffmpeg.exe"),
-        (Join-Path $localAppData "Programs\ffmpeg\bin\ffmpeg.exe"),
-        (Join-Path $localAppData "ffmpeg\bin\ffmpeg.exe"),
+        (Join-NormalizedWindowsPath $RuntimeBase @("bin", "ffmpeg.exe")),
+        (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg", "bin", "ffmpeg.exe")),
+        (Join-NormalizedWindowsPath $localAppData @("Programs", "ffmpeg", "bin", "ffmpeg.exe")),
+        (Join-NormalizedWindowsPath $localAppData @("ffmpeg", "bin", "ffmpeg.exe")),
         "C:\ffmpeg\bin\ffmpeg.exe",
-        (Join-Path $programFiles "FFmpeg\bin\ffmpeg.exe"),
-        (Join-Path $programFiles "ffmpeg\bin\ffmpeg.exe"),
-        (Join-Path $programFilesX86 "FFmpeg\bin\ffmpeg.exe")
+        (Join-NormalizedWindowsPath $programFiles @("FFmpeg", "bin", "ffmpeg.exe")),
+        (Join-NormalizedWindowsPath $programFiles @("ffmpeg", "bin", "ffmpeg.exe")),
+        (Join-NormalizedWindowsPath $programFilesX86 @("FFmpeg", "bin", "ffmpeg.exe"))
     )
 
     foreach ($p in $ffmpegCandidates) {
@@ -532,7 +588,7 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
         }
     }
 
-    $runtimeFfmpegRoot = Join-Path $RuntimeBase "ffmpeg"
+    $runtimeFfmpegRoot = Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")
     if (Test-Path $runtimeFfmpegRoot) {
         try {
             $runtimeFfmpeg = Get-ChildItem -Path $runtimeFfmpegRoot -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -928,18 +984,39 @@ function EnsureCoreModelCache([string]$PythonPath, [string]$ModelDir) {
         LogProgress ("Core model cache already present: " + $ModelDir)
         return $true
     }
+    if (-not (EnsureSharedModelDownloadChecks $ModelDir)) {
+        LogLine "Core model prefetch could not prepare download_checks.json"
+        return $false
+    }
+    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall
+    if ([string]::IsNullOrWhiteSpace($resolvedFfmpeg) -or -not (Test-Path $resolvedFfmpeg)) {
+        LogLine "Core model prefetch could not resolve FFmpeg"
+        return $false
+    }
+    LogProgress ("Core model prefetch using FFmpeg: " + $resolvedFfmpeg)
     $prefetchCode = @"
 import os
 from audio_separator.separator import Separator
 from stemwerk_core.models import resolve_audio_separator_model_id
 
 model_dir = r"$ModelDir"
+def demucs_contract(separator):
+    supported = separator.list_supported_model_files()
+    demucs = supported.get("Demucs", {}) if isinstance(supported, dict) else {}
+    names = []
+    for entry in demucs.values():
+        if isinstance(entry, dict):
+            names.extend(str(name) for name in entry.keys() if "demucs" in str(name).lower())
+    print("STEMWERK_CORE_MODEL_SUPPORTED_DEMUCS=" + ",".join(sorted(set(names))))
 for model_name in ("htdemucs", "htdemucs_ft", "htdemucs_6s"):
     sep = Separator(model_file_dir=model_dir, output_dir=".", output_format="wav")
+    demucs_contract(sep)
     sep.load_model(resolve_audio_separator_model_id(model_name))
 print("STEMWERK_CORE_MODEL_PREFETCH ok")
 "@
-    RunHidden $PythonPath @("-c", $prefetchCode) "Prefetch core model cache" | Out-Null
+    InvokeWithResolvedFfmpegEnvironment $resolvedFfmpeg {
+        RunHidden $PythonPath @("-c", $prefetchCode) "Prefetch core model cache" | Out-Null
+    } | Out-Null
     if ($LASTEXITCODE -ne 0) {
         LogLine ("Core model prefetch failed for cache: " + $ModelDir)
         return $false
@@ -1681,7 +1758,7 @@ function ResolveSupportedWindowsPython([string[]]$Candidates) {
     return $resolved
 }
 
-function EnsureDrumsepDownloadChecks([string]$ModelDir) {
+function EnsureSharedModelDownloadChecks([string]$ModelDir) {
     if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
     try {
         New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
@@ -1693,7 +1770,23 @@ function EnsureDrumsepDownloadChecks([string]$ModelDir) {
             current_version_linux = ""
             vr_download_list = @{}
             mdx_download_list = @{}
-            demucs_download_list = @{}
+            demucs_download_list = @{
+                "Demucs v4: htdemucs" = @{
+                    "955717e8-8726e21a.th" = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th"
+                    "htdemucs.yaml" = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/htdemucs.yaml"
+                }
+                "Demucs v4: htdemucs_ft" = @{
+                    "f7e0c4bc-ba3fe64a.th" = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th"
+                    "d12395a8-e57c48e6.th" = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th"
+                    "92cfc3b6-ef3bcb9c.th" = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th"
+                    "04573f0d-f3cf25b2.th" = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th"
+                    "htdemucs_ft.yaml" = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/htdemucs_ft.yaml"
+                }
+                "Demucs v4: htdemucs_6s" = @{
+                    "5c90dfd2-34c22ccb.th" = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th"
+                    "htdemucs_6s.yaml" = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/htdemucs_6s.yaml"
+                }
+            }
             mdx_download_vip_list = @{}
             mdx23_download_list = @{}
             mdx23c_download_list = @{
@@ -1715,7 +1808,7 @@ function EnsureDrumsepDownloadChecks([string]$ModelDir) {
         [System.IO.File]::WriteAllText($checksPath, $json, $utf8NoBom)
         return $true
     } catch {
-        LogLine ("DrumSep download_checks.json write failed: " + $_.Exception.Message)
+        LogLine ("Shared download_checks.json write failed: " + $_.Exception.Message)
         return $false
     }
 }
@@ -1850,7 +1943,7 @@ function EnsureDrumsepAssets([string]$ModelDir) {
         }
     }
 
-    return (EnsureDrumsepDownloadChecks $ModelDir)
+    return (EnsureSharedModelDownloadChecks $ModelDir)
 }
 
 function VerifyDrumsepRuntime([string]$PythonPath) {

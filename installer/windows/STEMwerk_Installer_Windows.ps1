@@ -13,6 +13,57 @@ function LogLine([string]$Message, [string]$Path) {
     }
 }
 
+function Normalize-WindowsPath([string]$Path, [switch]$PreserveTrailingSeparator) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+
+    $value = $Path.Trim().Replace('/', '\')
+    $hadTrailing = $value.EndsWith('\')
+    $prefix = ""
+    $rest = $value
+
+    if ($value.StartsWith('\\?\UNC\')) {
+        $prefix = '\\?\UNC\'
+        $rest = $value.Substring($prefix.Length)
+    } elseif ($value.StartsWith('\\?\')) {
+        $prefix = '\\?\'
+        $rest = $value.Substring($prefix.Length)
+    } elseif ($value.StartsWith('\\')) {
+        $prefix = '\\'
+        $rest = $value.Substring(2)
+    }
+
+    $segments = @()
+    foreach ($segment in ($rest -split '\\+')) {
+        if ($segment -ne "") {
+            $segments += $segment
+        }
+    }
+    $normalized = $prefix + ($segments -join '\')
+
+    if ($PreserveTrailingSeparator.IsPresent) {
+        if ($hadTrailing -and -not $normalized.EndsWith('\')) {
+            $normalized += '\'
+        }
+    } elseif ($normalized.Length -gt 3) {
+        $normalized = $normalized.TrimEnd('\')
+    }
+
+    return $normalized
+}
+
+function Join-NormalizedWindowsPath([string]$BasePath, [string[]]$ChildParts) {
+    $current = $BasePath
+    foreach ($child in $ChildParts) {
+        if ([string]::IsNullOrWhiteSpace($child)) { continue }
+        if ([string]::IsNullOrWhiteSpace($current)) {
+            $current = $child
+        } else {
+            $current = Join-Path $current $child
+        }
+    }
+    return Normalize-WindowsPath $current
+}
+
 function Remove-ChildDirectory([string]$BasePath, [string]$ChildName) {
     if ([string]::IsNullOrWhiteSpace($BasePath)) { return $false }
     if ([string]::IsNullOrWhiteSpace($ChildName)) { return $false }
@@ -25,7 +76,7 @@ function Remove-ChildDirectory([string]$BasePath, [string]$ChildName) {
 if ([string]::IsNullOrWhiteSpace($RuntimeBase)) {
     $localAppData = $env:LOCALAPPDATA
     if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
-        $RuntimeBase = Join-Path $localAppData "STEMwerk"
+        $RuntimeBase = Join-NormalizedWindowsPath $localAppData @("STEMwerk")
     }
 }
 
@@ -33,13 +84,15 @@ if ([string]::IsNullOrWhiteSpace($RuntimeBase)) {
     exit 1
 }
 
+$RuntimeBase = Normalize-WindowsPath $RuntimeBase
+
 $cleanRuntimeRequested = $CleanRuntime.IsPresent -or ($env:STEMWERK_CLEAN_RUNTIME -eq "1")
 $cleanModelsRequested = $CleanModels.IsPresent -or ($env:STEMWERK_CLEAN_MODELS -eq "1")
 
-$stateDir = Join-Path $RuntimeBase "state"
-$logDir = Join-Path $RuntimeBase "logs"
-$stateFile = Join-Path $stateDir "bootstrap.env"
-$logFile = Join-Path $logDir "bootstrap.log"
+$stateDir = Join-NormalizedWindowsPath $RuntimeBase @("state")
+$logDir = Join-NormalizedWindowsPath $RuntimeBase @("logs")
+$stateFile = Join-NormalizedWindowsPath $stateDir @("bootstrap.env")
+$logFile = Join-NormalizedWindowsPath $logDir @("bootstrap.log")
 
 if ($cleanRuntimeRequested) {
     $runtimeTargets = @("state", "logs", ".venv", ".venv-gpu", "cache", "tmp", "temp", "bin", "ffmpeg", "python")
@@ -59,7 +112,7 @@ if (Test-Path $stateFile) { Remove-Item $stateFile -Force -ErrorAction SilentlyC
 if (Test-Path $logFile) { Remove-Item $logFile -Force -ErrorAction SilentlyContinue }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$bootstrap = Join-Path $scriptRoot "STEMwerk_Bootstrap_Windows.ps1"
+$bootstrap = Join-NormalizedWindowsPath $scriptRoot @("STEMwerk_Bootstrap_Windows.ps1")
 
 if (-not (Test-Path $bootstrap)) {
     LogLine "STATUS=failed" $logFile

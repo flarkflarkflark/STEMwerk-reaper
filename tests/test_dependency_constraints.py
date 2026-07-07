@@ -586,6 +586,86 @@ def test_linux_bootstrap_gfx1201_requires_rx9070_or_gfx1201_device_visibility():
     assert 'SELECTED_TORCH_STACK="torch==${ACTIVE_TORCH_VERSION}+$(basename "${idx}") torchvision==${ACTIVE_TORCHVISION_VERSION}+$(basename "${idx}") torchaudio==${ACTIVE_TORCHAUDIO_VERSION}+$(basename "${idx}")"' in script
 
 
+def test_linux_drumsep_rocm_runtime_aligns_gfx1201_with_rocm7_main_runtime_policy():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_VERSION="2.10.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm7.0"' in script
+    assert 'select_drumsep_rocm_torch_stack() {' in script
+    assert 'DRUMSEP_ACTIVE_ROCM_STACK_POLICY="rocm7_gfx1201_align_main_runtime"' in script
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_VERSION="${DRUMSEP_ROCM7_GFX1201_TORCH_VERSION}"' in script
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL="${DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL}"' in script
+    assert 'printf "%s\\n" "${_device_names}" | grep -Eiq "rx 9070|gfx1201"' in script
+    assert 'torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}' in script
+    assert 'torchvision==${DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION}' in script
+    assert 'torchaudio==${DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION}' in script
+
+
+def test_linux_setup_reports_five_top_level_steps_when_ready_runtime_runs():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    launcher = Path("scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh").read_text()
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'set_progress "1" "${STEP_TOTAL}" "Preparing runtime"' in bootstrap
+    assert 'set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"' in bootstrap
+    assert 'set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"' in bootstrap
+    assert 'set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"' in bootstrap
+    assert 'set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"' in bootstrap
+    assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
+    assert 'local segment = 100 / total' in setup_internal
+    assert '"3. STEMwerk runtime"' in setup_internal
+    assert '"4. FFmpeg"' in setup_internal
+    assert '"5. Drum Kit runtime"' in setup_internal
+
+
+def test_macos_setup_reports_five_top_level_steps_for_reapack_bootstrap():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'set_progress "1" "${STEP_TOTAL}" "Preparing runtime"' in bootstrap
+    assert 'set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"' in bootstrap
+    assert 'set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"' in bootstrap
+    assert 'set_progress "4" "${STEP_TOTAL}" "Checking FFmpeg"' in bootstrap
+    assert 'set_progress "5" "${STEP_TOTAL}" "Preparing Drum Kit runtime"' in bootstrap
+    assert 'set_progress "4" "${STEP_TOTAL}" "Finalizing setup"' not in bootstrap
+
+
+def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_rocm_runtime():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    launcher = Path("scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh").read_text()
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+    drumsep_install = bootstrap.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
+
+    assert 'STEP_TOTAL="5"' in bootstrap
+    assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
+    assert 'if OS ~= "Windows" then' in setup_internal
+    assert '{ id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }' in setup_internal
+    assert '{ id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }' in setup_internal
+    assert 'mode ~= "repair" and mode ~= "rebuild-venv" and mode ~= "drumsep-runtime" and mode ~= "drumsep-rocm-runtime" and mode ~= "ready-to-go-verify"' in setup_internal
+
+    assert 'clear_drumsep_substep_state() {' in bootstrap
+    assert 'set_drumsep_substep_progress() {' in bootstrap
+    assert 'echo "DRUMSEP_STEP_INDEX=${DRUMSEP_STEP_INDEX}"' in bootstrap
+    assert 'echo "DRUMSEP_STEP_TOTAL=${DRUMSEP_STEP_TOTAL}"' in bootstrap
+    assert 'echo "DRUMSEP_STEP_LABEL=${DRUMSEP_STEP_LABEL}"' in bootstrap
+    assert 'log "DRUMSEP STEP ${DRUMSEP_STEP_INDEX}/${DRUMSEP_STEP_TOTAL}: ${DRUMSEP_STEP_LABEL}"' in bootstrap
+    assert 'if [ "${MODE}" = "drumsep-runtime" ]; then' in bootstrap
+    assert '_drumsep_step_total="4"' in drumsep_install
+    assert '"torch==${DRUMSEP_TORCH_VERSION}"' in drumsep_install
+    assert '"torchvision==${DRUMSEP_TORCHVISION_VERSION}"' in drumsep_install
+    assert 'set_drumsep_substep_progress "1" "${_drumsep_step_total}" "Creating DrumSep runtime"' in drumsep_install
+    assert 'set_drumsep_substep_progress "4" "${_drumsep_step_total}" "Verifying DrumSep runtime"' in drumsep_install
+    assert 'set_progress "1" "${STEP_TOTAL}" "Creating DrumSep runtime"' not in drumsep_install
+    assert 'set_progress "4" "${STEP_TOTAL}" "Verifying DrumSep runtime"' not in drumsep_install
+    assert 'select_drumsep_rocm_torch_stack' not in drumsep_install
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_VERSION' not in drumsep_install
+    assert 'DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL' not in drumsep_install
+    assert 'drumsep_rocm_runtime.env' not in drumsep_install
+
+
 def test_support_bundle_reports_rocm_selected_stack_and_devices():
     script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
 
@@ -1774,6 +1854,62 @@ def test_rebuild_venv_safety_reports_canonical_failure_without_using_raw_output_
     assert '"Canonical target: " .. tostring(venvCanon or "(unresolved)")' in script
     assert '"Canonical expected: " .. tostring(expectedVenvCanon or "(unresolved)")' in script
     assert "terminate called without an active exception/.venv" not in script
+
+
+def test_windows_path_helper_normalizes_local_drive_paths_without_breaking_unc_or_extended_prefixes():
+    lua_script = r"""
+local helper = dofile("scripts/reaper/_internal/STEMwerk_Path_Helper.lua")
+print(helper.normalizeWindowsPath([[C:\Users\Ferro\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\_bundled\python\\python-3.11.8-amd64.exe]]))
+print(helper.normalizeWindowsPath([[C:\\Users\\Ferro\\AppData\\Local\\STEMwerk\\.venv\\Scripts\\python.exe]]))
+print(helper.normalizeWindowsPath([[\\server\share\\STEMwerk\\models\\]]))
+print(helper.normalizeWindowsPath([[\\?\C:\Users\Ferro\\STEMwerk\\python\\python.exe]]))
+"""
+    proc = subprocess.run(
+        ["lua", "-"],
+        input=lua_script,
+        text=True,
+        capture_output=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    lines = proc.stdout.splitlines()
+
+    assert lines[0] == r"C:\Users\Ferro\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\_bundled\python\python-3.11.8-amd64.exe"
+    assert lines[1] == r"C:\Users\Ferro\AppData\Local\STEMwerk\.venv\Scripts\python.exe"
+    assert lines[2] == r"\\server\share\STEMwerk\models"
+    assert lines[3] == r"\\?\C:\Users\Ferro\STEMwerk\python\python.exe"
+
+
+def test_windows_setup_internal_normalizes_windows_runtime_paths_before_safety_checks():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local function normalizePlatformPath(path, preserveTrailing)" in script
+    assert 'if OS == "Windows" and PATH_HELPER and PATH_HELPER.normalizeWindowsPath then' in script
+    assert 'return PATH_HELPER.normalizeWindowsPath(value, { preserveTrailing = preserveTrailing == true })' in script
+    assert 'local canon = normalizePathForSafety(raw)' in script
+    assert 'if OS == "Windows" then' in script
+    assert "return canon, nil" in script
+
+
+def test_windows_repair_and_rebuild_menu_actions_launch_bootstrap_instead_of_verify_only():
+    script = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-cuda-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then' in script
+    assert 'if OS == "Windows" then\n                startWindowsSetup(runtime, separatorScript, chosen, true)' in script
+
+
+def test_windows_bootstrap_normalizes_bundled_python_and_ffmpeg_paths():
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+    installer = Path("installer/windows/STEMwerk_Installer_Windows.ps1").read_text(encoding="utf-8")
+
+    assert "function Normalize-WindowsPath" in windows_bootstrap
+    assert "function Join-NormalizedWindowsPath" in windows_bootstrap
+    assert '$bundledPythonInstaller = Join-NormalizedWindowsPath $bundledRuntimeDir @("python", $pythonInstallerFileName)' in windows_bootstrap
+    assert '$bundledFfmpegZip = Join-NormalizedWindowsPath $bundledRuntimeDir @("ffmpeg", $ffmpegArchiveFileName)' in windows_bootstrap
+    assert '$StateFile = Normalize-WindowsPath $StateFile' in windows_bootstrap
+    assert '$LogFile = Normalize-WindowsPath $LogFile' in windows_bootstrap
+    assert "function Normalize-WindowsPath" in installer
+    assert '$RuntimeBase = Normalize-WindowsPath $RuntimeBase' in installer
 
 
 def test_system_helper_resolves_path_separator_without_caller_global():
@@ -4075,7 +4211,7 @@ def test_linux_drumsep_runtime_installer_is_isolated_and_pinned():
     assert 'DRUMSEP_NUMBA_VERSION="0.65.1"' in script
     assert 'printf "%s/.venv-drumsep/bin/python\\n" "${RUNTIME_BASE}"' in script
     assert '"${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep"' in script
-    assert '"${_drumsep_py}" -m pip install' in script
+    assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
     assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
     assert '"numpy==${DRUMSEP_NUMPY_VERSION}"' in script
     assert '"torch==${DRUMSEP_TORCH_VERSION}"' in script
@@ -4146,12 +4282,15 @@ def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins()
     assert 'DRUMSEP_ROCM_TORCHVISION_VERSION="0.24.1+rocm6.4"' in script
     assert 'DRUMSEP_ROCM_TORCHAUDIO_VERSION="2.9.1+rocm6.4"' in script
     assert 'DRUMSEP_ROCM_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm6.4"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_VERSION="2.10.0+rocm7.0"' in script
+    assert 'DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm7.0"' in script
     assert 'DRUMSEP_ROCM_MIN_FREE_GB="20"' in script
     assert "drumsep_rocm_disk_preflight()" in script
     assert "resolve_drumsep_rocm_tmpdir()" in script
     assert 'write_drumsep_rocm_state "disk_space_insufficient" "missing"' in script
-    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
-    assert '"torch==${DRUMSEP_ROCM_TORCH_VERSION}"' in script
+    assert 'select_drumsep_rocm_torch_stack() {' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}"' in script
+    assert '"torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}"' in script
     assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps' in script
     assert '"audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}"' in script
     assert '"${_py}" -m pip check' in script
@@ -4476,6 +4615,45 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
 
     assert 'Uninstallable=no' in patch_iss
     assert 'STEMwerk_Offline_Patch.iss' in patch_shell
+    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
+    assert '#define ReleaseAssetVersion MyAppVersion' in patch_iss
+    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
+    assert 'STEMWERK_RELEASE_ASSET_VERSION="${STEMWERK_RELEASE_ASSET_VERSION:-$STEMWERK_VERSION}"' in patch_shell
+    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
+    assert '[Run]' in patch_iss
+    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
+    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
+    assert 'Flags: runhidden waituntilterminated' in patch_iss
+
+
+def test_release_docs_retire_windows_update_patch_for_2300():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    release_notes = Path("docs/RELEASE_2.3.0.0.md").read_text(encoding="utf-8")
+    installer_readme = Path("installer/README.md").read_text(encoding="utf-8")
+
+    assert "Existing Windows users should uninstall the old STEMwerk version first" in readme
+    assert "A clean reinstall avoids stale runtime/backend state" in readme
+    assert "STEMwerk-2.3.0.0-update-patch.exe" not in readme
+    assert "The small update-patch asset has been retired for `2.3`" in release_notes
+    assert "WINDOWS_UPDATE_PATCH_RETIRED_FOR_2300" in release_notes
+    assert "Supported Windows upgrade path: uninstall the old version first" in release_notes
+    assert "not published for the `2.3.0.0` refresh" in installer_readme
+
+
+def test_release_workflow_uploads_only_supported_windows_installers():
+    workflow = Path(".github/workflows/release-installers.yml").read_text(encoding="utf-8")
+
+    assert "Windows update patch is retired for the 2.3.0.0 refresh" in workflow
+    assert "installer/windows/dist/STEMwerk-Setup-*.exe" in workflow
+    assert 'files: installer/windows/dist/*.exe' not in workflow
+
+
+def test_ci_fast_quick_script_smoke_installs_pyyaml():
+    workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
+
+    assert "Install test dependencies" in workflow
+    assert "python -m pip install pytest pyyaml soundfile" in workflow
+    assert "python scripts/reaper/audio_separator_process.py --list-models" in workflow
 
 
 def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_consistent():
@@ -4598,7 +4776,7 @@ def test_linux_bootstrap_uses_bundled_payloads_for_models_and_offline_pip():
     assert 'copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models"' in script
     assert 'pip_install_with_scope main "${VENV_PY}" --upgrade pip setuptools wheel' in script
     assert 'pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel' in script
-    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ROCM_TORCH_INDEX_URL}"' in script
+    assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}"' in script
     assert '"${BUNDLED_PAYLOAD_DIR}/wheels/main" \\' in script
     assert "bundled_main_has_required_torch_stack()" in script
     assert 'log_step "Bundled main wheelhouse does not contain the requested torch stack; using CPU index fallback"' in script
@@ -6672,11 +6850,19 @@ def test_windows_drumsep_runtime_writers_persist_to_dedicated_state_files():
     assert '$lines | Out-File -FilePath (GetDrumsepCudaRuntimeStatePath) -Encoding ascii' in windows_bootstrap
 
 
-def test_windows_bootstrap_prefetch_uses_concrete_demucs_model_ids():
+def test_windows_bootstrap_prefetch_uses_supported_demucs_model_ids():
     windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
 
+    assert 'Core model prefetch using FFmpeg: ' in windows_bootstrap
+    assert 'Core model prefetch could not prepare download_checks.json' in windows_bootstrap
+    assert 'STEMWERK_CORE_MODEL_SUPPORTED_DEMUCS=' in windows_bootstrap
+    assert 'ResolveWindowsFfmpegPath -AllowInstall' in windows_bootstrap
+    assert 'InvokeWithResolvedFfmpegEnvironment $resolvedFfmpeg {' in windows_bootstrap
     assert 'from stemwerk_core.models import resolve_audio_separator_model_id' in windows_bootstrap
     assert 'sep.load_model(resolve_audio_separator_model_id(model_name))' in windows_bootstrap
+    assert '"Demucs v4: htdemucs"' in windows_bootstrap
+    assert '"htdemucs.yaml"' in windows_bootstrap
+    assert 'function EnsureSharedModelDownloadChecks([string]$ModelDir)' in windows_bootstrap
 
 
 def test_windows_ffmpeg_status_text_is_context_aware_for_existing_bundled_and_download_paths():
@@ -6769,6 +6955,47 @@ def test_windows_installer_uses_five_step_progress_and_drumkit_finish_copy():
     assert "Next step:" in script
     assert "%APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper" in script
     assert "%LOCALAPPDATA%\\STEMwerk" in script
+
+
+def test_windows_update_patch_forces_current_runtime_repair_after_script_update():
+    patch_iss = Path("installer/windows/STEMwerk_Offline_Patch.iss").read_text(encoding="utf-8")
+    installer = Path("installer/windows/STEMwerk_Installer_Windows.ps1").read_text(encoding="utf-8")
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+    patch_build_ps1 = Path("installer/windows/build_offline_patch_installer.ps1").read_text(encoding="utf-8")
+
+    assert "WizardForm.Caption := 'Setup - STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
+    assert "WizardForm.WelcomeLabel1.Caption := 'STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
+    assert "'Updating STEMwerk {#ReleaseAssetVersion} installation to script/runtime v{#MyAppVersion}." in patch_iss
+    assert "'STEMwerk has been updated. Installed script/runtime version: v{#MyAppVersion}.'" in patch_iss
+    assert "'- Release/update asset: v{#ReleaseAssetVersion}'" in patch_iss
+    assert "ShowReleaseNotesCheckbox.Caption := 'Show what changed in installed payload v{#MyAppVersion}';" in patch_iss
+    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
+    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
+    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
+    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
+    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
+    assert 'runhidden waituntilterminated' in patch_iss
+    assert 'runtime state, Drum Kit runtime, and offline model readiness' in patch_iss
+    assert "StepLabelS.Caption := '1. Runtime';" in patch_iss
+    assert "StepLabelT.Caption := '2. Python + venv';" in patch_iss
+    assert "StepLabelE.Caption := '3. FFmpeg';" in patch_iss
+    assert "StepLabelM.Caption := '4. Core packages';" in patch_iss
+    assert "StepLabelW.Caption := '5. Drum Kit';" in patch_iss
+    assert "LogMemo := TNewMemo.Create(WizardForm);" in patch_iss
+    assert "LogTimerId := SetTimer(0, 0, 500, LogTimerProc);" in patch_iss
+    assert "StatusDetailLabel.Caption := 'Current task:'" in patch_iss
+    assert "'Do not close this window.'" in patch_iss
+    assert '$env:STEMWERK_VERSION = $version' in patch_build_ps1
+    assert '$env:STEMWERK_RELEASE_ASSET_VERSION = $version' in patch_build_ps1
+    assert '$bootstrap = Join-NormalizedWindowsPath $scriptRoot @("STEMwerk_Bootstrap_Windows.ps1")' in installer
+    assert '$env:STEMWERK_INSTALLER = "1"' in installer
+    assert 'if (Test-Path $stateFile) { Remove-Item $stateFile -Force -ErrorAction SilentlyContinue }' in installer
+    assert 'if (Test-Path $logFile) { Remove-Item $logFile -Force -ErrorAction SilentlyContinue }' in installer
+    assert 'Step "step_5_drumkit" "drum kit runtime and offline models"' in bootstrap
+    assert 'WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainRuntimeStatus' in bootstrap
+    assert 'WriteDrumsepCudaState "running" "missing" "creating_venv"' in bootstrap
+    assert 'WriteDrumsepCudaState "running" "missing" "model_download"' in bootstrap
+    assert 'WriteDrumsepCudaState "ok" "ok" "ok" $verifyResult.Probe $verifyResult.FfmpegPath' in bootstrap
 
 
 def test_windows_setup_guides_are_release_clean_and_describe_offline_allmodels_payloads():
