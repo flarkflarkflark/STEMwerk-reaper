@@ -8,18 +8,12 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 ## What is STEMwerk-reaper?
 STEMwerk-reaper is a REAPER script that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend (audio-separator/Demucs) and keeps processing on your machine.
 
-### Release status note
-This README still points to the current public stable release, `v2.2.2.2`, for end-user download links.
+### Release status
+This branch prepares the next public Windows-focused patch release: `STEMwerk 2.3.0.3`.
 
-For the current `2.3.0.0` release candidate:
-
-- final code basis: `95013e6d8e9e3bf6cda0456264612153678ed1c0`
-- the final Windows readiness follow-up in that commit restores normal Windows CPU multi-item `cap2` scheduling and persists DrumSep ready-state markers to the dedicated runtime state files
-- `ready_to_go` reporting no longer remains `missing` after a successful DrumSep verify on the current Windows 2.3 candidate line
-- Linux and Windows artifacts built from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a`, `e06507c99e6e336cbbf36892a39c97876d10daa0`, or `328c614c8adcdc8244c8bb9bf601083907f29032` are stale and superseded by artifacts rebuilt from `95013e6d8e9e3bf6cda0456264612153678ed1c0` or later
-- see [docs/RELEASE_2.3.0.0.md](docs/RELEASE_2.3.0.0.md) for the 2.3 release-line notes
-
-`v2.2.2.2` is a reliability and packaging parity release on top of the `2.2.2.x` UI/workflow line.
+- `2.3.0.0` remains the original full-release baseline.
+- `2.3.0.2` remains a ReaPack/script hotfix line and is not the full installer identity.
+- See [docs/RELEASE_2.3.0.3.md](docs/RELEASE_2.3.0.3.md) for the `2.3.0.3` Windows patch notes.
 
 <img src="https://github.com/flarkflarkflark/STEMwerk-reaper/releases/download/v2.2.2.2/STEMwerk-v2.2.2.2-REAPER-Native-UI-cropped-720.png" alt="STEMwerk v2.2.2.2 REAPER-Native UI" width="720">
 
@@ -92,7 +86,7 @@ After runtime setup is complete and your model is cached, normal separation is t
 
 Windows release assets may also include offline installers, bundled installers, or larger offline/full asset variants for specific stable versions. In this terminology, the smaller offline installer path is still a downloader-style installer and can require internet for backend package or model downloads. Bundled installers include Python + FFmpeg, but they can still require backend package or model downloads on first use. Existing allmodels/Demucs core model-cache assets are not complete DrumSep/Drum Kit offline/full bundles. Drum Kit/DrumSep runtime and model assets in the 2.3 release line are handled through the setup/runtime flow unless a specific full/offline asset explicitly says otherwise. Large offline/full allmodels-style assets are hosted separately on Google Drive because they are too large for GitHub release assets.
 
-For the unreleased `2.3.0.0` artifact set, do not treat any installer/package built from `21a59cd`, `e06507c`, or `328c614` as final; those artifacts are stale and superseded by `95013e6`.
+Existing Windows users should uninstall the old STEMwerk version first, then install STEMwerk `2.3.0.3` using the full online or bundled installer. STEMwerk `2.3` adds a second Drum Kit Split runtime and model setup, so the old small update-patch path is retired. A clean reinstall avoids stale runtime/backend state, including cases where GPU-capable systems may otherwise fall back to CPU.
 
 You should still run `STEMwerk-SETUP.lua` when asked to verify or repair the runtime inside REAPER.
 

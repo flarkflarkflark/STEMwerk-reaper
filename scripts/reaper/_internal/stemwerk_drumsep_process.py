@@ -31,6 +31,8 @@ REAPER_FILENAMES = {
     "crash": "crash.wav",
 }
 DIRECT_DEMIX_KEYS = ("Kick", "Snare", "Toms", "Hh", "Ride", "Crash")
+LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
+CUDA_FAILURE_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
 
 
 class DirectDemixValidationError(RuntimeError):
@@ -79,14 +81,35 @@ def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
         if not available:
             return False, "torch_cuda_unavailable", {"torch_hip": hip, "torch_cuda": cuda_version}
         tensor = torch.ones(1, device="cuda:0")
+        total_memory = 0
+        try:
+            props = torch.cuda.get_device_properties(0)
+            total_memory = int(getattr(props, "total_memory", 0) or 0)
+        except Exception:
+            total_memory = 0
         return True, "ok", {
             "torch_hip": hip,
             "torch_cuda": cuda_version,
             "tensor_device": str(tensor.device),
             "device_name": str(torch.cuda.get_device_name(0)),
+            "total_memory_bytes": str(total_memory or ""),
+            "total_memory_gib": f"{(total_memory / float(1024 ** 3)):.1f}" if total_memory else "",
+            "low_vram": "yes" if total_memory and total_memory <= LOW_VRAM_THRESHOLD_BYTES else ("no" if total_memory else ""),
         }
     except Exception as exc:
         return False, f"{type(exc).__name__}:{exc}", {}
+
+
+def _classify_runtime_exception(exc: Exception, device: str, gpu_probe: dict[str, str]) -> tuple[str, str]:
+    text = f"{type(exc).__name__}: {exc}"
+    lower = text.lower()
+    requested = str(device or "").strip().lower()
+    if requested == "cuda":
+        if "illegal memory access was encountered" in lower:
+            return "cuda_illegal_memory_access", CUDA_FAILURE_GUIDANCE
+        if "cuda out of memory" in lower:
+            return "cuda_out_of_memory", CUDA_FAILURE_GUIDANCE
+    return "", ""
 
 
 def normalize_stem_name(value: str | Path) -> str | None:
@@ -538,6 +561,9 @@ def run(args: argparse.Namespace) -> int:
     print(f"drumsep_helper_gpu_probe_tensor_device={gpu_probe.get('tensor_device', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_conv_device={gpu_probe.get('conv_device', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_device_name={gpu_probe.get('device_name', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_total_memory_bytes={gpu_probe.get('total_memory_bytes', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_total_memory_gib={gpu_probe.get('total_memory_gib', '')}", file=sys.stderr)
+    print(f"drumsep_helper_gpu_probe_low_vram={gpu_probe.get('low_vram', '')}", file=sys.stderr)
     print(f"drumsep_helper_gpu_probe_onnx_provider={gpu_probe.get('onnx_provider', '')}", file=sys.stderr)
     if not gpu_probe_ok:
         write_result(
@@ -623,12 +649,20 @@ def run(args: argparse.Namespace) -> int:
         print(f"timing_utc={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())} drumsep_helper_separate_end", file=sys.stderr)
     except Exception as exc:
         validation_reason = getattr(exc, "reason", "")
+        classified_reason, classified_hint = _classify_runtime_exception(exc, args.device, gpu_probe)
+        error_reason = classified_reason or (
+            "drumsep_direct_demix_failed" if args.route in {"mps-direct-demix", "direct-demix"} else "drumsep_separate_failed"
+        )
+        if classified_reason:
+            print(f"error_reason={classified_reason}", file=sys.stderr)
+        if classified_hint:
+            print(f"guidance={classified_hint}", file=sys.stderr)
         if validation_reason:
             print(f"output_validation_reason={validation_reason}", file=sys.stderr)
         write_result(
             result_json,
             _error_payload(
-                "drumsep_direct_demix_failed" if args.route in {"mps-direct-demix", "direct-demix"} else "drumsep_separate_failed",
+                error_reason,
                 "stage2_output_validation" if validation_reason else "stage2_separate",
                 f"{type(exc).__name__}: {exc}",
                 traceback=traceback.format_exc(),
@@ -644,6 +678,11 @@ def run(args: argparse.Namespace) -> int:
                 requested_device=requested_device,
                 effective_device=str(getattr(sep, "torch_device", "unknown")),
                 model_device=_direct_demix_model_device(sep),
+                error_hint=classified_hint,
+                guidance=classified_hint,
+                gpu_low_vram=gpu_probe.get("low_vram", ""),
+                gpu_total_memory_gib=gpu_probe.get("total_memory_gib", ""),
+                gpu_device_name=gpu_probe.get("device_name", ""),
             ),
         )
         return 1

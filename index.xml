@@ -2,18 +2,14 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.0.0" author="flarkAUDIO" time="1780055621">
+      <version name="2.3.0.3" author="flarkAUDIO" time="1780055621">
         <changelog><![CDATA[
-STEMwerk 2.3.0.0 - major drum-splitting and GPU release
+STEMwerk 2.3.0.3 - Windows setup/runtime patch release
 
-- Adds Direct Kit Split for drum-only material: Kick, Snare, Toms, Hi-Hat, Ride, and Crash.
-- Adds high-quality Drum Kit Split for full mixes: isolate drums first, then split into kit parts.
-- Adds full Apple Silicon MPS support for native Mac GPU acceleration.
-- Integrates new DrumSep-based drum-part models into the REAPER workflow.
-- Improves Auto device routing and CPU fallback across macOS, Linux, and Windows.
-- Improves progress bars, stage labels, setup/repair flow, diagnostics, and support bundles.
-- Refines UI labels, tooltips, and multilingual EN/NL/DE text.
-- Fixes ReaPack payload completeness for clean installs.
+- Fixes Windows path normalization so bundled Python, FFmpeg, and venv rebuild paths no longer carry duplicate separators into canonicalization/safety checks.
+- Routes Windows Setup Repair/Rebuild venv through bootstrap instead of the old verify-only path.
+- Preserves primary Drum Kit Split CUDA failures such as illegal memory access and out-of-memory instead of masking them as output-count mismatch.
+- Adds clearer low-VRAM CUDA diagnostics, CPU runtime-missing guidance, launcher environment cleanup, stale override guardrails, and normalized support-bundle ZIP entry names.
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>

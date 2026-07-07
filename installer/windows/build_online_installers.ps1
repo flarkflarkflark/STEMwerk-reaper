@@ -103,10 +103,10 @@ if (-not $SkipFetchBundledAssets) {
 }
 
 Build-OnlineVariant $isccPath "-bundled" $true $onlineWheelPayloadSubdir $onlineModelPayloadSubdir
-Build-OnlineVariant $isccPath "-lite" $false "" ""
+Build-OnlineVariant $isccPath "" $false "" ""
 
 Write-Host ""
 Write-Host "Build complete. Generated online installers in: $distDir"
-Get-ChildItem -Path $distDir -Filter ("STEMwerk-Setup-$version-*.exe") |
-    Where-Object { $_.Name -match ("^STEMwerk-Setup-" + [regex]::Escape($version) + "-(bundled|lite)\\.exe$") } |
+Get-ChildItem -Path $distDir -Filter ("STEMwerk-Setup-$version*.exe") |
+    Where-Object { $_.Name -match ("^STEMwerk-Setup-" + [regex]::Escape($version) + "(-bundled)?\\.exe$") } |
     Select-Object Name, Length, LastWriteTime

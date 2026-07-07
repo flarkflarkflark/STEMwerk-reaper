@@ -1,6 +1,6 @@
 -- @description Stemwerk: Drum Kit Split
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.0
+-- @version 2.3.0.3
 -- @changelog
 --   Quick preset: direct drum kit split.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

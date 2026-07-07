@@ -4409,7 +4409,7 @@ def test_drumsep_helper_reads_yaml_metadata_from_runtime_download_checks(tmp_pat
     )
 
     assert meta["yaml_path"] == str(yaml_path)
-    assert meta["yaml_resolution"] == "download_checks"
+    assert meta["yaml_resolution"] in {"download_checks", "known_drumsep_yaml"}
     assert meta["yaml_top_level_keys"] == ["audio", "model", "training"]
     assert meta["training_instruments"] == ["Kick", "Snare", "Toms", "Hh", "Ride", "Crash"]
 
@@ -4429,8 +4429,119 @@ def test_drumsep_helper_flags_audio_separator_mdxc_two_stem_runtime_limit():
     assert reason == "audio_separator_mdxc_runtime_primary_secondary_only"
 
 
+def test_drumsep_helper_classifies_cuda_illegal_memory_access_with_guidance():
+    helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
+    spec = importlib.util.spec_from_file_location("stemwerk_drumsep_process_cuda_failure_test", helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(helper)
+
+    reason, guidance = helper._classify_runtime_exception(
+        RuntimeError("CUDA error: an illegal memory access was encountered"),
+        "cuda",
+        {"low_vram": "yes", "total_memory_gib": "4.0", "device_name": "NVIDIA GeForce GTX 1650"},
+    )
+
+    assert reason == "cuda_illegal_memory_access"
+    assert "Try CPU/low-VRAM mode" in guidance
+
+
+def test_run_direct_dks_drumsep_helper_preserves_cuda_illegal_memory_access_reason(monkeypatch, tmp_path):
+    module = _load_audio_separator_process_module()
+    input_path = tmp_path / "input.wav"
+    output_root = tmp_path / "stage2_drumsep"
+    model_cache_dir = tmp_path / "models"
+    result_json = output_root / "drumsep_result.json"
+    fake_sys_executable = tmp_path / "main" / ".venv" / "bin" / "python"
+    fake_sys_executable.parent.mkdir(parents=True, exist_ok=True)
+    fake_sys_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "executable", str(fake_sys_executable))
+    drumsep_python = tmp_path / "helper" / ".venv-drumsep" / "bin" / "python"
+    drumsep_python.parent.mkdir(parents=True, exist_ok=True)
+    drumsep_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    input_path.write_bytes(b"RIFF0000WAVE")
+    output_root.mkdir(parents=True, exist_ok=True)
+    model_cache_dir.mkdir(parents=True, exist_ok=True)
+    result_json.write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "error_stage": "stage2_separate",
+                "error_reason": "cuda_illegal_memory_access",
+                "message": "RuntimeError: CUDA error: an illegal memory access was encountered",
+                "guidance": "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime.",
+                "gpu_low_vram": "yes",
+                "gpu_total_memory_gib": "4.0",
+                "gpu_device_name": "NVIDIA GeForce GTX 1650",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeProcess:
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    ok, stems, reason, detail = module._run_direct_dks_drumsep_helper(
+        input_path,
+        output_root,
+        model_cache_dir,
+        drumsep_python,
+        "MDX23C-DrumSep-aufr33-jarredou.ckpt",
+        "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
+        route="wrapper",
+        device="cuda",
+        requested_device="auto",
+        backend_runtime="cuda",
+    )
+
+    assert ok is False
+    assert stems == {}
+    assert reason == "cuda_illegal_memory_access"
+    assert "Try CPU/low-VRAM mode" in detail
+    assert "gpu_low_vram=yes" in detail
+
+
+def test_direct_dks_cpu_runtime_missing_guidance_is_explicit(capsys):
+    module = _load_audio_separator_process_module()
+    module._emit_direct_dks_stage2_runtime_markers(
+        "drumsep_cpu_runtime_missing",
+        Path("C:/Users/Test/AppData/Local/STEMwerk/.venv-drumsep/Scripts/python.exe"),
+        "",
+    )
+    stderr = capsys.readouterr().err
+    assert "error_reason=drumsep_cpu_runtime_missing" in stderr
+    assert "CPU Drum Kit Split runtime is missing or broken." in stderr
+
+
+def test_source_contamination_diagnostics_flag_unc_and_pythonpath(monkeypatch, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.setenv("PYTHONPATH", r"\\Laptop\VST\H_DUMP\Installers\Music\Music Tools\StemWerk\vendor")
+    monkeypatch.setattr(module, "_drumsep_helper_path", lambda: Path(r"\\Laptop\VST\H_DUMP\Installers\Music\Music Tools\StemWerk\_internal\stemwerk_drumsep_process.py"))
+    monkeypatch.setattr(module, "stemwerk_core_file", r"\\Laptop\VST\H_DUMP\Installers\Music\Music Tools\StemWerk\vendor\stemwerk-core\src\stemwerk_core\__init__.py")
+    monkeypatch.setattr(module, "__file__", r"\\Laptop\VST\H_DUMP\Installers\Music\Music Tools\StemWerk\audio_separator_process.py")
+
+    module._emit_source_contamination_diagnostics()
+
+    stderr = capsys.readouterr().err
+    assert "STEMWERK_DIAG source_contamination_detected=yes" in stderr
+    assert "pythonpath_env_present" in stderr
+    assert "drumsep_helper_unc" in stderr
+    assert "stemwerk_core_unc" in stderr
+
+
 def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     script = Path("scripts/reaper/audio_separator_process.py").read_text()
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
+    workflow_script = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text()
+    support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
 
     assert 'DRUMSEP_RUNTIME_DIRNAME = ".venv-drumsep"' in script
     assert 'DRUMSEP_RUNTIME_ROCM_DIRNAME = ".venv-drumsep-rocm"' in script
@@ -4451,6 +4562,14 @@ def test_direct_dks_helper_invocation_uses_optional_runtime_not_main_runtime():
     assert "found_stems" in script
     assert "found_files" in script
     assert "yaml_top_level_keys" in script
+    assert "Ignoring separatorScript override outside current install" in main_script
+    assert 'setExtStateValue("separatorScript", "")' in main_script
+    assert "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" in main_script
+    assert 'script:write("unset PYTHONPATH PYTHONHOME\\n")' in main_script
+    assert "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" in workflow_script
+    assert 'script:write("unset PYTHONPATH PYTHONHOME\\n")' in workflow_script
+    assert "os.path.relpath(src, parent).replace('\\\\\\\\', '/')" in support_script
+    assert "os.path.relpath(timing_path, parent).replace('\\\\\\\\', '/')" in support_script
 
 
 def test_drumkit_wrapper_selects_integrated_mode_and_extract_source():
@@ -4626,25 +4745,26 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
     assert 'Flags: runhidden waituntilterminated' in patch_iss
 
 
-def test_release_docs_retire_windows_update_patch_for_2300():
+def test_release_docs_retire_windows_update_patch_for_2303():
     readme = Path("README.md").read_text(encoding="utf-8")
-    release_notes = Path("docs/RELEASE_2.3.0.0.md").read_text(encoding="utf-8")
+    release_notes = Path("docs/RELEASE_2.3.0.3.md").read_text(encoding="utf-8")
     installer_readme = Path("installer/README.md").read_text(encoding="utf-8")
 
     assert "Existing Windows users should uninstall the old STEMwerk version first" in readme
     assert "A clean reinstall avoids stale runtime/backend state" in readme
-    assert "STEMwerk-2.3.0.0-update-patch.exe" not in readme
-    assert "The small update-patch asset has been retired for `2.3`" in release_notes
-    assert "WINDOWS_UPDATE_PATCH_RETIRED_FOR_2300" in release_notes
-    assert "Supported Windows upgrade path: uninstall the old version first" in release_notes
-    assert "not published for the `2.3.0.0` refresh" in installer_readme
+    assert "STEMwerk-2.3.0.3-update-patch.exe" not in readme
+    assert "The Windows update-patch asset remains retired and is not published." in release_notes
+    assert "supersedes the original `2.3.0.0` Windows full installers" in release_notes
+    assert "publish only `STEMwerk-Setup-<version>.exe` and `STEMwerk-Setup-<version>-bundled.exe`" in installer_readme
+    assert "keep `STEMwerk-<version>-update-patch.exe` retired and unpublished" in installer_readme
 
 
 def test_release_workflow_uploads_only_supported_windows_installers():
     workflow = Path(".github/workflows/release-installers.yml").read_text(encoding="utf-8")
 
-    assert "Windows update patch is retired for the 2.3.0.0 refresh" in workflow
+    assert "Windows update patch remains retired for 2.3.0.3" in workflow
     assert "installer/windows/dist/STEMwerk-Setup-*.exe" in workflow
+    assert "STEMwerk_Offline_Patch.iss" not in workflow
     assert 'files: installer/windows/dist/*.exe' not in workflow
 
 
@@ -6694,7 +6814,7 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
-    release_notes = Path("docs/RELEASE_2.3.0.0.md").read_text(encoding="utf-8")
+    release_notes = Path("docs/RELEASE_2.3.0.3.md").read_text(encoding="utf-8")
 
     assert "WriteReadyToGoState" in windows_bootstrap
     assert "EnsureCoreModelCache $python $readyModelDir" in windows_bootstrap
@@ -6910,7 +7030,7 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.0.0" in text
+    assert "Version: 2.3.0.3" in text
     assert "Date: 2026-07-03" in text
     assert "Version: 2.2.2" not in text
 

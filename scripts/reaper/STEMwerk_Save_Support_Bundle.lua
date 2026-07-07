@@ -1,6 +1,6 @@
 -- @description Stemwerk: Save Support Bundle
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.0
+-- @version 2.3.0.3
 -- @changelog
 --   Collects a read-only STEMwerk support bundle with runtime diagnostics, logs, and temp-folder inventory.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -2051,14 +2051,14 @@ local function tryCreateZipWithPython(bundleParent, bundleDir, zipPath, pythonPa
         "",
         "with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:",
         "    for root, dirs, files in os.walk(bundle_dir):",
-        "        rel_root = os.path.relpath(root, parent)",
+        "        rel_root = os.path.relpath(root, parent).replace('\\\\', '/')",
         "        if rel_root == '.':",
         "            rel_root = base",
         "        if not files and not dirs:",
         "            zf.writestr(rel_root.rstrip('/\\\\') + '/', '')",
         "        for name in files:",
         "            src = os.path.join(root, name)",
-        "            rel = os.path.relpath(src, parent)",
+        "            rel = os.path.relpath(src, parent).replace('\\\\', '/')",
         "            zf.write(src, rel)",
     }, "\n")
     if not writeFile(scriptPath, script, "wb") then
@@ -2167,7 +2167,7 @@ local function updateZipTimingFile(zipPath, bundleDir, timingPath, pythonPath)
         "bundle_dir = os.path.abspath(sys.argv[2])",
         "timing_path = os.path.abspath(sys.argv[3])",
         "parent = os.path.dirname(bundle_dir)",
-        "arcname = os.path.relpath(timing_path, parent)",
+        "arcname = os.path.relpath(timing_path, parent).replace('\\\\', '/')",
         "with zipfile.ZipFile(zip_path, 'a', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:",
         "    zf.write(timing_path, arcname)",
     }, "\n")

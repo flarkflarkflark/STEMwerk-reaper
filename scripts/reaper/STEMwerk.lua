@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description STEMwerk - AI Stem Separation
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.0
+-- @version 2.3.0.3
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.3.0.0"
+local APP_VERSION = "2.3.0.3"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -919,6 +919,18 @@ function getFastStartupPythonPath()
 end
 
 local function findSeparatorScript()
+    local function normalizedPathForCompare(path)
+        local text = tostring(path or ""):gsub("\\", "/"):lower()
+        return text:gsub("/+$", "")
+    end
+
+    local function pathWithinRoot(path, root)
+        local child = normalizedPathForCompare(path)
+        local parent = normalizedPathForCompare(root)
+        if child == "" or parent == "" then return false end
+        return child == parent or child:sub(1, #parent + 1) == parent .. "/"
+    end
+
     local override = getExtStateValue("separatorScript")
     if override then
         local resolved = override
@@ -926,9 +938,17 @@ local function findSeparatorScript()
             resolved = script_path .. resolved
         end
         if fileExists(resolved) then
-            return resolved
+            local scriptsDir = getInstallScriptsDir()
+            if pathWithinRoot(resolved, script_path) or pathWithinRoot(resolved, scriptsDir) then
+                return resolved
+            end
+            debugLog("Ignoring separatorScript override outside current install: " .. tostring(resolved))
+            if setExtStateValue then
+                setExtStateValue("separatorScript", "")
+            end
+        else
+            debugLog("separatorScript override not found: " .. tostring(resolved))
         end
-        debugLog("separatorScript override not found: " .. tostring(resolved))
     end
 
     local scriptsDir = getInstallScriptsDir()
@@ -20007,6 +20027,8 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
                 "$jobTag='" .. jobTagEsc .. "';" ..
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
+                "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
+                "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
                 "$sepq=$dq + $sep + $dq;" ..
                 "$inq=$dq + $in + $dq;" ..
@@ -20081,6 +20103,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
               script:write("STEMWERK_LOG_PATH=" .. quoteArg(execLogPath) .. "\n")
               script:write("STEMWERK_JOB_TAG=" .. quoteArg(jobTag) .. "\n")
               script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG\n")
+              script:write("unset PYTHONPATH PYTHONHOME\n")
               script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
               script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
               script:write("WORKFLOW_MODE=" .. quoteArg(workflowModeArg) .. "\n")
