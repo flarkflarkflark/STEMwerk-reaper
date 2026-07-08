@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.2
+-- @version 2.3.0.3
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -174,6 +174,18 @@ local function resolveSetupScriptsDir()
         setupDir = setupDir:gsub("[/\\]_internal[/\\]$", PATH_SEP)
     end
     return setupDir
+end
+
+local function normalizePlatformPath(path, preserveTrailing)
+    local value = tostring(path or "")
+    if value == "" then return "" end
+    if OS == "Windows" and PATH_HELPER and PATH_HELPER.normalizeWindowsPath then
+        return PATH_HELPER.normalizeWindowsPath(value, { preserveTrailing = preserveTrailing == true })
+    end
+    if preserveTrailing then
+        return value
+    end
+    return value:gsub("[/\\]+$", "")
 end
 
 local function launchMainStemwerkScript()
@@ -439,7 +451,7 @@ end
 local function getRuntimeBase()
     local override = reaper and reaper.GetExtState and reaper.GetExtState(EXT_SECTION, "runtimeBase") or ""
     if override ~= "" then
-        return override
+        return normalizePlatformPath(override, false)
     end
     local home = getHome()
     local candidates = {}
@@ -458,15 +470,16 @@ local function getRuntimeBase()
         table.insert(candidates, home .. "/.local/share/STEMwerk")
     end
     for _, base in ipairs(candidates) do
+        base = normalizePlatformPath(base, false)
         if ensureWritableDir(base) then
             return base
         end
     end
-    return candidates[1] or (home .. PATH_SEP .. ".STEMwerk")
+    return normalizePlatformPath(candidates[1] or (home .. PATH_SEP .. ".STEMwerk"), false)
 end
 
 local function getRuntimePaths()
-    local base = getRuntimeBase()
+    local base = normalizePlatformPath(getRuntimeBase(), false)
     local runtimeRoot = base
     local runtimeState = base .. PATH_SEP .. "state"
     local runtimeLogs = base .. PATH_SEP .. "logs"
@@ -488,9 +501,9 @@ local function getModelCacheDir()
     if OS == "Windows" then
         local localAppData = os.getenv("LOCALAPPDATA") or ""
         if localAppData ~= "" then
-            return localAppData .. "\\STEMwerk\\models"
+            return normalizePlatformPath(localAppData .. "\\STEMwerk\\models", false)
         end
-        return home .. "\\AppData\\Local\\STEMwerk\\models"
+        return normalizePlatformPath(home .. "\\AppData\\Local\\STEMwerk\\models", false)
     elseif OS == "macOS" then
         return home .. "/Library/Application Support/STEMwerk/models"
     else
@@ -768,6 +781,7 @@ local function prettyCheckError(err)
     if lower == "runtime_incomplete" then return "Runtime is incomplete (Python path intentionally withheld until verification passes)" end
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
+    if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this check; current ready-to-go state remains authoritative" end
     if lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
         return "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
     end
@@ -928,9 +942,9 @@ end
 local function resolvePath(raw)
     local value = stripQuotes(raw)
     if value == "" then return "" end
-    if isAbsolutePath(value) then return value end
+    if isAbsolutePath(value) then return normalizePlatformPath(value, false) end
     if value:find("[/\\]") then
-        return getScriptDir() .. value
+        return normalizePlatformPath(getScriptDir() .. value, false)
     end
     return value
 end
@@ -1131,6 +1145,8 @@ sys.exit(0 if not reason else 1)
         result.error = "torch_too_new_for_demucs"
     elseif result.driftReason == "numpy_too_new_for_demucs" then
         result.error = "numpy_too_new_for_demucs"
+    elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then
+        result.error = "torch_runtime_probe_failed"
     elseif result.ok then
         result.error = nil
     end
@@ -1618,6 +1634,109 @@ function readReadyState(runtime)
         return {}
     end
     return parseStateFile(runtime.runtimeState .. PATH_SEP .. "ready_to_go.env")
+end
+
+local function copyStateTable(input)
+    local out = {}
+    for k, v in pairs(input or {}) do
+        out[k] = v
+    end
+    return out
+end
+
+local function readyStateIndicatesHealthyRuntime(readyState, capState)
+    readyState = readyState or {}
+    capState = capState or {}
+    local readyStatus = trim(readyState.READY_TO_GO_STATUS or "")
+    local mainRuntimeStatus = trim(readyState.MAIN_RUNTIME_STATUS or "")
+    local drumsepRuntimeStatus = trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "")
+    local drumsepModelStatus = trim(readyState.DRUMSEP_READY_MODEL_STATUS or "")
+    local audioSeparator = trim(capState.AUDIO_SEPARATOR or "")
+    local stemwerkCore = trim(capState.STEMWERK_CORE or "")
+    local capVerification = trim(capState.VERIFICATION or "")
+    return readyStatus == "ok"
+        and mainRuntimeStatus == "ok"
+        and (drumsepRuntimeStatus == "" or drumsepRuntimeStatus == "ok" or drumsepRuntimeStatus == "skipped")
+        and (drumsepModelStatus == "" or drumsepModelStatus == "ok" or drumsepModelStatus == "skipped")
+        and (audioSeparator == "" or audioSeparator == "ok")
+        and (stemwerkCore == "" or stemwerkCore == "ok")
+        and (capVerification == "" or capVerification == "ok" or capVerification == "failed")
+end
+
+local function resolveVerifyOnlyPythonPath(runtime, state, capState)
+    local candidates = {
+        capState.VENV_PYTHON_PATH or "",
+        capState.PYTHON_PATH or "",
+        state.VENV_PYTHON_PATH or "",
+        state.VENV_PYTHON or "",
+        state.PYTHON_PATH or "",
+        (runtime and runtime.venvPython) or "",
+    }
+    for _, candidate in ipairs(candidates) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) and canRunPython(resolved) then
+            return resolved
+        end
+    end
+    return ""
+end
+
+local function resolveVerifyOnlyFfmpegPath(state, capState)
+    local candidates = {
+        getExt("ffmpegPath"),
+        capState.FFMPEG_PATH or "",
+        state.FFMPEG_PATH or "",
+        resolveUnixFfmpegFallback(),
+    }
+    for _, candidate in ipairs(candidates) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) and canRunFfmpeg(resolved) then
+            return resolved
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) then
+            return resolved
+        end
+    end
+    return ""
+end
+
+local function buildVerifyOnlyState(runtime, state, capState, readyState)
+    local out = copyStateTable(state or {})
+    local readyHealthy = readyStateIndicatesHealthyRuntime(readyState, capState)
+    local pythonPath = resolveVerifyOnlyPythonPath(runtime, out, capState or {})
+    if pythonPath ~= "" then
+        out.PYTHON_PATH = pythonPath
+    end
+    local venvPython = resolvePath(firstNonEmpty(
+        capState.VENV_PYTHON_PATH,
+        out.VENV_PYTHON_PATH,
+        out.VENV_PYTHON,
+        runtime and runtime.venvPython or ""
+    ))
+    if venvPython ~= "" and fileExists(venvPython) and canRunPython(venvPython) then
+        out.VENV_PYTHON = venvPython
+        out.VENV_PYTHON_PATH = venvPython
+        if OS == "macOS" then
+            out.PYTHON_PATH = venvPython
+        end
+    end
+    local ffmpegPath = resolveVerifyOnlyFfmpegPath(out, capState or {})
+    if ffmpegPath ~= "" then
+        out.FFMPEG_PATH = ffmpegPath
+    end
+    local staleFailedVerification = (
+        readyHealthy
+        and trim(out.STATUS or "") == "ok"
+        and trim(capState.BOOTSTRAP_STATUS or "") ~= "failed"
+        and trim(capState.VERIFICATION or "") == "failed"
+    )
+    if staleFailedVerification and trim(out.RUNTIME_VERIFY_DETAIL or "") ~= "" then
+        out.RUNTIME_VERIFY_DETAIL = "not_checked"
+    end
+    return out, readyHealthy, staleFailedVerification
 end
 
 function resolveDrumsepPolicyState(readyState, profile, backend)
@@ -2420,9 +2539,16 @@ local function verifyRuntimePaths(state)
             pythonCandidate = venvCandidate
         end
     end
+    local resolvedFfmpegPath = resolvePath(state.FFMPEG_PATH or "")
+    if OS ~= "Windows" and (resolvedFfmpegPath == "" or not fileExists(resolvedFfmpegPath) or not canRunFfmpeg(resolvedFfmpegPath)) then
+        local autoFfmpegPath = resolveUnixFfmpegFallback()
+        if autoFfmpegPath ~= "" then
+            resolvedFfmpegPath = resolvePath(autoFfmpegPath)
+        end
+    end
     local resolved = {
         pythonPath = resolvePath(pythonCandidate ~= "" and pythonCandidate or state.VENV_PYTHON or ""),
-        ffmpegPath = resolvePath(state.FFMPEG_PATH or ""),
+        ffmpegPath = resolvedFfmpegPath,
     }
     local errors = {}
     local pythonOk = false
@@ -3023,7 +3149,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
     end
-    if hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg" then
+    if OS == "macOS" and (hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg") then
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Missing FFmpeg"
         finalMessage[#finalMessage + 1] = "STEMwerk could not find FFmpeg."
@@ -3732,6 +3858,9 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     local state = fileExists(stateFile) and parseStateFile(stateFile) or {}
     local capState = fileExists(capFile) and parseStateFile(capFile) or {}
     local readyState = fileExists(readyFile) and parseStateFile(readyFile) or {}
@@ -3753,6 +3882,37 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     end
     local ffmpeg = trim(resolvePath(capState.FFMPEG_PATH or state.FFMPEG_PATH or extFfmpeg))
     local python, pythonSource = setupResolveWindowsPython(runtime, state, capState)
+    local readyHealthy = (
+        trim(readyState.READY_TO_GO_STATUS or "") == "ok"
+        and trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"
+        and trim(capState.AUDIO_SEPARATOR or "") == "ok"
+        and trim(capState.STEMWERK_CORE or "") == "ok"
+    )
+    local bootstrapComplete = false
+    if fileExists(logFile) then
+        local f = io.open(logFile, "r")
+        if f then
+            local text = f:read("*a") or ""
+            f:close()
+            bootstrapComplete = text:find("Bootstrap complete", 1, true) ~= nil
+        end
+    end
+    local guard = (guardPath and guardPath ~= "" and fileExists(guardPath)) and readBootstrapGuard(guardPath) or {}
+    local guardBusy = false
+    if guardPath and guardPath ~= "" then
+        guardBusy = select(1, isBootstrapBusy(guardPath, pidFile))
+    end
+    local pid = readBootstrapPid(pidFile)
+    local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy
+    local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)
+    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running") and readyHealthy and bootstrapComplete
+    if staleRunning or staleGuardFailed or staleFailedState then
+        status = "ok"
+        reason = ""
+    end
+    if verification == "" and readyHealthy then
+        verification = "ok"
+    end
     local needsRepair = false
 
     if status ~= "" and status ~= "ok" then needsRepair = true end
@@ -3770,7 +3930,7 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         julius = trim(capState.JULIUS or state.JULIUS or ""),
     }
     for k, v in pairs(deps) do
-        if v == "" then deps[k] = "unknown" end
+        if v == "" or v == "not_checked" then deps[k] = "not checked" end
     end
 
     return {
@@ -3784,7 +3944,7 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         pythonSource = pythonSource or "unknown",
         extPython = extPythonRaw ~= "" and extPythonRaw or "(empty)",
         ffmpegPath = ffmpeg ~= "" and ffmpeg or "unknown",
-        verification = verification ~= "" and verification or "unknown",
+        verification = verification ~= "" and verification or "not checked",
         readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown",
         readyToGoDetail = trim(readyState.READY_TO_GO_DETAIL or ""),
         deps = deps,
@@ -3865,6 +4025,12 @@ local function resolveLinuxPythonPath(state)
 end
 
 local function resolveLinuxFfmpegPath(state)
+    if OS == "macOS" then
+        local unixPath = resolveVerifyOnlyFfmpegPath(state or {}, {})
+        if unixPath ~= "" then
+            return unixPath
+        end
+    end
     for _, candidate in ipairs({
         state.FFMPEG_PATH or "",
         getExt("ffmpegPath"),
@@ -4442,7 +4608,7 @@ local function drawLinuxStepLegend(x, y, w, state, logLines)
     end
 end
 
-local function linuxDrawStatus(state, logLines, pidAlive, pid)
+function linuxDrawStatus(state, logLines, pidAlive, pid)
     local uiState = normalizeLinuxUiState(state, pidAlive)
     local lastLogLine = extractLastLogLine(logLines or {})
     local w, h = gfx.w, gfx.h
@@ -4528,7 +4694,7 @@ local function linuxDrawStatus(state, logLines, pidAlive, pid)
     drawLinuxLogPanel(logX, logY, logW, logH, logLines, "Console wheel scrolls. Ctrl+wheel outside console zooms text. Use +/- or 0 for text size.")
 end
 
-local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
+function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local w, h = gfx.w, gfx.h
     gfx.set(0.03, 0.03, 0.04, 1)
     gfx.rect(0, 0, w, h, 1)
@@ -4710,10 +4876,7 @@ local function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.drawstr(footerText)
 end
 
-local verifyExistingSetup
-local startLinuxSetup
-
-local function linuxSetupTick()
+function linuxSetupTick()
     if not LINUX_SETUP then return end
     if not gfx then return end
 
@@ -4926,6 +5089,8 @@ local function linuxSetupTick()
     reaper.defer(linuxSetupTick)
 end
 
+do
+
 local function appendSetupLog(runtime, line, replace)
     if not runtime or not runtime.runtimeLogs then return end
     ensureDir(runtime.runtimeLogs)
@@ -4957,6 +5122,20 @@ local function normalizePathForSafety(path)
     local p = resolvePath(path or "")
     if p == "" then return "" end
     p = p:gsub("\\", "/")
+    local prefix = ""
+    local rest = p
+    if rest:match("^//%?/UNC/") then
+        prefix = "//?/UNC/"
+        rest = rest:sub(#prefix + 1)
+    elseif rest:match("^//%?/") then
+        prefix = "//?/"
+        rest = rest:sub(#prefix + 1)
+    elseif rest:match("^//") then
+        prefix = "//"
+        rest = rest:sub(3)
+    end
+    rest = rest:gsub("/+", "/")
+    p = prefix .. rest
     p = p:gsub("/+$", "")
     return p
 end
@@ -5010,6 +5189,14 @@ local function canonicalizeDir(path)
     local raw = resolvePath(path or "")
     if raw == "" then return nil, "empty_path" end
     if not pathExists(raw) then return nil, "path_missing" end
+    if OS == "Windows" then
+        local canon = normalizePathForSafety(raw)
+        if canon == "" then return nil, "canonical_empty" end
+        if not isAbsolutePath(canon) then
+            return nil, "canonical_not_absolute"
+        end
+        return canon, nil
+    end
     local cmd = 'cd ' .. quoteArg(raw) .. ' >/dev/null 2>&1 && pwd -P'
     local rc, out = execCapture(cmd, 4000)
     if rc == 0 then
@@ -5494,7 +5681,7 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
     reaper.defer(linuxSetupTick)
 end
 
-function reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
+function reconcileCheckVerification(state, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = {}
     for _, e in ipairs(verification.errors or {}) do
         adjustedErrors[#adjustedErrors + 1] = e
@@ -5564,6 +5751,7 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         trim(state.STATUS or "") == "ok"
         and hasBootstrapRuntimeVerificationPass(logFile)
     )
+    local readyHealthy = readyStateIndicatesHealthyRuntime(readyState, capState)
     local mpsInformational = (
         trim(backendReason or "") == ""
         or trim(backendReason or "") == "mps_unavailable"
@@ -5588,11 +5776,33 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         and torchVersionPinnedCompatible(torchVersion)
         and torchaudioVersion ~= ""
     )
+    local canAcceptMacReadyHealthyState = (
+        OS == "macOS"
+        and readyHealthy
+        and trim(capState.BOOTSTRAP_STATUS or "") ~= "failed"
+        and verification.pythonOk
+        and verification.ffmpegOk
+        and not hasHardImportFailures
+        and (
+            trim(capState.VERIFICATION or "") == "ok"
+            or trim(capState.STATUS or "") == "ok"
+        )
+    )
     if canAcceptMacIntelCpuFallback or bootstrapVerified then
         removeError("torch_too_new_for_demucs")
         removeError("torch_runtime_unsupported")
         removeError("torch_runtime_probe_failed")
         if torchaudioVersion ~= "" then
+            removeError("torchaudio_missing_for_demucs")
+        end
+    end
+    if canAcceptMacReadyHealthyState then
+        removeError("torch_runtime_unsupported")
+        removeError("torch_runtime_probe_failed")
+        if torchVersionPinnedCompatible(torchVersion) then
+            removeError("torch_too_new_for_demucs")
+        end
+        if torchaudioVersion ~= "" and torchaudioVersion ~= "missing" then
             removeError("torchaudio_missing_for_demucs")
         end
     end
@@ -5627,6 +5837,8 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
     result.runtimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
     if verifiedRuntimeOk then
         result.runtimeVerifyDetail = "ok"
+    elseif canAcceptMacReadyHealthyState then
+        result.runtimeVerifyDetail = "not_checked"
     elseif result.runtimeVerifyDetail == "" then
         result.runtimeVerifyDetail = table.concat(adjustedErrors, ";")
     end
@@ -5646,9 +5858,11 @@ verifyExistingSetup = function(runtime, separatorScript)
 
     local state = parseStateFile(stateFile)
     local capState = parseStateFile(capFile)
-    local pythonPath = trim(resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(state)))
-    local ffmpegPath = trim(resolvePath(state.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(state)))
-    local verification = verifyRuntimePaths(state)
+    local readyState = readReadyState(runtime)
+    local effectiveState = buildVerifyOnlyState(runtime, state, capState, readyState)
+    local pythonPath = trim(resolvePath(effectiveState.PYTHON_PATH or effectiveState.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(effectiveState)))
+    local ffmpegPath = trim(resolvePath(effectiveState.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(effectiveState)))
+    local verification = verifyRuntimePaths(effectiveState)
     local verifyErrors = verification.errors or {}
     local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
     local envJson = extractEnvJson(deviceOut or "")
@@ -5658,7 +5872,7 @@ verifyExistingSetup = function(runtime, separatorScript)
         backendReason = probeErr
     end
     local profile = profileForBackend(backend)
-    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
+    local checkProbe = reconcileCheckVerification(effectiveState, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = checkProbe.adjustedErrors
     local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then
@@ -5688,7 +5902,6 @@ verifyExistingSetup = function(runtime, separatorScript)
         if not c.ok then allOk = false end
     end
 
-    local readyState = readReadyState(runtime)
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
     writeCapabilities(capFile, {
         profile = profile,
@@ -5996,7 +6209,7 @@ end
 -- Deferred tick for the existing-runtime setup mode selection menu.
 -- Draws the window, handles input, and dispatches to verifyExistingSetup /
 -- startLinuxSetup / cancel. Never blocks the REAPER UI thread.
-local function existingRuntimeSetupMenuTick()
+function existingRuntimeSetupMenuTick()
     if not SETUP_MENU then return end
     local m = SETUP_MENU
     refreshSetupMenuChoiceLabels(m)
@@ -6748,11 +6961,7 @@ local function existingRuntimeSetupMenuTick()
             end
         elseif chosen == "repair" or chosen == "rebuild-venv" or chosen == "drumsep-runtime" or chosen == "drumsep-cuda-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
             if OS == "Windows" then
-                if chosen == "drumsep-runtime" or chosen == "drumsep-cuda-runtime" or chosen == "drumsep-rocm-runtime" or chosen == "drumsep-directml-runtime" then
-                    startWindowsSetup(runtime, separatorScript, chosen, true)
-                else
-                    windowsVerifyStart(runtime, separatorScript, true)
-                end
+                startWindowsSetup(runtime, separatorScript, chosen, true)
             else
                 gfx.quit()
                 startLinuxSetup(runtime, separatorScript, chosen)
@@ -6771,85 +6980,101 @@ local function existingRuntimeSetupMenuTick()
     reaper.defer(existingRuntimeSetupMenuTick)
 end
 
--- Initializes the gfx window and kicks off the deferred menu tick.
--- Returns immediately; REAPER remains responsive while the menu is open.
-local function startExistingRuntimeSetupMenu(runtime, separatorScript)
-    local stateFileForVer = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
-    local storedState = fileExists(stateFileForVer) and parseStateFile(stateFileForVer) or {}
-    local lastSetupVersion = trim(storedState.STEMWERK_SETUP_VERSION or "")
-    local currentVersion = SETUP_VERSION or ""
-    local versionMatch = (lastSetupVersion == "" or lastSetupVersion == currentVersion)
-    local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
+do
+    function startExistingRuntimeSetupMenu(runtime, separatorScript)
+        local stateFileForVer = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+        local storedState = fileExists(stateFileForVer) and parseStateFile(stateFileForVer) or {}
+        local lastSetupVersion = trim(storedState.STEMWERK_SETUP_VERSION or "")
+        local currentVersion = SETUP_VERSION or ""
+        local updateDetected = (lastSetupVersion ~= "" and lastSetupVersion ~= currentVersion)
 
-    local windowsOverview = nil
-    if OS == "Windows" then
-        windowsOverview = buildWindowsSetupOverview(runtime, currentVersion, lastSetupVersion)
+        local windowsOverview = nil
+        if OS == "Windows" then
+            windowsOverview = buildWindowsSetupOverview(runtime, currentVersion, lastSetupVersion)
+        end
+
+        local choices = {
+            { id = "verify", accent = { 0.22, 0.70, 0.50 } },
+            { id = "repair", accent = { 0.92, 0.55, 0.10 } },
+            { id = "rebuild-venv", accent = { 0.45, 0.52, 0.90 } },
+            { id = "support-bundle", accent = { 0.26, 0.60, 0.88 } },
+            { id = "open-logs", accent = { 0.35, 0.56, 0.82 } },
+            { id = "open-runtime", accent = { 0.35, 0.56, 0.82 } },
+        }
+        if OS == "Windows" then
+            choices[#choices + 1] = { id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }
+            choices[#choices + 1] = { id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }
+        end
+        if OS ~= "Windows" then
+            choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
+            choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+            choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
+            choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
+        end
+        choices[#choices + 1] = { id = "cancel", accent = { 0.38, 0.38, 0.42 } }
+        refreshSetupMenuChoiceLabels({ choices = choices })
+
+        SETUP_MENU = {
+            runtime         = runtime,
+            separatorScript = separatorScript,
+            modelDir        = getModelCacheDir(),
+            mouseWasDown    = false,
+            lastMouseWheel  = gfx.mouse_wheel or 0,
+            fontScale       = math.max(getLinuxSetupFontScale(), LINUX_SETUP_FONT_SCALE_DEFAULT),
+            currentVersion  = currentVersion,
+            lastSetupVersion = lastSetupVersion,
+            updateDetected  = updateDetected,
+            windowsOverview = windowsOverview,
+            choices = choices,
+        }
+        gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
+        reaper.defer(existingRuntimeSetupMenuTick)
     end
 
-    local choices = {
-        { id = "verify", accent = { 0.22, 0.70, 0.50 } },
-        { id = "repair", accent = { 0.92, 0.55, 0.10 } },
-        { id = "rebuild-venv", accent = { 0.45, 0.52, 0.90 } },
-        { id = "support-bundle", accent = { 0.26, 0.60, 0.88 } },
-        { id = "open-logs", accent = { 0.35, 0.56, 0.82 } },
-        { id = "open-runtime", accent = { 0.35, 0.56, 0.82 } },
-    }
-    if OS == "Windows" then
-        choices[#choices + 1] = { id = "drumsep-cuda-runtime", accent = { 0.22, 0.62, 0.70 } }
-        choices[#choices + 1] = { id = "drumsep-directml-runtime", accent = { 0.12, 0.58, 0.76 } }
+    function shouldSkipMacBootstrap(runtime)
+        if OS ~= "macOS" then return false end
+        if not PATH_HELPER then return false end
+        local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
+        if not guardPath or guardPath == "" or not fileExists(guardPath) then return false end
+        local guard = readBootstrapGuard(guardPath)
+        if tostring(guard.STATUS or "") ~= "ok" or tostring(guard.REASON or "") ~= "completed" then
+            return false
+        end
+        local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
+        if not fileExists(stateFile) then return false end
+        local state = parseStateFile(stateFile)
+        if not state or next(state) == nil then return false end
+        if state.RUNTIME_BASE and state.RUNTIME_BASE ~= "" and runtime.base and runtime.base ~= "" then
+            if not PATH_HELPER.pathEquals(state.RUNTIME_BASE, runtime.base, OS) then return false end
+        end
+        local verification = verifyRuntimePaths(state)
+        local ok = verification and verification.pythonOk and verification.ffmpegOk and #(verification.errors or {}) == 0
+        if not ok then return false end
+        local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+        return true, stateFile, logFile, state
     end
-    if OS ~= "Windows" then
-        choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
-        choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
-        choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
-        choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
-    end
-    choices[#choices + 1] = { id = "cancel", accent = { 0.38, 0.38, 0.42 } }
-    refreshSetupMenuChoiceLabels({ choices = choices })
 
-    SETUP_MENU = {
-        runtime         = runtime,
-        separatorScript = separatorScript,
-        modelDir        = getModelCacheDir(),
-        mouseWasDown    = false,
-        lastMouseWheel  = gfx.mouse_wheel or 0,
-        fontScale       = math.max(getLinuxSetupFontScale(), LINUX_SETUP_FONT_SCALE_DEFAULT),
-        currentVersion  = currentVersion,
-        lastSetupVersion = lastSetupVersion,
-        updateDetected  = updateDetected,
-        windowsOverview = windowsOverview,
-        choices = choices,
-    }
-    gfx.init(setupWindowTitle(setupUiLabel()), SETUP_MENU_DEFAULT_W, SETUP_MENU_DEFAULT_H, 0, 120, 80)
-    reaper.defer(existingRuntimeSetupMenuTick)
-end
-
-local function shouldSkipMacBootstrap(runtime)
-    if OS ~= "macOS" then return false end
-    if not PATH_HELPER then return false end
-    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
-    if not guardPath or guardPath == "" or not fileExists(guardPath) then return false end
-    local guard = readBootstrapGuard(guardPath)
-    if tostring(guard.STATUS or "") ~= "ok" or tostring(guard.REASON or "") ~= "completed" then
-        return false
+    function showSkippedMacBootstrapFinalWindow(runtime, separatorScript)
+        local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
+        if not skip then
+            return false
+        end
+        local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
+        showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
+        return true
     end
-    local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
-    if not fileExists(stateFile) then return false end
-    local state = parseStateFile(stateFile)
-    if not state or next(state) == nil then return false end
-    if state.RUNTIME_BASE and state.RUNTIME_BASE ~= "" and runtime.base and runtime.base ~= "" then
-        if not PATH_HELPER.pathEquals(state.RUNTIME_BASE, runtime.base, OS) then return false end
-    end
-    local verification = verifyRuntimePaths(state)
-    local ok = verification and verification.pythonOk and verification.ffmpegOk and #(verification.errors or {}) == 0
-    if not ok then return false end
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
-    return true, stateFile, logFile, state
-end
 
-local function main()
+    function finishBootstrapAndShow(runtime, separatorScript)
+        local bootstrapSuccess, stateFile, logFile, bootstrapState = runBootstrap(runtime)
+        local result = safePerformPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+        if OS == "Windows" then
+            showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
+        else
+            showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
+        end
+    end
+
     local runtime = getRuntimePaths()
-    local hasRuntime = runtimeLooksPresent(runtime)
     setExt("runtimeBase", runtime.base)
     local separatorScript = SCRIPT_DIR .. "audio_separator_process.py"
     if fileExists(separatorScript) then
@@ -6862,40 +7087,28 @@ local function main()
     end
 
     if OS == "Linux" or OS == "macOS" then
-        if hasRuntime then
+        if runtimeLooksPresent(runtime) then
             startExistingRuntimeSetupMenu(runtime, separatorScript)
             return
         end
 
-        local intro =
+        if msgBox("STEMwerk Setup",
             "Run this setup once in REAPER before using STEMwerk.lua.\n\n"
             .. "STEMwerk will prepare a runtime in:\n  " .. runtime.base .. "\n\n"
             .. "Downloaded models will be kept in:\n  " .. getModelCacheDir() .. "\n\n"
-            .. "Continue with first-time setup?"
-        if msgBox("STEMwerk Setup", intro, 4) ~= 6 then
+            .. "Continue with first-time setup?", 4) ~= 6 then
             return
         end
 
-        if OS == "macOS" then
-            local skip, stateFile, logFile, state = shouldSkipMacBootstrap(runtime)
-            if skip then
-                local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, separatorScript)
-                showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
-                return
-            end
+        if OS == "macOS" and showSkippedMacBootstrapFinalWindow(runtime, separatorScript) then
+            return
         end
 
         startLinuxSetup(runtime, separatorScript, "repair")
         return
     end
 
-    local bootstrapSuccess, stateFile, logFile, bootstrapState = runBootstrap(runtime)
-    local result = safePerformPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
-    if OS == "Windows" then
-        showStatusWindow(stateFile, logFile, table.concat(result.finalMessage, "\n"))
-    else
-        showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
-    end
+    finishBootstrapAndShow(runtime, separatorScript)
 end
 
-main()
+end

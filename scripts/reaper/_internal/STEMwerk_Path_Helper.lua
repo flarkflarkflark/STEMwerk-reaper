@@ -40,6 +40,44 @@ function M.stripTrailingSep(path)
     return (tostring(path):gsub("[/\\]+$", ""))
 end
 
+function M.normalizeWindowsPath(path, opts)
+    opts = opts or {}
+    local p = tostring(path or "")
+    if p == "" then return "" end
+
+    local preserveTrailing = opts.preserveTrailing == true
+    local hadTrailing = p:match("[/\\]$") ~= nil
+    p = p:gsub("/", "\\")
+
+    local prefix = ""
+    local rest = p
+    if p:match("^\\\\%?\\UNC\\") then
+        prefix = "\\\\?\\UNC\\"
+        rest = p:sub(#prefix + 1)
+    elseif p:match("^\\\\%?\\") then
+        prefix = "\\\\?\\"
+        rest = p:sub(#prefix + 1)
+    elseif p:match("^\\\\") then
+        prefix = "\\\\"
+        rest = p:sub(3)
+    end
+
+    local collapsed = {}
+    for segment in rest:gmatch("[^\\]+") do
+        collapsed[#collapsed + 1] = segment
+    end
+    rest = table.concat(collapsed, "\\")
+
+    local normalized = prefix .. rest
+    if preserveTrailing and hadTrailing and normalized ~= "" and normalized:sub(-1) ~= "\\" then
+        normalized = normalized .. "\\"
+    elseif not preserveTrailing and #normalized > 3 then
+        normalized = normalized:gsub("\\+$", "")
+    end
+
+    return normalized
+end
+
 function M.joinPath(sep, ...)
     local parts = { ... }
     local out = ""

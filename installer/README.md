@@ -5,18 +5,20 @@ These are **packaging helpers** so you can download installers from GitHub and t
 ## Outputs
 
 - Windows: `STEMwerk-Setup-<version>.exe` (Inno Setup)
-- Windows update patch: `STEMwerk-<version>-update-patch.exe` (Inno Setup)
+- Windows update patch: retired for the public `2.3.x` full-release line; do not publish `STEMwerk-<version>-update-patch.exe`
 - macOS: `STEMwerk-<version>.pkg` (pkgbuild)
 - Linux (Debian/Ubuntu): `stemwerk_<version>_amd64.deb` (dpkg-deb)
 - Linux (portable): `STEMwerk-<version>-x86_64.AppImage` (AppImageKit)
 - Linux (Fedora/RHEL/openSUSE): `stemwerk-<version>-1.noarch.rpm` (rpmbuild)
 - Linux (Arch): `stemwerk-<version>-1-any.pkg.tar.zst` (makepkg)
 
-Release-note caveat for the current `2.3.0.0` line:
+Release-note caveat for the current `2.3.0.3` Windows patch line:
 
-- final release-candidate code basis is `95013e6d8e9e3bf6cda0456264612153678ed1c0`
-- that final Windows follow-up restores normal CPU multi-item `cap2` scheduling and fixes DrumSep ready-state persistence/`ready_to_go` reporting
-- any Linux/Windows artifacts or manifests generated from `21a59cd64686b6cc8c6feca62ac863d8a9e13b6a`, `e06507c99e6e336cbbf36892a39c97876d10daa0`, or `328c614c8adcdc8244c8bb9bf601083907f29032` are stale and must be rebuilt from `95013e6d8e9e3bf6cda0456264612153678ed1c0` or later before release/publish
+- branch purpose: public Windows-focused patch release carrying setup/runtime fixes on top of the trusted `2.3.0.0` basis
+- publish only `STEMwerk-Setup-<version>.exe` and `STEMwerk-Setup-<version>-bundled.exe`
+- keep `STEMwerk-<version>-update-patch.exe` retired and unpublished
+- existing Windows users should uninstall the old STEMwerk version first, then run the full online or bundled `2.3.0.3` installer
+- large offline allmodels installers remain at `2.3.0.0` unless a user specifically needs the latest Windows setup/runtime fixes
 - do not "fix up" checked-in `dist/` outputs by hand; rebuild from source when release work resumes
 
 The canonical release version is stored in the repo root `VERSION` file.

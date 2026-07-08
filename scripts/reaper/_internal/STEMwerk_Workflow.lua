@@ -611,6 +611,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 "$jobTag='" .. jobTagEsc .. "';" ..
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
+                "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
+                "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
                 "$sepq=$dq + $sep + $dq;" ..
                 "$inq=$dq + $in + $dq;" ..
@@ -729,6 +731,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             else
             script:write("IN=" .. C.quoteArg(inputFile) .. "\n")
             script:write("OUT=" .. C.quoteArg(outputDir) .. "\n")
+            script:write("unset PYTHONPATH PYTHONHOME\n")
             script:write("MODEL=" .. C.quoteArg(modelArg) .. "\n")
             script:write("DEVICE=" .. C.quoteArg(deviceArg) .. "\n")
             script:write("WORKFLOW_MODE=" .. C.quoteArg(workflowModeArg) .. "\n")

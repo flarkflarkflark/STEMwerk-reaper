@@ -73,6 +73,8 @@ BENCHMARK_MPS_CAP_MAX = 8
 BENCHMARK_DRUMSEP_HELPER_DEVICE_ENV = "STEMWERK_BENCH_DRUMSEP_HELPER_DEVICE"
 BENCHMARK_DRUMSEP_HELPER_DEVICES = {"cpu", "cuda", "rocm", "directml"}
 DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
+LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
+CUDA_DKS_RUNTIME_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
 
 
 def _prefer_vendored_stemwerk_core() -> None:
@@ -83,6 +85,76 @@ def _prefer_vendored_stemwerk_core() -> None:
     if vendor_src_str in sys.path:
         sys.path.remove(vendor_src_str)
     sys.path.insert(0, vendor_src_str)
+
+
+def _is_unc_path(path_value: Optional[str | Path]) -> bool:
+    text = str(path_value or "").strip().replace("/", "\\")
+    return text.startswith("\\\\")
+
+
+def _format_gib(value: object) -> str:
+    try:
+        amount = int(value or 0)
+    except Exception:
+        return ""
+    if amount <= 0:
+        return ""
+    return f"{amount / float(1024 ** 3):.1f}"
+
+
+def _extract_gpu_memory_details(env: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    payload = env if isinstance(env, dict) else {}
+    total_bytes = 0
+    for key in ("cuda_primary_total_memory_bytes", "cuda_total_memory_bytes"):
+        try:
+            total_bytes = int(payload.get(key) or 0)
+        except Exception:
+            total_bytes = 0
+        if total_bytes > 0:
+            break
+    if total_bytes <= 0:
+        device_props = payload.get("cuda_device_props") if isinstance(payload.get("cuda_device_props"), list) else []
+        if device_props:
+            first = device_props[0] if isinstance(device_props[0], dict) else {}
+            try:
+                total_bytes = int(first.get("total_memory") or 0)
+            except Exception:
+                total_bytes = 0
+    low_vram = total_bytes > 0 and total_bytes <= LOW_VRAM_THRESHOLD_BYTES
+    return {
+        "cuda_total_memory_bytes": total_bytes if total_bytes > 0 else 0,
+        "cuda_total_memory_gib": _format_gib(total_bytes),
+        "cuda_low_vram": "yes" if low_vram else ("no" if total_bytes > 0 else ""),
+    }
+
+
+def _emit_source_contamination_diagnostics() -> None:
+    issues: List[str] = []
+    script_file_raw = str(__file__ or "")
+    helper_file_raw = str(_drumsep_helper_path())
+    script_file = script_file_raw if _is_unc_path(script_file_raw) else str(Path(script_file_raw).resolve())
+    helper_file = helper_file_raw if _is_unc_path(helper_file_raw) else str(Path(helper_file_raw).resolve())
+    pythonpath_env = str(os.environ.get("PYTHONPATH") or "").strip()
+
+    print(f"STEMWERK_DIAG audio_separator_process_file={script_file}", file=sys.stderr)
+    print(f"STEMWERK_DIAG drumsep_helper_script={helper_file}", file=sys.stderr)
+    print(f"STEMWERK_DIAG pythonpath_env={pythonpath_env}", file=sys.stderr)
+
+    if pythonpath_env:
+        issues.append("pythonpath_env_present")
+    if _is_unc_path(script_file):
+        issues.append("audio_separator_process_unc")
+    if _is_unc_path(helper_file):
+        issues.append("drumsep_helper_unc")
+    if stemwerk_core_file and _is_unc_path(stemwerk_core_file):
+        issues.append("stemwerk_core_unc")
+
+    if issues:
+        print("STEMWERK_DIAG source_contamination_detected=yes", file=sys.stderr)
+        print(f"STEMWERK_DIAG source_contamination_issues={'|'.join(issues)}", file=sys.stderr)
+        print("STEMWERK_DIAG source_contamination_guidance=Release installs should run the installed script tree; stale separatorScript/PYTHONPATH overrides should be cleared.", file=sys.stderr)
+    else:
+        print("STEMWERK_DIAG source_contamination_detected=no", file=sys.stderr)
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -1081,12 +1153,15 @@ def _emit_direct_dks_stage2_runtime_markers(reason: str, python_path: Path, deta
     print(f"drumsep_runtime_python={python_path}", file=sys.stderr)
     if detail:
         print(f"detail={detail}", file=sys.stderr)
-    print(f"guidance={DRUMSEP_RUNTIME_GUIDANCE}", file=sys.stderr)
-    if reason == "drumsep_runtime_missing":
+    guidance = DRUMSEP_RUNTIME_GUIDANCE
+    if reason in {"drumsep_cpu_runtime_missing", "drumsep_cpu_runtime_broken"}:
+        guidance = "CPU Drum Kit Split runtime is missing or broken. Run Setup/Repair Drum Kit Split runtime before using the CPU option."
+    print(f"guidance={guidance}", file=sys.stderr)
+    if reason in {"drumsep_runtime_missing", "drumsep_cpu_runtime_missing"}:
         print("Direct Drum Kit Split runtime is not installed.", file=sys.stderr)
     else:
         print("Direct Drum Kit Split runtime is broken.", file=sys.stderr)
-    print(DRUMSEP_RUNTIME_GUIDANCE, file=sys.stderr)
+    print(guidance, file=sys.stderr)
 
 
 def _emit_direct_dks_helper_failure_markers(reason: str, stage: str, requested_model: str, resolved_model: str, detail: str = "") -> None:
@@ -2737,6 +2812,11 @@ def _run_direct_dks_drumsep_helper(
             "effective_device",
             "model_device",
             "direct_demix_keys",
+            "error_hint",
+            "guidance",
+            "gpu_low_vram",
+            "gpu_total_memory_gib",
+            "gpu_device_name",
         ):
             value = result_data.get(key)
             if value in (None, "", [], {}):
@@ -3103,7 +3183,14 @@ def _prefer_linux_amd_device(devices: List[Dict[str, str]], skip_ids: Set[str]) 
 
 def _clean_env() -> Dict[str, str]:
     env = dict(os.environ)
-    for key in ("HIP_VISIBLE_DEVICES", "HSA_OVERRIDE_GFX_VERSION", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
+    for key in (
+        "HIP_VISIBLE_DEVICES",
+        "HSA_OVERRIDE_GFX_VERSION",
+        "ROCR_VISIBLE_DEVICES",
+        "CUDA_VISIBLE_DEVICES",
+        "PYTHONPATH",
+        "PYTHONHOME",
+    ):
         env.pop(key, None)
     return env
 
@@ -3440,6 +3527,9 @@ def _build_env_json() -> Dict[str, object]:
         "onnxruntime-gpu": None,
         "onnxruntime-directml": None,
         "onnxruntime-silicon": None,
+        "cuda_device_props": [],
+        "cuda_primary_total_memory_bytes": 0,
+        "cuda_primary_device_name": None,
     }
 
     try:
@@ -3468,6 +3558,23 @@ def _build_env_json() -> Dict[str, object]:
             env["cuda_count"] = int(torch.cuda.device_count()) if env["cuda_available"] else 0
         except Exception:
             env["cuda_count"] = 0
+        if env["cuda_available"]:
+            device_props = []
+            for idx in range(int(env["cuda_count"]) or 0):
+                try:
+                    props = torch.cuda.get_device_properties(idx)
+                    info = {
+                        "index": idx,
+                        "name": getattr(props, "name", ""),
+                        "total_memory": int(getattr(props, "total_memory", 0) or 0),
+                    }
+                    device_props.append(info)
+                except Exception:
+                    continue
+            env["cuda_device_props"] = device_props
+            if device_props:
+                env["cuda_primary_total_memory_bytes"] = int(device_props[0].get("total_memory") or 0)
+                env["cuda_primary_device_name"] = str(device_props[0].get("name") or "")
         try:
             env["mps_built"] = bool(
                 getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_built()
@@ -3529,6 +3636,14 @@ def _emit_runtime_diagnostics(selected_device: Optional[str]) -> Dict[str, objec
     print(f"STEMWERK_DIAG onnxruntime_version={env.get('onnxruntime_version')}", file=sys.stderr)
     print(f"STEMWERK_DIAG cuda_available={env.get('cuda_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG cuda_count={env.get('cuda_count')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG cuda_primary_device_name={env.get('cuda_primary_device_name')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG cuda_primary_total_memory_bytes={env.get('cuda_primary_total_memory_bytes')}", file=sys.stderr)
+    print(f"STEMWERK_DIAG cuda_primary_total_memory_gib={_format_gib(env.get('cuda_primary_total_memory_bytes'))}", file=sys.stderr)
+    print(
+        "STEMWERK_DIAG cuda_low_vram="
+        + ("yes" if int(env.get("cuda_primary_total_memory_bytes") or 0) > 0 and int(env.get("cuda_primary_total_memory_bytes") or 0) <= LOW_VRAM_THRESHOLD_BYTES else "no"),
+        file=sys.stderr,
+    )
     print(f"STEMWERK_DIAG mps_built={env.get('mps_built')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_available={env.get('mps_available')}", file=sys.stderr)
     print(f"STEMWERK_DIAG mps_fallback_env={env.get('mps_fallback_env')}", file=sys.stderr)
@@ -3569,10 +3684,40 @@ def _classify_runtime_failure(
             and "mps" in lower
         )
     )
-    if not is_mps_unsupported:
+    env = env or {}
+    if is_mps_unsupported:
+        details = {
+            "requested_device": requested_device or "",
+            "selected_device": selected_device or "",
+            "effective_device": selected_device or "",
+            "model": model_name or "",
+            "torch_version": str(env.get("torch_version") or env.get("torch") or "unknown"),
+            "platform": str(env.get("platform") or platform.system()),
+            "platform_machine": str(env.get("platform_machine") or platform.machine()),
+            "mps_built": str(env.get("mps_built")),
+            "mps_available": str(env.get("mps_available")),
+            "mps_fallback_env": str(env.get("mps_fallback_env") or os.environ.get(MPS_FALLBACK_ENV, "")),
+            "mps_experimental": "yes",
+            "mps_segment_size": str(MPS_DEMUCS_SEGMENT_SIZE),
+            "mps_segment_policy": MPS_SEGMENT_POLICY,
+            "mps_fallback_used": "no",
+            "mps_fallback_reason": "mps_channel_limit",
+        }
+        return {
+            "marker": MPS_UNSUPPORTED_MARKER,
+            "details": details,
+        }
+
+    is_cuda_failure = (
+        "cuda error: an illegal memory access was encountered" in lower
+        or "illegal memory access was encountered" in lower
+        or "cuda out of memory" in lower
+    )
+    if not is_cuda_failure:
         return None
 
-    env = env or {}
+    gpu_details = _extract_gpu_memory_details(env)
+    reason = "cuda_out_of_memory" if "cuda out of memory" in lower else "cuda_illegal_memory_access"
     details = {
         "requested_device": requested_device or "",
         "selected_device": selected_device or "",
@@ -3581,17 +3726,16 @@ def _classify_runtime_failure(
         "torch_version": str(env.get("torch_version") or env.get("torch") or "unknown"),
         "platform": str(env.get("platform") or platform.system()),
         "platform_machine": str(env.get("platform_machine") or platform.machine()),
-        "mps_built": str(env.get("mps_built")),
-        "mps_available": str(env.get("mps_available")),
-        "mps_fallback_env": str(env.get("mps_fallback_env") or os.environ.get(MPS_FALLBACK_ENV, "")),
-        "mps_experimental": "yes",
-        "mps_segment_size": str(MPS_DEMUCS_SEGMENT_SIZE),
-        "mps_segment_policy": MPS_SEGMENT_POLICY,
-        "mps_fallback_used": "no",
-        "mps_fallback_reason": "mps_channel_limit",
+        "cuda_device_name": str(env.get("cuda_primary_device_name") or ""),
+        "cuda_total_memory_bytes": str(gpu_details.get("cuda_total_memory_bytes") or ""),
+        "cuda_total_memory_gib": str(gpu_details.get("cuda_total_memory_gib") or ""),
+        "cuda_low_vram": str(gpu_details.get("cuda_low_vram") or ""),
+        "guidance": CUDA_DKS_RUNTIME_GUIDANCE,
     }
     return {
-        "marker": MPS_UNSUPPORTED_MARKER,
+        "marker": "STEMWERK_CUDA_RUNTIME_FAILURE",
+        "error_reason": reason,
+        "error_hint": CUDA_DKS_RUNTIME_GUIDANCE,
         "details": details,
     }
 
@@ -3972,6 +4116,7 @@ def main():
     _require_core()
     if stemwerk_core_file:
         print(f"STEMWERK_DIAG stemwerk_core_file={stemwerk_core_file}", file=sys.stderr)
+    _emit_source_contamination_diagnostics()
 
     if not os.path.exists(args.input):
         print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
@@ -4024,7 +4169,11 @@ def main():
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         print(f"dks_extract_stage2_backend={runtime_kind}", file=sys.stderr)
         if drumsep_python is None:
-            reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+            requested_runtime = str(device_preference or "").strip().lower()
+            if requested_runtime == "cpu":
+                reason = "drumsep_cpu_runtime_missing" if runtime_kind == "missing" else "drumsep_cpu_runtime_broken"
+            else:
+                reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
             runtime_path = Path(
                 str(
                     runtime_info.get("cuda_python")
@@ -4208,7 +4357,11 @@ def main():
         drumsep_python, runtime_kind, runtime_info = _select_drumsep_runtime(device_preference)
         print(f"timing_utc={_ts()} drumsep_runtime_select_end", file=sys.stderr)
         if drumsep_python is None:
-            reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
+            requested_runtime = str(device_preference or "").strip().lower()
+            if requested_runtime == "cpu":
+                reason = "drumsep_cpu_runtime_missing" if runtime_kind == "missing" else "drumsep_cpu_runtime_broken"
+            else:
+                reason = "drumsep_runtime_missing" if runtime_kind == "missing" else "drumsep_runtime_broken"
             runtime_path = Path(
                 str(
                     runtime_info.get("cuda_python")
@@ -4431,8 +4584,14 @@ def main():
             runtime_env,
         )
         if failure:
+            if failure.get("error_reason"):
+                print(f"error_reason={failure['error_reason']}", file=sys.stderr)
+            if failure.get("error_hint"):
+                print(f"error_hint={failure['error_hint']}", file=sys.stderr)
             print(failure["marker"], file=sys.stderr)
             for key, value in failure.get("details", {}).items():
+                if value in (None, ""):
+                    continue
                 print(f"STEMWERK_MPS_CONTEXT {key}={value}", file=sys.stderr)
                 print(f"STEMWERK_DIAG {key}={value}", file=sys.stderr)
         print(f"ERROR: {exc}", file=sys.stderr)

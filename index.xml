@@ -2,14 +2,14 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.0.2" author="flarkAUDIO" time="1783282616">
+      <version name="2.3.0.3" author="flarkAUDIO" time="1780055621">
         <changelog><![CDATA[
-STEMwerk 2.3.0.2 is a ReaPack-only polish hotfix.
+STEMwerk 2.3.0.3 - Windows setup/runtime patch release
 
-- Keeps Linux setup progress at the correct 5-step top-level flow while Drum Kit substeps run.
-- Syncs macOS ReaPack setup UX with the macOS installer 5-step flow.
-- Restores the language tooltip help text explaining that right-click toggles tooltips.
-- No installer/AppImage artifacts are changed.
+- Fixes Windows path normalization so bundled Python, FFmpeg, and venv rebuild paths no longer carry duplicate separators into canonicalization/safety checks.
+- Routes Windows Setup Repair/Rebuild venv through bootstrap instead of the old verify-only path.
+- Preserves primary Drum Kit Split CUDA failures such as illegal memory access and out-of-memory instead of masking them as output-count mismatch.
+- Adds clearer low-VRAM CUDA diagnostics, CPU runtime-missing guidance, launcher environment cleanup, stale override guardrails, and normalized support-bundle ZIP entry names.
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>

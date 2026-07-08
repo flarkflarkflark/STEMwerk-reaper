@@ -142,18 +142,12 @@ jobs:
           $env:STEMWERK_OUTPUT_SUFFIX = "-bundled"
           & $iscc "installer\windows\STEMwerk.iss"
 
-      - name: Build offline patch .exe (Inno Setup)
-        shell: powershell
-        run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (!(Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
-          & $iscc "installer\windows\STEMwerk_Offline_Patch.iss"
-
       - name: Upload build artifacts (Windows)
         uses: actions/upload-artifact@v4
         with:
           name: installers-windows
-          path: installer/windows/dist/*.exe
+          path: |
+            installer/windows/dist/STEMwerk-Setup-*.exe
           if-no-files-found: error
 
       - name: Upload release asset (Windows .exe)
@@ -161,7 +155,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-version.outputs.release_tag }}
-          files: installer/windows/dist/*.exe
+          # Windows update patch remains retired for 2.3.0.3 because 2.3 requires
+          # full runtime migration (main venv + DrumSep venv + model assets + ready_to_go.env).
+          # Publish only the supported full Windows installer assets.
+          files: |
+            installer/windows/dist/STEMwerk-Setup-*.exe
 
   macos-pkg:
     needs: validate-version
