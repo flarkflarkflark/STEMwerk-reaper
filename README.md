@@ -124,7 +124,7 @@ GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the relea
 ### Large offline allmodels installers (separate / optional)
 These large offline/full installers are not part of the lightweight `2.3.0.3` GitHub release asset set. They remain available separately for users who specifically want the larger offline allmodels installers with bundled runtime/model payloads.
 
-Historical/separate large offline assets still use `2.3.0.0` naming because `2.3.0.0` remains the original 2.3 full-release baseline. They are optional separate downloads, not the current `2.3.0.3` GitHub release assets.
+The large Windows offline allmodels installers remain at [`2.3.0.0`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0) and are still valid unless a user specifically needs the latest Windows setup/runtime fixes from [`2.3.0.3`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.3). These are optional separate downloads, not the current `2.3.0.3` GitHub release assets.
 
 | File | Platform | Download |
 |---|---|---|
