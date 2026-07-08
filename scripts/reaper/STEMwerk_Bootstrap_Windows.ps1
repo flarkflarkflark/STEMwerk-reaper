@@ -120,6 +120,7 @@ $onnxRuntimeDirectMlVersion = "1.24.4"
 $audioSeparatorOk = $false
 $stemwerkCoreOk = $false
 $samplerateOk = $false
+$juliusOk = $false
 $pytorchCudaIndex = "https://download.pytorch.org/whl/cu121"
 $package = "audio-separator==$audioSeparatorVersion"
 $coreExtra = ""
@@ -196,17 +197,18 @@ function LogStatusDetail([string]$Message) {
     LogProgress ("STEMWERK_STATUS detail=" + $Message)
 }
 
-function WriteBootstrapGuard([string]$GuardStatus, [string]$GuardReason) {
+function WriteBootstrapGuard([string]$GuardStatus, [string]$GuardReason, [string]$GuardPid) {
     if ([string]::IsNullOrWhiteSpace($RuntimeBase)) { return }
     $guardPath = Join-NormalizedWindowsPath $RuntimeBase @("state", "bootstrap.guard")
     $timestamp = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $scriptPath = $PSCommandPath
+    $pidValue = if ($PSBoundParameters.ContainsKey("GuardPid")) { $GuardPid } else { [string]$PID }
     $lines = @(
         "STATUS=$GuardStatus",
         "REASON=$GuardReason",
         "SCRIPT_PATH=$scriptPath",
         "UPDATED_AT=$timestamp",
-        "PID=$PID"
+        "PID=$pidValue"
     )
     $lines | Out-File -FilePath $guardPath -Encoding ascii
 }
@@ -251,7 +253,7 @@ function LogExecutionPolicyStatus {
     }
 }
 
-function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue) {
+function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue, [string]$SamplerateValue, [string]$JuliusValue) {
     $lines = @()
     $lines += "CAP_VERSION=1"
     $lines += "PROFILE=$ProfileValue"
@@ -265,22 +267,35 @@ function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$Backen
     $lines += "VERIFICATION=$VerificationValue"
     $lines += "AUDIO_SEPARATOR=$AudioSeparatorValue"
     $lines += "STEMWERK_CORE=$StemwerkCoreValue"
+    $lines += "SAMPLERATE=$SamplerateValue"
+    $lines += "JULIUS=$JuliusValue"
     $lines += "DEVICE_NAMES="
     $tmpPath = $Path + ".tmp"
-    try {
-        $parent = Split-Path -Parent $Path
-        if (-not [string]::IsNullOrWhiteSpace($parent)) {
-            New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $lastErrorMessage = ""
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            $parent = Split-Path -Parent $Path
+            if (-not [string]::IsNullOrWhiteSpace($parent)) {
+                New-Item -ItemType Directory -Force -Path $parent | Out-Null
+            }
+            $lines | Out-File -FilePath $tmpPath -Encoding ascii
+            if (Test-Path $Path) {
+                [System.IO.File]::Copy($tmpPath, $Path, $true)
+                Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+            } else {
+                Move-Item -Force -Path $tmpPath -Destination $Path
+            }
+            return $true
+        } catch {
+            $lastErrorMessage = $_.Exception.Message
+            Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+            if ($attempt -lt 3) {
+                Start-Sleep -Milliseconds (100 * $attempt)
+            }
         }
-        $lines | Out-File -FilePath $tmpPath -Encoding ascii
-        Move-Item -Force -Path $tmpPath -Destination $Path
-        return $true
-    } catch {
-        LogLine ("WARN: failed to write capabilities file: " + $Path + " (" + $_.Exception.Message + ")")
-        Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path $Path -Force -ErrorAction SilentlyContinue
-        return $false
     }
+    LogLine ("WARN: failed to write capabilities file: " + $Path + " (" + $lastErrorMessage + ")")
+    return $false
 }
 
 function Set-Progress([string]$Reason, [string]$Message) {
@@ -1335,6 +1350,7 @@ function EnsureJuliusRuntime([string]$PythonPath) {
 
     RunHidden $PythonPath @("-c", "import julius") "Verify julius runtime" | Out-Null
     if ($LASTEXITCODE -eq 0) {
+        $script:juliusOk = $true
         return $true
     }
 
@@ -1350,7 +1366,8 @@ function EnsureJuliusRuntime([string]$PythonPath) {
     }
 
     RunHidden $PythonPath @("-c", "import julius") "Verify julius runtime" | Out-Null
-    return ($LASTEXITCODE -eq 0)
+    $script:juliusOk = ($LASTEXITCODE -eq 0)
+    return $script:juliusOk
 }
 
 function EnsureSamplerateRuntime([string]$PythonPath, [string]$BackendName) {
@@ -2866,6 +2883,23 @@ if (Test-Path $venvPy) {
     WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable" "missing"
 }
 
+if ($RuntimeBase) {
+    $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
+    $bootstrapStatusValue = $status
+    $bootstrapReasonValue = $statusReason
+    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk -and $samplerateOk) { "ok" } else { "failed" }
+    $audioSeparatorValue = if ($audioSeparatorOk) { "ok" } else { "missing" }
+    $stemwerkCoreValue = if ($stemwerkCoreOk) { "ok" } else { "missing" }
+    $samplerateValue = if ($samplerateOk) { "ok" } else { "not_checked" }
+    $juliusValue = if ($juliusOk) { "ok" } else { "not_checked" }
+    $pythonValue = if ($python) { $python } else { "" }
+    $ffmpegValue = if ($ffmpeg) { $ffmpeg } else { "" }
+    $wroteCapabilities = WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue $samplerateValue $juliusValue
+    if (-not $wroteCapabilities) {
+        Set-Status "deps_failed" "capabilities_write_failed"
+    }
+}
+
 $lines = @()
 $lines += "STATUS=$status"
 $lines += "STATUS_REASON=$statusReason"
@@ -2882,22 +2916,11 @@ if ($RuntimeBase) { $lines += "RUNTIME_BASE=$RuntimeBase" }
 $lines | Out-File -FilePath $StateFile -Encoding ascii
 
 if ($RuntimeBase) {
-    $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
-    $bootstrapStatusValue = $status
-    $bootstrapReasonValue = $statusReason
-    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk -and $samplerateOk) { "ok" } else { "failed" }
-    $audioSeparatorValue = if ($audioSeparatorOk) { "ok" } else { "missing" }
-    $stemwerkCoreValue = if ($stemwerkCoreOk) { "ok" } else { "missing" }
-    $pythonValue = if ($python) { $python } else { "" }
-    $ffmpegValue = if ($ffmpeg) { $ffmpeg } else { "" }
-    $wroteCapabilities = WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue
-    if (-not $wroteCapabilities) {
-        Set-Status "deps_failed" "capabilities_write_failed"
-    }
-
+    $pidPath = Join-NormalizedWindowsPath $RuntimeBase @("state", "bootstrap.pid")
+    Remove-Item -Path $pidPath -Force -ErrorAction SilentlyContinue
     $guardStatus = if ($status -eq "ok") { "ok" } else { "failed" }
-    $guardReason = if ($status -eq "ok") { "completed" } else { $statusReason }
-    WriteBootstrapGuard $guardStatus $guardReason
+    $guardReason = if ($status -eq "ok") { "ok" } else { $statusReason }
+    WriteBootstrapGuard $guardStatus $guardReason ""
 }
 
 if ($status -ne "ok") {

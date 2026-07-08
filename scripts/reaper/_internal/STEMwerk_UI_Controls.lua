@@ -154,7 +154,7 @@ local function drawUtilityControlsCore(ctx)
     end
     state._ucWasRightDown = langHover and rightMouseDown
     if langHover and tooltipsOn then
-        ctx.tooltipText = T("tooltip_lang") or (T("tooltip_lang") or "Change language. Right-click: toggle tooltips.")
+        ctx.tooltipText = T("tooltip_change_language") or (T("tooltip_change_language") or "Change language. Right-click: toggle tooltips.")
         ctx.tooltipX = mx + S(10)
         ctx.tooltipY = my + S(15)
         GUI.tooltip  = ctx.tooltipText
@@ -276,7 +276,7 @@ local function drawHelpControls(ctx)
     gfx.drawstr(langCode)
 
     if langHover and controlsOpacity > 0.3 then
-        tooltipText = T("tooltip_lang")
+        tooltipText = T("tooltip_change_language") or "Change language. Right-click: toggle tooltips."
         tooltipX, tooltipY = mx + S(10), my + S(15)
     end
     if langHover and rightMouseDown and not state.wasRightMouseDown and controlsOpacity > 0.3 then
@@ -478,7 +478,7 @@ local function drawResultControls(ctx)
     if langHover then
         gfx.set(accent[1], accent[2], accent[3], 1 * controlsOpacity)
         if controlsOpacity > 0.3 then
-            tooltipText = T("tooltip_lang") or (T("tooltip_lang") or "Change language. Right-click: toggle tooltips.")
+            tooltipText = T("tooltip_change_language") or (T("tooltip_change_language") or "Change language. Right-click: toggle tooltips.")
             tooltipX, tooltipY = mx + S(spacing.tooltipOffsetX or 10), my + S(spacing.tooltipOffsetY or 15)
             if rightMouseDown and not (state.wasRightMouseDown or false) then
                 SETTINGS.tooltips = not SETTINGS.tooltips

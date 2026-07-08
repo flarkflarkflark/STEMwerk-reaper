@@ -1420,6 +1420,49 @@ def test_windows_setup_overview_ignores_stale_failed_capabilities_when_bootstrap
     assert "verification = \"\"" in setup_internal
 
 
+def test_windows_setup_overview_ignores_stale_running_and_failed_bootstrap_state_when_ready_is_ok():
+    setup_internal = _read_utf8("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
+
+    assert 'local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"' in setup_internal
+    assert 'local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"' in setup_internal
+    assert 'local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)' in setup_internal
+    assert 'local readyHealthy = (' in setup_internal
+    assert 'trim(readyState.READY_TO_GO_STATUS or "") == "ok"' in setup_internal
+    assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
+    assert 'local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy' in setup_internal
+    assert 'local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)' in setup_internal
+    assert 'local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running") and readyHealthy and bootstrapComplete' in setup_internal
+    assert 'if staleRunning or staleGuardFailed or staleFailedState then' in setup_internal
+    assert 'status = "ok"' in setup_internal
+    assert 'reason = ""' in setup_internal
+
+
+def test_windows_setup_overview_labels_unchecked_deps_and_keeps_homebrew_ffmpeg_guidance_off_windows():
+    setup_internal = _read_utf8("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
+
+    assert 'if v == "" or v == "not_checked" then deps[k] = "not checked" end' in setup_internal
+    assert 'verification = verification ~= "" and verification or "not checked"' in setup_internal
+    assert 'if OS == "macOS" and (hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg") then' in setup_internal
+
+
+def test_setup_language_hover_uses_change_language_tooltip_with_right_click_hint():
+    ui_controls = _read_utf8("scripts/reaper/_internal/STEMwerk_UI_Controls.lua")
+
+    assert 'ctx.tooltipText = T("tooltip_change_language") or (T("tooltip_change_language") or "Change language. Right-click: toggle tooltips.")' in ui_controls
+    assert 'tooltipText = T("tooltip_change_language") or "Change language. Right-click: toggle tooltips."' in ui_controls
+    assert 'tooltipText = T("tooltip_change_language") or (T("tooltip_change_language") or "Change language. Right-click: toggle tooltips.")' in ui_controls
+
+
+def test_tooltip_lang_strings_keep_23_0_2_right_click_hint_compatibility():
+    script_lang = _read_utf8("scripts/reaper/i18n/languages.lua")
+    root_lang = _read_utf8("i18n/languages.lua")
+
+    for text in (script_lang, root_lang):
+        assert 'tooltip_lang = "Change language. Right-click: toggle tooltips.",' in text
+        assert 'tooltip_lang = "Taal wijzigen. Rechtsklik: tooltips aan/uit.",' in text
+        assert 'tooltip_lang = "Sprache wechseln. Rechtsklick: Tooltips ein/aus.",' in text
+
+
 def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
@@ -7084,16 +7127,22 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
     windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
 
     assert '$tmpPath = $Path + ".tmp"' in windows_bootstrap
-    assert 'LogLine ("WARN: failed to write capabilities file: " + $Path + " (" + $_.Exception.Message + ")")' in windows_bootstrap
-    assert 'Remove-Item -Path $Path -Force -ErrorAction SilentlyContinue' in windows_bootstrap
+    assert 'for ($attempt = 1; $attempt -le 3; $attempt++) {' in windows_bootstrap
+    assert '[System.IO.File]::Copy($tmpPath, $Path, $true)' in windows_bootstrap
+    assert 'LogLine ("WARN: failed to write capabilities file: " + $Path + " (" + $lastErrorMessage + ")")' in windows_bootstrap
+    assert 'Remove-Item -Path $Path -Force -ErrorAction SilentlyContinue' not in windows_bootstrap
     assert 'Set-Status "deps_failed" "capabilities_write_failed"' in windows_bootstrap
+    assert '$lines += "SAMPLERATE=$SamplerateValue"' in windows_bootstrap
+    assert '$lines += "JULIUS=$JuliusValue"' in windows_bootstrap
+    assert 'WriteBootstrapGuard $guardStatus $guardReason ""' in windows_bootstrap
+    assert 'Remove-Item -Path $pidPath -Force -ErrorAction SilentlyContinue' in windows_bootstrap
 
 
 def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
     assert "Version: 2.3.0.3" in text
-    assert "Date: 2026-07-03" in text
+    assert "Date: 2026-07-07" in text
     assert "Version: 2.2.2" not in text
 
 

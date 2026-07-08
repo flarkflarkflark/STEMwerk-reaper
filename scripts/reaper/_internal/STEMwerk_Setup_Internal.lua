@@ -3036,7 +3036,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
     end
-    if hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg" then
+    if OS == "macOS" and (hasError("ffmpeg_missing") or hasError("ffmpeg_unusable") or trim(state.STATUS or "") == "missing_ffmpeg") then
         finalMessage[#finalMessage + 1] = ""
         finalMessage[#finalMessage + 1] = "Missing FFmpeg"
         finalMessage[#finalMessage + 1] = "STEMwerk could not find FFmpeg."
@@ -3745,6 +3745,9 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"
+    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
+    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
+    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     local state = fileExists(stateFile) and parseStateFile(stateFile) or {}
     local capState = fileExists(capFile) and parseStateFile(capFile) or {}
     local readyState = fileExists(readyFile) and parseStateFile(readyFile) or {}
@@ -3766,6 +3769,37 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     end
     local ffmpeg = trim(resolvePath(capState.FFMPEG_PATH or state.FFMPEG_PATH or extFfmpeg))
     local python, pythonSource = setupResolveWindowsPython(runtime, state, capState)
+    local readyHealthy = (
+        trim(readyState.READY_TO_GO_STATUS or "") == "ok"
+        and trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"
+        and trim(capState.AUDIO_SEPARATOR or "") == "ok"
+        and trim(capState.STEMWERK_CORE or "") == "ok"
+    )
+    local bootstrapComplete = false
+    if fileExists(logFile) then
+        local f = io.open(logFile, "r")
+        if f then
+            local text = f:read("*a") or ""
+            f:close()
+            bootstrapComplete = text:find("Bootstrap complete", 1, true) ~= nil
+        end
+    end
+    local guard = (guardPath and guardPath ~= "" and fileExists(guardPath)) and readBootstrapGuard(guardPath) or {}
+    local guardBusy = false
+    if guardPath and guardPath ~= "" then
+        guardBusy = select(1, isBootstrapBusy(guardPath, pidFile))
+    end
+    local pid = readBootstrapPid(pidFile)
+    local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy
+    local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)
+    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running") and readyHealthy and bootstrapComplete
+    if staleRunning or staleGuardFailed or staleFailedState then
+        status = "ok"
+        reason = ""
+    end
+    if verification == "" and readyHealthy then
+        verification = "ok"
+    end
     local needsRepair = false
 
     if status ~= "" and status ~= "ok" then needsRepair = true end
@@ -3783,7 +3817,7 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         julius = trim(capState.JULIUS or state.JULIUS or ""),
     }
     for k, v in pairs(deps) do
-        if v == "" then deps[k] = "unknown" end
+        if v == "" or v == "not_checked" then deps[k] = "not checked" end
     end
 
     return {
@@ -3797,7 +3831,7 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         pythonSource = pythonSource or "unknown",
         extPython = extPythonRaw ~= "" and extPythonRaw or "(empty)",
         ffmpegPath = ffmpeg ~= "" and ffmpeg or "unknown",
-        verification = verification ~= "" and verification or "unknown",
+        verification = verification ~= "" and verification or "not checked",
         readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown",
         readyToGoDetail = trim(readyState.READY_TO_GO_DETAIL or ""),
         deps = deps,

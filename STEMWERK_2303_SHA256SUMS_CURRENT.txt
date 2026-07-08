@@ -1,0 +1,2 @@
+2942bc1f41b70c15611a4a30df7dc79c6e70bbf9707ae6555a73eecace7f6973  STEMwerk-Setup-2.3.0.3.exe
+8b64fc5ee08039d338cf9467c71ffa5677f27f6772bab4076882ed89864e32b2  STEMwerk-Setup-2.3.0.3-bundled.exe
