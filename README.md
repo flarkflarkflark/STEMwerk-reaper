@@ -32,6 +32,19 @@ For full release notes, asset checksums, and current download details, use the p
 - The old Windows update-patch path is retired.
 - Large offline/allmodels assets remain separate and are not part of the `2.3.0.3` GitHub release assets.
 
+## Platform screenshots
+### Windows
+![STEMwerk 2.3 Windows Kit Split](docs/assets/stemwerk-2.3-windows-kit-split.png)
+
+### Linux (AMD ROCm)
+![STEMwerk 2.3 Linux AMD ROCm Kit Split](docs/assets/stemwerk-2.3-linux-amd-rx9070-kit-split.png)
+
+### Linux (NVIDIA CUDA)
+![STEMwerk 2.3 Linux NVIDIA CUDA Kit Split](docs/assets/stemwerk-2.3-linux-nvidia-rtx3060-kit-split.png)
+
+### macOS (Apple Silicon / MPS)
+![STEMwerk 2.3 macOS Kit Split](docs/assets/stemwerk-2.3-macos-kit-split.png)
+
 ## Features
 - Stem separation for vocals, drums, bass, other, and drum-kit workflows
 - Time selection and per-item workflows for multi-item tracks
@@ -108,16 +121,31 @@ All current public GitHub downloads are on the release page:
 
 GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user downloads.
 
-### Large offline allmodels installers
-Large offline/full installers remain separate from the `2.3.0.3` GitHub release assets. The existing large Windows and macOS allmodels assets from the 2.3 baseline remain separate downloads and are intended for users who specifically need those larger offline payloads.
+### Large offline allmodels installers (separate / optional)
+These large offline/full installers are not part of the lightweight `2.3.0.3` GitHub release asset set. They remain available separately for users who specifically want the larger offline allmodels installers with bundled runtime/model payloads.
 
-Historical/separate large offline assets can still use `2.3.0.0` naming because `2.3.0.0` remains the original 2.3 full-release baseline. They are not the current `2.3.0.3` GitHub release assets.
+Historical/separate large offline assets still use `2.3.0.0` naming because `2.3.0.0` remains the original 2.3 full-release baseline. They are optional separate downloads, not the current `2.3.0.3` GitHub release assets.
 
-### First-use model downloads
-If models are not already included in your installer, approximate download sizes on first use:
+| File | Platform | Download |
+|---|---|---|
+| `STEMwerk-Setup-2.3.0.0-offline-bundled-cpu-allmodels.exe` | Windows CPU | [Google Drive](https://drive.google.com/file/d/1yfqURi2sllPPdIVu8RepaJmDQKuLyVWX/view?usp=drivesdk) |
+| `STEMwerk-Setup-2.3.0.0-offline-bundled-amd-gpu-allmodels.exe` | Windows AMD / DirectML | [Google Drive](https://drive.google.com/file/d/15Lpi_CjcjvZndqdpZevwA76wslcXASkm/view?usp=drivesdk) |
+| `STEMwerk-Setup-2.3.0.0-offline-bundled-nvidia-gpu-allmodels.exe` | Windows NVIDIA / CUDA | [Google Drive](https://drive.google.com/file/d/1mS_TmmXBlqPPBbJGZt_YoDC05N7DWZCh/view?usp=drivesdk) |
+| `STEMwerk-2.3.0.0-offline-bundled-intel-cpu-allmodels.pkg` | macOS Intel CPU | [Google Drive](https://drive.google.com/file/d/1PAjHndTmYgQkyJ9ZOEqHEUSRYxvCHmQ-/view?usp=drivesdk) |
+| `STEMwerk-2.3.0.0-offline-bundled-apple-silicon-mps-allmodels.pkg` | macOS Apple Silicon / MPS | [Google Drive](https://drive.google.com/file/d/1zIKV3BrYoNFjQzw34mTox7wV60nZ5bts/view?usp=drivesdk) |
+
+No current public Linux large offline allmodels download URLs are listed here because those larger Linux offline builds were not part of the public lightweight `2.3` release set.
+
+### Runtime and model downloads
+STEMwerk downloads the required separation models during setup/runtime preparation when possible, or automatically on first use if a model is not cached yet.
+
+Approximate model-cache downloads:
 - `Fast` (`htdemucs`): about 84 MB
 - `Quality` (`htdemucs_ft`): about 337 MB
 - `6-Stem` (`htdemucs_6s`): about 55 MB
+- Drum Kit / DrumSep models are handled by the separate DrumSep runtime and model setup and can require additional downloads.
+
+Bundled installers include Python + FFmpeg, but not necessarily every backend package and model cache. Large offline/allmodels installers are separate assets for users who need more complete offline model payloads.
 
 ## Installation
 
