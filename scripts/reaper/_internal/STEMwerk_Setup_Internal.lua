@@ -781,6 +781,7 @@ local function prettyCheckError(err)
     if lower == "runtime_incomplete" then return "Runtime is incomplete (Python path intentionally withheld until verification passes)" end
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
+    if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this check; current ready-to-go state remains authoritative" end
     if lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
         return "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
     end
@@ -1144,6 +1145,8 @@ sys.exit(0 if not reason else 1)
         result.error = "torch_too_new_for_demucs"
     elseif result.driftReason == "numpy_too_new_for_demucs" then
         result.error = "numpy_too_new_for_demucs"
+    elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then
+        result.error = "torch_runtime_probe_failed"
     elseif result.ok then
         result.error = nil
     end
@@ -1631,6 +1634,109 @@ function readReadyState(runtime)
         return {}
     end
     return parseStateFile(runtime.runtimeState .. PATH_SEP .. "ready_to_go.env")
+end
+
+local function copyStateTable(input)
+    local out = {}
+    for k, v in pairs(input or {}) do
+        out[k] = v
+    end
+    return out
+end
+
+local function readyStateIndicatesHealthyRuntime(readyState, capState)
+    readyState = readyState or {}
+    capState = capState or {}
+    local readyStatus = trim(readyState.READY_TO_GO_STATUS or "")
+    local mainRuntimeStatus = trim(readyState.MAIN_RUNTIME_STATUS or "")
+    local drumsepRuntimeStatus = trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "")
+    local drumsepModelStatus = trim(readyState.DRUMSEP_READY_MODEL_STATUS or "")
+    local audioSeparator = trim(capState.AUDIO_SEPARATOR or "")
+    local stemwerkCore = trim(capState.STEMWERK_CORE or "")
+    local capVerification = trim(capState.VERIFICATION or "")
+    return readyStatus == "ok"
+        and mainRuntimeStatus == "ok"
+        and (drumsepRuntimeStatus == "" or drumsepRuntimeStatus == "ok" or drumsepRuntimeStatus == "skipped")
+        and (drumsepModelStatus == "" or drumsepModelStatus == "ok" or drumsepModelStatus == "skipped")
+        and (audioSeparator == "" or audioSeparator == "ok")
+        and (stemwerkCore == "" or stemwerkCore == "ok")
+        and (capVerification == "" or capVerification == "ok" or capVerification == "failed")
+end
+
+local function resolveVerifyOnlyPythonPath(runtime, state, capState)
+    local candidates = {
+        capState.VENV_PYTHON_PATH or "",
+        capState.PYTHON_PATH or "",
+        state.VENV_PYTHON_PATH or "",
+        state.VENV_PYTHON or "",
+        state.PYTHON_PATH or "",
+        (runtime and runtime.venvPython) or "",
+    }
+    for _, candidate in ipairs(candidates) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) and canRunPython(resolved) then
+            return resolved
+        end
+    end
+    return ""
+end
+
+local function resolveVerifyOnlyFfmpegPath(state, capState)
+    local candidates = {
+        getExt("ffmpegPath"),
+        capState.FFMPEG_PATH or "",
+        state.FFMPEG_PATH or "",
+        resolveUnixFfmpegFallback(),
+    }
+    for _, candidate in ipairs(candidates) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) and canRunFfmpeg(resolved) then
+            return resolved
+        end
+    end
+    for _, candidate in ipairs(candidates) do
+        local resolved = resolvePath(candidate)
+        if resolved ~= "" and fileExists(resolved) then
+            return resolved
+        end
+    end
+    return ""
+end
+
+local function buildVerifyOnlyState(runtime, state, capState, readyState)
+    local out = copyStateTable(state or {})
+    local readyHealthy = readyStateIndicatesHealthyRuntime(readyState, capState)
+    local pythonPath = resolveVerifyOnlyPythonPath(runtime, out, capState or {})
+    if pythonPath ~= "" then
+        out.PYTHON_PATH = pythonPath
+    end
+    local venvPython = resolvePath(firstNonEmpty(
+        capState.VENV_PYTHON_PATH,
+        out.VENV_PYTHON_PATH,
+        out.VENV_PYTHON,
+        runtime and runtime.venvPython or ""
+    ))
+    if venvPython ~= "" and fileExists(venvPython) and canRunPython(venvPython) then
+        out.VENV_PYTHON = venvPython
+        out.VENV_PYTHON_PATH = venvPython
+        if OS == "macOS" then
+            out.PYTHON_PATH = venvPython
+        end
+    end
+    local ffmpegPath = resolveVerifyOnlyFfmpegPath(out, capState or {})
+    if ffmpegPath ~= "" then
+        out.FFMPEG_PATH = ffmpegPath
+    end
+    local staleFailedVerification = (
+        readyHealthy
+        and trim(out.STATUS or "") == "ok"
+        and trim(capState.BOOTSTRAP_STATUS or "") ~= "failed"
+        and trim(capState.VERIFICATION or "") == "failed"
+    )
+    if staleFailedVerification and trim(out.RUNTIME_VERIFY_DETAIL or "") ~= "" then
+        out.RUNTIME_VERIFY_DETAIL = "not_checked"
+    end
+    return out, readyHealthy, staleFailedVerification
 end
 
 function resolveDrumsepPolicyState(readyState, profile, backend)
@@ -2433,9 +2539,16 @@ local function verifyRuntimePaths(state)
             pythonCandidate = venvCandidate
         end
     end
+    local resolvedFfmpegPath = resolvePath(state.FFMPEG_PATH or "")
+    if OS ~= "Windows" and (resolvedFfmpegPath == "" or not fileExists(resolvedFfmpegPath) or not canRunFfmpeg(resolvedFfmpegPath)) then
+        local autoFfmpegPath = resolveUnixFfmpegFallback()
+        if autoFfmpegPath ~= "" then
+            resolvedFfmpegPath = resolvePath(autoFfmpegPath)
+        end
+    end
     local resolved = {
         pythonPath = resolvePath(pythonCandidate ~= "" and pythonCandidate or state.VENV_PYTHON or ""),
-        ffmpegPath = resolvePath(state.FFMPEG_PATH or ""),
+        ffmpegPath = resolvedFfmpegPath,
     }
     local errors = {}
     local pythonOk = false
@@ -3912,6 +4025,12 @@ local function resolveLinuxPythonPath(state)
 end
 
 local function resolveLinuxFfmpegPath(state)
+    if OS == "macOS" then
+        local unixPath = resolveVerifyOnlyFfmpegPath(state or {}, {})
+        if unixPath ~= "" then
+            return unixPath
+        end
+    end
     for _, candidate in ipairs({
         state.FFMPEG_PATH or "",
         getExt("ffmpegPath"),
@@ -5562,7 +5681,7 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
     reaper.defer(linuxSetupTick)
 end
 
-function reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
+function reconcileCheckVerification(state, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = {}
     for _, e in ipairs(verification.errors or {}) do
         adjustedErrors[#adjustedErrors + 1] = e
@@ -5632,6 +5751,7 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         trim(state.STATUS or "") == "ok"
         and hasBootstrapRuntimeVerificationPass(logFile)
     )
+    local readyHealthy = readyStateIndicatesHealthyRuntime(readyState, capState)
     local mpsInformational = (
         trim(backendReason or "") == ""
         or trim(backendReason or "") == "mps_unavailable"
@@ -5656,11 +5776,33 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
         and torchVersionPinnedCompatible(torchVersion)
         and torchaudioVersion ~= ""
     )
+    local canAcceptMacReadyHealthyState = (
+        OS == "macOS"
+        and readyHealthy
+        and trim(capState.BOOTSTRAP_STATUS or "") ~= "failed"
+        and verification.pythonOk
+        and verification.ffmpegOk
+        and not hasHardImportFailures
+        and (
+            trim(capState.VERIFICATION or "") == "ok"
+            or trim(capState.STATUS or "") == "ok"
+        )
+    )
     if canAcceptMacIntelCpuFallback or bootstrapVerified then
         removeError("torch_too_new_for_demucs")
         removeError("torch_runtime_unsupported")
         removeError("torch_runtime_probe_failed")
         if torchaudioVersion ~= "" then
+            removeError("torchaudio_missing_for_demucs")
+        end
+    end
+    if canAcceptMacReadyHealthyState then
+        removeError("torch_runtime_unsupported")
+        removeError("torch_runtime_probe_failed")
+        if torchVersionPinnedCompatible(torchVersion) then
+            removeError("torch_too_new_for_demucs")
+        end
+        if torchaudioVersion ~= "" and torchaudioVersion ~= "missing" then
             removeError("torchaudio_missing_for_demucs")
         end
     end
@@ -5695,6 +5837,8 @@ function reconcileCheckVerification(state, verification, envJson, deviceNames, b
     result.runtimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
     if verifiedRuntimeOk then
         result.runtimeVerifyDetail = "ok"
+    elseif canAcceptMacReadyHealthyState then
+        result.runtimeVerifyDetail = "not_checked"
     elseif result.runtimeVerifyDetail == "" then
         result.runtimeVerifyDetail = table.concat(adjustedErrors, ";")
     end
@@ -5714,9 +5858,11 @@ verifyExistingSetup = function(runtime, separatorScript)
 
     local state = parseStateFile(stateFile)
     local capState = parseStateFile(capFile)
-    local pythonPath = trim(resolvePath(state.PYTHON_PATH or state.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(state)))
-    local ffmpegPath = trim(resolvePath(state.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(state)))
-    local verification = verifyRuntimePaths(state)
+    local readyState = readReadyState(runtime)
+    local effectiveState = buildVerifyOnlyState(runtime, state, capState, readyState)
+    local pythonPath = trim(resolvePath(effectiveState.PYTHON_PATH or effectiveState.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(effectiveState)))
+    local ffmpegPath = trim(resolvePath(effectiveState.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(effectiveState)))
+    local verification = verifyRuntimePaths(effectiveState)
     local verifyErrors = verification.errors or {}
     local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
     local envJson = extractEnvJson(deviceOut or "")
@@ -5726,7 +5872,7 @@ verifyExistingSetup = function(runtime, separatorScript)
         backendReason = probeErr
     end
     local profile = profileForBackend(backend)
-    local checkProbe = reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)
+    local checkProbe = reconcileCheckVerification(effectiveState, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)
     local adjustedErrors = checkProbe.adjustedErrors
     local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then
@@ -5756,7 +5902,6 @@ verifyExistingSetup = function(runtime, separatorScript)
         if not c.ok then allOk = false end
     end
 
-    local readyState = readReadyState(runtime)
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
     writeCapabilities(capFile, {
         profile = profile,

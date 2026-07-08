@@ -1560,6 +1560,35 @@ def test_verify_only_normalizes_state_before_bootstrap_check_rows():
     assert setup_internal.index("local checks = {") > setup_internal.index('local stateStatus = state.STATUS or ""')
 
 
+def test_verify_only_prefers_current_macos_ffmpeg_and_python_over_stale_bootstrap_values():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local function resolveVerifyOnlyPythonPath(runtime, state, capState)" in setup_internal
+    assert "local function resolveVerifyOnlyFfmpegPath(state, capState)" in setup_internal
+    assert 'capState.FFMPEG_PATH or ""' in setup_internal
+    assert "resolveUnixFfmpegFallback()" in setup_internal
+    assert "local effectiveState = buildVerifyOnlyState(runtime, state, capState, readyState)" in setup_internal
+    assert "local verification = verifyRuntimePaths(effectiveState)" in setup_internal
+
+
+def test_verify_only_uses_ready_to_go_health_to_avoid_stale_macos_runtime_failures():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert "local function readyStateIndicatesHealthyRuntime(readyState, capState)" in setup_internal
+    assert 'trim(readyState.READY_TO_GO_STATUS or "") == "ok"' in setup_internal
+    assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
+    assert "local canAcceptMacReadyHealthyState = (" in setup_internal
+    assert 'result.runtimeVerifyDetail = "not_checked"' in setup_internal
+
+
+def test_torch_probe_failures_are_not_labeled_unsupported_without_specific_version_drift():
+    setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
+
+    assert 'elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then' in setup_internal
+    assert 'result.error = "torch_runtime_probe_failed"' in setup_internal
+    assert 'if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this check; current ready-to-go state remains authoritative" end' in setup_internal
+
+
 def test_verify_only_intel_macos_cpu_fallback_does_not_hide_real_missing_torch_failures():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
