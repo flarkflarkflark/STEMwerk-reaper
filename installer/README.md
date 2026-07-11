@@ -12,12 +12,12 @@ These are **packaging helpers** so you can download installers from GitHub and t
 - Linux (Fedora/RHEL/openSUSE): `stemwerk-<version>-1.noarch.rpm` (rpmbuild)
 - Linux (Arch): `stemwerk-<version>-1-any.pkg.tar.zst` (makepkg)
 
-Release-note caveat for the current `2.3.0.3` Windows patch line:
+Release-note caveat for the current `2.3.0.4` Windows hotfix line:
 
 - branch purpose: public Windows-focused patch release carrying setup/runtime fixes on top of the trusted `2.3.0.0` basis
 - publish only `STEMwerk-Setup-<version>.exe` and `STEMwerk-Setup-<version>-bundled.exe`
 - keep `STEMwerk-<version>-update-patch.exe` retired and unpublished
-- existing Windows users should uninstall the old STEMwerk version first, then run the full online or bundled `2.3.0.3` installer
+- existing Windows users should uninstall the old STEMwerk version first, then run the full online or bundled `2.3.0.4` installer
 - large offline allmodels installers remain at `2.3.0.0` unless a user specifically needs the latest Windows setup/runtime fixes
 - do not "fix up" checked-in `dist/` outputs by hand; rebuild from source when release work resumes
 

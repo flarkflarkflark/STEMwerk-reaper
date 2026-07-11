@@ -75,6 +75,8 @@ BENCHMARK_DRUMSEP_HELPER_DEVICES = {"cpu", "cuda", "rocm", "directml"}
 DIRECT_DKS_EXPECTED_STEMS = ("kick", "snare", "toms", "hihat", "ride", "crash")
 LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
 CUDA_DKS_RUNTIME_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
+DRUMSEP_HELPER_POLL_INTERVAL_SECONDS = 2.0
+DRUMSEP_HELPER_NO_OUTPUT_STALL_SECONDS = 60 * 60
 
 
 def _prefer_vendored_stemwerk_core() -> None:
@@ -2742,6 +2744,28 @@ def _run_direct_dks_drumsep_helper(
             return None
         return max(0, min(99, int(matches[-1].group(1))))
 
+    def helper_file_signature(path: Path) -> Tuple[int, int]:
+        try:
+            stat = path.stat()
+            return int(stat.st_size), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+        except Exception:
+            return -1, -1
+
+    def format_helper_stall_detail(elapsed_seconds: float, last_progress_percent: Optional[int]) -> str:
+        stall_minutes = max(1, int(DRUMSEP_HELPER_NO_OUTPUT_STALL_SECONDS // 60))
+        elapsed_minutes = max(0, int(elapsed_seconds // 60))
+        minute_label = "minute" if stall_minutes == 1 else "minutes"
+        detail = (
+            f"DrumSep helper produced no progress/log output for {stall_minutes} {minute_label}; "
+            f"treating as stalled (elapsed {elapsed_minutes} minutes"
+        )
+        if last_progress_percent is not None:
+            detail += f", last progress {last_progress_percent}%"
+        else:
+            detail += ", last progress unknown"
+        detail += ")"
+        return detail
+
     with helper_stdout.open("w", encoding="utf-8", errors="replace") as stdout_fh, helper_stderr.open(
         "w", encoding="utf-8", errors="replace"
     ) as stderr_fh:
@@ -2754,22 +2778,50 @@ def _run_direct_dks_drumsep_helper(
             **_windows_no_window_kwargs(),
         )
         start_time = time.monotonic()
+        last_output_at = start_time
         last_percent = -1
+        last_real_progress_percent: Optional[int] = None
+        watched_paths = {
+            "helper_log": helper_log,
+            "helper_stdout": helper_stdout,
+            "helper_stderr": helper_stderr,
+        }
+        last_signatures = {name: helper_file_signature(path) for name, path in watched_paths.items()}
         while True:
+            now = time.monotonic()
             rc = process.poll()
-            percent = helper_log_percent()
-            if percent is None:
-                elapsed = int(time.monotonic() - start_time)
+            observed_progress = helper_log_percent()
+            if observed_progress is None:
+                elapsed = int(now - start_time)
                 percent = min(12, 1 + elapsed // 10)
+            else:
+                percent = observed_progress
             if percent != last_percent:
                 print(f"PROGRESS:{percent}:Splitting drum kit...", flush=True)
                 last_percent = percent
+            file_activity_detected = False
+            for name, path in watched_paths.items():
+                signature = helper_file_signature(path)
+                if signature != last_signatures[name]:
+                    last_signatures[name] = signature
+                    file_activity_detected = True
+            if observed_progress is not None and observed_progress != last_real_progress_percent:
+                last_real_progress_percent = observed_progress
+                file_activity_detected = True
+            if file_activity_detected:
+                last_output_at = now
             if rc is not None:
                 break
-            if time.monotonic() - start_time > 60 * 60:
+            if now - last_output_at > DRUMSEP_HELPER_NO_OUTPUT_STALL_SECONDS:
                 process.kill()
-                return False, {}, "drumsep_helper_failed", "helper timeout after 3600 seconds"
-            time.sleep(2.0)
+                try:
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
+                detail = format_helper_stall_detail(now - start_time, last_real_progress_percent)
+                print(f"timing_utc={_ts()} drumsep_helper_stalled_detail={detail}", file=sys.stderr)
+                return False, {}, "drumsep_helper_failed", detail
+            time.sleep(DRUMSEP_HELPER_POLL_INTERVAL_SECONDS)
 
     completed_returncode = process.returncode
 

@@ -4820,14 +4820,14 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
     assert 'Flags: runhidden waituntilterminated' in patch_iss
 
 
-def test_release_docs_retire_windows_update_patch_for_2303():
+def test_release_docs_retire_windows_update_patch_for_2304():
     readme = Path("README.md").read_text(encoding="utf-8")
-    release_notes = Path("docs/RELEASE_2.3.0.3.md").read_text(encoding="utf-8")
+    release_notes = Path("docs/RELEASE_2.3.0.4.md").read_text(encoding="utf-8")
     installer_readme = Path("installer/README.md").read_text(encoding="utf-8")
 
     assert "Existing Windows users should uninstall the old STEMwerk version first" in readme
     assert "A clean reinstall avoids stale runtime/backend state" in readme
-    assert "STEMwerk-2.3.0.3-update-patch.exe" not in readme
+    assert "STEMwerk-2.3.0.4-update-patch.exe" not in readme
     assert "The Windows update-patch asset remains retired and is not published." in release_notes
     assert "supersedes the original `2.3.0.0` Windows full installers" in release_notes
     assert "publish only `STEMwerk-Setup-<version>.exe` and `STEMwerk-Setup-<version>-bundled.exe`" in installer_readme
@@ -4837,7 +4837,7 @@ def test_release_docs_retire_windows_update_patch_for_2303():
 def test_release_workflow_uploads_only_supported_windows_installers():
     workflow = Path(".github/workflows/release-installers.yml").read_text(encoding="utf-8")
 
-    assert "Windows update patch remains retired for 2.3.0.3" in workflow
+    assert "Windows update patch remains retired for 2.3.0.4" in workflow
     assert "installer/windows/dist/STEMwerk-Setup-*.exe" in workflow
     assert "STEMwerk_Offline_Patch.iss" not in workflow
     assert 'files: installer/windows/dist/*.exe' not in workflow
@@ -6948,7 +6948,7 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(encoding="utf-8")
     support_script = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text(encoding="utf-8")
-    release_notes = Path("docs/RELEASE_2.3.0.3.md").read_text(encoding="utf-8")
+    release_notes = Path("docs/RELEASE_2.3.0.4.md").read_text(encoding="utf-8")
 
     assert "WriteReadyToGoState" in windows_bootstrap
     assert "EnsureCoreModelCache $python $readyModelDir" in windows_bootstrap
@@ -7170,8 +7170,8 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.0.3" in text
-    assert "Date: 2026-07-07" in text
+    assert "Version: 2.3.0.4" in text
+    assert "Date: 2026-07-11" in text
     assert "Version: 2.2.2" not in text
 
 

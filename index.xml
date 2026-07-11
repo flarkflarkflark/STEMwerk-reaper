@@ -2,14 +2,13 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.0.3" author="flarkAUDIO" time="1780055621">
+      <version name="2.3.0.4" author="flarkAUDIO" time="1780055621">
         <changelog><![CDATA[
-STEMwerk 2.3.0.3 - Windows setup/runtime patch release
+STEMwerk 2.3.0.4 - DrumSep timeout hotfix and docs/helper update
 
-- Fixes Windows path normalization so bundled Python, FFmpeg, and venv rebuild paths no longer carry duplicate separators into canonicalization/safety checks.
-- Routes Windows Setup Repair/Rebuild venv through bootstrap instead of the old verify-only path.
-- Preserves primary Drum Kit Split CUDA failures such as illegal memory access and out-of-memory instead of masking them as output-count mismatch.
-- Adds clearer low-VRAM CUDA diagnostics, CPU runtime-missing guidance, launcher environment cleanup, stale override guardrails, and normalized support-bundle ZIP entry names.
+- Removes the duplicated hard 3600-second DrumSep helper timeout for long-running Direct Kit and Kit Split CPU fallback jobs.
+- Adds a progress-aware no-output stall watchdog so active DrumSep processing can continue past one hour while still detecting real stalls.
+- Carries forward the current Windows Action List registration guidance, toolbar helper update, README polish, screenshots, and demo/docs refresh.
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>

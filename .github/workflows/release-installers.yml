@@ -155,7 +155,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-version.outputs.release_tag }}
-          # Windows update patch remains retired for 2.3.0.3 because 2.3 requires
+          # Windows update patch remains retired for 2.3.0.4 because 2.3 requires
           # full runtime migration (main venv + DrumSep venv + model assets + ready_to_go.env).
           # Publish only the supported full Windows installer assets.
           files: |

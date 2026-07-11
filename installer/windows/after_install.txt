@@ -24,4 +24,4 @@ Use STEMwerk-SETUP.lua only as a support or repair path if something is missing 
 Do not load files from _internal\ as normal actions.
 Do not promote STEMwerk_AI_Separate.lua on a fresh install; it exists for compatibility with older action bindings.
 
-For 2.3.0.3, verify downloads with the published SHA256 values before installing. On Windows upgrades, uninstall the older STEMwerk install first and then reinstall fresh.
+For 2.3.0.4, verify downloads with the published SHA256 values before installing. On Windows upgrades, uninstall the older STEMwerk install first and then reinstall fresh.

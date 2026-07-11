@@ -9,28 +9,28 @@ Split vocals, drums, bass, and more directly in your DAW for practical productio
 STEMwerk-reaper is a REAPER script package that runs high-quality stem separation on selected items or time selections and brings the results back into your project as new tracks or in-place takes. It uses a Python backend and keeps processing on your machine.
 
 ## Release status
-This README describes the current public release: `STEMwerk 2.3.0.3`.
+This README describes the current hotfix release: `STEMwerk 2.3.0.4`.
 
-- `2.3.0.3` is the current public release for the 2.3 line.
+- `2.3.0.4` is the current hotfix release for the 2.3 line.
 - `2.3.0.0` remains the original 2.3 full-release baseline.
-- `2.3.0.3` is a stability, installer, setup, and ReaPack maintenance update for the 2.3 line.
-- ReaPack is now updated to `2.3.0.3`.
-- Windows users should uninstall older STEMwerk versions first, then install the `2.3.0.3` online or bundled installer.
-- GitHub Release: <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.3>
+- `2.3.0.4` is a focused hotfix release for the 2.3 line with the DrumSep timeout fix plus post-`2.3.0.3` docs/helper improvements.
+- ReaPack is updated to `2.3.0.4`.
+- Windows users should uninstall older STEMwerk versions first, then install the `2.3.0.4` online or bundled installer.
+- GitHub Release: <https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.4>
 - ReaPack index: <https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/index.xml>
 
 For full release notes, asset checksums, and current download details, use the published GitHub Release page.
 
 ![STEMwerk in action](docs/assets/stemwerk_fullscreen.gif)
 
-## What's new in 2.3.0.3
-- Windows installer, runtime repair, and setup-state handling are improved.
-- Support bundle ZIP creation and packaging reliability are improved.
-- CUDA and low-VRAM diagnostics are clearer.
-- The macOS setup verify false-negative is fixed.
-- ReaPack is updated to `2.3.0.3`.
-- The old Windows patch-only route is retired.
-- Large offline/allmodels assets remain separate and are not part of the `2.3.0.3` GitHub release assets.
+## What's new in 2.3.0.4
+- Long-running DrumSep, Direct Kit, and Kit Split jobs are no longer killed after a hard 3600-second wall-clock timeout.
+- DrumSep now uses a progress-aware no-output stall watchdog instead of an absolute one-hour kill.
+- Windows installer and manual setup guidance now explains REAPER Action List registration more clearly.
+- `STEMwerk_Setup_Toolbar.lua` remains the preferred one-time action-registration helper and also registers Drum Kit Split.
+- README, screenshots, offline/allmodels links, and the full-workflow demo GIF are refreshed.
+- ReaPack is updated to `2.3.0.4`.
+- Large offline/allmodels assets remain separate and are not part of the `2.3.0.4` GitHub release assets.
 
 ## Platform screenshots
 ### Windows
@@ -106,27 +106,27 @@ After install or update, use `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when runti
 
 Windows installer note: the installer copies the REAPER script payload to `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`, but REAPER action entries may still need to be registered from inside REAPER. If `STEMwerk:` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`, load `STEMwerk_Setup_Toolbar.lua`, and cancel the toolbar prompt if you only need action registration.
 
-### GitHub release assets for 2.3.0.3
+### GitHub release assets for 2.3.0.4
 All current public GitHub downloads are on the release page:
-<https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.3>
+<https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.4>
 
 | File | Description |
 |---|---|
-| `STEMwerk-Setup-2.3.0.3.exe` | Windows standard installer |
-| `STEMwerk-Setup-2.3.0.3-bundled.exe` | Windows bundled installer |
-| `STEMwerk-2.3.0.3.pkg` | macOS installer |
-| `STEMwerk-2.3.0.3-x86_64.AppImage` | Linux AppImage |
-| `stemwerk_2.3.0.3_amd64.deb` | Debian/Ubuntu package |
-| `stemwerk-2.3.0.3-1.noarch.rpm` | RPM package |
-| `stemwerk-2.3.0.3-1-any.pkg.tar.zst` | Arch package |
-| `STEMWERK_2303_SHA256SUMS_CURRENT.txt` | Current public SHA256 manifest |
+| `STEMwerk-Setup-2.3.0.4.exe` | Windows standard installer |
+| `STEMwerk-Setup-2.3.0.4-bundled.exe` | Windows bundled installer |
+| `STEMwerk-2.3.0.4.pkg` | macOS installer |
+| `STEMwerk-2.3.0.4-x86_64.AppImage` | Linux AppImage |
+| `stemwerk_2.3.0.4_amd64.deb` | Debian/Ubuntu package |
+| `stemwerk-2.3.0.4-1.noarch.rpm` | RPM package |
+| `stemwerk-2.3.0.4-1-any.pkg.tar.zst` | Arch package |
+| `STEMWERK_2304_SHA256SUMS_CURRENT.txt` | Current public SHA256 manifest |
 
 GitHub also provides automatic source archives (`.zip` / `.tar.gz`) on the release page, but those are not the recommended end-user downloads.
 
 ### Large offline allmodels installers (separate / optional)
-These large offline/full installers are not part of the lightweight `2.3.0.3` GitHub release asset set. They remain available separately for users who specifically want the larger offline allmodels installers with bundled runtime/model payloads.
+These large offline/full installers are not part of the lightweight `2.3.0.4` GitHub release asset set. They remain available separately for users who specifically want the larger offline allmodels installers with bundled runtime/model payloads.
 
-The large Windows offline allmodels installers remain at [`2.3.0.0`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0) and are still valid unless a user specifically needs the latest Windows setup/runtime fixes from [`2.3.0.3`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.3). These are optional separate downloads, not the current `2.3.0.3` GitHub release assets.
+The large Windows offline allmodels installers remain at [`2.3.0.0`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/2.3.0.0) and are still valid unless a user specifically needs the latest Windows setup/runtime fixes from [`2.3.0.4`](https://github.com/flarkflarkflark/STEMwerk-reaper/releases/tag/v2.3.0.4). These are optional separate downloads, not the current `2.3.0.4` GitHub release assets.
 
 | File | Platform | Download |
 |---|---|---|
@@ -190,9 +190,9 @@ After installing or updating via ReaPack, run `STEMwerk: Setup` once.
 > **Windows note**: ReaPack is not the preferred first-time Windows install path. Use the Windows installer first, then use ReaPack for later script updates if desired.
 
 ## Windows Notes
-- The current stable Windows target is `2.3.0.3`.
+- The current stable Windows target is `2.3.0.4`.
 - The small Windows patch-only path is retired.
-- Existing Windows users should uninstall older STEMwerk versions first, then install the full online or bundled `2.3.0.3` installer.
+- Existing Windows users should uninstall older STEMwerk versions first, then install the full online or bundled `2.3.0.4` installer.
 - After install, run `STEMwerk-SETUP.lua` once to verify paths and runtime state.
 - If setup still reports missing runtime or bootstrap pieces, rerun the installer first, then rerun `STEMwerk-SETUP.lua`.
 
