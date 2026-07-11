@@ -4,6 +4,7 @@
 -- @changelog
 --   Adds/refreshes STEMwerk scripts in the Action List and guides toolbar setup.
 --   Registers the dedicated "Stemwerk: Explode Takes (In Place)" quick action.
+--   Also registers "Stemwerk: Drum Kit Split" without adding it to the default toolbar.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
 
 local function msgBox(title, text, type)
@@ -175,6 +176,7 @@ local scriptFiles = {
     "STEMwerk.lua",
     "STEMwerk-SETUP.lua",
     "STEMwerk_Save_Support_Bundle.lua",
+    "STEMwerk_Drum_Kit_Split.lua",
     "STEMwerk_Explode_Takes.lua",
     "STEMwerk_Karaoke.lua",
     "STEMwerk_Vocals_Only.lua",

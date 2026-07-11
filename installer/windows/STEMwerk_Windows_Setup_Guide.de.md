@@ -33,11 +33,13 @@ Diese Installer sollen die Einrichtung fuer ihre Ziel-Runtime vollstaendig offli
 ## Naechste Schritte
 
 1. Starte REAPER.
-2. Fuehre `STEMwerk: Setup` aus, wenn du die Runtime pruefen oder reparieren willst.
+2. Wenn die `STEMwerk`-Aktionen bereits sichtbar sind, fuehre `STEMwerk: Setup` aus, wenn du die Runtime pruefen oder reparieren willst.
 3. Nutze `Check only`, um den Runtime-Zustand zu verifizieren.
 4. Starte `Stemwerk: Main` aus dem Actions-Menue fuer die normale Nutzung.
-5. Wenn Aktionen fehlen, lade Skripte aus `REAPER/Scripts/STEMwerk-reaper/`.
-6. `STEMwerk_Setup_Toolbar.lua` ist optional, wenn du Toolbar-Kurzbefehle moechtest.
+5. Wenn `STEMwerk`-Aktionen fehlen, oeffne `Actions -> Show action list -> ReaScript: Load...`.
+6. Bevorzugter Helfer fuer die einmalige Registrierung:
+   `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
+7. Dieser Helfer registriert die normalen STEMwerk-Aktionen in REAPER. Wenn du nur die Aktionen brauchst, kannst du den spaeteren Toolbar-Dialog abbrechen.
 
 ## Setup und Reparatur
 
@@ -56,12 +58,20 @@ Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REA
 
 ## Wenn etwas fehlt
 
-1. Starte `STEMwerk: Setup`.
-2. Klicke auf `Check only`.
-3. Nutze `Repair` oder `Rebuild venv`, wenn das empfohlen wird.
-4. Nutze `Open logs folder` fuer tiefere Fehlersuche.
-5. Nutze `Save Support Bundle`, wenn du Hilfe anforderst.
-6. Fuehre den Installer nur erneut aus, wenn die Installations-Payload selbst fehlt oder beschaedigt ist.
+1. Pruefe zuerst, ob dieser Skript-Ordner existiert:
+   `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
+2. Wenn der Ordner existiert, aber keine `STEMwerk`-Aktionen erscheinen, hat REAPER die Skripte noch nicht registriert.
+3. Oeffne in REAPER `Actions -> Show action list -> ReaScript: Load...`.
+4. Bevorzugter Helfer fuer die einmalige Registrierung:
+   `STEMwerk_Setup_Toolbar.lua`
+5. Wenn du den Helfer nicht verwenden willst, lade nur:
+   `STEMwerk-SETUP.lua`, `STEMwerk.lua`, `STEMwerk_Drum_Kit_Split.lua`, `STEMwerk_Explode_Takes.lua`
+6. Lade nicht einfach jede `.lua`-Datei in diesem Ordner.
+7. Lade keine Dateien unter `_internal\`.
+8. `STEMwerk_AI_Separate.lua` ist nur ein Kompatibilitaets-Wrapper fuer aeltere Installationen und wird bei einer frischen Installation nicht benoetigt.
+9. Fuehre nach der Registrierung `STEMwerk: Setup` aus, klicke auf `Check only` und nutze danach `Repair` oder `Rebuild venv`, wenn das empfohlen wird.
+10. Nutze `Open logs folder` oder `Save Support Bundle`, wenn du Hilfe anforderst.
+11. Fuehre den Installer nur erneut aus, wenn die Installations-Payload selbst fehlt oder beschaedigt ist.
 
 ## Support Bundles
 
@@ -106,19 +116,24 @@ Nutze die Setup-Aktionsknopfe, um Logs oder Runtime-Ordner direkt zu oeffnen.
 
 Normale Nutzung:
 
+- `STEMwerk: Setup`
 - `Stemwerk: Main`
 - `Stemwerk: Karaoke`
 - `Stemwerk: Vocals Only`
 - `Stemwerk: Drums Only`
 - `Stemwerk: Bass Only`
 - `Stemwerk: All Stems`
+- `Stemwerk: Drum Kit Split`
 - `Stemwerk: Explode Takes (In Place)` fuer ausgewaehlte Multi-Take-Items
 
 Support und Reparatur:
 
-- `STEMwerk: Setup`
 - `STEMwerk: Save Support Bundle`
 
 Optionaler Komfort:
 
 - `STEMwerk_Setup_Toolbar.lua`
+
+Kompatibilitaets-Wrapper:
+
+- `STEMwerk_AI_Separate.lua` bleibt erhalten, damit aeltere REAPER-Action-Bindings nicht brechen, aber neue Installationen sollten `STEMwerk.lua` verwenden.

@@ -29,7 +29,7 @@ For full release notes, asset checksums, and current download details, use the p
 - CUDA and low-VRAM diagnostics are clearer.
 - The macOS setup verify false-negative is fixed.
 - ReaPack is updated to `2.3.0.3`.
-- The old Windows update-patch path is retired.
+- The old Windows patch-only route is retired.
 - Large offline/allmodels assets remain separate and are not part of the `2.3.0.3` GitHub release assets.
 
 ## Platform screenshots
@@ -103,6 +103,8 @@ Recommended free space:
 - Linux users: use ReaPack or one of the package-based release assets.
 
 After install or update, use `STEMwerk: Setup` (`STEMwerk-SETUP.lua`) when runtime verification or repair is needed, then launch `STEMwerk: Main` (`STEMwerk.lua`).
+
+Windows installer note: the installer copies the REAPER script payload to `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`, but REAPER action entries may still need to be registered from inside REAPER. If `STEMwerk:` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`, load `STEMwerk_Setup_Toolbar.lua`, and cancel the toolbar prompt if you only need action registration.
 
 ### GitHub release assets for 2.3.0.3
 All current public GitHub downloads are on the release page:
@@ -189,7 +191,7 @@ After installing or updating via ReaPack, run `STEMwerk: Setup` once.
 
 ## Windows Notes
 - The current stable Windows target is `2.3.0.3`.
-- The small Windows update-patch path is retired.
+- The small Windows patch-only path is retired.
 - Existing Windows users should uninstall older STEMwerk versions first, then install the full online or bundled `2.3.0.3` installer.
 - After install, run `STEMwerk-SETUP.lua` once to verify paths and runtime state.
 - If setup still reports missing runtime or bootstrap pieces, rerun the installer first, then rerun `STEMwerk-SETUP.lua`.
@@ -204,6 +206,13 @@ For normal use:
 - `STEMwerk: Bass Only`
 - `STEMwerk: All Stems`
 - `STEMwerk: Drum Kit Split`
+- `STEMwerk: Explode Takes (In Place)`
+
+Windows installer note:
+- If STEMwerk does not appear in REAPER Actions after install, open `Actions -> Show action list -> ReaScript: Load...` and first try `STEMwerk_Setup_Toolbar.lua` from `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`.
+- If you prefer manual registration, load only `STEMwerk-SETUP.lua`, `STEMwerk.lua`, `STEMwerk_Drum_Kit_Split.lua`, and `STEMwerk_Explode_Takes.lua`.
+- Do not load every `.lua` file in that folder, and do not load files under `scripts/reaper/_internal/`.
+- `STEMwerk_AI_Separate.lua` is a compatibility wrapper for older action bindings and is not needed on a fresh install.
 
 Internal or troubleshooting content:
 - Files under `scripts/reaper/_internal/` are runtime helpers and not normal user entry points.

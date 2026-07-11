@@ -37,11 +37,13 @@ These installers are intended to complete setup fully offline from bundled wheel
 ## What to do next
 
 1. Start REAPER.
-2. Run `STEMwerk: Setup` if you want to check or repair the runtime.
+2. If `STEMwerk` actions are already visible, run `STEMwerk: Setup` if you want to check or repair the runtime.
 3. Use `Check only` to verify runtime health.
 4. Run `Stemwerk: Main` from the Actions menu for normal use.
-5. If actions are missing, load scripts from `REAPER/Scripts/STEMwerk-reaper/`.
-6. `STEMwerk_Setup_Toolbar.lua` is optional if you want a toolbar shortcut set.
+5. If `STEMwerk` actions are missing, open `Actions -> Show action list -> ReaScript: Load...`.
+6. Preferred one-time registration helper:
+   `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
+7. That helper registers the normal STEMwerk actions inside REAPER. If you only need the actions, you can cancel the later toolbar prompt.
 
 ## Setup and repair
 
@@ -60,12 +62,20 @@ Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts.
 
 ## When something is missing
 
-1. Run `STEMwerk: Setup`.
-2. Click `Check only`.
-3. Use `Repair` or `Rebuild venv` if recommended.
-4. Use `Open logs folder` if deeper troubleshooting is needed.
-5. Use `Save Support Bundle` when asking for help.
-6. Re-run the installer only if the installation payload itself is missing or damaged.
+1. First confirm the installed script folder exists:
+   `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
+2. If the folder exists but no `STEMwerk` actions appear, REAPER has not registered the scripts yet.
+3. In REAPER, open `Actions -> Show action list -> ReaScript: Load...`.
+4. Preferred one-time registration helper:
+   `STEMwerk_Setup_Toolbar.lua`
+5. If you do not want to use the helper, manually load only:
+   `STEMwerk-SETUP.lua`, `STEMwerk.lua`, `STEMwerk_Drum_Kit_Split.lua`, `STEMwerk_Explode_Takes.lua`
+6. Do not load every `.lua` file in the folder.
+7. Do not load files under `_internal\`.
+8. `STEMwerk_AI_Separate.lua` is a compatibility wrapper for older installs and is not needed on a fresh install.
+9. After registration, run `STEMwerk: Setup`, click `Check only`, then use `Repair` or `Rebuild venv` if recommended.
+10. Use `Open logs folder` or `Save Support Bundle` when asking for help.
+11. Re-run the installer only if the installation payload itself is missing or damaged.
 
 ## Support bundles
 
@@ -110,19 +120,24 @@ Use the Setup action buttons to open logs or runtime folders directly.
 
 Normal use:
 
+- `STEMwerk: Setup`
 - `Stemwerk: Main`
 - `Stemwerk: Karaoke`
 - `Stemwerk: Vocals Only`
 - `Stemwerk: Drums Only`
 - `Stemwerk: Bass Only`
 - `Stemwerk: All Stems`
+- `Stemwerk: Drum Kit Split`
 - `Stemwerk: Explode Takes (In Place)` for selected multi-take items
 
 Support and repair:
 
-- `STEMwerk: Setup`
 - `STEMwerk: Save Support Bundle`
 
 Optional setup convenience:
 
 - `STEMwerk_Setup_Toolbar.lua`
+
+Compatibility wrapper:
+
+- `STEMwerk_AI_Separate.lua` exists so older REAPER action bindings do not break, but new installs should use `STEMwerk.lua`.

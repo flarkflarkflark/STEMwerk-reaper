@@ -33,11 +33,13 @@ Deze installers zijn bedoeld om volledig offline te kunnen afronden met alleen d
 ## Wat je nu doet
 
 1. Start REAPER.
-2. Voer `STEMwerk: Setup` uit als je de runtime wilt controleren of herstellen.
+2. Als de `STEMwerk`-acties al zichtbaar zijn, voer dan `STEMwerk: Setup` uit als je de runtime wilt controleren of herstellen.
 3. Gebruik `Check only` om de runtime te verifieren.
 4. Start `Stemwerk: Main` vanuit het Actions-menu voor normaal gebruik.
-5. Als acties ontbreken, laad dan scripts uit `REAPER/Scripts/STEMwerk-reaper/`.
-6. `STEMwerk_Setup_Toolbar.lua` is optioneel als je toolbar-snelkoppelingen wilt.
+5. Als `STEMwerk`-acties ontbreken, open dan `Actions -> Show action list -> ReaScript: Load...`.
+6. Voorkeurshelper voor eenmalige registratie:
+   `C:\Users\<Username>\AppData\Roaming\REAPER\Scripts\STEMwerk-reaper\STEMwerk_Setup_Toolbar.lua`
+7. Die helper registreert de normale STEMwerk-acties in REAPER. Als je alleen de acties nodig hebt, kun je de latere toolbar-prompt annuleren.
 
 ## Setup en herstel
 
@@ -56,12 +58,20 @@ De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPE
 
 ## Wanneer er iets ontbreekt
 
-1. Run `STEMwerk: Setup`.
-2. Klik op `Check only`.
-3. Gebruik `Repair` of `Rebuild venv` als dat wordt aangeraden.
-4. Gebruik `Open logs folder` voor diepere troubleshooting.
-5. Gebruik `Save Support Bundle` als je hulp vraagt.
-6. Voer de installer alleen opnieuw uit als de installatiepayload zelf ontbreekt of beschadigd is.
+1. Controleer eerst of deze scriptmap bestaat:
+   `%APPDATA%\REAPER\Scripts\STEMwerk-reaper`
+2. Als die map bestaat maar er geen `STEMwerk`-acties zichtbaar zijn, heeft REAPER de scripts nog niet geregistreerd.
+3. Open in REAPER `Actions -> Show action list -> ReaScript: Load...`.
+4. Voorkeurshelper voor eenmalige registratie:
+   `STEMwerk_Setup_Toolbar.lua`
+5. Als je de helper niet wilt gebruiken, laad dan alleen:
+   `STEMwerk-SETUP.lua`, `STEMwerk.lua`, `STEMwerk_Drum_Kit_Split.lua`, `STEMwerk_Explode_Takes.lua`
+6. Laad niet zomaar elk `.lua`-bestand in deze map.
+7. Laad geen bestanden uit `_internal\`.
+8. `STEMwerk_AI_Separate.lua` is alleen een compatibiliteitswrapper voor oudere installs en is niet nodig bij een verse installatie.
+9. Voer na registratie `STEMwerk: Setup` uit, klik op `Check only` en gebruik daarna `Repair` of `Rebuild venv` als dat wordt aangeraden.
+10. Gebruik `Open logs folder` of `Save Support Bundle` als je hulp vraagt.
+11. Voer de installer alleen opnieuw uit als de installatiepayload zelf ontbreekt of beschadigd is.
 
 ## Support bundles
 
@@ -106,19 +116,24 @@ Gebruik de Setup-knoppen om logs of runtime-mappen direct te openen.
 
 Normaal gebruik:
 
+- `STEMwerk: Setup`
 - `Stemwerk: Main`
 - `Stemwerk: Karaoke`
 - `Stemwerk: Vocals Only`
 - `Stemwerk: Drums Only`
 - `Stemwerk: Bass Only`
 - `Stemwerk: All Stems`
+- `Stemwerk: Drum Kit Split`
 - `Stemwerk: Explode Takes (In Place)` voor geselecteerde multi-take-items
 
 Support en herstel:
 
-- `STEMwerk: Setup`
 - `STEMwerk: Save Support Bundle`
 
 Optioneel gemak:
 
 - `STEMwerk_Setup_Toolbar.lua`
+
+Compatibiliteitswrapper:
+
+- `STEMwerk_AI_Separate.lua` blijft bestaan zodat oudere REAPER-action bindings niet breken, maar nieuwe installs moeten `STEMwerk.lua` gebruiken.

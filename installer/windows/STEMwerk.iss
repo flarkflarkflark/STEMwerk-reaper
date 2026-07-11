@@ -382,7 +382,10 @@ begin
     '  %LOCALAPPDATA%\STEMwerk' + #13#10 +
     CleanupLines +
     LText('Next step:', 'Volgende stap:', 'Naechster Schritt:') + #13#10 +
-    LText('- Start REAPER and run STEMwerk from the Actions menu.', '- Start REAPER en voer STEMwerk uit vanuit het Actions-menu.', '- Starte REAPER und fuehre STEMwerk aus dem Actions-Menue aus.') + #13#10 +
+    LText('- Start REAPER and check the Actions menu for STEMwerk.', '- Start REAPER en controleer het Actions-menu op STEMwerk.', '- Starte REAPER und pruefe das Actions-Menue auf STEMwerk.') + #13#10 +
+    LText('- If STEMwerk is missing, use: Actions -> Show action list -> ReaScript: Load...', '- Als STEMwerk ontbreekt, gebruik dan: Actions -> Show action list -> ReaScript: Load...', '- Wenn STEMwerk fehlt, nutze: Actions -> Show action list -> ReaScript: Load...') + #13#10 +
+    LText('- Preferred helper: load STEMwerk_Setup_Toolbar.lua from %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. It registers the normal STEMwerk actions; cancel the toolbar prompt if you only need the actions.', '- Voorkeurshelper: laad STEMwerk_Setup_Toolbar.lua uit %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. Die registreert de normale STEMwerk-acties; annuleer de toolbar-prompt als je alleen de acties nodig hebt.', '- Bevorzugter Helfer: lade STEMwerk_Setup_Toolbar.lua aus %APPDATA%\\REAPER\\Scripts\\STEMwerk-reaper. Er registriert die normalen STEMwerk-Aktionen; brich den Toolbar-Dialog ab, wenn du nur die Aktionen brauchst.') + #13#10 +
+    LText('- Manual fallback: load only STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua, and STEMwerk_Explode_Takes.lua. Do not load _internal\\*.lua.', '- Handmatige fallback: laad alleen STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua en STEMwerk_Explode_Takes.lua. Laad geen _internal\\*.lua.', '- Manueller Fallback: lade nur STEMwerk-SETUP.lua, STEMwerk.lua, STEMwerk_Drum_Kit_Split.lua und STEMwerk_Explode_Takes.lua. Lade kein _internal\\*.lua.') + #13#10 +
     LText('- Use STEMwerk: Setup if you want to check or repair the runtime.', '- Gebruik STEMwerk: Setup als je de runtime wilt controleren of herstellen.', '- Nutze STEMwerk: Setup, wenn du die Runtime pruefen oder reparieren moechtest.') + #13#10 + #13#10 +
     LText('Setup log:', 'Setup-log:', 'Setup-Log:') + #13#10 +
     '  ' + GetLogPath;

@@ -1,8 +1,27 @@
 STEMwerk installed.
 
 Important:
-Open REAPER and run STEMwerk.lua.
+The installer copied the scripts to:
+%APPDATA%\REAPER\Scripts\STEMwerk-reaper
+
+REAPER actions are not created by file copy alone.
+If STEMwerk is missing in the REAPER Actions list, open:
+Actions > Show action list > ReaScript: Load...
+
+Preferred one-time registration helper:
+- load STEMwerk_Setup_Toolbar.lua
+- this registers the normal STEMwerk actions inside REAPER
+- you can cancel the toolbar prompt if you only need the actions
+
+If you load scripts manually, load only:
+- STEMwerk-SETUP.lua
+- STEMwerk.lua
+- STEMwerk_Drum_Kit_Split.lua
+- STEMwerk_Explode_Takes.lua
 
 Use STEMwerk-SETUP.lua only as a support or repair path if something is missing after installation.
+
+Do not load files from _internal\ as normal actions.
+Do not promote STEMwerk_AI_Separate.lua on a fresh install; it exists for compatibility with older action bindings.
 
 For 2.3.0.3, verify downloads with the published SHA256 values before installing. On Windows upgrades, uninstall the older STEMwerk install first and then reinstall fresh.
