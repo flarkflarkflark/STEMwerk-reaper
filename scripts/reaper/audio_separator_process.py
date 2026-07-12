@@ -1095,6 +1095,8 @@ def _load_runtime_registry_entry(model_id: str) -> Dict[str, Any]:
 
 def _resolve_normal_route_model_selection(args: argparse.Namespace) -> Dict[str, Any]:
     requested_model_id = str(getattr(args, "model", "htdemucs") or "htdemucs").strip() or "htdemucs"
+    workflow_mode = str(getattr(args, "workflow_mode", "") or "").strip()
+    workflow_source = str(getattr(args, "workflow_source", "") or "").strip()
     enable_value = str(os.environ.get(EXPERIMENTAL_MODELS_ENABLE_ENV, "") or "").strip()
     experimental_model_id = str(os.environ.get(EXPERIMENTAL_MODEL_ID_ENV, "") or "").strip()
     enable_present = enable_value != ""
@@ -1124,6 +1126,18 @@ def _resolve_normal_route_model_selection(args: argparse.Namespace) -> Dict[str,
     if enable_value != "1":
         raise RuntimeError(
             f"{EXPERIMENTAL_MODELS_ENABLE_ENV} must be exactly '1' when {EXPERIMENTAL_MODEL_ID_ENV} is used."
+        )
+
+    if (
+        _is_direct_dks_source(workflow_mode, workflow_source)
+        or _is_extract_dks_source(workflow_mode, workflow_source)
+        or _is_direct_dks_mode(workflow_mode)
+    ):
+        print("experimental_env_gate=invalid_for_drum_kit_workflow", file=sys.stderr)
+        raise RuntimeError(
+            "experimental model override is not valid for drum-kit workflows. "
+            f"Set neither {EXPERIMENTAL_MODELS_ENABLE_ENV} nor {EXPERIMENTAL_MODEL_ID_ENV} for this run. "
+            f"workflow_mode={workflow_mode or '<empty>'} workflow_source={workflow_source or '<empty>'}"
         )
 
     registry_entry = _load_runtime_registry_entry(experimental_model_id)
@@ -3265,6 +3279,22 @@ def _complement_contract_info(registry_entry: Optional[Dict[str, Any]]) -> Tuple
     return semantics == "complement" and normalized_stems == ["vocals", "instrumental"], expected_outputs
 
 
+def _emit_registry_model_markers(registry_entry: Optional[Dict[str, Any]], run_model: str) -> None:
+    if not isinstance(registry_entry, dict):
+        return
+    print(f"registry_model_id={registry_entry.get('id', '')}", file=sys.stderr)
+    print(f"registry_family={registry_entry.get('family', '')}", file=sys.stderr)
+    print(f"registry_architecture={registry_entry.get('architecture', '')}", file=sys.stderr)
+    contract = registry_entry.get("output_contract") if isinstance(registry_entry.get("output_contract"), dict) else {}
+    print(f"registry_stem_semantics={contract.get('stem_semantics', '')}", file=sys.stderr)
+    print(f"output_contract_expected={contract.get('expected_outputs', '')}", file=sys.stderr)
+    if (
+        str(registry_entry.get("architecture") or "").strip().lower() == "mdxc"
+        and str(run_model or "").strip().lower().endswith(".ckpt")
+    ):
+        print("onnx_provider_warning_expected_for_ckpt_mdxc=true", file=sys.stderr)
+
+
 def _map_reaper_stems_from_result(
     result: Any, output_root: Path, registry_entry: Optional[Dict[str, Any]] = None
 ) -> Dict[str, str]:
@@ -4690,18 +4720,7 @@ def main():
     if normal_model_selection.get("experimental_override_active"):
         print("experimental_override_active=1", file=sys.stderr)
     registry_entry = normal_model_selection.get("registry_entry")
-    if isinstance(registry_entry, dict):
-        print(f"registry_model_id={registry_entry.get('id', '')}", file=sys.stderr)
-        print(f"registry_family={registry_entry.get('family', '')}", file=sys.stderr)
-        print(f"registry_architecture={registry_entry.get('architecture', '')}", file=sys.stderr)
-        contract = registry_entry.get("output_contract") if isinstance(registry_entry.get("output_contract"), dict) else {}
-        print(f"registry_stem_semantics={contract.get('stem_semantics', '')}", file=sys.stderr)
-        print(f"output_contract_expected={contract.get('expected_outputs', '')}", file=sys.stderr)
-        if (
-            str(registry_entry.get("architecture") or "").strip().lower() == "mdxc"
-            and str(run_model or "").strip().lower().endswith(".ckpt")
-        ):
-            print("onnx_provider_warning_expected_for_ckpt_mdxc=true", file=sys.stderr)
+    _emit_registry_model_markers(registry_entry, run_model)
     print(f"model_name={run_model}", file=sys.stderr)
     print(f"device={resolved_device}", file=sys.stderr)
     print(f"backend={backend}", file=sys.stderr)

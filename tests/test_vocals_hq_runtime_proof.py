@@ -19,7 +19,7 @@ def _load_module():
 
 
 def _normal_args(model="htdemucs"):
-    return type("Args", (), {"model": model})()
+    return type("Args", (), {"model": model, "workflow_mode": "", "workflow_source": ""})()
 
 
 def test_visible_model_passes_through_without_registry_io(monkeypatch):
@@ -48,6 +48,14 @@ def test_normal_flow_ignores_corrupt_registry_without_env_gate(monkeypatch, tmp_
     bad_registry = tmp_path / "models.json"
     bad_registry.write_text("{ definitely-not-json", encoding="utf-8")
     monkeypatch.setattr(module, "_runtime_registry_path", lambda: bad_registry)
+    original_read_text = Path.read_text
+
+    def guarded_read_text(self, *args, **kwargs):
+        if self == bad_registry:
+            raise AssertionError("registry read should not happen without env gate")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
 
     selection = module._resolve_normal_route_model_selection(_normal_args("htdemucs"))
 
@@ -113,6 +121,49 @@ def test_unknown_experimental_model_id_fails(monkeypatch):
         module._resolve_normal_route_model_selection(_normal_args("htdemucs"))
 
 
+@pytest.mark.parametrize("enable_value", ["0", "true"])
+def test_non_one_enable_value_hard_fails(monkeypatch, enable_value):
+    module = _load_module()
+    monkeypatch.setenv(module.EXPERIMENTAL_MODELS_ENABLE_ENV, enable_value)
+    monkeypatch.setenv(module.EXPERIMENTAL_MODEL_ID_ENV, "bs_roformer_viperx")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        module._resolve_normal_route_model_selection(_normal_args("htdemucs"))
+
+    assert module.EXPERIMENTAL_MODELS_ENABLE_ENV in str(excinfo.value)
+    assert module.EXPERIMENTAL_MODEL_ID_ENV in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "workflow_mode,workflow_source",
+    [
+        ("drumkit", "dks_extract"),
+        ("dks_direct", ""),
+        ("", "dks_direct"),
+    ],
+)
+def test_experimental_override_fails_for_drum_workflows(monkeypatch, capsys, workflow_mode, workflow_source):
+    module = _load_module()
+    monkeypatch.setenv(module.EXPERIMENTAL_MODELS_ENABLE_ENV, "1")
+    monkeypatch.setenv(module.EXPERIMENTAL_MODEL_ID_ENV, "bs_roformer_viperx")
+    args = type(
+        "Args",
+        (),
+        {"model": "htdemucs", "workflow_mode": workflow_mode, "workflow_source": workflow_source},
+    )()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        module._resolve_normal_route_model_selection(args)
+
+    text = str(excinfo.value)
+    assert module.EXPERIMENTAL_MODELS_ENABLE_ENV in text
+    assert module.EXPERIMENTAL_MODEL_ID_ENV in text
+    assert "experimental model override is not valid for drum-kit workflows" in text
+    assert f"workflow_mode={workflow_mode or '<empty>'}" in text
+    assert f"workflow_source={workflow_source or '<empty>'}" in text
+    assert "experimental_env_gate=invalid_for_drum_kit_workflow" in capsys.readouterr().err
+
+
 def test_runtime_registry_reader_ignores_ui_and_presets(monkeypatch, tmp_path):
     module = _load_module()
     monkeypatch.setenv(module.EXPERIMENTAL_MODELS_ENABLE_ENV, "1")
@@ -149,6 +200,26 @@ def test_hidden_roformer_is_absent_from_normal_visible_registry_list():
     registry = json.loads((ROOT / "scripts" / "reaper" / "models.json").read_text(encoding="utf-8"))
     visible_ids = [entry["id"] for entry in registry["models"] if not entry.get("hidden")]
     assert "bs_roformer_viperx" not in visible_ids
+
+
+def test_mdxc_ckpt_registry_marker_is_emitted(capsys):
+    module = _load_module()
+    registry_entry = {
+        "id": "bs_roformer_viperx",
+        "family": "roformer",
+        "architecture": "mdxc",
+        "output_contract": {
+            "stems": ["vocals", "instrumental"],
+            "stem_semantics": "complement",
+            "expected_outputs": 2,
+        },
+    }
+
+    module._emit_registry_model_markers(registry_entry, "model_bs_roformer_ep_317_sdr_12.9755.ckpt")
+
+    stderr = capsys.readouterr().err
+    assert "registry_model_id=bs_roformer_viperx" in stderr
+    assert "onnx_provider_warning_expected_for_ckpt_mdxc=true" in stderr
 
 
 @pytest.mark.parametrize("suffix", [".flac", ".wav"])
