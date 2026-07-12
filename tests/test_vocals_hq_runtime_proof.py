@@ -121,6 +121,20 @@ def test_unknown_experimental_model_id_fails(monkeypatch):
         module._resolve_normal_route_model_selection(_normal_args("htdemucs"))
 
 
+@pytest.mark.parametrize("override_target", ["htdemucs", "stemwerk_dks"])
+def test_override_rejects_non_hidden_or_non_experimental_targets(monkeypatch, override_target):
+    module = _load_module()
+    monkeypatch.setenv(module.EXPERIMENTAL_MODELS_ENABLE_ENV, "1")
+    monkeypatch.setenv(module.EXPERIMENTAL_MODEL_ID_ENV, override_target)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        module._resolve_normal_route_model_selection(_normal_args("htdemucs"))
+
+    text = str(excinfo.value)
+    assert "hidden+experimental" in text
+    assert override_target in text
+
+
 @pytest.mark.parametrize("enable_value", ["0", "true"])
 def test_non_one_enable_value_hard_fails(monkeypatch, enable_value):
     module = _load_module()
