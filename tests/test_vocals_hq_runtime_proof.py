@@ -1,7 +1,7 @@
 import importlib.util
 import json
-import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -149,3 +149,51 @@ def test_hidden_roformer_is_absent_from_normal_visible_registry_list():
     registry = json.loads((ROOT / "scripts" / "reaper" / "models.json").read_text(encoding="utf-8"))
     visible_ids = [entry["id"] for entry in registry["models"] if not entry.get("hidden")]
     assert "bs_roformer_viperx" not in visible_ids
+
+
+@pytest.mark.parametrize("suffix", [".flac", ".wav"])
+def test_complement_output_mapping_accepts_vocals_and_instrumental(tmp_path, suffix):
+    module = _load_module()
+    vocals = tmp_path / f"input_20s_(Vocals)_model_bs_roformer_ep_317_sdr_12{suffix}"
+    instrumental = tmp_path / f"input_20s_(Instrumental)_model_bs_roformer_ep_317_sdr_12{suffix}"
+    vocals.write_bytes(b"vocals")
+    instrumental.write_bytes(b"instrumental")
+    registry_entry = {
+        "output_contract": {
+            "stems": ["vocals", "instrumental"],
+            "stem_semantics": "complement",
+            "expected_outputs": 2,
+        }
+    }
+
+    result = SimpleNamespace(stems={"vocals": str(vocals), "other": str(instrumental)})
+    reaper_stems = module._map_reaper_stems_from_result(result, tmp_path, registry_entry=registry_entry)
+    mapping_info = module._get_last_output_mapping_info()
+
+    assert set(reaper_stems) == {"vocals", "other"}
+    assert Path(reaper_stems["vocals"]).name == "vocals.wav"
+    assert Path(reaper_stems["other"]).name == "other.wav"
+    assert sorted(Path(p).name for p in mapping_info["raw_output_files"]) == sorted([vocals.name, instrumental.name])
+    assert mapping_info["instrumental_as_other"] is True
+
+
+def test_complement_output_mapping_requires_exactly_two_outputs(tmp_path):
+    module = _load_module()
+    vocals = tmp_path / "input_(Vocals).flac"
+    instrumental = tmp_path / "input_(Instrumental).flac"
+    extra = tmp_path / "input_(Drums).flac"
+    for path in (vocals, instrumental, extra):
+        path.write_bytes(b"x")
+    registry_entry = {
+        "output_contract": {
+            "stems": ["vocals", "instrumental"],
+            "stem_semantics": "complement",
+            "expected_outputs": 2,
+        }
+    }
+    result = SimpleNamespace(
+        stems={"vocals": str(vocals), "other": str(instrumental), "drums": str(extra)}
+    )
+
+    with pytest.raises(RuntimeError, match="Complement output contract expected 2 outputs"):
+        module._map_reaper_stems_from_result(result, tmp_path, registry_entry=registry_entry)

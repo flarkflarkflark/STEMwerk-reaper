@@ -94,6 +94,7 @@ _RUNTIME_REGISTRY_ALLOWED_FIELDS = {
     "output_contract",
     "validation",
 }
+_LAST_OUTPUT_MAPPING_INFO: Dict[str, Any] = {}
 
 
 def _prefer_vendored_stemwerk_core() -> None:
@@ -3247,7 +3248,27 @@ def _is_unexpected_cpu_downgrade(requested_device: str, preview_device: str) -> 
     return requested not in ("", "auto", "cpu")
 
 
-def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, str]:
+def _get_last_output_mapping_info() -> Dict[str, Any]:
+    return dict(_LAST_OUTPUT_MAPPING_INFO)
+
+
+def _complement_contract_info(registry_entry: Optional[Dict[str, Any]]) -> Tuple[bool, int]:
+    entry = registry_entry if isinstance(registry_entry, dict) else {}
+    contract = entry.get("output_contract") if isinstance(entry.get("output_contract"), dict) else {}
+    semantics = str(contract.get("stem_semantics") or "").strip()
+    stems = contract.get("stems") if isinstance(contract.get("stems"), list) else []
+    normalized_stems = [str(item or "").strip().lower() for item in stems]
+    try:
+        expected_outputs = int(contract.get("expected_outputs") or 0)
+    except Exception:
+        expected_outputs = 0
+    return semantics == "complement" and normalized_stems == ["vocals", "instrumental"], expected_outputs
+
+
+def _map_reaper_stems_from_result(
+    result: Any, output_root: Path, registry_entry: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
+    global _LAST_OUTPUT_MAPPING_INFO
     stem_mapping = {
         "vocals": ["vocals", "vocal", "Vocals"],
         "drums": ["drums", "drum", "Drums"],
@@ -3256,6 +3277,12 @@ def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, s
         "guitar": ["guitar", "Guitar"],
         "piano": ["piano", "Piano", "keys", "Keys"],
     }
+    complement_contract, complement_expected = _complement_contract_info(registry_entry)
+    mapping_info: Dict[str, Any] = {
+        "raw_output_files": [],
+        "mapped_reaper_stems": {},
+        "instrumental_as_other": False,
+    }
 
     reaper_stems: Dict[str, str] = {}
     for stem_name, stem_path in result.stems.items():
@@ -3263,11 +3290,14 @@ def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, s
         if not abs_path.exists():
             raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
 
+        mapping_info["raw_output_files"].append(str(abs_path))
         filename = abs_path.stem.lower()
         target_name = stem_name
         for map_name, patterns in stem_mapping.items():
             if any(p.lower() in filename for p in patterns):
                 target_name = map_name
+                if map_name == "other" and ("instrumental" in filename or "no_vocals" in filename):
+                    mapping_info["instrumental_as_other"] = True
                 break
 
         new_path = abs_path.parent / f"{target_name}.wav"
@@ -3277,8 +3307,20 @@ def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, s
             shutil.move(str(abs_path), str(new_path))
 
         reaper_stems[target_name] = str(new_path)
+        mapping_info["mapped_reaper_stems"][target_name] = str(new_path)
         print(f"  {target_name}:  {new_path}", file=sys.stderr)
 
+    if complement_contract:
+        if len(mapping_info["raw_output_files"]) != complement_expected:
+            raise RuntimeError(
+                f"Complement output contract expected {complement_expected} outputs, got {len(mapping_info['raw_output_files'])}"
+            )
+        if set(reaper_stems) != {"vocals", "other"}:
+            raise RuntimeError(
+                f"Complement output contract expected REAPER stems vocals+other, got {sorted(reaper_stems)}"
+            )
+
+    _LAST_OUTPUT_MAPPING_INFO = mapping_info
     return reaper_stems
 
 
@@ -4647,6 +4689,19 @@ def main():
     print(f"resolved_model_filename={run_model}", file=sys.stderr)
     if normal_model_selection.get("experimental_override_active"):
         print("experimental_override_active=1", file=sys.stderr)
+    registry_entry = normal_model_selection.get("registry_entry")
+    if isinstance(registry_entry, dict):
+        print(f"registry_model_id={registry_entry.get('id', '')}", file=sys.stderr)
+        print(f"registry_family={registry_entry.get('family', '')}", file=sys.stderr)
+        print(f"registry_architecture={registry_entry.get('architecture', '')}", file=sys.stderr)
+        contract = registry_entry.get("output_contract") if isinstance(registry_entry.get("output_contract"), dict) else {}
+        print(f"registry_stem_semantics={contract.get('stem_semantics', '')}", file=sys.stderr)
+        print(f"output_contract_expected={contract.get('expected_outputs', '')}", file=sys.stderr)
+        if (
+            str(registry_entry.get("architecture") or "").strip().lower() == "mdxc"
+            and str(run_model or "").strip().lower().endswith(".ckpt")
+        ):
+            print("onnx_provider_warning_expected_for_ckpt_mdxc=true", file=sys.stderr)
     print(f"model_name={run_model}", file=sys.stderr)
     print(f"device={resolved_device}", file=sys.stderr)
     print(f"backend={backend}", file=sys.stderr)
@@ -4688,7 +4743,19 @@ def main():
         # audio-separator writes model outputs inside sep.separate(); this phase
         # brackets the REAPER-facing output mapping and final stem renames.
         emit_phase("stem_write_start")
-        reaper_stems = _map_reaper_stems_from_result(result, output_root)
+        reaper_stems = _map_reaper_stems_from_result(result, output_root, registry_entry=registry_entry)
+        mapping_info = _get_last_output_mapping_info()
+        print(
+            "raw_output_files=" + json.dumps(mapping_info.get("raw_output_files") or [], ensure_ascii=False),
+            file=sys.stderr,
+        )
+        print(
+            "mapped_reaper_stems="
+            + json.dumps(mapping_info.get("mapped_reaper_stems") or {}, sort_keys=True, ensure_ascii=False),
+            file=sys.stderr,
+        )
+        if mapping_info.get("instrumental_as_other"):
+            print("instrumental_as_other=true", file=sys.stderr)
 
         emit_phase("stem_write_end")
 
