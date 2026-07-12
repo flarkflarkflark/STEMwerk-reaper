@@ -77,6 +77,23 @@ LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
 CUDA_DKS_RUNTIME_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
 DRUMSEP_HELPER_POLL_INTERVAL_SECONDS = 2.0
 DRUMSEP_HELPER_NO_OUTPUT_STALL_SECONDS = 60 * 60
+EXPERIMENTAL_MODELS_ENABLE_ENV = "STEMWERK_ENABLE_EXPERIMENTAL_MODELS"
+EXPERIMENTAL_MODEL_ID_ENV = "STEMWERK_EXPERIMENTAL_MODEL_ID"
+# Dev-only proof guard: hidden experimental primaries are not allowed through the
+# normal CLI model route without the explicit env gate below.
+EXPERIMENTAL_ENV_ONLY_MODEL_IDS = {"bs_roformer_viperx"}
+_RUNTIME_REGISTRY_ALLOWED_FIELDS = {
+    "id",
+    "kind",
+    "hidden",
+    "experimental",
+    "engine",
+    "backend_arg",
+    "architecture",
+    "family",
+    "output_contract",
+    "validation",
+}
 
 
 def _prefer_vendored_stemwerk_core() -> None:
@@ -1054,6 +1071,77 @@ def _resolve_run_model(args: argparse.Namespace) -> str:
         if requested:
             return requested
     return str(getattr(args, "model", "htdemucs") or "htdemucs")
+
+
+def _runtime_registry_path() -> Path:
+    return Path(__file__).resolve().with_name("models.json")
+
+
+def _load_runtime_registry_entry(model_id: str) -> Dict[str, Any]:
+    registry_path = _runtime_registry_path()
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    models = payload.get("models")
+    if not isinstance(models, list):
+        raise RuntimeError(f"Invalid runtime registry at {registry_path}: models list missing")
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("id") or "").strip() != model_id:
+            continue
+        return {key: entry.get(key) for key in _RUNTIME_REGISTRY_ALLOWED_FIELDS}
+    raise RuntimeError(f"Unknown experimental model id: {model_id}")
+
+
+def _resolve_normal_route_model_selection(args: argparse.Namespace) -> Dict[str, Any]:
+    requested_model_id = str(getattr(args, "model", "htdemucs") or "htdemucs").strip() or "htdemucs"
+    enable_value = str(os.environ.get(EXPERIMENTAL_MODELS_ENABLE_ENV, "") or "").strip()
+    experimental_model_id = str(os.environ.get(EXPERIMENTAL_MODEL_ID_ENV, "") or "").strip()
+    enable_present = enable_value != ""
+    model_present = experimental_model_id != ""
+
+    if not enable_present and not model_present:
+        if requested_model_id in EXPERIMENTAL_ENV_ONLY_MODEL_IDS:
+            raise RuntimeError(
+                "Hidden experimental model ids require the explicit env gate. "
+                f"Set both {EXPERIMENTAL_MODELS_ENABLE_ENV}=1 and {EXPERIMENTAL_MODEL_ID_ENV}=<model-id>."
+            )
+        return {
+            "requested_model_id": requested_model_id,
+            "effective_model_id": requested_model_id,
+            "model_for_separator": requested_model_id,
+            "registry_entry": None,
+            "experimental_override_active": False,
+        }
+
+    if not enable_present or not model_present:
+        print("experimental_env_gate=half_configured", file=sys.stderr)
+        raise RuntimeError(
+            "Half-configured experimental env gate: set both "
+            f"{EXPERIMENTAL_MODELS_ENABLE_ENV} and {EXPERIMENTAL_MODEL_ID_ENV} together."
+        )
+
+    if enable_value != "1":
+        raise RuntimeError(
+            f"{EXPERIMENTAL_MODELS_ENABLE_ENV} must be exactly '1' when {EXPERIMENTAL_MODEL_ID_ENV} is used."
+        )
+
+    registry_entry = _load_runtime_registry_entry(experimental_model_id)
+    if not bool(registry_entry.get("hidden")) or not bool(registry_entry.get("experimental")):
+        raise RuntimeError(
+            f"Experimental env override only allows hidden+experimental models; rejected: {experimental_model_id}"
+        )
+
+    backend_arg = str(registry_entry.get("backend_arg") or "").strip()
+    if not backend_arg:
+        raise RuntimeError(f"Experimental registry model has no backend_arg: {experimental_model_id}")
+
+    return {
+        "requested_model_id": requested_model_id,
+        "effective_model_id": experimental_model_id,
+        "model_for_separator": backend_arg,
+        "registry_entry": registry_entry,
+        "experimental_override_active": True,
+    }
 
 
 def _resolve_requested_stage2_model(args: argparse.Namespace) -> str:
@@ -4536,6 +4624,8 @@ def main():
             write_done("DONE")
         return _finish_benchmark_run(benchmark_sampler, 0)
 
+    normal_model_selection = _resolve_normal_route_model_selection(args)
+    run_model = str(normal_model_selection.get("model_for_separator") or run_model)
     requested_device, resolved_device, preview_text, live_device_ids = _resolve_normal_runtime_device(device_preference)
     preview_device_id, _sep, preview_device_name = preview_text.partition("|")
     print(f"normal_workflow_backend_seen_device_request={requested_device}", file=sys.stderr)
@@ -4552,6 +4642,11 @@ def main():
     print(f"workflow_mode={workflow_mode}", file=sys.stderr)
     print(f"route={route}", file=sys.stderr)
     print(f"stage={stage}", file=sys.stderr)
+    print(f"requested_model_id={normal_model_selection.get('requested_model_id', '')}", file=sys.stderr)
+    print(f"effective_model_id={normal_model_selection.get('effective_model_id', '')}", file=sys.stderr)
+    print(f"resolved_model_filename={run_model}", file=sys.stderr)
+    if normal_model_selection.get("experimental_override_active"):
+        print("experimental_override_active=1", file=sys.stderr)
     print(f"model_name={run_model}", file=sys.stderr)
     print(f"device={resolved_device}", file=sys.stderr)
     print(f"backend={backend}", file=sys.stderr)
