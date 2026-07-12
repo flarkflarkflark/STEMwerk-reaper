@@ -28,6 +28,7 @@ STEMwerk 2.3.0.4 - DrumSep timeout hotfix and docs/helper update
         <source file="../STEMwerk_Bootstrap_Linux.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux.sh</source>
         <source file="../STEMwerk_Bootstrap_Linux_Launcher.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh</source>
         <source file="../audio_separator_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/audio_separator_process.py</source>
+        <source file="../models.json" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/models.json</source>
 
         <source file="../_internal/STEMwerk_Devices.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Devices.lua</source>
         <source file="../_internal/STEMwerk_DrumKit_Workflow.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua</source>
@@ -40,6 +41,7 @@ STEMwerk 2.3.0.4 - DrumSep timeout hotfix and docs/helper update
         <source file="../_internal/STEMwerk_Managed_Python.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Managed_Python.lua</source>
         <source file="../_internal/STEMwerk_Managed_Python.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Managed_Python.sh</source>
         <source file="../_internal/STEMwerk_Messages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Messages.lua</source>
+        <source file="../_internal/STEMwerk_Model_Registry.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Model_Registry.lua</source>
         <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
         <source file="../_internal/STEMwerk_Platform.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Platform.lua</source>
         <source file="../_internal/STEMwerk_Progress_Render.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Progress_Render.lua</source>

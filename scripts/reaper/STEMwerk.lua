@@ -128,6 +128,13 @@ exec_capture = SYSTEM.exec_capture
 dofile(script_path .. "_internal/STEMwerk_Log.lua")
 dofile(script_path .. "_internal/STEMwerk_Timing.lua")
 
+-- Model registry (schema v2, metadata-only). Hard-failt bij kapotte/ontbrekende
+-- models.json conform registry_policy; runtime-gedrag leest de registry niet.
+-- Global (zoals SETTINGS/MODEL_AVAILABILITY): de main chunk zit op de
+-- Lua-limiet van 200 locals, een extra local compileert niet.
+MODEL_REGISTRY = dofile(script_path .. "_internal/STEMwerk_Model_Registry.lua")
+MODEL_REGISTRY.validate_preset_stages()
+
 SELF_CHECK_LOGGED = false
 function logSelfCheckOnce()
     if SELF_CHECK_LOGGED then return end
@@ -1326,12 +1333,16 @@ RUNTIME_DEVICE_PROBE = nil
 RUNTIME_DEVICE_UI_SEED_SOURCE = nil
 RUNTIME_DEVICE_UI_REFRESH_REASON = nil
 
--- Available models
-local MODELS = {
-    { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
-    { id = "htdemucs_ft", name = "Quality", desc = "htdemucs_ft - Best quality, slower (4 stems)" },
-    { id = "htdemucs_6s", name = "6-Stem", desc = "htdemucs_6s - Adds Guitar & Piano separation" },
-}
+-- Available models -- opgebouwd uit de registry (scripts/reaper/models.json).
+-- name komt uit ui.fallback_label (identiek aan de vorige literals); het
+-- voormalige desc-veld werd nergens gelezen en is vervallen.
+local MODELS = {}
+for _, regModel in ipairs(MODEL_REGISTRY.models()) do
+    MODELS[#MODELS + 1] = {
+        id = regModel.id,
+        name = (regModel.ui and regModel.ui.fallback_label) or regModel.id,
+    }
+end
 
 MODEL_AVAILABILITY = {
     bundledLimited = false,
@@ -1339,11 +1350,10 @@ MODEL_AVAILABILITY = {
 }
 
 do
-    local KNOWN_MODEL_IDS = {
-        htdemucs = true,
-        htdemucs_ft = true,
-        htdemucs_6s = true,
-    }
+    local KNOWN_MODEL_IDS = {}
+    for _, regModel in ipairs(MODEL_REGISTRY.models()) do
+        KNOWN_MODEL_IDS[regModel.id] = true
+    end
 
     local function parseModelAllowlist(raw)
         if not raw or raw == "" then return nil end
@@ -12670,11 +12680,11 @@ function renderMainColumns(ctx)
     local modelBtnFontSize = _ubfs
 
     local modelY = contentTop + S(20)
-    local modelDescKeys = {
-        htdemucs = "model_fast_desc",
-        htdemucs_ft = "model_quality_desc",
-        htdemucs_6s = "model_6stem_desc",
-    }
+    local modelDescKeys = {}
+    for _, regModel in ipairs(MODEL_REGISTRY.models()) do
+        modelDescKeys[regModel.id] = regModel.ui and regModel.ui.tooltip_key
+    end
+    -- Sneltoetsen blijven bewust lokaal (backlog: ui.shortcut in registry-schema).
     local modelShortcutKeys = {
         htdemucs = "F",
         htdemucs_ft = "Q",

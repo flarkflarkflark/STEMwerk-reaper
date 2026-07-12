@@ -22,6 +22,8 @@ REQUIRED_TOP_LEVEL_SCRIPTS = (
 )
 
 RUNTIME_DEP_REGRESSION_TARGET = "scripts/reaper/_internal/STEMwerk_Timing.lua"
+MODEL_REGISTRY_LUA = "scripts/reaper/_internal/STEMwerk_Model_Registry.lua"
+MODEL_REGISTRY_MANIFEST = "scripts/reaper/models.json"
 BOOTSTRAP_MACOS = "scripts/reaper/STEMwerk_Bootstrap_macOS.sh"
 SAMPLERATE_GUARD_REL = "_internal/stemwerk_samplerate_guard.py"
 SAMPLERATE_GUARD_PAYLOAD_PATH = f"scripts/reaper/{SAMPLERATE_GUARD_REL}"
@@ -267,6 +269,27 @@ def check_runtime_dependencies(root: Path, payload_paths: set[str]) -> Section:
         section.fail(f"regression guard: missing local dependency {timing_path}")
     if timing_path not in payload_paths:
         section.fail(f"regression guard: missing index.xml payload entry for {timing_path}")
+
+    # Paired data dependency: de model registry (Lua) hard-failt bij startup
+    # als scripts/reaper/models.json ontbreekt. Zodra de registry-module in
+    # gebruik is (lokaal aanwezig, als dep gedetecteerd of in de payload),
+    # MOET het manifest lokaal bestaan en in de index.xml payload zitten.
+    registry_in_use = (
+        (root / MODEL_REGISTRY_LUA).exists()
+        or MODEL_REGISTRY_LUA in deps
+        or MODEL_REGISTRY_LUA in payload_paths
+    )
+    if registry_in_use:
+        if not (root / MODEL_REGISTRY_MANIFEST).exists():
+            section.fail(
+                f"model registry guard: {MODEL_REGISTRY_LUA} in use but local manifest missing: {MODEL_REGISTRY_MANIFEST}"
+            )
+        if MODEL_REGISTRY_MANIFEST not in payload_paths:
+            section.fail(
+                f"model registry guard: missing index.xml payload entry for {MODEL_REGISTRY_MANIFEST}"
+            )
+        if section.status != "FAIL":
+            section.note(f"model registry manifest paired with {MODEL_REGISTRY_LUA}: OK")
 
     section.note(f"statically detected internal runtime deps: {len(deps)}")
     return section
