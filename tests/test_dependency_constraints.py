@@ -3581,10 +3581,10 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path, monkeypatch):
     assert "ImportError: audio_separator missing" in detail
 
 
-def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
+def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4019,10 +4019,10 @@ def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_pa
     assert "expected_schema=audio,model,training" in stderr
 
 
-def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4049,10 +4049,10 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     assert info["selection_policy"] == "fallback_cpu"
 
 
-def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path):
+def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4084,10 +4084,10 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     assert verify_calls and verify_calls[0][1] is False
 
 
-def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
+def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4113,10 +4113,10 @@ def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
     assert info["selection_policy"] == "explicit_cuda"
 
 
-def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path):
+def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     cpu_python = module._drumsep_runtime_python_path(base)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
@@ -4138,9 +4138,10 @@ def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(
     assert info["selection_policy"] == "auto_prefer_cuda"
 
 
-def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_is_missing(tmp_path):
+def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_is_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
-    module.sys.platform = "win32"
+    module.os = _OsProxy(module.os, name="nt")
+    monkeypatch.setattr(module.sys, "platform", "win32")
     base = tmp_path
     directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
     directml_python.parent.mkdir(parents=True, exist_ok=True)
@@ -4170,9 +4171,10 @@ def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_
     assert info["fallback_reason"] == "cuda_skipped:missing"
 
 
-def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path):
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
-    module.sys.platform = "win32"
+    module.os = _OsProxy(module.os, name="nt")
+    monkeypatch.setattr(module.sys, "platform", "win32")
     base = tmp_path
     directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
     cpu_python = base / ".venv-drumsep" / "Scripts" / "python.exe"
