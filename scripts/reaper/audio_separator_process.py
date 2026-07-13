@@ -2157,6 +2157,7 @@ def _select_drumsep_runtime(
     explicit_cuda = device_norm == "cuda" or bool(re.match(r"^cuda:\d+$", device_norm))
     explicit_rocm = device_norm == "rocm"
     explicit_directml = device_norm == "directml" or device_norm.startswith("directml:")
+    is_windows = sys.platform.startswith("win")
 
     def _normalized_device_request(value: str) -> str:
         if value == "cpu":
@@ -2200,7 +2201,7 @@ def _select_drumsep_runtime(
         reason = "missing" if directml_detail == "missing" else "broken"
         return None, reason, info
 
-    if os.name == "nt" and explicit_cuda:
+    if is_windows and explicit_cuda:
         print("drumsep_runtime_selection_policy=explicit_cuda", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
         selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
@@ -2225,7 +2226,7 @@ def _select_drumsep_runtime(
         reason = "missing" if cuda_detail == "missing" else "broken"
         return None, reason, info
 
-    if os.name == "nt" and normalized_request in {"auto", "gpu"}:
+    if is_windows and normalized_request in {"auto", "gpu"}:
         selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"
         print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)

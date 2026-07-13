@@ -1849,10 +1849,10 @@ en = {
         edks_complete_title = "Kit Split erfolgreich abgeschlossen!",
         drumkit_partial_title = "Direct Kit teilweise abgeschlossen",
         edks_partial_title = "Kit Split teilweise abgeschlossen",
-        drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstuetzt.",
+        drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstützt.",
         drumsep_backend_limited_body = "Dieses DrumSep-Backend lieferte derzeit nur Kick und Snare; für Direct Kit / Kit Split werden 6 Drum-Parts benötigt.",
-        drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfuegbar",
-        drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfuegbar. Verwende fuer Drum Kit Split Apple Silicon oder eine unterstuetzte GPU-/beschleunigte Plattform.",
+        drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfügbar",
+        drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfügbar. Verwende für Drum Kit Split Apple Silicon oder eine unterstützte GPU-/beschleunigte Plattform.",
         dks_multi_partial_created = "%d von %d Quellen verarbeitet; %d von %d Drum-Ausgaben erstellt.",
         dks_multi_partial_takes = "%d von %d Items verarbeitet; %d von %d Drum-Takes erstellt.",
         dks_multi_failed_jobs = "Fehlgeschlagene Jobs: %s",
@@ -1888,7 +1888,7 @@ en = {
         device_mps_label = "Apple MPS",
         device_mps_desc = "Apple MPS auf Apple Silicon verwenden. Empfohlen für normale Stems.",
         mps_failure_message = "Die MPS-Verarbeitung ist auf diesem Mac fehlgeschlagen. Bitte CPU als Gerät wählen und erneut versuchen.",
-        device_note_linux_no_gpu = "Kein GPU-Backend auf diesem Linux Setup erkannt. AMD GPUs brauchen typischerweise ROCm-unterstuetzte Hardware + einen ROCm PyTorch Build. Unter Windows laeuft AMD GPU Beschleunigung meist ueber DirectML.",
+        device_note_linux_no_gpu = "Kein GPU-Backend auf diesem Linux Setup erkannt. AMD GPUs brauchen typischerweise ROCm-unterstützte Hardware + einen ROCm PyTorch Build. Unter Windows läuft AMD GPU Beschleunigung meist über DirectML.",
         device_note_linux_cuda_build = "Ihre Python-Umgebung nutzt einen CUDA PyTorch Build (z.B. +cuXXX) aber CUDA ist nicht verfügbar. Fuer AMD GPUs unter Linux benoetigen Sie typischerweise einen ROCm-faehigen PyTorch Build (torch.version.hip gesetzt).",
         device_note_cuda_unavailable = "CUDA Backend nicht verfügbar (torch.cuda.is_available() ist false).",
         device_note_mps_unavailable = "Apple MPS Backend nicht verfügbar.",
@@ -1976,7 +1976,7 @@ en = {
         help_gallery_hint = "< > Navigieren | Scrollen zum Zoomen | ESC zum Schließen",
 
         -- About tab
-        about_title = "Ueber STEMwerk",
+        about_title = "Über STEMwerk",
         about_subtitle = "Stem Separation für REAPER",
         about_version = "Version",
         about_author = "Erstellt mit",
@@ -1990,7 +1990,7 @@ en = {
         about_feature_3 = "In-place oder neue Tracks Ausgabe",
         about_feature_4 = "Multi-Track parallele Verarbeitung",
         about_feature_5 = "Wunderschoene prozedurale Kunst Animationen",
-        about_shortcuts_title = "Tastaturkuerzel",
+        about_shortcuts_title = "Tastaturkürzel",
         about_tip = "Tipp: Drücke R zum Kamera-Reset, Leertaste für neue Kunst",
 
         -- Welcome tab
@@ -2096,7 +2096,7 @@ en = {
         help_native_tabs_hint = "<-/-> Reiter  |  ESC zurück",
         help_feature_vocals = "Gesang für Remixes oder Karaoke extrahieren",
         help_feature_vocals_desc = "Leadgesang, Backing-Vocals, Sprache",
-        help_feature_drums = "Schlagzeug zum Samplen oder Ueben isolieren",
+        help_feature_drums = "Schlagzeug zum Samplen oder Üben isolieren",
         help_feature_drums_desc = "Kick, Snare, Hi-Hats, Percussion",
         help_feature_bass = "Bass zum Mischen oder Transkribieren trennen",
         help_feature_bass_desc = "Bassgitarre, Synth-Bass, tiefe Frequenzen",
@@ -2117,13 +2117,13 @@ en = {
         help_step3_detail = "Direct Kit teilt Audio direkt in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf. Kit Split isoliert zuerst die Drums und teilt danach diesen Drum-Stem auf.",
         help_pro_tip = "Pro Tipp: Auto verwendet Apple MPS, AMD ROCm oder NVIDIA CUDA, wenn verfügbar. CPU-Fallback wird unterstützt, aber Drum Kit ist auf CPU deutlich langsamer.",
         tips_hints = "Tipps",
-        keyboard_shortcuts = "Tastaturkuerzel:",
+        keyboard_shortcuts = "Tastaturkürzel:",
         open_help = "Hilfe öffnen",
         close_cancel = "Schließen / Abbrechen",
         start_stemwerk = "STEMwerk starten",
 
         -- Stems tab
-        help_stems_title = "Ueber Stems",
+        help_stems_title = "Über Stems",
         help_stems_sub = "Was jeder Stem enthält",
         help_stem_vocals_desc = "Hauptgesang, Hintergrundgesang, Sprache",
         help_stem_drums_desc = "Kick, Snare, Hi-Hats, Becken, Perkussion",
@@ -2146,7 +2146,7 @@ en = {
         help_reaper_logs_title = "Logs und Diagnose",
         help_reaper_logs_body = "Bei Fehlern speichert STEMwerk kleine Logs (stdout, ffmpeg, separation log) im selben Ordner. Nützlich für Debugging oder Support.",
         help_reaper_cleanup_title = "Aufräumen",
-        help_reaper_cleanup_body = "Option \"Temp-Dateien behalten\" unter Modell behält die Tempmappe für Troubleshooting. Standardmäßig raeumt STEMwerk temporäre Dateien nach einem erfolgreichen Lauf auf.",
+        help_reaper_cleanup_body = "Option \"Temp-Dateien behalten\" unter Modell behält die Tempmappe für Troubleshooting. Standardmäßig räumt STEMwerk temporäre Dateien nach einem erfolgreichen Lauf auf.",
 
         -- Stem names for help
         stem_vocals = "Gesang",

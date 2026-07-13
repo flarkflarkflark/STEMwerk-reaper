@@ -5,6 +5,8 @@ on:
     branches:
       - ci/macos-apple-silicon-backend-smoke
   pull_request:
+  schedule:
+    - cron: "23 4 * * 1"
   workflow_dispatch:
 
 jobs:
@@ -47,6 +49,15 @@ jobs:
       - name: Verify vendored stemwerk-core bundle
         run: |
           test -f scripts/reaper/vendor/stemwerk-core/pyproject.toml
+
+      - name: Install Lua runtime for Lua guard tests
+        run: |
+          if ! command -v lua >/dev/null 2>&1 || ! command -v luac >/dev/null 2>&1; then
+            brew update
+            brew install lua
+          fi
+          lua -v
+          luac -v
 
       - name: Create venv and install backend smoke dependencies
         run: |
