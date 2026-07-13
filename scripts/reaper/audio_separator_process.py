@@ -3266,6 +3266,53 @@ def _get_last_output_mapping_info() -> Dict[str, Any]:
     return dict(_LAST_OUTPUT_MAPPING_INFO)
 
 
+def _match_named_stem_label(path: Path, labels: Set[str]) -> Optional[str]:
+    stem_name = path.stem
+    for label in re.findall(r"\(([^()]+)\)", stem_name):
+        normalized = str(label or "").strip().lower()
+        if normalized in labels:
+            return normalized
+    return None
+
+
+def _infer_complement_basename(path: Path) -> str:
+    stem_name = path.stem
+    match = re.match(r"^(?P<prefix>.+?)_\((?:vocals|instrumental|no vocals|no_vocals)\)", stem_name, re.IGNORECASE)
+    if match:
+        return str(match.group("prefix") or "").strip().lower()
+    return ""
+
+
+def _discover_complement_fallback_stems(
+    output_root: Path, known_paths: List[Path]
+) -> Tuple[Dict[str, Path], List[str]]:
+    known_resolved = {str(path.resolve()).lower() for path in known_paths}
+    prefix_hints = {hint for hint in (_infer_complement_basename(path) for path in known_paths) if hint}
+    label_to_target = {"vocals": "vocals", "instrumental": "other", "no vocals": "other", "no_vocals": "other"}
+    candidates: Dict[str, Path] = {}
+    candidate_names: List[str] = []
+    audio_suffixes = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aif", ".aiff"}
+
+    for candidate in sorted(output_root.iterdir(), key=lambda p: p.name.lower()):
+        if not candidate.is_file() or candidate.suffix.lower() not in audio_suffixes:
+            continue
+        resolved_key = str(candidate.resolve()).lower()
+        if resolved_key in known_resolved:
+            continue
+        label = _match_named_stem_label(candidate, set(label_to_target))
+        if label is None:
+            continue
+        prefix = _infer_complement_basename(candidate)
+        if prefix_hints and prefix and prefix not in prefix_hints:
+            continue
+        target_name = label_to_target[label]
+        candidate_names.append(str(candidate))
+        if target_name not in candidates:
+            candidates[target_name] = candidate
+
+    return candidates, candidate_names
+
+
 def _complement_contract_info(registry_entry: Optional[Dict[str, Any]]) -> Tuple[bool, int]:
     entry = registry_entry if isinstance(registry_entry, dict) else {}
     contract = entry.get("output_contract") if isinstance(entry.get("output_contract"), dict) else {}
@@ -3312,13 +3359,46 @@ def _map_reaper_stems_from_result(
         "raw_output_files": [],
         "mapped_reaper_stems": {},
         "instrumental_as_other": False,
+        "fallback_output_scan_used": False,
+        "fallback_output_scan_candidates": [],
     }
 
+    source_entries: List[Tuple[str, Path]] = []
     reaper_stems: Dict[str, str] = {}
     for stem_name, stem_path in result.stems.items():
         abs_path = _resolve_stem_path(output_root, stem_path)
         if not abs_path.exists():
             raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
+        source_entries.append((stem_name, abs_path))
+
+    if complement_contract and len(source_entries) < complement_expected:
+        existing_targets = set()
+        for stem_name, abs_path in source_entries:
+            filename = abs_path.stem.lower()
+            if "instrumental" in filename or "no_vocals" in filename:
+                existing_targets.add("other")
+            elif "vocals" in filename:
+                existing_targets.add("vocals")
+            elif str(stem_name or "").strip().lower() in {"vocals", "other"}:
+                existing_targets.add(str(stem_name or "").strip().lower())
+        fallback_stems, fallback_candidates = _discover_complement_fallback_stems(
+            output_root,
+            [path for _, path in source_entries],
+        )
+        mapping_info["fallback_output_scan_candidates"] = fallback_candidates
+        added = False
+        for target_name in ("vocals", "other"):
+            if target_name in existing_targets:
+                continue
+            fallback_path = fallback_stems.get(target_name)
+            if fallback_path is None:
+                continue
+            source_entries.append((target_name, fallback_path))
+            existing_targets.add(target_name)
+            added = True
+        mapping_info["fallback_output_scan_used"] = added
+
+    for stem_name, abs_path in source_entries:
 
         mapping_info["raw_output_files"].append(str(abs_path))
         filename = abs_path.stem.lower()
@@ -3340,6 +3420,8 @@ def _map_reaper_stems_from_result(
         mapping_info["mapped_reaper_stems"][target_name] = str(new_path)
         print(f"  {target_name}:  {new_path}", file=sys.stderr)
 
+    _LAST_OUTPUT_MAPPING_INFO = mapping_info
+
     if complement_contract:
         if len(mapping_info["raw_output_files"]) != complement_expected:
             raise RuntimeError(
@@ -3350,7 +3432,6 @@ def _map_reaper_stems_from_result(
                 f"Complement output contract expected REAPER stems vocals+other, got {sorted(reaper_stems)}"
             )
 
-    _LAST_OUTPUT_MAPPING_INFO = mapping_info
     return reaper_stems
 
 
@@ -4771,6 +4852,15 @@ def main():
         print(
             "mapped_reaper_stems="
             + json.dumps(mapping_info.get("mapped_reaper_stems") or {}, sort_keys=True, ensure_ascii=False),
+            file=sys.stderr,
+        )
+        print(
+            "fallback_output_scan_candidates="
+            + json.dumps(mapping_info.get("fallback_output_scan_candidates") or [], ensure_ascii=False),
+            file=sys.stderr,
+        )
+        print(
+            f"fallback_output_scan_used={'true' if mapping_info.get('fallback_output_scan_used') else 'false'}",
             file=sys.stderr,
         )
         if mapping_info.get("instrumental_as_other"):

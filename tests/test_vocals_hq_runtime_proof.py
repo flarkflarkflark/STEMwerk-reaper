@@ -260,6 +260,82 @@ def test_complement_output_mapping_accepts_vocals_and_instrumental(tmp_path, suf
     assert Path(reaper_stems["other"]).name == "other.wav"
     assert sorted(Path(p).name for p in mapping_info["raw_output_files"]) == sorted([vocals.name, instrumental.name])
     assert mapping_info["instrumental_as_other"] is True
+    assert mapping_info["fallback_output_scan_used"] is False
+
+
+def test_complement_output_mapping_falls_back_to_output_scan_for_windows_shape(tmp_path):
+    module = _load_module()
+    vocals = tmp_path / "input_20s_(Vocals)_model_bs_roformer_ep_317_sdr_12.wav"
+    instrumental = tmp_path / "input_20s_(Instrumental)_model_bs_roformer_ep_317_sdr_12.wav"
+    vocals.write_bytes(b"vocals")
+    instrumental.write_bytes(b"instrumental")
+    registry_entry = {
+        "output_contract": {
+            "stems": ["vocals", "instrumental"],
+            "stem_semantics": "complement",
+            "expected_outputs": 2,
+        }
+    }
+
+    result = SimpleNamespace(stems={"vocals": str(vocals)})
+    reaper_stems = module._map_reaper_stems_from_result(result, tmp_path, registry_entry=registry_entry)
+    mapping_info = module._get_last_output_mapping_info()
+
+    assert set(reaper_stems) == {"vocals", "other"}
+    assert Path(reaper_stems["vocals"]).name == "vocals.wav"
+    assert Path(reaper_stems["other"]).name == "other.wav"
+    assert sorted(Path(p).name for p in mapping_info["raw_output_files"]) == sorted([vocals.name, instrumental.name])
+    assert mapping_info["instrumental_as_other"] is True
+    assert mapping_info["fallback_output_scan_used"] is True
+    assert Path(mapping_info["fallback_output_scan_candidates"][0]).name == instrumental.name
+
+
+def test_complement_output_mapping_ignores_stale_other_input_during_fallback(tmp_path):
+    module = _load_module()
+    vocals = tmp_path / "input_20s_(Vocals)_model_bs_roformer_ep_317_sdr_12.wav"
+    stale_instrumental = tmp_path / "old_take_(Instrumental)_model_bs_roformer_ep_317_sdr_12.wav"
+    vocals.write_bytes(b"vocals")
+    stale_instrumental.write_bytes(b"instrumental")
+    registry_entry = {
+        "output_contract": {
+            "stems": ["vocals", "instrumental"],
+            "stem_semantics": "complement",
+            "expected_outputs": 2,
+        }
+    }
+
+    result = SimpleNamespace(stems={"vocals": str(vocals)})
+
+    with pytest.raises(RuntimeError, match="Complement output contract expected 2 outputs"):
+        module._map_reaper_stems_from_result(result, tmp_path, registry_entry=registry_entry)
+
+    mapping_info = module._get_last_output_mapping_info()
+    assert mapping_info["fallback_output_scan_used"] is False
+    assert mapping_info["fallback_output_scan_candidates"] == []
+
+
+def test_non_complement_contract_does_not_scan_for_instrumental_fallback(tmp_path):
+    module = _load_module()
+    vocals = tmp_path / "input_20s_(Vocals)_model_bs_roformer_ep_317_sdr_12.wav"
+    instrumental = tmp_path / "input_20s_(Instrumental)_model_bs_roformer_ep_317_sdr_12.wav"
+    vocals.write_bytes(b"vocals")
+    instrumental.write_bytes(b"instrumental")
+    registry_entry = {
+        "output_contract": {
+            "stems": ["vocals", "other"],
+            "stem_semantics": "independent",
+            "expected_outputs": 2,
+        }
+    }
+
+    result = SimpleNamespace(stems={"vocals": str(vocals)})
+    reaper_stems = module._map_reaper_stems_from_result(result, tmp_path, registry_entry=registry_entry)
+    mapping_info = module._get_last_output_mapping_info()
+
+    assert set(reaper_stems) == {"vocals"}
+    assert mapping_info["fallback_output_scan_used"] is False
+    assert mapping_info["fallback_output_scan_candidates"] == []
+    assert mapping_info["instrumental_as_other"] is False
 
 
 def test_complement_output_mapping_requires_exactly_two_outputs(tmp_path):
