@@ -1370,7 +1370,8 @@ def test_device_refresh_has_module_scope_friendly_name_sanitizer():
     assert 'if not name then return "" end' in script
     assert 'raw = tostring(name):gsub("%c", " ")' in script
     assert script.index("local function sanitizeFriendlyName(name)") < script.index("function DEVICE_RUNTIME.refreshRuntimeDevices(force)")
-    assert 'local short = sanitizeFriendlyName(d.fullName or d.name)' in script
+    assert 'local base = sanitizeFriendlyName(dev.fullName or dev.name or dev.id) or ""' in script
+    assert 'base = sanitizeFriendlyName(dev.name or dev.id) or ""' in script
 
 
 def test_early_stem_resolver_uses_safe_drumkit_route_helper_before_progress_init():
@@ -1508,7 +1509,7 @@ def test_post_bootstrap_trusts_verified_bootstrap_log_over_stale_probe_failures(
 def test_verify_only_accepts_intel_macos_cpu_fallback_when_imports_and_paths_are_ok():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
-    assert "function reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)" in setup_internal
+    assert "function reconcileCheckVerification(state, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)" in setup_internal
     assert "local canAcceptMacIntelCpuFallback = (" in setup_internal
     assert 'OS == "macOS"' in setup_internal
     assert 'MAC_ARCH == "x86_64"' in setup_internal
@@ -3560,7 +3561,7 @@ def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, 
     assert "stage2_model_load" not in captured.err
 
 
-def test_drumsep_runtime_broken_reports_import_error(tmp_path):
+def test_drumsep_runtime_broken_reports_import_error(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     runtime_python = module._drumsep_runtime_python_path(tmp_path)
     runtime_python.parent.mkdir(parents=True)
@@ -3572,7 +3573,7 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path):
         stdout = ""
         stderr = "ImportError: audio_separator missing"
 
-    module.subprocess.run = lambda *args, **kwargs: Completed()
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Completed())
 
     ok, detail, _payload = module._verify_drumsep_runtime(runtime_python)
 
@@ -3580,10 +3581,10 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path):
     assert "ImportError: audio_separator missing" in detail
 
 
-def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
+def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4018,10 +4019,10 @@ def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_pa
     assert "expected_schema=audio,model,training" in stderr
 
 
-def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4048,10 +4049,10 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     assert info["selection_policy"] == "fallback_cpu"
 
 
-def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path):
+def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4083,10 +4084,10 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     assert verify_calls and verify_calls[0][1] is False
 
 
-def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
+def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4112,10 +4113,10 @@ def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
     assert info["selection_policy"] == "explicit_cuda"
 
 
-def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path):
+def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    module.sys.platform = "linux"
+    monkeypatch.setattr(module.sys, "platform", "linux")
     base = tmp_path
     cpu_python = module._drumsep_runtime_python_path(base)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
@@ -4137,9 +4138,10 @@ def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(
     assert info["selection_policy"] == "auto_prefer_cuda"
 
 
-def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_is_missing(tmp_path):
+def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_is_missing(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
-    module.sys.platform = "win32"
+    module.os = _OsProxy(module.os, name="nt")
+    monkeypatch.setattr(module.sys, "platform", "win32")
     base = tmp_path
     directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
     directml_python.parent.mkdir(parents=True, exist_ok=True)
@@ -4169,9 +4171,10 @@ def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_
     assert info["fallback_reason"] == "cuda_skipped:missing"
 
 
-def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path):
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
-    module.sys.platform = "win32"
+    module.os = _OsProxy(module.os, name="nt")
+    monkeypatch.setattr(module.sys, "platform", "win32")
     base = tmp_path
     directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
     cpu_python = base / ".venv-drumsep" / "Scripts" / "python.exe"
@@ -4809,15 +4812,13 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
 
     assert 'Uninstallable=no' in patch_iss
     assert 'STEMwerk_Offline_Patch.iss' in patch_shell
-    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
-    assert '#define ReleaseAssetVersion MyAppVersion' in patch_iss
-    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
-    assert 'STEMWERK_RELEASE_ASSET_VERSION="${STEMWERK_RELEASE_ASSET_VERSION:-$STEMWERK_VERSION}"' in patch_shell
-    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
-    assert '[Run]' in patch_iss
-    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
-    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
-    assert 'Flags: runhidden waituntilterminated' in patch_iss
+    assert "#define MyAppVersion GetEnv('STEMWERK_VERSION')" in patch_iss
+    assert 'OutputBaseFilename=STEMwerk-{#MyAppVersion}-update-patch' in patch_iss
+    assert 'export STEMWERK_VERSION="${STEMWERK_VERSION:-$(tr -d \'\\r\\n\' < "$REPO_DIR/VERSION")}"' in patch_shell
+    assert 'Source: "..\\..\\scripts\\reaper\\*"; DestDir: "{app}"' in patch_iss
+    assert 'Source: "..\\..\\i18n\\*"; DestDir: "{app}\\i18n"' in patch_iss
+    assert '[Run]' not in patch_iss
+    assert 'STEMwerk_Installer_Windows.ps1' not in patch_iss
 
 
 def test_release_docs_retire_windows_update_patch_for_2304():
@@ -4825,8 +4826,8 @@ def test_release_docs_retire_windows_update_patch_for_2304():
     release_notes = Path("docs/RELEASE_2.3.0.4.md").read_text(encoding="utf-8")
     installer_readme = Path("installer/README.md").read_text(encoding="utf-8")
 
-    assert "Existing Windows users should uninstall the old STEMwerk version first" in readme
-    assert "A clean reinstall avoids stale runtime/backend state" in readme
+    assert "Windows users should uninstall older STEMwerk versions first" in readme
+    assert "latest Windows setup/runtime fixes" in readme
     assert "STEMwerk-2.3.0.4-update-patch.exe" not in readme
     assert "The Windows update-patch asset remains retired and is not published." in release_notes
     assert "supersedes the original `2.3.0.0` Windows full installers" in release_notes
@@ -4956,8 +4957,8 @@ def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
     installer = Path("installer/windows/STEMwerk_Installer_Windows.ps1").read_text()
 
     assert '$offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")' in script
-    assert '$bundledDrumsepWheelsDir = Join-Path $bundledRuntimeDir "drumsep-wheels"' in script
-    assert '$bundledDrumsepModelsDir = Join-Path $bundledRuntimeDir "drumsep-models"' in script
+    assert '$bundledDrumsepWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-wheels")' in script
+    assert '$bundledDrumsepModelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-models")' in script
     assert 'function HasBundledDrumsepWheels' in script
     assert 'function InstallWithPipOfflineSources' in script
     assert 'function InstallBundledDrumsepPackages' in script
@@ -5328,14 +5329,14 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_complete_title = "Direct Kit erfolgreich abgeschlossen!"' in langs
     assert 'drumsep_backend_limited_title = "Drum Kit backend not yet supported."' in langs
     assert 'drumsep_backend_limited_title = "Drum Kit-backend wordt nog niet ondersteund."' in langs
-    assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstuetzt."' in langs
+    assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstützt."' in langs
     assert 'drumsep_backend_limited_body = "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split."' in langs
     assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split unavailable on Intel Mac"' in langs
     assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform."' in langs
     assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split niet beschikbaar op Intel Mac"' in langs
     assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is in deze release niet ingeschakeld op Intel Mac. Normale CPU-stems zijn beschikbaar. Gebruik voor Drum Kit Split Apple Silicon of een ondersteund GPU/versneld platform."' in langs
-    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfuegbar"' in langs
-    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfuegbar. Verwende fuer Drum Kit Split Apple Silicon oder eine unterstuetzte GPU-/beschleunigte Plattform."' in langs
+    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfügbar"' in langs
+    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfügbar. Verwende für Drum Kit Split Apple Silicon oder eine unterstützte GPU-/beschleunigte Plattform."' in langs
     assert 'drumkit_result_track_many = "drum tracks"' in langs
     assert 'drumkit_result_track_many = "drumtracks"' in langs
     assert 'drumkit_result_track_many = "Drum-Tracks"' in langs
@@ -5627,8 +5628,8 @@ def test_single_track_footer_uses_shared_runtime_resolution_without_rocm_cuda_re
 
 
 def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations():
-    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
-    helpers = Path("scripts/reaper/_internal/STEMwerk_Helpers.lua").read_text()
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
+    helpers = Path("scripts/reaper/_internal/STEMwerk_Helpers.lua").read_text(encoding="utf-8")
     combined = langs + "\n" + helpers
 
     forbidden = [
@@ -6027,7 +6028,8 @@ def test_direct_kit_running_rows_strip_prefixed_stage2_copy_but_extract_keeps_it
     assert 'or flat == "splitting drum kit"' in progress_render
     assert 'return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")' in progress_render
     assert 'return progressUiLabel("progress_stage_splitting_drum_kit", "Stage 2/2: Creating drum parts…")' in progress_render
-    assert 'if isExtractDrumKitWorkflowActive()\n                    and inferProgressStageIndex(job.stage) == 2' in main_script
+    assert 'local stageIdx = inferProgressStageIndex(progressState.stage)' in main_script
+    assert 'local stageBadge = stageIdx == 1' in main_script
     assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' not in main_script
 
 
@@ -6116,7 +6118,7 @@ def test_backend_limited_drumsep_message_preempts_model_failure_and_generic_no_s
     assert 'lowerLog:find("error_reason=drumsep_backend_runtime_limited", 1, true)' in main_script
     assert 'lowerLog:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)' in main_script
     assert 'trSafeValue("drumsep_backend_limited_body", "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split.")' in main_script
-    assert main_script.index('trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")') < main_script.index('local msg = "Model download/load failed.\\n"')
+    assert main_script.index('trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")') < main_script.index('local msg = "Drum Kit Split separation failed.\\n"')
     assert 'SW_LOG.readFileSnippet(logPath, 12000)' in main_script
 
 
@@ -6461,9 +6463,12 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'local cudaPython = resolveRuntimePython(cudaState, defaultRuntimePython(".venv-drumsep-cuda"))' in script
     assert 'local directmlPython = resolveRuntimePython(directmlState, defaultRuntimePython(".venv-drumsep-directml"))' in script
     assert 'local capabilityState = readEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}' in script
-    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)' in script
+    assert 'local cudaStateForUi = cudaState' in script
+    assert 'local cudaPythonForUi = cudaPython' in script
+    assert 'and schedulerRuntimeHasCudaCapability(cpuState, genericCudaPython, capabilityState)' in script
+    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaStateForUi, cudaPythonForUi, capabilityState)' in script
     assert 'local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)' in script
-    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)' in script
+    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaStateForUi, capabilityState)' in script
     assert 'local directmlDeviceNames = schedulerRuntimeDirectmlDeviceNames(directmlState, capabilityState)' in script
     assert 'rocmReady = rocmReady and rocmPython ~= ""' in script
     assert 'local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""' in script
@@ -7223,30 +7228,20 @@ def test_windows_update_patch_forces_current_runtime_repair_after_script_update(
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
     patch_build_ps1 = Path("installer/windows/build_offline_patch_installer.ps1").read_text(encoding="utf-8")
 
-    assert "WizardForm.Caption := 'Setup - STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
-    assert "WizardForm.WelcomeLabel1.Caption := 'STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
-    assert "'Updating STEMwerk {#ReleaseAssetVersion} installation to script/runtime v{#MyAppVersion}." in patch_iss
-    assert "'STEMwerk has been updated. Installed script/runtime version: v{#MyAppVersion}.'" in patch_iss
-    assert "'- Release/update asset: v{#ReleaseAssetVersion}'" in patch_iss
-    assert "ShowReleaseNotesCheckbox.Caption := 'Show what changed in installed payload v{#MyAppVersion}';" in patch_iss
-    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
-    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
-    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
-    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
-    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
-    assert 'runhidden waituntilterminated' in patch_iss
-    assert 'runtime state, Drum Kit runtime, and offline model readiness' in patch_iss
-    assert "StepLabelS.Caption := '1. Runtime';" in patch_iss
-    assert "StepLabelT.Caption := '2. Python + venv';" in patch_iss
-    assert "StepLabelE.Caption := '3. FFmpeg';" in patch_iss
-    assert "StepLabelM.Caption := '4. Core packages';" in patch_iss
-    assert "StepLabelW.Caption := '5. Drum Kit';" in patch_iss
-    assert "LogMemo := TNewMemo.Create(WizardForm);" in patch_iss
-    assert "LogTimerId := SetTimer(0, 0, 500, LogTimerProc);" in patch_iss
-    assert "StatusDetailLabel.Caption := 'Current task:'" in patch_iss
-    assert "'Do not close this window.'" in patch_iss
+    assert "WizardForm.WelcomeLabel1.Caption := 'STEMwerk update patch';" in patch_iss
+    assert "'- STEMwerk for REAPER: previous install -> v' + NewVersion" in patch_iss
+    assert "'Patch completed successfully.'" in patch_iss
+    assert "Result := '- STEMwerk for REAPER: v' + Trim(DetectedOldVersion) + ' -> v' + NewVersion;" in patch_iss
+    assert "ShowReleaseNotesCheckbox.Caption := 'Show what changed in v{#MyAppVersion}';" in patch_iss
+    assert 'Source: "..\\..\\scripts\\reaper\\*"; DestDir: "{app}"' in patch_iss
+    assert "#define MyAppVersion GetEnv('STEMWERK_VERSION')" in patch_iss
+    assert 'OutputBaseFilename=STEMwerk-{#MyAppVersion}-update-patch' in patch_iss
+    assert 'STEMwerk_Installer_Windows.ps1' not in patch_iss
+    assert '[Run]' not in patch_iss
+    assert "BuildVersionTransitionText" in patch_iss
+    assert "BuildPatchFinishedSummary" in patch_iss
     assert '$env:STEMWERK_VERSION = $version' in patch_build_ps1
-    assert '$env:STEMWERK_RELEASE_ASSET_VERSION = $version' in patch_build_ps1
+    assert 'STEMWERK_RELEASE_ASSET_VERSION' not in patch_build_ps1
     assert '$bootstrap = Join-NormalizedWindowsPath $scriptRoot @("STEMwerk_Bootstrap_Windows.ps1")' in installer
     assert '$env:STEMWERK_INSTALLER = "1"' in installer
     assert 'if (Test-Path $stateFile) { Remove-Item $stateFile -Force -ErrorAction SilentlyContinue }' in installer
@@ -7271,6 +7266,13 @@ def test_windows_setup_guides_are_release_clean_and_describe_offline_allmodels_p
         assert "328c614" not in text
         assert "pre-release" not in text.lower()
         assert "offline-bundled-cpu-allmodels" in text
-        assert "offline-bundled-nvidia-allmodels" in text
-        assert "offline-bundled-amd-allmodels" in text
+        assert "offline-bundled-nvidia-gpu-allmodels" in text
+        assert "offline-bundled-amd-gpu-allmodels" in text
+        assert (
+            "offline allmodels installers remain on the `2.3.0.0` release line" in text
+            or "grote offline allmodels-installers blijven op de `2.3.0.0`-release" in text
+            or "großen Offline-Allmodels-Installer bleiben auf der `2.3.0.0`-Release-Linie" in text
+            or "volledig offline" in text
+            or "vollstaendig offline" in text
+        )
         assert "Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts." in text or "De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPER-scripts." in text or "Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REAPER-Skripte." in text
