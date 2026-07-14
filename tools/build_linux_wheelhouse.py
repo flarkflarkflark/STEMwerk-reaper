@@ -74,11 +74,12 @@ class WheelhouseSpec:
 SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ("main", "cpu"): WheelhouseSpec(
         requirements=(
-            "audio-separator==0.23.0",
-            "numpy==1.26.4",
-            "numba==0.59.1",
-            "llvmlite==0.42.0",
-            "scipy==1.17.1",
+            "audio-separator==0.44.3",
+            "numpy==2.4.4",
+            "numba==0.66.0",
+            "llvmlite==0.48.0",
+            "scipy==1.18.0",
+            "beartype==0.18.5",
             "onnxruntime",
             "torch==2.5.1",
             "torchvision==0.20.1",
@@ -88,11 +89,12 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("main", "cuda"): WheelhouseSpec(
         requirements=(
-            "audio-separator[gpu]==0.23.0",
-            "numpy==1.26.4",
-            "numba==0.59.1",
-            "llvmlite==0.42.0",
-            "scipy==1.17.1",
+            "audio-separator[gpu]==0.44.3",
+            "numpy==2.4.4",
+            "numba==0.66.0",
+            "llvmlite==0.48.0",
+            "scipy==1.18.0",
+            "beartype==0.18.5",
             "onnxruntime",
             "torch==2.5.1",
             "torchvision==0.20.1",
@@ -101,11 +103,12 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("main", "rocm"): WheelhouseSpec(
         requirements=(
-            "audio-separator==0.23.0",
-            "numpy==1.26.4",
-            "numba==0.59.1",
-            "llvmlite==0.42.0",
-            "scipy==1.17.1",
+            "audio-separator==0.44.3",
+            "numpy==2.4.4",
+            "numba==0.66.0",
+            "llvmlite==0.48.0",
+            "scipy==1.18.0",
+            "beartype==0.18.5",
             "onnxruntime",
         ),
         index_url="https://download.pytorch.org/whl/rocm6.4",
