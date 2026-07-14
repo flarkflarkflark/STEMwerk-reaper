@@ -74,7 +74,7 @@ class WheelhouseSpec:
 SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ("main", "cpu"): WheelhouseSpec(
         requirements=(
-            "audio-separator==0.23.0",
+            "audio-separator==0.44.3",
             "numpy==1.26.4",
             "numba==0.59.1",
             "llvmlite==0.42.0",
@@ -88,7 +88,7 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("main", "cuda"): WheelhouseSpec(
         requirements=(
-            "audio-separator[gpu]==0.23.0",
+            "audio-separator[gpu]==0.44.3",
             "numpy==1.26.4",
             "numba==0.59.1",
             "llvmlite==0.42.0",
@@ -101,7 +101,7 @@ SPECS: Dict[tuple[str, str], WheelhouseSpec] = {
     ),
     ("main", "rocm"): WheelhouseSpec(
         requirements=(
-            "audio-separator==0.23.0",
+            "audio-separator==0.44.3",
             "numpy==1.26.4",
             "numba==0.59.1",
             "llvmlite==0.42.0",

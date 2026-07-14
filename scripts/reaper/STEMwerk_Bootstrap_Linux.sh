@@ -7,6 +7,10 @@ BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled"
 PINNED_TORCH_VERSION="2.5.1"
 PINNED_TORCHAUDIO_VERSION="2.5.1"
 PINNED_TORCHVISION_VERSION="0.20.1"
+PINNED_AUDIO_SEPARATOR_VERSION="0.44.3"
+MAIN_AUDIO_SEPARATOR_PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
+MAIN_GPU_AUDIO_SEPARATOR_PACKAGE="audio-separator[gpu]==${PINNED_AUDIO_SEPARATOR_VERSION}"
+PINNED_BEARTYPE_VERSION="0.18.5"
 ROCM7_GFX1201_TORCH_VERSION="2.10.0"
 ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0"
 ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0"
@@ -1487,7 +1491,7 @@ PY
 )"
   case "${_probe}" in
     rebuild\|*)
-      log_step "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator 0.23.0 compatibility"
+      log_step "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} compatibility"
       return 0
       ;;
     ok\|*)
@@ -1679,6 +1683,53 @@ enforce_runtime_python_pins() {
     "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1
 }
 
+install_main_audio_separator_runtime_deps() {
+  _py="$1"
+  if [ -n "${CONSTRAINTS_FILE}" ]; then
+    pip_install_with_scope main "${_py}" -c "${CONSTRAINTS_FILE}" --upgrade --no-cache-dir \
+      "beartype==${PINNED_BEARTYPE_VERSION}" \
+      "diffq>=0.2" \
+      "einops>=0.7" \
+      "julius>=0.2" \
+      "librosa>=0.10" \
+      "ml_collections" \
+      "onnx-weekly" \
+      "onnx2torch-py313>=1.6" \
+      "${ONNX_PACKAGE}" \
+      "pydub>=0.25" \
+      "PyYAML" \
+      "requests>=2" \
+      "resampy>=0.4" \
+      "rotary-embedding-torch>=0.6.1,<0.7.0" \
+      "samplerate==0.1.0" \
+      "scipy==1.17.1" \
+      "six>=1.16" \
+      "soundfile>=0.12" \
+      "tqdm" >> "${LOG_FILE}" 2>&1
+    return $?
+  fi
+  pip_install_with_scope main "${_py}" --upgrade --no-cache-dir \
+    "beartype==${PINNED_BEARTYPE_VERSION}" \
+    "diffq>=0.2" \
+    "einops>=0.7" \
+    "julius>=0.2" \
+    "librosa>=0.10" \
+    "ml_collections" \
+    "onnx-weekly" \
+    "onnx2torch-py313>=1.6" \
+    "${ONNX_PACKAGE}" \
+    "pydub>=0.25" \
+    "PyYAML" \
+    "requests>=2" \
+    "resampy>=0.4" \
+    "rotary-embedding-torch>=0.6.1,<0.7.0" \
+    "samplerate==0.1.0" \
+    "scipy==1.17.1" \
+    "six>=1.16" \
+    "soundfile>=0.12" \
+    "tqdm" >> "${LOG_FILE}" 2>&1
+}
+
 if [ -z "${RUNTIME_BASE}" ]; then
   echo "Missing runtime base" >&2
   exit 1
@@ -1722,7 +1773,7 @@ SUPPORTED_PYTHON_FOUND="no"
 DETECTED_PYTHON_VERSION=""
 DETECTED_PYTHON_PATH=""
 # Conservative default on Linux to avoid extra GPU deps unless explicitly needed.
-PACKAGE="audio-separator==0.23.0"
+PACKAGE="${MAIN_AUDIO_SEPARATOR_PACKAGE}"
 ONNX_PACKAGE="onnxruntime"
 CORE_EXTRA=""
 PROFILE="linux-cpu"
@@ -1804,7 +1855,7 @@ if [ "${ROCM_MODE}" -eq 1 ] && [ "${GPU_MODE}" -eq 0 ]; then
   BACKEND="rocm"
 elif [ "${GPU_MODE}" -eq 1 ]; then
   log_step "CUDA-capable NVIDIA detected; enabling GPU packages"
-  PACKAGE="audio-separator[gpu]==0.23.0"
+  PACKAGE="${MAIN_GPU_AUDIO_SEPARATOR_PACKAGE}"
   CORE_EXTRA="[gpu]"
   PROFILE="linux-cuda"
   BACKEND="cuda"
@@ -2180,7 +2231,7 @@ else
       log_stage "Installing CPU torch"
       install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_cpu_install_failed"
       log_nvidia_packages "CPU torch install"
-      PACKAGE="audio-separator==0.23.0"
+      PACKAGE="${MAIN_AUDIO_SEPARATOR_PACKAGE}"
       CORE_EXTRA=""
     elif [ "${BACKEND}" = "cuda" ]; then
       log_stage "Installing CUDA torch"
@@ -2381,7 +2432,7 @@ EOF
         PROFILE="linux-cpu"
         BACKEND="cpu"
         BACKEND_REASON="${rocm_fail_reason}"
-        PACKAGE="audio-separator==0.23.0"
+        PACKAGE="${MAIN_AUDIO_SEPARATOR_PACKAGE}"
         CORE_EXTRA=""
       fi
     fi
@@ -2478,7 +2529,7 @@ PY
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || audio_import_rc=$?
     if [ "${audio_import_rc}" -ne 0 ] && [ "${audio_install_rc}" -eq 0 ]; then
       if [ -n "${CONSTRAINTS_FILE}" ]; then
-        log_step "Installing audio-separator 0.23.0 with constraints (torch pinned)"
+        log_step "Installing audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} with constraints (torch pinned)"
         if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
           pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
         else
@@ -2493,12 +2544,12 @@ PY
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
-    if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator==0.23.0" ]; then
+    if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "${MAIN_AUDIO_SEPARATOR_PACKAGE}" ]; then
       if detect_build_tools_missing_log "${audio_install_log}"; then
         mark_build_tools_missing
       fi
       log_step "GPU audio-separator install failed; falling back to CPU package"
-      PACKAGE="audio-separator==0.23.0"
+      PACKAGE="${MAIN_AUDIO_SEPARATOR_PACKAGE}"
       PROFILE="linux-cpu"
       BACKEND="cpu"
       BACKEND_REASON="${BACKEND_REASON:-backend_install_failed}"
@@ -2510,6 +2561,14 @@ PY
         pip_install_with_scope main "${VENV_PY}" "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
+    fi
+    if [ "${audio_install_rc}" -ne 0 ]; then
+      log_step "audio-separator resolver install failed; installing pinned runtime dependencies and retrying package install without dependency resolution"
+      audio_install_rc=0
+      install_main_audio_separator_runtime_deps "${VENV_PY}" || audio_install_rc=$?
+      if [ "${audio_install_rc}" -eq 0 ]; then
+        pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
+      fi
     fi
     if [ "${audio_install_rc}" -ne 0 ] && [ "${managed_diffq_required}" -eq 0 ]; then
       if detect_build_tools_missing_log "${audio_install_log}"; then
@@ -2527,7 +2586,7 @@ PY
     if [ "${audio_install_rc}" -ne 0 ]; then
       log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"
       audio_repair_attempted=1
-      PACKAGE="audio-separator==0.23.0"
+      PACKAGE="${MAIN_AUDIO_SEPARATOR_PACKAGE}"
       audio_repair_rc=0
       : > "${audio_install_log}" || true
       if [ "${managed_diffq_required}" -eq 1 ]; then

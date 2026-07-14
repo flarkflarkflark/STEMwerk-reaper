@@ -19,7 +19,7 @@ import pytest
 EXPECTED_TORCH = "2.5.1"
 EXPECTED_TORCHVISION = "0.20.1"
 EXPECTED_TORCHAUDIO = "2.5.1"
-EXPECTED_AUDIO_SEPARATOR = "0.23.0"
+EXPECTED_AUDIO_SEPARATOR = "0.44.3"
 
 
 def _load_audio_separator_process_module():
@@ -2021,6 +2021,10 @@ def test_command_path_noise_is_ignored_for_python_resolution():
 def test_linux_managed_flow_installs_audio_separator_runtime_deps_after_torch():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
+    assert 'PINNED_AUDIO_SEPARATOR_VERSION="0.44.3"' in script
+    assert 'MAIN_AUDIO_SEPARATOR_PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
+    assert 'MAIN_GPU_AUDIO_SEPARATOR_PACKAGE="audio-separator[gpu]==${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
+    assert 'PINNED_BEARTYPE_VERSION="0.18.5"' in script
     assert 'PINNED_NUMPY_VERSION="1.26.4"' in script
     assert 'PINNED_NUMBA_VERSION="0.59.1"' in script
     assert 'PINNED_LLVM_VERSION="0.42.0"' in script
@@ -2029,7 +2033,11 @@ def test_linux_managed_flow_installs_audio_separator_runtime_deps_after_torch():
     assert '"llvmlite==${PINNED_LLVM_VERSION}"' in script
     assert '"numba==${PINNED_NUMBA_VERSION}"' in script
     assert 'log_stage "Checking/installing audio_separator"' in script
-    assert 'Installing audio-separator 0.23.0 with constraints (torch pinned)' in script
+    assert 'Installing audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} with constraints (torch pinned)' in script
+    assert "install_main_audio_separator_runtime_deps" in script
+    assert '"beartype==${PINNED_BEARTYPE_VERSION}"' in script
+    assert '"onnx2torch-py313>=1.6"' in script
+    assert '"samplerate==0.1.0"' in script
     assert 'pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"' in script
     assert script.index('install_linux_torch_stack "cpu"') < script.index('log_stage "Checking/installing audio_separator"')
     assert script.index('log_stage "Checking/installing audio_separator"') < script.index("Final verification")
@@ -2141,7 +2149,7 @@ def test_linux_no_deps_audio_separator_fallback_requires_runtime_deps():
     assert "verify_audio_separator_runtime_deps || audio_install_rc=1" in script
     assert 'log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"' in script
     assert 'audio_repair_attempted=1' in script
-    assert 'PACKAGE="audio-separator==0.23.0"' in script
+    assert 'PACKAGE="${MAIN_AUDIO_SEPARATOR_PACKAGE}"' in script
     assert 'if [ "${audio_repair_rc}" -eq 0 ]; then' in script
     assert "verify_audio_separator_runtime_deps || audio_repair_rc=1" in script
     assert "AUDIO_SEPARATOR_DEPS_COMPLETE=\"no\"" in script
@@ -5183,7 +5191,7 @@ def test_linux_wheelhouse_builder_targets_cp312_manylinux_and_uses_name_preload(
     assert '"pip"' not in main_cpu_block
     assert '"setuptools"' not in main_cpu_block
     assert '"wheel"' not in main_cpu_block
-    assert '"audio-separator==0.23.0"' in main_cpu_block
+    assert '"audio-separator==0.44.3"' in main_cpu_block
 
     torch_requirements_block = script.split("TORCH_REQUIREMENTS = (", 1)[1].split(")", 1)[0]
     assert '"torch"' in torch_requirements_block
@@ -5204,6 +5212,38 @@ def test_linux_wheelhouse_builder_targets_cp312_manylinux_and_uses_name_preload(
     assert "cuda-toolkit" not in drumsep_cpu_block
 
     assert '"linux-x86_64-cp312"' in payload_builder
+
+
+def test_linux_main_runtime_asep_0443_pins_preserve_drumsep_policy():
+    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    linux_wheelhouse = Path("tools/build_linux_wheelhouse.py").read_text()
+
+    main_cpu_block = linux_wheelhouse.split('("main", "cpu"): WheelhouseSpec(', 1)[1].split('("main", "cuda")', 1)[0]
+    main_cuda_block = linux_wheelhouse.split('("main", "cuda"): WheelhouseSpec(', 1)[1].split('("main", "rocm")', 1)[0]
+    main_rocm_block = linux_wheelhouse.split('("main", "rocm"): WheelhouseSpec(', 1)[1].split('("drumsep", "cpu")', 1)[0]
+
+    assert 'PINNED_AUDIO_SEPARATOR_VERSION="0.44.3"' in linux_bootstrap
+    assert 'PACKAGE="${MAIN_AUDIO_SEPARATOR_PACKAGE}"' in linux_bootstrap
+    assert 'PACKAGE="${MAIN_GPU_AUDIO_SEPARATOR_PACKAGE}"' in linux_bootstrap
+    assert 'PINNED_NUMPY_VERSION="1.26.4"' in linux_bootstrap
+    assert 'PINNED_NUMBA_VERSION="0.59.1"' in linux_bootstrap
+    assert 'PINNED_LLVM_VERSION="0.42.0"' in linux_bootstrap
+    assert 'PINNED_BEARTYPE_VERSION="0.18.5"' in linux_bootstrap
+    assert "install_main_audio_separator_runtime_deps" in linux_bootstrap
+    assert 'DRUMSEP_AUDIO_SEPARATOR_VERSION="0.34.1"' in linux_bootstrap
+    assert 'ROCM7_GFX1201_TORCH_VERSION="2.10.0"' in linux_bootstrap
+    assert 'ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0"' in linux_bootstrap
+    assert 'ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0"' in linux_bootstrap
+    assert 'IDX_LIST="https://download.pytorch.org/whl/rocm7.0 https://download.pytorch.org/whl/rocm7.1 https://download.pytorch.org/whl/rocm7.2"' in linux_bootstrap
+
+    assert '"audio-separator==0.44.3"' in main_cpu_block
+    assert '"audio-separator[gpu]==0.44.3"' in main_cuda_block
+    assert '"audio-separator==0.44.3"' in main_rocm_block
+    assert '"numpy==1.26.4"' in main_rocm_block
+    assert '"numba==0.59.1"' in main_rocm_block
+    assert '"llvmlite==0.42.0"' in main_rocm_block
+    assert '"onnxruntime"' in main_rocm_block
+    assert '"audio-separator==0.34.1"' in linux_wheelhouse
 
 
 def test_macos_build_script_supports_package_variants_without_wiping_dist():
