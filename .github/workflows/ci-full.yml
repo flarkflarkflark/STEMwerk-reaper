@@ -57,4 +57,5 @@ jobs:
             tests/test_windows_normal_route_matrix.py \
             tests/test_vocals_hq_runtime_proof.py \
             tests/test_dependency_constraints.py::test_ci_fast_quick_script_smoke_installs_pyyaml \
-            tests/test_dependency_constraints.py::test_ci_fast_runs_curated_pytest_coverage
+            tests/test_dependency_constraints.py::test_ci_fast_runs_curated_pytest_coverage \
+            tests/test_dependency_constraints.py::test_no_stale_onnxruntime_ci_pins

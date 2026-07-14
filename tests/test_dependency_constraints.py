@@ -4865,6 +4865,20 @@ def test_ci_fast_runs_curated_pytest_coverage():
     assert "python -m pytest -q \\\n            tests" in workflow
 
 
+def test_no_stale_onnxruntime_ci_pins():
+    requirements = Path("requirements-ci.txt").read_text(encoding="utf-8")
+    smoke = Path(".github/workflows/macos-apple-silicon-backend-smoke.yml").read_text(
+        encoding="utf-8"
+    )
+    workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
+
+    assert "onnxruntime>=1.21,<1.22" not in requirements
+    assert "onnxruntime>=1.21,<1.22" not in smoke
+    assert "\nonnxruntime\n" in requirements
+    assert "pip install onnxruntime-silicon || pip install onnxruntime" in smoke
+    assert "tests/test_dependency_constraints.py::test_no_stale_onnxruntime_ci_pins" in workflow
+
+
 def test_setup_internal_luac_compiles_under_reaper_limits():
     luac = shutil.which("luac")
     if not luac:
