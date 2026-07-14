@@ -102,11 +102,22 @@ Proposed first branch candidate:
 - torchvision: 0.25.0+rocm7.0 only if required by resolved payload/tests
 - onnxruntime: 1.27.0, or keep the current unpinned policy if it resolves to
   1.27.0 in the target environment
-- numpy: keep 1.26.4 for the main runtime first branch
-- numba: keep 0.59.1 for the main runtime first branch
-- llvmlite: keep 0.42.0 for the main runtime first branch
+- numpy: 2.4.4
+- scipy: 1.18.0
+- numba: 0.66.0
+- llvmlite: 0.48.0
 - beartype: 0.18.5 is acceptable on Python 3.12; Python 3.14 is known-bad for
   Viperx with this beartype/toolchain combination
+
+NumPy 2 compatibility addendum: the first Linux ROCm pin branch with
+`audio-separator==0.44.3` and `numpy==1.26.4` was superseded because
+audio-separator 0.44.3 package metadata declares `numpy>=2`, making the NumPy
+1.x strategy fail `pip check`. The pip-consistent R&D root
+`/home/flark/stemwerk-rnd/linux-rocm-asep0443-numpy2-rd-20260714-153559`
+validated the NumPy 2 stack above with `pip check` PASS plus htdemucs,
+htdemucs_ft, htdemucs_6s, and Viperx PASS on RX 9070. This does not change
+DrumSep/DKS release policy; keep DrumSep/DKS on audio-separator 0.34.1 until
+the catalog/model rename scenarios are handled.
 
 Evidence confidence is high. The branch still needs normal installer/bootstrap
 smokes because wheelhouse and offline payload behavior are separate from R&D
