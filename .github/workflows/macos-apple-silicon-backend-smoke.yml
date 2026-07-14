@@ -69,7 +69,7 @@ jobs:
           pip install ./scripts/reaper/vendor/stemwerk-core
           pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"
           pip install --force-reinstall --no-deps "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
-          pip install onnxruntime-silicon || pip install "onnxruntime>=1.21,<1.22"
+          pip install onnxruntime-silicon || pip install onnxruntime
           pip install pytest
 
       - name: Show backend smoke dependency diagnostics
