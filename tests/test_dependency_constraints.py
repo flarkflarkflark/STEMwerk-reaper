@@ -19,7 +19,7 @@ import pytest
 EXPECTED_TORCH = "2.5.1"
 EXPECTED_TORCHVISION = "0.20.1"
 EXPECTED_TORCHAUDIO = "2.5.1"
-EXPECTED_AUDIO_SEPARATOR = "0.44.3"
+EXPECTED_AUDIO_SEPARATOR = "0.23.0"
 
 
 def _load_audio_separator_process_module():
@@ -2070,6 +2070,23 @@ def test_linux_repair_skips_torch_pin_reapply_after_successful_same_run_install(
     assert script.index('torch_pin_reapply_skipped=already_installed_this_run') < script.index('log_stage "Re-applying pinned torch stack"')
 
 
+def test_linux_main_runtime_rebuilds_old_numpy1_audio_separator_venv():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert "main_runtime_requires_rebuild()" in script
+    assert '"audio-separator": "${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
+    assert '"numpy": "${PINNED_NUMPY_VERSION}"' in script
+    assert '"scipy": "${PINNED_SCIPY_VERSION}"' in script
+    assert '"numba": "${PINNED_NUMBA_VERSION}"' in script
+    assert '"llvmlite": "${PINNED_LLVM_VERSION}"' in script
+    assert '"beartype": "${PINNED_BEARTYPE_VERSION}"' in script
+    assert 'print("rebuild|numpy_major_lt_2:" + installed)' in script
+    assert 'print("rebuild|" + name + ":" + installed + "!=" + wanted)' in script
+    assert "rebuilding .venv for audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} / NumPy ${PINNED_NUMPY_VERSION}" in script
+    assert 'venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python" || main_runtime_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"' in script
+    assert script.index("main_runtime_requires_rebuild()") < script.index('log_stage "Creating venv"')
+
+
 def test_linux_torch_stack_verify_helper_checks_backend_and_all_three_packages():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
@@ -2189,6 +2206,8 @@ def test_linux_final_verification_requires_audio_separator_dependency_imports():
     assert 'set_status "deps_failed" "audio_separator_install_failed"' in linux_script
     assert "if ! verify_audio_separator_runtime_deps; then" in mac_script
     assert 'set_status "deps_failed" "audio_separator_install_failed"' in mac_script
+    assert "numpy_major_gte_2" not in linux_script
+    assert 'errors.append("numpy_major_lt_2")' in linux_script
     assert '[ "${AUDIO_SEPARATOR_DEPS_COMPLETE}" = "yes" ]' in linux_script
     assert 'log_step "Venv runtime incomplete; refusing to set PYTHON_PATH"' in linux_script
     assert 'log_step "Venv runtime verified; PYTHON_PATH set to venv"' in linux_script

@@ -1500,6 +1500,52 @@ PY
   return 1
 }
 
+main_runtime_requires_rebuild() {
+  _venv_py="$1"
+  [ -x "${_venv_py}" ] || return 1
+  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
+from importlib import metadata as md
+
+expected = {
+    "audio-separator": "${PINNED_AUDIO_SEPARATOR_VERSION}",
+    "numpy": "${PINNED_NUMPY_VERSION}",
+    "scipy": "${PINNED_SCIPY_VERSION}",
+    "numba": "${PINNED_NUMBA_VERSION}",
+    "llvmlite": "${PINNED_LLVM_VERSION}",
+    "beartype": "${PINNED_BEARTYPE_VERSION}",
+}
+
+for name, wanted in expected.items():
+    try:
+        installed = md.version(name)
+    except md.PackageNotFoundError:
+        continue
+    if name == "numpy":
+        try:
+            major = int(installed.split(".", 1)[0])
+        except Exception:
+            major = 0
+        if major < 2:
+            print("rebuild|numpy_major_lt_2:" + installed)
+            raise SystemExit(0)
+    if installed != wanted:
+        print("rebuild|" + name + ":" + installed + "!=" + wanted)
+        raise SystemExit(0)
+print("ok")
+PY
+)"
+  case "${_probe}" in
+    rebuild\|*)
+      log_step "Existing venv has incompatible main runtime ${_probe#rebuild|}; rebuilding .venv for audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} / NumPy ${PINNED_NUMPY_VERSION}"
+      return 0
+      ;;
+    ok)
+      log_step "Existing venv main runtime pins are compatible"
+      ;;
+  esac
+  return 1
+}
+
 linux_torch_install_args() {
   printf 'torch==%s torchvision==%s torchaudio==%s' \
     "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}" \
@@ -2142,7 +2188,7 @@ else
   fi
   log_stage "Creating venv"
   log_step "Creating STEMwerk virtual environment..."
-  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && { venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python" || main_runtime_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; }; then
     log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
     rm -rf "${RUNTIME_BASE}/.venv"
   fi
@@ -2675,8 +2721,8 @@ backend = os.environ.get("STEMWERK_BACKEND", "cpu")
 errors = []
 try:
     import numpy as np
-    if int(str(getattr(np, "__version__", "0")).split(".", 1)[0]) >= 2:
-        errors.append("numpy_major_gte_2")
+    if int(str(getattr(np, "__version__", "0")).split(".", 1)[0]) < 2:
+        errors.append("numpy_major_lt_2")
 except Exception as exc:
     errors.append("numpy_import_failed:" + str(exc))
 try:
