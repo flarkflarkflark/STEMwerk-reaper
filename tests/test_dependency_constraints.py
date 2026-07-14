@@ -4879,6 +4879,38 @@ def test_no_stale_onnxruntime_ci_pins():
     assert "tests/test_dependency_constraints.py::test_no_stale_onnxruntime_ci_pins" in workflow
 
 
+def test_onnxruntime_runtime_pin_policy_is_documented():
+    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text(
+        encoding="utf-8"
+    )
+    linux_wheelhouse = Path("tools/build_linux_wheelhouse.py").read_text(encoding="utf-8")
+    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(
+        encoding="utf-8"
+    )
+    directml_constraints = Path("scripts/reaper/constraints/directml.txt").read_text(
+        encoding="utf-8"
+    )
+    macos_payload = Path("tools/build_macos_apple_silicon_payload.py").read_text(
+        encoding="utf-8"
+    )
+    ci_workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
+
+    # Policy: CI Fast runs Python 3.11, production payloads generally use
+    # Python 3.12, Linux main keeps generic onnxruntime unpinned pending the
+    # ASEP 0.44.3 pin matrix, and DrumSep/DirectML pins remain platform-scoped.
+    assert "python-version: 3.11" in ci_workflow
+    assert 'ONNX_PACKAGE="onnxruntime"' in linux_bootstrap
+    assert 'DRUMSEP_ONNXRUNTIME_VERSION="1.26.0"' in linux_bootstrap
+    assert '"onnxruntime"' in linux_wheelhouse
+    assert '"onnxruntime==1.26.0"' in linux_wheelhouse
+    assert '"onnxruntime-gpu==1.24.4"' in linux_wheelhouse
+    assert "onnxruntime-directml==1.24.4" in directml_constraints
+    assert '$onnxRuntimeDirectMlVersion = "1.24.4"' in windows_bootstrap
+    assert '"onnxruntime"' in macos_payload
+    assert '"onnxruntime-silicon"' not in macos_payload
+    assert "tests/test_dependency_constraints.py::test_onnxruntime_runtime_pin_policy_is_documented" in ci_workflow
+
+
 def test_setup_internal_luac_compiles_under_reaper_limits():
     luac = shutil.which("luac")
     if not luac:
