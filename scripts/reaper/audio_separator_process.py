@@ -3218,6 +3218,53 @@ def _split_list(value: Optional[str]) -> List[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
+def _torch_device_probe_markers(device_name_index: int = 0) -> Dict[str, object]:
+    markers: Dict[str, object] = {
+        "torch_cuda_available": False,
+        "torch_cuda_device_count": 0,
+        "torch_cuda_device_name": "",
+        "torch_hip_version": "",
+    }
+    try:
+        import torch
+
+        markers["torch_hip_version"] = str(getattr(getattr(torch, "version", None), "hip", "") or "")
+        cuda_available = bool(torch.cuda.is_available())
+        markers["torch_cuda_available"] = cuda_available
+        markers["torch_cuda_device_count"] = int(torch.cuda.device_count()) if cuda_available else 0
+        if cuda_available and int(markers["torch_cuda_device_count"]) > device_name_index:
+            markers["torch_cuda_device_name"] = str(torch.cuda.get_device_name(device_name_index))
+    except Exception:
+        pass
+    return markers
+
+
+def _emit_device_normalization_markers(
+    normalized_result: object,
+    explicit_gpu_request: bool,
+    probe_markers: Dict[str, object],
+) -> None:
+    print(
+        f"STEMWERK_DIAG normalized_device={getattr(normalized_result, 'normalized_device', '')}",
+        file=sys.stderr,
+    )
+    print(
+        f"STEMWERK_DIAG effective_backend={getattr(normalized_result, 'effective_backend', '')}",
+        file=sys.stderr,
+    )
+    print(
+        "STEMWERK_DIAG device_normalized="
+        f"{str(bool(getattr(normalized_result, 'device_normalized', False))).lower()}",
+        file=sys.stderr,
+    )
+    for key in ("torch_cuda_available", "torch_cuda_device_count", "torch_cuda_device_name", "torch_hip_version"):
+        value = probe_markers.get(key, "")
+        if isinstance(value, bool):
+            value = str(value).lower()
+        print(f"STEMWERK_DIAG {key}={value}", file=sys.stderr)
+    print(f"STEMWERK_DIAG explicit_gpu_request={str(explicit_gpu_request).lower()}", file=sys.stderr)
+
+
 def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, str, List[str]]:
     requested = str(device_preference or "auto")
     resolved = requested
@@ -3225,7 +3272,11 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
     live_device_ids = [str(dev.get("id", "")) for dev in live_devices]
     print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
 
-    if requested == "auto":
+    requested_norm = requested.strip().lower()
+    explicit_gpu_request = requested_norm not in ("", "auto", "cpu")
+    normalized_result = None
+
+    if requested_norm == "auto":
         preferred = None
         if _is_darwin_arm64():
             preferred = next((dev for dev in live_devices if str(dev.get("id", "")).strip().lower() == "mps"), None)
@@ -3244,6 +3295,25 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
                 resolved = dev_id
             except Exception:
                 resolved = "auto"
+    else:
+        normalizer = getattr(core_devices, "normalize_torch_device", None) if core_devices is not None else None
+        if normalizer is not None:
+            probe_markers = _torch_device_probe_markers()
+            try:
+                normalized_result = normalizer(requested, strict=True)
+                resolved = str(getattr(normalized_result, "normalized_device", resolved) or resolved)
+                _emit_device_normalization_markers(normalized_result, explicit_gpu_request, probe_markers)
+            except Exception as exc:
+                error_result = getattr(exc, "result", None)
+                if error_result is not None:
+                    _emit_device_normalization_markers(error_result, explicit_gpu_request, probe_markers)
+                    print(
+                        f"STEMWERK_DIAG device_normalization_error_reason={getattr(error_result, 'error_reason', '')}",
+                        file=sys.stderr,
+                    )
+                    resolved = str(getattr(error_result, "normalized_device", resolved) or resolved)
+                    return requested, resolved, "cpu|CPU", live_device_ids
+                print(f"normal_workflow_device_normalization_error={type(exc).__name__}:{exc}", file=sys.stderr)
     preview_device_id = resolved
     preview_device_name = ""
     try:
@@ -4807,11 +4877,13 @@ def main():
     print(f"backend={backend}", file=sys.stderr)
     if _is_unexpected_cpu_downgrade(device_preference, preview_device_id):
         print("normal_workflow_backend_fallback_reason=live_runtime_cpu_only", file=sys.stderr)
+        print("STEMWERK_DIAG cpu_fallback_blocked=true", file=sys.stderr)
         print(
             "Runtime device fallback blocked: the explicitly requested accelerator is unavailable in the live normal STEMwerk runtime.",
             file=sys.stderr,
         )
         return 2
+    print("STEMWERK_DIAG cpu_fallback_blocked=false", file=sys.stderr)
 
     runtime_env: Dict[str, object] = {}
     try:

@@ -201,6 +201,66 @@ def test_explicit_cuda_cpu_preview_still_counts_as_unexpected_cpu_downgrade():
     assert module._is_unexpected_cpu_downgrade("cuda", "cpu") is True
 
 
+def test_runtime_device_resolution_keeps_requested_device_and_returns_normalized_value(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    monkeypatch.setattr(module, "get_available_devices", lambda: [{"id": "cuda:0", "name": "RX 9070", "type": "cuda"}])
+    monkeypatch.setattr(module, "select_device", lambda requested: (requested, "RX 9070"))
+    monkeypatch.setattr(
+        module,
+        "core_devices",
+        SimpleNamespace(
+            normalize_torch_device=lambda requested, strict=False: SimpleNamespace(
+                requested_device=requested,
+                normalized_device="cuda:0",
+                effective_backend="rocm",
+                device_normalized=True,
+                error_reason="",
+            )
+        ),
+    )
+
+    requested, resolved, preview, live_ids = module._resolve_normal_runtime_device("cuda")
+
+    assert requested == "cuda"
+    assert resolved == "cuda:0"
+    assert preview == "cuda:0|RX 9070"
+    assert live_ids == ["cuda:0"]
+
+
+def test_runtime_device_resolution_strict_error_feeds_existing_cpu_downgrade_guard(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    class ErrorWithResult(Exception):
+        result = SimpleNamespace(
+            requested_device="cuda",
+            normalized_device="cuda",
+            effective_backend="cuda",
+            device_normalized=False,
+            error_reason="torch_cuda_unavailable",
+        )
+
+    def raise_error(_requested, strict=False):
+        assert strict is True
+        raise ErrorWithResult()
+
+    monkeypatch.setattr(module, "get_available_devices", lambda: [{"id": "cpu", "name": "CPU", "type": "cpu"}])
+    monkeypatch.setattr(
+        module,
+        "core_devices",
+        SimpleNamespace(normalize_torch_device=raise_error),
+    )
+
+    requested, resolved, preview, live_ids = module._resolve_normal_runtime_device("cuda")
+    preview_device, _, _preview_name = preview.partition("|")
+
+    assert requested == "cuda"
+    assert resolved == "cuda"
+    assert preview == "cpu|CPU"
+    assert live_ids == ["cpu"]
+    assert module._is_unexpected_cpu_downgrade(requested, preview_device) is True
+
+
 def test_select_device_normalizes_bare_cuda_for_direct_consumers(monkeypatch):
     import stemwerk_core.devices as devices
 
