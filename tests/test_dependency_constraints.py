@@ -4852,6 +4852,19 @@ def test_ci_fast_quick_script_smoke_installs_pyyaml():
     assert "python scripts/reaper/audio_separator_process.py --list-models" in workflow
 
 
+def test_ci_fast_runs_curated_pytest_coverage():
+    workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
+
+    assert "Run curated fast pytest coverage" in workflow
+    assert "python -m pytest -q" in workflow
+    assert "tests/test_device_normalization.py" in workflow
+    assert "tests/test_macos_mps_fallback.py" in workflow
+    assert "tests/test_model_registry_schema.py" in workflow
+    assert "tests/test_windows_normal_route_matrix.py" in workflow
+    assert "tests/test_vocals_hq_runtime_proof.py" in workflow
+    assert "python -m pytest -q \\\n            tests" in workflow
+
+
 def test_setup_internal_luac_compiles_under_reaper_limits():
     luac = shutil.which("luac")
     if not luac:

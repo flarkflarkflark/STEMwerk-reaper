@@ -47,3 +47,14 @@ jobs:
             echo "Language file validation failed"
             exit 1
           fi
+
+      - name: Run curated fast pytest coverage
+        run: |
+          python -m pytest -q \
+            tests/test_device_normalization.py \
+            tests/test_macos_mps_fallback.py \
+            tests/test_model_registry_schema.py \
+            tests/test_windows_normal_route_matrix.py \
+            tests/test_vocals_hq_runtime_proof.py \
+            tests/test_dependency_constraints.py::test_ci_fast_quick_script_smoke_installs_pyyaml \
+            tests/test_dependency_constraints.py::test_ci_fast_runs_curated_pytest_coverage
