@@ -31,6 +31,15 @@ def _load_audio_separator_process_module():
     return module
 
 
+def _load_drumsep_helper_module():
+    path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
+    spec = importlib.util.spec_from_file_location("stemwerk_drumsep_process_dependency_test", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 class _OsProxy:
     def __init__(self, real_os, *, name: str):
         self._real_os = real_os
@@ -2465,6 +2474,93 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
+
+
+def test_drumsep_helper_migrates_legacy_asep0443_catalog_cache_without_deleting_old_files(tmp_path):
+    helper = _load_drumsep_helper_module()
+    legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
+    legacy_yaml = tmp_path / helper.DRUMSEP_MODEL_YAML
+    legacy_ckpt.write_bytes(b"legacy-model")
+    legacy_yaml.write_text("audio: {}\nmodel: {}\ntraining: {}\n", encoding="utf-8")
+
+    result = helper._resolve_drumsep_catalog_cache_for_runtime(
+        tmp_path,
+        helper.DRUMSEP_MODEL_FILENAME,
+        expected_legacy_sha256="",
+    )
+
+    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    assert result.action == "copy_alias"
+    assert result.legacy_model_detected is True
+    assert (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).read_bytes() == b"legacy-model"
+    assert legacy_ckpt.exists()
+    assert legacy_yaml.exists()
+    assert result.markers["dks_catalog_version"] == "asep_0443"
+    assert result.markers["dks_model_migration_action"] == "copy_alias"
+    assert result.markers["dks_resolved_model_file"].endswith(helper.ASEP_0443_DRUMSEP_MODEL_FILENAME)
+    assert result.markers["dks_resolved_config_file"].endswith(helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME)
+
+
+def test_drumsep_helper_uses_fresh_asep0443_catalog_name_for_empty_cache(tmp_path):
+    helper = _load_drumsep_helper_module()
+
+    result = helper._resolve_drumsep_catalog_cache_for_runtime(
+        tmp_path,
+        helper.DRUMSEP_MODEL_ALIAS,
+        expected_legacy_sha256="",
+    )
+
+    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    assert result.action == "download_new"
+    assert result.legacy_model_detected is False
+    assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
+    assert result.markers["dks_model_migration_action"] == "download_new"
+    assert result.markers["dks_legacy_model_detected"] == "false"
+
+
+def test_drumsep_helper_does_not_alias_legacy_model_when_checksum_differs(tmp_path):
+    helper = _load_drumsep_helper_module()
+    legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
+    legacy_ckpt.write_bytes(b"unexpected-model-content")
+
+    result = helper._resolve_drumsep_catalog_cache_for_runtime(
+        tmp_path,
+        helper.DRUMSEP_MODEL_FILENAME,
+        expected_legacy_sha256="definitely-not-this-model",
+    )
+
+    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    assert result.action == "download_new"
+    assert result.legacy_model_detected is True
+    assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
+    assert legacy_ckpt.read_bytes() == b"unexpected-model-content"
+    assert result.markers["dks_model_migration_action"] == "download_new"
+
+
+def test_drumsep_helper_prefers_existing_asep0443_model_in_mixed_cache(tmp_path):
+    helper = _load_drumsep_helper_module()
+    legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
+    new_ckpt = tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    legacy_ckpt.write_bytes(b"legacy-model")
+    new_ckpt.write_bytes(b"new-model")
+    (tmp_path / helper.DRUMSEP_MODEL_YAML).write_text("audio: {}\nmodel: {}\ntraining: {}\n", encoding="utf-8")
+    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text(
+        "audio: {}\nmodel: {}\ntraining: {}\n",
+        encoding="utf-8",
+    )
+
+    result = helper._resolve_drumsep_catalog_cache_for_runtime(
+        tmp_path,
+        helper.DRUMSEP_MODEL_ALIAS,
+        expected_legacy_sha256="",
+    )
+
+    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    assert result.action == "mixed_cache_use_new"
+    assert result.legacy_model_detected is True
+    assert legacy_ckpt.read_bytes() == b"legacy-model"
+    assert new_ckpt.read_bytes() == b"new-model"
+    assert result.markers["dks_model_migration_action"] == "mixed_cache_use_new"
 
 
 def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
