@@ -206,6 +206,7 @@ def test_runtime_device_resolution_keeps_requested_device_and_returns_normalized
 
     monkeypatch.setattr(module, "get_available_devices", lambda: [{"id": "cuda:0", "name": "RX 9070", "type": "cuda"}])
     monkeypatch.setattr(module, "select_device", lambda requested: (requested, "RX 9070"))
+    monkeypatch.setattr(module, "_get_device_skips", lambda: [])
     monkeypatch.setattr(
         module,
         "core_devices",
@@ -228,6 +229,119 @@ def test_runtime_device_resolution_keeps_requested_device_and_returns_normalized
     assert live_ids == ["cuda:0"]
 
 
+def test_runtime_device_resolution_blocks_skipped_cuda_index_before_preview(monkeypatch, capsys):
+    module = _load_audio_separator_process_module()
+
+    def fail_select_device(_requested):
+        raise AssertionError("select_device should not run for skipped explicit devices")
+
+    seen_probe_indexes = []
+
+    def probe_markers(index=0):
+        seen_probe_indexes.append(index)
+        return {
+            "torch_cuda_available": True,
+            "torch_cuda_device_count": 2,
+            "torch_cuda_device_name": "AMD Radeon 780M Graphics" if index == 1 else "AMD Radeon RX 9070",
+            "torch_hip_version": "7.0.51831",
+        }
+
+    monkeypatch.setattr(
+        module,
+        "get_available_devices",
+        lambda: [{"id": "cuda:0", "name": "AMD Radeon RX 9070", "type": "cuda"}],
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_device_skips",
+        lambda: [
+            {
+                "id": "cuda:1",
+                "name": "AMD Radeon 780M Graphics",
+                "reason": "ROCm rocBLAS Tensile library missing for arch gfx1103.",
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_torch_device_probe_markers", probe_markers)
+    monkeypatch.setattr(module, "select_device", fail_select_device)
+    monkeypatch.setattr(
+        module,
+        "core_devices",
+        SimpleNamespace(
+            normalize_torch_device=lambda requested, strict=False: SimpleNamespace(
+                requested_device=requested,
+                normalized_device="cuda:1",
+                effective_backend="rocm",
+                device_normalized=False,
+                error_reason="",
+            )
+        ),
+    )
+
+    requested, resolved, preview, live_ids = module._resolve_normal_runtime_device("cuda:1")
+    preview_device, _, _preview_name = preview.partition("|")
+    stderr = capsys.readouterr().err
+
+    assert requested == "cuda:1"
+    assert resolved == "cuda:1"
+    assert preview == "cpu|CPU"
+    assert live_ids == ["cuda:0"]
+    assert seen_probe_indexes == [1]
+    assert "STEMWERK_DIAG torch_cuda_device_name=AMD Radeon 780M Graphics" in stderr
+    assert "STEMWERK_DIAG device_skip_reason=ROCm rocBLAS Tensile library missing for arch gfx1103." in stderr
+    assert "STEMWERK_DIAG device_normalization_error_reason=device_skipped:cuda:1" in stderr
+    assert module._is_unexpected_cpu_downgrade(requested, preview_device) is True
+
+
+def test_runtime_device_resolution_allows_unskipped_cuda_zero(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    seen_probe_indexes = []
+
+    def probe_markers(index=0):
+        seen_probe_indexes.append(index)
+        return {
+            "torch_cuda_available": True,
+            "torch_cuda_device_count": 2,
+            "torch_cuda_device_name": "AMD Radeon RX 9070",
+            "torch_hip_version": "7.0.51831",
+        }
+
+    monkeypatch.setattr(
+        module,
+        "get_available_devices",
+        lambda: [{"id": "cuda:0", "name": "AMD Radeon RX 9070", "type": "cuda"}],
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_device_skips",
+        lambda: [{"id": "cuda:1", "name": "AMD Radeon 780M Graphics", "reason": "skip"}],
+    )
+    monkeypatch.setattr(module, "_torch_device_probe_markers", probe_markers)
+    monkeypatch.setattr(module, "select_device", lambda requested: (requested, "AMD Radeon RX 9070"))
+    monkeypatch.setattr(
+        module,
+        "core_devices",
+        SimpleNamespace(
+            normalize_torch_device=lambda requested, strict=False: SimpleNamespace(
+                requested_device=requested,
+                normalized_device="cuda:0",
+                effective_backend="rocm",
+                device_normalized=False,
+                error_reason="",
+            )
+        ),
+    )
+
+    requested, resolved, preview, live_ids = module._resolve_normal_runtime_device("cuda:0")
+
+    assert requested == "cuda:0"
+    assert resolved == "cuda:0"
+    assert preview == "cuda:0|AMD Radeon RX 9070"
+    assert live_ids == ["cuda:0"]
+    assert seen_probe_indexes == [0]
+
+
 def test_runtime_device_resolution_strict_error_feeds_existing_cpu_downgrade_guard(monkeypatch):
     module = _load_audio_separator_process_module()
 
@@ -245,6 +359,7 @@ def test_runtime_device_resolution_strict_error_feeds_existing_cpu_downgrade_gua
         raise ErrorWithResult()
 
     monkeypatch.setattr(module, "get_available_devices", lambda: [{"id": "cpu", "name": "CPU", "type": "cpu"}])
+    monkeypatch.setattr(module, "_get_device_skips", lambda: [])
     monkeypatch.setattr(
         module,
         "core_devices",
@@ -313,3 +428,24 @@ def test_select_device_keeps_warning_cpu_fallback_for_unavailable_cuda(monkeypat
 
     assert result == ("cpu", "CPU")
     assert any("Requested device 'cuda' not available; using CPU." in str(item.message) for item in caught)
+
+
+def test_torch_device_probe_markers_use_selected_cuda_index(monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    fake_torch = SimpleNamespace(
+        version=SimpleNamespace(hip="7.0.51831"),
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 2,
+            get_device_name=lambda index: ["AMD Radeon RX 9070", "AMD Radeon 780M Graphics"][index],
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    markers = module._torch_device_probe_markers(1)
+
+    assert markers["torch_cuda_available"] is True
+    assert markers["torch_cuda_device_count"] == 2
+    assert markers["torch_cuda_device_name"] == "AMD Radeon 780M Graphics"
+    assert markers["torch_hip_version"] == "7.0.51831"
