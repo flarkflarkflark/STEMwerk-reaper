@@ -3218,6 +3218,26 @@ def _split_list(value: Optional[str]) -> List[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
+def _cuda_device_index(device_id: str) -> Optional[int]:
+    match = re.fullmatch(r"cuda:(\d+)", str(device_id or "").strip().lower())
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _find_device_skip(device_id: str) -> Optional[Dict[str, str]]:
+    wanted = str(device_id or "").strip().lower()
+    if not wanted:
+        return None
+    for item in _get_device_skips():
+        if str(item.get("id", "")).strip().lower() == wanted:
+            return item
+    return None
+
+
 def _torch_device_probe_markers(device_name_index: int = 0) -> Dict[str, object]:
     markers: Dict[str, object] = {
         "torch_cuda_available": False,
@@ -3232,7 +3252,7 @@ def _torch_device_probe_markers(device_name_index: int = 0) -> Dict[str, object]
         cuda_available = bool(torch.cuda.is_available())
         markers["torch_cuda_available"] = cuda_available
         markers["torch_cuda_device_count"] = int(torch.cuda.device_count()) if cuda_available else 0
-        if cuda_available and int(markers["torch_cuda_device_count"]) > device_name_index:
+        if cuda_available and device_name_index >= 0 and int(markers["torch_cuda_device_count"]) > device_name_index:
             markers["torch_cuda_device_name"] = str(torch.cuda.get_device_name(device_name_index))
     except Exception:
         pass
@@ -3298,14 +3318,31 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
     else:
         normalizer = getattr(core_devices, "normalize_torch_device", None) if core_devices is not None else None
         if normalizer is not None:
-            probe_markers = _torch_device_probe_markers()
             try:
                 normalized_result = normalizer(requested, strict=True)
                 resolved = str(getattr(normalized_result, "normalized_device", resolved) or resolved)
+                device_name_index = _cuda_device_index(resolved)
+                probe_markers = _torch_device_probe_markers(
+                    device_name_index if device_name_index is not None else 0
+                )
                 _emit_device_normalization_markers(normalized_result, explicit_gpu_request, probe_markers)
+                skip = _find_device_skip(resolved)
+                if skip is not None:
+                    reason = str(skip.get("reason", "") or "device_skipped")
+                    print(f"STEMWERK_DIAG device_skip_reason={reason}", file=sys.stderr)
+                    print(
+                        f"STEMWERK_DIAG device_normalization_error_reason=device_skipped:{resolved}",
+                        file=sys.stderr,
+                    )
+                    return requested, resolved, "cpu|CPU", live_device_ids
             except Exception as exc:
                 error_result = getattr(exc, "result", None)
                 if error_result is not None:
+                    normalized_error_device = str(getattr(error_result, "normalized_device", resolved) or resolved)
+                    device_name_index = _cuda_device_index(normalized_error_device)
+                    probe_markers = _torch_device_probe_markers(
+                        device_name_index if device_name_index is not None else 0
+                    )
                     _emit_device_normalization_markers(error_result, explicit_gpu_request, probe_markers)
                     print(
                         f"STEMWERK_DIAG device_normalization_error_reason={getattr(error_result, 'error_reason', '')}",
