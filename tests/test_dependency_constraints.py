@@ -5674,7 +5674,7 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert '"llvmlite==0.48.0"' in script
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
-    assert '"onnxruntime"' in script
+    assert '"onnxruntime==1.27.0"' in script
     assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"' in script
     assert '"onnxruntime-silicon"' not in script
     assert '"--only-binary=:all:"' in script

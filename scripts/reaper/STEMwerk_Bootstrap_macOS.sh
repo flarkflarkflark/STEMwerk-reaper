@@ -19,6 +19,9 @@ PINNED_LLVM_VERSION_INTEL="0.42.0"
 PINNED_AUDIO_SEPARATOR_VERSION=""
 PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"
 PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"
+PINNED_SCIPY_VERSION="1.18.0"
+PINNED_SAMPLERATE_VERSION="0.1.0"
+PINNED_ONNXRUNTIME_VERSION="1.27.0"
 PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
 PINNED_TORCHAUDIO_VERSION=""
@@ -146,6 +149,47 @@ install_with_optional_bundled_wheels() {
   "${_py}" -m pip install "$@"
 }
 
+apple_silicon_core_bundle_requirements() {
+  printf "%s\n" \
+    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
+    "numpy==${PINNED_NUMPY_VERSION}" \
+    "scipy==${PINNED_SCIPY_VERSION}" \
+    "numba==${PINNED_NUMBA_VERSION}" \
+    "llvmlite==${PINNED_LLVM_VERSION}" \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
+    "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    "samplerate==${PINNED_SAMPLERATE_VERSION}" \
+    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"
+}
+
+install_apple_silicon_core_bundle() {
+  MACOS_CORE_BUNDLE_REQUIREMENTS="$(apple_silicon_core_bundle_requirements | tr '\n' ' ')"
+  log "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
+  log "Installing complete Apple Silicon core bundle in one audited offline transaction"
+  if "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: \
+    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
+    "numpy==${PINNED_NUMPY_VERSION}" \
+    "scipy==${PINNED_SCIPY_VERSION}" \
+    "numba==${PINNED_NUMBA_VERSION}" \
+    "llvmlite==${PINNED_LLVM_VERSION}" \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
+    "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    "samplerate==${PINNED_SAMPLERATE_VERSION}" \
+    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" >> "${LOG_FILE}" 2>&1; then
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="ok"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="installed"
+    log "MACOS_CORE_BUNDLE_INSTALL_STATUS=ok"
+    return 0
+  fi
+  MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+  MACOS_CORE_BUNDLE_INSTALL_REASON="core_bundle_install_failed"
+  log "MACOS_CORE_BUNDLE_INSTALL_STATUS=failed"
+  log "MACOS_CORE_BUNDLE_INSTALL_REASON=${MACOS_CORE_BUNDLE_INSTALL_REASON}"
+  return 1
+}
+
 preflight_bundled_apple_silicon_payload() {
   _py="$1"
   _wheelhouse="$2"
@@ -164,13 +208,14 @@ preflight_bundled_apple_silicon_payload() {
     --dry-run --ignore-installed --no-cache-dir --no-index --find-links "${_wheelhouse}" --only-binary=:all: \
     "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
     "numpy==${PINNED_NUMPY_VERSION}" \
-    "scipy==1.18.0" \
+    "scipy==${PINNED_SCIPY_VERSION}" \
     "numba==${PINNED_NUMBA_VERSION}" \
     "llvmlite==${PINNED_LLVM_VERSION}" \
     "torch==${PINNED_TORCH_VERSION}" \
     "torchvision==${PINNED_TORCHVISION_VERSION}" \
     "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
-    "samplerate==0.1.0" > "${_preflight_log}" 2>&1
+    "samplerate==${PINNED_SAMPLERATE_VERSION}" \
+    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" > "${_preflight_log}" 2>&1
   _rc=$?
   if [ "${_rc}" -ne 0 ]; then
     MACOS_PAYLOAD_PREFLIGHT_REASON="offline_resolve_failed"
@@ -735,6 +780,9 @@ expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
 expected_audio_separator = "${PINNED_AUDIO_SEPARATOR_VERSION}"
+expected_scipy = "${PINNED_SCIPY_VERSION}"
+expected_samplerate = "${PINNED_SAMPLERATE_VERSION}"
+expected_onnxruntime = "${PINNED_ONNXRUNTIME_VERSION}"
 expected_profile = "${PINNED_TORCH_STACK_LABEL}"
 mac_arch = "${MAC_ARCH}"
 
@@ -786,6 +834,11 @@ try:
     _, torchvision_ver = import_module_version("torchvision")
     _, torchaudio_ver = import_module_version("torchaudio")
     audio_separator_ver = distribution_version("audio-separator")
+    scipy_ver = ""
+    samplerate_ver = ""
+    if mac_arch == "arm64":
+        scipy_ver = distribution_version("scipy")
+        samplerate_ver = distribution_version("samplerate")
     _, onnxruntime_ver = import_module_version("onnxruntime")
 
     mps_backend = getattr(getattr(torch_mod, "backends", None), "mps", None) if torch_mod is not None else None
@@ -827,6 +880,13 @@ try:
         add_failure("torchaudio", expected_torchaudio, torchaudio_ver or "missing")
     if core(audio_separator_ver) != expected_audio_separator:
         add_failure("audio-separator", expected_audio_separator, audio_separator_ver or "missing")
+    if mac_arch == "arm64":
+        if core(scipy_ver) != expected_scipy:
+            add_failure("scipy", expected_scipy, scipy_ver or "missing")
+        if core(samplerate_ver) != expected_samplerate:
+            add_failure("samplerate", expected_samplerate, samplerate_ver or "missing")
+        if core(onnxruntime_ver) != expected_onnxruntime:
+            add_failure("onnxruntime", expected_onnxruntime, onnxruntime_ver or "missing")
 
     ordered_names = (
         "mac_arch",
@@ -837,6 +897,8 @@ try:
         "torchvision",
         "torchaudio",
         "audio-separator",
+        "scipy",
+        "samplerate",
         "onnxruntime",
         "mps_built",
         "mps_available",
@@ -1056,6 +1118,10 @@ write_state() {
       echo "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
       echo "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
       echo "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=${MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED}"
+      echo "MACOS_CORE_BUNDLE_INSTALL_STATUS=${MACOS_CORE_BUNDLE_INSTALL_STATUS}"
+      echo "MACOS_CORE_BUNDLE_INSTALL_REASON=${MACOS_CORE_BUNDLE_INSTALL_REASON}"
+      echo "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
+      echo "MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS=${MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
@@ -1252,6 +1318,10 @@ MACOS_PAYLOAD_PREFLIGHT_STATUS="not_required"
 MACOS_PAYLOAD_PREFLIGHT_REASON="no_bundled_apple_silicon_payload"
 MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE="${BUNDLED_WHEELS_DIR}"
 MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"
+MACOS_CORE_BUNDLE_INSTALL_STATUS="not_required"
+MACOS_CORE_BUNDLE_INSTALL_REASON="not_apple_silicon"
+MACOS_CORE_BUNDLE_REQUIREMENTS=""
+MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="not_run"
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
@@ -1425,12 +1495,12 @@ else
     MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
     install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     log "Installing pinned STEMwerk backend packages..."
-    install_with_optional_bundled_wheels "${VENV_PY}" "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
-    if ! install_pinned_torch_stack; then
-      if [ "${MAC_ARCH}" = "x86_64" ]; then
+    if [ "${MAC_ARCH}" = "x86_64" ]; then
+      install_with_optional_bundled_wheels "${VENV_PY}" "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+      if ! install_pinned_torch_stack; then
         log "Intel macOS CPU fallback dependency install failed during initial torch stack setup"
+        set_status "deps_failed" "torch_install_failed"
       fi
-      set_status "deps_failed" "torch_install_failed"
     fi
 
     log "Installing stemwerk-core"
@@ -1453,9 +1523,16 @@ else
       exit 1
     fi
 
-    log "Preinstalling numba/llvmlite (macOS wheels)"
-    install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==${PINNED_LLVM_VERSION}" "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1 || \
-      log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
+    if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then
+      if ! install_apple_silicon_core_bundle; then
+        set_status "deps_failed" "core_bundle_install_failed"
+        write_state
+        exit 1
+      fi
+    else
+      log "Preinstalling numba/llvmlite (macOS wheels)"
+      install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==${PINNED_LLVM_VERSION}" "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1 || \
+        log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
     if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
         _audio_tmp_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
@@ -1513,6 +1590,7 @@ else
           set_status "deps_failed" "onnxruntime_install_failed"
         fi
       fi
+    fi
     fi
   fi
 fi
@@ -1585,7 +1663,10 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   fi
   if ! assert_pinned_torch_stack "${VENV_PY}"; then
     FINAL_RUNTIME_VERIFIED="no"
-    set_status "deps_failed" "torch_pin_assert_failed"
+    MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="failed"
+    set_status "deps_failed" "core_bundle_pin_assert_failed"
+  else
+    MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="ok"
   fi
   if ! "${VENV_PY}" -m pip check >> "${LOG_FILE}" 2>&1; then
     FINAL_RUNTIME_VERIFIED="no"

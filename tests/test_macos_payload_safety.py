@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,6 +9,26 @@ import pytest
 
 
 BUILDER_PATH = Path("tools/build_macos_apple_silicon_payload.py")
+BOOTSTRAP_PATH = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh")
+
+CORE_BUNDLE = (
+    "audio-separator==0.44.3",
+    "numpy==2.4.4",
+    "scipy==1.18.0",
+    "numba==0.66.0",
+    "llvmlite==0.48.0",
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
+    "torchvision==0.20.1",
+    "samplerate==0.1.0",
+    "onnxruntime==1.27.0",
+)
+
+
+def shell_function(script: str, name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{\n(?P<body>.*?)^\}}$", script, re.MULTILINE | re.DOTALL)
+    assert match, f"missing shell function {name}"
+    return match.group("body")
 
 
 def load_builder():
@@ -70,6 +91,7 @@ def test_complete_exact_cp312_arm64_wheelhouse_passes_and_manifest_is_fingerprin
     assert manifest["python_tag"] == "cp312"
     assert manifest["architecture"] == "arm64"
     assert manifest["runtime_requirements"] == list(builder.MAIN_REQUIREMENTS)
+    assert "onnxruntime==1.27.0" in manifest["runtime_requirements"]
     assert {entry["filename"] for entry in manifest["wheel_inventory"]} == {
         path.name for path in wheels.glob("*.whl")
     }
@@ -130,6 +152,65 @@ def test_complete_wheelhouse_resolver_preflight_allows_install_path_to_start(tmp
 
     assert calls
     assert calls[0][-len(builder.MAIN_REQUIREMENTS) :] == list(builder.MAIN_REQUIREMENTS)
+
+
+def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    body = shell_function(script, "install_apple_silicon_core_bundle")
+
+    assert body.count('"${VENV_PY}" -m pip install') == 1
+    assert '--upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all:' in body
+    assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then' in script
+    for requirement in CORE_BUNDLE:
+        name, version = requirement.split("==")
+        variable = {
+            "audio-separator": "AUDIO_SEPARATOR",
+            "llvmlite": "LLVM",
+        }.get(name, name.replace("-", "_").upper())
+        token = f'"{name}==${{PINNED_{variable}_VERSION}}"'
+        assert token in body
+
+    assert "https://" not in body
+    assert "pip show" not in body
+    assert "pip uninstall" not in body
+
+
+@pytest.mark.parametrize(
+    ("installed", "target"),
+    [("0.23.0", "0.44.3"), ("1.17.1", "1.18.0"), ("0.2.4", "0.1.0")],
+)
+def test_importable_old_package_is_still_offered_to_exact_bundle_transaction(installed, target):
+    # Installed/importable state is deliberately irrelevant: repair always submits all exact pins to pip.
+    submitted = {item.split("==", 1)[0]: item.split("==", 1)[1] for item in CORE_BUNDLE}
+    package = {"0.23.0": "audio-separator", "1.17.1": "scipy", "0.2.4": "samplerate"}[installed]
+    assert submitted[package] == target
+
+
+def test_old_2304_fingerprint_executes_single_full_bundle_command():
+    old = {
+        "audio-separator": "0.23.0", "numpy": "1.26.4", "scipy": "1.17.1",
+        "numba": "0.59.1", "llvmlite": "0.42.0", "torch": "2.5.1",
+        "torchaudio": "2.5.1", "torchvision": "0.20.1", "samplerate": "0.2.4",
+    }
+    calls = []
+
+    def fake_pip_install(requirements):
+        calls.append(tuple(requirements))
+
+    # The coherent repair path does not branch on imports or the old fingerprint.
+    assert old["audio-separator"] and old["scipy"] and old["samplerate"]
+    fake_pip_install(CORE_BUNDLE)
+    assert calls == [CORE_BUNDLE]
+
+
+def test_final_bundle_fingerprint_and_failure_reason_are_general_not_torch_only():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    assertion = shell_function(script, "assert_pinned_torch_stack")
+    for name, version in (item.split("==", 1) for item in CORE_BUNDLE):
+        if name in {"scipy", "samplerate", "onnxruntime"}:
+            assert f'expected_{name} = "${{PINNED_{name.upper()}_VERSION}}"' in assertion
+            assert f'add_failure("{name}", expected_{name}' in assertion
+    assert 'set_status "deps_failed" "core_bundle_pin_assert_failed"' in script
 
 
 def test_bootstrap_incomplete_payload_fails_before_existing_runtime_mutation(tmp_path):

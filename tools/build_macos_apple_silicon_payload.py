@@ -47,7 +47,7 @@ MAIN_REQUIREMENTS = (
     "torchaudio==2.5.1",
     "audio-separator==0.44.3",
     "samplerate==0.1.0",
-    "onnxruntime",
+    "onnxruntime==1.27.0",
 )
 
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
