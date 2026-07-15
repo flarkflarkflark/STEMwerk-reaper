@@ -495,8 +495,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             local msg =
                 "NumPy compatibility issue.\n\n"
                 .. tostring(numpyErr or "Unknown error") .. "\n\n"
-                .. "Fix (command):\n"
-                .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
+                .. "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle."
             debugLog(msg)
             SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
             local lf = io.open(logFile, "w")

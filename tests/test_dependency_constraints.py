@@ -363,6 +363,35 @@ def test_macos_bootstrap_pip_check_blocks_ready_false_positive():
     assert script.index(pip_check) < script.index('write_ready_to_go_state "${READY_RUNTIME_KIND}"')
 
 
+def test_runtime_numpy_numba_guard_uses_live_import_and_jit_probe():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    workflow = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
+
+    assert "import numpy, numba" in main_script
+    assert "@numba.njit" in main_script
+    assert "_stemwerk_numba_probe(1)" in main_script
+    assert "execProcess(cmd, 30000)" in main_script
+    assert "NumPy/Numba runtime probe failed:" in main_script
+    assert "requires < 2.4" not in main_script
+    assert 'pip install \\\"numpy<2.4\\\"' not in main_script
+    assert 'pip install \\\"numpy<2.4\\\"' not in workflow
+    assert "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle." in main_script
+    assert "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle." in workflow
+
+
+def test_macos_ready_assertion_enforces_numpy_numba_llvmlite_bundle():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'expected_numpy = "${PINNED_NUMPY_VERSION}"' in script
+    assert 'expected_numba = "${PINNED_NUMBA_VERSION}"' in script
+    assert 'expected_llvmlite = "${PINNED_LLVM_VERSION}"' in script
+    assert 'add_failure("numpy", expected_numpy, numpy_ver or "missing")' in script
+    assert 'add_failure("numba", expected_numba, numba_ver or "missing")' in script
+    assert 'add_failure("llvmlite", expected_llvmlite, llvmlite_ver or "missing")' in script
+    assert "@numba_mod.njit" in script
+    assert "numba JIT probe failed:" in script
+
+
 def test_apple_silicon_workflows_follow_asep_0443_numpy2_policy():
     workflow_paths = [
         Path(".github/workflows/macos-apple-silicon-backend-smoke.yml"),

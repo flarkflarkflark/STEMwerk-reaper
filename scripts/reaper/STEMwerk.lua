@@ -690,30 +690,34 @@ function checkNumpyCompat(pythonPath)
     end
     local sep = PATH_SEP or (OS == "Windows" and "\\" or "/")
     local outPath = tempBase .. sep .. "STEMwerk_numpy_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)) .. ".txt"
-    local py = "import numpy,sys; f=open('" .. escapePythonString(outPath) .. "','w'); f.write(numpy.__version__); f.close()"
+    local py = table.concat({
+        "import sys",
+        "try:",
+        " import numpy, numba",
+        " @numba.njit",
+        " def _stemwerk_numba_probe(x): return x + 1",
+        " _jit_result = _stemwerk_numba_probe(1)",
+        " _status = 'ok|numpy=' + numpy.__version__ + '|numba=' + numba.__version__ + '|jit=' + str(_jit_result)",
+        "except Exception as exc:",
+        " _status = 'error|' + type(exc).__name__ + ': ' + str(exc).replace('\\n', ' ')",
+        "with open('" .. escapePythonString(outPath) .. "', 'w') as f: f.write(_status)",
+        "if _status.startswith('error|'): sys.exit(1)",
+    }, "\n")
     local cmd = quoteArg(pythonPath) .. " -c " .. quoteArg(py)
-    local rc, out = execProcess(cmd, 12000)
+    local rc, out = execProcess(cmd, 30000)
     out = out or ""
-    local ver = nil
+    local probe = nil
     local f = io.open(outPath, "r")
     if f then
         local line = f:read("*l") or ""
         f:close()
         os.remove(outPath)
-        if line ~= "" then ver = line:match("(%d+%.%d+%.%d+)") end
+        if line ~= "" then probe = line end
     end
-    if rc ~= 0 or not ver then
-        if out:lower():find("no module named 'numpy'", 1, true) then
-            return false, "NumPy is not installed."
-        end
-        if rc == 0 and not ver then return true, nil end
-        local extra = out ~= "" and ("\nOutput:\n" .. tostring(out)) or "\nOutput: (none)"
-        return false, "Unable to detect NumPy version." .. extra
-    end
-    local major, minor = ver:match("^(%d+)%.(%d+)")
-    major, minor = tonumber(major), tonumber(minor)
-    if major and minor and (major > 2 or (major == 2 and minor >= 4)) then
-        return false, "NumPy " .. tostring(ver) .. " is not supported by Numba (requires < 2.4)."
+    if rc ~= 0 or not probe or probe:sub(1, 3) ~= "ok|" then
+        local detail = probe and probe:gsub("^error|", "") or "probe produced no result"
+        if out ~= "" then detail = detail .. "\nOutput:\n" .. tostring(out) end
+        return false, "NumPy/Numba runtime probe failed: " .. tostring(detail)
     end
     return true, nil
 end
@@ -19033,8 +19037,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         local msg =
             "NumPy compatibility issue.\n\n"
             .. tostring(numpyErr or "Unknown error") .. "\n\n"
-            .. "Fix (command):\n"
-            .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
+            .. "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle."
         debugLog(msg)
         SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
         if reaper and reaper.ShowMessageBox then

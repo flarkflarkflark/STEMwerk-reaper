@@ -693,6 +693,8 @@ assert_pinned_torch_stack() {
 from importlib.metadata import PackageNotFoundError, version
 
 expected_numpy = "${PINNED_NUMPY_VERSION}"
+expected_numba = "${PINNED_NUMBA_VERSION}"
+expected_llvmlite = "${PINNED_LLVM_VERSION}"
 expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
@@ -742,7 +744,7 @@ def distribution_version(dist_name, detail_name=None):
 
 try:
     _, numpy_ver = import_module_version("numpy")
-    _, numba_ver = import_module_version("numba")
+    numba_mod, numba_ver = import_module_version("numba")
     _, llvmlite_ver = import_module_version("llvmlite")
     torch_mod, torch_ver = import_module_version("torch")
     _, torchvision_ver = import_module_version("torchvision")
@@ -765,8 +767,22 @@ try:
         record("mps_available", "unsupported")
     record("mac_arch", mac_arch)
 
+    if numba_mod is not None:
+        try:
+            @numba_mod.njit
+            def _stemwerk_numba_probe(x):
+                return x + 1
+            record("numba_jit", _stemwerk_numba_probe(1))
+        except Exception as exc:
+            record("numba_jit", f"error:{exc}")
+            failures.append(f"numba JIT probe failed: {exc}")
+
     if core(numpy_ver) != expected_numpy:
         add_failure("numpy", expected_numpy, numpy_ver or "missing")
+    if core(numba_ver) != expected_numba:
+        add_failure("numba", expected_numba, numba_ver or "missing")
+    if core(llvmlite_ver) != expected_llvmlite:
+        add_failure("llvmlite", expected_llvmlite, llvmlite_ver or "missing")
     if core(torch_ver) != expected_torch:
         add_failure("torch", expected_torch, torch_ver or "missing")
     if core(torchvision_ver) != expected_torchvision:
