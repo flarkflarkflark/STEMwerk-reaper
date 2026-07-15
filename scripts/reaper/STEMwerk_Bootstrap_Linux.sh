@@ -263,7 +263,7 @@ write_ready_to_go_state() {
     *) _ready="missing" ;;
   esac
   case "${_runtime_status}" in
-    ok|skipped) ;;
+    ok|skipped|unified_main) ;;
     broken|load_failed|verify_failed|install_failed|disk_space_insufficient)
       _ready="broken"
       ;;
@@ -380,6 +380,87 @@ PY
   esac
 }
 
+probe_main_rocm_dks_ready() {
+  _py="${1:-$(main_runtime_python)}"
+  [ -x "${_py}" ] || {
+    log_step "Main unified DKS probe failed: python_missing"
+    return 1
+  }
+  _probe="$("${_py}" - <<'PY' 2>/dev/null || true
+import importlib.metadata as metadata
+import re
+
+
+def version_tuple(value):
+    return tuple(int(part) for part in re.findall(r"\d+", value)[:3])
+
+
+errors = []
+try:
+    from audio_separator.separator import Separator  # noqa: F401
+except Exception as exc:
+    errors.append(f"audio_separator_import_failed:{type(exc).__name__}:{exc}")
+
+try:
+    audio_separator_version = metadata.version("audio-separator")
+except Exception:
+    audio_separator_version = ""
+if version_tuple(audio_separator_version) < (0, 44, 3):
+    errors.append(f"audio_separator_lt_0_44_3:{audio_separator_version or 'missing'}")
+
+try:
+    numpy_version = metadata.version("numpy")
+except Exception:
+    numpy_version = ""
+if version_tuple(numpy_version) < (2, 0, 0):
+    errors.append(f"numpy_lt_2:{numpy_version or 'missing'}")
+
+try:
+    import torch
+    hip = str(getattr(getattr(torch, "version", None), "hip", "") or "")
+    cuda_available = bool(torch.cuda.is_available())
+    device_count = int(torch.cuda.device_count()) if cuda_available else 0
+    if not hip:
+        errors.append("rocm_no_hip")
+    if not cuda_available:
+        errors.append("rocm_cuda_unavailable")
+    if device_count <= 0:
+        errors.append("rocm_no_devices")
+    if device_count > 0:
+        torch.empty(1, device="cuda:0")
+        if not str(torch.cuda.get_device_name(0)).strip():
+            errors.append("rocm_device_name_missing")
+except Exception as exc:
+    errors.append(f"rocm_device_probe_failed:{type(exc).__name__}:{exc}")
+
+if errors:
+    print("broken|" + ";".join(errors))
+else:
+    print("ok")
+PY
+)"
+  case "${_probe}" in
+    ok)
+      log_step "Main unified DKS probe passed: ${_py}"
+      return 0
+      ;;
+    broken\|*)
+      log_step "Main unified DKS probe failed: ${_probe#broken|}"
+      return 1
+      ;;
+    *)
+      log_step "Main unified DKS probe failed: probe_failed"
+      return 1
+      ;;
+  esac
+}
+
+main_dks_assets_ready() {
+  _model_dir="$(model_cache_dir)"
+  [ -f "${_model_dir}/${DRUMSEP_MODEL_FILE}" ] \
+    && [ -f "${_model_dir}/${DRUMSEP_MODEL_YAML}" ]
+}
+
 load_ready_runtime_state() {
   _kind="${1:-cpu}"
   if [ "${_kind}" = "rocm" ] && [ -f "$(drumsep_rocm_state_file)" ]; then
@@ -402,6 +483,11 @@ load_ready_runtime_state() {
 verify_existing_ready_runtime() {
   _preferred="${1:-cpu}"
   if [ "${_preferred}" = "rocm" ]; then
+    if probe_main_rocm_dks_ready "$(main_runtime_python)" && main_dks_assets_ready; then
+      write_main_unified_rocm_state "ok"
+      load_ready_runtime_state "rocm"
+      return 0
+    fi
     if verify_drumsep_rocm_runtime; then
       load_ready_runtime_state "rocm"
       return 0
@@ -582,7 +668,12 @@ write_drumsep_rocm_state() {
   _status="$1"
   _model_status="${2:-missing}"
   _detail="${3:-}"
-  _py="$(drumsep_rocm_runtime_python)"
+  _py="${4:-$(drumsep_rocm_runtime_python)}"
+  _selection="${5:-legacy_rocm}"
+  _legacy_status="${6:-not_checked}"
+  _legacy_install_skipped="${7:-}"
+  _compat_status="${_status}"
+  [ "${_status}" = "unified_main" ] && _compat_status="ok"
   _state="$(drumsep_rocm_state_file)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
@@ -648,11 +739,14 @@ PY
   fi
 
   {
-    echo "STATUS=${_status}"
+    echo "STATUS=${_compat_status}"
     [ -n "${_detail}" ] && echo "STATUS_REASON=${_detail}"
     echo "DRUMSEP_ROCM_RUNTIME_STATUS=${_status}"
     [ -n "${_detail}" ] && echo "DRUMSEP_ROCM_RUNTIME_DETAIL=${_detail}"
+    echo "DRUMSEP_ROCM_RUNTIME_SELECTION=${_selection}"
     echo "DRUMSEP_ROCM_PYTHON=${_py}"
+    echo "DRUMSEP_ROCM_LEGACY_RUNTIME_STATUS=${_legacy_status}"
+    echo "DRUMSEP_ROCM_LEGACY_INSTALL_SKIPPED=${_legacy_install_skipped}"
     if [ -n "${_versions}" ]; then
       printf "%s\n" "${_versions}"
     else
@@ -672,6 +766,15 @@ PY
     echo "DRUMSEP_ROCM_MODEL_YAML=${_model_yaml}"
     echo "DRUMSEP_ROCM_TEMP_DIR=${_tmp_dir}"
   } > "${_state}"
+}
+
+write_main_unified_rocm_state() {
+  _legacy_status="missing"
+  [ -d "${RUNTIME_BASE}/.venv-drumsep-rocm" ] && _legacy_status="present"
+  write_drumsep_rocm_state \
+    "unified_main" "${1:-ok}" "main_unified_ready" \
+    "$(main_runtime_python)" "main_unified" "${_legacy_status}" "main_unified_ready"
+  log_step "Legacy DrumSep ROCm install skipped: main_unified_ready"
 }
 
 write_state() {
@@ -2946,8 +3049,12 @@ fi
 if [ "${STATUS}" = "ok" ] && [ "${FINAL_OK}" -eq 1 ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   if [ "${BACKEND}" = "rocm" ]; then
     READY_RUNTIME_KIND="rocm"
-    if ! install_drumsep_rocm_runtime; then
-      set_status "deps_failed" "drumsep_ready_runtime_failed"
+    if probe_main_rocm_dks_ready "${VENV_PY}" && ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
+      write_main_unified_rocm_state "ok"
+    else
+      if ! install_drumsep_rocm_runtime; then
+        set_status "deps_failed" "drumsep_ready_runtime_failed"
+      fi
     fi
   else
     READY_RUNTIME_KIND="cpu"
