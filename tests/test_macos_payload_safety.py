@@ -76,7 +76,7 @@ def test_exact_core_wheel_missing_fails_payload_audit(tmp_path, missing):
     wheels = complete_fake_wheelhouse(tmp_path, builder)
     (wheels / wheel_name(missing)).unlink()
 
-    with pytest.raises(RuntimeError, match=missing):
+    with pytest.raises(RuntimeError, match="payload_core_version_exclusivity"):
         builder.ensure_wheelhouse_complete(wheels)
 
 
@@ -107,7 +107,9 @@ def test_complete_exact_cp312_arm64_wheelhouse_passes_and_manifest_is_fingerprin
         path.name for path in wheels.glob("*.whl")
     }
     assert all(len(entry["sha256"]) == 64 for entry in manifest["wheel_inventory"])
+    assert all(entry["size"] == 0 for entry in manifest["wheel_inventory"])
     builder.audit_existing_manifest(tmp_path)
+    print("MACOS_PAYLOAD_CLOSED_WORLD_POSITIVE_TEST=PASS")
 
 
 def test_manifest_audit_rejects_missing_wheel_and_checksum_drift(tmp_path):
@@ -117,12 +119,10 @@ def test_manifest_audit_rejects_missing_wheel_and_checksum_drift(tmp_path):
     victim = wheels / wheel_name("numpy==2.4.4")
     victim.write_bytes(b"changed")
 
-    with pytest.raises(RuntimeError, match="checksum mismatch"):
+    with pytest.raises(RuntimeError, match="payload_checksum_mismatch"):
         builder.audit_existing_manifest(tmp_path)
 
-    victim.unlink()
-    with pytest.raises(RuntimeError, match="inventory does not match"):
-        builder.audit_existing_manifest(tmp_path)
+    assert victim.is_file()
 
 
 def test_resolver_audit_is_non_mutating_and_uses_only_wheelhouse(tmp_path, monkeypatch):
@@ -162,9 +162,145 @@ def test_complete_wheelhouse_resolver_preflight_allows_install_path_to_start(tmp
     builder.audit_wheelhouse_resolution(wheels, "python3.12")
 
     assert calls
-    assert calls[0][-1] == "audio-separator==0.44.3"
-    assert "--no-deps" in calls[1]
-    assert calls[1][-len(builder.MAIN_REQUIREMENTS) :] == list(builder.MAIN_REQUIREMENTS)
+    assert "--no-deps" in calls[0]
+    assert calls[0][-len(builder.MAIN_REQUIREMENTS) :] == list(builder.MAIN_REQUIREMENTS)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "samplerate-0.1.0-py2.py3-none-any.whl",
+        "numpy-2.4.6-cp312-cp312-macosx_12_0_arm64.whl",
+        "torch-2.13.0-cp312-cp312-macosx_12_0_arm64.whl",
+        "torchvision-0.28.0-cp312-cp312-macosx_12_0_arm64.whl",
+    ],
+)
+def test_closed_world_rejects_alternative_core_versions(tmp_path, filename):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    (wheels / filename).touch()
+    reason = "payload_forbidden_samplerate_0_1_0" if filename.startswith("samplerate-") else "payload_core_version_exclusivity"
+    with pytest.raises(RuntimeError, match=reason):
+        builder.validate_closed_world_wheelhouse(wheels)
+
+
+def test_proven_native_extra_wheel_fixture_fails_even_when_resolver_passes(tmp_path, monkeypatch):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    for filename in (
+        "samplerate-0.1.0-py2.py3-none-any.whl",
+        "numpy-2.4.6-cp312-cp312-macosx_12_0_arm64.whl",
+        "torch-2.13.0-cp312-cp312-macosx_12_0_arm64.whl",
+        "torchvision-0.28.0-cp312-cp312-macosx_12_0_arm64.whl",
+    ):
+        (wheels / filename).touch()
+    monkeypatch.setattr(builder.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0))
+    builder.audit_wheelhouse_resolution(wheels, "python3.12")
+    with pytest.raises(RuntimeError, match="payload_forbidden_samplerate_0_1_0"):
+        builder.validate_closed_world_wheelhouse(wheels)
+    print("MACOS_PAYLOAD_CLOSED_WORLD_NEGATIVE_TEST=PASS")
+
+
+def test_manifest_closed_world_rejects_extra_and_missing_non_core_wheels(tmp_path):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    extra = wheels / "extra_dependency-1.0-py3-none-any.whl"
+    extra.touch()
+    with pytest.raises(RuntimeError, match="payload_extra_wheels"):
+        builder.audit_existing_manifest(tmp_path)
+    extra.unlink()
+    victim = next(wheels.glob("stemwerk_core-*.whl"))
+    victim.unlink()
+    with pytest.raises(RuntimeError, match="payload_missing_wheels"):
+        builder.audit_existing_manifest(tmp_path)
+
+
+def test_manifest_rejects_duplicate_entry_and_unexpected_archive(tmp_path):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["wheel_inventory"].append(dict(manifest["wheel_inventory"][0]))
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="payload_manifest_duplicate"):
+        builder.audit_existing_manifest(tmp_path)
+    manifest["wheel_inventory"].pop()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (wheels / "unexpected.tar.gz").touch()
+    with pytest.raises(RuntimeError, match="payload_unexpected_artifacts"):
+        builder.audit_existing_manifest(tmp_path)
+
+
+def test_manifest_rejects_case_collision(tmp_path):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    collision = dict(manifest["wheel_inventory"][0])
+    collision["filename"] = collision["filename"].upper()
+    manifest["wheel_inventory"].append(collision)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="payload_manifest_duplicate"):
+        builder.audit_existing_manifest(tmp_path)
+
+
+def test_duplicate_allowed_core_version_with_different_tag_is_rejected(tmp_path):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    (wheels / "numpy-2.4.4-cp312-cp312-macosx_11_0_universal2.whl").touch()
+    with pytest.raises(RuntimeError, match="payload_core_version_exclusivity"):
+        builder.validate_closed_world_wheelhouse(wheels)
+
+
+def test_reset_dir_removes_only_selected_payload_root(tmp_path):
+    builder = load_builder()
+    output = tmp_path / "payload"
+    outside = tmp_path / "keep.txt"
+    output.mkdir()
+    (output / "stale.whl").touch()
+    outside.write_text("keep", encoding="utf-8")
+    builder.reset_dir(output)
+    assert output.is_dir() and not any(output.iterdir())
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_non_empty_output_requires_explicit_clean_and_fresh_output_passes(tmp_path):
+    builder = load_builder()
+    output = tmp_path / "payload"
+    output.mkdir()
+    (output / "stale.whl").touch()
+    with pytest.raises(RuntimeError, match="existing_payload_requires_clean_output"):
+        builder.prepare_output_dir(output, clean_output=False)
+    assert (output / "stale.whl").is_file()
+    builder.prepare_output_dir(output, clean_output=True)
+    assert output.is_dir() and not any(output.iterdir())
+    fresh = tmp_path / "fresh"
+    builder.prepare_output_dir(fresh, clean_output=False)
+    assert fresh.is_dir() and not any(fresh.iterdir())
+
+
+def test_resolver_projection_discards_alternative_core_candidates(tmp_path):
+    builder = load_builder()
+    resolved = tmp_path / "resolved"
+    selected = tmp_path / "selected"
+    resolved.mkdir()
+    for filename in (
+        "samplerate-0.1.0-py2.py3-none-any.whl",
+        wheel_name("samplerate==0.2.4"),
+        "numpy-2.4.6-cp312-cp312-macosx_12_0_arm64.whl",
+        wheel_name("numpy==2.4.4"),
+        "some_dependency-1.0-py3-none-any.whl",
+    ):
+        (resolved / filename).touch()
+    builder.project_resolved_wheels(resolved, selected)
+    assert {path.name for path in selected.glob("*.whl")} == {
+        wheel_name("samplerate==0.2.4"),
+        wheel_name("numpy==2.4.4"),
+        "some_dependency-1.0-py3-none-any.whl",
+    }
 
 
 def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction():

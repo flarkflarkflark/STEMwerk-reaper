@@ -5628,6 +5628,11 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
     assert 'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
     assert 'python3 "$ROOT_DIR/tools/build_macos_apple_silicon_payload.py" \\' in script
     assert '--audit-existing "$BUNDLED_PAYLOAD_ROOT"' in script
+    assert script.index('--audit-existing "$BUNDLED_PAYLOAD_ROOT"') < script.index(
+        'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"'
+    )
+    assert 'bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)' in script
+    assert 'bundled-intel' not in script
     assert 'ERROR: bundled Apple Silicon payload is missing:' in script
     assert 'payload_status=missing' not in script
 
@@ -5683,7 +5688,7 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert '"--abi"' not in script
     assert 'subprocess.run(cmd, check=True, env=command_env())' in script
     assert 'DIFFQ_REQUIREMENT = "diffq==0.2.4"' in script
-    assert 'ensure_diffq_wheel(output_dir / "wheels")' in script
+    assert 'ensure_diffq_wheel(resolver_dir)' in script
     assert 'ensure_samplerate_wheel(output_dir / "wheels")' in script
 
 
