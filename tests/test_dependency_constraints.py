@@ -5174,9 +5174,11 @@ def test_release_workflow_uploads_only_supported_windows_installers():
 
 def test_ci_fast_quick_script_smoke_installs_pyyaml():
     workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
+    requirements = Path("requirements-dev.txt").read_text(encoding="utf-8").lower().splitlines()
 
     assert "Install test dependencies" in workflow
-    assert "python -m pip install pytest pyyaml soundfile" in workflow
+    assert "python -m pip install -r requirements-dev.txt" in workflow
+    assert "pyyaml" in requirements
     assert "python scripts/reaper/audio_separator_process.py --list-models" in workflow
 
 
@@ -5191,6 +5193,8 @@ def test_ci_fast_runs_curated_pytest_coverage():
     assert "tests/test_windows_normal_route_matrix.py" in workflow
     assert "tests/test_vocals_hq_runtime_proof.py" in workflow
     assert "python -m pytest -q \\\n            tests" in workflow
+    assert "python -m pip install -r requirements-dev.txt" in workflow
+    assert "python -m pytest -q tests/test_00_test_environment.py" in workflow
 
 
 def test_no_stale_onnxruntime_ci_pins():
@@ -5221,6 +5225,8 @@ def test_onnxruntime_runtime_pin_policy_is_documented():
     macos_payload = Path("tools/build_macos_apple_silicon_payload.py").read_text(
         encoding="utf-8"
     )
+    macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+    macos_sanity = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8")
     ci_workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
 
     # Policy: CI Fast runs Python 3.11, production payloads generally use
@@ -5234,9 +5240,45 @@ def test_onnxruntime_runtime_pin_policy_is_documented():
     assert '"onnxruntime-gpu==1.24.4"' in linux_wheelhouse
     assert "onnxruntime-directml==1.24.4" in directml_constraints
     assert '$onnxRuntimeDirectMlVersion = "1.24.4"' in windows_bootstrap
-    assert '"onnxruntime"' in macos_payload
+    assert '"onnxruntime==1.27.0"' in macos_payload
     assert '"onnxruntime-silicon"' not in macos_payload
+    assert 'PINNED_ONNXRUNTIME_VERSION="1.27.0"' in macos_bootstrap
+    assert 'ONNX_PACKAGE="onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"' in macos_bootstrap
+    assert 'ONNX_PACKAGE="onnxruntime-silicon"' not in macos_bootstrap
+    assert 'pip install "onnxruntime==1.27.0"' in macos_sanity
+    assert "onnxruntime-silicon ||" not in macos_sanity
+    assert 'core(payload["onnxruntime_version"]) == "1.27.0"' in macos_sanity
     assert "tests/test_dependency_constraints.py::test_onnxruntime_runtime_pin_policy_is_documented" in ci_workflow
+    print("MACOS_ONNXRUNTIME_POLICY_TEST=PASS")
+
+
+def test_macos_arm64_constraints_are_policy_reference_not_online_fallback():
+    constraints = Path("scripts/reaper/constraints/macos.txt").read_text(encoding="utf-8")
+    assert "macOS arm64 online/fallback resolution is unsupported" in constraints
+    assert "requires the audited bundled payload" in constraints
+    assert "do not use this file to resolve ASEP online" in constraints
+    for requirement in ("samplerate==0.2.4", "torch==2.5.1", "sympy==1.13.1", "onnxruntime==1.27.0"):
+        assert requirement in constraints
+
+
+def test_macos_intel_no_payload_route_remains_available():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in bootstrap
+    assert 'ONNX_PACKAGE="onnxruntime"' in bootstrap
+    assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then' in bootstrap
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then' not in bootstrap
+
+
+def test_macos_pip_check_regex_matches_sanity_workflow_semantics():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+    sanity = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8")
+    canonical = r"audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$"
+    assert bootstrap.count(canonical) == 2
+    assert sanity.count(canonical) == 2
+    assert "grep -Eiq" in bootstrap and "grep -Eiv" in bootstrap
+    assert "grep -Eiq" in sanity and "grep -Eivc" in sanity
+    assert "sympy" not in "\n".join(line for line in bootstrap.splitlines() if "pip_check" in line.lower())
+    print("MACOS_PIP_CHECK_REGEX_PARITY_TEST=PASS")
 
 
 def test_setup_internal_luac_compiles_under_reaper_limits():

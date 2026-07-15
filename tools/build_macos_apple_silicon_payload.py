@@ -416,6 +416,8 @@ def sha256_file(path: Path) -> str:
 
 
 def write_manifest(output_dir: Path, version: str) -> None:
+    # Deferred D6: wheels are fully fingerprinted here; ffmpeg, models, and the
+    # managed Python tree still need a separate non-wheel integrity design.
     validate_closed_world_wheelhouse(output_dir / "wheels")
     wheel_inventory = [
         {"filename": path.name, "sha256": sha256_file(path), "size": path.stat().st_size}

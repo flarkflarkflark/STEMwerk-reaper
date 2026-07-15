@@ -31,8 +31,10 @@ jobs:
         run: python tools/release_gate.py --check
 
       - name: Install test dependencies
-        run: |
-          python -m pip install pytest pyyaml soundfile
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Validate canonical test environment
+        run: python -m pytest -q tests/test_00_test_environment.py
 
       - name: Quick script smoke tests
         run: |

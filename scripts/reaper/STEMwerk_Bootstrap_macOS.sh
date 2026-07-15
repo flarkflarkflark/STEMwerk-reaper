@@ -170,6 +170,25 @@ install_apple_silicon_core_bundle() {
   MACOS_CORE_BUNDLE_REQUIREMENTS="$(apple_silicon_core_bundle_requirements | tr '\n' ' ')"
   log "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
   log "Installing complete Apple Silicon core bundle in one audited offline transaction"
+  log "Inspecting bounded stale Apple Silicon packages: onnxruntime-silicon samplerate"
+  "${VENV_PY}" -m pip show onnxruntime-silicon samplerate >> "${LOG_FILE}" 2>&1 || true
+  # Remove only the two known collision sources. samplerate 0.1.x can leave an
+  # x86_64 dylib under the legacy _samplerate_data layout after an overwrite.
+  if ! "${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate >> "${LOG_FILE}" 2>&1; then
+    MACOS_STALE_PACKAGE_CLEANUP_STATUS="failed"
+    MACOS_STALE_PACKAGE_CLEANUP_REASON="bounded_uninstall_failed"
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="bounded_stale_package_cleanup_failed"
+    log "MACOS_STALE_PACKAGE_CLEANUP_STATUS=failed"
+    log "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
+    return 1
+  fi
+  MACOS_STALE_PACKAGE_CLEANUP_STATUS="ok"
+  MACOS_STALE_PACKAGE_CLEANUP_REASON="removed_or_absent"
+  log "MACOS_STALE_PACKAGE_CLEANUP_STATUS=ok"
+  log "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
+  # Deferred D5: same-version corruption still requires an explicit rebuild-venv;
+  # normal Repair intentionally does not force-reinstall the complete bundle.
   log "Installing manifest-defined audio-separator dependency closure before native samplerate override"
   if [ -z "${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS:-}" ]; then
     MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
@@ -1219,6 +1238,8 @@ write_state() {
       echo "MACOS_CORE_BUNDLE_INSTALL_REASON=${MACOS_CORE_BUNDLE_INSTALL_REASON}"
       echo "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
       echo "MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS=${MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS}"
+      echo "MACOS_STALE_PACKAGE_CLEANUP_STATUS=${MACOS_STALE_PACKAGE_CLEANUP_STATUS}"
+      echo "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
       echo "REQUIRED_SCRIPT_STATUS=${REQUIRED_SCRIPT_STATUS}"
       [ -n "${REQUIRED_SCRIPT_PATH}" ] && echo "REQUIRED_SCRIPT_PATH=${REQUIRED_SCRIPT_PATH}"
       echo "DRUMSEP_PREFETCH_SCRIPT_STATUS=${DRUMSEP_PREFETCH_SCRIPT_STATUS}"
@@ -1376,8 +1397,7 @@ PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
 ONNX_PACKAGE="onnxruntime"
 ONNX_FALLBACK_PACKAGE=""
 if [ "$(uname -m)" = "arm64" ]; then
-  ONNX_PACKAGE="onnxruntime-silicon"
-  ONNX_FALLBACK_PACKAGE="onnxruntime"
+  ONNX_PACKAGE="onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"
 fi
 PROFILE="mac-cpu"
 BACKEND="cpu"
@@ -1425,6 +1445,8 @@ MACOS_CORE_BUNDLE_INSTALL_STATUS="not_required"
 MACOS_CORE_BUNDLE_INSTALL_REASON="not_apple_silicon"
 MACOS_CORE_BUNDLE_REQUIREMENTS=""
 MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="not_run"
+MACOS_STALE_PACKAGE_CLEANUP_STATUS="not_required"
+MACOS_STALE_PACKAGE_CLEANUP_REASON="not_apple_silicon_bundled_repair"
 DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
 DRUMSEP_PREFETCH_SCRIPT_STATUS="unknown"
 SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
@@ -1444,9 +1466,24 @@ if ! validate_required_reaper_layout; then
   exit 1
 fi
 
-mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
 
-if [ "${MAC_ARCH}" = "arm64" ] && [ -n "${BUNDLED_WHEELS_DIR}" ]; then
+if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then
+  log "Apple Silicon Repair requires a complete bundled payload; online fallback is unsupported"
+  set_status "deps_failed" "apple_silicon_requires_bundled_payload"
+  write_state
+  exit 1
+fi
+if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "present" ] && [ -z "${BUNDLED_WHEELS_DIR}" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="wheelhouse_missing"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=wheelhouse_missing"
+  set_status "deps_failed" "payload_preflight_failed"
+  write_state
+  exit 1
+fi
+if [ "${MAC_ARCH}" = "arm64" ]; then
   MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
   MACOS_PAYLOAD_PREFLIGHT_REASON="python_unavailable"
   _payload_probe_python=""
@@ -1473,6 +1510,7 @@ if [ "${MAC_ARCH}" = "arm64" ] && [ -n "${BUNDLED_WHEELS_DIR}" ]; then
     exit 1
   fi
 fi
+mkdir -p "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
 log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
 log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
@@ -1644,7 +1682,7 @@ else
 
     if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then
       if ! install_apple_silicon_core_bundle; then
-        set_status "deps_failed" "core_bundle_install_failed"
+        set_status "deps_failed" "${MACOS_CORE_BUNDLE_INSTALL_REASON:-core_bundle_install_failed}"
         write_state
         exit 1
       fi

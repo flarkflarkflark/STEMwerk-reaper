@@ -58,6 +58,52 @@ def load_payload_contract():
     return module
 
 
+def run_arm64_payload_gate_fixture(tmp_path: Path, payload_state: str):
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        pytest.skip("native Git Bash not available")
+    script_dir = tmp_path / "reaper"
+    internal = script_dir / "_internal"
+    internal.mkdir(parents=True)
+    bootstrap = script_dir / "STEMwerk_Bootstrap_macOS.sh"
+    shutil.copy2(BOOTSTRAP_PATH, bootstrap)
+    shutil.copy2(Path("scripts/reaper/audio_separator_process.py"), script_dir / "audio_separator_process.py")
+    shutil.copy2(SAMPLERATE_GUARD_PATH, internal / "stemwerk_samplerate_guard.py")
+    shutil.copy2(PAYLOAD_CONTRACT_PATH, internal / "stemwerk_macos_payload_contract.py")
+    payload = script_dir / "_bundled" / "macos" / "apple-silicon"
+    if payload_state == "damaged":
+        payload.mkdir(parents=True)
+        (payload / "manifest.json").write_text("{}\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    (fake_bin / "uname").write_text("#!/bin/sh\nprintf 'arm64\\n'\n", encoding="utf-8")
+    invoked = tmp_path / "python-invoked"
+    (fake_bin / "python3.12").write_text(
+        f"#!/bin/sh\nprintf invoked > '{invoked.as_posix()}'\nexit 99\n", encoding="utf-8"
+    )
+    runtime = tmp_path / "runtime"
+    sentinel = runtime / ".venv" / "sentinel"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("preserved\n", encoding="utf-8")
+
+    def posix(path: Path) -> str:
+        result = subprocess.run(
+            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"], check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+    command = (
+        f"PATH='{posix(fake_bin)}':$PATH '{posix(bootstrap)}' "
+        f"--runtime-base '{posix(runtime)}' --state-file '{posix(state)}' "
+        f"--log-file '{posix(log)}' --mode repair"
+    )
+    result = subprocess.run([str(bash), "-lc", command], capture_output=True, text=True)
+    return result, state.read_text(encoding="utf-8"), sentinel, invoked
+
+
 def wheel_name(requirement: str) -> str:
     name, version = requirement.split("==", 1)
     normalized = name.replace("-", "_")
@@ -476,8 +522,52 @@ def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction()
         assert token in body
 
     assert "https://" not in body
-    assert "pip show" not in body
-    assert "pip uninstall" not in body
+    assert '"${VENV_PY}" -m pip show onnxruntime-silicon samplerate' in body
+    assert '"${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate' in body
+
+
+def test_arm64_requires_bundled_payload_before_mutation(tmp_path):
+    result, state, sentinel, invoked = run_arm64_payload_gate_fixture(tmp_path, "missing")
+    assert result.returncode != 0
+    assert "STATUS_REASON=apple_silicon_requires_bundled_payload" in state
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state
+    assert sentinel.read_text(encoding="utf-8") == "preserved\n"
+    assert not (sentinel.parents[1] / "bin").exists()
+    assert not (sentinel.parents[1] / "python").exists()
+    assert not invoked.exists()
+    print("MACOS_APPLE_SILICON_BUNDLED_PAYLOAD_REQUIRED_TEST=PASS")
+
+
+def test_damaged_arm64_payload_without_wheelhouse_fails_before_mutation(tmp_path):
+    result, state, sentinel, invoked = run_arm64_payload_gate_fixture(tmp_path, "damaged")
+    assert result.returncode != 0
+    assert "STATUS_REASON=payload_preflight_failed" in state
+    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=wheelhouse_missing" in state
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state
+    assert sentinel.read_text(encoding="utf-8") == "preserved\n"
+    assert not (sentinel.parents[1] / "bin").exists()
+    assert not (sentinel.parents[1] / "python").exists()
+    assert not invoked.exists()
+    print("MACOS_DAMAGED_PAYLOAD_WHEELHOUSE_GUARD_TEST=PASS")
+
+
+def test_bounded_stale_package_cleanup_is_exact_and_before_closure_install():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    body = shell_function(script, "install_apple_silicon_core_bundle")
+    cleanup = '"${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate'
+    closure = 'Installing manifest-defined audio-separator dependency closure'
+    assert cleanup in body
+    assert body.index(cleanup) < body.index(closure)
+    assert "pip freeze" not in body and "pip list --format" not in body
+    assert 'MACOS_STALE_PACKAGE_CLEANUP_REASON="removed_or_absent"' in body
+    assert 'MACOS_STALE_PACKAGE_CLEANUP_REASON="bounded_uninstall_failed"' in body
+    cleanup_failure = body[body.index(f"if ! {cleanup}") : body.index("  fi", body.index(f"if ! {cleanup}"))]
+    assert 'MACOS_CORE_BUNDLE_INSTALL_REASON="bounded_stale_package_cleanup_failed"' in cleanup_failure
+    assert "return 1" in cleanup_failure
+    call = 'if ! install_apple_silicon_core_bundle; then'
+    assert script.rfind('MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"', 0, script.index(call)) != -1
+    assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then' in script
+    print("MACOS_BOUNDED_STALE_PACKAGE_CLEANUP_TEST=PASS")
 
 
 @pytest.mark.parametrize(
