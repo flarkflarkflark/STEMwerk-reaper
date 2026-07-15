@@ -76,7 +76,7 @@ DrumSep/DKS runtimes:
 | Platform | Backend | Python | audio-separator | torch / torchaudio / torchvision | onnxruntime | numpy / numba / llvmlite | Workflows/models tested | Result | Confidence | Source/evidence root |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Linux RX 9070 | ROCm | 3.12.13 | 0.44.3 | torch 2.10.0+rocm7.0 / torchaudio 2.10.0+rocm7.0 / torchvision 0.25.0+rocm7.0 present/bycatch | 1.27.0 | beartype 0.18.5; numpy/numba/llvmlite not the failure axis in the R&D note | htdemucs_ft, DKS real entrypoint, Viperx rerun | PASS; Viperx Python 3.14 failure classified as beartype/toolchain artifact, not model/backend failure | High | `docs/research/MAC_LINUX_ROFORMER_ASEP_0443_RND.md`; R&D/chat smoke evidence |
-| Linux RTX 3060 Laptop | CUDA | 3.11.14 | 0.44.3 | torch 2.13.0+cu130 / torchaudio absent in that R&D runtime / torchvision not recorded | onnxruntime-gpu 1.27.0; providers included TensorRT, CUDA, CPU | not recorded | htdemucs, htdemucs_ft, htdemucs_6s, Viperx, DKS CUDA, PR68 process path with `cuda:0` | PASS in R&D stack; current main device-routing smoke used production ASEP 0.23.0 + torch 2.5.1+cu124 and proves routing only | High for R&D stack; needs short current-main reconfirmation before pin PR | R&D/chat smoke evidence; current main routing smoke root outside repo |
+| Linux RTX 3060 Laptop | CUDA | 3.12.13 | 0.44.3 | torch 2.5.1+cu124 / torchaudio 2.5.1 / torchvision 0.20.1 | onnxruntime 1.27.0 | numpy 2.4.4 / numba 0.66.0 / llvmlite 0.48.0 / beartype 0.18.5 | official Linux bootstrap plus htdemucs, htdemucs_ft, htdemucs_6s, `cuda:0` positive, `cuda:9` negative | PASS on current main; CUDA backend selected; no positive CPU fallback; `cuda:9` blocked with out-of-range exit 2 | High for current-main bootstrap and normal CUDA processing routes | `docs/research/LINUX_NVIDIA_CUDA_BOOTSTRAP_ASEP0443_2026-07-15.md` |
 | Windows native | CPU | 3.11.0 | 0.44.3 | torch 2.13.0+cpu / torchaudio unknown or absent / torchvision not recorded | onnxruntime 1.27.0; onnxruntime-directml 1.24.4 available only as provider probe | not recorded | htdemucs, htdemucs_ft, htdemucs_6s, Viperx CPU, PR68 process path | PASS for main CPU routes; DKS skipped in isolated root | High for Windows CPU main routes; low for DKS | R&D/chat smoke evidence |
 | macOS Apple Silicon | MPS | exact R&D Python not recovered in repo | 0.44.3 | modern torch in R&D; exact version not recovered in repo; torch 2.5.1 MPS was bad/slow for RoFormer and must not be carried into new RoFormer policy | exact R&D ORT not recovered in repo | not recorded | Demucs, Viperx/RoFormer, PR68 process path | PASS; 0.44.3 fixed Demucs safeload issue seen with 0.23.0 + modern torch | Medium/high after exact version recovery | `docs/research/MAC_LINUX_ROFORMER_ASEP_0443_RND.md`; macOS R&D/chat evidence |
 | Windows native | DirectML | current target 3.11 | current release pins only | current release pins only | provider-probe only | current release pins only | provider probe | No processing smoke for ASEP 0.44.3 | Low | repo policy + R&D/chat context |
@@ -123,25 +123,35 @@ Evidence confidence is high. The branch still needs normal installer/bootstrap
 smokes because wheelhouse and offline payload behavior are separate from R&D
 throwaway-runtime success.
 
-### Candidate / needs short reconfirmation: Linux NVIDIA CUDA
+### Candidate / current-main bootstrap PASS: Linux NVIDIA CUDA
 
-Do not propose keeping old torch 2.5.1 as the 0.44.3 candidate.
+Current-main bootstrap evidence is now recorded in
+`docs/research/LINUX_NVIDIA_CUDA_BOOTSTRAP_ASEP0443_2026-07-15.md`.
 
-Proven R&D candidate:
+Proven current-main bootstrap stack:
 
-- Python: 3.11.14
+- Python: 3.12.13
 - audio-separator: 0.44.3
-- torch: 2.13.0+cu130
-- torchaudio: absent in smoke
-- onnxruntime-gpu: 1.27.0
-- ORT providers: TensorRT/CUDA/CPU observed in R&D smoke
+- torch: 2.5.1+cu124
+- torchaudio: 2.5.1
+- torchvision: 0.20.1
+- onnxruntime: 1.27.0
+- numpy: 2.4.4
+- scipy: 1.18.0
+- numba: 0.66.0
+- llvmlite: 0.48.0
+- beartype: 0.18.5
 
-Before installer pin:
+Validated routes:
 
-- rerun a short current-main smoke with warm cache
-- include htdemucs, htdemucs_ft, htdemucs_6s, Viperx, and DKS CUDA
-- decide explicitly whether Linux bootstrap should keep requiring torchaudio
-  for NVIDIA, or whether the assertion should be relaxed for this stack
+- official Linux bootstrap to a throwaway runtime base
+- htdemucs, htdemucs_ft, and htdemucs_6s with `--device cuda`
+- `cuda:0` positive smoke
+- `cuda:9` negative smoke with out-of-range exit 2
+
+This evidence covers current-main Linux NVIDIA/CUDA bootstrap and normal parent
+route processing. It does not force NVIDIA runtime unification and does not
+change DrumSep/DKS release policy.
 
 ### Candidate / needs exact version recovery: macOS Apple Silicon MPS
 
