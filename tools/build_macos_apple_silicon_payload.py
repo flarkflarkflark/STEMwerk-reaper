@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -38,12 +39,14 @@ BOOTSTRAP_REQUIREMENTS = (
 
 MAIN_REQUIREMENTS = (
     "numpy==2.4.4",
+    "scipy==1.18.0",
+    "numba==0.66.0",
+    "llvmlite==0.48.0",
     "torch==2.5.1",
     "torchvision==0.20.1",
     "torchaudio==2.5.1",
     "audio-separator==0.44.3",
-    "llvmlite==0.48.0",
-    "numba==0.66.0",
+    "samplerate==0.1.0",
     "onnxruntime",
 )
 
@@ -74,8 +77,9 @@ REQUIRED_WHEEL_PATTERNS = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--version")
+    parser.add_argument("--output")
+    parser.add_argument("--audit-existing")
     parser.add_argument(
         "--model-cache",
         default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "models"),
@@ -208,11 +212,54 @@ def ensure_samplerate_wheel(wheels_dir: Path) -> None:
 
 
 def ensure_wheelhouse_complete(wheels_dir: Path) -> None:
+    missing_exact = []
+    wrong_platform = []
+    for requirement in MAIN_REQUIREMENTS:
+        if "==" not in requirement:
+            continue
+        name, wanted = requirement.split("==", 1)
+        wheel_prefix = name.replace("-", "_") + "-" + wanted + "-"
+        matches = [path for path in wheels_dir.glob("*.whl") if path.name.lower().startswith(wheel_prefix.lower())]
+        if not matches:
+            missing_exact.append(requirement)
+            continue
+        for path in matches:
+            filename = path.name.lower()
+            if filename.endswith("-none-any.whl"):
+                continue
+            if "cp312" not in filename or "macosx" not in filename or not any(
+                tag in filename for tag in ("arm64", "universal2")
+            ):
+                wrong_platform.append(path.name)
+    if missing_exact or wrong_platform:
+        raise RuntimeError(
+            "Invalid exact Apple Silicon wheelhouse: "
+            f"missing={','.join(missing_exact) or 'none'}; "
+            f"wrong_platform={','.join(wrong_platform) or 'none'}"
+        )
     missing = [prefix for prefix in REQUIRED_WHEEL_PREFIXES if not any(wheels_dir.glob(f"{prefix}*.whl"))]
     missing += [pattern for pattern in REQUIRED_WHEEL_PATTERNS if not any(wheels_dir.glob(pattern))]
     if missing:
         missing_list = ", ".join(missing)
         raise RuntimeError(f"Incomplete wheelhouse for offline Apple Silicon payload: missing {missing_list}")
+
+
+def audit_wheelhouse_resolution(wheels_dir: Path, python_executable: str) -> None:
+    cmd = [
+        python_executable,
+        "-m",
+        "pip",
+        "install",
+        "--dry-run",
+        "--ignore-installed",
+        "--no-cache-dir",
+        "--no-index",
+        "--find-links",
+        str(wheels_dir),
+        "--only-binary=:all:",
+        *MAIN_REQUIREMENTS,
+    ]
+    subprocess.run(cmd, check=True, env=command_env())
 
 
 def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> None:
@@ -232,11 +279,27 @@ def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executab
     subprocess.run(cmd, check=True, env=command_env())
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def write_manifest(output_dir: Path, version: str) -> None:
+    wheel_inventory = [
+        {"filename": path.name, "sha256": sha256_file(path)}
+        for path in sorted((output_dir / "wheels").glob("*.whl"))
+    ]
     manifest = {
         "platform": "macos-apple-silicon",
         "version": version,
         "runtime_policy": "mps_preferred_cpu_fallback",
+        "python_tag": "cp312",
+        "architecture": "arm64",
+        "runtime_requirements": list(MAIN_REQUIREMENTS),
+        "wheel_inventory": wheel_inventory,
         "contains": {
             "ffmpeg": True,
             "python": True,
@@ -248,9 +311,40 @@ def write_manifest(output_dir: Path, version: str) -> None:
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def audit_existing_manifest(output_dir: Path) -> None:
+    manifest_path = output_dir / "manifest.json"
+    ensure_file(manifest_path, "Apple Silicon payload manifest")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("platform") != "macos-apple-silicon":
+        raise RuntimeError("Apple Silicon payload manifest has the wrong platform")
+    if manifest.get("python_tag") != "cp312" or manifest.get("architecture") != "arm64":
+        raise RuntimeError("Apple Silicon payload manifest has the wrong Python or architecture tag")
+    if manifest.get("runtime_requirements") != list(MAIN_REQUIREMENTS):
+        raise RuntimeError("Apple Silicon payload manifest runtime requirements do not match policy")
+    expected_inventory = {
+        entry["filename"]: entry["sha256"] for entry in manifest.get("wheel_inventory", [])
+    }
+    actual_paths = sorted((output_dir / "wheels").glob("*.whl"))
+    if set(expected_inventory) != {path.name for path in actual_paths}:
+        raise RuntimeError("Apple Silicon payload manifest wheel inventory does not match wheelhouse")
+    mismatched = [path.name for path in actual_paths if expected_inventory[path.name] != sha256_file(path)]
+    if mismatched:
+        raise RuntimeError(f"Apple Silicon payload wheel checksum mismatch: {','.join(mismatched)}")
+
+
 def main() -> int:
     args = parse_args()
     repo_root = Path.cwd().resolve()
+    if args.audit_existing:
+        output_dir = Path(args.audit_existing).expanduser().resolve()
+        python_executable = payload_python()
+        ensure_wheelhouse_complete(output_dir / "wheels")
+        audit_existing_manifest(output_dir)
+        audit_wheelhouse_resolution(output_dir / "wheels", python_executable)
+        print(f"Apple Silicon payload audit passed: {output_dir}")
+        return 0
+    if not args.version or not args.output:
+        raise SystemExit("--version and --output are required unless --audit-existing is used")
     output_dir = (repo_root / args.output).resolve()
     model_cache = Path(args.model_cache).expanduser().resolve()
     ffmpeg_path = Path(args.ffmpeg).expanduser().resolve()
@@ -269,6 +363,7 @@ def main() -> int:
     ensure_samplerate_wheel(output_dir / "wheels")
     build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)
     ensure_wheelhouse_complete(output_dir / "wheels")
+    audit_wheelhouse_resolution(output_dir / "wheels", python_executable)
     copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")
     copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
     copy_files(model_cache, output_dir / "drumsep", DRUMSEP_FILES, "drumsep payload file")

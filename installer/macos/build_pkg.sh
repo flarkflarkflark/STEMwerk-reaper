@@ -129,14 +129,13 @@ case "$VARIANT" in
     ;;
   bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)
     if [[ -d "$BUNDLED_PAYLOAD_ROOT" ]]; then
+      python3 "$ROOT_DIR/tools/build_macos_apple_silicon_payload.py" \
+        --audit-existing "$BUNDLED_PAYLOAD_ROOT"
       mkdir -p "$(dirname "$PAYLOAD_DEST")"
       rsync -a --delete --exclude='._*' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
     else
-      mkdir -p "$PAYLOAD_DEST"
-      cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF
-variant=$VARIANT
-payload_status=missing
-EOF
+      echo "ERROR: bundled Apple Silicon payload is missing: $BUNDLED_PAYLOAD_ROOT" >&2
+      exit 1
     fi
     ;;
 esac

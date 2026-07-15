@@ -146,6 +146,42 @@ install_with_optional_bundled_wheels() {
   "${_py}" -m pip install "$@"
 }
 
+preflight_bundled_apple_silicon_payload() {
+  _py="$1"
+  _wheelhouse="$2"
+  [ -x "${_py}" ] || {
+    MACOS_PAYLOAD_PREFLIGHT_REASON="python_unavailable"
+    return 1
+  }
+  [ -d "${_wheelhouse}" ] || {
+    MACOS_PAYLOAD_PREFLIGHT_REASON="wheelhouse_missing"
+    return 1
+  }
+  _preflight_log="${RUNTIME_BASE}/logs/macos_payload_preflight.log"
+  mkdir -p "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/state" >/dev/null 2>&1 || return 1
+  : > "${_preflight_log}"
+  "${_py}" -m pip install \
+    --dry-run --ignore-installed --no-cache-dir --no-index --find-links "${_wheelhouse}" --only-binary=:all: \
+    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
+    "numpy==${PINNED_NUMPY_VERSION}" \
+    "scipy==1.18.0" \
+    "numba==${PINNED_NUMBA_VERSION}" \
+    "llvmlite==${PINNED_LLVM_VERSION}" \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
+    "samplerate==0.1.0" > "${_preflight_log}" 2>&1
+  _rc=$?
+  if [ "${_rc}" -ne 0 ]; then
+    MACOS_PAYLOAD_PREFLIGHT_REASON="offline_resolve_failed"
+    cat "${_preflight_log}" >> "${LOG_FILE}" 2>/dev/null || true
+    return "${_rc}"
+  fi
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="ok"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="resolved"
+  return 0
+}
+
 command_path() {
   _cmd="$1"
   command -v "${_cmd}" 2>/dev/null | while IFS= read -r _line; do
@@ -1016,6 +1052,10 @@ write_state() {
       echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
       echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
       echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=${MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
@@ -1136,11 +1176,6 @@ else
 fi
 log "Selected torch stack profile: ${PINNED_TORCH_STACK_LABEL}"
 log "Selected torch stack versions: torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
-if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
-  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
-  rm -rf "${RUNTIME_BASE}/.venv"
-fi
-
 MACOS_BUNDLED_PAYLOAD_STATUS="missing"
 MACOS_BUNDLED_FFMPEG_STATUS="missing"
 MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
@@ -1213,9 +1248,51 @@ AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
 SYSTEM_PYTHON_PATH=""
 SYSTEM_PYTHON_VERSION=""
 SYSTEM_PYTHON_USED="no"
+MACOS_PAYLOAD_PREFLIGHT_STATUS="not_required"
+MACOS_PAYLOAD_PREFLIGHT_REASON="no_bundled_apple_silicon_payload"
+MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE="${BUNDLED_WHEELS_DIR}"
+MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
+fi
+
+if [ "${MAC_ARCH}" = "arm64" ] && [ -n "${BUNDLED_WHEELS_DIR}" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="python_unavailable"
+  _payload_probe_python=""
+  for _candidate in \
+    "${BUNDLED_PAYLOAD_DIR}/python/bin/python3" \
+    "${BUNDLED_PAYLOAD_DIR}/python/bin/python3.12" \
+    "${RUNTIME_BASE}/.venv/bin/python"
+  do
+    if [ -x "${_candidate}" ]; then
+      _payload_probe_python="${_candidate}"
+      break
+    fi
+  done
+  if [ -z "${_payload_probe_python}" ]; then
+    _payload_probe_python="$(command -v python3.12 2>/dev/null || true)"
+  fi
+  if [ -z "${_payload_probe_python}" ] || ! preflight_bundled_apple_silicon_payload "${_payload_probe_python}" "${BUNDLED_WHEELS_DIR}"; then
+    log "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed"
+    log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+    log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+    log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
+    set_status "deps_failed" "payload_preflight_failed"
+    write_state
+    exit 1
+  fi
+fi
+log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=${MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED}"
+
+if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
+  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
 fi
 
 set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
@@ -1223,12 +1300,14 @@ set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 # macOS must not blindly trust bare python3 because Homebrew/system aliases can
 # move to 3.13+ while STEMwerk 2.x only supports Python 3.10-3.12.
 if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+  MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
   remove_incompatible_venv
 fi
 if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
   if evaluate_python_candidate "${RUNTIME_BASE}/.venv/bin/python"; then
     log "Selected existing virtual environment Python: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
   else
+    MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
     remove_incompatible_venv
   fi
 fi
@@ -1335,6 +1414,7 @@ else
   esac
   log_macos_diagnostics
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
     log "Creating STEMwerk virtual environment..."
     log "Creating venv with ${PYTHON}"
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
@@ -1342,6 +1422,7 @@ else
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
+    MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
     install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
     log "Installing pinned STEMwerk backend packages..."
     install_with_optional_bundled_wheels "${VENV_PY}" "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"

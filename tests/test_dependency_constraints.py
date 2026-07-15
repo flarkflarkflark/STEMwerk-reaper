@@ -392,6 +392,36 @@ def test_macos_ready_assertion_enforces_numpy_numba_llvmlite_bundle():
     assert "numba JIT probe failed:" in script
 
 
+def test_macos_offline_payload_preflight_precedes_all_runtime_mutation():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+
+    preflight_call = 'preflight_bundled_apple_silicon_payload "${_payload_probe_python}" "${BUNDLED_WHEELS_DIR}"'
+    rebuild_remove = 'log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"'
+    incompatible_remove = 'remove_incompatible_venv\nfi'
+    first_torch_install_call = "if ! install_pinned_torch_stack; then"
+    first_runtime_install = 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip'
+
+    assert script.index(preflight_call) < script.index(rebuild_remove)
+    assert script.index(preflight_call) < script.index(incompatible_remove)
+    assert script.index(preflight_call) < script.index(first_torch_install_call)
+    assert script.index(preflight_call) < script.index(first_runtime_install)
+    assert "--dry-run --ignore-installed --no-cache-dir --no-index --find-links" in script
+    assert 'set_status "deps_failed" "payload_preflight_failed"' in script
+    assert 'MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"' in script
+
+
+def test_macos_payload_preflight_state_markers_are_persisted():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+
+    for marker in (
+        "MACOS_PAYLOAD_PREFLIGHT_STATUS",
+        "MACOS_PAYLOAD_PREFLIGHT_REASON",
+        "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE",
+        "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED",
+    ):
+        assert f'echo "{marker}=${{{marker}}}"' in script
+
+
 def test_apple_silicon_workflows_follow_asep_0443_numpy2_policy():
     workflow_paths = [
         Path(".github/workflows/macos-apple-silicon-backend-smoke.yml"),
@@ -5596,8 +5626,10 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
     assert 'BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"' in script
     assert 'rm -rf "$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"' in script
     assert 'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
-    assert 'cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF' in script
-    assert 'payload_status=missing' in script
+    assert 'python3 "$ROOT_DIR/tools/build_macos_apple_silicon_payload.py" \\' in script
+    assert '--audit-existing "$BUNDLED_PAYLOAD_ROOT"' in script
+    assert 'ERROR: bundled Apple Silicon payload is missing:' in script
+    assert 'payload_status=missing' not in script
 
 
 def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payload():
