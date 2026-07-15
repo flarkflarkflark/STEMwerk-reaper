@@ -64,12 +64,13 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install "numpy<2.0" "soundfile>=0.12.1"
+          pip install -c scripts/reaper/constraints/macos.txt "numpy==2.4.4" "soundfile>=0.12.1"
           pip install "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
           pip install ./scripts/reaper/vendor/stemwerk-core
-          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"
-          pip install --force-reinstall --no-deps "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
+          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.44.3"
+          pip install --force-reinstall --no-deps "numpy==2.4.4" "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
           pip install onnxruntime-silicon || pip install onnxruntime
+          pip check
           pip install pytest
 
       - name: Show backend smoke dependency diagnostics

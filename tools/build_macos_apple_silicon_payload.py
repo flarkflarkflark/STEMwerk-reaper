@@ -37,18 +37,18 @@ BOOTSTRAP_REQUIREMENTS = (
 )
 
 MAIN_REQUIREMENTS = (
-    "numpy==1.26.4",
+    "numpy==2.4.4",
     "torch==2.5.1",
     "torchvision==0.20.1",
     "torchaudio==2.5.1",
-    "audio-separator==0.23.0",
-    "llvmlite==0.42.0",
-    "numba==0.59.1",
+    "audio-separator==0.44.3",
+    "llvmlite==0.48.0",
+    "numba==0.66.0",
     "onnxruntime",
 )
 
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
-SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"
+SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"
 
 REQUIRED_WHEEL_PREFIXES = (
     "pip-",
@@ -68,7 +68,7 @@ REQUIRED_WHEEL_PREFIXES = (
 )
 
 REQUIRED_WHEEL_PATTERNS = (
-    "samplerate-0.2.4-*.whl",
+    "samplerate-0.1.0-*.whl",
 )
 
 
@@ -190,8 +190,8 @@ def ensure_diffq_wheel(wheels_dir: Path) -> None:
     subprocess.run(cmd, check=True, env=command_env())
 
 
-def ensure_samplerate_repair_wheel(wheels_dir: Path) -> None:
-    if any(wheels_dir.glob("samplerate-0.2.4-*.whl")):
+def ensure_samplerate_wheel(wheels_dir: Path) -> None:
+    if any(wheels_dir.glob("samplerate-0.1.0-*.whl")):
         return
     cmd = [
         wheel_builder_python(),
@@ -202,7 +202,7 @@ def ensure_samplerate_repair_wheel(wheels_dir: Path) -> None:
         str(wheels_dir),
         "--only-binary=:all:",
         "--no-deps",
-        SAMPLERATE_REPAIR_REQUIREMENT,
+        SAMPLERATE_REQUIREMENT,
     ]
     subprocess.run(cmd, check=True, env=command_env())
 
@@ -266,7 +266,7 @@ def main() -> int:
     except subprocess.CalledProcessError:
         ensure_diffq_wheel(output_dir / "wheels")
         run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file, python_executable)
-    ensure_samplerate_repair_wheel(output_dir / "wheels")
+    ensure_samplerate_wheel(output_dir / "wheels")
     build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)
     ensure_wheelhouse_complete(output_dir / "wheels")
     copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")

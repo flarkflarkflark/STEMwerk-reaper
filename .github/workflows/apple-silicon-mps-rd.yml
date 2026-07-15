@@ -66,20 +66,21 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -c scripts/reaper/constraints/macos.txt \
-            "numpy==1.26.4" \
+            "numpy==2.4.4" \
             "torch==2.5.1" \
             "torchvision==0.20.1" \
             "torchaudio==2.5.1"
-          pip install "llvmlite==0.42.0" "numba==0.59.1"
+          pip install "llvmlite==0.48.0" "numba==0.66.0"
           pip install "soundfile>=0.12.1"
           pip install ./scripts/reaper/vendor/stemwerk-core
-          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.23.0"
+          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.44.3"
           pip install --force-reinstall --no-deps \
-            "numpy==1.26.4" \
+            "numpy==2.4.4" \
             "torch==2.5.1" \
             "torchvision==0.20.1" \
             "torchaudio==2.5.1"
           pip install onnxruntime-silicon || pip install onnxruntime
+          pip check
 
       - name: Show torch MPS diagnostics
         run: |
