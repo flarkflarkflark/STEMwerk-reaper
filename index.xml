@@ -2,13 +2,13 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.0.4" author="flarkAUDIO" time="1780055621">
+      <version name="2.3.0.5" author="flarkAUDIO" time="1780055621">
         <changelog><![CDATA[
-STEMwerk 2.3.0.4 - DrumSep timeout hotfix and docs/helper update
+STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
 
-- Removes the duplicated hard 3600-second DrumSep helper timeout for long-running Direct Kit and Kit Split CPU fallback jobs.
-- Adds a progress-aware no-output stall watchdog so active DrumSep processing can continue past one hour while still detecting real stalls.
-- Carries forward the current Windows Action List registration guidance, toolbar helper update, README polish, screenshots, and demo/docs refresh.
+- Unifies Linux ROCm normal stems and Drum Kit Separation on the managed main runtime.
+- Updates Linux and Apple Silicon runtime policy to audio-separator 0.44.3 with NumPy 2 where supported.
+- Adds model registry, device normalization, offline wheelhouse, and macOS installer reliability improvements.
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
