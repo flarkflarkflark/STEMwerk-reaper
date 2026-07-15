@@ -3,7 +3,8 @@ scipy==1.18.0
 numba==0.66.0
 llvmlite==0.48.0
 audio-separator==0.44.3
-samplerate==0.1.0
+# Apple Silicon override: 0.1.0 bundles an x86_64-only dylib; 0.2.4 publishes CPython 3.12 universal2.
+samplerate==0.2.4
 torch==2.5.1
 torchvision==0.20.1
 torchaudio==2.5.1

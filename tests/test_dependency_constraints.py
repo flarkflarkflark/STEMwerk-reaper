@@ -348,8 +348,8 @@ def test_macos_main_runtime_uses_asep_0443_numpy2_without_samplerate_conflict():
     assert "numpy==1.26.4" not in constraints
     assert '"audio-separator==0.44.3"' in payload
     assert '"numpy==2.4.4"' in payload
-    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"' in payload
-    assert 'SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"' not in payload
+    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"' in payload
+    assert 'PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"' in script
     assert 'if version("audio-separator") == "0.44.3":' in script
     assert 'dependencies.remove("samplerate")' in script
 
@@ -357,7 +357,7 @@ def test_macos_main_runtime_uses_asep_0443_numpy2_without_samplerate_conflict():
 def test_macos_bootstrap_pip_check_blocks_ready_false_positive():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    pip_check = 'if ! "${VENV_PY}" -m pip check >> "${LOG_FILE}" 2>&1; then'
+    pip_check = "if ! check_runtime_dependencies; then"
     assert pip_check in script
     assert 'set_status "deps_failed" "pip_check_failed"' in script
     assert script.index(pip_check) < script.index('write_ready_to_go_state "${READY_RUNTIME_KIND}"')
@@ -440,7 +440,7 @@ def test_apple_silicon_workflows_follow_asep_0443_numpy2_policy():
 
     sanity = workflow_paths[1].read_text()
     assert 'payload["samplerate_version"] = version("samplerate")' in sanity
-    assert 'core(payload["samplerate_version"]) == "0.1.0"' in sanity
+    assert 'core(payload["samplerate_version"]) == "0.2.4"' in sanity
 
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
     intel_constraints = Path("scripts/reaper/constraints/macos-intel.txt").read_text().splitlines()
@@ -5675,7 +5675,7 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
     assert '"onnxruntime==1.27.0"' in script
-    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"' in script
+    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"' in script
     assert '"onnxruntime-silicon"' not in script
     assert '"--only-binary=:all:"' in script
     assert '"--find-links"' in script
@@ -5702,11 +5702,22 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert 'Incomplete wheelhouse for offline Apple Silicon payload' in script
     assert 'REQUIRED_WHEEL_PREFIXES = (' in script
     assert 'REQUIRED_WHEEL_PATTERNS = (' in script
-    assert '"samplerate-0.1.0-*.whl"' in script
+    assert '"samplerate-0.2.4-cp312-cp312-macosx_*_universal2.whl"' in script
     assert '"stemwerk_core-"' in script
     assert '"--no-build-isolation"' in script
     assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
     assert 'build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)' in script
+
+
+def test_macos_pkg_staging_enforces_bootstrap_layout_contract():
+    script = Path("installer/macos/build_pkg.sh").read_text()
+    assert "validate_staged_reaper_layout()" in script
+    assert '"$reaper_root/STEMwerk_Bootstrap_macOS.sh"' in script
+    assert '"$reaper_root/audio_separator_process.py"' in script
+    assert '"$reaper_root/_internal/stemwerk_samplerate_guard.py"' in script
+    assert '[[ -f "$PAYLOAD_DEST/manifest.json" ]]' in script
+    assert '[[ -d "$PAYLOAD_DEST/wheels" ]]' in script
+    assert script.index("validate_staged_reaper_layout\n") < script.index('remove_appledouble_sidecars "$STAGE"')
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
@@ -6777,11 +6788,10 @@ def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64()
     guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
 
     assert "repair_samplerate_if_arch_mismatch" in script
-    assert 'if [ "${PINNED_AUDIO_SEPARATOR_VERSION}" = "0.44.3" ]; then' in script
-    assert "asep_0443_requires_samplerate_010" in script
+    assert 'PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"' in script
+    assert "asep_0443_requires_samplerate_010" not in script
     assert "stemwerk_samplerate_guard.py" in script
-    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"' in script
-    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"' in script
+    assert '--repair-version "${PINNED_SAMPLERATE_VERSION}" --validate-only' in script
     assert '_guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"' not in script
     assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
@@ -6890,14 +6900,14 @@ def test_setup_internal_surfaces_samplerate_arch_mismatch_reason_and_capabilitie
     assert "SAMPLERATE_REPAIR_ATTEMPTED" in script
 
 
-def test_macos_apple_silicon_sanity_workflow_keeps_asep_samplerate_metadata_pin():
+def test_macos_apple_silicon_sanity_workflow_validates_native_samplerate_override():
     workflow = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text()
 
     assert "Run samplerate arm64 repair guard (bootstrap parity)" not in workflow
-    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py" not in workflow
-    assert "import samplerate" not in workflow
+    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py --validate-only --repair-version 0.2.4" in workflow
+    assert "apple_silicon_samplerate_native_override" not in workflow
     assert 'payload["samplerate_version"] = version("samplerate")' in workflow
-    assert 'assert core(payload["samplerate_version"]) == "0.1.0"' in workflow
+    assert 'assert core(payload["samplerate_version"]) == "0.2.4"' in workflow
 
 
 def test_normal_workflow_device_preflight_blocks_silent_cpu_fallback():

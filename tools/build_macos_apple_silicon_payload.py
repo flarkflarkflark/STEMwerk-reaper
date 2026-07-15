@@ -46,12 +46,12 @@ MAIN_REQUIREMENTS = (
     "torchvision==0.20.1",
     "torchaudio==2.5.1",
     "audio-separator==0.44.3",
-    "samplerate==0.1.0",
+    "samplerate==0.2.4",
     "onnxruntime==1.27.0",
 )
 
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
-SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"
+SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"
 
 REQUIRED_WHEEL_PREFIXES = (
     "pip-",
@@ -71,7 +71,7 @@ REQUIRED_WHEEL_PREFIXES = (
 )
 
 REQUIRED_WHEEL_PATTERNS = (
-    "samplerate-0.1.0-*.whl",
+    "samplerate-0.2.4-cp312-cp312-macosx_*_universal2.whl",
 )
 
 
@@ -177,7 +177,7 @@ def run_pip_download(requirements: tuple[str, ...], wheels_dir: Path, constraint
             "--find-links",
             str(wheels_dir),
         ]
-        if constraints_file.is_file() and requirement not in BOOTSTRAP_REQUIREMENTS:
+        if constraints_file.is_file() and requirement not in BOOTSTRAP_REQUIREMENTS and not requirement.startswith("audio-separator=="):
             cmd += ["-c", str(constraints_file)]
         cmd.append(requirement)
         subprocess.run(cmd, check=True, env=command_env())
@@ -195,7 +195,7 @@ def ensure_diffq_wheel(wheels_dir: Path) -> None:
 
 
 def ensure_samplerate_wheel(wheels_dir: Path) -> None:
-    if any(wheels_dir.glob("samplerate-0.1.0-*.whl")):
+    if any(wheels_dir.glob("samplerate-0.2.4-cp312-cp312-macosx_*_universal2.whl")):
         return
     cmd = [
         wheel_builder_python(),
@@ -245,7 +245,7 @@ def ensure_wheelhouse_complete(wheels_dir: Path) -> None:
 
 
 def audit_wheelhouse_resolution(wheels_dir: Path, python_executable: str) -> None:
-    cmd = [
+    common = [
         python_executable,
         "-m",
         "pip",
@@ -257,9 +257,9 @@ def audit_wheelhouse_resolution(wheels_dir: Path, python_executable: str) -> Non
         "--find-links",
         str(wheels_dir),
         "--only-binary=:all:",
-        *MAIN_REQUIREMENTS,
     ]
-    subprocess.run(cmd, check=True, env=command_env())
+    subprocess.run([*common, "audio-separator==0.44.3"], check=True, env=command_env())
+    subprocess.run([*common, "--no-deps", *MAIN_REQUIREMENTS], check=True, env=command_env())
 
 
 def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> None:

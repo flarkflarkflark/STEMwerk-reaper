@@ -10,6 +10,7 @@ import pytest
 
 BUILDER_PATH = Path("tools/build_macos_apple_silicon_payload.py")
 BOOTSTRAP_PATH = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh")
+SAMPLERATE_GUARD_PATH = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py")
 
 CORE_BUNDLE = (
     "audio-separator==0.44.3",
@@ -20,7 +21,7 @@ CORE_BUNDLE = (
     "torch==2.5.1",
     "torchaudio==2.5.1",
     "torchvision==0.20.1",
-    "samplerate==0.1.0",
+    "samplerate==0.2.4",
     "onnxruntime==1.27.0",
 )
 
@@ -39,11 +40,21 @@ def load_builder():
     return module
 
 
+def load_samplerate_guard():
+    spec = importlib.util.spec_from_file_location("macos_samplerate_guard_safety", SAMPLERATE_GUARD_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 def wheel_name(requirement: str) -> str:
     name, version = requirement.split("==", 1)
     normalized = name.replace("-", "_")
-    if name in {"audio-separator", "samplerate"}:
+    if name == "audio-separator":
         return f"{normalized}-{version}-py3-none-any.whl"
+    if name == "samplerate":
+        return f"{normalized}-{version}-cp312-cp312-macosx_10_13_universal2.whl"
     return f"{normalized}-{version}-cp312-cp312-macosx_12_0_arm64.whl"
 
 
@@ -151,15 +162,18 @@ def test_complete_wheelhouse_resolver_preflight_allows_install_path_to_start(tmp
     builder.audit_wheelhouse_resolution(wheels, "python3.12")
 
     assert calls
-    assert calls[0][-len(builder.MAIN_REQUIREMENTS) :] == list(builder.MAIN_REQUIREMENTS)
+    assert calls[0][-1] == "audio-separator==0.44.3"
+    assert "--no-deps" in calls[1]
+    assert calls[1][-len(builder.MAIN_REQUIREMENTS) :] == list(builder.MAIN_REQUIREMENTS)
 
 
 def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction():
     script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
     body = shell_function(script, "install_apple_silicon_core_bundle")
 
-    assert body.count('"${VENV_PY}" -m pip install') == 1
-    assert '--upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all:' in body
+    assert body.count('"${VENV_PY}" -m pip install') == 2
+    assert '--upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: --no-deps' in body
+    assert body.count('"audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"') == 2
     assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then' in script
     for requirement in CORE_BUNDLE:
         name, version = requirement.split("==")
@@ -177,12 +191,12 @@ def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction()
 
 @pytest.mark.parametrize(
     ("installed", "target"),
-    [("0.23.0", "0.44.3"), ("1.17.1", "1.18.0"), ("0.2.4", "0.1.0")],
+    [("0.23.0", "0.44.3"), ("1.17.1", "1.18.0"), ("0.1.0", "0.2.4")],
 )
 def test_importable_old_package_is_still_offered_to_exact_bundle_transaction(installed, target):
     # Installed/importable state is deliberately irrelevant: repair always submits all exact pins to pip.
     submitted = {item.split("==", 1)[0]: item.split("==", 1)[1] for item in CORE_BUNDLE}
-    package = {"0.23.0": "audio-separator", "1.17.1": "scipy", "0.2.4": "samplerate"}[installed]
+    package = {"0.23.0": "audio-separator", "1.17.1": "scipy", "0.1.0": "samplerate"}[installed]
     assert submitted[package] == target
 
 
@@ -222,6 +236,10 @@ def test_bootstrap_incomplete_payload_fails_before_existing_runtime_mutation(tmp
     script_dir.mkdir()
     bootstrap = script_dir / "STEMwerk_Bootstrap_macOS.sh"
     shutil.copy2(Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh"), bootstrap)
+    shutil.copy2(Path("scripts/reaper/audio_separator_process.py"), script_dir / "audio_separator_process.py")
+    internal = script_dir / "_internal"
+    internal.mkdir()
+    shutil.copy2(Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py"), internal / "stemwerk_samplerate_guard.py")
     wheelhouse = script_dir / "_bundled" / "macos" / "apple-silicon" / "wheels"
     wheelhouse.mkdir(parents=True)
     (wheelhouse / "torch-2.5.1-cp312-none-macosx_11_0_arm64.whl").touch()
@@ -277,3 +295,146 @@ def test_bootstrap_incomplete_payload_fails_before_existing_runtime_mutation(tmp
     assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
     assert "MACOS_PAYLOAD_PREFLIGHT_REASON=offline_resolve_failed" in state_text
     assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+
+
+def test_staged_layout_resolves_prefetch_script_independent_of_cwd(tmp_path):
+    script_dir = tmp_path / "repair-stage" / "reaper"
+    wheels = script_dir / "_bundled" / "macos" / "apple-silicon" / "wheels"
+    wheels.mkdir(parents=True)
+    for relative in (
+        "STEMwerk_Bootstrap_macOS.sh",
+        "audio_separator_process.py",
+        "_internal/stemwerk_samplerate_guard.py",
+    ):
+        target = script_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+    (wheels.parent / "manifest.json").write_text("{}\n", encoding="utf-8")
+
+    canonical = script_dir.resolve()
+    assert (canonical / "audio_separator_process.py").is_file()
+    assert (canonical / "_internal" / "stemwerk_samplerate_guard.py").is_file()
+    assert (canonical / "_bundled" / "macos" / "apple-silicon" / "manifest.json").is_file()
+    assert wheels.is_dir()
+    assert canonical != tmp_path.resolve()
+
+
+def test_missing_prefetch_sibling_fails_layout_preflight_before_python():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    layout = shell_function(script, "validate_required_reaper_layout")
+    prefetch = shell_function(script, "ensure_drumsep_assets")
+
+    assert 'DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"' in layout
+    assert 'REQUIRED_SCRIPT_STATUS="missing"' in layout
+    assert 'DRUMSEP_PREFETCH_DETAIL="drumsep_prefetch_script_missing"' in prefetch
+    assert script.index("validate_required_reaper_layout") < script.index('MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"')
+    assert prefetch.index('[ ! -f "${DRUMSEP_PREFETCH_SCRIPT_PATH}" ]') < prefetch.index('"${_py}" - <<PY')
+
+
+def test_missing_prefetch_sibling_actual_bootstrap_stops_before_python(tmp_path):
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        pytest.skip("native Git Bash not available")
+    script_dir = tmp_path / "repair-stage" / "reaper"
+    script_dir.mkdir(parents=True)
+    bootstrap = script_dir / "STEMwerk_Bootstrap_macOS.sh"
+    shutil.copy2(BOOTSTRAP_PATH, bootstrap)
+    runtime = tmp_path / "runtime"
+    python = runtime / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    invoked = tmp_path / "python-invoked"
+    python.write_text(f"#!/bin/sh\ntouch '{invoked.as_posix()}'\nexit 0\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "uname").write_text("#!/bin/sh\nprintf 'arm64\\n'\n", encoding="utf-8")
+
+    def posix(path: Path) -> str:
+        return subprocess.run(
+            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+    command = (
+        f"PATH='{posix(fake_bin)}':$PATH '{posix(bootstrap)}' "
+        f"--runtime-base '{posix(runtime)}' --state-file '{posix(state)}' "
+        f"--log-file '{posix(log)}' --mode repair"
+    )
+    result = subprocess.run([str(bash), "-lc", command], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert not invoked.exists()
+    state_text = state.read_text(encoding="utf-8")
+    assert "STATUS_REASON=required_script_missing" in state_text
+    assert "DRUMSEP_PREFETCH_SCRIPT_STATUS=missing" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+
+
+def test_prefetch_import_uses_validated_absolute_script_path():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    prefetch = shell_function(script, "ensure_drumsep_assets")
+    assert 'script_path = Path(r"${DRUMSEP_PREFETCH_SCRIPT_PATH}")' in prefetch
+    assert 'Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"' not in prefetch
+
+
+def test_samplerate_native_override_keeps_strict_pip_check_for_other_conflicts():
+    check = shell_function(BOOTSTRAP_PATH.read_text(encoding="utf-8"), "check_runtime_dependencies")
+    assert '"${VENV_PY}" -m pip check' in check
+    assert "apple_silicon_samplerate_native_override" in check
+    assert 'PIP_CHECK_STATUS="failed"' in check
+    assert 'PIP_CHECK_REASON="dependency_conflict"' in check
+
+
+def test_samplerate_guard_is_validate_only_before_ready_state():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text(encoding="utf-8")
+    assert "--validate-only" in script
+    assert 'parser.add_argument("--validate-only", action="store_true")' in guard
+    assert '"samplerate_import_failed"' in guard
+    assert 'samplerate.resample(np.zeros(32, dtype=np.float32), 1.0, "sinc_best")' in guard
+    assert '"samplerate_native_probe_failed"' in guard
+    assert script.index('repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"') < script.index(
+        'write_ready_to_go_state "${READY_RUNTIME_KIND}"'
+    )
+
+
+def test_validate_only_samplerate_guard_rejects_x86_only_native_payload(monkeypatch, capsys):
+    guard = load_samplerate_guard()
+    probe = {
+        "samplerate_import": "ok",
+        "samplerate_function_probe": "ok",
+        "samplerate_dylib_x86_only_count": "1",
+        "samplerate_dylib_arm_or_universal_count": "0",
+        "samplerate_dylib_candidate_count": "1",
+    }
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    monkeypatch.setattr(guard.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(guard, "_probe_samplerate", lambda: probe)
+    monkeypatch.setattr(guard, "_check_audio_separator_import", lambda: (True, ""))
+    monkeypatch.setattr(guard.sys, "argv", [str(SAMPLERATE_GUARD_PATH), "--validate-only"])
+
+    assert guard.main() == 22
+    output = capsys.readouterr().out
+    assert "error=samplerate_arch_mismatch_requires_runtime_rebuild" in output
+    assert "repair_attempted=no" in output
+
+
+def test_validate_only_samplerate_guard_accepts_arm_native_function_probe(monkeypatch, capsys):
+    guard = load_samplerate_guard()
+    probe = {
+        "samplerate_import": "ok",
+        "samplerate_function_probe": "ok",
+        "samplerate_dylib_x86_only_count": "0",
+        "samplerate_dylib_arm_or_universal_count": "1",
+        "samplerate_dylib_candidate_count": "1",
+    }
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    monkeypatch.setattr(guard.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(guard, "_probe_samplerate", lambda: probe)
+    monkeypatch.setattr(guard, "_check_audio_separator_import", lambda: (True, ""))
+    monkeypatch.setattr(guard.sys, "argv", [str(SAMPLERATE_GUARD_PATH), "--validate-only"])
+
+    assert guard.main() == 0
+    output = capsys.readouterr().out
+    assert "arch_match=yes" in output
+    assert "repair_attempted=no" in output

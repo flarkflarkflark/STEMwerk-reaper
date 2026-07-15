@@ -20,7 +20,9 @@ PINNED_AUDIO_SEPARATOR_VERSION=""
 PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"
 PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"
 PINNED_SCIPY_VERSION="1.18.0"
-PINNED_SAMPLERATE_VERSION="0.1.0"
+PINNED_SAMPLERATE_VERSION=""
+PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"
+PINNED_SAMPLERATE_VERSION_INTEL="0.1.0"
 PINNED_ONNXRUNTIME_VERSION="1.27.0"
 PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
@@ -167,7 +169,14 @@ install_apple_silicon_core_bundle() {
   MACOS_CORE_BUNDLE_REQUIREMENTS="$(apple_silicon_core_bundle_requirements | tr '\n' ' ')"
   log "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
   log "Installing complete Apple Silicon core bundle in one audited offline transaction"
-  if "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: \
+  log "Installing audio-separator dependency closure from audited wheelhouse before native samplerate override"
+  if ! "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: \
+    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" >> "${LOG_FILE}" 2>&1; then
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="core_bundle_dependency_install_failed"
+    return 1
+  fi
+  if "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: --no-deps \
     "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
     "numpy==${PINNED_NUMPY_VERSION}" \
     "scipy==${PINNED_SCIPY_VERSION}" \
@@ -206,6 +215,12 @@ preflight_bundled_apple_silicon_payload() {
   : > "${_preflight_log}"
   "${_py}" -m pip install \
     --dry-run --ignore-installed --no-cache-dir --no-index --find-links "${_wheelhouse}" --only-binary=:all: \
+    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" > "${_preflight_log}" 2>&1
+  _rc=$?
+  if [ "${_rc}" -eq 0 ]; then
+    "${_py}" -m pip install \
+    --dry-run --ignore-installed --no-cache-dir --no-index --find-links "${_wheelhouse}" --only-binary=:all: \
+    --no-deps \
     "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
     "numpy==${PINNED_NUMPY_VERSION}" \
     "scipy==${PINNED_SCIPY_VERSION}" \
@@ -215,8 +230,9 @@ preflight_bundled_apple_silicon_payload() {
     "torchvision==${PINNED_TORCHVISION_VERSION}" \
     "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
     "samplerate==${PINNED_SAMPLERATE_VERSION}" \
-    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" > "${_preflight_log}" 2>&1
-  _rc=$?
+    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" >> "${_preflight_log}" 2>&1
+    _rc=$?
+  fi
   if [ "${_rc}" -ne 0 ]; then
     MACOS_PAYLOAD_PREFLIGHT_REASON="offline_resolve_failed"
     cat "${_preflight_log}" >> "${LOG_FILE}" 2>/dev/null || true
@@ -311,13 +327,23 @@ ensure_drumsep_assets() {
   _model_dir="${2:-$(model_cache_dir)}"
   [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
   mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  if [ ! -f "${DRUMSEP_PREFETCH_SCRIPT_PATH}" ]; then
+    DRUMSEP_PREFETCH_SCRIPT_STATUS="missing"
+    DRUMSEP_PREFETCH_DETAIL="drumsep_prefetch_script_missing"
+    log "DRUMSEP_PREFETCH_SCRIPT_STATUS=missing"
+    log "DRUMSEP_PREFETCH_SCRIPT_PATH=${DRUMSEP_PREFETCH_SCRIPT_PATH}"
+    return 1
+  fi
+  DRUMSEP_PREFETCH_SCRIPT_STATUS="ok"
+  log "DRUMSEP_PREFETCH_SCRIPT_STATUS=ok"
+  log "DRUMSEP_PREFETCH_SCRIPT_PATH=${DRUMSEP_PREFETCH_SCRIPT_PATH}"
   _detail_file="$(mktemp "${TMPDIR:-/tmp}/stemwerk-drumsep-prefetch.XXXXXX")" || return 1
   STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
 import os
 from pathlib import Path
 
-script_path = Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"
+script_path = Path(r"${DRUMSEP_PREFETCH_SCRIPT_PATH}")
 spec = importlib.util.spec_from_file_location("stemwerk_audio_separator_process_ready", script_path)
 module = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
@@ -340,6 +366,52 @@ PY
   fi
   rm -f "${_detail_file}" 2>/dev/null || true
   [ "${_rc}" -eq 0 ]
+}
+
+validate_required_reaper_layout() {
+  DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
+  SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  for _required_script in "${DRUMSEP_PREFETCH_SCRIPT_PATH}" "${SAMPLERATE_GUARD_SCRIPT_PATH}"; do
+    if [ ! -f "${_required_script}" ]; then
+      REQUIRED_SCRIPT_STATUS="missing"
+      REQUIRED_SCRIPT_PATH="${_required_script}"
+      case "${_required_script}" in
+        "${DRUMSEP_PREFETCH_SCRIPT_PATH}") DRUMSEP_PREFETCH_SCRIPT_STATUS="missing" ;;
+      esac
+      log "required_script_missing=${_required_script}"
+      return 1
+    fi
+  done
+  REQUIRED_SCRIPT_STATUS="ok"
+  REQUIRED_SCRIPT_PATH=""
+  DRUMSEP_PREFETCH_SCRIPT_STATUS="ok"
+  return 0
+}
+
+check_runtime_dependencies() {
+  _pip_check_log="${RUNTIME_BASE}/logs/pip_check.log"
+  : > "${_pip_check_log}"
+  "${VENV_PY}" -m pip check > "${_pip_check_log}" 2>&1
+  _pip_check_rc=$?
+  cat "${_pip_check_log}" >> "${LOG_FILE}" 2>/dev/null || true
+  if [ "${_pip_check_rc}" -eq 0 ]; then
+    PIP_CHECK_STATUS="ok"
+    PIP_CHECK_REASON="clean"
+    return 0
+  fi
+  if [ "${MAC_ARCH}" = "arm64" ]; then
+    _non_override_lines="$(grep -Eiv '^[[:space:]]*$|audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' "${_pip_check_log}" || true)"
+    if grep -Eiq 'audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' "${_pip_check_log}" \
+      && [ -z "${_non_override_lines}" ]; then
+      PIP_CHECK_STATUS="ok"
+      PIP_CHECK_REASON="apple_silicon_samplerate_native_override"
+      log "pip_check_override=apple_silicon_samplerate_native_override"
+      return 0
+    fi
+  fi
+  PIP_CHECK_STATUS="failed"
+  PIP_CHECK_REASON="dependency_conflict"
+  return 1
 }
 
 write_ready_to_go_state() {
@@ -544,15 +616,10 @@ PY
 repair_samplerate_if_arch_mismatch() {
   _guard_phase="${1:-unspecified}"
   [ "${MAC_ARCH}" = "arm64" ] || return 0
-  if [ "${PINNED_AUDIO_SEPARATOR_VERSION}" = "0.44.3" ]; then
-    log "samplerate_guard_skipped phase=${_guard_phase} reason=asep_0443_requires_samplerate_010"
-    SAMPLERATE_ARCH_MATCH="not_required_for_main_runtime"
-    return 0
-  fi
   [ -n "${VENV_PY}" ] || return 0
   [ -x "${VENV_PY}" ] || return 0
 
-  _guard_script="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  _guard_script="${SAMPLERATE_GUARD_SCRIPT_PATH}"
   log "samplerate_guard_start phase=${_guard_phase}"
   log "samplerate_guard_script_path=${_guard_script}"
   if [ ! -f "${_guard_script}" ]; then
@@ -562,9 +629,9 @@ repair_samplerate_if_arch_mismatch() {
   fi
 
   if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
-    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --repair-version "${PINNED_SAMPLERATE_VERSION}" --validate-only --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"
   else
-    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --repair-version "${PINNED_SAMPLERATE_VERSION}" --validate-only 2>&1)"
   fi
   _guard_rc=$?
   [ -n "${_guard_out}" ] && printf "%s\n" "${_guard_out}" >> "${LOG_FILE}"
@@ -599,6 +666,8 @@ repair_samplerate_if_arch_mismatch() {
       STEMWERK_SAMPLERATE_GUARD\ repair_attempted=*) _guard_repair_attempted="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ arch_match=*) SAMPLERATE_ARCH_MATCH="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ error=samplerate_reinstall_failed) BACKEND_DEPS_REASON="samplerate_reinstall_failed" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_import_failed) BACKEND_DEPS_REASON="samplerate_import_failed" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_native_probe_failed) BACKEND_DEPS_REASON="samplerate_native_probe_failed" ;;
       STEMWERK_SAMPLERATE_GUARD\ error=samplerate_arch_mismatch_requires_runtime_rebuild) BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild" ;;
     esac
   done <<EOF
@@ -1122,6 +1191,12 @@ write_state() {
       echo "MACOS_CORE_BUNDLE_INSTALL_REASON=${MACOS_CORE_BUNDLE_INSTALL_REASON}"
       echo "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
       echo "MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS=${MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS}"
+      echo "REQUIRED_SCRIPT_STATUS=${REQUIRED_SCRIPT_STATUS}"
+      [ -n "${REQUIRED_SCRIPT_PATH}" ] && echo "REQUIRED_SCRIPT_PATH=${REQUIRED_SCRIPT_PATH}"
+      echo "DRUMSEP_PREFETCH_SCRIPT_STATUS=${DRUMSEP_PREFETCH_SCRIPT_STATUS}"
+      echo "DRUMSEP_PREFETCH_SCRIPT_PATH=${DRUMSEP_PREFETCH_SCRIPT_PATH}"
+      echo "PIP_CHECK_STATUS=${PIP_CHECK_STATUS}"
+      [ -n "${PIP_CHECK_REASON}" ] && echo "PIP_CHECK_REASON=${PIP_CHECK_REASON}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
@@ -1226,6 +1301,7 @@ if [ "${MAC_ARCH}" = "x86_64" ]; then
   PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_INTEL}"
   PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_INTEL}"
   PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_INTEL}"
+  PINNED_SAMPLERATE_VERSION="${PINNED_SAMPLERATE_VERSION_INTEL}"
   PINNED_TORCH_STACK_LABEL="Intel macOS CPU fallback"
   log "Using macOS Intel constraints: ${MACOS_CONSTRAINTS_FILE}"
 else
@@ -1237,6 +1313,7 @@ else
   PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_ARM64}"
   PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_ARM64}"
   PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_ARM64}"
+  PINNED_SAMPLERATE_VERSION="${PINNED_SAMPLERATE_VERSION_ARM64}"
   PINNED_TORCH_STACK_LABEL="Apple Silicon macOS"
   log "Using macOS Apple Silicon constraints: ${MACOS_CONSTRAINTS_FILE}"
 fi
@@ -1260,8 +1337,6 @@ log "MACOS_BUNDLED_PAYLOAD_STATUS=${MACOS_BUNDLED_PAYLOAD_STATUS}"
 log "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
 log "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
 log "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
-
-mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 STATUS="ok"
 STATUS_REASON=""
@@ -1322,10 +1397,26 @@ MACOS_CORE_BUNDLE_INSTALL_STATUS="not_required"
 MACOS_CORE_BUNDLE_INSTALL_REASON="not_apple_silicon"
 MACOS_CORE_BUNDLE_REQUIREMENTS=""
 MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="not_run"
+DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
+DRUMSEP_PREFETCH_SCRIPT_STATUS="unknown"
+SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+REQUIRED_SCRIPT_STATUS="unknown"
+REQUIRED_SCRIPT_PATH=""
+PIP_CHECK_STATUS="not_run"
+PIP_CHECK_REASON=""
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
 fi
+
+if ! validate_required_reaper_layout; then
+  mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" >/dev/null 2>&1 || true
+  set_status "deps_failed" "required_script_missing"
+  write_state
+  exit 1
+fi
+
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 if [ "${MAC_ARCH}" = "arm64" ] && [ -n "${BUNDLED_WHEELS_DIR}" ]; then
   MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
@@ -1647,7 +1738,7 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   fi
   if ! verify_audio_separator_runtime_deps; then
     FINAL_RUNTIME_VERIFIED="no"
-    if [ "${BACKEND_DEPS_REASON}" = "samplerate_arch_mismatch_requires_runtime_rebuild" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_reinstall_failed" ]; then
+    if [ "${BACKEND_DEPS_REASON}" = "samplerate_arch_mismatch_requires_runtime_rebuild" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_reinstall_failed" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_import_failed" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_native_probe_failed" ]; then
       set_status "deps_failed" "${BACKEND_DEPS_REASON}"
     else
       set_status "deps_failed" "audio_separator_install_failed"
@@ -1668,7 +1759,7 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   else
     MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="ok"
   fi
-  if ! "${VENV_PY}" -m pip check >> "${LOG_FILE}" 2>&1; then
+  if ! check_runtime_dependencies; then
     FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "pip_check_failed"
   fi
@@ -1733,6 +1824,10 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
       READY_RUNTIME_STATUS="missing"
       READY_DRUMSEP_MODEL_STATUS="missing"
       case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+        drumsep_prefetch_script_missing)
+          READY_DETAIL="drumsep_prefetch_script_missing"
+          set_status "deps_failed" "drumsep_prefetch_script_missing"
+          ;;
         asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
           READY_DETAIL="drumsep_model_download_failed"
           set_status "deps_failed" "drumsep_model_download_failed"
