@@ -406,6 +406,9 @@ def test_macos_offline_payload_preflight_precedes_all_runtime_mutation():
     assert script.index(preflight_call) < script.index(first_torch_install_call)
     assert script.index(preflight_call) < script.index(first_runtime_install)
     assert "--dry-run --ignore-installed --no-cache-dir --no-index --find-links" in script
+    assert "resolved_with_native_override" in script
+    assert "stemwerk_macos_payload_contract.py" in script
+    assert "MACOS_PAYLOAD_EXCLUDED_UPSTREAM_EDGE" in script
     assert 'set_status "deps_failed" "payload_preflight_failed"' in script
     assert 'MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"' in script
 

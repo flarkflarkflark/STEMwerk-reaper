@@ -3,6 +3,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 BUILDER_PATH = Path("tools/build_macos_apple_silicon_payload.py")
 BOOTSTRAP_PATH = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh")
 SAMPLERATE_GUARD_PATH = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py")
+PAYLOAD_CONTRACT_PATH = Path("scripts/reaper/_internal/stemwerk_macos_payload_contract.py")
 
 CORE_BUNDLE = (
     "audio-separator==0.44.3",
@@ -42,6 +44,14 @@ def load_builder():
 
 def load_samplerate_guard():
     spec = importlib.util.spec_from_file_location("macos_samplerate_guard_safety", SAMPLERATE_GUARD_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_payload_contract():
+    spec = importlib.util.spec_from_file_location("macos_payload_contract_safety", PAYLOAD_CONTRACT_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -102,6 +112,10 @@ def test_complete_exact_cp312_arm64_wheelhouse_passes_and_manifest_is_fingerprin
     assert manifest["python_tag"] == "cp312"
     assert manifest["architecture"] == "arm64"
     assert manifest["runtime_requirements"] == list(builder.MAIN_REQUIREMENTS)
+    assert manifest["target_core_requirements"] == list(builder.MAIN_REQUIREMENTS)
+    assert manifest["dependency_overrides"] == list(builder.DEPENDENCY_OVERRIDE_POLICY)
+    assert manifest["forbidden_requirements"] == ["samplerate==0.1.0"]
+    assert manifest["dependency_closure_requirements"] == ["diffq==1.0"]
     assert "onnxruntime==1.27.0" in manifest["runtime_requirements"]
     assert {entry["filename"] for entry in manifest["wheel_inventory"]} == {
         path.name for path in wheels.glob("*.whl")
@@ -110,6 +124,104 @@ def test_complete_exact_cp312_arm64_wheelhouse_passes_and_manifest_is_fingerprin
     assert all(entry["size"] == 0 for entry in manifest["wheel_inventory"])
     builder.audit_existing_manifest(tmp_path)
     print("MACOS_PAYLOAD_CLOSED_WORLD_POSITIVE_TEST=PASS")
+
+
+def test_native_samplerate_override_contract_passes_with_complete_closure(tmp_path):
+    builder = load_builder()
+    contract = load_payload_contract()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    core, closure = contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
+    assert core == list(builder.MAIN_REQUIREMENTS)
+    assert closure == ["diffq==1.0"]
+    print("MACOS_SAMPLERATE_OVERRIDE_PREFLIGHT_POSITIVE_TEST=PASS")
+
+
+def test_samplerate_override_contract_rejects_missing_override_forbidden_and_missing_closure(tmp_path):
+    builder = load_builder()
+    contract = load_payload_contract()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+
+    samplerate = wheels / wheel_name("samplerate==0.2.4")
+    samplerate.unlink()
+    with pytest.raises(RuntimeError, match="samplerate_override_missing"):
+        contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
+    samplerate.touch()
+
+    forbidden = wheels / "samplerate-0.1.0-py2.py3-none-any.whl"
+    forbidden.touch()
+    with pytest.raises(RuntimeError, match="forbidden_samplerate_0_1_0_present"):
+        contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
+    forbidden.unlink()
+
+    closure_wheel = next(wheels.glob("diffq-*.whl"))
+    closure_wheel.unlink()
+    with pytest.raises(RuntimeError, match="dependency_closure_missing"):
+        contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
+    print("MACOS_SAMPLERATE_OVERRIDE_PREFLIGHT_NEGATIVE_TEST=PASS")
+
+
+def test_override_aware_shell_preflight_harness_exits_zero_before_mutation(tmp_path):
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        pytest.skip("native Git Bash not available")
+    builder = load_builder()
+    payload_root = tmp_path / "payload"
+    payload_root.mkdir()
+    wheels = complete_fake_wheelhouse(payload_root, builder)
+    builder.write_manifest(wheels.parent, "2.3.0.5")
+    helper = tmp_path / "stemwerk_macos_payload_contract.py"
+    shutil.copy2(PAYLOAD_CONTRACT_PATH, helper)
+
+    def git_bash_path(path: Path) -> str:
+        result = subprocess.run(
+            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    fake_python = tmp_path / "payload-python"
+    host_python = git_bash_path(Path(sys.executable))
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "-m" ]; then exit 0; fi\n'
+        f"exec '{host_python}' \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "preflight-harness.sh"
+    pins = {
+        "AUDIO_SEPARATOR": "0.44.3", "NUMPY": "2.4.4", "SCIPY": "1.18.0",
+        "NUMBA": "0.66.0", "LLVM": "0.48.0", "TORCH": "2.5.1",
+        "TORCHAUDIO": "2.5.1", "TORCHVISION": "0.20.1", "SAMPLERATE": "0.2.4",
+        "ONNXRUNTIME": "1.27.0",
+    }
+    assignments = "\n".join(f'PINNED_{name}_VERSION="{version}"' for name, version in pins.items())
+    harness.write_text(
+        "#!/bin/sh\nset -u\n"
+        + shell_function(BOOTSTRAP_PATH.read_text(encoding="utf-8"), "preflight_bundled_apple_silicon_payload").join(
+            ("preflight_bundled_apple_silicon_payload() {\n", "\n}\n")
+        )
+        + assignments + "\n"
+        + f"RUNTIME_BASE='{git_bash_path(tmp_path / 'runtime')}'\n"
+        + f"LOG_FILE='{git_bash_path(tmp_path / 'bootstrap.log')}'\n"
+        + f"BUNDLED_PAYLOAD_DIR='{git_bash_path(wheels.parent)}'\n"
+        + f"MACOS_PAYLOAD_CONTRACT_HELPER='{git_bash_path(helper)}'\n"
+        + 'MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"\n'
+        + 'MACOS_PAYLOAD_PREFLIGHT_REASON="not_run"\n'
+        + 'MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"\n'
+        + f"preflight_bundled_apple_silicon_payload '{git_bash_path(fake_python)}' '{git_bash_path(wheels)}'\n"
+        + 'printf "status=%s\\nreason=%s\\nmutation=%s\\n" "$MACOS_PAYLOAD_PREFLIGHT_STATUS" "$MACOS_PAYLOAD_PREFLIGHT_REASON" "$MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED"\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run([str(bash), git_bash_path(harness)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "status=ok" in result.stdout
+    assert "reason=resolved_with_native_override" in result.stdout
+    assert "mutation=false" in result.stdout
 
 
 def test_manifest_audit_rejects_missing_wheel_and_checksum_drift(tmp_path):
@@ -309,7 +421,8 @@ def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction()
 
     assert body.count('"${VENV_PY}" -m pip install') == 2
     assert '--upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: --no-deps' in body
-    assert body.count('"audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"') == 2
+    assert body.count('"audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"') == 1
+    assert "${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS}" in body
     assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then' in script
     for requirement in CORE_BUNDLE:
         name, version = requirement.split("==")
@@ -376,6 +489,7 @@ def test_bootstrap_incomplete_payload_fails_before_existing_runtime_mutation(tmp
     internal = script_dir / "_internal"
     internal.mkdir()
     shutil.copy2(Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py"), internal / "stemwerk_samplerate_guard.py")
+    shutil.copy2(PAYLOAD_CONTRACT_PATH, internal / "stemwerk_macos_payload_contract.py")
     wheelhouse = script_dir / "_bundled" / "macos" / "apple-silicon" / "wheels"
     wheelhouse.mkdir(parents=True)
     (wheelhouse / "torch-2.5.1-cp312-none-macosx_11_0_arm64.whl").touch()
@@ -423,13 +537,13 @@ def test_bootstrap_incomplete_payload_fails_before_existing_runtime_mutation(tmp
     assert sentinel.read_text(encoding="utf-8") == "torch=2.5.1\n"
     assert fake_python.is_file()
     pip_command = pip_log.read_text(encoding="utf-8")
-    assert "pip install --dry-run --ignore-installed --no-cache-dir --no-index --find-links" in pip_command
+    assert "stemwerk_macos_payload_contract.py" in pip_command
     assert "pip uninstall" not in pip_command
     state_text = state.read_text(encoding="utf-8")
     assert "STATUS=deps_failed" in state_text
     assert "STATUS_REASON=payload_preflight_failed" in state_text
     assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=offline_resolve_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=override_contract_invalid" in state_text
     assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
 
 
@@ -441,6 +555,7 @@ def test_staged_layout_resolves_prefetch_script_independent_of_cwd(tmp_path):
         "STEMwerk_Bootstrap_macOS.sh",
         "audio_separator_process.py",
         "_internal/stemwerk_samplerate_guard.py",
+        "_internal/stemwerk_macos_payload_contract.py",
     ):
         target = script_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -450,6 +565,7 @@ def test_staged_layout_resolves_prefetch_script_independent_of_cwd(tmp_path):
     canonical = script_dir.resolve()
     assert (canonical / "audio_separator_process.py").is_file()
     assert (canonical / "_internal" / "stemwerk_samplerate_guard.py").is_file()
+    assert (canonical / "_internal" / "stemwerk_macos_payload_contract.py").is_file()
     assert (canonical / "_bundled" / "macos" / "apple-silicon" / "manifest.json").is_file()
     assert wheels.is_dir()
     assert canonical != tmp_path.resolve()

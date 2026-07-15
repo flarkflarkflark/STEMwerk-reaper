@@ -4,6 +4,7 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled/macos/apple-silicon"
+MACOS_PAYLOAD_CONTRACT_HELPER="${SCRIPT_DIR}/_internal/stemwerk_macos_payload_contract.py"
 MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
@@ -169,11 +170,16 @@ install_apple_silicon_core_bundle() {
   MACOS_CORE_BUNDLE_REQUIREMENTS="$(apple_silicon_core_bundle_requirements | tr '\n' ' ')"
   log "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
   log "Installing complete Apple Silicon core bundle in one audited offline transaction"
-  log "Installing audio-separator dependency closure from audited wheelhouse before native samplerate override"
-  if ! "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: \
-    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" >> "${LOG_FILE}" 2>&1; then
+  log "Installing manifest-defined audio-separator dependency closure before native samplerate override"
+  if [ -z "${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS:-}" ]; then
     MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
-    MACOS_CORE_BUNDLE_INSTALL_REASON="core_bundle_dependency_install_failed"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="override_contract_invalid"
+    return 1
+  fi
+  if ! "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: --no-deps \
+    ${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS} >> "${LOG_FILE}" 2>&1; then
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="dependency_closure_install_failed"
     return 1
   fi
   if "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: --no-deps \
@@ -213,33 +219,48 @@ preflight_bundled_apple_silicon_payload() {
   _preflight_log="${RUNTIME_BASE}/logs/macos_payload_preflight.log"
   mkdir -p "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/state" >/dev/null 2>&1 || return 1
   : > "${_preflight_log}"
+  [ -f "${MACOS_PAYLOAD_CONTRACT_HELPER}" ] || {
+    MACOS_PAYLOAD_PREFLIGHT_REASON="override_contract_invalid"
+    return 1
+  }
+  _contract_output=$("${_py}" "${MACOS_PAYLOAD_CONTRACT_HELPER}" \
+    --manifest "${BUNDLED_PAYLOAD_DIR}/manifest.json" \
+    --wheelhouse "${_wheelhouse}" \
+    --expected-core "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
+    --expected-core "numpy==${PINNED_NUMPY_VERSION}" \
+    --expected-core "scipy==${PINNED_SCIPY_VERSION}" \
+    --expected-core "numba==${PINNED_NUMBA_VERSION}" \
+    --expected-core "llvmlite==${PINNED_LLVM_VERSION}" \
+    --expected-core "torch==${PINNED_TORCH_VERSION}" \
+    --expected-core "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
+    --expected-core "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    --expected-core "samplerate==${PINNED_SAMPLERATE_VERSION}" \
+    --expected-core "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" 2> "${_preflight_log}")
+  _rc=$?
+  if [ "${_rc}" -ne 0 ]; then
+    MACOS_PAYLOAD_PREFLIGHT_REASON=$(sed -n '1{s/:.*//;p;}' "${_preflight_log}")
+    [ -n "${MACOS_PAYLOAD_PREFLIGHT_REASON}" ] || MACOS_PAYLOAD_PREFLIGHT_REASON="override_contract_invalid"
+    cat "${_preflight_log}" >> "${LOG_FILE}" 2>/dev/null || true
+    return "${_rc}"
+  fi
+  MACOS_PAYLOAD_CORE_REQUIREMENTS=$(printf "%s\n" "${_contract_output}" | sed -n 's/^CORE_REQUIREMENTS=//p')
+  MACOS_PAYLOAD_CLOSURE_REQUIREMENTS=$(printf "%s\n" "${_contract_output}" | sed -n 's/^CLOSURE_REQUIREMENTS=//p')
+  MACOS_PAYLOAD_OVERRIDE=$(printf "%s\n" "${_contract_output}" | sed -n 's/^OVERRIDE=//p')
+  log "MACOS_PAYLOAD_CORE_REQUIREMENTS=${MACOS_PAYLOAD_CORE_REQUIREMENTS}"
+  log "MACOS_PAYLOAD_CLOSURE_REQUIREMENTS=${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS}"
+  log "MACOS_PAYLOAD_OVERRIDE=${MACOS_PAYLOAD_OVERRIDE}"
+  log "MACOS_PAYLOAD_EXCLUDED_UPSTREAM_EDGE=audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}->samplerate==0.1.0"
   "${_py}" -m pip install \
     --dry-run --ignore-installed --no-cache-dir --no-index --find-links "${_wheelhouse}" --only-binary=:all: \
-    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" > "${_preflight_log}" 2>&1
+    --no-deps ${MACOS_PAYLOAD_CORE_REQUIREMENTS} ${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS} >> "${_preflight_log}" 2>&1
   _rc=$?
-  if [ "${_rc}" -eq 0 ]; then
-    "${_py}" -m pip install \
-    --dry-run --ignore-installed --no-cache-dir --no-index --find-links "${_wheelhouse}" --only-binary=:all: \
-    --no-deps \
-    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
-    "numpy==${PINNED_NUMPY_VERSION}" \
-    "scipy==${PINNED_SCIPY_VERSION}" \
-    "numba==${PINNED_NUMBA_VERSION}" \
-    "llvmlite==${PINNED_LLVM_VERSION}" \
-    "torch==${PINNED_TORCH_VERSION}" \
-    "torchvision==${PINNED_TORCHVISION_VERSION}" \
-    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
-    "samplerate==${PINNED_SAMPLERATE_VERSION}" \
-    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" >> "${_preflight_log}" 2>&1
-    _rc=$?
-  fi
   if [ "${_rc}" -ne 0 ]; then
     MACOS_PAYLOAD_PREFLIGHT_REASON="offline_resolve_failed"
     cat "${_preflight_log}" >> "${LOG_FILE}" 2>/dev/null || true
     return "${_rc}"
   fi
   MACOS_PAYLOAD_PREFLIGHT_STATUS="ok"
-  MACOS_PAYLOAD_PREFLIGHT_REASON="resolved"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="resolved_with_native_override"
   return 0
 }
 
@@ -371,6 +392,7 @@ PY
 validate_required_reaper_layout() {
   DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
   SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  MACOS_PAYLOAD_CONTRACT_HELPER="${SCRIPT_DIR}/_internal/stemwerk_macos_payload_contract.py"
   for _required_script in "${DRUMSEP_PREFETCH_SCRIPT_PATH}" "${SAMPLERATE_GUARD_SCRIPT_PATH}"; do
     if [ ! -f "${_required_script}" ]; then
       REQUIRED_SCRIPT_STATUS="missing"
@@ -382,6 +404,12 @@ validate_required_reaper_layout() {
       return 1
     fi
   done
+  if bundled_payload_available && [ ! -f "${MACOS_PAYLOAD_CONTRACT_HELPER}" ]; then
+    REQUIRED_SCRIPT_STATUS="missing"
+    REQUIRED_SCRIPT_PATH="${MACOS_PAYLOAD_CONTRACT_HELPER}"
+    log "required_script_missing=${MACOS_PAYLOAD_CONTRACT_HELPER}"
+    return 1
+  fi
   REQUIRED_SCRIPT_STATUS="ok"
   REQUIRED_SCRIPT_PATH=""
   DRUMSEP_PREFETCH_SCRIPT_STATUS="ok"

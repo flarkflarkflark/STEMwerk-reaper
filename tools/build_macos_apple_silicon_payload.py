@@ -60,6 +60,17 @@ CORE_VERSION_POLICY = {
     for requirement in MAIN_REQUIREMENTS
 }
 
+DEPENDENCY_OVERRIDE_POLICY = ({
+    "package": "samplerate",
+    "upstream_required": "0.1.0",
+    "project_override": "0.2.4",
+    "scope": "macos-arm64",
+},)
+FORBIDDEN_REQUIREMENTS = ("samplerate==0.1.0",)
+NON_CLOSURE_PACKAGES = {
+    canonicalize_name(name) for name in ("pip", "setuptools", "wheel", "stemwerk-core")
+}
+
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
 SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"
 
@@ -138,6 +149,15 @@ def wheel_identity(path: Path) -> tuple[str, str]:
     except Exception as exc:
         raise RuntimeError(f"payload_invalid_wheel_filename:{path.name}:{exc}") from exc
     return canonicalize_name(name), str(version)
+
+
+def dependency_closure_requirements(wheels_dir: Path) -> list[str]:
+    requirements = set()
+    for path in wheels_dir.glob("*.whl"):
+        name, version = wheel_identity(path)
+        if name not in CORE_VERSION_POLICY and name not in NON_CLOSURE_PACKAGES:
+            requirements.add(f"{name}=={version}")
+    return sorted(requirements)
 
 
 def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
@@ -386,6 +406,10 @@ def write_manifest(output_dir: Path, version: str) -> None:
         "python_tag": "cp312",
         "architecture": "arm64",
         "runtime_requirements": list(MAIN_REQUIREMENTS),
+        "target_core_requirements": list(MAIN_REQUIREMENTS),
+        "dependency_closure_requirements": dependency_closure_requirements(output_dir / "wheels"),
+        "dependency_overrides": list(DEPENDENCY_OVERRIDE_POLICY),
+        "forbidden_requirements": list(FORBIDDEN_REQUIREMENTS),
         "wheel_inventory": wheel_inventory,
         "contains": {
             "ffmpeg": True,
@@ -408,6 +432,12 @@ def audit_existing_manifest(output_dir: Path) -> None:
         raise RuntimeError("Apple Silicon payload manifest has the wrong Python or architecture tag")
     if manifest.get("runtime_requirements") != list(MAIN_REQUIREMENTS):
         raise RuntimeError("Apple Silicon payload manifest runtime requirements do not match policy")
+    if manifest.get("target_core_requirements") != list(MAIN_REQUIREMENTS):
+        raise RuntimeError("payload_override_contract_invalid:target_core_requirements")
+    if manifest.get("dependency_overrides") != list(DEPENDENCY_OVERRIDE_POLICY):
+        raise RuntimeError("payload_override_contract_invalid:dependency_overrides")
+    if manifest.get("forbidden_requirements") != list(FORBIDDEN_REQUIREMENTS):
+        raise RuntimeError("payload_override_contract_invalid:forbidden_requirements")
     inventory = manifest.get("wheel_inventory", [])
     filenames = [entry.get("filename", "") for entry in inventory]
     if len(filenames) != len(set(filenames)) or len(filenames) != len({name.lower() for name in filenames}):
@@ -422,6 +452,8 @@ def audit_existing_manifest(output_dir: Path) -> None:
         raise RuntimeError("payload_extra_wheels:" + ",".join(extra))
     if missing:
         raise RuntimeError("payload_missing_wheels:" + ",".join(missing))
+    if manifest.get("dependency_closure_requirements") != dependency_closure_requirements(output_dir / "wheels"):
+        raise RuntimeError("payload_dependency_closure_mismatch")
     mismatched = [path.name for path in actual_paths if expected_inventory[path.name].get("sha256") != sha256_file(path)]
     if mismatched:
         raise RuntimeError(f"payload_checksum_mismatch:{','.join(mismatched)}")
