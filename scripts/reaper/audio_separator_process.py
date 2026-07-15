@@ -2004,6 +2004,63 @@ def _macos_ready_drumsep_main_runtime_candidates(runtime_base: Optional[Path] = 
     return []
 
 
+def _version_at_least(raw_version: Any, minimum: Tuple[int, int, int]) -> bool:
+    text = str(raw_version or "").strip()
+    match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?", text)
+    if not match:
+        return False
+    parts = tuple(int(item or "0") for item in match.groups())
+    return parts >= minimum
+
+
+def _linux_rocm_dks_main_runtime_candidates(runtime_base: Optional[Path] = None) -> Tuple[List[Path], str]:
+    if not sys.platform.startswith("linux"):
+        return [], "platform_not_linux"
+    ready = _ready_to_go_state(runtime_base)
+    ready_status = str(ready.get("READY_TO_GO_STATUS") or "").strip().lower()
+    main_status = str(ready.get("MAIN_RUNTIME_STATUS") or "").strip().lower()
+    model_status = str(ready.get("DRUMSEP_READY_MODEL_STATUS") or "").strip().lower()
+    if ready_status != "ok":
+        return [], f"ready_to_go_status_{ready_status or 'missing'}"
+    if main_status != "ok":
+        return [], f"main_runtime_status_{main_status or 'missing'}"
+    if model_status != "ok":
+        return [], f"dks_model_status_{model_status or 'missing'}"
+    return [_main_runtime_python_path(runtime_base)], "ready_state_ok"
+
+
+def _dks_unified_runtime_capability_detail(payload: Dict[str, Any]) -> str:
+    versions = payload.get("versions") if isinstance(payload.get("versions"), dict) else {}
+    audio_separator_version = str(versions.get("audio-separator") or "").strip()
+    numpy_version = str(versions.get("numpy") or "").strip()
+    if not _version_at_least(audio_separator_version, (0, 44, 3)):
+        return f"audio_separator_lt_0_44_3:{audio_separator_version or 'missing'}"
+    if not _version_at_least(numpy_version, (2, 0, 0)):
+        return f"numpy_lt_2:{numpy_version or 'missing'}"
+    if not str(payload.get("torch_hip") or "").strip():
+        return "rocm_no_hip"
+    if not bool(payload.get("torch_cuda_available")):
+        return "rocm_cuda_unavailable"
+    device_names = payload.get("device_names") or []
+    if not isinstance(device_names, list) or not any(str(item).strip() for item in device_names):
+        return "rocm_no_device_names"
+    return "ok"
+
+
+def _emit_dks_runtime_selection_markers(
+    selection: str,
+    python_path: Optional[Path],
+    reason: str,
+    unified_candidate: bool,
+    legacy_fallback_available: bool,
+) -> None:
+    print(f"dks_runtime_selection={selection}", file=sys.stderr)
+    print(f"dks_runtime_python={python_path or ''}", file=sys.stderr)
+    print(f"dks_runtime_reason={reason}", file=sys.stderr)
+    print(f"dks_unified_candidate={'true' if unified_candidate else 'false'}", file=sys.stderr)
+    print(f"dks_legacy_fallback_available={'true' if legacy_fallback_available else 'false'}", file=sys.stderr)
+
+
 def _drumsep_state_python_candidates(state: Dict[str, str], fallback: Path) -> List[Path]:
     candidates: List[Path] = []
     seen: Set[str] = set()
@@ -2560,6 +2617,101 @@ def _select_drumsep_runtime(
             "selection_policy": "bench_helper_cuda_failed",
         }
         reason = "missing" if cuda_detail == "missing" else "broken"
+        return None, reason, info
+
+    linux_rocm_selection = sys.platform.startswith("linux") and (
+        explicit_rocm or normalized_request in {"auto", "gpu"}
+    )
+    unified_candidates, unified_state_detail = _linux_rocm_dks_main_runtime_candidates(runtime_base)
+    legacy_rocm_candidate_exists = any(candidate.exists() for candidate in rocm_candidates)
+    if linux_rocm_selection and (explicit_rocm or unified_candidates):
+        selection_policy = "explicit_rocm" if explicit_rocm else ("gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm")
+        print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
+        main_detail = unified_state_detail
+        main_attempts: List[Dict[str, Any]] = []
+        if unified_candidates:
+            print(f"timing_utc={_ts()} dks_runtime_probe_main_unified_start", file=sys.stderr)
+            selected_main_python, main_detail, main_payload, main_attempts = _probe_drumsep_runtime_candidates(
+                unified_candidates,
+                require_gpu=True,
+            )
+            print(f"timing_utc={_ts()} dks_runtime_probe_main_unified_end detail={main_detail}", file=sys.stderr)
+            if selected_main_python is not None:
+                capability_detail = _dks_unified_runtime_capability_detail(main_payload)
+                if capability_detail == "ok":
+                    info = dict(main_payload or {})
+                    info["kind"] = "rocm"
+                    info["detail"] = "main_unified"
+                    info["fallback_reason"] = ""
+                    info["selection_policy"] = selection_policy
+                    info["dks_runtime_selection"] = "main_unified"
+                    info["dks_runtime_reason"] = "main_unified_capable"
+                    info["dks_unified_candidate"] = True
+                    info["dks_legacy_fallback_available"] = legacy_rocm_candidate_exists
+                    info["main_unified_python_attempts"] = main_attempts
+                    _emit_dks_runtime_selection_markers(
+                        "main_unified",
+                        selected_main_python,
+                        "main_unified_capable",
+                        True,
+                        legacy_rocm_candidate_exists,
+                    )
+                    return selected_main_python, "rocm", info
+                main_detail = capability_detail
+
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_start", file=sys.stderr)
+        selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)
+        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_end detail={rocm_detail}", file=sys.stderr)
+        if selected_rocm_python is None and rocm_detail in {"rocm_cuda_unavailable", "rocm_no_device_names"}:
+            time.sleep(1.0)
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_start", file=sys.stderr)
+            selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)
+            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_end detail={rocm_detail}", file=sys.stderr)
+        if selected_rocm_python is not None:
+            selection = "fallback_legacy" if unified_candidates else "legacy_drumsep_rocm"
+            reason = f"main_unified_skipped:{main_detail}" if unified_candidates else "legacy_rocm_capable"
+            info = dict(rocm_payload or {})
+            info["kind"] = "rocm"
+            info["detail"] = rocm_detail
+            info["fallback_reason"] = reason if unified_candidates else ""
+            info["selection_policy"] = selection_policy
+            info["dks_runtime_selection"] = selection
+            info["dks_runtime_reason"] = reason
+            info["dks_unified_candidate"] = bool(unified_candidates)
+            info["dks_legacy_fallback_available"] = True
+            info["main_unified_python_attempts"] = main_attempts
+            info["rocm_python_attempts"] = rocm_attempts
+            _emit_dks_runtime_selection_markers(
+                selection,
+                selected_rocm_python,
+                reason,
+                bool(unified_candidates),
+                True,
+            )
+            return selected_rocm_python, "rocm", info
+
+        info = {
+            "rocm_detail": rocm_detail,
+            "main_unified_detail": main_detail,
+            "rocm_python": str(rocm_python),
+            "main_unified_python": str(unified_candidates[0]) if unified_candidates else str(_main_runtime_python_path(runtime_base)),
+            "main_unified_python_attempts": main_attempts,
+            "rocm_python_attempts": rocm_attempts,
+            "selection_policy": selection_policy,
+            "normalized_request": normalized_request,
+            "dks_runtime_selection": "unavailable",
+            "dks_runtime_reason": f"main_unified:{main_detail};legacy_rocm:{rocm_detail}",
+            "dks_unified_candidate": bool(unified_candidates),
+            "dks_legacy_fallback_available": False,
+        }
+        _emit_dks_runtime_selection_markers(
+            "unavailable",
+            None,
+            info["dks_runtime_reason"],
+            bool(unified_candidates),
+            False,
+        )
+        reason = "missing" if main_detail.startswith("ready_to_go_status_") and rocm_detail == "missing" else "broken"
         return None, reason, info
 
     selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"

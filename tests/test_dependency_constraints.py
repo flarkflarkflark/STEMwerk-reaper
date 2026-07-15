@@ -6760,6 +6760,128 @@ def test_drumsep_runtime_selector_reads_state_python_candidates_before_dedicated
     assert "selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)" in script
 
 
+def _write_linux_ready_state(runtime_base, *, ready="ok", main="ok", model="ok"):
+    state_dir = runtime_base / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "ready_to_go.env").write_text(
+        "\n".join(
+            [
+                f"READY_TO_GO_STATUS={ready}",
+                f"MAIN_RUNTIME_STATUS={main}",
+                f"DRUMSEP_READY_MODEL_STATUS={model}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _touch_executable(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _rocm_probe_payload(*, audio_separator="0.44.3", numpy="2.4.4"):
+    return {
+        "versions": {
+            "audio-separator": audio_separator,
+            "numpy": numpy,
+            "torch": "2.10.0+rocm7.0",
+        },
+        "torch_hip": "7.0.0",
+        "torch_cuda_available": True,
+        "device_names": ["AMD Radeon RX 9070"],
+    }
+
+
+def test_linux_rocm_dks_selector_prefers_main_unified_runtime_when_capable(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    _write_linux_ready_state(tmp_path)
+    main_python = tmp_path / ".venv" / "bin" / "python"
+    legacy_python = tmp_path / ".venv-drumsep-rocm" / "bin" / "python"
+    _touch_executable(main_python)
+    _touch_executable(legacy_python)
+
+    def fake_probe(candidates, **kwargs):
+        assert kwargs.get("require_gpu") is True
+        first = Path(candidates[0])
+        if first == main_python:
+            return main_python, "ok", _rocm_probe_payload(), [{"python": str(main_python), "ok": True}]
+        return None, "should_not_probe_legacy", {}, []
+
+    monkeypatch.setattr(module, "_probe_drumsep_runtime_candidates", fake_probe)
+
+    selected, kind, info = module._select_drumsep_runtime("rocm", tmp_path)
+
+    captured = capsys.readouterr()
+    assert selected == main_python
+    assert kind == "rocm"
+    assert info["dks_runtime_selection"] == "main_unified"
+    assert "dks_runtime_selection=main_unified" in captured.err
+    assert f"dks_runtime_python={main_python}" in captured.err
+    assert "dks_unified_candidate=true" in captured.err
+    assert "dks_legacy_fallback_available=true" in captured.err
+
+
+def test_linux_rocm_dks_selector_falls_back_to_legacy_when_main_not_capable(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    _write_linux_ready_state(tmp_path)
+    main_python = tmp_path / ".venv" / "bin" / "python"
+    legacy_python = tmp_path / ".venv-drumsep-rocm" / "bin" / "python"
+    _touch_executable(main_python)
+    _touch_executable(legacy_python)
+
+    def fake_probe(candidates, **kwargs):
+        assert kwargs.get("require_gpu") is True
+        first = Path(candidates[0])
+        if first == main_python:
+            return main_python, "ok", _rocm_probe_payload(audio_separator="0.23.0", numpy="1.26.4"), [
+                {"python": str(main_python), "ok": True}
+            ]
+        if first == legacy_python:
+            return legacy_python, "ok", _rocm_probe_payload(), [{"python": str(legacy_python), "ok": True}]
+        return None, "missing", {}, []
+
+    monkeypatch.setattr(module, "_probe_drumsep_runtime_candidates", fake_probe)
+
+    selected, kind, info = module._select_drumsep_runtime("rocm", tmp_path)
+
+    captured = capsys.readouterr()
+    assert selected == legacy_python
+    assert kind == "rocm"
+    assert info["dks_runtime_selection"] == "fallback_legacy"
+    assert info["fallback_reason"].startswith("main_unified_skipped:audio_separator_lt_0_44_3")
+    assert "dks_runtime_selection=fallback_legacy" in captured.err
+    assert f"dks_runtime_python={legacy_python}" in captured.err
+    assert "dks_legacy_fallback_available=true" in captured.err
+
+
+def test_linux_rocm_dks_selector_reports_unavailable_without_cpu_fallback(monkeypatch, tmp_path, capsys):
+    module = _load_audio_separator_process_module()
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    _write_linux_ready_state(tmp_path, ready="missing", main="missing", model="missing")
+    probed = []
+
+    def fake_probe(candidates, **kwargs):
+        probed.extend(str(item) for item in candidates)
+        return None, "missing", {}, [{"python": str(candidates[0]), "ok": False}]
+
+    monkeypatch.setattr(module, "_probe_drumsep_runtime_candidates", fake_probe)
+
+    selected, kind, info = module._select_drumsep_runtime("rocm", tmp_path)
+
+    captured = capsys.readouterr()
+    assert selected is None
+    assert kind == "missing"
+    assert info["dks_runtime_selection"] == "unavailable"
+    assert all(".venv-drumsep/bin/python" not in item for item in probed)
+    assert "dks_runtime_selection=unavailable" in captured.err
+    assert "dks_legacy_fallback_available=false" in captured.err
+
+
 def test_cached_capability_devices_ignore_stale_raw_gpu_blocks_when_runtime_is_cpu_only():
     script = Path("scripts/reaper/_internal/STEMwerk_Devices.lua").read_text(encoding="utf-8")
 
