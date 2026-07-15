@@ -7,7 +7,18 @@ BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled/macos/apple-silicon"
 MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
-PINNED_NUMPY_VERSION="1.26.4"
+PINNED_NUMPY_VERSION=""
+PINNED_NUMPY_VERSION_ARM64="2.4.4"
+PINNED_NUMPY_VERSION_INTEL="1.26.4"
+PINNED_NUMBA_VERSION=""
+PINNED_NUMBA_VERSION_ARM64="0.66.0"
+PINNED_NUMBA_VERSION_INTEL="0.59.1"
+PINNED_LLVM_VERSION=""
+PINNED_LLVM_VERSION_ARM64="0.48.0"
+PINNED_LLVM_VERSION_INTEL="0.42.0"
+PINNED_AUDIO_SEPARATOR_VERSION=""
+PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"
+PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"
 PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
 PINNED_TORCHAUDIO_VERSION=""
@@ -336,12 +347,13 @@ verify_audio_separator_runtime_deps() {
   fi
   _probe="$("${VENV_PY}" - <<'PY' 2>/dev/null || true
 import importlib
+from importlib.metadata import PackageNotFoundError, version
 errors = []
 try:
     import audio_separator  # noqa: F401
 except Exception as exc:
     errors.append("audio_separator:" + str(exc))
-for name in (
+dependencies = [
     "beartype",
     "diffq",
     "einops",
@@ -360,7 +372,13 @@ for name in (
     "six",
     "tqdm",
     "yaml",
-):
+]
+try:
+    if version("audio-separator") == "0.44.3":
+        dependencies.remove("samplerate")
+except PackageNotFoundError:
+    pass
+for name in dependencies:
     try:
         importlib.import_module(name)
     except Exception as exc:
@@ -445,6 +463,11 @@ PY
 repair_samplerate_if_arch_mismatch() {
   _guard_phase="${1:-unspecified}"
   [ "${MAC_ARCH}" = "arm64" ] || return 0
+  if [ "${PINNED_AUDIO_SEPARATOR_VERSION}" = "0.44.3" ]; then
+    log "samplerate_guard_skipped phase=${_guard_phase} reason=asep_0443_requires_samplerate_010"
+    SAMPLERATE_ARCH_MATCH="not_required_for_main_runtime"
+    return 0
+  fi
   [ -n "${VENV_PY}" ] || return 0
   [ -x "${VENV_PY}" ] || return 0
 
@@ -588,7 +611,7 @@ PY
 )"
   case "${_probe}" in
     rebuild\|*)
-      log "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator 0.23.0 compatibility"
+      log "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} compatibility"
       return 0
       ;;
     ok\|*)
@@ -673,7 +696,7 @@ expected_numpy = "${PINNED_NUMPY_VERSION}"
 expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
-expected_audio_separator = "0.23.0"
+expected_audio_separator = "${PINNED_AUDIO_SEPARATOR_VERSION}"
 expected_profile = "${PINNED_TORCH_STACK_LABEL}"
 mac_arch = "${MAC_ARCH}"
 
@@ -1074,6 +1097,10 @@ log "Downloaded models are kept at: $(model_cache_dir)"
 MAC_ARCH="$(uname -m 2>/dev/null || echo unknown)"
 if [ "${MAC_ARCH}" = "x86_64" ]; then
   MACOS_CONSTRAINTS_FILE="${MACOS_INTEL_CONSTRAINTS_FILE}"
+  PINNED_NUMPY_VERSION="${PINNED_NUMPY_VERSION_INTEL}"
+  PINNED_NUMBA_VERSION="${PINNED_NUMBA_VERSION_INTEL}"
+  PINNED_LLVM_VERSION="${PINNED_LLVM_VERSION_INTEL}"
+  PINNED_AUDIO_SEPARATOR_VERSION="${PINNED_AUDIO_SEPARATOR_VERSION_INTEL}"
   PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_INTEL}"
   PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_INTEL}"
   PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_INTEL}"
@@ -1081,6 +1108,10 @@ if [ "${MAC_ARCH}" = "x86_64" ]; then
   log "Using macOS Intel constraints: ${MACOS_CONSTRAINTS_FILE}"
 else
   MACOS_CONSTRAINTS_FILE="${MACOS_ARM_CONSTRAINTS_FILE}"
+  PINNED_NUMPY_VERSION="${PINNED_NUMPY_VERSION_ARM64}"
+  PINNED_NUMBA_VERSION="${PINNED_NUMBA_VERSION_ARM64}"
+  PINNED_LLVM_VERSION="${PINNED_LLVM_VERSION_ARM64}"
+  PINNED_AUDIO_SEPARATOR_VERSION="${PINNED_AUDIO_SEPARATOR_VERSION_ARM64}"
   PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_ARM64}"
   PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_ARM64}"
   PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_ARM64}"
@@ -1121,7 +1152,7 @@ PYTHON=""
 FFMPEG=""
 VENV_PY=""
 # Conservative default on macOS to avoid GPU extras with limited wheel support.
-PACKAGE="audio-separator==0.23.0"
+PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
 ONNX_PACKAGE="onnxruntime"
 ONNX_FALLBACK_PACKAGE=""
 if [ "$(uname -m)" = "arm64" ]; then
@@ -1326,7 +1357,7 @@ else
     fi
 
     log "Preinstalling numba/llvmlite (macOS wheels)"
-    install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==0.42.0" "numba==0.59.1" >> "${LOG_FILE}" 2>&1 || \
+    install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==${PINNED_LLVM_VERSION}" "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1 || \
       log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
     if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
@@ -1458,6 +1489,10 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   if ! assert_pinned_torch_stack "${VENV_PY}"; then
     FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "torch_pin_assert_failed"
+  fi
+  if ! "${VENV_PY}" -m pip check >> "${LOG_FILE}" 2>&1; then
+    FINAL_RUNTIME_VERIFIED="no"
+    set_status "deps_failed" "pip_check_failed"
   fi
   if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then
     case "${STATUS_REASON}" in

@@ -19,7 +19,7 @@ import pytest
 EXPECTED_TORCH = "2.5.1"
 EXPECTED_TORCHVISION = "0.20.1"
 EXPECTED_TORCHAUDIO = "2.5.1"
-EXPECTED_AUDIO_SEPARATOR = "0.23.0"
+EXPECTED_AUDIO_SEPARATOR = "0.44.3"
 
 
 def _load_audio_separator_process_module():
@@ -236,7 +236,7 @@ def test_macos_arm_constraints_include_matching_torchvision_pin():
     from pathlib import Path
 
     constraints_lines = Path("scripts/reaper/constraints/macos.txt").read_text().splitlines()
-    assert "numpy==1.26.4" in constraints_lines
+    assert "numpy==2.4.4" in constraints_lines
     assert "torch==2.5.1" in constraints_lines
     assert "torchvision==0.20.1" in constraints_lines
     assert "torchaudio==2.5.1" in constraints_lines
@@ -259,7 +259,12 @@ def test_macos_bootstrap_repairs_after_audio_separator_install():
     audio_install_marker = 'install_with_optional_bundled_wheels "${VENV_PY}" -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"'
     repair_marker = 'set_status "deps_failed" "torch_pin_repair_failed"'
 
-    assert 'PINNED_NUMPY_VERSION="1.26.4"' in script
+    assert 'PINNED_NUMPY_VERSION_ARM64="2.4.4"' in script
+    assert 'PINNED_NUMPY_VERSION_INTEL="1.26.4"' in script
+    assert 'PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"' in script
+    assert 'PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"' in script
+    assert 'PINNED_NUMBA_VERSION_ARM64="0.66.0"' in script
+    assert 'PINNED_LLVM_VERSION_ARM64="0.48.0"' in script
     assert '"numpy==${PINNED_NUMPY_VERSION}"' in script
     assert 'if core(numpy_ver) != expected_numpy:' in script
     assert 'import numba' in script
@@ -295,6 +300,34 @@ def test_macos_bootstrap_assertion_uses_audio_separator_metadata():
 
     assert 'version("audio-separator")' in script
     assert 'audio_separator.__version__' not in script
+
+
+def test_macos_main_runtime_uses_asep_0443_numpy2_without_samplerate_conflict():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+    constraints = Path("scripts/reaper/constraints/macos.txt").read_text().splitlines()
+    payload = Path("tools/build_macos_apple_silicon_payload.py").read_text()
+
+    assert 'PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"' in script
+    assert 'PINNED_NUMPY_VERSION_ARM64="2.4.4"' in script
+    assert 'expected_audio_separator = "${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
+    assert 'PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
+    assert "numpy==2.4.4" in constraints
+    assert "numpy==1.26.4" not in constraints
+    assert '"audio-separator==0.44.3"' in payload
+    assert '"numpy==2.4.4"' in payload
+    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"' in payload
+    assert 'SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"' not in payload
+    assert 'if version("audio-separator") == "0.44.3":' in script
+    assert 'dependencies.remove("samplerate")' in script
+
+
+def test_macos_bootstrap_pip_check_blocks_ready_false_positive():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    pip_check = 'if ! "${VENV_PY}" -m pip check >> "${LOG_FILE}" 2>&1; then'
+    assert pip_check in script
+    assert 'set_status "deps_failed" "pip_check_failed"' in script
+    assert script.index(pip_check) < script.index('write_ready_to_go_state "${READY_RUNTIME_KIND}"')
 
 
 def test_macos_bootstrap_assertion_does_not_require_mps_availability_on_intel():
@@ -5496,11 +5529,14 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert 'Path("/usr/local/bin/python3.12")' in script
     assert 'if version == (3, 12):' in script
     assert 'raise RuntimeError("Missing native Python 3.12 interpreter for macOS Apple Silicon payload wheel downloads")' in script
-    assert '"audio-separator==0.23.0"' in script
+    assert '"audio-separator==0.44.3"' in script
+    assert '"numpy==2.4.4"' in script
+    assert '"numba==0.66.0"' in script
+    assert '"llvmlite==0.48.0"' in script
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
     assert '"onnxruntime"' in script
-    assert 'SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"' in script
+    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"' in script
     assert '"onnxruntime-silicon"' not in script
     assert '"--only-binary=:all:"' in script
     assert '"--find-links"' in script
@@ -5509,7 +5545,7 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert 'subprocess.run(cmd, check=True, env=command_env())' in script
     assert 'DIFFQ_REQUIREMENT = "diffq==0.2.4"' in script
     assert 'ensure_diffq_wheel(output_dir / "wheels")' in script
-    assert 'ensure_samplerate_repair_wheel(output_dir / "wheels")' in script
+    assert 'ensure_samplerate_wheel(output_dir / "wheels")' in script
 
 
 def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
@@ -5527,7 +5563,7 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert 'Incomplete wheelhouse for offline Apple Silicon payload' in script
     assert 'REQUIRED_WHEEL_PREFIXES = (' in script
     assert 'REQUIRED_WHEEL_PATTERNS = (' in script
-    assert '"samplerate-0.2.4-*.whl"' in script
+    assert '"samplerate-0.1.0-*.whl"' in script
     assert '"stemwerk_core-"' in script
     assert '"--no-build-isolation"' in script
     assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
@@ -6567,6 +6603,8 @@ def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64()
     guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
 
     assert "repair_samplerate_if_arch_mismatch" in script
+    assert 'if [ "${PINNED_AUDIO_SEPARATOR_VERSION}" = "0.44.3" ]; then' in script
+    assert "asep_0443_requires_samplerate_010" in script
     assert "stemwerk_samplerate_guard.py" in script
     assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"' in script
     assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"' in script
