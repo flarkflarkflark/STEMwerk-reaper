@@ -114,7 +114,34 @@ def _version_or_fail(dist_name):
         pytest.fail(f"{dist_name} is not installed")
 
 
+def _require_host_runtime_packages(*module_names):
+    missing = [name for name in module_names if importlib.util.find_spec(name) is None]
+    if missing:
+        pytest.skip(
+            "host runtime package not installed; static policy covered separately: "
+            + ", ".join(missing)
+        )
+
+
+def _require_managed_target_runtime():
+    if any(
+        importlib.util.find_spec(name) is None
+        for name in ("audio_separator", "stemwerk_core")
+    ):
+        pytest.skip(
+            "managed runtime version checked by bootstrap smoke, not system Python"
+        )
+
+
 def test_dependency_diagnostics():
+    _require_host_runtime_packages(
+        "audio_separator",
+        "onnxruntime",
+        "stemwerk_core",
+        "torch",
+        "torchvision",
+        "torchaudio",
+    )
     import audio_separator
     import onnxruntime
     import stemwerk_core
@@ -150,6 +177,7 @@ def test_runner_is_macos_arm64():
 
 
 def test_torch_pin():
+    _require_managed_target_runtime()
     import torch
 
     assert _core_version(torch.__version__) == EXPECTED_TORCH, (
@@ -158,6 +186,7 @@ def test_torch_pin():
 
 
 def test_torchvision_pin_and_abi_match():
+    _require_managed_target_runtime()
     import torch
     import torchvision
 
@@ -181,6 +210,7 @@ def test_torchvision_pin_and_abi_match():
 
 
 def test_torchaudio_pin_and_abi_match():
+    _require_managed_target_runtime()
     import torch
     import torchaudio
 
@@ -225,6 +255,9 @@ def test_onnxruntime_imports():
 
 
 def test_torch_wheel_has_mps_support_built():
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        pytest.skip("MPS probe only valid on Apple Silicon runtime")
+    _require_managed_target_runtime()
     import torch
 
     assert torch.backends.mps.is_built() is True, (
