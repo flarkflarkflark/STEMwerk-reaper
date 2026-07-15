@@ -20,6 +20,7 @@ BOOTSTRAP_REQUIREMENTS = (
     "pip",
     "setuptools",
     "wheel",
+    "Cython",  # diffq offline dependency completeness for preloaded wheels
 )
 
 TORCH_REQUIREMENTS = (

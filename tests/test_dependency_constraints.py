@@ -5288,6 +5288,27 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"linux_x86_64"' in script
 
 
+def test_linux_wheelhouse_includes_cython_for_preloaded_diffq_dependency():
+    script = Path("tools/build_linux_wheelhouse.py").read_text()
+    diffq_wheel = Path(
+        "installer/linux/payload/wheels/linux-x86_64-cp312/"
+        "diffq-0.2.4-cp312-cp312-linux_x86_64.whl"
+    )
+
+    with zipfile.ZipFile(diffq_wheel) as archive:
+        metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+        diffq_metadata = archive.read(metadata_name).decode("utf-8", errors="replace")
+
+    bootstrap_block = script.split("BOOTSTRAP_REQUIREMENTS = (", 1)[1].split(")", 1)[0]
+    assert "Requires-Dist: Cython" in diffq_metadata
+    assert '"Cython"' in bootstrap_block
+    assert "diffq offline dependency completeness" in bootstrap_block
+    assert script.count('"audio-separator==0.44.3"') >= 2
+    assert '"audio-separator[gpu]==0.44.3"' in script
+    assert script.count('"numpy==2.4.4"') >= 3
+    assert '"audio-separator==0.34.1"' in script
+
+
 def test_linux_main_wheelhouse_pins_numpy2_compatible_runtime_stack():
     script = Path("tools/build_linux_wheelhouse.py").read_text()
 
