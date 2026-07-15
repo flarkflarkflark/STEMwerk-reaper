@@ -37,6 +37,7 @@ Status: release planning. No tag, release, or installer build has been created.
 - Device requests are normalized before processing.
 - Invalid GPU requests fail explicitly instead of silently changing to CPU.
 - Dependency runtime probes are platform-aware while static dependency-policy checks remain hard.
+- Optional REAPER toolbar icons and actions make the existing Direct Kit and Kit Split workflows easier to access.
 
 ## Platform Evidence
 
