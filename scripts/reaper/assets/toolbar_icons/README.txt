@@ -25,6 +25,8 @@ Action-to-icon mapping:
 - STEMwerk: Bass Only -> stemwerk_bass_only
 - STEMwerk: All Stems -> stemwerk_all_stems
 - Stemwerk: Explode Takes (In Place) -> stemwerk_explode_takes
+- Stemwerk: Direct Kit -> stemwerk_direct_kit
+- Stemwerk: Drum Kit Split -> stemwerk_kit_split
 
 Notes:
 - Dedicated toolbar creation is opt-in and backup-first; it does not overwrite random existing toolbar sections.
@@ -38,5 +40,7 @@ Notes:
   7. Bass Only
   8. Karaoke
   9. separator
-  10. Explode Takes
+  10. Direct Kit
+  11. Kit Split
+  12. Explode Takes
 - Assign icons manually in REAPER toolbar customize dialogs.

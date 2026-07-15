@@ -5791,6 +5791,41 @@ def test_drumkit_split_wrapper_selects_integrated_extract_route():
     assert "requestedStage2Model = M.DIRECT_DKS_MODEL" in workflow
 
 
+def test_direct_kit_wrapper_selects_integrated_direct_route():
+    wrapper = Path("scripts/reaper/STEMwerk_Direct_Kit.lua").read_text(encoding="utf-8")
+    assert "-- @description Stemwerk: Direct Kit" in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "quick_preset", "dks_direct", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_mode", "drumkit", false)' in wrapper
+    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_direct", false)' in wrapper
+    assert 'dofile(script_path .. "STEMwerk.lua")' in wrapper
+    version_sync = Path("tools/version_sync.py").read_text(encoding="utf-8")
+    assert '"scripts/reaper/STEMwerk_Direct_Kit.lua"' in version_sync
+
+
+def test_drum_kit_toolbar_actions_have_reaper_icon_payloads():
+    setup = Path("scripts/reaper/STEMwerk_Setup_Toolbar.lua").read_text(encoding="utf-8")
+    index = Path("index.xml").read_text(encoding="utf-8")
+    assets = Path("scripts/reaper/assets/toolbar_icons")
+    expected = {
+        "stemwerk_direct_kit": "STEMwerk_Direct_Kit.lua",
+        "stemwerk_kit_split": "STEMwerk_Drum_Kit_Split.lua",
+    }
+    for icon_name, script_name in expected.items():
+        assert script_name in setup
+        assert f'icon = "{icon_name}.png"' in setup
+        for relative in (
+            f"single/{icon_name}_24.png",
+            f"single/{icon_name}_30.png",
+            f"single/{icon_name}_36.png",
+            f"single/{icon_name}_48.png",
+            f"single/{icon_name}_64.png",
+            f"strips_90x30/{icon_name}_90x30.png",
+            f"strips_180x60/{icon_name}_180x60.png",
+        ):
+            assert (assets / relative).is_file(), relative
+            assert f'../assets/toolbar_icons/{relative}' in index
+
+
 def test_main_ui_exposes_direct_and_extract_drumkit_presets():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
