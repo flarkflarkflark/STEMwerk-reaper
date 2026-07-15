@@ -77,6 +77,7 @@ def complete_fake_wheelhouse(tmp_path: Path, builder) -> Path:
     for prefix in builder.REQUIRED_WHEEL_PREFIXES:
         if not any(wheels.glob(f"{prefix}*.whl")):
             (wheels / f"{prefix}1.0-py3-none-any.whl").touch()
+    (wheels / "sympy-1.13.1-py3-none-any.whl").touch()
     return wheels
 
 
@@ -114,8 +115,8 @@ def test_complete_exact_cp312_arm64_wheelhouse_passes_and_manifest_is_fingerprin
     assert manifest["runtime_requirements"] == list(builder.MAIN_REQUIREMENTS)
     assert manifest["target_core_requirements"] == list(builder.MAIN_REQUIREMENTS)
     assert manifest["dependency_overrides"] == list(builder.DEPENDENCY_OVERRIDE_POLICY)
-    assert manifest["forbidden_requirements"] == ["samplerate==0.1.0"]
-    assert manifest["dependency_closure_requirements"] == ["diffq==1.0"]
+    assert manifest["forbidden_requirements"] == ["samplerate==0.1.0", "sympy==1.14.0"]
+    assert manifest["dependency_closure_requirements"] == ["diffq==1.0", "sympy==1.13.1"]
     assert "onnxruntime==1.27.0" in manifest["runtime_requirements"]
     assert {entry["filename"] for entry in manifest["wheel_inventory"]} == {
         path.name for path in wheels.glob("*.whl")
@@ -133,7 +134,7 @@ def test_native_samplerate_override_contract_passes_with_complete_closure(tmp_pa
     builder.write_manifest(tmp_path, "2.3.0.5")
     core, closure = contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
     assert core == list(builder.MAIN_REQUIREMENTS)
-    assert closure == ["diffq==1.0"]
+    assert closure == ["diffq==1.0", "sympy==1.13.1"]
     print("MACOS_SAMPLERATE_OVERRIDE_PREFLIGHT_POSITIVE_TEST=PASS")
 
 
@@ -160,6 +161,46 @@ def test_samplerate_override_contract_rejects_missing_override_forbidden_and_mis
     with pytest.raises(RuntimeError, match="dependency_closure_missing"):
         contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
     print("MACOS_SAMPLERATE_OVERRIDE_PREFLIGHT_NEGATIVE_TEST=PASS")
+
+
+def test_torch_sympy_closure_accepts_1131_and_rejects_native_1140_fixture(tmp_path):
+    builder = load_builder()
+    contract = load_payload_contract()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
+    assert len(list(wheels.glob("sympy-1.13.1-*.whl"))) == 1
+    print("MACOS_TORCH_SYMPY_CLOSURE_POSITIVE_TEST=PASS")
+
+    good = wheels / "sympy-1.13.1-py3-none-any.whl"
+    bad = wheels / "sympy-1.14.0-py3-none-any.whl"
+    bad.touch()
+    with pytest.raises(RuntimeError, match="dependency_closure_core_conflict"):
+        builder.validate_closed_world_wheelhouse(wheels)
+    bad.unlink()
+    good.unlink()
+    bad.touch()
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    manifest["dependency_closure_requirements"] = ["diffq==1.0", "sympy==1.14.0"]
+    manifest["wheel_inventory"] = [
+        entry for entry in manifest["wheel_inventory"] if not entry["filename"].startswith("sympy-")
+    ] + [{"filename": bad.name, "sha256": builder.sha256_file(bad), "size": bad.stat().st_size}]
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="dependency_closure_core_conflict"):
+        contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
+    print("MACOS_TORCH_SYMPY_CLOSURE_NEGATIVE_TEST=PASS")
+
+
+def test_core_constrained_resolver_plan_pins_torch_sympy_and_rewrites_only_samplerate(tmp_path):
+    builder = load_builder()
+    constraints = tmp_path / "resolver-constraints.txt"
+    builder.write_core_constrained_resolver_file(constraints)
+    lines = constraints.read_text(encoding="utf-8").splitlines()
+    assert "torch==2.5.1" in lines
+    assert "sympy==1.13.1" in lines
+    assert not any(line.startswith("sympy==1.14") for line in lines)
+    assert not any(line.startswith("samplerate==") for line in lines)
+    assert set(builder.MAIN_REQUIREMENTS) - {"samplerate==0.2.4"} <= set(lines)
 
 
 def test_override_aware_shell_preflight_harness_exits_zero_before_mutation(tmp_path):
@@ -275,7 +316,8 @@ def test_complete_wheelhouse_resolver_preflight_allows_install_path_to_start(tmp
 
     assert calls
     assert "--no-deps" in calls[0]
-    assert calls[0][-len(builder.MAIN_REQUIREMENTS) :] == list(builder.MAIN_REQUIREMENTS)
+    assert set(builder.MAIN_REQUIREMENTS) <= set(calls[0])
+    assert "sympy==1.13.1" in calls[0]
 
 
 @pytest.mark.parametrize(
@@ -635,6 +677,51 @@ def test_samplerate_native_override_keeps_strict_pip_check_for_other_conflicts()
     assert "apple_silicon_samplerate_native_override" in check
     assert 'PIP_CHECK_STATUS="failed"' in check
     assert 'PIP_CHECK_REASON="dependency_conflict"' in check
+
+
+def test_pip_check_parser_accepts_only_single_samplerate_override(tmp_path):
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        pytest.skip("native Git Bash not available")
+
+    def posix(path: Path) -> str:
+        result = subprocess.run(
+            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"], check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text('#!/bin/sh\ncat "$FAKE_PIP_CHECK_FILE"\nexit 1\n', encoding="utf-8")
+    fake_python.chmod(0o755)
+    harness = tmp_path / "pip-check-harness.sh"
+    body = shell_function(BOOTSTRAP_PATH.read_text(encoding="utf-8"), "check_runtime_dependencies")
+    harness.write_text(
+        "#!/bin/sh\nset -u\ncheck_runtime_dependencies() {\n"
+        + body
+        + "\n}\nlog() { :; }\n"
+        + f"RUNTIME_BASE='{posix(tmp_path / 'runtime')}'\nmkdir -p \"$RUNTIME_BASE/logs\"\n"
+        + f"VENV_PY='{posix(fake_python)}'\nMAC_ARCH=arm64\nFAKE_PIP_CHECK_FILE=\"$1\"\nexport FAKE_PIP_CHECK_FILE\n"
+        + 'check_runtime_dependencies\nrc=$?\nprintf "rc=%s\\nstatus=%s\\nreason=%s\\n" "$rc" "$PIP_CHECK_STATUS" "$PIP_CHECK_REASON"\n',
+        encoding="utf-8",
+    )
+    override = tmp_path / "override.txt"
+    override.write_text(
+        "audio-separator 0.44.3 has requirement samplerate==0.1.0, but you have samplerate 0.2.4.\n",
+        encoding="utf-8",
+    )
+    conflict = tmp_path / "conflict.txt"
+    conflict.write_text(
+        override.read_text(encoding="utf-8")
+        + "torch 2.5.1 has requirement sympy==1.13.1, but you have sympy 1.14.0.\n",
+        encoding="utf-8",
+    )
+    accepted = subprocess.run([str(bash), posix(harness), posix(override)], capture_output=True, text=True)
+    rejected = subprocess.run([str(bash), posix(harness), posix(conflict)], capture_output=True, text=True)
+    assert "rc=0" in accepted.stdout
+    assert "reason=apple_silicon_samplerate_native_override" in accepted.stdout
+    assert "rc=1" in rejected.stdout
+    assert "reason=dependency_conflict" in rejected.stdout
+    print("MACOS_PIP_CHECK_SINGLE_OVERRIDE_TEST=PASS")
 
 
 def test_samplerate_guard_is_validate_only_before_ready_state():

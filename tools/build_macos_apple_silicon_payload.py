@@ -59,6 +59,7 @@ CORE_VERSION_POLICY = {
     canonicalize_name(requirement.split("==", 1)[0]): requirement.split("==", 1)[1]
     for requirement in MAIN_REQUIREMENTS
 }
+CLOSURE_VERSION_POLICY = {canonicalize_name("sympy"): "1.13.1"}
 
 DEPENDENCY_OVERRIDE_POLICY = ({
     "package": "samplerate",
@@ -66,7 +67,7 @@ DEPENDENCY_OVERRIDE_POLICY = ({
     "project_override": "0.2.4",
     "scope": "macos-arm64",
 },)
-FORBIDDEN_REQUIREMENTS = ("samplerate==0.1.0",)
+FORBIDDEN_REQUIREMENTS = ("samplerate==0.1.0", "sympy==1.14.0")
 NON_CLOSURE_PACKAGES = {
     canonicalize_name(name) for name in ("pip", "setuptools", "wheel", "stemwerk-core")
 }
@@ -160,6 +161,12 @@ def dependency_closure_requirements(wheels_dir: Path) -> list[str]:
     return sorted(requirements)
 
 
+def write_core_constrained_resolver_file(path: Path) -> None:
+    requirements = [requirement for requirement in MAIN_REQUIREMENTS if not requirement.startswith("samplerate==")]
+    requirements += [f"{name}=={version}" for name, version in CLOSURE_VERSION_POLICY.items()]
+    path.write_text("\n".join(requirements) + "\n", encoding="utf-8")
+
+
 def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
     if not wheels_dir.is_dir():
         raise RuntimeError(f"payload_wheelroot_missing:{wheels_dir}")
@@ -170,11 +177,14 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
     wheels = [path for path in entries if path.is_file() and path.suffix.lower() == ".whl"]
     lower_names: dict[str, list[str]] = {}
     core_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in CORE_VERSION_POLICY}
+    closure_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in CLOSURE_VERSION_POLICY}
     for path in wheels:
         lower_names.setdefault(path.name.lower(), []).append(path.name)
         name, version = wheel_identity(path)
         if name in core_wheels:
             core_wheels[name].append((path.name, version))
+        if name in closure_wheels:
+            closure_wheels[name].append((path.name, version))
     collisions = ["|".join(names) for names in lower_names.values() if len(names) != 1]
     if collisions:
         raise RuntimeError("payload_wheel_case_collision:" + ",".join(collisions))
@@ -188,6 +198,14 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
         if any(item.startswith("samplerate:") and "@0.1.0" in item for item in failures):
             raise RuntimeError("payload_forbidden_samplerate_0_1_0:" + ";".join(failures))
         raise RuntimeError("payload_core_version_exclusivity:" + ";".join(failures))
+    closure_failures = []
+    for name, wanted in CLOSURE_VERSION_POLICY.items():
+        found = closure_wheels[name]
+        if len(found) != 1 or found[0][1] != wanted:
+            detail = "|".join(f"{filename}@{version}" for filename, version in found) or "missing"
+            closure_failures.append(f"{name}:expected={wanted}:found={detail}")
+    if closure_failures:
+        raise RuntimeError("dependency_closure_core_conflict:" + ";".join(closure_failures))
     return wheels
 
 
@@ -283,7 +301,7 @@ def run_pip_download(
         ]
         if no_deps:
             cmd.append("--no-deps")
-        if constraints_file.is_file() and requirement not in BOOTSTRAP_REQUIREMENTS and not requirement.startswith("audio-separator=="):
+        if constraints_file.is_file() and requirement not in BOOTSTRAP_REQUIREMENTS:
             cmd += ["-c", str(constraints_file)]
         cmd.append(requirement)
         subprocess.run(cmd, check=True, env=command_env())
@@ -365,7 +383,11 @@ def audit_wheelhouse_resolution(wheels_dir: Path, python_executable: str) -> Non
         str(wheels_dir),
         "--only-binary=:all:",
     ]
-    subprocess.run([*common, "--no-deps", *MAIN_REQUIREMENTS], check=True, env=command_env())
+    subprocess.run(
+        [*common, "--no-deps", *MAIN_REQUIREMENTS, *dependency_closure_requirements(wheels_dir)],
+        check=True,
+        env=command_env(),
+    )
 
 
 def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> None:
@@ -487,11 +509,13 @@ def main() -> int:
     copy_ffmpeg(ffmpeg_path, ffprobe_path, output_dir / "ffmpeg")
     resolver_dir = output_dir / ".resolver-closure"
     reset_dir(resolver_dir)
+    resolver_constraints = resolver_dir / "core-closure-constraints.txt"
+    write_core_constrained_resolver_file(resolver_constraints)
     try:
-        run_pip_download(("audio-separator==0.44.3",), resolver_dir, constraints_file, python_executable)
+        run_pip_download(("audio-separator==0.44.3",), resolver_dir, resolver_constraints, python_executable)
     except subprocess.CalledProcessError:
         ensure_diffq_wheel(resolver_dir)
-        run_pip_download(("audio-separator==0.44.3",), resolver_dir, constraints_file, python_executable)
+        run_pip_download(("audio-separator==0.44.3",), resolver_dir, resolver_constraints, python_executable)
     project_resolved_wheels(resolver_dir, output_dir / "wheels")
     run_pip_download(
         BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS,
