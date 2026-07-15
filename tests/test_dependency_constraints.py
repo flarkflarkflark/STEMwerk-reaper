@@ -330,6 +330,34 @@ def test_macos_bootstrap_pip_check_blocks_ready_false_positive():
     assert script.index(pip_check) < script.index('write_ready_to_go_state "${READY_RUNTIME_KIND}"')
 
 
+def test_apple_silicon_workflows_follow_asep_0443_numpy2_policy():
+    workflow_paths = [
+        Path(".github/workflows/macos-apple-silicon-backend-smoke.yml"),
+        Path(".github/workflows/macos-apple-silicon-backend-sanity.yml"),
+        Path(".github/workflows/apple-silicon-mps-rd.yml"),
+    ]
+
+    for workflow_path in workflow_paths:
+        workflow = workflow_path.read_text()
+        assert 'audio-separator==0.44.3' in workflow, workflow_path
+        assert 'numpy==2.4.4' in workflow, workflow_path
+        assert 'audio-separator==0.23.0' not in workflow, workflow_path
+        assert 'numpy<2.0' not in workflow, workflow_path
+        assert 'numpy==1.26.4' not in workflow, workflow_path
+        assert 'pip check' in workflow, workflow_path
+
+    sanity = workflow_paths[1].read_text()
+    assert 'payload["samplerate_version"] = version("samplerate")' in sanity
+    assert 'core(payload["samplerate_version"]) == "0.1.0"' in sanity
+
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+    intel_constraints = Path("scripts/reaper/constraints/macos-intel.txt").read_text().splitlines()
+    assert 'PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"' in bootstrap
+    assert 'PINNED_NUMPY_VERSION_ARM64="2.4.4"' in bootstrap
+    assert 'PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"' in bootstrap
+    assert "numpy==1.26.4" in intel_constraints
+
+
 def test_macos_bootstrap_assertion_does_not_require_mps_availability_on_intel():
     from pathlib import Path
 
@@ -6716,18 +6744,14 @@ def test_setup_internal_surfaces_samplerate_arch_mismatch_reason_and_capabilitie
     assert "SAMPLERATE_REPAIR_ATTEMPTED" in script
 
 
-def test_macos_apple_silicon_sanity_workflow_asserts_samplerate_dylib_architecture():
+def test_macos_apple_silicon_sanity_workflow_keeps_asep_samplerate_metadata_pin():
     workflow = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text()
 
-    assert "Run samplerate arm64 repair guard (bootstrap parity)" in workflow
-    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py" in workflow
-    assert "import samplerate" in workflow
-    assert 'samplerate_root.rglob("*.dylib")' in workflow
-    assert 'payload["samplerate_dylib_file_outputs"]' in workflow
-    assert 'assert len(payload["samplerate_dylib_x86_only"]) == 0' in workflow
-    assert 'if payload["samplerate_dylib_candidates"]:' in workflow
-    assert 'assert len(payload["samplerate_dylib_arm_or_universal"]) > 0' in workflow
-    assert workflow.index("Run samplerate arm64 repair guard (bootstrap parity)") < workflow.index("Run Apple Silicon dependency and backend assertions")
+    assert "Run samplerate arm64 repair guard (bootstrap parity)" not in workflow
+    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py" not in workflow
+    assert "import samplerate" not in workflow
+    assert 'payload["samplerate_version"] = version("samplerate")' in workflow
+    assert 'assert core(payload["samplerate_version"]) == "0.1.0"' in workflow
 
 
 def test_normal_workflow_device_preflight_blocks_silent_cpu_fallback():
