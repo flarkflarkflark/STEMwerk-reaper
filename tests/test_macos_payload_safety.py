@@ -139,6 +139,9 @@ def complete_fake_wheelhouse(tmp_path: Path, builder) -> Path:
             elif requirement == "audio-separator==0.44.3":
                 requires = ("samplerate==0.1.0", "diffq==1.0")
             write_fake_wheel(wheels / wheel_name(requirement), requires)
+    for requirement in builder.PINNED_BOOTSTRAP_REQUIREMENTS:
+        name, version = requirement.split("==", 1)
+        write_fake_wheel(wheels / f"{name}-{version}-py3-none-any.whl")
     for prefix in builder.REQUIRED_WHEEL_PREFIXES:
         if not any(wheels.glob(f"{prefix}*.whl")):
             write_fake_wheel(wheels / f"{prefix}1.0-py3-none-any.whl")
@@ -272,6 +275,7 @@ def test_core_constrained_resolver_plan_pins_torch_sympy_and_rewrites_only_sampl
     assert not any(line.startswith("sympy==1.14") for line in lines)
     assert not any(line.startswith("samplerate==") for line in lines)
     assert set(builder.MAIN_REQUIREMENTS) - {"samplerate==0.2.4"} <= set(lines)
+    assert set(builder.PINNED_BOOTSTRAP_REQUIREMENTS) <= set(lines)
 
 
 def test_full_core_closure_resolver_uses_one_exact_core_plan(tmp_path, monkeypatch):
@@ -368,6 +372,102 @@ def test_historical_repair_and_fresh_py312_scenarios_converge_by_policy():
     builder = load_builder()
     assert "flatbuffers" in builder.REQUIRED_CLOSURE_PACKAGES
     assert "setuptools" in builder.BOOTSTRAP_ALLOWLIST and "wheel" in builder.BOOTSTRAP_ALLOWLIST
+
+
+def fake_isolated_core_build_run(builder, calls, failure_stage=None, output_count=1):
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[1:3] == ["-m", "venv"]:
+            if failure_stage == "create":
+                raise subprocess.CalledProcessError(1, command)
+            environment = Path(command[-1])
+            build_python = builder.isolated_environment_python(environment)
+            build_python.parent.mkdir(parents=True)
+            build_python.touch()
+        elif "install" in command:
+            if failure_stage == "install":
+                raise subprocess.CalledProcessError(1, command)
+        elif command[1:2] == ["-c"]:
+            if failure_stage == "backend":
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(
+                command, 0, stdout="pip=26.1.2 setuptools=83.0.0 wheel=0.45.1\n"
+            )
+        elif "wheel" in command:
+            if failure_stage == "build":
+                raise subprocess.CalledProcessError(1, command)
+            output = Path(command[command.index("--wheel-dir") + 1])
+            for index in range(output_count):
+                suffix = "" if index == 0 else f"-{index}"
+                (output / f"stemwerk_core-0.1.1{suffix}-py3-none-any.whl").touch()
+        return subprocess.CompletedProcess(command, 0)
+
+    return fake_run
+
+
+def test_payload_builder_isolates_core_build_tools_from_invoking_python(tmp_path, monkeypatch):
+    builder = load_builder()
+    wheels = tmp_path / "payload" / "wheels"
+    wheels.mkdir(parents=True)
+    invoking_python = tmp_path / "production-like" / "python"
+    invoking_python.parent.mkdir()
+    invoking_python.write_bytes(b"python-with-pip-only")
+    original = invoking_python.read_bytes()
+    calls = []
+    monkeypatch.setattr(builder.subprocess, "run", fake_isolated_core_build_run(builder, calls))
+
+    produced = builder.build_stemwerk_core_wheel(Path.cwd(), wheels, str(invoking_python))
+
+    assert produced.name == "stemwerk_core-0.1.1-py3-none-any.whl"
+    assert invoking_python.read_bytes() == original
+    assert not list((tmp_path / "payload").glob(".stemwerk-core-build-*"))
+    invoking_calls = [command for command in calls if command[0] == str(invoking_python)]
+    assert len(invoking_calls) == 1 and invoking_calls[0][1:3] == ["-m", "venv"]
+    install = next(command for command in calls if "install" in command)
+    assert install[0] != str(invoking_python)
+    assert "--no-index" in install and "--find-links" in install
+    assert tuple(install[-3:]) == builder.PINNED_BOOTSTRAP_REQUIREMENTS
+    assert builder.BOOTSTRAP_VERSION_POLICY == {
+        "pip": "26.1.2", "setuptools": "83.0.0", "wheel": "0.45.1"
+    }
+    print("MACOS_PAYLOAD_BUILDER_ISOLATED_CORE_BUILD_TEST=PASS")
+
+
+def test_payload_builder_core_backend_guards_and_cleanup(tmp_path, monkeypatch):
+    builder = load_builder()
+    invoking_python = str(tmp_path / "production-like-python")
+    cases = (
+        ("create", 1, "core_build_environment_create_failed"),
+        ("install", 1, "core_build_tools_install_failed"),
+        ("backend", 1, "core_build_backend_unavailable"),
+        ("build", 1, "core_wheel_build_failed"),
+        (None, 0, "core_wheel_missing"),
+        (None, 2, "core_wheel_ambiguous"),
+    )
+    for index, (failure_stage, output_count, reason) in enumerate(cases):
+        case_root = tmp_path / f"case-{index}"
+        wheels = case_root / "wheels"
+        wheels.mkdir(parents=True)
+        calls = []
+        monkeypatch.setattr(
+            builder.subprocess, "run",
+            fake_isolated_core_build_run(builder, calls, failure_stage, output_count),
+        )
+        with pytest.raises(RuntimeError, match=reason):
+            builder.build_stemwerk_core_wheel(Path.cwd(), wheels, invoking_python)
+        assert not list(case_root.glob(".stemwerk-core-build-*"))
+        assert not any(command[0] == invoking_python and "install" in command for command in calls)
+
+    monkeypatch.setattr(
+        builder.tempfile, "TemporaryDirectory",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("denied")),
+    )
+    with pytest.raises(RuntimeError, match="core_build_environment_create_failed"):
+        builder.build_stemwerk_core_wheel(tmp_path, tmp_path / "temp-failure" / "wheels", invoking_python)
+    source = BUILDER_PATH.read_text(encoding="utf-8")
+    assert "pip install setuptools wheel" not in source
+    assert "manually" not in source.lower()
+    print("MACOS_PAYLOAD_BUILDER_CORE_BACKEND_GUARD_TEST=PASS")
 
 
 def test_override_aware_shell_preflight_harness_exits_zero_before_mutation(tmp_path):

@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from email.parser import BytesParser
 from email.policy import default as email_policy
@@ -50,6 +51,15 @@ BOOTSTRAP_REQUIREMENTS = (
     "setuptools",
     "wheel",
 )
+BOOTSTRAP_VERSION_POLICY = {
+    "pip": "26.1.2",
+    "setuptools": "83.0.0",
+    "wheel": "0.45.1",
+}
+PINNED_BOOTSTRAP_REQUIREMENTS = tuple(
+    f"{name}=={BOOTSTRAP_VERSION_POLICY[name]}" for name in BOOTSTRAP_REQUIREMENTS
+)
+STEMWERK_CORE_VERSION = "0.1.1"
 
 MAIN_REQUIREMENTS = (
     "numpy==2.4.4",
@@ -178,6 +188,7 @@ def dependency_closure_requirements(wheels_dir: Path) -> list[str]:
 def write_core_constrained_resolver_file(path: Path) -> None:
     requirements = [requirement for requirement in MAIN_REQUIREMENTS if not requirement.startswith("samplerate==")]
     requirements += [f"{name}=={version}" for name, version in CLOSURE_VERSION_POLICY.items()]
+    requirements += list(PINNED_BOOTSTRAP_REQUIREMENTS)
     path.write_text("\n".join(requirements) + "\n", encoding="utf-8")
 
 
@@ -193,6 +204,9 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
     core_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in CORE_VERSION_POLICY}
     closure_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in CLOSURE_VERSION_POLICY}
     required_closure_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in REQUIRED_CLOSURE_PACKAGES}
+    bootstrap_wheels: dict[str, list[tuple[str, str]]] = {
+        canonicalize_name(name): [] for name in BOOTSTRAP_REQUIREMENTS
+    }
     for path in wheels:
         lower_names.setdefault(path.name.lower(), []).append(path.name)
         name, version = wheel_identity(path)
@@ -202,6 +216,8 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
             closure_wheels[name].append((path.name, version))
         if name in required_closure_wheels:
             required_closure_wheels[name].append((path.name, version))
+        if name in bootstrap_wheels:
+            bootstrap_wheels[name].append((path.name, version))
     collisions = ["|".join(names) for names in lower_names.values() if len(names) != 1]
     if collisions:
         raise RuntimeError("payload_wheel_case_collision:" + ",".join(collisions))
@@ -230,6 +246,14 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
     ]
     if required_closure_failures:
         raise RuntimeError("dependency_closure_core_conflict:" + ";".join(required_closure_failures))
+    bootstrap_failures = []
+    for name, wanted in BOOTSTRAP_VERSION_POLICY.items():
+        found = bootstrap_wheels[canonicalize_name(name)]
+        if len(found) != 1 or found[0][1] != wanted:
+            detail = "|".join(f"{filename}@{version}" for filename, version in found) or "missing"
+            bootstrap_failures.append(f"{name}:expected={wanted}:found={detail}")
+    if bootstrap_failures:
+        raise RuntimeError("bootstrap_tool_version_conflict:" + ";".join(bootstrap_failures))
     return wheels
 
 
@@ -497,21 +521,97 @@ def audit_wheelhouse_resolution(wheels_dir: Path, python_executable: str) -> Non
     )
 
 
-def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> None:
-    if any(wheels_dir.glob("stemwerk_core-*.whl")):
-        return
-    cmd = [
-        python_executable,
-        "-m",
-        "pip",
-        "wheel",
-        "--no-deps",
-        "--no-build-isolation",
-        "--wheel-dir",
-        str(wheels_dir),
-        str(repo_root / "scripts" / "reaper" / "vendor" / "stemwerk-core"),
-    ]
-    subprocess.run(cmd, check=True, env=command_env())
+def isolated_environment_python(environment_dir: Path) -> Path:
+    return environment_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def run_core_build_command(command: list[str], failure_reason: str, **kwargs) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, check=True, env=command_env(), **kwargs)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(failure_reason) from exc
+
+
+def validate_stemwerk_core_candidates(directory: Path) -> Path:
+    candidates = sorted(directory.glob("stemwerk_core-*.whl"))
+    if not candidates:
+        raise RuntimeError("core_wheel_missing")
+    if len(candidates) != 1:
+        raise RuntimeError("core_wheel_ambiguous:" + ",".join(path.name for path in candidates))
+    name, version = wheel_identity(candidates[0])
+    if name != canonicalize_name("stemwerk-core") or version != STEMWERK_CORE_VERSION:
+        raise RuntimeError(f"core_wheel_invalid:{candidates[0].name}")
+    return candidates[0]
+
+
+def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> Path:
+    existing = sorted(wheels_dir.glob("stemwerk_core-*.whl"))
+    if existing:
+        return validate_stemwerk_core_candidates(wheels_dir)
+
+    wheels_dir.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    print(f"CORE_BUILD_INVOKING_PYTHON={python_executable}")
+    try:
+        try:
+            temporary = tempfile.TemporaryDirectory(prefix=".stemwerk-core-build-", dir=wheels_dir.parent)
+        except OSError as exc:
+            raise RuntimeError("core_build_environment_create_failed") from exc
+        build_root = Path(temporary.name)
+        environment_dir = build_root / "venv"
+        built_wheels = build_root / "dist"
+        built_wheels.mkdir()
+        run_core_build_command(
+            [python_executable, "-m", "venv", str(environment_dir)],
+            "core_build_environment_create_failed",
+        )
+        build_python = isolated_environment_python(environment_dir)
+        if not build_python.is_file():
+            raise RuntimeError("core_build_environment_create_failed:python_missing")
+        print(f"CORE_BUILD_TEMPORARY_PYTHON={build_python}")
+        install_command = [
+            str(build_python), "-m", "pip", "install", "--no-index", "--find-links", str(wheels_dir),
+            "--only-binary=:all:", "--upgrade", *PINNED_BOOTSTRAP_REQUIREMENTS,
+        ]
+        print("CORE_BUILD_TOOL_POLICY=" + " ".join(PINNED_BOOTSTRAP_REQUIREMENTS))
+        run_core_build_command(install_command, "core_build_tools_install_failed")
+        backend_probe = (
+            "import importlib.metadata as m; import setuptools; import wheel; import setuptools.build_meta; "
+            "print('pip=' + m.version('pip') + ' setuptools=' + m.version('setuptools') + ' wheel=' + m.version('wheel'))"
+        )
+        probe = run_core_build_command(
+            [str(build_python), "-c", backend_probe],
+            "core_build_backend_unavailable",
+            capture_output=True,
+            text=True,
+        )
+        print("CORE_BUILD_TOOL_VERSIONS=" + probe.stdout.strip())
+        source_dir = repo_root / "scripts" / "reaper" / "vendor" / "stemwerk-core"
+        isolated_source_dir = build_root / "source" / "stemwerk-core"
+        try:
+            shutil.copytree(
+                source_dir,
+                isolated_source_dir,
+                ignore=shutil.ignore_patterns("build", "dist", "*.egg-info", "__pycache__", "*.pyc"),
+            )
+        except OSError as exc:
+            raise RuntimeError("core_build_source_prepare_failed") from exc
+        print(f"CORE_BUILD_SOURCE={source_dir}")
+        build_command = [
+            str(build_python), "-m", "pip", "wheel", "--no-deps", "--no-build-isolation",
+            "--wheel-dir", str(built_wheels), str(isolated_source_dir),
+        ]
+        print("CORE_BUILD_COMMAND=" + " ".join(build_command))
+        run_core_build_command(build_command, "core_wheel_build_failed")
+        built_wheel = validate_stemwerk_core_candidates(built_wheels)
+        destination = wheels_dir / built_wheel.name
+        shutil.copy2(built_wheel, destination)
+        print(f"CORE_BUILD_OUTPUT_WHEEL={destination.name}")
+        return destination
+    finally:
+        if temporary is not None:
+            temporary.cleanup()
+            print("CORE_BUILD_TEMPORARY_ENV_CLEANUP=ok")
 
 
 def sha256_file(path: Path) -> str:
@@ -635,7 +735,7 @@ def main() -> int:
         run_pip_download_plan(FULL_CORE_RESOLVER_REQUIREMENTS, resolver_dir, resolver_constraints, python_executable)
     project_resolved_wheels(resolver_dir, output_dir / "wheels")
     run_pip_download(
-        BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS,
+        PINNED_BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS,
         output_dir / "wheels",
         constraints_file,
         python_executable,
