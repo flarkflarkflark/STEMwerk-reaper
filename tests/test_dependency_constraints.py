@@ -5516,6 +5516,7 @@ def test_macos_build_script_supports_package_variants_without_wiping_dist():
     assert 'rm -rf "$STAGE"' in script
     assert 'rm -rf "$OUT_DIR"' not in script
     assert 'OUTPUT_PKG="$OUT_DIR/STEMwerk-$VERSION$OUTPUT_SUFFIX.pkg"' in script
+    assert 'PACKAGE_REPACK_DIR=""' in script
     assert 'Built: $OUTPUT_PKG' in script
 
 
@@ -5532,9 +5533,25 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
 
     assert 'BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"' in script
     assert 'rm -rf "$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"' in script
-    assert 'rsync -a --delete "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
+    assert 'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
     assert 'cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF' in script
     assert 'payload_status=missing' in script
+
+
+def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payload():
+    script = Path("installer/macos/build_pkg.sh").read_text()
+
+    assert "--exclude='._*' \\" in script
+    assert "remove_appledouble_sidecars()" in script
+    assert "find \"$1\" -name '._*' -delete" in script
+    assert 'remove_appledouble_sidecars "$STAGE"' in script
+    assert "repack_pkg_without_appledouble()" in script
+    assert 'mkbom "$STAGE" "$PACKAGE_REPACK_DIR/Bom"' in script
+    assert "find . -print | cpio -o --format odc --owner 0:80" in script
+    assert 'xar -xf "$OUTPUT_PKG"' in script
+    assert 'xar --compression none -cf "$OUTPUT_PKG" Bom Payload Scripts PackageInfo' in script
+    assert script.index('remove_appledouble_sidecars "$STAGE"') < script.index("pkgbuild \\")
+    assert script.index("pkgbuild \\") < script.index("repack_pkg_without_appledouble\n")
 
 
 def test_macos_payload_builder_declares_expected_layout_and_manifest():

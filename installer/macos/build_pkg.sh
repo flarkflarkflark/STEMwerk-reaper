@@ -67,12 +67,45 @@ esac
 STAGE="$ROOT_DIR/installer/macos/build/$VARIANT/root"
 PAYLOAD_DEST="$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"
 OUTPUT_PKG="$OUT_DIR/STEMwerk-$VERSION$OUTPUT_SUFFIX.pkg"
+PACKAGE_REPACK_DIR=""
+
+cleanup() {
+  if [[ -n "$PACKAGE_REPACK_DIR" && -d "$PACKAGE_REPACK_DIR" ]]; then
+    rm -rf "$PACKAGE_REPACK_DIR"
+  fi
+}
+trap cleanup EXIT
+
+remove_appledouble_sidecars() {
+  find "$1" -name '._*' -delete
+}
+
+repack_pkg_without_appledouble() {
+  PACKAGE_REPACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stemwerk-macos-pkg-repack.XXXXXX")"
+  (
+    cd "$PACKAGE_REPACK_DIR"
+    xar -xf "$OUTPUT_PKG"
+  )
+
+  mkbom "$STAGE" "$PACKAGE_REPACK_DIR/Bom"
+  (
+    cd "$STAGE"
+    find . -print | cpio -o --format odc --owner 0:80 2>/dev/null | gzip -c > "$PACKAGE_REPACK_DIR/Payload"
+  )
+
+  rm -f "$OUTPUT_PKG"
+  (
+    cd "$PACKAGE_REPACK_DIR"
+    xar --compression none -cf "$OUTPUT_PKG" Bom Payload Scripts PackageInfo
+  )
+}
 
 rm -rf "$STAGE"
 mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper"
 
 # Copy only what we need
 rsync -a --delete \
+  --exclude='._*' \
   --exclude='*.bak' \
   --exclude='*.bak2' \
   --exclude='sync_to_reaper.sh' \
@@ -97,7 +130,7 @@ case "$VARIANT" in
   bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)
     if [[ -d "$BUNDLED_PAYLOAD_ROOT" ]]; then
       mkdir -p "$(dirname "$PAYLOAD_DEST")"
-      rsync -a --delete "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
+      rsync -a --delete --exclude='._*' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
     else
       mkdir -p "$PAYLOAD_DEST"
       cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF
@@ -108,6 +141,8 @@ EOF
     ;;
 esac
 
+remove_appledouble_sidecars "$STAGE"
+
 # Ensure pkg scripts are executable
 chmod +x "$SCRIPTS_DIR/postinstall" 2>/dev/null || true
 
@@ -117,5 +152,7 @@ pkgbuild \
   --identifier "$PKG_ID" \
   --version "$VERSION" \
   "$OUTPUT_PKG"
+
+repack_pkg_without_appledouble
 
 echo "Built: $OUTPUT_PKG"
