@@ -170,11 +170,12 @@ install_apple_silicon_core_bundle() {
   MACOS_CORE_BUNDLE_REQUIREMENTS="$(apple_silicon_core_bundle_requirements | tr '\n' ' ')"
   log "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
   log "Installing complete Apple Silicon core bundle in one audited offline transaction"
-  log "Inspecting bounded stale Apple Silicon packages: onnxruntime-silicon samplerate"
-  "${VENV_PY}" -m pip show onnxruntime-silicon samplerate >> "${LOG_FILE}" 2>&1 || true
-  # Remove only the two known collision sources. samplerate 0.1.x can leave an
-  # x86_64 dylib under the legacy _samplerate_data layout after an overwrite.
-  if ! "${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate >> "${LOG_FILE}" 2>&1; then
+  log "Inspecting bounded stale Apple Silicon packages: onnxruntime-silicon samplerate onnx onnx2torch"
+  "${VENV_PY}" -m pip show onnxruntime-silicon samplerate onnx onnx2torch >> "${LOG_FILE}" 2>&1 || true
+  # Remove only the four known namespace/layout collision sources:
+  # onnxruntime-silicon/onnxruntime, onnx/onnx-weekly, onnx2torch/onnx2torch-py313,
+  # and samplerate 0.1.x legacy _samplerate_data x86_64 dylibs.
+  if ! "${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate onnx onnx2torch >> "${LOG_FILE}" 2>&1; then
     MACOS_STALE_PACKAGE_CLEANUP_STATUS="failed"
     MACOS_STALE_PACKAGE_CLEANUP_REASON="bounded_uninstall_failed"
     MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
@@ -1240,6 +1241,8 @@ write_state() {
       echo "MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS=${MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS}"
       echo "MACOS_STALE_PACKAGE_CLEANUP_STATUS=${MACOS_STALE_PACKAGE_CLEANUP_STATUS}"
       echo "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
+      echo "MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS=${MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS}"
+      echo "MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON=${MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON}"
       echo "REQUIRED_SCRIPT_STATUS=${REQUIRED_SCRIPT_STATUS}"
       [ -n "${REQUIRED_SCRIPT_PATH}" ] && echo "REQUIRED_SCRIPT_PATH=${REQUIRED_SCRIPT_PATH}"
       echo "DRUMSEP_PREFETCH_SCRIPT_STATUS=${DRUMSEP_PREFETCH_SCRIPT_STATUS}"
@@ -1447,6 +1450,8 @@ MACOS_CORE_BUNDLE_REQUIREMENTS=""
 MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="not_run"
 MACOS_STALE_PACKAGE_CLEANUP_STATUS="not_required"
 MACOS_STALE_PACKAGE_CLEANUP_REASON="not_apple_silicon_bundled_repair"
+MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS="not_run"
+MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="not_started"
 DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
 DRUMSEP_PREFETCH_SCRIPT_STATUS="unknown"
 SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
@@ -1650,7 +1655,20 @@ else
     set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
-    install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
+    if [ "${MAC_ARCH}" = "arm64" ]; then
+      if install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip setuptools wheel >> "${LOG_FILE}" 2>&1; then
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS="ok"
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="installed_from_bundled_payload"
+      else
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS="failed"
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="bootstrap_tools_install_failed"
+        set_status "deps_failed" "bootstrap_tools_install_failed"
+        write_state
+        exit 1
+      fi
+    else
+      install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
+    fi
     log "Installing pinned STEMwerk backend packages..."
     if [ "${MAC_ARCH}" = "x86_64" ]; then
       install_with_optional_bundled_wheels "${VENV_PY}" "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"

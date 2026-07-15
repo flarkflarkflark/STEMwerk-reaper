@@ -10,12 +10,21 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from pathlib import Path
 
 try:
+    from packaging.markers import default_environment
+    from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name, parse_wheel_filename
+    from packaging.version import Version
 except ImportError:  # payload Python always has pip, whose vendored packaging is sufficient here
+    from pip._vendor.packaging.markers import default_environment
+    from pip._vendor.packaging.requirements import Requirement
     from pip._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
+    from pip._vendor.packaging.version import Version
 
 
 CORE_MODEL_FILES = (
@@ -71,6 +80,11 @@ FORBIDDEN_REQUIREMENTS = ("samplerate==0.1.0", "sympy==1.14.0")
 NON_CLOSURE_PACKAGES = {
     canonicalize_name(name) for name in ("pip", "setuptools", "wheel", "stemwerk-core")
 }
+BOOTSTRAP_ALLOWLIST = {canonicalize_name(name) for name in BOOTSTRAP_REQUIREMENTS}
+REQUIRED_CLOSURE_PACKAGES = {canonicalize_name("flatbuffers")}
+FULL_CORE_RESOLVER_REQUIREMENTS = tuple(
+    requirement for requirement in MAIN_REQUIREMENTS if not requirement.startswith("samplerate==")
+)
 
 DIFFQ_REQUIREMENT = "diffq==0.2.4"
 SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"
@@ -178,6 +192,7 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
     lower_names: dict[str, list[str]] = {}
     core_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in CORE_VERSION_POLICY}
     closure_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in CLOSURE_VERSION_POLICY}
+    required_closure_wheels: dict[str, list[tuple[str, str]]] = {name: [] for name in REQUIRED_CLOSURE_PACKAGES}
     for path in wheels:
         lower_names.setdefault(path.name.lower(), []).append(path.name)
         name, version = wheel_identity(path)
@@ -185,6 +200,8 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
             core_wheels[name].append((path.name, version))
         if name in closure_wheels:
             closure_wheels[name].append((path.name, version))
+        if name in required_closure_wheels:
+            required_closure_wheels[name].append((path.name, version))
     collisions = ["|".join(names) for names in lower_names.values() if len(names) != 1]
     if collisions:
         raise RuntimeError("payload_wheel_case_collision:" + ",".join(collisions))
@@ -206,7 +223,85 @@ def validate_closed_world_wheelhouse(wheels_dir: Path) -> list[Path]:
             closure_failures.append(f"{name}:expected={wanted}:found={detail}")
     if closure_failures:
         raise RuntimeError("dependency_closure_core_conflict:" + ";".join(closure_failures))
+    required_closure_failures = [
+        f"{name}:found=" + ("|".join(f"{filename}@{version}" for filename, version in found) or "missing")
+        for name, found in required_closure_wheels.items()
+        if len(found) != 1
+    ]
+    if required_closure_failures:
+        raise RuntimeError("dependency_closure_core_conflict:" + ";".join(required_closure_failures))
     return wheels
+
+
+def target_marker_environment() -> dict[str, str]:
+    environment = default_environment()
+    environment.update({
+        "implementation_name": "cpython",
+        "python_version": "3.12",
+        "python_full_version": "3.12.0",
+        "sys_platform": "darwin",
+        "platform_system": "Darwin",
+        "platform_machine": "arm64",
+        "extra": "",
+    })
+    return environment
+
+
+def core_wheel_requires_dist(path: Path) -> list[Requirement]:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            metadata_names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+            if len(metadata_names) != 1:
+                raise RuntimeError(f"payload_core_metadata_missing:{path.name}")
+            message = BytesParser(policy=email_policy).parsebytes(archive.read(metadata_names[0]))
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"payload_core_metadata_invalid:{path.name}:{exc}") from exc
+    requirements = []
+    for value in message.get_all("Requires-Dist", []):
+        try:
+            requirements.append(Requirement(value))
+        except Exception as exc:
+            raise RuntimeError(f"payload_core_metadata_invalid:{path.name}:{value}:{exc}") from exc
+    return requirements
+
+
+def validate_core_requires_dist(wheels_dir: Path) -> None:
+    wheels = list(wheels_dir.glob("*.whl"))
+    available: dict[str, set[str]] = {}
+    core_paths: dict[str, Path] = {}
+    for path in wheels:
+        name, version = wheel_identity(path)
+        available.setdefault(name, set()).add(version)
+        if name in CORE_VERSION_POLICY:
+            core_paths[name] = path
+    environment = target_marker_environment()
+    override = DEPENDENCY_OVERRIDE_POLICY[0]
+    for core_name, path in core_paths.items():
+        for requirement in core_wheel_requires_dist(path):
+            if requirement.marker and not requirement.marker.evaluate(environment):
+                print(f"PAYLOAD_CORE_DEPENDENCY core={core_name} requirement={requirement} active=false")
+                continue
+            dependency = canonicalize_name(requirement.name)
+            if dependency in BOOTSTRAP_ALLOWLIST:
+                print(f"PAYLOAD_CORE_DEPENDENCY core={core_name} requirement={requirement} active=true source=bootstrap")
+                continue
+            if (
+                core_name == canonicalize_name("audio-separator")
+                and dependency == canonicalize_name(override["package"])
+                and str(requirement.specifier) == f"=={override['upstream_required']}"
+                and override["project_override"] in available.get(dependency, set())
+            ):
+                print(f"PAYLOAD_CORE_DEPENDENCY core={core_name} requirement={requirement} active=true source=override")
+                continue
+            versions = set() if dependency in NON_CLOSURE_PACKAGES else available.get(dependency, set())
+            if not versions or not any(Version(version) in requirement.specifier for version in versions):
+                raise RuntimeError(
+                    f"payload_core_dependency_unsatisfied:{core_name}:{requirement}:available={','.join(sorted(versions)) or 'missing'}"
+                )
+            source = "core" if dependency in CORE_VERSION_POLICY else "closure"
+            print(f"PAYLOAD_CORE_DEPENDENCY core={core_name} requirement={requirement} active=true source={source}")
 
 
 def project_resolved_wheels(resolved_dir: Path, wheels_dir: Path) -> None:
@@ -305,6 +400,18 @@ def run_pip_download(
             cmd += ["-c", str(constraints_file)]
         cmd.append(requirement)
         subprocess.run(cmd, check=True, env=command_env())
+
+
+def run_pip_download_plan(
+    requirements: tuple[str, ...], wheels_dir: Path, constraints_file: Path, python_executable: str
+) -> None:
+    wheels_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        python_executable, "-m", "pip", "download", "--dest", str(wheels_dir),
+        "--only-binary=:all:", "--find-links", str(wheels_dir), "-c", str(constraints_file),
+        *requirements,
+    ]
+    subprocess.run(cmd, check=True, env=command_env())
 
 
 def wheel_builder_python() -> str:
@@ -419,6 +526,7 @@ def write_manifest(output_dir: Path, version: str) -> None:
     # Deferred D6: wheels are fully fingerprinted here; ffmpeg, models, and the
     # managed Python tree still need a separate non-wheel integrity design.
     validate_closed_world_wheelhouse(output_dir / "wheels")
+    validate_core_requires_dist(output_dir / "wheels")
     wheel_inventory = [
         {"filename": path.name, "sha256": sha256_file(path), "size": path.stat().st_size}
         for path in sorted((output_dir / "wheels").glob("*.whl"))
@@ -432,6 +540,7 @@ def write_manifest(output_dir: Path, version: str) -> None:
         "runtime_requirements": list(MAIN_REQUIREMENTS),
         "target_core_requirements": list(MAIN_REQUIREMENTS),
         "dependency_closure_requirements": dependency_closure_requirements(output_dir / "wheels"),
+        "bootstrap_requirements": list(BOOTSTRAP_REQUIREMENTS),
         "dependency_overrides": list(DEPENDENCY_OVERRIDE_POLICY),
         "forbidden_requirements": list(FORBIDDEN_REQUIREMENTS),
         "wheel_inventory": wheel_inventory,
@@ -462,6 +571,8 @@ def audit_existing_manifest(output_dir: Path) -> None:
         raise RuntimeError("payload_override_contract_invalid:dependency_overrides")
     if manifest.get("forbidden_requirements") != list(FORBIDDEN_REQUIREMENTS):
         raise RuntimeError("payload_override_contract_invalid:forbidden_requirements")
+    if manifest.get("bootstrap_requirements") != list(BOOTSTRAP_REQUIREMENTS):
+        raise RuntimeError("payload_override_contract_invalid:bootstrap_requirements")
     inventory = manifest.get("wheel_inventory", [])
     filenames = [entry.get("filename", "") for entry in inventory]
     if len(filenames) != len(set(filenames)) or len(filenames) != len({name.lower() for name in filenames}):
@@ -484,6 +595,7 @@ def audit_existing_manifest(output_dir: Path) -> None:
     wrong_size = [path.name for path in actual_paths if expected_inventory[path.name].get("size") != path.stat().st_size]
     if wrong_size:
         raise RuntimeError(f"payload_size_mismatch:{','.join(wrong_size)}")
+    validate_core_requires_dist(output_dir / "wheels")
 
 
 def main() -> int:
@@ -513,11 +625,14 @@ def main() -> int:
     reset_dir(resolver_dir)
     resolver_constraints = resolver_dir / "core-closure-constraints.txt"
     write_core_constrained_resolver_file(resolver_constraints)
+    # onnx-weekly is intentionally not separately pinned in this hotfix. The
+    # closed-world manifest freezes the exact resolver snapshot; add a policy
+    # pin during the next ASEP/runtime upgrade if cross-build determinism needs it.
     try:
-        run_pip_download(("audio-separator==0.44.3",), resolver_dir, resolver_constraints, python_executable)
+        run_pip_download_plan(FULL_CORE_RESOLVER_REQUIREMENTS, resolver_dir, resolver_constraints, python_executable)
     except subprocess.CalledProcessError:
         ensure_diffq_wheel(resolver_dir)
-        run_pip_download(("audio-separator==0.44.3",), resolver_dir, resolver_constraints, python_executable)
+        run_pip_download_plan(FULL_CORE_RESOLVER_REQUIREMENTS, resolver_dir, resolver_constraints, python_executable)
     project_resolved_wheels(resolver_dir, output_dir / "wheels")
     run_pip_download(
         BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS,

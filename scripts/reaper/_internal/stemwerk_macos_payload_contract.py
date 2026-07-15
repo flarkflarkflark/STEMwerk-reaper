@@ -22,6 +22,7 @@ EXPECTED_OVERRIDE = {
     "scope": "macos-arm64",
 }
 NON_CLOSURE_PACKAGES = {canonicalize_name(name) for name in ("pip", "setuptools", "wheel", "stemwerk-core")}
+EXPECTED_BOOTSTRAP_REQUIREMENTS = ["pip", "setuptools", "wheel"]
 TORCH_SYMPY_POLICY = {"torch": "2.5.1", "sympy": "1.13.1"}
 
 
@@ -58,6 +59,8 @@ def validate_contract(manifest_path: Path, wheels_dir: Path, expected_core: list
         fail("override_contract_invalid", "dependency_overrides")
     if manifest.get("forbidden_requirements") != ["samplerate==0.1.0", "sympy==1.14.0"]:
         fail("override_contract_invalid", "forbidden_requirements")
+    if manifest.get("bootstrap_requirements") != EXPECTED_BOOTSTRAP_REQUIREMENTS:
+        fail("override_contract_invalid", "bootstrap_requirements")
     if "samplerate==0.2.4" not in core:
         fail("samplerate_override_missing")
 
@@ -73,6 +76,9 @@ def validate_contract(manifest_path: Path, wheels_dir: Path, expected_core: list
     sympy_requirement = f"sympy=={TORCH_SYMPY_POLICY['sympy']}"
     if torch_requirement not in core or sympy_requirement not in closure:
         fail("dependency_closure_core_conflict", f"{torch_requirement}_requires_{sympy_requirement}")
+    flatbuffers = [requirement for requirement in closure if requirement.startswith("flatbuffers==")]
+    if len(flatbuffers) != 1:
+        fail("dependency_closure_missing", "onnxruntime_requires_flatbuffers")
     if any(requirement.startswith("sympy==") and requirement != sympy_requirement for requirement in physical_requirements):
         fail("dependency_closure_core_conflict", "torch_sympy_pin_mismatch")
     if set(inventory_by_name) != set(physical):

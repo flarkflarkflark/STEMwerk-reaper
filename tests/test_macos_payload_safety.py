@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ CORE_BUNDLE = (
     "samplerate==0.2.4",
     "onnxruntime==1.27.0",
 )
+FAKE_FLATBUFFERS_VERSION = "25.9.23"
 
 
 def shell_function(script: str, name: str) -> str:
@@ -114,16 +116,34 @@ def wheel_name(requirement: str) -> str:
     return f"{normalized}-{version}-cp312-cp312-macosx_12_0_arm64.whl"
 
 
+def write_fake_wheel(path: Path, requires_dist=()) -> None:
+    distribution, version = path.name.split("-", 2)[:2]
+    metadata = ["Metadata-Version: 2.1", f"Name: {distribution.replace('_', '-')}", f"Version: {version}"]
+    metadata += [f"Requires-Dist: {requirement}" for requirement in requires_dist]
+    dist_info = f"{distribution}-{version}.dist-info"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"{dist_info}/METADATA", "\n".join(metadata) + "\n")
+        archive.writestr(f"{dist_info}/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
+
+
 def complete_fake_wheelhouse(tmp_path: Path, builder) -> Path:
     wheels = tmp_path / "wheels"
     wheels.mkdir()
     for requirement in builder.MAIN_REQUIREMENTS:
         if "==" in requirement:
-            (wheels / wheel_name(requirement)).touch()
+            requires = ()
+            if requirement == "onnxruntime==1.27.0":
+                requires = ("flatbuffers>=23.5.26",)
+            elif requirement == "torch==2.5.1":
+                requires = ('setuptools; python_version >= "3.12"',)
+            elif requirement == "audio-separator==0.44.3":
+                requires = ("samplerate==0.1.0", "diffq==1.0")
+            write_fake_wheel(wheels / wheel_name(requirement), requires)
     for prefix in builder.REQUIRED_WHEEL_PREFIXES:
         if not any(wheels.glob(f"{prefix}*.whl")):
-            (wheels / f"{prefix}1.0-py3-none-any.whl").touch()
-    (wheels / "sympy-1.13.1-py3-none-any.whl").touch()
+            write_fake_wheel(wheels / f"{prefix}1.0-py3-none-any.whl")
+    write_fake_wheel(wheels / "sympy-1.13.1-py3-none-any.whl")
+    write_fake_wheel(wheels / f"flatbuffers-{FAKE_FLATBUFFERS_VERSION}-py2.py3-none-any.whl")
     return wheels
 
 
@@ -162,13 +182,16 @@ def test_complete_exact_cp312_arm64_wheelhouse_passes_and_manifest_is_fingerprin
     assert manifest["target_core_requirements"] == list(builder.MAIN_REQUIREMENTS)
     assert manifest["dependency_overrides"] == list(builder.DEPENDENCY_OVERRIDE_POLICY)
     assert manifest["forbidden_requirements"] == ["samplerate==0.1.0", "sympy==1.14.0"]
-    assert manifest["dependency_closure_requirements"] == ["diffq==1.0", "sympy==1.13.1"]
+    assert manifest["dependency_closure_requirements"] == [
+        "diffq==1.0", f"flatbuffers=={FAKE_FLATBUFFERS_VERSION}", "sympy==1.13.1"
+    ]
+    assert manifest["bootstrap_requirements"] == ["pip", "setuptools", "wheel"]
     assert "onnxruntime==1.27.0" in manifest["runtime_requirements"]
     assert {entry["filename"] for entry in manifest["wheel_inventory"]} == {
         path.name for path in wheels.glob("*.whl")
     }
     assert all(len(entry["sha256"]) == 64 for entry in manifest["wheel_inventory"])
-    assert all(entry["size"] == 0 for entry in manifest["wheel_inventory"])
+    assert all(entry["size"] > 0 for entry in manifest["wheel_inventory"])
     builder.audit_existing_manifest(tmp_path)
     print("MACOS_PAYLOAD_CLOSED_WORLD_POSITIVE_TEST=PASS")
 
@@ -180,7 +203,7 @@ def test_native_samplerate_override_contract_passes_with_complete_closure(tmp_pa
     builder.write_manifest(tmp_path, "2.3.0.5")
     core, closure = contract.validate_contract(tmp_path / "manifest.json", wheels, list(builder.MAIN_REQUIREMENTS))
     assert core == list(builder.MAIN_REQUIREMENTS)
-    assert closure == ["diffq==1.0", "sympy==1.13.1"]
+    assert closure == ["diffq==1.0", f"flatbuffers=={FAKE_FLATBUFFERS_VERSION}", "sympy==1.13.1"]
     print("MACOS_SAMPLERATE_OVERRIDE_PREFLIGHT_POSITIVE_TEST=PASS")
 
 
@@ -227,7 +250,9 @@ def test_torch_sympy_closure_accepts_1131_and_rejects_native_1140_fixture(tmp_pa
     good.unlink()
     bad.touch()
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    manifest["dependency_closure_requirements"] = ["diffq==1.0", "sympy==1.14.0"]
+    manifest["dependency_closure_requirements"] = [
+        "diffq==1.0", f"flatbuffers=={FAKE_FLATBUFFERS_VERSION}", "sympy==1.14.0"
+    ]
     manifest["wheel_inventory"] = [
         entry for entry in manifest["wheel_inventory"] if not entry["filename"].startswith("sympy-")
     ] + [{"filename": bad.name, "sha256": builder.sha256_file(bad), "size": bad.stat().st_size}]
@@ -247,6 +272,102 @@ def test_core_constrained_resolver_plan_pins_torch_sympy_and_rewrites_only_sampl
     assert not any(line.startswith("sympy==1.14") for line in lines)
     assert not any(line.startswith("samplerate==") for line in lines)
     assert set(builder.MAIN_REQUIREMENTS) - {"samplerate==0.2.4"} <= set(lines)
+
+
+def test_full_core_closure_resolver_uses_one_exact_core_plan(tmp_path, monkeypatch):
+    builder = load_builder()
+    calls = []
+    monkeypatch.setattr(builder.subprocess, "run", lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0))
+    constraints = tmp_path / "constraints.txt"
+    constraints.touch()
+    builder.run_pip_download_plan(builder.FULL_CORE_RESOLVER_REQUIREMENTS, tmp_path / "resolved", constraints, "python3.12")
+    assert len(calls) == 1
+    assert "onnxruntime==1.27.0" in calls[0]
+    assert "torch==2.5.1" in calls[0]
+    assert "audio-separator==0.44.3" in calls[0]
+    assert "samplerate==0.2.4" not in calls[0]
+    assert set(builder.MAIN_REQUIREMENTS) - {"samplerate==0.2.4"} <= set(calls[0])
+    print("MACOS_FULL_CORE_CLOSURE_RESOLVER_TEST=PASS")
+
+
+def test_onnxruntime_flatbuffers_is_required_in_closed_manifest_and_semantic_gate(tmp_path):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    builder.audit_existing_manifest(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dependency_closure_requirements"] = [
+        requirement for requirement in manifest["dependency_closure_requirements"]
+        if not requirement.startswith("flatbuffers==")
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="payload_dependency_closure_mismatch"):
+        builder.audit_existing_manifest(tmp_path)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    flatbuffers = next(wheels.glob("flatbuffers-*.whl"))
+    flatbuffers.unlink()
+    with pytest.raises(RuntimeError, match="dependency_closure_core_conflict"):
+        builder.validate_closed_world_wheelhouse(wheels)
+    with pytest.raises(RuntimeError, match="payload_core_dependency_unsatisfied.*flatbuffers"):
+        builder.validate_core_requires_dist(wheels)
+    write_fake_wheel(wheels / "flatbuffers-24.3.25-py2.py3-none-any.whl")
+    write_fake_wheel(wheels / "flatbuffers-25.2.10-py2.py3-none-any.whl")
+    with pytest.raises(RuntimeError, match="dependency_closure_core_conflict"):
+        builder.validate_closed_world_wheelhouse(wheels)
+    print("MACOS_ONNXRUNTIME_FLATBUFFERS_CLOSURE_TEST=PASS")
+
+
+def test_core_requires_dist_gate_handles_bootstrap_override_markers_and_bad_metadata(tmp_path, monkeypatch):
+    builder = load_builder()
+    wheels = complete_fake_wheelhouse(tmp_path, builder)
+    builder.validate_core_requires_dist(wheels)
+    monkeypatch.setattr(builder, "BOOTSTRAP_ALLOWLIST", {"pip", "wheel"})
+    with pytest.raises(RuntimeError, match="payload_core_dependency_unsatisfied.*setuptools"):
+        builder.validate_core_requires_dist(wheels)
+    monkeypatch.setattr(builder, "BOOTSTRAP_ALLOWLIST", {"pip", "setuptools", "wheel"})
+
+    torch = wheels / wheel_name("torch==2.5.1")
+    write_fake_wheel(torch, ('missing-inactive; python_version < "3.12"', 'setuptools; python_version >= "3.12"'))
+    builder.validate_core_requires_dist(wheels)
+    write_fake_wheel(torch, ("malformed requirement @@@",))
+    with pytest.raises(RuntimeError, match="payload_core_metadata_invalid"):
+        builder.validate_core_requires_dist(wheels)
+    with zipfile.ZipFile(torch, "w") as archive:
+        archive.writestr("torch-2.5.1.dist-info/WHEEL", "Wheel-Version: 1.0\n")
+    with pytest.raises(RuntimeError, match="payload_core_metadata_missing"):
+        builder.validate_core_requires_dist(wheels)
+    torch.write_bytes(b"not-a-wheel")
+    with pytest.raises(RuntimeError, match="payload_core_metadata_invalid"):
+        builder.validate_core_requires_dist(wheels)
+    print("MACOS_CORE_REQUIRES_DIST_GATE_TEST=PASS")
+
+
+def test_py312_bootstrap_tools_are_installed_offline_before_core_bundle():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    tools_command = 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip setuptools wheel'
+    assert tools_command in script
+    assert script.index(tools_command) < script.index('if ! install_apple_silicon_core_bundle; then')
+    assert 'MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="bootstrap_tools_install_failed"' in script
+    assert 'MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="installed_from_bundled_payload"' in script
+    builder = load_builder()
+    assert set(builder.BOOTSTRAP_REQUIREMENTS) == {"pip", "setuptools", "wheel"}
+    assert set(builder.BOOTSTRAP_REQUIREMENTS) <= builder.BOOTSTRAP_ALLOWLIST
+    print("MACOS_PY312_BOOTSTRAP_TOOLS_TEST=PASS")
+
+
+def test_historical_repair_and_fresh_py312_scenarios_converge_by_policy():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    body = shell_function(script, "install_apple_silicon_core_bundle")
+    tools_command = 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip setuptools wheel'
+    cleanup = '"${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate onnx onnx2torch'
+    closure = '${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS}'
+    core = '"onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"'
+    assert script.index(tools_command) < script.index('if ! install_apple_silicon_core_bundle; then')
+    assert body.index(cleanup) < body.index(closure) < body.index(core)
+    builder = load_builder()
+    assert "flatbuffers" in builder.REQUIRED_CLOSURE_PACKAGES
+    assert "setuptools" in builder.BOOTSTRAP_ALLOWLIST and "wheel" in builder.BOOTSTRAP_ALLOWLIST
 
 
 def test_override_aware_shell_preflight_harness_exits_zero_before_mutation(tmp_path):
@@ -522,8 +643,8 @@ def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction()
         assert token in body
 
     assert "https://" not in body
-    assert '"${VENV_PY}" -m pip show onnxruntime-silicon samplerate' in body
-    assert '"${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate' in body
+    assert '"${VENV_PY}" -m pip show onnxruntime-silicon samplerate onnx onnx2torch' in body
+    assert '"${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate onnx onnx2torch' in body
 
 
 def test_arm64_requires_bundled_payload_before_mutation(tmp_path):
@@ -554,7 +675,7 @@ def test_damaged_arm64_payload_without_wheelhouse_fails_before_mutation(tmp_path
 def test_bounded_stale_package_cleanup_is_exact_and_before_closure_install():
     script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
     body = shell_function(script, "install_apple_silicon_core_bundle")
-    cleanup = '"${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate'
+    cleanup = '"${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate onnx onnx2torch'
     closure = 'Installing manifest-defined audio-separator dependency closure'
     assert cleanup in body
     assert body.index(cleanup) < body.index(closure)
@@ -568,6 +689,7 @@ def test_bounded_stale_package_cleanup_is_exact_and_before_closure_install():
     assert script.rfind('MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"', 0, script.index(call)) != -1
     assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then' in script
     print("MACOS_BOUNDED_STALE_PACKAGE_CLEANUP_TEST=PASS")
+    print("MACOS_EXPANDED_BOUNDED_CLEANUP_TEST=PASS")
 
 
 @pytest.mark.parametrize(
