@@ -4521,6 +4521,56 @@ def test_linux_drumsep_rocm_state_fields_are_written():
     assert 'printf "%s/logs/drumsep_rocm_install.log\\n" "${RUNTIME_BASE}"' in script
 
 
+def test_linux_rocm_repair_skips_legacy_runtime_when_main_unified_is_ready():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    assert "probe_main_rocm_dks_ready()" in script
+    assert 'metadata.version("audio-separator")' in script
+    assert 'metadata.version("numpy")' in script
+    assert 'if probe_main_rocm_dks_ready "${VENV_PY}" && ensure_drumsep_assets' in script
+    assert 'write_main_unified_rocm_state "ok"' in script
+    assert 'log_step "Legacy DrumSep ROCm install skipped: main_unified_ready"' in script
+
+
+def test_linux_rocm_unified_state_records_selection_and_legacy_skip_reason():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+
+    for marker in (
+        'echo "DRUMSEP_ROCM_RUNTIME_STATUS=${_status}"',
+        'echo "DRUMSEP_ROCM_RUNTIME_SELECTION=${_selection}"',
+        'echo "DRUMSEP_ROCM_PYTHON=${_py}"',
+        'echo "DRUMSEP_ROCM_LEGACY_RUNTIME_STATUS=${_legacy_status}"',
+        'echo "DRUMSEP_ROCM_LEGACY_INSTALL_SKIPPED=${_legacy_install_skipped}"',
+        '"unified_main" "${1:-ok}" "main_unified_ready"',
+        '"$(main_runtime_python)" "main_unified" "${_legacy_status}" "main_unified_ready"',
+    ):
+        assert marker in script
+    assert 'ok|skipped|unified_main)' in script
+
+
+def test_linux_rocm_repair_preserves_legacy_fallback_when_main_is_not_ready():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    automatic_guard = script.split('READY_DETAIL="${STATUS_REASON}"', 1)[1].split(
+        'if [ "${READY_RUNTIME_KIND}" = "rocm" ]', 1
+    )[0]
+
+    assert 'if probe_main_rocm_dks_ready "${VENV_PY}" && ensure_drumsep_assets' in automatic_guard
+    assert 'if ! install_drumsep_rocm_runtime; then' in automatic_guard
+    assert 'set_status "deps_failed" "drumsep_ready_runtime_failed"' in automatic_guard
+    assert 'elif [ "${MODE}" = "drumsep-rocm-runtime" ]; then' in script
+    assert 'if install_drumsep_rocm_runtime; then' in script
+
+
+def test_linux_rocm_unified_guard_never_deletes_legacy_runtime():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    unified_writer = script.split("write_main_unified_rocm_state()", 1)[1].split("write_state()", 1)[0]
+
+    assert ".venv-drumsep-rocm" in unified_writer
+    assert "rm -rf" not in unified_writer
+    assert "rmdir" not in unified_writer
+    assert "delete" not in unified_writer.lower()
+
+
 def test_drumsep_helper_payload_and_stem_normalization():
     helper_path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
     index_xml = Path("index.xml").read_text()
