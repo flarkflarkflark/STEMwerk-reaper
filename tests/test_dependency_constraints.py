@@ -5383,7 +5383,9 @@ def test_support_bundle_windows_zip_helper_prefers_python_and_writes_clean_entri
         names = zf.namelist()
         assert all("\\" not in name for name in names)
         assert "STEMwerk-support-bundle-20260707-181043/processing_summary.txt" in names
-        assert zf.read("STEMwerk-support-bundle-20260707-181043/processing_summary.txt").decode("utf-8") == "summary ok\n"
+        payload = zf.read("STEMwerk-support-bundle-20260707-181043/processing_summary.txt")
+        assert payload in (b"summary ok\n", b"summary ok\r\n")
+        assert payload.decode("utf-8").splitlines() == ["summary ok"]
 
 
 def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_consistent():
