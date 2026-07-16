@@ -335,7 +335,7 @@ def test_drumsep_compat_yaml_canonical_bytes_survive_checkout_policy(tmp_path):
     asset = builder.DRUMSEP_COMPAT_ASSET
     canonical = asset.read_bytes()
     blob = subprocess.run(
-        ["git", "cat-file", "blob", f"HEAD:{asset.as_posix()}"],
+        ["git", "cat-file", "blob", f":{asset.as_posix()}"],
         check=True,
         capture_output=True,
     ).stdout

@@ -47,14 +47,16 @@ DRUMSEP_FILES = (
     "config_drumsep_mdx23c.yaml",
 )
 DRUMSEP_MODEL_CACHE_FILES = DRUMSEP_FILES[:2]
-DRUMSEP_COMPAT_ASSET = Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml")
-DRUMSEP_COMPAT_CANONICAL_SHA256 = "b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
-DRUMSEP_COMPAT_CANONICAL_SIZE = 2331
-DRUMSEP_COMPAT_INSTRUMENTS = ("kick", "snare", "toms", "hh", "ride", "crash")
+DRUMSEP_COMPAT_ASSET = Path("tools/assets/drumsep/config_drumsep_mdx23c.yaml")
+DRUMSEP_COMPAT_CONTRACT_PATH = Path("tools/assets/drumsep/compatibility_config_contract.json")
+DRUMSEP_COMPAT_CONTRACT = json.loads(DRUMSEP_COMPAT_CONTRACT_PATH.read_text(encoding="utf-8"))
+DRUMSEP_COMPAT_CANONICAL_SHA256 = DRUMSEP_COMPAT_CONTRACT["canonical"]["sha256"]
+DRUMSEP_COMPAT_CANONICAL_SIZE = DRUMSEP_COMPAT_CONTRACT["canonical"]["size"]
+DRUMSEP_COMPAT_INSTRUMENTS = tuple(DRUMSEP_COMPAT_CONTRACT["canonical"]["instruments"])
 DRUMSEP_COMPAT_SOURCE_PROVENANCE = {
-    "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
-    "size": 2417,
-    "newlines": "CRLF",
+    "sha256": DRUMSEP_COMPAT_CONTRACT["legacy_crlf"]["sha256"],
+    "size": DRUMSEP_COMPAT_CONTRACT["legacy_crlf"]["size"],
+    "newlines": DRUMSEP_COMPAT_CONTRACT["legacy_crlf"]["newlines"],
 }
 DRUMSEP_FILE_POLICY = {
     DRUMSEP_FILES[0]: {

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -27,6 +29,8 @@ MODEL_REGISTRY_MANIFEST = "scripts/reaper/models.json"
 BOOTSTRAP_MACOS = "scripts/reaper/STEMwerk_Bootstrap_macOS.sh"
 SAMPLERATE_GUARD_REL = "_internal/stemwerk_samplerate_guard.py"
 SAMPLERATE_GUARD_PAYLOAD_PATH = f"scripts/reaper/{SAMPLERATE_GUARD_REL}"
+DRUMSEP_COMPAT_ASSET = "tools/assets/drumsep/config_drumsep_mdx23c.yaml"
+DRUMSEP_COMPAT_CONTRACT_PATH = "tools/assets/drumsep/compatibility_config_contract.json"
 
 
 @dataclass
@@ -323,6 +327,42 @@ def check_bootstrap_guard_payload(root: Path, payload_paths: set[str]) -> Sectio
     return section
 
 
+def check_drumsep_compat_asset_contract(root: Path) -> Section:
+    section = Section("E. Shared DrumSep compatibility payload")
+    windows_builder = root / "tools/build_windows_drumsep_payload.py"
+    if not windows_builder.exists():
+        section.note("Windows DrumSep payload builder not present; shared asset check not required")
+        return section
+    asset = root / DRUMSEP_COMPAT_ASSET
+    contract_path = root / DRUMSEP_COMPAT_CONTRACT_PATH
+    if not asset.is_file() or not contract_path.is_file():
+        section.fail("shared DrumSep compatibility asset or contract is missing")
+        return section
+    try:
+        contract = json.loads(read_text(contract_path))
+        payload = asset.read_bytes()
+        expected = contract["canonical"]
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        section.fail(f"shared DrumSep compatibility contract is invalid: {exc}")
+        return section
+    actual_sha = hashlib.sha256(payload).hexdigest()
+    if len(payload) != expected.get("size") or actual_sha != expected.get("sha256"):
+        section.fail("shared DrumSep compatibility asset fingerprint does not match its contract")
+    if payload.count(b"\n") != expected.get("lf_count") or payload.count(b"\r") != expected.get("cr_count"):
+        section.fail("shared DrumSep compatibility asset newline contract mismatch")
+    references = (
+        (root / "tools/build_macos_apple_silicon_payload.py", DRUMSEP_COMPAT_ASSET),
+        (windows_builder, DRUMSEP_COMPAT_CONTRACT_PATH),
+        (root / "installer/windows/STEMwerk.iss", DRUMSEP_COMPAT_ASSET),
+    )
+    for path, required_reference in references:
+        if not path.is_file() or required_reference not in read_text(path).replace("\\", "/"):
+            section.fail(f"shared DrumSep compatibility asset is not required by {posix_path(path.relative_to(root))}")
+    if section.status != "FAIL":
+        section.note(f"validated shared compatibility asset size={len(payload)} sha256={actual_sha}")
+    return section
+
+
 def run_check(root: Path) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
@@ -345,6 +385,7 @@ def run_check(root: Path) -> tuple[list[Section], int]:
     runtime_section = check_runtime_dependencies(root, payload_paths)
     sections.append(runtime_section)
     sections.append(check_bootstrap_guard_payload(root, payload_paths))
+    sections.append(check_drumsep_compat_asset_contract(root))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count

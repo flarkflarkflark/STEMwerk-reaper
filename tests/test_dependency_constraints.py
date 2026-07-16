@@ -2723,7 +2723,7 @@ def test_drumsep_compat_yaml_runtime_guard_no_network_and_managed_alias_integrit
     canonical = tmp_path / helper.DRUMSEP_MODEL_FILENAME
     compatibility = tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME
     canonical.write_bytes(b"managed-checkpoint")
-    shutil.copy2(Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml"), compatibility)
+    shutil.copy2(Path("tools/assets/drumsep/config_drumsep_mdx23c.yaml"), compatibility)
 
     network_calls = []
     monkeypatch.setattr(

@@ -106,6 +106,11 @@ $drumsepDirectMlSoundFileVersion = "0.14.0"
 $drumsepModelEntryName = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 $drumsepModelFileName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 $drumsepModelYamlName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+$drumsepCompatYamlName = "config_drumsep_mdx23c.yaml"
+$drumsepCompatYamlExpectedSize = 2331
+$drumsepCompatYamlExpectedSha256 = "b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
+$drumsepCompatYamlLegacyCrlfSize = 2417
+$drumsepCompatYamlLegacyCrlfSha256 = "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
 $drumsepModelCkptUrl = "https://huggingface.co/KitsuneX07/Music_Source_Sepetration_Models/resolve/8309883c6b3fecc360fff24c932dcc588f8c23c2/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt?download=true"
 $drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 $drumsepModelCkptMinimumBytes = 104857600
@@ -157,6 +162,10 @@ $script:DrumsepOfflinePayloadSource = if ($offlineBundledAllmodelsMode) { "bundl
 $script:DrumsepOfflinePayloadReason = ""
 $script:DrumsepModelSource = ""
 $script:DrumsepRuntimeWheelSource = ""
+$script:DrumsepCompatYamlStatus = "not_checked"
+$script:DrumsepCompatYamlReason = "not_checked"
+$script:DrumsepCompatYamlPreviousSha256 = ""
+$script:DrumsepCompatYamlSha256 = ""
 
 function TestCoreSourceBundle([string]$Root) {
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
@@ -801,7 +810,7 @@ function SetDrumsepOfflinePayloadState([string]$Status, [string]$Reason, [string
 }
 
 function TestBundledDrumsepModelsAvailable {
-    foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName)) {
+    foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName, $drumsepCompatYamlName)) {
         if (-not (Test-Path (Join-Path $bundledDrumsepModelsDir $name))) {
             return $false
         }
@@ -820,6 +829,14 @@ function CopyBundledDrumsepAssets([string]$ModelDir) {
         foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName)) {
             $src = Join-Path $bundledDrumsepModelsDir $name
             $dest = Join-Path $ModelDir $name
+            if (Test-Path -LiteralPath $dest) {
+                $sourceSize = (Get-Item -LiteralPath $src).Length
+                $destinationSize = (Get-Item -LiteralPath $dest).Length
+                if ($sourceSize -eq $destinationSize -and (GetSha256Lower $src) -eq (GetSha256Lower $dest)) {
+                    LogProgress ("Bundled DrumSep asset already matches: " + $dest)
+                    continue
+                }
+            }
             Copy-Item -Path $src -Destination $dest -Force
         }
         SetDrumsepOfflinePayloadState "ok" "bundled" "bundled" $script:DrumsepRuntimeWheelSource
@@ -828,6 +845,108 @@ function CopyBundledDrumsepAssets([string]$ModelDir) {
         SetDrumsepOfflinePayloadState "missing" "bundled_model_copy_failed"
         LogLine ("Bundled DrumSep model copy failed: " + $_.Exception.Message)
         return $false
+    }
+}
+
+function GetSha256Lower([string]$Path) {
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function SetDrumsepCompatYamlResult([string]$Status, [string]$Reason, [string]$PreviousSha256 = "", [string]$Sha256 = "") {
+    $script:DrumsepCompatYamlStatus = $Status
+    $script:DrumsepCompatYamlReason = $Reason
+    $script:DrumsepCompatYamlPreviousSha256 = $PreviousSha256
+    $script:DrumsepCompatYamlSha256 = $Sha256
+    foreach ($line in @(
+        "DRUMSEP_COMPAT_YAML_STATUS=$Status",
+        "DRUMSEP_COMPAT_YAML_REASON=$Reason",
+        "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=$PreviousSha256",
+        "DRUMSEP_COMPAT_YAML_SHA256=$Sha256"
+    )) {
+        LogLine $line
+    }
+}
+
+function MaterializeDrumsepCompatYaml([string]$SourcePath, [string]$DestinationPath) {
+    if ([string]::IsNullOrWhiteSpace($SourcePath) -or -not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+        SetDrumsepCompatYamlResult "error" "payload_source_missing"
+        LogLine "Bundled DrumSep compatibility config is missing; reinstall from an official payload."
+        return $false
+    }
+    try {
+        $sourceSize = (Get-Item -LiteralPath $SourcePath).Length
+        $sourceSha = GetSha256Lower $SourcePath
+    } catch {
+        SetDrumsepCompatYamlResult "error" "payload_source_unreadable"
+        return $false
+    }
+    if ($sourceSize -ne $drumsepCompatYamlExpectedSize -or $sourceSha -ne $drumsepCompatYamlExpectedSha256) {
+        SetDrumsepCompatYamlResult "error" "payload_source_checksum_mismatch" "" $sourceSha
+        LogLine "Bundled DrumSep compatibility config failed its size/checksum contract; reinstall from an official payload."
+        return $false
+    }
+
+    $previousSha = ""
+    $status = "created"
+    $reason = "created_from_bundled_payload"
+    if (Test-Path -LiteralPath $DestinationPath) {
+        try {
+            $previousSize = (Get-Item -LiteralPath $DestinationPath).Length
+            $previousSha = GetSha256Lower $DestinationPath
+        } catch {
+            SetDrumsepCompatYamlResult "error" "existing_config_unreadable"
+            return $false
+        }
+        if ($previousSize -eq $drumsepCompatYamlExpectedSize -and $previousSha -eq $drumsepCompatYamlExpectedSha256) {
+            SetDrumsepCompatYamlResult "exists_valid" "canonical_checksum_match" $previousSha $previousSha
+            return $true
+        }
+        if ($previousSize -ne $drumsepCompatYamlLegacyCrlfSize -or $previousSha -ne $drumsepCompatYamlLegacyCrlfSha256) {
+            SetDrumsepCompatYamlResult "error" "existing_checksum_mismatch" $previousSha $previousSha
+            return $false
+        }
+        $status = "migrated_legacy_crlf"
+        $reason = "migrated_known_legacy_crlf"
+    }
+
+    $destinationDir = Split-Path -Parent $DestinationPath
+    $tempPath = Join-Path $destinationDir ("." + [IO.Path]::GetFileName($DestinationPath) + ".tmp-" + [Guid]::NewGuid().ToString("N"))
+    $backupPath = Join-Path $destinationDir ("." + [IO.Path]::GetFileName($DestinationPath) + ".bak-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+        [IO.File]::Copy($SourcePath, $tempPath, $false)
+        $tempSize = (Get-Item -LiteralPath $tempPath).Length
+        $tempSha = GetSha256Lower $tempPath
+        if ($tempSize -ne $drumsepCompatYamlExpectedSize -or $tempSha -ne $drumsepCompatYamlExpectedSha256) {
+            SetDrumsepCompatYamlResult "error" "temporary_checksum_mismatch" $previousSha $tempSha
+            return $false
+        }
+        if (Test-Path -LiteralPath $DestinationPath) {
+            [IO.File]::Replace($tempPath, $DestinationPath, $backupPath)
+        } else {
+            [IO.File]::Move($tempPath, $DestinationPath)
+        }
+        $finalSize = (Get-Item -LiteralPath $DestinationPath).Length
+        $finalSha = GetSha256Lower $DestinationPath
+        if ($finalSize -ne $drumsepCompatYamlExpectedSize -or $finalSha -ne $drumsepCompatYamlExpectedSha256) {
+            SetDrumsepCompatYamlResult "error" "final_checksum_mismatch" $previousSha $finalSha
+            return $false
+        }
+        SetDrumsepCompatYamlResult $status $reason $previousSha $finalSha
+        return $true
+    } catch {
+        SetDrumsepCompatYamlResult "error" "atomic_materialization_failed" $previousSha
+        LogLine ("DrumSep compatibility config materialization failed: " + $_.Exception.Message)
+        return $false
+    } finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $backupPath) {
+            if (-not (Test-Path -LiteralPath $DestinationPath)) {
+                Move-Item -LiteralPath $backupPath -Destination $DestinationPath -Force -ErrorAction SilentlyContinue
+            } else {
+                Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
@@ -1624,6 +1743,10 @@ function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string
         "DRUMSEP_DIRECTML_MODEL_STATUS=$ModelStatus",
         "DRUMSEP_DIRECTML_MODEL_FILE=$modelFile",
         "DRUMSEP_DIRECTML_MODEL_YAML=$modelYaml",
+        "DRUMSEP_COMPAT_YAML_STATUS=$script:DrumsepCompatYamlStatus",
+        "DRUMSEP_COMPAT_YAML_REASON=$script:DrumsepCompatYamlReason",
+        "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=$script:DrumsepCompatYamlPreviousSha256",
+        "DRUMSEP_COMPAT_YAML_SHA256=$script:DrumsepCompatYamlSha256",
         "DRUMSEP_OFFLINE_PAYLOAD_STATUS=$script:DrumsepOfflinePayloadStatus",
         "DRUMSEP_OFFLINE_PAYLOAD_SOURCE=$script:DrumsepOfflinePayloadSource",
         "DRUMSEP_OFFLINE_PAYLOAD_REASON=$script:DrumsepOfflinePayloadReason",
@@ -1929,6 +2052,11 @@ function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label
 
 function EnsureDrumsepAssets([string]$ModelDir) {
     if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
+    $compatSource = Join-Path $bundledDrumsepModelsDir $drumsepCompatYamlName
+    $compatDestination = Join-Path $ModelDir $drumsepCompatYamlName
+    if (-not (MaterializeDrumsepCompatYaml $compatSource $compatDestination)) {
+        return $false
+    }
     if ($offlineBundledAllmodelsMode) {
         LogProgress "Installing bundled Drum Kit model assets..."
         return (CopyBundledDrumsepAssets $ModelDir)

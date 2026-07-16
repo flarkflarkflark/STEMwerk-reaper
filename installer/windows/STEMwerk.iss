@@ -126,6 +126,10 @@ Source: "payload\{#ModelPayloadSubdir}\*"; DestDir: "{localappdata}\STEMwerk\mod
 #endif
 #endif
 
+#if BundleRuntime != "1"
+Source: "..\..\tools\assets\drumsep\config_drumsep_mdx23c.yaml"; DestDir: "{app}\_bundled\drumsep-models"; Flags: ignoreversion
+#endif
+
 ; Helpful docs
 Source: "STEMwerk_Windows_Setup_Guide.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "STEMwerk_Windows_Setup_Guide.nl.md"; DestDir: "{app}"; Flags: ignoreversion

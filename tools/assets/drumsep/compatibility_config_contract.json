@@ -1,0 +1,18 @@
+{
+  "filename": "config_drumsep_mdx23c.yaml",
+  "role": "compatibility_config",
+  "canonical": {
+    "size": 2331,
+    "sha256": "b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a",
+    "newlines": "LF",
+    "lf_count": 86,
+    "cr_count": 0,
+    "instruments": ["kick", "snare", "toms", "hh", "ride", "crash"]
+  },
+  "legacy_crlf": {
+    "size": 2417,
+    "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
+    "status": "supported_migration_source",
+    "newlines": "CRLF"
+  }
+}
