@@ -1,3 +1,6 @@
 # Ensure bash scripts run on Linux/macOS runners
+.gitattributes text eol=lf
 installer/**/*.sh text eol=lf
 .github/workflows/*.yml text eol=lf
+# LF defines the byte contract; the narrow lint exception covers pinned source whitespace only.
+tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml text eol=lf whitespace=-blank-at-eol

@@ -94,6 +94,7 @@ def _probe_samplerate() -> dict[str, str]:
         "platform_machine": platform.machine(),
         "sysconfig_platform": str(sysconfig.get_platform()),
         "samplerate_import": "failed",
+        "samplerate_function_probe": "not_run",
         "samplerate_version": "",
         "samplerate_module": "",
         "samplerate_dylib": "",
@@ -113,6 +114,16 @@ def _probe_samplerate() -> dict[str, str]:
 
     result["samplerate_import"] = "ok"
     result["samplerate_version"] = str(getattr(samplerate, "__version__", ""))
+    try:
+        import numpy as np
+
+        output = samplerate.resample(np.zeros(32, dtype=np.float32), 1.0, "sinc_best")
+        if len(output) != 32:
+            raise RuntimeError(f"unexpected_output_length:{len(output)}")
+        result["samplerate_function_probe"] = "ok"
+    except Exception as exc:
+        result["samplerate_function_probe"] = "failed"
+        result["samplerate_function_error"] = str(exc).replace("\n", " ")
     module_path = Path(getattr(samplerate, "__file__", "") or "")
     result["samplerate_module"] = str(module_path.resolve()) if module_path else ""
 
@@ -154,6 +165,8 @@ def _probe_samplerate() -> dict[str, str]:
 def _repair_needed(probe: dict[str, str]) -> bool:
     if probe.get("samplerate_import") != "ok":
         return True
+    if probe.get("samplerate_function_probe") != "ok":
+        return True
     x86_only = int(probe.get("samplerate_dylib_x86_only_count") or "0")
     arm_ok = int(probe.get("samplerate_dylib_arm_or_universal_count") or "0")
     if x86_only > 0 and arm_ok == 0:
@@ -190,6 +203,7 @@ def main() -> int:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--repair-version", default="0.2.4")
     parser.add_argument("--find-links", action="append", default=[])
+    parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
 
     mac_arch = platform.machine()
@@ -212,6 +226,16 @@ def main() -> int:
         _print_diag("arch_match", "yes")
         _print_diag("repair_attempted", "no")
         return 0
+
+    if args.validate_only:
+        _print_diag("repair_attempted", "no")
+        if probe_before.get("samplerate_import") != "ok":
+            _print_diag("error", "samplerate_import_failed")
+        elif probe_before.get("samplerate_function_probe") != "ok":
+            _print_diag("error", "samplerate_native_probe_failed")
+        else:
+            _print_diag("error", "samplerate_arch_mismatch_requires_runtime_rebuild")
+        return 22
 
     _print_diag("repair_attempted", "yes")
     _print_diag("arch_match", "no")
@@ -237,6 +261,9 @@ def main() -> int:
     _emit_probe("after", probe_after)
     if probe_after.get("samplerate_import") != "ok":
         _print_diag("error", "samplerate_import_failed_after_repair")
+        return 22
+    if probe_after.get("samplerate_function_probe") != "ok":
+        _print_diag("error", "samplerate_native_probe_failed")
         return 22
 
     audio_ok, audio_err = _check_audio_separator_import()

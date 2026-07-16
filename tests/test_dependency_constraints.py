@@ -348,8 +348,8 @@ def test_macos_main_runtime_uses_asep_0443_numpy2_without_samplerate_conflict():
     assert "numpy==1.26.4" not in constraints
     assert '"audio-separator==0.44.3"' in payload
     assert '"numpy==2.4.4"' in payload
-    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"' in payload
-    assert 'SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"' not in payload
+    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"' in payload
+    assert 'PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"' in script
     assert 'if version("audio-separator") == "0.44.3":' in script
     assert 'dependencies.remove("samplerate")' in script
 
@@ -357,10 +357,72 @@ def test_macos_main_runtime_uses_asep_0443_numpy2_without_samplerate_conflict():
 def test_macos_bootstrap_pip_check_blocks_ready_false_positive():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
-    pip_check = 'if ! "${VENV_PY}" -m pip check >> "${LOG_FILE}" 2>&1; then'
+    pip_check = "if ! check_runtime_dependencies; then"
     assert pip_check in script
     assert 'set_status "deps_failed" "pip_check_failed"' in script
     assert script.index(pip_check) < script.index('write_ready_to_go_state "${READY_RUNTIME_KIND}"')
+
+
+def test_runtime_numpy_numba_guard_uses_live_import_and_jit_probe():
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    workflow = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
+
+    assert "import numpy, numba" in main_script
+    assert "@numba.njit" in main_script
+    assert "_stemwerk_numba_probe(1)" in main_script
+    assert "execProcess(cmd, 30000)" in main_script
+    assert "NumPy/Numba runtime probe failed:" in main_script
+    assert "requires < 2.4" not in main_script
+    assert 'pip install \\\"numpy<2.4\\\"' not in main_script
+    assert 'pip install \\\"numpy<2.4\\\"' not in workflow
+    assert "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle." in main_script
+    assert "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle." in workflow
+
+
+def test_macos_ready_assertion_enforces_numpy_numba_llvmlite_bundle():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
+
+    assert 'expected_numpy = "${PINNED_NUMPY_VERSION}"' in script
+    assert 'expected_numba = "${PINNED_NUMBA_VERSION}"' in script
+    assert 'expected_llvmlite = "${PINNED_LLVM_VERSION}"' in script
+    assert 'add_failure("numpy", expected_numpy, numpy_ver or "missing")' in script
+    assert 'add_failure("numba", expected_numba, numba_ver or "missing")' in script
+    assert 'add_failure("llvmlite", expected_llvmlite, llvmlite_ver or "missing")' in script
+    assert "@numba_mod.njit" in script
+    assert "numba JIT probe failed:" in script
+
+
+def test_macos_offline_payload_preflight_precedes_all_runtime_mutation():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+
+    preflight_call = 'preflight_bundled_apple_silicon_payload "${_payload_probe_python}" "${BUNDLED_WHEELS_DIR}"'
+    rebuild_remove = 'log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"'
+    incompatible_remove = 'remove_incompatible_venv\nfi'
+    first_torch_install_call = "if ! install_pinned_torch_stack; then"
+    first_runtime_install = 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip'
+
+    assert script.index(preflight_call) < script.index(rebuild_remove)
+    assert script.index(preflight_call) < script.index(incompatible_remove)
+    assert script.index(preflight_call) < script.index(first_torch_install_call)
+    assert script.index(preflight_call) < script.index(first_runtime_install)
+    assert "--dry-run --ignore-installed --no-cache-dir --no-index --find-links" in script
+    assert "resolved_with_native_override" in script
+    assert "stemwerk_macos_payload_contract.py" in script
+    assert "MACOS_PAYLOAD_EXCLUDED_UPSTREAM_EDGE" in script
+    assert 'set_status "deps_failed" "payload_preflight_failed"' in script
+    assert 'MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"' in script
+
+
+def test_macos_payload_preflight_state_markers_are_persisted():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+
+    for marker in (
+        "MACOS_PAYLOAD_PREFLIGHT_STATUS",
+        "MACOS_PAYLOAD_PREFLIGHT_REASON",
+        "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE",
+        "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED",
+    ):
+        assert f'echo "{marker}=${{{marker}}}"' in script
 
 
 def test_apple_silicon_workflows_follow_asep_0443_numpy2_policy():
@@ -381,7 +443,7 @@ def test_apple_silicon_workflows_follow_asep_0443_numpy2_policy():
 
     sanity = workflow_paths[1].read_text()
     assert 'payload["samplerate_version"] = version("samplerate")' in sanity
-    assert 'core(payload["samplerate_version"]) == "0.1.0"' in sanity
+    assert 'core(payload["samplerate_version"]) == "0.2.4"' in sanity
 
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
     intel_constraints = Path("scripts/reaper/constraints/macos-intel.txt").read_text().splitlines()
@@ -2576,11 +2638,13 @@ def test_drumsep_helper_migrates_legacy_asep0443_catalog_cache_without_deleting_
     legacy_yaml = tmp_path / helper.DRUMSEP_MODEL_YAML
     legacy_ckpt.write_bytes(b"legacy-model")
     legacy_yaml.write_text("audio: {}\nmodel: {}\ntraining: {}\n", encoding="utf-8")
+    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text("compat: true\n", encoding="utf-8")
 
     result = helper._resolve_drumsep_catalog_cache_for_runtime(
         tmp_path,
         helper.DRUMSEP_MODEL_FILENAME,
         expected_legacy_sha256="",
+        expected_config_sha256="",
     )
 
     assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
@@ -2598,29 +2662,22 @@ def test_drumsep_helper_migrates_legacy_asep0443_catalog_cache_without_deleting_
 def test_drumsep_helper_uses_fresh_asep0443_catalog_name_for_empty_cache(tmp_path):
     helper = _load_drumsep_helper_module()
 
-    result = helper._resolve_drumsep_catalog_cache_for_runtime(
-        tmp_path,
-        helper.DRUMSEP_MODEL_ALIAS,
-        expected_legacy_sha256="",
-    )
-
-    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
-    assert result.action == "download_new"
-    assert result.legacy_model_detected is False
-    assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
-    assert result.markers["dks_model_migration_action"] == "download_new"
-    assert result.markers["dks_legacy_model_detected"] == "false"
+    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
+        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert exc_info.value.reason == "drumsep_compat_yaml_missing"
 
 
 def test_drumsep_helper_does_not_alias_legacy_model_when_checksum_differs(tmp_path):
     helper = _load_drumsep_helper_module()
     legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
     legacy_ckpt.write_bytes(b"unexpected-model-content")
+    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text("compat: true\n", encoding="utf-8")
 
     result = helper._resolve_drumsep_catalog_cache_for_runtime(
         tmp_path,
         helper.DRUMSEP_MODEL_FILENAME,
         expected_legacy_sha256="definitely-not-this-model",
+        expected_config_sha256="",
     )
 
     assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
@@ -2647,6 +2704,7 @@ def test_drumsep_helper_prefers_existing_asep0443_model_in_mixed_cache(tmp_path)
         tmp_path,
         helper.DRUMSEP_MODEL_ALIAS,
         expected_legacy_sha256="",
+        expected_config_sha256="",
     )
 
     assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
@@ -2655,6 +2713,56 @@ def test_drumsep_helper_prefers_existing_asep0443_model_in_mixed_cache(tmp_path)
     assert legacy_ckpt.read_bytes() == b"legacy-model"
     assert new_ckpt.read_bytes() == b"new-model"
     assert result.markers["dks_model_migration_action"] == "mixed_cache_use_new"
+
+
+@pytest.mark.parametrize("workflow_route", ["direct_kit", "kit_split"])
+def test_drumsep_compat_yaml_runtime_guard_no_network_and_managed_alias_integrity(
+    tmp_path, monkeypatch, workflow_route
+):
+    helper = _load_drumsep_helper_module()
+    canonical = tmp_path / helper.DRUMSEP_MODEL_FILENAME
+    compatibility = tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME
+    canonical.write_bytes(b"managed-checkpoint")
+    shutil.copy2(Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml"), compatibility)
+
+    network_calls = []
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: network_calls.append((args, kwargs)) or (_ for _ in ()).throw(AssertionError("network forbidden")),
+    )
+    result = helper._resolve_drumsep_catalog_cache_for_runtime(
+        tmp_path,
+        helper.DRUMSEP_MODEL_ALIAS,
+        expected_legacy_sha256="",
+    )
+    alias = tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    baseline = {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
+    assert workflow_route in {"direct_kit", "kit_split"}
+    assert result.action == "copy_alias"
+    assert alias.read_bytes() == canonical.read_bytes()
+    assert helper._sha256_file(compatibility) == helper.ASEP_0443_DRUMSEP_CONFIG_SHA256
+    assert set(baseline) == {
+        helper.DRUMSEP_MODEL_FILENAME,
+        helper.ASEP_0443_DRUMSEP_MODEL_FILENAME,
+        helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME,
+    }
+    assert network_calls == []
+
+    second = helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert second.action == "mixed_cache_use_new"
+    assert baseline == {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
+    crlf_source_variant = compatibility.read_bytes().replace(b"\n", b"\r\n")
+    compatibility.write_bytes(crlf_source_variant)
+    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
+        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert exc_info.value.reason == "drumsep_compat_yaml_checksum_mismatch"
+    compatibility.write_bytes(b"checksum drift")
+    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
+        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert exc_info.value.reason == "drumsep_compat_yaml_checksum_mismatch"
+    print("DRUMSEP_COMPAT_YAML_RUNTIME_GUARD_TEST=PASS")
+    print("MACOS_DRUMSEP_COMPAT_YAML_NO_NETWORK_TEST=PASS")
+    print("MACOS_MANAGED_MODEL_ALIAS_INTEGRITY_TEST=PASS")
 
 
 def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
@@ -5112,9 +5220,11 @@ def test_release_workflow_uploads_only_supported_windows_installers():
 
 def test_ci_fast_quick_script_smoke_installs_pyyaml():
     workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
+    requirements = Path("requirements-dev.txt").read_text(encoding="utf-8").lower().splitlines()
 
     assert "Install test dependencies" in workflow
-    assert "python -m pip install pytest pyyaml soundfile" in workflow
+    assert "python -m pip install -r requirements-dev.txt" in workflow
+    assert "pyyaml" in requirements
     assert "python scripts/reaper/audio_separator_process.py --list-models" in workflow
 
 
@@ -5129,6 +5239,8 @@ def test_ci_fast_runs_curated_pytest_coverage():
     assert "tests/test_windows_normal_route_matrix.py" in workflow
     assert "tests/test_vocals_hq_runtime_proof.py" in workflow
     assert "python -m pytest -q \\\n            tests" in workflow
+    assert "python -m pip install -r requirements-dev.txt" in workflow
+    assert "python -m pytest -q tests/test_00_test_environment.py" in workflow
 
 
 def test_no_stale_onnxruntime_ci_pins():
@@ -5159,6 +5271,8 @@ def test_onnxruntime_runtime_pin_policy_is_documented():
     macos_payload = Path("tools/build_macos_apple_silicon_payload.py").read_text(
         encoding="utf-8"
     )
+    macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+    macos_sanity = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8")
     ci_workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
 
     # Policy: CI Fast runs Python 3.11, production payloads generally use
@@ -5172,9 +5286,45 @@ def test_onnxruntime_runtime_pin_policy_is_documented():
     assert '"onnxruntime-gpu==1.24.4"' in linux_wheelhouse
     assert "onnxruntime-directml==1.24.4" in directml_constraints
     assert '$onnxRuntimeDirectMlVersion = "1.24.4"' in windows_bootstrap
-    assert '"onnxruntime"' in macos_payload
+    assert '"onnxruntime==1.27.0"' in macos_payload
     assert '"onnxruntime-silicon"' not in macos_payload
+    assert 'PINNED_ONNXRUNTIME_VERSION="1.27.0"' in macos_bootstrap
+    assert 'ONNX_PACKAGE="onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"' in macos_bootstrap
+    assert 'ONNX_PACKAGE="onnxruntime-silicon"' not in macos_bootstrap
+    assert 'pip install "onnxruntime==1.27.0"' in macos_sanity
+    assert "onnxruntime-silicon ||" not in macos_sanity
+    assert 'core(payload["onnxruntime_version"]) == "1.27.0"' in macos_sanity
     assert "tests/test_dependency_constraints.py::test_onnxruntime_runtime_pin_policy_is_documented" in ci_workflow
+    print("MACOS_ONNXRUNTIME_POLICY_TEST=PASS")
+
+
+def test_macos_arm64_constraints_are_policy_reference_not_online_fallback():
+    constraints = Path("scripts/reaper/constraints/macos.txt").read_text(encoding="utf-8")
+    assert "macOS arm64 online/fallback resolution is unsupported" in constraints
+    assert "requires the audited bundled payload" in constraints
+    assert "do not use this file to resolve ASEP online" in constraints
+    for requirement in ("samplerate==0.2.4", "torch==2.5.1", "sympy==1.13.1", "onnxruntime==1.27.0"):
+        assert requirement in constraints
+
+
+def test_macos_intel_no_payload_route_remains_available():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in bootstrap
+    assert 'ONNX_PACKAGE="onnxruntime"' in bootstrap
+    assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then' in bootstrap
+    assert 'if [ "${MAC_ARCH}" = "x86_64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then' not in bootstrap
+
+
+def test_macos_pip_check_regex_matches_sanity_workflow_semantics():
+    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+    sanity = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8")
+    canonical = r"audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$"
+    assert bootstrap.count(canonical) == 2
+    assert sanity.count(canonical) == 2
+    assert "grep -Eiq" in bootstrap and "grep -Eiv" in bootstrap
+    assert "grep -Eiq" in sanity and "grep -Eivc" in sanity
+    assert "sympy" not in "\n".join(line for line in bootstrap.splitlines() if "pip_check" in line.lower())
+    print("MACOS_PIP_CHECK_REGEX_PARITY_TEST=PASS")
 
 
 def test_setup_internal_luac_compiles_under_reaper_limits():
@@ -5567,8 +5717,15 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
     assert 'BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"' in script
     assert 'rm -rf "$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"' in script
     assert 'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
-    assert 'cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF' in script
-    assert 'payload_status=missing' in script
+    assert 'python3 "$ROOT_DIR/tools/build_macos_apple_silicon_payload.py" \\' in script
+    assert '--audit-existing "$BUNDLED_PAYLOAD_ROOT"' in script
+    assert script.index('--audit-existing "$BUNDLED_PAYLOAD_ROOT"') < script.index(
+        'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"'
+    )
+    assert 'bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)' in script
+    assert 'bundled-intel' not in script
+    assert 'ERROR: bundled Apple Silicon payload is missing:' in script
+    assert 'payload_status=missing' not in script
 
 
 def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payload():
@@ -5613,8 +5770,8 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert '"llvmlite==0.48.0"' in script
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
-    assert '"onnxruntime"' in script
-    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.1.0"' in script
+    assert '"onnxruntime==1.27.0"' in script
+    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"' in script
     assert '"onnxruntime-silicon"' not in script
     assert '"--only-binary=:all:"' in script
     assert '"--find-links"' in script
@@ -5622,7 +5779,7 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
     assert '"--abi"' not in script
     assert 'subprocess.run(cmd, check=True, env=command_env())' in script
     assert 'DIFFQ_REQUIREMENT = "diffq==0.2.4"' in script
-    assert 'ensure_diffq_wheel(output_dir / "wheels")' in script
+    assert 'ensure_diffq_wheel(resolver_dir)' in script
     assert 'ensure_samplerate_wheel(output_dir / "wheels")' in script
 
 
@@ -5641,11 +5798,22 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert 'Incomplete wheelhouse for offline Apple Silicon payload' in script
     assert 'REQUIRED_WHEEL_PREFIXES = (' in script
     assert 'REQUIRED_WHEEL_PATTERNS = (' in script
-    assert '"samplerate-0.1.0-*.whl"' in script
+    assert '"samplerate-0.2.4-cp312-cp312-macosx_*_universal2.whl"' in script
     assert '"stemwerk_core-"' in script
     assert '"--no-build-isolation"' in script
     assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
     assert 'build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)' in script
+
+
+def test_macos_pkg_staging_enforces_bootstrap_layout_contract():
+    script = Path("installer/macos/build_pkg.sh").read_text()
+    assert "validate_staged_reaper_layout()" in script
+    assert '"$reaper_root/STEMwerk_Bootstrap_macOS.sh"' in script
+    assert '"$reaper_root/audio_separator_process.py"' in script
+    assert '"$reaper_root/_internal/stemwerk_samplerate_guard.py"' in script
+    assert '[[ -f "$PAYLOAD_DEST/manifest.json" ]]' in script
+    assert '[[ -d "$PAYLOAD_DEST/wheels" ]]' in script
+    assert script.index("validate_staged_reaper_layout\n") < script.index('remove_appledouble_sidecars "$STAGE"')
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
@@ -5714,7 +5882,13 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
     assert 'copy_bundled_models_to_cache "${_bundled_models_dir}" "$(model_cache_dir)"' in script
     assert 'MACOS_BUNDLED_MODELS_STATUS="seeded"' in script
     assert '_bundled_drumsep_dir="$(bundled_drumsep_dir || true)"' in script
-    assert 'copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
+    assert 'copy_bundled_drumsep_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
+    materialize = 'materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}" "$(model_cache_dir)" "${VENV_PY}"'
+    assert materialize in script
+    assert script.index(materialize) < script.index('ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"')
+    assert 'DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"' in script
+    assert 'echo "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"' in script
+    assert '_success_reason="migrated_known_legacy_crlf"' in script
     assert 'MACOS_BUNDLED_DRUMSEP_STATUS="seeded"' in script
     assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in script
     assert 'READY_RUNTIME_STATUS="skipped"' in script
@@ -6716,11 +6890,10 @@ def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64()
     guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
 
     assert "repair_samplerate_if_arch_mismatch" in script
-    assert 'if [ "${PINNED_AUDIO_SEPARATOR_VERSION}" = "0.44.3" ]; then' in script
-    assert "asep_0443_requires_samplerate_010" in script
+    assert 'PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"' in script
+    assert "asep_0443_requires_samplerate_010" not in script
     assert "stemwerk_samplerate_guard.py" in script
-    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"' in script
-    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"' in script
+    assert '--repair-version "${PINNED_SAMPLERATE_VERSION}" --validate-only' in script
     assert '_guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"' not in script
     assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
@@ -6829,14 +7002,14 @@ def test_setup_internal_surfaces_samplerate_arch_mismatch_reason_and_capabilitie
     assert "SAMPLERATE_REPAIR_ATTEMPTED" in script
 
 
-def test_macos_apple_silicon_sanity_workflow_keeps_asep_samplerate_metadata_pin():
+def test_macos_apple_silicon_sanity_workflow_validates_native_samplerate_override():
     workflow = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text()
 
     assert "Run samplerate arm64 repair guard (bootstrap parity)" not in workflow
-    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py" not in workflow
-    assert "import samplerate" not in workflow
+    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py --validate-only --repair-version 0.2.4" in workflow
+    assert "apple_silicon_samplerate_native_override" not in workflow
     assert 'payload["samplerate_version"] = version("samplerate")' in workflow
-    assert 'assert core(payload["samplerate_version"]) == "0.1.0"' in workflow
+    assert 'assert core(payload["samplerate_version"]) == "0.2.4"' in workflow
 
 
 def test_normal_workflow_device_preflight_blocks_silent_cpu_fallback():

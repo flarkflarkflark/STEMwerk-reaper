@@ -57,14 +57,18 @@ jobs:
             "torchaudio==2.5.1"
           pip install "llvmlite==0.48.0" "numba==0.66.0"
           pip install ./scripts/reaper/vendor/stemwerk-core
-          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.44.3"
+          pip install "audio-separator==0.44.3"
+          pip install --force-reinstall --no-deps "samplerate==0.2.4"
           pip install --force-reinstall --no-deps \
             "numpy==2.4.4" \
             "torch==2.5.1" \
             "torchvision==0.20.1" \
             "torchaudio==2.5.1"
-          pip install onnxruntime-silicon || pip install onnxruntime
-          pip check
+          pip install "onnxruntime==1.27.0"
+          python scripts/reaper/_internal/stemwerk_samplerate_guard.py --validate-only --repair-version 0.2.4
+          pip check 2>&1 | tee /tmp/stemwerk-pip-check.log || true
+          grep -Eiq '^audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' /tmp/stemwerk-pip-check.log
+          test "$(grep -Eivc '^[[:space:]]*$|^audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' /tmp/stemwerk-pip-check.log)" -eq 0
 
       - name: Run Apple Silicon dependency and backend assertions
         run: |
@@ -119,7 +123,8 @@ jobs:
           assert core(payload["torchvision_version"]) == "0.20.1", payload["torchvision_version"]
           assert core(payload["torchaudio_version"]) == "2.5.1", payload["torchaudio_version"]
           assert core(payload["audio_separator_version"]) == "0.44.3", payload["audio_separator_version"]
-          assert core(payload["samplerate_version"]) == "0.1.0", payload["samplerate_version"]
+          assert core(payload["samplerate_version"]) == "0.2.4", payload["samplerate_version"]
+          assert core(payload["onnxruntime_version"]) == "1.27.0", payload["onnxruntime_version"]
           assert onnxruntime is not None
           assert torch.backends.mps.is_built() is True, "Expected torch wheel with MPS support built in"
           PY

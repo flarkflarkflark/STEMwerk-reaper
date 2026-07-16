@@ -1,0 +1,4 @@
+pytest
+PyYAML
+soundfile
+numpy

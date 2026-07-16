@@ -80,6 +80,27 @@ remove_appledouble_sidecars() {
   find "$1" -name '._*' -delete
 }
 
+validate_staged_reaper_layout() {
+  local reaper_root="$STAGE/Users/Shared/STEMwerk-reaper"
+  local required
+  for required in \
+    "$reaper_root/STEMwerk_Bootstrap_macOS.sh" \
+    "$reaper_root/audio_separator_process.py" \
+    "$reaper_root/_internal/stemwerk_samplerate_guard.py"
+  do
+    if [[ ! -f "$required" ]]; then
+      echo "ERROR: required staged macOS runtime script missing: $required" >&2
+      exit 1
+    fi
+  done
+  case "$VARIANT" in
+    bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)
+      [[ -f "$PAYLOAD_DEST/manifest.json" ]] || { echo "ERROR: staged Apple Silicon manifest missing" >&2; exit 1; }
+      [[ -d "$PAYLOAD_DEST/wheels" ]] || { echo "ERROR: staged Apple Silicon wheelhouse missing" >&2; exit 1; }
+      ;;
+  esac
+}
+
 repack_pkg_without_appledouble() {
   PACKAGE_REPACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stemwerk-macos-pkg-repack.XXXXXX")"
   (
@@ -129,17 +150,18 @@ case "$VARIANT" in
     ;;
   bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)
     if [[ -d "$BUNDLED_PAYLOAD_ROOT" ]]; then
+      python3 "$ROOT_DIR/tools/build_macos_apple_silicon_payload.py" \
+        --audit-existing "$BUNDLED_PAYLOAD_ROOT"
       mkdir -p "$(dirname "$PAYLOAD_DEST")"
       rsync -a --delete --exclude='._*' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
     else
-      mkdir -p "$PAYLOAD_DEST"
-      cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF
-variant=$VARIANT
-payload_status=missing
-EOF
+      echo "ERROR: bundled Apple Silicon payload is missing: $BUNDLED_PAYLOAD_ROOT" >&2
+      exit 1
     fi
     ;;
 esac
+
+validate_staged_reaper_layout
 
 remove_appledouble_sidecars "$STAGE"
 

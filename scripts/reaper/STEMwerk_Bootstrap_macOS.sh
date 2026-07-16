@@ -4,6 +4,7 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BUNDLED_CORE_DIR="${SCRIPT_DIR}/vendor/stemwerk-core"
 BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled/macos/apple-silicon"
+MACOS_PAYLOAD_CONTRACT_HELPER="${SCRIPT_DIR}/_internal/stemwerk_macos_payload_contract.py"
 MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
@@ -19,6 +20,11 @@ PINNED_LLVM_VERSION_INTEL="0.42.0"
 PINNED_AUDIO_SEPARATOR_VERSION=""
 PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"
 PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"
+PINNED_SCIPY_VERSION="1.18.0"
+PINNED_SAMPLERATE_VERSION=""
+PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"
+PINNED_SAMPLERATE_VERSION_INTEL="0.1.0"
+PINNED_ONNXRUNTIME_VERSION="1.27.0"
 PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
 PINNED_TORCHAUDIO_VERSION=""
@@ -30,6 +36,13 @@ PINNED_TORCHVISION_VERSION_INTEL="0.17.2"
 PINNED_TORCHAUDIO_VERSION_INTEL="2.2.2"
 PINNED_TORCH_STACK_LABEL=""
 TORCH_PIN_APPLIED="0"
+DRUMSEP_CANONICAL_MODEL="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+DRUMSEP_CANONICAL_CONFIG="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"
+DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
+DRUMSEP_COMPAT_YAML_EXPECTED_SIZE="2331"
+DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
+DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE="2417"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -135,6 +148,137 @@ copy_bundled_models_to_cache() {
   cp -R "${_src}/." "${_dest}/" >> "${LOG_FILE}" 2>&1 || return 1
 }
 
+copy_bundled_drumsep_to_cache() {
+  _src="$1"
+  _dest="${2:-$(model_cache_dir)}"
+  [ -n "${_src}" ] && [ -d "${_src}" ] || return 1
+  mkdir -p "${_dest}" >/dev/null 2>&1 || return 1
+  for _name in "${DRUMSEP_CANONICAL_MODEL}" "${DRUMSEP_CANONICAL_CONFIG}"; do
+    [ -f "${_src}/${_name}" ] || return 1
+    cp "${_src}/${_name}" "${_dest}/${_name}" >> "${LOG_FILE}" 2>&1 || return 1
+  done
+}
+
+drumsep_file_sha256() {
+  _py="$1"
+  _path="$2"
+  "${_py}" - "${_path}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+digest = hashlib.sha256()
+with path.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+drumsep_file_size() {
+  _py="$1"
+  _path="$2"
+  "${_py}" - "${_path}" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).stat().st_size)
+PY
+}
+
+materialize_drumsep_compat_yaml() {
+  _src_dir="$1"
+  _dest_dir="$2"
+  _py="$3"
+  _src="${_src_dir}/${DRUMSEP_COMPAT_YAML}"
+  _dest="${_dest_dir}/${DRUMSEP_COMPAT_YAML}"
+  _tmp="${_dest}.tmp.$$"
+  DRUMSEP_COMPAT_YAML_SHA256=""
+  DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=""
+  if [ ! -f "${_src}" ]; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="payload_source_missing"
+    return 1
+  fi
+  _src_sha="$(drumsep_file_sha256 "${_py}" "${_src}" 2>> "${LOG_FILE}" || true)"
+  _src_size="$(drumsep_file_size "${_py}" "${_src}" 2>> "${LOG_FILE}" || true)"
+  if [ "${_src_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || \
+     [ "${_src_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="payload_source_integrity_mismatch"
+    DRUMSEP_COMPAT_YAML_SHA256="${_src_sha}"
+    return 1
+  fi
+  mkdir -p "${_dest_dir}" >/dev/null 2>&1 || {
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="model_cache_create_failed"
+    return 1
+  }
+  _success_status="created"
+  _success_reason="materialized_from_payload"
+  if [ -e "${_dest}" ]; then
+    _dest_sha="$(drumsep_file_sha256 "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+    _dest_size="$(drumsep_file_size "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+    DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256="${_dest_sha}"
+    DRUMSEP_COMPAT_YAML_SHA256="${_dest_sha}"
+    if [ "${_dest_sha}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] && \
+       [ "${_dest_size}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
+      DRUMSEP_COMPAT_YAML_STATUS="exists_valid"
+      DRUMSEP_COMPAT_YAML_REASON="already_materialized"
+      log "DRUMSEP_COMPAT_YAML_STATUS=exists_valid"
+      return 0
+    fi
+    if [ "${_dest_sha}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256}" ] && \
+       [ "${_dest_size}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE}" ]; then
+      _success_status="migrated_legacy_crlf"
+      _success_reason="migrated_known_legacy_crlf"
+      log "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"
+      log "DRUMSEP_COMPAT_YAML_MIGRATION=known_legacy_crlf_to_canonical_lf"
+    else
+      DRUMSEP_COMPAT_YAML_STATUS="failed"
+      DRUMSEP_COMPAT_YAML_REASON="existing_checksum_mismatch"
+      return 1
+    fi
+  fi
+  rm -f "${_tmp}" >/dev/null 2>&1 || true
+  if ! cp "${_src}" "${_tmp}" >> "${LOG_FILE}" 2>&1; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="atomic_copy_failed"
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  _tmp_sha="$(drumsep_file_sha256 "${_py}" "${_tmp}" 2>> "${LOG_FILE}" || true)"
+  _tmp_size="$(drumsep_file_size "${_py}" "${_tmp}" 2>> "${LOG_FILE}" || true)"
+  if [ "${_tmp_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || \
+     [ "${_tmp_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="temporary_copy_integrity_mismatch"
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! mv "${_tmp}" "${_dest}"; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="atomic_replace_failed"
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  DRUMSEP_COMPAT_YAML_SHA256="$(drumsep_file_sha256 "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+  _dest_size="$(drumsep_file_size "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+  if [ "${DRUMSEP_COMPAT_YAML_SHA256}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || \
+     [ "${_dest_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="destination_integrity_mismatch"
+    return 1
+  fi
+  DRUMSEP_COMPAT_YAML_STATUS="${_success_status}"
+  DRUMSEP_COMPAT_YAML_REASON="${_success_reason}"
+  log "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
+  log "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
+  log "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
+  return 0
+}
+
 install_with_optional_bundled_wheels() {
   _py="$1"
   shift
@@ -144,6 +288,138 @@ install_with_optional_bundled_wheels() {
     return $?
   fi
   "${_py}" -m pip install "$@"
+}
+
+apple_silicon_core_bundle_requirements() {
+  printf "%s\n" \
+    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
+    "numpy==${PINNED_NUMPY_VERSION}" \
+    "scipy==${PINNED_SCIPY_VERSION}" \
+    "numba==${PINNED_NUMBA_VERSION}" \
+    "llvmlite==${PINNED_LLVM_VERSION}" \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
+    "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    "samplerate==${PINNED_SAMPLERATE_VERSION}" \
+    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"
+}
+
+install_apple_silicon_core_bundle() {
+  MACOS_CORE_BUNDLE_REQUIREMENTS="$(apple_silicon_core_bundle_requirements | tr '\n' ' ')"
+  log "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
+  log "Installing complete Apple Silicon core bundle in one audited offline transaction"
+  log "Inspecting bounded stale Apple Silicon packages: onnxruntime-silicon samplerate onnx onnx2torch"
+  "${VENV_PY}" -m pip show onnxruntime-silicon samplerate onnx onnx2torch >> "${LOG_FILE}" 2>&1 || true
+  # Remove only the four known namespace/layout collision sources:
+  # onnxruntime-silicon/onnxruntime, onnx/onnx-weekly, onnx2torch/onnx2torch-py313,
+  # and samplerate 0.1.x legacy _samplerate_data x86_64 dylibs.
+  if ! "${VENV_PY}" -m pip uninstall -y onnxruntime-silicon samplerate onnx onnx2torch >> "${LOG_FILE}" 2>&1; then
+    MACOS_STALE_PACKAGE_CLEANUP_STATUS="failed"
+    MACOS_STALE_PACKAGE_CLEANUP_REASON="bounded_uninstall_failed"
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="bounded_stale_package_cleanup_failed"
+    log "MACOS_STALE_PACKAGE_CLEANUP_STATUS=failed"
+    log "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
+    return 1
+  fi
+  MACOS_STALE_PACKAGE_CLEANUP_STATUS="ok"
+  MACOS_STALE_PACKAGE_CLEANUP_REASON="removed_or_absent"
+  log "MACOS_STALE_PACKAGE_CLEANUP_STATUS=ok"
+  log "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
+  # Deferred D5: same-version corruption still requires an explicit rebuild-venv;
+  # normal Repair intentionally does not force-reinstall the complete bundle.
+  log "Installing manifest-defined audio-separator dependency closure before native samplerate override"
+  if [ -z "${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS:-}" ]; then
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="override_contract_invalid"
+    return 1
+  fi
+  if ! "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: --no-deps \
+    ${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS} >> "${LOG_FILE}" 2>&1; then
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="dependency_closure_install_failed"
+    return 1
+  fi
+  if "${VENV_PY}" -m pip install --upgrade --no-cache-dir --no-index --find-links "${BUNDLED_WHEELS_DIR}" --only-binary=:all: --no-deps \
+    "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
+    "numpy==${PINNED_NUMPY_VERSION}" \
+    "scipy==${PINNED_SCIPY_VERSION}" \
+    "numba==${PINNED_NUMBA_VERSION}" \
+    "llvmlite==${PINNED_LLVM_VERSION}" \
+    "torch==${PINNED_TORCH_VERSION}" \
+    "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
+    "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    "samplerate==${PINNED_SAMPLERATE_VERSION}" \
+    "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" >> "${LOG_FILE}" 2>&1; then
+    MACOS_CORE_BUNDLE_INSTALL_STATUS="ok"
+    MACOS_CORE_BUNDLE_INSTALL_REASON="installed"
+    log "MACOS_CORE_BUNDLE_INSTALL_STATUS=ok"
+    return 0
+  fi
+  MACOS_CORE_BUNDLE_INSTALL_STATUS="failed"
+  MACOS_CORE_BUNDLE_INSTALL_REASON="core_bundle_install_failed"
+  log "MACOS_CORE_BUNDLE_INSTALL_STATUS=failed"
+  log "MACOS_CORE_BUNDLE_INSTALL_REASON=${MACOS_CORE_BUNDLE_INSTALL_REASON}"
+  return 1
+}
+
+preflight_bundled_apple_silicon_payload() {
+  _py="$1"
+  _wheelhouse="$2"
+  [ -x "${_py}" ] || {
+    MACOS_PAYLOAD_PREFLIGHT_REASON="python_unavailable"
+    return 1
+  }
+  [ -d "${_wheelhouse}" ] || {
+    MACOS_PAYLOAD_PREFLIGHT_REASON="wheelhouse_missing"
+    return 1
+  }
+  _preflight_log="${RUNTIME_BASE}/logs/macos_payload_preflight.log"
+  mkdir -p "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/state" >/dev/null 2>&1 || return 1
+  : > "${_preflight_log}"
+  [ -f "${MACOS_PAYLOAD_CONTRACT_HELPER}" ] || {
+    MACOS_PAYLOAD_PREFLIGHT_REASON="override_contract_invalid"
+    return 1
+  }
+  _contract_output=$("${_py}" "${MACOS_PAYLOAD_CONTRACT_HELPER}" \
+    --manifest "${BUNDLED_PAYLOAD_DIR}/manifest.json" \
+    --wheelhouse "${_wheelhouse}" \
+    --expected-core "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" \
+    --expected-core "numpy==${PINNED_NUMPY_VERSION}" \
+    --expected-core "scipy==${PINNED_SCIPY_VERSION}" \
+    --expected-core "numba==${PINNED_NUMBA_VERSION}" \
+    --expected-core "llvmlite==${PINNED_LLVM_VERSION}" \
+    --expected-core "torch==${PINNED_TORCH_VERSION}" \
+    --expected-core "torchaudio==${PINNED_TORCHAUDIO_VERSION}" \
+    --expected-core "torchvision==${PINNED_TORCHVISION_VERSION}" \
+    --expected-core "samplerate==${PINNED_SAMPLERATE_VERSION}" \
+    --expected-core "onnxruntime==${PINNED_ONNXRUNTIME_VERSION}" 2> "${_preflight_log}")
+  _rc=$?
+  if [ "${_rc}" -ne 0 ]; then
+    MACOS_PAYLOAD_PREFLIGHT_REASON=$(sed -n '1{s/:.*//;p;}' "${_preflight_log}")
+    [ -n "${MACOS_PAYLOAD_PREFLIGHT_REASON}" ] || MACOS_PAYLOAD_PREFLIGHT_REASON="override_contract_invalid"
+    cat "${_preflight_log}" >> "${LOG_FILE}" 2>/dev/null || true
+    return "${_rc}"
+  fi
+  MACOS_PAYLOAD_CORE_REQUIREMENTS=$(printf "%s\n" "${_contract_output}" | sed -n 's/^CORE_REQUIREMENTS=//p')
+  MACOS_PAYLOAD_CLOSURE_REQUIREMENTS=$(printf "%s\n" "${_contract_output}" | sed -n 's/^CLOSURE_REQUIREMENTS=//p')
+  MACOS_PAYLOAD_OVERRIDE=$(printf "%s\n" "${_contract_output}" | sed -n 's/^OVERRIDE=//p')
+  log "MACOS_PAYLOAD_CORE_REQUIREMENTS=${MACOS_PAYLOAD_CORE_REQUIREMENTS}"
+  log "MACOS_PAYLOAD_CLOSURE_REQUIREMENTS=${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS}"
+  log "MACOS_PAYLOAD_OVERRIDE=${MACOS_PAYLOAD_OVERRIDE}"
+  log "MACOS_PAYLOAD_EXCLUDED_UPSTREAM_EDGE=audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}->samplerate==0.1.0"
+  "${_py}" -m pip install \
+    --dry-run --ignore-installed --no-cache-dir --no-index --find-links "${_wheelhouse}" --only-binary=:all: \
+    --no-deps ${MACOS_PAYLOAD_CORE_REQUIREMENTS} ${MACOS_PAYLOAD_CLOSURE_REQUIREMENTS} >> "${_preflight_log}" 2>&1
+  _rc=$?
+  if [ "${_rc}" -ne 0 ]; then
+    MACOS_PAYLOAD_PREFLIGHT_REASON="offline_resolve_failed"
+    cat "${_preflight_log}" >> "${LOG_FILE}" 2>/dev/null || true
+    return "${_rc}"
+  fi
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="ok"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="resolved_with_native_override"
+  return 0
 }
 
 command_path() {
@@ -230,13 +506,23 @@ ensure_drumsep_assets() {
   _model_dir="${2:-$(model_cache_dir)}"
   [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
   mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  if [ ! -f "${DRUMSEP_PREFETCH_SCRIPT_PATH}" ]; then
+    DRUMSEP_PREFETCH_SCRIPT_STATUS="missing"
+    DRUMSEP_PREFETCH_DETAIL="drumsep_prefetch_script_missing"
+    log "DRUMSEP_PREFETCH_SCRIPT_STATUS=missing"
+    log "DRUMSEP_PREFETCH_SCRIPT_PATH=${DRUMSEP_PREFETCH_SCRIPT_PATH}"
+    return 1
+  fi
+  DRUMSEP_PREFETCH_SCRIPT_STATUS="ok"
+  log "DRUMSEP_PREFETCH_SCRIPT_STATUS=ok"
+  log "DRUMSEP_PREFETCH_SCRIPT_PATH=${DRUMSEP_PREFETCH_SCRIPT_PATH}"
   _detail_file="$(mktemp "${TMPDIR:-/tmp}/stemwerk-drumsep-prefetch.XXXXXX")" || return 1
   STEMWERK_DRUMSEP_DETAIL_FILE="${_detail_file}" "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
 import os
 from pathlib import Path
 
-script_path = Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"
+script_path = Path(r"${DRUMSEP_PREFETCH_SCRIPT_PATH}")
 spec = importlib.util.spec_from_file_location("stemwerk_audio_separator_process_ready", script_path)
 module = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
@@ -259,6 +545,59 @@ PY
   fi
   rm -f "${_detail_file}" 2>/dev/null || true
   [ "${_rc}" -eq 0 ]
+}
+
+validate_required_reaper_layout() {
+  DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
+  SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  MACOS_PAYLOAD_CONTRACT_HELPER="${SCRIPT_DIR}/_internal/stemwerk_macos_payload_contract.py"
+  for _required_script in "${DRUMSEP_PREFETCH_SCRIPT_PATH}" "${SAMPLERATE_GUARD_SCRIPT_PATH}"; do
+    if [ ! -f "${_required_script}" ]; then
+      REQUIRED_SCRIPT_STATUS="missing"
+      REQUIRED_SCRIPT_PATH="${_required_script}"
+      case "${_required_script}" in
+        "${DRUMSEP_PREFETCH_SCRIPT_PATH}") DRUMSEP_PREFETCH_SCRIPT_STATUS="missing" ;;
+      esac
+      log "required_script_missing=${_required_script}"
+      return 1
+    fi
+  done
+  if bundled_payload_available && [ ! -f "${MACOS_PAYLOAD_CONTRACT_HELPER}" ]; then
+    REQUIRED_SCRIPT_STATUS="missing"
+    REQUIRED_SCRIPT_PATH="${MACOS_PAYLOAD_CONTRACT_HELPER}"
+    log "required_script_missing=${MACOS_PAYLOAD_CONTRACT_HELPER}"
+    return 1
+  fi
+  REQUIRED_SCRIPT_STATUS="ok"
+  REQUIRED_SCRIPT_PATH=""
+  DRUMSEP_PREFETCH_SCRIPT_STATUS="ok"
+  return 0
+}
+
+check_runtime_dependencies() {
+  _pip_check_log="${RUNTIME_BASE}/logs/pip_check.log"
+  : > "${_pip_check_log}"
+  "${VENV_PY}" -m pip check > "${_pip_check_log}" 2>&1
+  _pip_check_rc=$?
+  cat "${_pip_check_log}" >> "${LOG_FILE}" 2>/dev/null || true
+  if [ "${_pip_check_rc}" -eq 0 ]; then
+    PIP_CHECK_STATUS="ok"
+    PIP_CHECK_REASON="clean"
+    return 0
+  fi
+  if [ "${MAC_ARCH}" = "arm64" ]; then
+    _non_override_lines="$(grep -Eiv '^[[:space:]]*$|audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' "${_pip_check_log}" || true)"
+    if grep -Eiq 'audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' "${_pip_check_log}" \
+      && [ -z "${_non_override_lines}" ]; then
+      PIP_CHECK_STATUS="ok"
+      PIP_CHECK_REASON="apple_silicon_samplerate_native_override"
+      log "pip_check_override=apple_silicon_samplerate_native_override"
+      return 0
+    fi
+  fi
+  PIP_CHECK_STATUS="failed"
+  PIP_CHECK_REASON="dependency_conflict"
+  return 1
 }
 
 write_ready_to_go_state() {
@@ -463,15 +802,10 @@ PY
 repair_samplerate_if_arch_mismatch() {
   _guard_phase="${1:-unspecified}"
   [ "${MAC_ARCH}" = "arm64" ] || return 0
-  if [ "${PINNED_AUDIO_SEPARATOR_VERSION}" = "0.44.3" ]; then
-    log "samplerate_guard_skipped phase=${_guard_phase} reason=asep_0443_requires_samplerate_010"
-    SAMPLERATE_ARCH_MATCH="not_required_for_main_runtime"
-    return 0
-  fi
   [ -n "${VENV_PY}" ] || return 0
   [ -x "${VENV_PY}" ] || return 0
 
-  _guard_script="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+  _guard_script="${SAMPLERATE_GUARD_SCRIPT_PATH}"
   log "samplerate_guard_start phase=${_guard_phase}"
   log "samplerate_guard_script_path=${_guard_script}"
   if [ ! -f "${_guard_script}" ]; then
@@ -481,9 +815,9 @@ repair_samplerate_if_arch_mismatch() {
   fi
 
   if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
-    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --repair-version "${PINNED_SAMPLERATE_VERSION}" --validate-only --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"
   else
-    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"
+    _guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --repair-version "${PINNED_SAMPLERATE_VERSION}" --validate-only 2>&1)"
   fi
   _guard_rc=$?
   [ -n "${_guard_out}" ] && printf "%s\n" "${_guard_out}" >> "${LOG_FILE}"
@@ -518,6 +852,8 @@ repair_samplerate_if_arch_mismatch() {
       STEMWERK_SAMPLERATE_GUARD\ repair_attempted=*) _guard_repair_attempted="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ arch_match=*) SAMPLERATE_ARCH_MATCH="${_line#*=}" ;;
       STEMWERK_SAMPLERATE_GUARD\ error=samplerate_reinstall_failed) BACKEND_DEPS_REASON="samplerate_reinstall_failed" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_import_failed) BACKEND_DEPS_REASON="samplerate_import_failed" ;;
+      STEMWERK_SAMPLERATE_GUARD\ error=samplerate_native_probe_failed) BACKEND_DEPS_REASON="samplerate_native_probe_failed" ;;
       STEMWERK_SAMPLERATE_GUARD\ error=samplerate_arch_mismatch_requires_runtime_rebuild) BACKEND_DEPS_REASON="samplerate_arch_mismatch_requires_runtime_rebuild" ;;
     esac
   done <<EOF
@@ -693,10 +1029,15 @@ assert_pinned_torch_stack() {
 from importlib.metadata import PackageNotFoundError, version
 
 expected_numpy = "${PINNED_NUMPY_VERSION}"
+expected_numba = "${PINNED_NUMBA_VERSION}"
+expected_llvmlite = "${PINNED_LLVM_VERSION}"
 expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
 expected_audio_separator = "${PINNED_AUDIO_SEPARATOR_VERSION}"
+expected_scipy = "${PINNED_SCIPY_VERSION}"
+expected_samplerate = "${PINNED_SAMPLERATE_VERSION}"
+expected_onnxruntime = "${PINNED_ONNXRUNTIME_VERSION}"
 expected_profile = "${PINNED_TORCH_STACK_LABEL}"
 mac_arch = "${MAC_ARCH}"
 
@@ -742,12 +1083,17 @@ def distribution_version(dist_name, detail_name=None):
 
 try:
     _, numpy_ver = import_module_version("numpy")
-    _, numba_ver = import_module_version("numba")
+    numba_mod, numba_ver = import_module_version("numba")
     _, llvmlite_ver = import_module_version("llvmlite")
     torch_mod, torch_ver = import_module_version("torch")
     _, torchvision_ver = import_module_version("torchvision")
     _, torchaudio_ver = import_module_version("torchaudio")
     audio_separator_ver = distribution_version("audio-separator")
+    scipy_ver = ""
+    samplerate_ver = ""
+    if mac_arch == "arm64":
+        scipy_ver = distribution_version("scipy")
+        samplerate_ver = distribution_version("samplerate")
     _, onnxruntime_ver = import_module_version("onnxruntime")
 
     mps_backend = getattr(getattr(torch_mod, "backends", None), "mps", None) if torch_mod is not None else None
@@ -765,8 +1111,22 @@ try:
         record("mps_available", "unsupported")
     record("mac_arch", mac_arch)
 
+    if numba_mod is not None:
+        try:
+            @numba_mod.njit
+            def _stemwerk_numba_probe(x):
+                return x + 1
+            record("numba_jit", _stemwerk_numba_probe(1))
+        except Exception as exc:
+            record("numba_jit", f"error:{exc}")
+            failures.append(f"numba JIT probe failed: {exc}")
+
     if core(numpy_ver) != expected_numpy:
         add_failure("numpy", expected_numpy, numpy_ver or "missing")
+    if core(numba_ver) != expected_numba:
+        add_failure("numba", expected_numba, numba_ver or "missing")
+    if core(llvmlite_ver) != expected_llvmlite:
+        add_failure("llvmlite", expected_llvmlite, llvmlite_ver or "missing")
     if core(torch_ver) != expected_torch:
         add_failure("torch", expected_torch, torch_ver or "missing")
     if core(torchvision_ver) != expected_torchvision:
@@ -775,6 +1135,13 @@ try:
         add_failure("torchaudio", expected_torchaudio, torchaudio_ver or "missing")
     if core(audio_separator_ver) != expected_audio_separator:
         add_failure("audio-separator", expected_audio_separator, audio_separator_ver or "missing")
+    if mac_arch == "arm64":
+        if core(scipy_ver) != expected_scipy:
+            add_failure("scipy", expected_scipy, scipy_ver or "missing")
+        if core(samplerate_ver) != expected_samplerate:
+            add_failure("samplerate", expected_samplerate, samplerate_ver or "missing")
+        if core(onnxruntime_ver) != expected_onnxruntime:
+            add_failure("onnxruntime", expected_onnxruntime, onnxruntime_ver or "missing")
 
     ordered_names = (
         "mac_arch",
@@ -785,6 +1152,8 @@ try:
         "torchvision",
         "torchaudio",
         "audio-separator",
+        "scipy",
+        "samplerate",
         "onnxruntime",
         "mps_built",
         "mps_available",
@@ -1000,6 +1369,28 @@ write_state() {
       echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
       echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
       echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=${MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED}"
+      echo "MACOS_CORE_BUNDLE_INSTALL_STATUS=${MACOS_CORE_BUNDLE_INSTALL_STATUS}"
+      echo "MACOS_CORE_BUNDLE_INSTALL_REASON=${MACOS_CORE_BUNDLE_INSTALL_REASON}"
+      echo "MACOS_CORE_BUNDLE_REQUIREMENTS=${MACOS_CORE_BUNDLE_REQUIREMENTS}"
+      echo "MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS=${MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS}"
+      echo "MACOS_STALE_PACKAGE_CLEANUP_STATUS=${MACOS_STALE_PACKAGE_CLEANUP_STATUS}"
+      echo "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
+      echo "MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS=${MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS}"
+      echo "MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON=${MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON}"
+      echo "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
+      echo "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
+      echo "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
+      echo "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"
+      echo "REQUIRED_SCRIPT_STATUS=${REQUIRED_SCRIPT_STATUS}"
+      [ -n "${REQUIRED_SCRIPT_PATH}" ] && echo "REQUIRED_SCRIPT_PATH=${REQUIRED_SCRIPT_PATH}"
+      echo "DRUMSEP_PREFETCH_SCRIPT_STATUS=${DRUMSEP_PREFETCH_SCRIPT_STATUS}"
+      echo "DRUMSEP_PREFETCH_SCRIPT_PATH=${DRUMSEP_PREFETCH_SCRIPT_PATH}"
+      echo "PIP_CHECK_STATUS=${PIP_CHECK_STATUS}"
+      [ -n "${PIP_CHECK_REASON}" ] && echo "PIP_CHECK_REASON=${PIP_CHECK_REASON}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
@@ -1104,6 +1495,7 @@ if [ "${MAC_ARCH}" = "x86_64" ]; then
   PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_INTEL}"
   PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_INTEL}"
   PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_INTEL}"
+  PINNED_SAMPLERATE_VERSION="${PINNED_SAMPLERATE_VERSION_INTEL}"
   PINNED_TORCH_STACK_LABEL="Intel macOS CPU fallback"
   log "Using macOS Intel constraints: ${MACOS_CONSTRAINTS_FILE}"
 else
@@ -1115,16 +1507,12 @@ else
   PINNED_TORCH_VERSION="${PINNED_TORCH_VERSION_ARM64}"
   PINNED_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION_ARM64}"
   PINNED_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION_ARM64}"
+  PINNED_SAMPLERATE_VERSION="${PINNED_SAMPLERATE_VERSION_ARM64}"
   PINNED_TORCH_STACK_LABEL="Apple Silicon macOS"
   log "Using macOS Apple Silicon constraints: ${MACOS_CONSTRAINTS_FILE}"
 fi
 log "Selected torch stack profile: ${PINNED_TORCH_STACK_LABEL}"
 log "Selected torch stack versions: torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
-if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
-  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
-  rm -rf "${RUNTIME_BASE}/.venv"
-fi
-
 MACOS_BUNDLED_PAYLOAD_STATUS="missing"
 MACOS_BUNDLED_FFMPEG_STATUS="missing"
 MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
@@ -1144,8 +1532,6 @@ log "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
 log "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
 log "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
 
-mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
-
 STATUS="ok"
 STATUS_REASON=""
 PYTHON=""
@@ -1156,8 +1542,7 @@ PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
 ONNX_PACKAGE="onnxruntime"
 ONNX_FALLBACK_PACKAGE=""
 if [ "$(uname -m)" = "arm64" ]; then
-  ONNX_PACKAGE="onnxruntime-silicon"
-  ONNX_FALLBACK_PACKAGE="onnxruntime"
+  ONNX_PACKAGE="onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"
 fi
 PROFILE="mac-cpu"
 BACKEND="cpu"
@@ -1197,9 +1582,95 @@ AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
 SYSTEM_PYTHON_PATH=""
 SYSTEM_PYTHON_VERSION=""
 SYSTEM_PYTHON_USED="no"
+MACOS_PAYLOAD_PREFLIGHT_STATUS="not_required"
+MACOS_PAYLOAD_PREFLIGHT_REASON="no_bundled_apple_silicon_payload"
+MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE="${BUNDLED_WHEELS_DIR}"
+MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"
+MACOS_CORE_BUNDLE_INSTALL_STATUS="not_required"
+MACOS_CORE_BUNDLE_INSTALL_REASON="not_apple_silicon"
+MACOS_CORE_BUNDLE_REQUIREMENTS=""
+MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="not_run"
+MACOS_STALE_PACKAGE_CLEANUP_STATUS="not_required"
+MACOS_STALE_PACKAGE_CLEANUP_REASON="not_apple_silicon_bundled_repair"
+MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS="not_run"
+MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="not_started"
+DRUMSEP_COMPAT_YAML_STATUS="not_run"
+DRUMSEP_COMPAT_YAML_REASON="not_started"
+DRUMSEP_COMPAT_YAML_SHA256=""
+DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=""
+DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
+DRUMSEP_PREFETCH_SCRIPT_STATUS="unknown"
+SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
+REQUIRED_SCRIPT_STATUS="unknown"
+REQUIRED_SCRIPT_PATH=""
+PIP_CHECK_STATUS="not_run"
+PIP_CHECK_REASON=""
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
+fi
+
+if ! validate_required_reaper_layout; then
+  mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" >/dev/null 2>&1 || true
+  set_status "deps_failed" "required_script_missing"
+  write_state
+  exit 1
+fi
+
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
+
+if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then
+  log "Apple Silicon Repair requires a complete bundled payload; online fallback is unsupported"
+  set_status "deps_failed" "apple_silicon_requires_bundled_payload"
+  write_state
+  exit 1
+fi
+if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "present" ] && [ -z "${BUNDLED_WHEELS_DIR}" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="wheelhouse_missing"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=wheelhouse_missing"
+  set_status "deps_failed" "payload_preflight_failed"
+  write_state
+  exit 1
+fi
+if [ "${MAC_ARCH}" = "arm64" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="python_unavailable"
+  _payload_probe_python=""
+  for _candidate in \
+    "${BUNDLED_PAYLOAD_DIR}/python/bin/python3" \
+    "${BUNDLED_PAYLOAD_DIR}/python/bin/python3.12" \
+    "${RUNTIME_BASE}/.venv/bin/python"
+  do
+    if [ -x "${_candidate}" ]; then
+      _payload_probe_python="${_candidate}"
+      break
+    fi
+  done
+  if [ -z "${_payload_probe_python}" ]; then
+    _payload_probe_python="$(command -v python3.12 2>/dev/null || true)"
+  fi
+  if [ -z "${_payload_probe_python}" ] || ! preflight_bundled_apple_silicon_payload "${_payload_probe_python}" "${BUNDLED_WHEELS_DIR}"; then
+    log "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed"
+    log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+    log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+    log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
+    set_status "deps_failed" "payload_preflight_failed"
+    write_state
+    exit 1
+  fi
+fi
+mkdir -p "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
+log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=${MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED}"
+
+if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
+  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
 fi
 
 set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
@@ -1207,12 +1678,14 @@ set_progress "1" "${STEP_TOTAL}" "Preparing runtime"
 # macOS must not blindly trust bare python3 because Homebrew/system aliases can
 # move to 3.13+ while STEMwerk 2.x only supports Python 3.10-3.12.
 if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+  MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
   remove_incompatible_venv
 fi
 if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
   if evaluate_python_candidate "${RUNTIME_BASE}/.venv/bin/python"; then
     log "Selected existing virtual environment Python: ${PYTHON} (version ${SELECTED_PYTHON_VERSION})"
   else
+    MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
     remove_incompatible_venv
   fi
 fi
@@ -1319,6 +1792,7 @@ else
   esac
   log_macos_diagnostics
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
     log "Creating STEMwerk virtual environment..."
     log "Creating venv with ${PYTHON}"
     "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv" >> "${LOG_FILE}" 2>&1 || set_status "venv_failed" "venv_create_failed"
@@ -1326,14 +1800,28 @@ else
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
-    install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
-    log "Installing pinned STEMwerk backend packages..."
-    install_with_optional_bundled_wheels "${VENV_PY}" "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
-    if ! install_pinned_torch_stack; then
-      if [ "${MAC_ARCH}" = "x86_64" ]; then
-        log "Intel macOS CPU fallback dependency install failed during initial torch stack setup"
+    MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
+    if [ "${MAC_ARCH}" = "arm64" ]; then
+      if install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip setuptools wheel >> "${LOG_FILE}" 2>&1; then
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS="ok"
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="installed_from_bundled_payload"
+      else
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS="failed"
+        MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="bootstrap_tools_install_failed"
+        set_status "deps_failed" "bootstrap_tools_install_failed"
+        write_state
+        exit 1
       fi
-      set_status "deps_failed" "torch_install_failed"
+    else
+      install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
+    fi
+    log "Installing pinned STEMwerk backend packages..."
+    if [ "${MAC_ARCH}" = "x86_64" ]; then
+      install_with_optional_bundled_wheels "${VENV_PY}" "numpy==${PINNED_NUMPY_VERSION}" >> "${LOG_FILE}" 2>&1 || set_status "deps_failed" "numpy_install_failed"
+      if ! install_pinned_torch_stack; then
+        log "Intel macOS CPU fallback dependency install failed during initial torch stack setup"
+        set_status "deps_failed" "torch_install_failed"
+      fi
     fi
 
     log "Installing stemwerk-core"
@@ -1356,9 +1844,16 @@ else
       exit 1
     fi
 
-    log "Preinstalling numba/llvmlite (macOS wheels)"
-    install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==${PINNED_LLVM_VERSION}" "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1 || \
-      log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
+    if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_PAYLOAD_PREFLIGHT_STATUS}" = "ok" ]; then
+      if ! install_apple_silicon_core_bundle; then
+        set_status "deps_failed" "${MACOS_CORE_BUNDLE_INSTALL_REASON:-core_bundle_install_failed}"
+        write_state
+        exit 1
+      fi
+    else
+      log "Preinstalling numba/llvmlite (macOS wheels)"
+      install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==${PINNED_LLVM_VERSION}" "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1 || \
+        log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
     if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
         _audio_tmp_log="${RUNTIME_BASE}/logs/audio_separator_install.log"
@@ -1417,6 +1912,7 @@ else
         fi
       fi
     fi
+    fi
   fi
 fi
 
@@ -1472,7 +1968,7 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   fi
   if ! verify_audio_separator_runtime_deps; then
     FINAL_RUNTIME_VERIFIED="no"
-    if [ "${BACKEND_DEPS_REASON}" = "samplerate_arch_mismatch_requires_runtime_rebuild" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_reinstall_failed" ]; then
+    if [ "${BACKEND_DEPS_REASON}" = "samplerate_arch_mismatch_requires_runtime_rebuild" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_reinstall_failed" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_import_failed" ] || [ "${BACKEND_DEPS_REASON}" = "samplerate_native_probe_failed" ]; then
       set_status "deps_failed" "${BACKEND_DEPS_REASON}"
     else
       set_status "deps_failed" "audio_separator_install_failed"
@@ -1488,9 +1984,12 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   fi
   if ! assert_pinned_torch_stack "${VENV_PY}"; then
     FINAL_RUNTIME_VERIFIED="no"
-    set_status "deps_failed" "torch_pin_assert_failed"
+    MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="failed"
+    set_status "deps_failed" "core_bundle_pin_assert_failed"
+  else
+    MACOS_CORE_BUNDLE_PIN_ASSERT_STATUS="ok"
   fi
-  if ! "${VENV_PY}" -m pip check >> "${LOG_FILE}" 2>&1; then
+  if ! check_runtime_dependencies; then
     FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "pip_check_failed"
   fi
@@ -1534,18 +2033,26 @@ fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   _bundled_drumsep_dir="$(bundled_drumsep_dir || true)"
   if [ -n "${_bundled_drumsep_dir}" ]; then
-    if copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"; then
+    if copy_bundled_drumsep_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"; then
       MACOS_BUNDLED_DRUMSEP_STATUS="seeded"
     else
       MACOS_BUNDLED_DRUMSEP_STATUS="copy_failed"
     fi
   fi
-  if [ "${MAC_ARCH}" = "x86_64" ]; then
+  if [ "${MAC_ARCH}" = "arm64" ] && ! materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}" "$(model_cache_dir)" "${VENV_PY}"; then
+    MACOS_BUNDLED_DRUMSEP_STATUS="copy_failed"
+    log "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
+    log "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
+    log "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
+    log "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"
+    READY_DETAIL="drumsep_compat_yaml_failed"
+    set_status "deps_failed" "drumsep_compat_yaml_failed"
+  elif [ "${MAC_ARCH}" = "x86_64" ]; then
     READY_RUNTIME_STATUS="skipped"
     READY_DRUMSEP_MODEL_STATUS="skipped"
     READY_DETAIL="unsupported_mac_intel"
     log "drumsep_ready_status=unsupported_mac_intel"
-  else
+  elif [ "${STATUS}" = "ok" ]; then
     if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
       READY_RUNTIME_STATUS="ok"
       READY_DRUMSEP_MODEL_STATUS="ok"
@@ -1555,6 +2062,10 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
       READY_RUNTIME_STATUS="missing"
       READY_DRUMSEP_MODEL_STATUS="missing"
       case "${DRUMSEP_PREFETCH_DETAIL:-}" in
+        drumsep_prefetch_script_missing)
+          READY_DETAIL="drumsep_prefetch_script_missing"
+          set_status "deps_failed" "drumsep_prefetch_script_missing"
+          ;;
         asset_download_failed:*|download_checks_write_failed:*|runtime_download_checks_missing|drumsep_yaml_filename_missing|builtin_fallback|catalog_entry_missing)
           READY_DETAIL="drumsep_model_download_failed"
           set_status "deps_failed" "drumsep_model_download_failed"
