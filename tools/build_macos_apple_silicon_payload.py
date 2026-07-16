@@ -48,6 +48,14 @@ DRUMSEP_FILES = (
 )
 DRUMSEP_MODEL_CACHE_FILES = DRUMSEP_FILES[:2]
 DRUMSEP_COMPAT_ASSET = Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml")
+DRUMSEP_COMPAT_CANONICAL_SHA256 = "b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
+DRUMSEP_COMPAT_CANONICAL_SIZE = 2331
+DRUMSEP_COMPAT_INSTRUMENTS = ("kick", "snare", "toms", "hh", "ride", "crash")
+DRUMSEP_COMPAT_SOURCE_PROVENANCE = {
+    "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
+    "size": 2417,
+    "newlines": "CRLF",
+}
 DRUMSEP_FILE_POLICY = {
     DRUMSEP_FILES[0]: {
         "role": "canonical_model",
@@ -57,8 +65,11 @@ DRUMSEP_FILE_POLICY = {
     },
     DRUMSEP_FILES[2]: {
         "role": "compatibility_config",
-        "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
-        "size": 2417,
+        "sha256": DRUMSEP_COMPAT_CANONICAL_SHA256,
+        "size": DRUMSEP_COMPAT_CANONICAL_SIZE,
+        "canonical_payload_newlines": "LF",
+        "instruments": DRUMSEP_COMPAT_INSTRUMENTS,
+        "source_provenance": DRUMSEP_COMPAT_SOURCE_PROVENANCE,
     },
 }
 
@@ -654,22 +665,40 @@ def validate_drumsep_files(drumsep_dir: Path, inventory: list[dict] | None = Non
             raise RuntimeError(f"payload_drumsep_checksum_mismatch:{filename}")
         if "size" in policy and path.stat().st_size != policy["size"]:
             raise RuntimeError(f"payload_drumsep_size_mismatch:{filename}")
+        if filename == DRUMSEP_COMPAT_ASSET.name:
+            try:
+                import yaml
+
+                document = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.FullLoader)
+                instruments = tuple(document["training"]["instruments"])
+            except Exception as exc:
+                raise RuntimeError(f"payload_drumsep_semantics_invalid:{filename}:{exc}") from exc
+            if instruments != DRUMSEP_COMPAT_INSTRUMENTS:
+                raise RuntimeError(f"payload_drumsep_instruments_mismatch:{filename}")
     if inventory is not None:
         manifest_by_name = {item.get("filename", ""): item for item in inventory}
         if len(manifest_by_name) != len(inventory) or set(manifest_by_name) != set(physical):
             raise RuntimeError("payload_drumsep_inventory_mismatch")
         for filename, path in physical.items():
             item = manifest_by_name[filename]
-            if item.get("role") != DRUMSEP_FILE_POLICY[filename]["role"]:
+            policy = DRUMSEP_FILE_POLICY[filename]
+            if item.get("role") != policy["role"]:
                 raise RuntimeError(f"payload_drumsep_role_mismatch:{filename}")
             if item.get("sha256") != sha256_file(path) or item.get("size") != path.stat().st_size:
                 raise RuntimeError(f"payload_drumsep_inventory_fingerprint_mismatch:{filename}")
+            if filename == DRUMSEP_COMPAT_ASSET.name:
+                if item.get("canonical_payload_newlines") != policy["canonical_payload_newlines"]:
+                    raise RuntimeError(f"payload_drumsep_inventory_policy_mismatch:{filename}:newlines")
+                if item.get("instruments") != list(policy["instruments"]):
+                    raise RuntimeError(f"payload_drumsep_inventory_policy_mismatch:{filename}:instruments")
+                if item.get("source_provenance") != policy["source_provenance"]:
+                    raise RuntimeError(f"payload_drumsep_inventory_policy_mismatch:{filename}:provenance")
     return list(physical.values())
 
 
 def drumsep_file_inventory(drumsep_dir: Path) -> list[dict]:
     paths = validate_drumsep_files(drumsep_dir)
-    return [
+    inventory = [
         {
             "filename": path.name,
             "role": DRUMSEP_FILE_POLICY[path.name]["role"],
@@ -678,6 +707,13 @@ def drumsep_file_inventory(drumsep_dir: Path) -> list[dict]:
         }
         for path in sorted(paths, key=lambda item: item.name)
     ]
+    compatibility = next(item for item in inventory if item["filename"] == DRUMSEP_COMPAT_ASSET.name)
+    compatibility.update(
+        canonical_payload_newlines="LF",
+        instruments=list(DRUMSEP_COMPAT_INSTRUMENTS),
+        source_provenance=dict(DRUMSEP_COMPAT_SOURCE_PROVENANCE),
+    )
+    return inventory
 
 
 def write_manifest(output_dir: Path, version: str) -> None:

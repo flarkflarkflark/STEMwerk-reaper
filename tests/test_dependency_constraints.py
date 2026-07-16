@@ -2751,6 +2751,11 @@ def test_drumsep_compat_yaml_runtime_guard_no_network_and_managed_alias_integrit
     second = helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
     assert second.action == "mixed_cache_use_new"
     assert baseline == {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
+    crlf_source_variant = compatibility.read_bytes().replace(b"\n", b"\r\n")
+    compatibility.write_bytes(crlf_source_variant)
+    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
+        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert exc_info.value.reason == "drumsep_compat_yaml_checksum_mismatch"
     compatibility.write_bytes(b"checksum drift")
     with pytest.raises(helper.DirectDemixValidationError) as exc_info:
         helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)

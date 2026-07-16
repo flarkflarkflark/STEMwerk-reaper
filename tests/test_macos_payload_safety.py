@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import re
 import shutil
@@ -8,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 BUILDER_PATH = Path("tools/build_macos_apple_silicon_payload.py")
@@ -211,16 +213,30 @@ def test_drumsep_compat_yaml_payload_inventory_and_audit_are_closed(tmp_path):
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     inventory = {item["filename"]: item for item in manifest["drumsep_file_inventory"]}
     compat = inventory["config_drumsep_mdx23c.yaml"]
+    assert (tmp_path / "drumsep" / compat["filename"]).read_bytes() == builder.DRUMSEP_COMPAT_ASSET.read_bytes()
     assert compat == {
         "filename": "config_drumsep_mdx23c.yaml",
         "role": "compatibility_config",
-        "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
-        "size": 2417,
+        "sha256": builder.DRUMSEP_COMPAT_CANONICAL_SHA256,
+        "size": builder.DRUMSEP_COMPAT_CANONICAL_SIZE,
+        "canonical_payload_newlines": "LF",
+        "instruments": list(builder.DRUMSEP_COMPAT_INSTRUMENTS),
+        "source_provenance": builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE,
     }
     assert {item["role"] for item in inventory.values()} == {
         "canonical_model", "canonical_config", "compatibility_config"
     }
     builder.audit_existing_manifest(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    tampered_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    next(
+        item for item in tampered_manifest["drumsep_file_inventory"]
+        if item["filename"] == builder.DRUMSEP_COMPAT_ASSET.name
+    )["canonical_payload_newlines"] = "CRLF"
+    manifest_path.write_text(json.dumps(tampered_manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="payload_drumsep_inventory_policy_mismatch"):
+        builder.audit_existing_manifest(tmp_path)
+    builder.write_manifest(tmp_path, "2.3.0.5")
 
     compat_path = tmp_path / "drumsep" / "config_drumsep_mdx23c.yaml"
     original = compat_path.read_bytes()
@@ -236,6 +252,66 @@ def test_drumsep_compat_yaml_payload_inventory_and_audit_are_closed(tmp_path):
     with pytest.raises(RuntimeError, match="payload_drumsep_files_mismatch"):
         builder.audit_existing_manifest(tmp_path)
     print("MACOS_DRUMSEP_COMPAT_YAML_PAYLOAD_TEST=PASS")
+
+
+def test_drumsep_compat_yaml_canonical_bytes_survive_checkout_policy(tmp_path):
+    builder = load_builder()
+    asset = builder.DRUMSEP_COMPAT_ASSET
+    canonical = asset.read_bytes()
+    blob = subprocess.run(
+        ["git", "cat-file", "blob", f"HEAD:{asset.as_posix()}"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert canonical == blob
+    assert len(canonical) == builder.DRUMSEP_COMPAT_CANONICAL_SIZE == 2331
+    assert hashlib.sha256(canonical).hexdigest() == builder.DRUMSEP_COMPAT_CANONICAL_SHA256
+    assert canonical.count(b"\n") == 86
+    assert canonical.count(b"\r") == canonical.count(b"\r\n") == 0
+    document = yaml.load(canonical.decode("utf-8"), Loader=yaml.FullLoader)
+    assert tuple(document["training"]["instruments"]) == builder.DRUMSEP_COMPAT_INSTRUMENTS
+
+    source = canonical.replace(b"\n", b"\r\n")
+    assert len(source) == builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["size"] == 2417
+    assert hashlib.sha256(source).hexdigest() == builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["sha256"]
+    assert source.count(b"\r\n") == 86
+
+    attributes = Path(".gitattributes").read_text(encoding="utf-8")
+    expected_attribute = f"{asset.as_posix()} text eol=lf whitespace=-blank-at-eol"
+    assert expected_attribute in attributes
+    assert f"{asset.as_posix()} -whitespace" not in attributes
+
+    source_repo = tmp_path / "source"
+    source_repo.mkdir()
+    shutil.copy2(Path(".gitattributes"), source_repo / ".gitattributes")
+    target = source_repo / asset
+    target.parent.mkdir(parents=True)
+    target.write_bytes(canonical)
+    subprocess.run(["git", "init", "-q"], cwd=source_repo, check=True)
+    subprocess.run(["git", "add", ".gitattributes", asset.as_posix()], cwd=source_repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=STEMwerk Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        cwd=source_repo,
+        check=True,
+    )
+    for autocrlf in ("false", "true"):
+        checkout = tmp_path / f"checkout-{autocrlf}"
+        subprocess.run(
+            ["git", "-c", f"core.autocrlf={autocrlf}", "clone", "-q", str(source_repo), str(checkout)],
+            check=True,
+        )
+        checked_out = (checkout / asset).read_bytes()
+        assert checked_out == canonical
+        assert hashlib.sha256(checked_out).hexdigest() == builder.DRUMSEP_COMPAT_CANONICAL_SHA256
+
+    fake_payload = tmp_path / "crlf-payload" / "drumsep"
+    fake_payload.mkdir(parents=True)
+    (fake_payload / builder.DRUMSEP_FILES[0]).write_bytes(b"checkpoint")
+    (fake_payload / builder.DRUMSEP_FILES[1]).write_text("training: {}\n", encoding="utf-8")
+    (fake_payload / builder.DRUMSEP_FILES[2]).write_bytes(source)
+    with pytest.raises(RuntimeError, match="payload_drumsep_checksum_mismatch"):
+        builder.validate_drumsep_files(fake_payload)
+    print("MACOS_DRUMSEP_COMPAT_YAML_CANONICAL_BYTES_TEST=PASS")
 
 
 def test_bootstrap_materializes_drumsep_compat_yaml_atomically_and_idempotently(tmp_path):
@@ -263,7 +339,7 @@ def test_bootstrap_materializes_drumsep_compat_yaml_atomically_and_idempotently(
         )
         + 'log() { :; }\nLOG_FILE="/dev/null"\n'
         + 'DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"\n'
-        + 'DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"\n'
+        + f'DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="{load_builder().DRUMSEP_COMPAT_CANONICAL_SHA256}"\n'
         + f"SRC='{posix(source_dir)}'\nDEST='{posix(cache_dir)}'\nPY='{posix(Path(sys.executable))}'\n"
         + 'materialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY" || exit 10\n'
         + 'printf "first=%s:%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON" "$DRUMSEP_COMPAT_YAML_SHA256"\n'
@@ -275,8 +351,8 @@ def test_bootstrap_materializes_drumsep_compat_yaml_atomically_and_idempotently(
         encoding="utf-8",
     )
     result = subprocess.run([str(bash), posix(harness)], capture_output=True, text=True, check=True)
-    assert "first=created:materialized_from_payload:17d1649a" in result.stdout
-    assert "second=exists_valid:already_materialized:17d1649a" in result.stdout
+    assert "first=created:materialized_from_payload:b7165bb7" in result.stdout
+    assert "second=exists_valid:already_materialized:b7165bb7" in result.stdout
     assert "drift=failed:existing_checksum_mismatch" in result.stdout
     assert (cache_dir / "config_drumsep_mdx23c.yaml").read_bytes() == b"drift"
     assert not list(cache_dir.glob("*.tmp.*"))

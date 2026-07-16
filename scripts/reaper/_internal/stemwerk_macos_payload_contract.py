@@ -24,15 +24,24 @@ EXPECTED_OVERRIDE = {
 NON_CLOSURE_PACKAGES = {canonicalize_name(name) for name in ("pip", "setuptools", "wheel", "stemwerk-core")}
 EXPECTED_BOOTSTRAP_REQUIREMENTS = ["pip", "setuptools", "wheel"]
 TORCH_SYMPY_POLICY = {"torch": "2.5.1", "sympy": "1.13.1"}
+DRUMSEP_COMPAT_INVENTORY_POLICY = {
+    "canonical_payload_newlines": "LF",
+    "instruments": ["kick", "snare", "toms", "hh", "ride", "crash"],
+    "source_provenance": {
+        "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
+        "size": 2417,
+        "newlines": "CRLF",
+    },
+}
 DRUMSEP_FILE_POLICY = {
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": (
-        "canonical_model", None
+        "canonical_model", None, None
     ),
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml": (
-        "canonical_config", None
+        "canonical_config", None, None
     ),
     "config_drumsep_mdx23c.yaml": (
-        "compatibility_config", "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
+        "compatibility_config", "b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a", 2331
     ),
 }
 
@@ -71,7 +80,7 @@ def validate_drumsep_contract(manifest: dict, drumsep_dir: Path) -> None:
     physical = {path.name: path for path in entries if path.is_file()}
     if len(physical) != len(entries) or set(physical) != set(DRUMSEP_FILE_POLICY):
         fail("drumsep_inventory_invalid", "filesystem_mismatch")
-    for filename, (role, expected_sha256) in DRUMSEP_FILE_POLICY.items():
+    for filename, (role, expected_sha256, expected_size) in DRUMSEP_FILE_POLICY.items():
         path = physical[filename]
         item = manifest_by_name[filename]
         if item.get("role") != role:
@@ -79,8 +88,14 @@ def validate_drumsep_contract(manifest: dict, drumsep_dir: Path) -> None:
         actual_sha256 = sha256_file(path)
         if expected_sha256 and actual_sha256 != expected_sha256:
             fail("drumsep_integrity_invalid", filename)
+        if expected_size and path.stat().st_size != expected_size:
+            fail("drumsep_integrity_invalid", f"size={filename}")
         if item.get("sha256") != actual_sha256 or item.get("size") != path.stat().st_size:
             fail("drumsep_inventory_invalid", f"fingerprint={filename}")
+        if filename == "config_drumsep_mdx23c.yaml":
+            for key, expected in DRUMSEP_COMPAT_INVENTORY_POLICY.items():
+                if item.get(key) != expected:
+                    fail("drumsep_inventory_invalid", f"{key}={filename}")
 
 
 def validate_contract(manifest_path: Path, wheels_dir: Path, expected_core: list[str]) -> tuple[list[str], list[str]]:
