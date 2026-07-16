@@ -70,6 +70,13 @@ def run_materializer(
         ps_function(script, name)
         for name in ("GetSha256Lower", "SetDrumsepCompatYamlResult", "MaterializeDrumsepCompatYaml")
     )
+    if lock_destination and sys.platform != "win32":
+        # Unix permits replacing an open file, unlike the native Windows contract
+        # exercised by this scenario. Inject the same failure at the Replace call
+        # so Linux still verifies fail-closed preservation and temporary cleanup.
+        replace_call = "[IO.File]::Replace($tempPath, $DestinationPath, $backupPath)"
+        assert functions.count(replace_call) == 1
+        functions = functions.replace(replace_call, 'throw "test_atomic_replace_failure"')
     override = ""
     if tamper_temp_hash:
         override = r'''
@@ -82,6 +89,9 @@ function GetSha256Lower([string]$Path) {
     harness.write_text(
         f'''param([string]$SourcePath, [string]$DestinationPath, [switch]$LockDestination)
 $ErrorActionPreference = "Stop"
+# A dot-prefixed sibling tempfile is hidden to the Unix PowerShell provider.
+# Native Windows PowerShell does not require Force for the same filename.
+$PSDefaultParameterValues["Get-Item:Force"] = $true
 $drumsepCompatYamlExpectedSize = 2331
 $drumsepCompatYamlExpectedSha256 = "{CANONICAL_SHA}"
 $drumsepCompatYamlLegacyCrlfSize = 2417
