@@ -247,10 +247,11 @@ def _resolve_drumsep_catalog_cache_for_runtime(
     model_dir = Path(model_dir)
     requested_name = Path(str(requested_model or "")).name
     requested_stem = Path(requested_name).stem
-    legacy_model = model_dir / DRUMSEP_MODEL_FILENAME
-    resolved_model = model_dir / ASEP_0443_DRUMSEP_MODEL_FILENAME
+    canonical_model = model_dir / DRUMSEP_MODEL_FILENAME
+    alias_model = model_dir / ASEP_0443_DRUMSEP_MODEL_FILENAME
+    resolved_model = canonical_model
     resolved_config = model_dir / ASEP_0443_DRUMSEP_CONFIG_FILENAME
-    legacy_detected = legacy_model.exists()
+    legacy_detected = canonical_model.exists()
     requested_is_drumsep = requested_name in {
         "",
         DRUMSEP_MODEL_ALIAS,
@@ -279,30 +280,42 @@ def _resolve_drumsep_catalog_cache_for_runtime(
         action = "none"
         model_name = str(requested_model or "")
         resolved_model = model_dir / Path(model_name).name
-    elif resolved_model.exists() and legacy_detected:
-        action = "mixed_cache_use_new"
-        model_name = ASEP_0443_DRUMSEP_MODEL_FILENAME
-    elif resolved_model.exists():
-        action = "use_existing_new"
-        model_name = ASEP_0443_DRUMSEP_MODEL_FILENAME
-    elif legacy_detected:
-        model_name = ASEP_0443_DRUMSEP_MODEL_FILENAME
-        action = "download_new"
-        checksum_ok = False
+    else:
+        if not canonical_model.is_file():
+            raise DirectDemixValidationError(
+                "drumsep_canonical_checkpoint_missing",
+                "Managed canonical DrumSep checkpoint is missing; run STEMwerk Repair before processing.",
+            )
         try:
             expected = str(expected_legacy_sha256 or "").strip().lower()
-            checksum_ok = not expected or _sha256_file(legacy_model).lower() == expected
-        except Exception:
-            checksum_ok = False
-        if checksum_ok:
+            canonical_sha256 = _sha256_file(canonical_model).lower()
+        except Exception as exc:
+            raise DirectDemixValidationError(
+                "drumsep_canonical_checkpoint_unreadable",
+                f"Managed canonical DrumSep checkpoint could not be read: {exc}",
+            ) from exc
+        if expected and canonical_sha256 != expected:
+            raise DirectDemixValidationError(
+                "drumsep_canonical_checkpoint_checksum_mismatch",
+                "Managed canonical DrumSep checkpoint failed integrity validation; run STEMwerk Repair.",
+            )
+        if alias_model.exists():
             try:
-                shutil.copy2(legacy_model, resolved_model)
-                action = "copy_alias"
-            except Exception:
-                action = "download_new"
-    else:
-        action = "download_new"
-        model_name = ASEP_0443_DRUMSEP_MODEL_FILENAME if requested_is_drumsep else str(requested_model or "")
+                alias_sha256 = _sha256_file(alias_model).lower()
+            except Exception as exc:
+                raise DirectDemixValidationError(
+                    "drumsep_checkpoint_alias_unreadable",
+                    f"Existing DrumSep checkpoint alias could not be read: {exc}",
+                ) from exc
+            if alias_sha256 != canonical_sha256:
+                raise DirectDemixValidationError(
+                    "drumsep_checkpoint_alias_checksum_mismatch",
+                    "Existing DrumSep checkpoint alias differs from the managed canonical checkpoint; run STEMwerk Repair.",
+                )
+            action = "use_canonical_alias_compatible"
+        else:
+            action = "use_canonical"
+        model_name = DRUMSEP_MODEL_FILENAME
 
     markers = {
         "dks_catalog_version": "asep_0443" if requested_is_drumsep else "passthrough",
@@ -319,6 +332,30 @@ def _resolve_drumsep_catalog_cache_for_runtime(
         resolved_config_file=resolved_config,
         markers=markers,
     )
+
+
+def _configure_managed_drumsep_checkpoint(
+    separator: Any,
+    resolution: DrumSepCatalogCacheResolution,
+) -> None:
+    """Route the catalog-only DrumSep loader to STEMwerk's managed files in memory."""
+    original_download_model_files = separator.download_model_files
+    canonical_path = resolution.resolved_model_file
+    config_path = resolution.resolved_config_file
+
+    def resolve_model_files(model_filename: str):
+        requested_name = Path(str(model_filename or "")).name
+        if requested_name not in {DRUMSEP_MODEL_ALIAS, DRUMSEP_MODEL_FILENAME}:
+            return original_download_model_files(model_filename)
+        return (
+            DRUMSEP_MODEL_FILENAME,
+            "MDXC",
+            "STEMwerk managed DrumSep 6stem",
+            str(canonical_path),
+            config_path.name,
+        )
+
+    separator.download_model_files = resolve_model_files
 
 
 def _emit_catalog_cache_resolution_markers(resolution: DrumSepCatalogCacheResolution) -> None:
@@ -747,6 +784,8 @@ def run(args: argparse.Namespace) -> int:
                 }
             )
         sep = Separator(**separator_kwargs)
+        if model_resolution.action != "none":
+            _configure_managed_drumsep_checkpoint(sep, model_resolution)
         if args.route in {"mps-direct-demix", "direct-demix"}:
             _apply_separator_requested_device(sep, str(args.device or "cpu"))
         sep.load_model(model_name)
