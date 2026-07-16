@@ -16,6 +16,7 @@ BUILDER_PATH = Path("tools/build_macos_apple_silicon_payload.py")
 BOOTSTRAP_PATH = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh")
 SAMPLERATE_GUARD_PATH = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py")
 PAYLOAD_CONTRACT_PATH = Path("scripts/reaper/_internal/stemwerk_macos_payload_contract.py")
+DRUMSEP_HELPER_PATH = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
 
 CORE_BUNDLE = (
     "audio-separator==0.44.3",
@@ -60,6 +61,56 @@ def load_payload_contract():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def load_drumsep_helper():
+    spec = importlib.util.spec_from_file_location("macos_drumsep_helper_safety", DRUMSEP_HELPER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_drumsep_materialization_harness(
+    tmp_path: Path, source_dir: Path, cache_dir: Path, *, extra_shell: str = ""
+):
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        pytest.skip("native Git Bash not available")
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    builder = load_builder()
+
+    def posix(path: Path) -> str:
+        return subprocess.run(
+            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    harness = tmp_path / "materialize-drumsep-compat.sh"
+    harness.write_text(
+        "#!/bin/sh\nset -u\n"
+        + shell_function(script, "drumsep_file_sha256").join(("drumsep_file_sha256() {\n", "\n}\n"))
+        + shell_function(script, "drumsep_file_size").join(("drumsep_file_size() {\n", "\n}\n"))
+        + shell_function(script, "materialize_drumsep_compat_yaml").join(
+            ("materialize_drumsep_compat_yaml() {\n", "\n}\n")
+        )
+        + f'LOG_FILE="{posix(tmp_path / "materialize.log")}"\n'
+        + 'log() { printf "%s\\n" "$*" >> "$LOG_FILE"; }\n'
+        + 'curl() { printf curl > "${LOG_FILE}.network"; return 97; }\n'
+        + 'wget() { printf wget > "${LOG_FILE}.network"; return 98; }\n'
+        + 'DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"\n'
+        + f'DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="{builder.DRUMSEP_COMPAT_CANONICAL_SHA256}"\n'
+        + f'DRUMSEP_COMPAT_YAML_EXPECTED_SIZE="{builder.DRUMSEP_COMPAT_CANONICAL_SIZE}"\n'
+        + f'DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="{builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["sha256"]}"\n'
+        + f'DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE="{builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["size"]}"\n'
+        + f'SRC="{posix(source_dir)}"\nDEST="{posix(cache_dir)}"\nPY="{posix(Path(sys.executable))}"\n'
+        + extra_shell
+        + '\nmaterialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY"\nrc=$?\n'
+        + 'printf "result=%s:%s:%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON" '
+        + '"$DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256" "$DRUMSEP_COMPAT_YAML_SHA256"\nexit "$rc"\n',
+        encoding="utf-8",
+    )
+    return subprocess.run([str(bash), posix(harness)], capture_output=True, text=True)
 
 
 def run_arm64_payload_gate_fixture(tmp_path: Path, payload_state: str):
@@ -314,50 +365,136 @@ def test_drumsep_compat_yaml_canonical_bytes_survive_checkout_policy(tmp_path):
     print("MACOS_DRUMSEP_COMPAT_YAML_CANONICAL_BYTES_TEST=PASS")
 
 
-def test_bootstrap_materializes_drumsep_compat_yaml_atomically_and_idempotently(tmp_path):
-    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
-    if not bash.is_file():
-        pytest.skip("native Git Bash not available")
-    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+def test_bootstrap_materializes_and_migrates_drumsep_compat_yaml_atomically(
+    tmp_path, monkeypatch
+):
+    builder = load_builder()
+    helper = load_drumsep_helper()
     source_dir = tmp_path / "payload" / "drumsep"
     cache_dir = tmp_path / "models"
     source_dir.mkdir(parents=True)
-    shutil.copy2(Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml"), source_dir)
+    canonical = builder.DRUMSEP_COMPAT_ASSET.read_bytes()
+    legacy = canonical.replace(b"\n", b"\r\n")
+    source = source_dir / builder.DRUMSEP_COMPAT_ASSET.name
+    destination = cache_dir / builder.DRUMSEP_COMPAT_ASSET.name
+    source.write_bytes(canonical)
+    assert len(legacy) == builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["size"]
+    assert hashlib.sha256(legacy).hexdigest() == builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["sha256"]
 
-    def posix(path: Path) -> str:
-        return subprocess.run(
-            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"],
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
+    created = run_drumsep_materialization_harness(tmp_path, source_dir, cache_dir)
+    assert created.returncode == 0, created.stderr
+    assert "result=created:materialized_from_payload::b7165bb7" in created.stdout
+    assert destination.read_bytes() == canonical
+    created_mtime = destination.stat().st_mtime_ns
 
-    harness = tmp_path / "materialize-drumsep-compat.sh"
-    harness.write_text(
-        "#!/bin/sh\nset -u\n"
-        + shell_function(script, "drumsep_file_sha256").join(("drumsep_file_sha256() {\n", "\n}\n"))
-        + shell_function(script, "materialize_drumsep_compat_yaml").join(
-            ("materialize_drumsep_compat_yaml() {\n", "\n}\n")
-        )
-        + 'log() { :; }\nLOG_FILE="/dev/null"\n'
-        + 'DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"\n'
-        + f'DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="{load_builder().DRUMSEP_COMPAT_CANONICAL_SHA256}"\n'
-        + f"SRC='{posix(source_dir)}'\nDEST='{posix(cache_dir)}'\nPY='{posix(Path(sys.executable))}'\n"
-        + 'materialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY" || exit 10\n'
-        + 'printf "first=%s:%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON" "$DRUMSEP_COMPAT_YAML_SHA256"\n'
-        + 'materialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY" || exit 11\n'
-        + 'printf "second=%s:%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON" "$DRUMSEP_COMPAT_YAML_SHA256"\n'
-        + 'printf "drift" > "$DEST/$DRUMSEP_COMPAT_YAML"\n'
-        + 'if materialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY"; then exit 12; fi\n'
-        + 'printf "drift=%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON"\n',
-        encoding="utf-8",
+    exists = run_drumsep_materialization_harness(tmp_path, source_dir, cache_dir)
+    assert exists.returncode == 0, exists.stderr
+    assert "result=exists_valid:already_materialized:b7165bb7" in exists.stdout
+    assert destination.stat().st_mtime_ns == created_mtime
+
+    canonical_checkpoint = cache_dir / helper.DRUMSEP_MODEL_FILENAME
+    checkpoint_alias = cache_dir / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    canonical_checkpoint.write_bytes(b"managed-checkpoint")
+    checkpoint_alias.write_bytes(canonical_checkpoint.read_bytes())
+    checkpoint_before = helper._sha256_file(checkpoint_alias)
+    destination.write_bytes(legacy)
+    migrated = run_drumsep_materialization_harness(tmp_path, source_dir, cache_dir)
+    assert migrated.returncode == 0, migrated.stderr
+    assert "result=migrated_legacy_crlf:migrated_known_legacy_crlf:17d1649a" in migrated.stdout
+    assert migrated.stdout.rstrip().endswith(builder.DRUMSEP_COMPAT_CANONICAL_SHA256)
+    assert destination.read_bytes() == canonical
+    assert checkpoint_before == helper._sha256_file(checkpoint_alias)
+    migrated_mtime = destination.stat().st_mtime_ns
+
+    network_calls = []
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: network_calls.append((args, kwargs))
+        or (_ for _ in ()).throw(AssertionError("network forbidden")),
     )
-    result = subprocess.run([str(bash), posix(harness)], capture_output=True, text=True, check=True)
-    assert "first=created:materialized_from_payload:b7165bb7" in result.stdout
-    assert "second=exists_valid:already_materialized:b7165bb7" in result.stdout
-    assert "drift=failed:existing_checksum_mismatch" in result.stdout
-    assert (cache_dir / "config_drumsep_mdx23c.yaml").read_bytes() == b"drift"
+    resolution = helper._resolve_drumsep_catalog_cache_for_runtime(cache_dir, helper.DRUMSEP_MODEL_ALIAS)
+    assert resolution.action == "mixed_cache_use_new"
+    assert network_calls == []
+
+    after_migration = run_drumsep_materialization_harness(tmp_path, source_dir, cache_dir)
+    assert after_migration.returncode == 0
+    assert "result=exists_valid:already_materialized:b7165bb7" in after_migration.stdout
+    assert destination.stat().st_mtime_ns == migrated_mtime
+
+    destination.write_bytes(b"unknown unmanaged bytes")
+    unknown = destination.read_bytes()
+    rejected = run_drumsep_materialization_harness(tmp_path, source_dir, cache_dir)
+    assert rejected.returncode != 0
+    assert "result=failed:existing_checksum_mismatch:" in rejected.stdout
+    assert destination.read_bytes() == unknown
+
+    destination.write_bytes(legacy)
+    source.write_bytes(b"damaged payload")
+    damaged_source = run_drumsep_materialization_harness(tmp_path, source_dir, cache_dir)
+    assert damaged_source.returncode != 0
+    assert "result=failed:payload_source_integrity_mismatch:" in damaged_source.stdout
+    assert destination.read_bytes() == legacy
+    source.write_bytes(canonical)
+
+    atomic_failure = run_drumsep_materialization_harness(
+        tmp_path, source_dir, cache_dir, extra_shell="mv() { return 1; }\n"
+    )
+    assert atomic_failure.returncode != 0
+    assert "result=failed:atomic_replace_failed:17d1649a" in atomic_failure.stdout
+    assert destination.read_bytes() == legacy
+
+    temporary_mismatch = run_drumsep_materialization_harness(
+        tmp_path,
+        source_dir,
+        cache_dir,
+        extra_shell='cp() { command cp "$1" "$2" && printf drift >> "$2"; }\n',
+    )
+    assert temporary_mismatch.returncode != 0
+    assert "result=failed:temporary_copy_integrity_mismatch:17d1649a" in temporary_mismatch.stdout
+    assert destination.read_bytes() == legacy
     assert not list(cache_dir.glob("*.tmp.*"))
+    assert not (tmp_path / "materialize.log.network").exists()
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
     bootstrap_section = script.index('materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}"')
     assert bootstrap_section < script.index('ensure_drumsep_assets "${VENV_PY}"')
+    print("MACOS_DRUMSEP_COMPAT_YAML_LEGACY_MIGRATION_TEST=PASS")
+    print("DRUMSEP_COMPAT_YAML_LEGACY_RUNTIME_GUARD_TEST=PASS")
+    print("MACOS_DRUMSEP_COMPAT_YAML_REPAIR_CONVERGENCE_TEST=PASS")
+
+
+def test_managed_model_legacy_replacement_policy_is_closed():
+    builder = load_builder()
+    legacy_sha = builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["sha256"]
+    canonical_sha = builder.DRUMSEP_COMPAT_CANONICAL_SHA256
+    filename = builder.DRUMSEP_COMPAT_ASSET.name
+    alias = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+    canonical_model = builder.DRUMSEP_FILES[0]
+    checkpoint_sha = "checkpoint-sha"
+
+    def classify(before, after):
+        removed = set(before) - set(after)
+        additions = set(after) - set(before)
+        changes = {name: (before[name], after[name]) for name in set(before) & set(after) if before[name] != after[name]}
+        if removed:
+            return "UNMANAGED"
+        if additions - {alias, filename}:
+            return "UNMANAGED"
+        if alias in additions and after[alias] != before.get(canonical_model):
+            return "UNMANAGED"
+        if filename in additions and after[filename] != canonical_sha:
+            return "UNMANAGED"
+        if changes and changes != {filename: (legacy_sha, canonical_sha)}:
+            return "UNMANAGED"
+        return "KNOWN_MANAGED_MIGRATION" if changes else "KNOWN_MANAGED_ADDITIONS"
+
+    before = {canonical_model: checkpoint_sha, filename: legacy_sha}
+    after = {canonical_model: checkpoint_sha, filename: canonical_sha, alias: checkpoint_sha}
+    assert classify(before, after) == "KNOWN_MANAGED_MIGRATION"
+    assert classify(before, {**after, filename: "unknown"}) == "UNMANAGED"
+    assert classify(before, {canonical_model: checkpoint_sha}) == "UNMANAGED"
+    assert classify(before, {**after, "unexpected.bin": "hash"}) == "UNMANAGED"
+    assert classify({canonical_model: checkpoint_sha}, after) == "KNOWN_MANAGED_ADDITIONS"
+    print("MACOS_MANAGED_MODEL_LEGACY_REPLACEMENT_TEST=PASS")
 
 
 def test_native_samplerate_override_contract_passes_with_complete_closure(tmp_path):

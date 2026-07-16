@@ -40,6 +40,9 @@ DRUMSEP_CANONICAL_MODEL="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059
 DRUMSEP_CANONICAL_CONFIG="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"
 DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
+DRUMSEP_COMPAT_YAML_EXPECTED_SIZE="2331"
+DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
+DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE="2417"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -173,6 +176,17 @@ print(digest.hexdigest())
 PY
 }
 
+drumsep_file_size() {
+  _py="$1"
+  _path="$2"
+  "${_py}" - "${_path}" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).stat().st_size)
+PY
+}
+
 materialize_drumsep_compat_yaml() {
   _src_dir="$1"
   _dest_dir="$2"
@@ -181,15 +195,18 @@ materialize_drumsep_compat_yaml() {
   _dest="${_dest_dir}/${DRUMSEP_COMPAT_YAML}"
   _tmp="${_dest}.tmp.$$"
   DRUMSEP_COMPAT_YAML_SHA256=""
+  DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=""
   if [ ! -f "${_src}" ]; then
     DRUMSEP_COMPAT_YAML_STATUS="failed"
     DRUMSEP_COMPAT_YAML_REASON="payload_source_missing"
     return 1
   fi
   _src_sha="$(drumsep_file_sha256 "${_py}" "${_src}" 2>> "${LOG_FILE}" || true)"
-  if [ "${_src_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+  _src_size="$(drumsep_file_size "${_py}" "${_src}" 2>> "${LOG_FILE}" || true)"
+  if [ "${_src_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || \
+     [ "${_src_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
     DRUMSEP_COMPAT_YAML_STATUS="failed"
-    DRUMSEP_COMPAT_YAML_REASON="payload_source_checksum_mismatch"
+    DRUMSEP_COMPAT_YAML_REASON="payload_source_integrity_mismatch"
     DRUMSEP_COMPAT_YAML_SHA256="${_src_sha}"
     return 1
   fi
@@ -198,18 +215,31 @@ materialize_drumsep_compat_yaml() {
     DRUMSEP_COMPAT_YAML_REASON="model_cache_create_failed"
     return 1
   }
+  _success_status="created"
+  _success_reason="materialized_from_payload"
   if [ -e "${_dest}" ]; then
     _dest_sha="$(drumsep_file_sha256 "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+    _dest_size="$(drumsep_file_size "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+    DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256="${_dest_sha}"
     DRUMSEP_COMPAT_YAML_SHA256="${_dest_sha}"
-    if [ "${_dest_sha}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+    if [ "${_dest_sha}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] && \
+       [ "${_dest_size}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
       DRUMSEP_COMPAT_YAML_STATUS="exists_valid"
       DRUMSEP_COMPAT_YAML_REASON="already_materialized"
       log "DRUMSEP_COMPAT_YAML_STATUS=exists_valid"
       return 0
     fi
-    DRUMSEP_COMPAT_YAML_STATUS="failed"
-    DRUMSEP_COMPAT_YAML_REASON="existing_checksum_mismatch"
-    return 1
+    if [ "${_dest_sha}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256}" ] && \
+       [ "${_dest_size}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE}" ]; then
+      _success_status="migrated_legacy_crlf"
+      _success_reason="migrated_known_legacy_crlf"
+      log "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"
+      log "DRUMSEP_COMPAT_YAML_MIGRATION=known_legacy_crlf_to_canonical_lf"
+    else
+      DRUMSEP_COMPAT_YAML_STATUS="failed"
+      DRUMSEP_COMPAT_YAML_REASON="existing_checksum_mismatch"
+      return 1
+    fi
   fi
   rm -f "${_tmp}" >/dev/null 2>&1 || true
   if ! cp "${_src}" "${_tmp}" >> "${LOG_FILE}" 2>&1; then
@@ -219,21 +249,33 @@ materialize_drumsep_compat_yaml() {
     return 1
   fi
   _tmp_sha="$(drumsep_file_sha256 "${_py}" "${_tmp}" 2>> "${LOG_FILE}" || true)"
-  if [ "${_tmp_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || ! mv "${_tmp}" "${_dest}"; then
+  _tmp_size="$(drumsep_file_size "${_py}" "${_tmp}" 2>> "${LOG_FILE}" || true)"
+  if [ "${_tmp_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || \
+     [ "${_tmp_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
     DRUMSEP_COMPAT_YAML_STATUS="failed"
-    DRUMSEP_COMPAT_YAML_REASON="atomic_copy_verification_failed"
+    DRUMSEP_COMPAT_YAML_REASON="temporary_copy_integrity_mismatch"
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! mv "${_tmp}" "${_dest}"; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="atomic_replace_failed"
     rm -f "${_tmp}" >/dev/null 2>&1 || true
     return 1
   fi
   DRUMSEP_COMPAT_YAML_SHA256="$(drumsep_file_sha256 "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
-  if [ "${DRUMSEP_COMPAT_YAML_SHA256}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+  _dest_size="$(drumsep_file_size "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+  if [ "${DRUMSEP_COMPAT_YAML_SHA256}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || \
+     [ "${_dest_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ]; then
     DRUMSEP_COMPAT_YAML_STATUS="failed"
-    DRUMSEP_COMPAT_YAML_REASON="destination_checksum_mismatch"
+    DRUMSEP_COMPAT_YAML_REASON="destination_integrity_mismatch"
     return 1
   fi
-  DRUMSEP_COMPAT_YAML_STATUS="created"
-  DRUMSEP_COMPAT_YAML_REASON="materialized_from_payload"
-  log "DRUMSEP_COMPAT_YAML_STATUS=created"
+  DRUMSEP_COMPAT_YAML_STATUS="${_success_status}"
+  DRUMSEP_COMPAT_YAML_REASON="${_success_reason}"
+  log "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
+  log "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
+  log "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
   return 0
 }
 
@@ -1342,6 +1384,7 @@ write_state() {
       echo "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
       echo "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
       echo "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
+      echo "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"
       echo "REQUIRED_SCRIPT_STATUS=${REQUIRED_SCRIPT_STATUS}"
       [ -n "${REQUIRED_SCRIPT_PATH}" ] && echo "REQUIRED_SCRIPT_PATH=${REQUIRED_SCRIPT_PATH}"
       echo "DRUMSEP_PREFETCH_SCRIPT_STATUS=${DRUMSEP_PREFETCH_SCRIPT_STATUS}"
@@ -1554,6 +1597,7 @@ MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="not_started"
 DRUMSEP_COMPAT_YAML_STATUS="not_run"
 DRUMSEP_COMPAT_YAML_REASON="not_started"
 DRUMSEP_COMPAT_YAML_SHA256=""
+DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=""
 DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
 DRUMSEP_PREFETCH_SCRIPT_STATUS="unknown"
 SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
@@ -2000,6 +2044,7 @@ if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     log "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
     log "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
     log "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
+    log "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"
     READY_DETAIL="drumsep_compat_yaml_failed"
     set_status "deps_failed" "drumsep_compat_yaml_failed"
   elif [ "${MAC_ARCH}" = "x86_64" ]; then

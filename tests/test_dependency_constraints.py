@@ -5886,6 +5886,9 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
     materialize = 'materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}" "$(model_cache_dir)" "${VENV_PY}"'
     assert materialize in script
     assert script.index(materialize) < script.index('ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"')
+    assert 'DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"' in script
+    assert 'echo "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"' in script
+    assert '_success_reason="migrated_known_legacy_crlf"' in script
     assert 'MACOS_BUNDLED_DRUMSEP_STATUS="seeded"' in script
     assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in script
     assert 'READY_RUNTIME_STATUS="skipped"' in script
