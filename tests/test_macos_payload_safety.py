@@ -485,6 +485,7 @@ def test_bootstrap_materializes_and_migrates_drumsep_compat_yaml_atomically(
     print("MACOS_DRUMSEP_COMPAT_YAML_LEGACY_MIGRATION_TEST=PASS")
     print("DRUMSEP_COMPAT_YAML_LEGACY_RUNTIME_GUARD_TEST=PASS")
     print("MACOS_DRUMSEP_COMPAT_YAML_REPAIR_CONVERGENCE_TEST=PASS")
+    print("MACOS_DRUMSEP_MIGRATION_TEST_PORTABILITY=PASS")
 
 
 def test_managed_model_legacy_replacement_policy_is_closed():
