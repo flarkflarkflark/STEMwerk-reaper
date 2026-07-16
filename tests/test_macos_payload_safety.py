@@ -1,6 +1,7 @@
 import importlib.util
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -71,20 +72,40 @@ def load_drumsep_helper():
     return module
 
 
+def resolve_posix_shell() -> Path | None:
+    if os.name != "nt":
+        shell = shutil.which("sh") or "/bin/sh"
+        path = Path(shell)
+        return path if path.is_file() else None
+    candidates = (
+        Path(r"C:\Program Files\Git\bin\bash.exe"),
+        Path(r"C:\Program Files\Git\bin\sh.exe"),
+    )
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def posix_shell_path(shell: Path, path: Path) -> str:
+    resolved = path.resolve()
+    if os.name != "nt":
+        return str(resolved)
+    return subprocess.run(
+        [str(shell), "-lc", 'cygpath -u "$1"', "stemwerk-cygpath", str(resolved)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def run_drumsep_materialization_harness(
     tmp_path: Path, source_dir: Path, cache_dir: Path, *, extra_shell: str = ""
 ):
-    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
-    if not bash.is_file():
-        pytest.skip("native Git Bash not available")
+    shell = resolve_posix_shell()
+    if shell is None:
+        if os.name == "nt":
+            pytest.skip("native Git Bash is required for the POSIX shell migration fixture on Windows")
+        pytest.fail("native /bin/sh is required for the DrumSep migration fixture")
     script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
     builder = load_builder()
-
-    def posix(path: Path) -> str:
-        return subprocess.run(
-            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"],
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
 
     harness = tmp_path / "materialize-drumsep-compat.sh"
     harness.write_text(
@@ -94,7 +115,7 @@ def run_drumsep_materialization_harness(
         + shell_function(script, "materialize_drumsep_compat_yaml").join(
             ("materialize_drumsep_compat_yaml() {\n", "\n}\n")
         )
-        + f'LOG_FILE="{posix(tmp_path / "materialize.log")}"\n'
+        + f'LOG_FILE="{posix_shell_path(shell, tmp_path / "materialize.log")}"\n'
         + 'log() { printf "%s\\n" "$*" >> "$LOG_FILE"; }\n'
         + 'curl() { printf curl > "${LOG_FILE}.network"; return 97; }\n'
         + 'wget() { printf wget > "${LOG_FILE}.network"; return 98; }\n'
@@ -103,14 +124,18 @@ def run_drumsep_materialization_harness(
         + f'DRUMSEP_COMPAT_YAML_EXPECTED_SIZE="{builder.DRUMSEP_COMPAT_CANONICAL_SIZE}"\n'
         + f'DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="{builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["sha256"]}"\n'
         + f'DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE="{builder.DRUMSEP_COMPAT_SOURCE_PROVENANCE["size"]}"\n'
-        + f'SRC="{posix(source_dir)}"\nDEST="{posix(cache_dir)}"\nPY="{posix(Path(sys.executable))}"\n'
+        + f'SRC="{posix_shell_path(shell, source_dir)}"\n'
+        + f'DEST="{posix_shell_path(shell, cache_dir)}"\n'
+        + f'PY="{posix_shell_path(shell, Path(sys.executable))}"\n'
         + extra_shell
         + '\nmaterialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY"\nrc=$?\n'
         + 'printf "result=%s:%s:%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON" '
         + '"$DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256" "$DRUMSEP_COMPAT_YAML_SHA256"\nexit "$rc"\n',
         encoding="utf-8",
     )
-    return subprocess.run([str(bash), posix(harness)], capture_output=True, text=True)
+    return subprocess.run(
+        [str(shell), posix_shell_path(shell, harness)], capture_output=True, text=True
+    )
 
 
 def run_arm64_payload_gate_fixture(tmp_path: Path, payload_state: str):
