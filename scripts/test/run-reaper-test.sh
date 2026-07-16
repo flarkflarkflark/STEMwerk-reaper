@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # Linux/macOS REAPER test launcher for STEMwerk
 
 set -e
