@@ -2632,7 +2632,7 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
 
 
-def test_drumsep_helper_migrates_legacy_asep0443_catalog_cache_without_deleting_old_files(tmp_path):
+def test_drumsep_helper_uses_canonical_checkpoint_without_materializing_alias(tmp_path):
     helper = _load_drumsep_helper_module()
     legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
     legacy_yaml = tmp_path / helper.DRUMSEP_MODEL_YAML
@@ -2647,15 +2647,15 @@ def test_drumsep_helper_migrates_legacy_asep0443_catalog_cache_without_deleting_
         expected_config_sha256="",
     )
 
-    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
-    assert result.action == "copy_alias"
+    assert result.model_name == helper.DRUMSEP_MODEL_FILENAME
+    assert result.action == "use_canonical"
     assert result.legacy_model_detected is True
-    assert (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).read_bytes() == b"legacy-model"
+    assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
     assert legacy_ckpt.exists()
     assert legacy_yaml.exists()
     assert result.markers["dks_catalog_version"] == "asep_0443"
-    assert result.markers["dks_model_migration_action"] == "copy_alias"
-    assert result.markers["dks_resolved_model_file"].endswith(helper.ASEP_0443_DRUMSEP_MODEL_FILENAME)
+    assert result.markers["dks_model_migration_action"] == "use_canonical"
+    assert result.markers["dks_resolved_model_file"].endswith(helper.DRUMSEP_MODEL_FILENAME)
     assert result.markers["dks_resolved_config_file"].endswith(helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME)
 
 
@@ -2667,33 +2667,31 @@ def test_drumsep_helper_uses_fresh_asep0443_catalog_name_for_empty_cache(tmp_pat
     assert exc_info.value.reason == "drumsep_compat_yaml_missing"
 
 
-def test_drumsep_helper_does_not_alias_legacy_model_when_checksum_differs(tmp_path):
+def test_drumsep_helper_rejects_canonical_model_when_checksum_differs(tmp_path):
     helper = _load_drumsep_helper_module()
     legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
     legacy_ckpt.write_bytes(b"unexpected-model-content")
     (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text("compat: true\n", encoding="utf-8")
 
-    result = helper._resolve_drumsep_catalog_cache_for_runtime(
-        tmp_path,
-        helper.DRUMSEP_MODEL_FILENAME,
-        expected_legacy_sha256="definitely-not-this-model",
-        expected_config_sha256="",
-    )
+    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
+        helper._resolve_drumsep_catalog_cache_for_runtime(
+            tmp_path,
+            helper.DRUMSEP_MODEL_FILENAME,
+            expected_legacy_sha256="definitely-not-this-model",
+            expected_config_sha256="",
+        )
 
-    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
-    assert result.action == "download_new"
-    assert result.legacy_model_detected is True
+    assert exc_info.value.reason == "drumsep_canonical_checkpoint_checksum_mismatch"
     assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
     assert legacy_ckpt.read_bytes() == b"unexpected-model-content"
-    assert result.markers["dks_model_migration_action"] == "download_new"
 
 
-def test_drumsep_helper_prefers_existing_asep0443_model_in_mixed_cache(tmp_path):
+def test_drumsep_helper_tolerates_byte_identical_existing_alias_but_uses_canonical(tmp_path):
     helper = _load_drumsep_helper_module()
     legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
     new_ckpt = tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
     legacy_ckpt.write_bytes(b"legacy-model")
-    new_ckpt.write_bytes(b"new-model")
+    new_ckpt.write_bytes(b"legacy-model")
     (tmp_path / helper.DRUMSEP_MODEL_YAML).write_text("audio: {}\nmodel: {}\ntraining: {}\n", encoding="utf-8")
     (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text(
         "audio: {}\nmodel: {}\ntraining: {}\n",
@@ -2707,12 +2705,12 @@ def test_drumsep_helper_prefers_existing_asep0443_model_in_mixed_cache(tmp_path)
         expected_config_sha256="",
     )
 
-    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
-    assert result.action == "mixed_cache_use_new"
+    assert result.model_name == helper.DRUMSEP_MODEL_FILENAME
+    assert result.action == "use_canonical_alias_compatible"
     assert result.legacy_model_detected is True
     assert legacy_ckpt.read_bytes() == b"legacy-model"
-    assert new_ckpt.read_bytes() == b"new-model"
-    assert result.markers["dks_model_migration_action"] == "mixed_cache_use_new"
+    assert new_ckpt.read_bytes() == b"legacy-model"
+    assert result.markers["dks_model_migration_action"] == "use_canonical_alias_compatible"
 
 
 @pytest.mark.parametrize("workflow_route", ["direct_kit", "kit_split"])
@@ -2723,7 +2721,7 @@ def test_drumsep_compat_yaml_runtime_guard_no_network_and_managed_alias_integrit
     canonical = tmp_path / helper.DRUMSEP_MODEL_FILENAME
     compatibility = tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME
     canonical.write_bytes(b"managed-checkpoint")
-    shutil.copy2(Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml"), compatibility)
+    shutil.copy2(Path("tools/assets/drumsep/config_drumsep_mdx23c.yaml"), compatibility)
 
     network_calls = []
     monkeypatch.setattr(
@@ -2735,21 +2733,23 @@ def test_drumsep_compat_yaml_runtime_guard_no_network_and_managed_alias_integrit
         helper.DRUMSEP_MODEL_ALIAS,
         expected_legacy_sha256="",
     )
-    alias = tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
     baseline = {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
     assert workflow_route in {"direct_kit", "kit_split"}
-    assert result.action == "copy_alias"
-    assert alias.read_bytes() == canonical.read_bytes()
+    assert result.action == "use_canonical"
+    assert result.resolved_model_file == canonical
     assert helper._sha256_file(compatibility) == helper.ASEP_0443_DRUMSEP_CONFIG_SHA256
     assert set(baseline) == {
         helper.DRUMSEP_MODEL_FILENAME,
-        helper.ASEP_0443_DRUMSEP_MODEL_FILENAME,
         helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME,
     }
     assert network_calls == []
 
-    second = helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
-    assert second.action == "mixed_cache_use_new"
+    second = helper._resolve_drumsep_catalog_cache_for_runtime(
+        tmp_path,
+        helper.DRUMSEP_MODEL_ALIAS,
+        expected_legacy_sha256="",
+    )
+    assert second.action == "use_canonical"
     assert baseline == {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
     crlf_source_variant = compatibility.read_bytes().replace(b"\n", b"\r\n")
     compatibility.write_bytes(crlf_source_variant)

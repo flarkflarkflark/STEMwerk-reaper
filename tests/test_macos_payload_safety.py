@@ -335,7 +335,7 @@ def test_drumsep_compat_yaml_canonical_bytes_survive_checkout_policy(tmp_path):
     asset = builder.DRUMSEP_COMPAT_ASSET
     canonical = asset.read_bytes()
     blob = subprocess.run(
-        ["git", "cat-file", "blob", f"HEAD:{asset.as_posix()}"],
+        ["git", "cat-file", "blob", f":{asset.as_posix()}"],
         check=True,
         capture_output=True,
     ).stdout
@@ -437,8 +437,13 @@ def test_bootstrap_materializes_and_migrates_drumsep_compat_yaml_atomically(
         lambda *args, **kwargs: network_calls.append((args, kwargs))
         or (_ for _ in ()).throw(AssertionError("network forbidden")),
     )
-    resolution = helper._resolve_drumsep_catalog_cache_for_runtime(cache_dir, helper.DRUMSEP_MODEL_ALIAS)
-    assert resolution.action == "mixed_cache_use_new"
+    resolution = helper._resolve_drumsep_catalog_cache_for_runtime(
+        cache_dir,
+        helper.DRUMSEP_MODEL_ALIAS,
+        expected_legacy_sha256="",
+    )
+    assert resolution.action == "use_canonical_alias_compatible"
+    assert resolution.resolved_model_file == canonical_checkpoint
     assert network_calls == []
 
     after_migration = run_drumsep_materialization_harness(tmp_path, source_dir, cache_dir)
