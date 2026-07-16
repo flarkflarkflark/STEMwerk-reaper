@@ -2638,11 +2638,13 @@ def test_drumsep_helper_migrates_legacy_asep0443_catalog_cache_without_deleting_
     legacy_yaml = tmp_path / helper.DRUMSEP_MODEL_YAML
     legacy_ckpt.write_bytes(b"legacy-model")
     legacy_yaml.write_text("audio: {}\nmodel: {}\ntraining: {}\n", encoding="utf-8")
+    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text("compat: true\n", encoding="utf-8")
 
     result = helper._resolve_drumsep_catalog_cache_for_runtime(
         tmp_path,
         helper.DRUMSEP_MODEL_FILENAME,
         expected_legacy_sha256="",
+        expected_config_sha256="",
     )
 
     assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
@@ -2660,29 +2662,22 @@ def test_drumsep_helper_migrates_legacy_asep0443_catalog_cache_without_deleting_
 def test_drumsep_helper_uses_fresh_asep0443_catalog_name_for_empty_cache(tmp_path):
     helper = _load_drumsep_helper_module()
 
-    result = helper._resolve_drumsep_catalog_cache_for_runtime(
-        tmp_path,
-        helper.DRUMSEP_MODEL_ALIAS,
-        expected_legacy_sha256="",
-    )
-
-    assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
-    assert result.action == "download_new"
-    assert result.legacy_model_detected is False
-    assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
-    assert result.markers["dks_model_migration_action"] == "download_new"
-    assert result.markers["dks_legacy_model_detected"] == "false"
+    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
+        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert exc_info.value.reason == "drumsep_compat_yaml_missing"
 
 
 def test_drumsep_helper_does_not_alias_legacy_model_when_checksum_differs(tmp_path):
     helper = _load_drumsep_helper_module()
     legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
     legacy_ckpt.write_bytes(b"unexpected-model-content")
+    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text("compat: true\n", encoding="utf-8")
 
     result = helper._resolve_drumsep_catalog_cache_for_runtime(
         tmp_path,
         helper.DRUMSEP_MODEL_FILENAME,
         expected_legacy_sha256="definitely-not-this-model",
+        expected_config_sha256="",
     )
 
     assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
@@ -2709,6 +2704,7 @@ def test_drumsep_helper_prefers_existing_asep0443_model_in_mixed_cache(tmp_path)
         tmp_path,
         helper.DRUMSEP_MODEL_ALIAS,
         expected_legacy_sha256="",
+        expected_config_sha256="",
     )
 
     assert result.model_name == helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
@@ -2717,6 +2713,51 @@ def test_drumsep_helper_prefers_existing_asep0443_model_in_mixed_cache(tmp_path)
     assert legacy_ckpt.read_bytes() == b"legacy-model"
     assert new_ckpt.read_bytes() == b"new-model"
     assert result.markers["dks_model_migration_action"] == "mixed_cache_use_new"
+
+
+@pytest.mark.parametrize("workflow_route", ["direct_kit", "kit_split"])
+def test_drumsep_compat_yaml_runtime_guard_no_network_and_managed_alias_integrity(
+    tmp_path, monkeypatch, workflow_route
+):
+    helper = _load_drumsep_helper_module()
+    canonical = tmp_path / helper.DRUMSEP_MODEL_FILENAME
+    compatibility = tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME
+    canonical.write_bytes(b"managed-checkpoint")
+    shutil.copy2(Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml"), compatibility)
+
+    network_calls = []
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: network_calls.append((args, kwargs)) or (_ for _ in ()).throw(AssertionError("network forbidden")),
+    )
+    result = helper._resolve_drumsep_catalog_cache_for_runtime(
+        tmp_path,
+        helper.DRUMSEP_MODEL_ALIAS,
+        expected_legacy_sha256="",
+    )
+    alias = tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
+    baseline = {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
+    assert workflow_route in {"direct_kit", "kit_split"}
+    assert result.action == "copy_alias"
+    assert alias.read_bytes() == canonical.read_bytes()
+    assert helper._sha256_file(compatibility) == helper.ASEP_0443_DRUMSEP_CONFIG_SHA256
+    assert set(baseline) == {
+        helper.DRUMSEP_MODEL_FILENAME,
+        helper.ASEP_0443_DRUMSEP_MODEL_FILENAME,
+        helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME,
+    }
+    assert network_calls == []
+
+    second = helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert second.action == "mixed_cache_use_new"
+    assert baseline == {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
+    compatibility.write_bytes(b"checksum drift")
+    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
+        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
+    assert exc_info.value.reason == "drumsep_compat_yaml_checksum_mismatch"
+    print("DRUMSEP_COMPAT_YAML_RUNTIME_GUARD_TEST=PASS")
+    print("MACOS_DRUMSEP_COMPAT_YAML_NO_NETWORK_TEST=PASS")
+    print("MACOS_MANAGED_MODEL_ALIAS_INTEGRITY_TEST=PASS")
 
 
 def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
@@ -5836,7 +5877,10 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
     assert 'copy_bundled_models_to_cache "${_bundled_models_dir}" "$(model_cache_dir)"' in script
     assert 'MACOS_BUNDLED_MODELS_STATUS="seeded"' in script
     assert '_bundled_drumsep_dir="$(bundled_drumsep_dir || true)"' in script
-    assert 'copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
+    assert 'copy_bundled_drumsep_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
+    materialize = 'materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}" "$(model_cache_dir)" "${VENV_PY}"'
+    assert materialize in script
+    assert script.index(materialize) < script.index('ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"')
     assert 'MACOS_BUNDLED_DRUMSEP_STATUS="seeded"' in script
     assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in script
     assert 'READY_RUNTIME_STATUS="skipped"' in script

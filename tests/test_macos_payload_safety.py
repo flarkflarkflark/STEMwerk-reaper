@@ -147,6 +147,11 @@ def complete_fake_wheelhouse(tmp_path: Path, builder) -> Path:
             write_fake_wheel(wheels / f"{prefix}1.0-py3-none-any.whl")
     write_fake_wheel(wheels / "sympy-1.13.1-py3-none-any.whl")
     write_fake_wheel(wheels / f"flatbuffers-{FAKE_FLATBUFFERS_VERSION}-py2.py3-none-any.whl")
+    drumsep = tmp_path / "drumsep"
+    drumsep.mkdir()
+    (drumsep / builder.DRUMSEP_FILES[0]).write_bytes(b"fake canonical checkpoint")
+    (drumsep / builder.DRUMSEP_FILES[1]).write_text("training:\n  instruments: [Kick]\n", encoding="utf-8")
+    shutil.copy2(builder.DRUMSEP_COMPAT_ASSET, drumsep / builder.DRUMSEP_FILES[2])
     return wheels
 
 
@@ -197,6 +202,86 @@ def test_complete_exact_cp312_arm64_wheelhouse_passes_and_manifest_is_fingerprin
     assert all(entry["size"] > 0 for entry in manifest["wheel_inventory"])
     builder.audit_existing_manifest(tmp_path)
     print("MACOS_PAYLOAD_CLOSED_WORLD_POSITIVE_TEST=PASS")
+
+
+def test_drumsep_compat_yaml_payload_inventory_and_audit_are_closed(tmp_path):
+    builder = load_builder()
+    complete_fake_wheelhouse(tmp_path, builder)
+    builder.write_manifest(tmp_path, "2.3.0.5")
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    inventory = {item["filename"]: item for item in manifest["drumsep_file_inventory"]}
+    compat = inventory["config_drumsep_mdx23c.yaml"]
+    assert compat == {
+        "filename": "config_drumsep_mdx23c.yaml",
+        "role": "compatibility_config",
+        "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
+        "size": 2417,
+    }
+    assert {item["role"] for item in inventory.values()} == {
+        "canonical_model", "canonical_config", "compatibility_config"
+    }
+    builder.audit_existing_manifest(tmp_path)
+
+    compat_path = tmp_path / "drumsep" / "config_drumsep_mdx23c.yaml"
+    original = compat_path.read_bytes()
+    compat_path.write_bytes(b"checksum drift")
+    with pytest.raises(RuntimeError, match="payload_drumsep_checksum_mismatch"):
+        builder.audit_existing_manifest(tmp_path)
+    compat_path.write_bytes(original)
+    compat_path.unlink()
+    with pytest.raises(RuntimeError, match="payload_drumsep_files_mismatch"):
+        builder.audit_existing_manifest(tmp_path)
+    compat_path.write_bytes(original)
+    (tmp_path / "drumsep" / "unexpected.yaml").write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="payload_drumsep_files_mismatch"):
+        builder.audit_existing_manifest(tmp_path)
+    print("MACOS_DRUMSEP_COMPAT_YAML_PAYLOAD_TEST=PASS")
+
+
+def test_bootstrap_materializes_drumsep_compat_yaml_atomically_and_idempotently(tmp_path):
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        pytest.skip("native Git Bash not available")
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    source_dir = tmp_path / "payload" / "drumsep"
+    cache_dir = tmp_path / "models"
+    source_dir.mkdir(parents=True)
+    shutil.copy2(Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml"), source_dir)
+
+    def posix(path: Path) -> str:
+        return subprocess.run(
+            [str(bash), "-lc", f"cygpath -u '{path.as_posix()}'"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    harness = tmp_path / "materialize-drumsep-compat.sh"
+    harness.write_text(
+        "#!/bin/sh\nset -u\n"
+        + shell_function(script, "drumsep_file_sha256").join(("drumsep_file_sha256() {\n", "\n}\n"))
+        + shell_function(script, "materialize_drumsep_compat_yaml").join(
+            ("materialize_drumsep_compat_yaml() {\n", "\n}\n")
+        )
+        + 'log() { :; }\nLOG_FILE="/dev/null"\n'
+        + 'DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"\n'
+        + 'DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"\n'
+        + f"SRC='{posix(source_dir)}'\nDEST='{posix(cache_dir)}'\nPY='{posix(Path(sys.executable))}'\n"
+        + 'materialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY" || exit 10\n'
+        + 'printf "first=%s:%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON" "$DRUMSEP_COMPAT_YAML_SHA256"\n'
+        + 'materialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY" || exit 11\n'
+        + 'printf "second=%s:%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON" "$DRUMSEP_COMPAT_YAML_SHA256"\n'
+        + 'printf "drift" > "$DEST/$DRUMSEP_COMPAT_YAML"\n'
+        + 'if materialize_drumsep_compat_yaml "$SRC" "$DEST" "$PY"; then exit 12; fi\n'
+        + 'printf "drift=%s:%s\\n" "$DRUMSEP_COMPAT_YAML_STATUS" "$DRUMSEP_COMPAT_YAML_REASON"\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run([str(bash), posix(harness)], capture_output=True, text=True, check=True)
+    assert "first=created:materialized_from_payload:17d1649a" in result.stdout
+    assert "second=exists_valid:already_materialized:17d1649a" in result.stdout
+    assert "drift=failed:existing_checksum_mismatch" in result.stdout
+    assert (cache_dir / "config_drumsep_mdx23c.yaml").read_bytes() == b"drift"
+    assert not list(cache_dir.glob("*.tmp.*"))
+    bootstrap_section = script.index('materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}"')
+    assert bootstrap_section < script.index('ensure_drumsep_assets "${VENV_PY}"')
 
 
 def test_native_samplerate_override_contract_passes_with_complete_closure(tmp_path):

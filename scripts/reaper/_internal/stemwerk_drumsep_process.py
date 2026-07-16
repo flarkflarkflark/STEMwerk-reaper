@@ -26,6 +26,7 @@ DRUMSEP_MODEL_YAML = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ya
 ASEP_0443_DRUMSEP_MODEL_FILENAME = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 ASEP_0443_DRUMSEP_CONFIG_FILENAME = "config_drumsep_mdx23c.yaml"
 LEGACY_DRUMSEP_MODEL_SHA256 = "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0"
+ASEP_0443_DRUMSEP_CONFIG_SHA256 = "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
 REAPER_FILENAMES = {
     "kick": "kick.wav",
     "snare": "snare.wav",
@@ -241,6 +242,7 @@ def _resolve_drumsep_catalog_cache_for_runtime(
     model_dir: Path,
     requested_model: str,
     expected_legacy_sha256: str = LEGACY_DRUMSEP_MODEL_SHA256,
+    expected_config_sha256: str = ASEP_0443_DRUMSEP_CONFIG_SHA256,
 ) -> DrumSepCatalogCacheResolution:
     model_dir = Path(model_dir)
     requested_name = Path(str(requested_model or "")).name
@@ -259,6 +261,19 @@ def _resolve_drumsep_catalog_cache_for_runtime(
         Path(DRUMSEP_MODEL_FILENAME).stem,
         Path(ASEP_0443_DRUMSEP_MODEL_FILENAME).stem,
     }
+
+    if requested_is_drumsep:
+        if not resolved_config.is_file():
+            raise DirectDemixValidationError(
+                "drumsep_compat_yaml_missing",
+                "Managed DrumSep compatibility config is missing; run STEMwerk Repair before processing.",
+            )
+        expected_config = str(expected_config_sha256 or "").strip().lower()
+        if expected_config and _sha256_file(resolved_config).lower() != expected_config:
+            raise DirectDemixValidationError(
+                "drumsep_compat_yaml_checksum_mismatch",
+                "Managed DrumSep compatibility config failed integrity validation; run STEMwerk Repair.",
+            )
 
     if not requested_is_drumsep:
         action = "none"
@@ -656,7 +671,12 @@ def run(args: argparse.Namespace) -> int:
     model_dir = Path(args.model_dir).expanduser().resolve()
     result_json = Path(args.result_json).expanduser().resolve()
     requested_model_name = str(args.model)
-    model_resolution = _resolve_drumsep_catalog_cache_for_runtime(model_dir, requested_model_name)
+    try:
+        model_resolution = _resolve_drumsep_catalog_cache_for_runtime(model_dir, requested_model_name)
+    except DirectDemixValidationError as exc:
+        write_result(result_json, _error_payload(exc.reason, "stage2_runtime", str(exc)))
+        print(f"drumsep_compat_yaml_guard={exc.reason}", file=sys.stderr)
+        return 1
     model_name = model_resolution.model_name
 
     output_dir.mkdir(parents=True, exist_ok=True)

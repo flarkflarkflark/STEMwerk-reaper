@@ -1,3 +1,7 @@
 # Ensure bash scripts run on Linux/macOS runners
 installer/**/*.sh text eol=lf
 .github/workflows/*.yml text eol=lf
+# This file is intentionally stored with CRLF in the current repository.
+.gitattributes -whitespace
+# Preserve the byte-exact upstream DrumSep config; its pinned hash includes whitespace.
+tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml -whitespace

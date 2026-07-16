@@ -24,6 +24,17 @@ EXPECTED_OVERRIDE = {
 NON_CLOSURE_PACKAGES = {canonicalize_name(name) for name in ("pip", "setuptools", "wheel", "stemwerk-core")}
 EXPECTED_BOOTSTRAP_REQUIREMENTS = ["pip", "setuptools", "wheel"]
 TORCH_SYMPY_POLICY = {"torch": "2.5.1", "sympy": "1.13.1"}
+DRUMSEP_FILE_POLICY = {
+    "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": (
+        "canonical_model", None
+    ),
+    "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml": (
+        "canonical_config", None
+    ),
+    "config_drumsep_mdx23c.yaml": (
+        "compatibility_config", "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
+    ),
+}
 
 
 def fail(reason: str, detail: str = "") -> None:
@@ -47,6 +58,31 @@ def wheel_requirement(path: Path) -> str:
     return f"{canonicalize_name(name)}=={version}"
 
 
+def validate_drumsep_contract(manifest: dict, drumsep_dir: Path) -> None:
+    inventory = manifest.get("drumsep_file_inventory")
+    if not isinstance(inventory, list):
+        fail("drumsep_inventory_invalid", "missing")
+    manifest_by_name = {item.get("filename", ""): item for item in inventory}
+    if len(manifest_by_name) != len(inventory) or set(manifest_by_name) != set(DRUMSEP_FILE_POLICY):
+        fail("drumsep_inventory_invalid", "filenames")
+    if not drumsep_dir.is_dir():
+        fail("drumsep_inventory_invalid", "directory_missing")
+    entries = list(drumsep_dir.iterdir())
+    physical = {path.name: path for path in entries if path.is_file()}
+    if len(physical) != len(entries) or set(physical) != set(DRUMSEP_FILE_POLICY):
+        fail("drumsep_inventory_invalid", "filesystem_mismatch")
+    for filename, (role, expected_sha256) in DRUMSEP_FILE_POLICY.items():
+        path = physical[filename]
+        item = manifest_by_name[filename]
+        if item.get("role") != role:
+            fail("drumsep_inventory_invalid", f"role={filename}")
+        actual_sha256 = sha256_file(path)
+        if expected_sha256 and actual_sha256 != expected_sha256:
+            fail("drumsep_integrity_invalid", filename)
+        if item.get("sha256") != actual_sha256 or item.get("size") != path.stat().st_size:
+            fail("drumsep_inventory_invalid", f"fingerprint={filename}")
+
+
 def validate_contract(manifest_path: Path, wheels_dir: Path, expected_core: list[str]) -> tuple[list[str], list[str]]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("platform") != "macos-apple-silicon" or manifest.get("architecture") != "arm64":
@@ -61,6 +97,7 @@ def validate_contract(manifest_path: Path, wheels_dir: Path, expected_core: list
         fail("override_contract_invalid", "forbidden_requirements")
     if manifest.get("bootstrap_requirements") != EXPECTED_BOOTSTRAP_REQUIREMENTS:
         fail("override_contract_invalid", "bootstrap_requirements")
+    validate_drumsep_contract(manifest, manifest_path.parent / "drumsep")
     if "samplerate==0.2.4" not in core:
         fail("samplerate_override_missing")
 

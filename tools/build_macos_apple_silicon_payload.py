@@ -44,7 +44,23 @@ CORE_MODEL_FILES = (
 DRUMSEP_FILES = (
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml",
+    "config_drumsep_mdx23c.yaml",
 )
+DRUMSEP_MODEL_CACHE_FILES = DRUMSEP_FILES[:2]
+DRUMSEP_COMPAT_ASSET = Path("tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml")
+DRUMSEP_FILE_POLICY = {
+    DRUMSEP_FILES[0]: {
+        "role": "canonical_model",
+    },
+    DRUMSEP_FILES[1]: {
+        "role": "canonical_config",
+    },
+    DRUMSEP_FILES[2]: {
+        "role": "compatibility_config",
+        "sha256": "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6",
+        "size": 2417,
+    },
+}
 
 BOOTSTRAP_REQUIREMENTS = (
     "pip",
@@ -622,6 +638,48 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validate_drumsep_files(drumsep_dir: Path, inventory: list[dict] | None = None) -> list[Path]:
+    if not drumsep_dir.is_dir():
+        raise RuntimeError(f"payload_drumsep_root_missing:{drumsep_dir}")
+    entries = sorted(drumsep_dir.iterdir(), key=lambda path: path.name.lower())
+    physical = {path.name: path for path in entries if path.is_file()}
+    if len(physical) != len(entries) or set(physical) != set(DRUMSEP_FILE_POLICY):
+        raise RuntimeError(
+            "payload_drumsep_files_mismatch:expected=" + ",".join(DRUMSEP_FILE_POLICY)
+            + ":actual=" + ",".join(path.name for path in entries)
+        )
+    for filename, policy in DRUMSEP_FILE_POLICY.items():
+        path = physical[filename]
+        if policy.get("sha256") and sha256_file(path) != policy["sha256"]:
+            raise RuntimeError(f"payload_drumsep_checksum_mismatch:{filename}")
+        if "size" in policy and path.stat().st_size != policy["size"]:
+            raise RuntimeError(f"payload_drumsep_size_mismatch:{filename}")
+    if inventory is not None:
+        manifest_by_name = {item.get("filename", ""): item for item in inventory}
+        if len(manifest_by_name) != len(inventory) or set(manifest_by_name) != set(physical):
+            raise RuntimeError("payload_drumsep_inventory_mismatch")
+        for filename, path in physical.items():
+            item = manifest_by_name[filename]
+            if item.get("role") != DRUMSEP_FILE_POLICY[filename]["role"]:
+                raise RuntimeError(f"payload_drumsep_role_mismatch:{filename}")
+            if item.get("sha256") != sha256_file(path) or item.get("size") != path.stat().st_size:
+                raise RuntimeError(f"payload_drumsep_inventory_fingerprint_mismatch:{filename}")
+    return list(physical.values())
+
+
+def drumsep_file_inventory(drumsep_dir: Path) -> list[dict]:
+    paths = validate_drumsep_files(drumsep_dir)
+    return [
+        {
+            "filename": path.name,
+            "role": DRUMSEP_FILE_POLICY[path.name]["role"],
+            "sha256": sha256_file(path),
+            "size": path.stat().st_size,
+        }
+        for path in sorted(paths, key=lambda item: item.name)
+    ]
+
+
 def write_manifest(output_dir: Path, version: str) -> None:
     # Deferred D6: wheels are fully fingerprinted here; ffmpeg, models, and the
     # managed Python tree still need a separate non-wheel integrity design.
@@ -644,6 +702,7 @@ def write_manifest(output_dir: Path, version: str) -> None:
         "dependency_overrides": list(DEPENDENCY_OVERRIDE_POLICY),
         "forbidden_requirements": list(FORBIDDEN_REQUIREMENTS),
         "wheel_inventory": wheel_inventory,
+        "drumsep_file_inventory": drumsep_file_inventory(output_dir / "drumsep"),
         "contains": {
             "ffmpeg": True,
             "python": True,
@@ -673,6 +732,7 @@ def audit_existing_manifest(output_dir: Path) -> None:
         raise RuntimeError("payload_override_contract_invalid:forbidden_requirements")
     if manifest.get("bootstrap_requirements") != list(BOOTSTRAP_REQUIREMENTS):
         raise RuntimeError("payload_override_contract_invalid:bootstrap_requirements")
+    validate_drumsep_files(output_dir / "drumsep", manifest.get("drumsep_file_inventory"))
     inventory = manifest.get("wheel_inventory", [])
     filenames = [entry.get("filename", "") for entry in inventory]
     if len(filenames) != len(set(filenames)) or len(filenames) != len({name.lower() for name in filenames}):
@@ -748,7 +808,13 @@ def main() -> int:
     audit_wheelhouse_resolution(output_dir / "wheels", python_executable)
     copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")
     copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
-    copy_files(model_cache, output_dir / "drumsep", DRUMSEP_FILES, "drumsep payload file")
+    copy_files(model_cache, output_dir / "drumsep", DRUMSEP_MODEL_CACHE_FILES, "drumsep payload file")
+    copy_files(
+        repo_root / DRUMSEP_COMPAT_ASSET.parent,
+        output_dir / "drumsep",
+        (DRUMSEP_COMPAT_ASSET.name,),
+        "DrumSep compatibility config",
+    )
     write_manifest(output_dir, args.version)
     audit_existing_manifest(output_dir)
     print(f"Prepared Apple Silicon macOS payload at {output_dir}")

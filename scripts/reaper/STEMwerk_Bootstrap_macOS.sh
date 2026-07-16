@@ -36,6 +36,10 @@ PINNED_TORCHVISION_VERSION_INTEL="0.17.2"
 PINNED_TORCHAUDIO_VERSION_INTEL="2.2.2"
 PINNED_TORCH_STACK_LABEL=""
 TORCH_PIN_APPLIED="0"
+DRUMSEP_CANONICAL_MODEL="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+DRUMSEP_CANONICAL_CONFIG="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"
+DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -139,6 +143,98 @@ copy_bundled_models_to_cache() {
   [ -n "${_src}" ] && [ -d "${_src}" ] || return 1
   mkdir -p "${_dest}" >/dev/null 2>&1 || return 1
   cp -R "${_src}/." "${_dest}/" >> "${LOG_FILE}" 2>&1 || return 1
+}
+
+copy_bundled_drumsep_to_cache() {
+  _src="$1"
+  _dest="${2:-$(model_cache_dir)}"
+  [ -n "${_src}" ] && [ -d "${_src}" ] || return 1
+  mkdir -p "${_dest}" >/dev/null 2>&1 || return 1
+  for _name in "${DRUMSEP_CANONICAL_MODEL}" "${DRUMSEP_CANONICAL_CONFIG}"; do
+    [ -f "${_src}/${_name}" ] || return 1
+    cp "${_src}/${_name}" "${_dest}/${_name}" >> "${LOG_FILE}" 2>&1 || return 1
+  done
+}
+
+drumsep_file_sha256() {
+  _py="$1"
+  _path="$2"
+  "${_py}" - "${_path}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+digest = hashlib.sha256()
+with path.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+materialize_drumsep_compat_yaml() {
+  _src_dir="$1"
+  _dest_dir="$2"
+  _py="$3"
+  _src="${_src_dir}/${DRUMSEP_COMPAT_YAML}"
+  _dest="${_dest_dir}/${DRUMSEP_COMPAT_YAML}"
+  _tmp="${_dest}.tmp.$$"
+  DRUMSEP_COMPAT_YAML_SHA256=""
+  if [ ! -f "${_src}" ]; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="payload_source_missing"
+    return 1
+  fi
+  _src_sha="$(drumsep_file_sha256 "${_py}" "${_src}" 2>> "${LOG_FILE}" || true)"
+  if [ "${_src_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="payload_source_checksum_mismatch"
+    DRUMSEP_COMPAT_YAML_SHA256="${_src_sha}"
+    return 1
+  fi
+  mkdir -p "${_dest_dir}" >/dev/null 2>&1 || {
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="model_cache_create_failed"
+    return 1
+  }
+  if [ -e "${_dest}" ]; then
+    _dest_sha="$(drumsep_file_sha256 "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+    DRUMSEP_COMPAT_YAML_SHA256="${_dest_sha}"
+    if [ "${_dest_sha}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+      DRUMSEP_COMPAT_YAML_STATUS="exists_valid"
+      DRUMSEP_COMPAT_YAML_REASON="already_materialized"
+      log "DRUMSEP_COMPAT_YAML_STATUS=exists_valid"
+      return 0
+    fi
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="existing_checksum_mismatch"
+    return 1
+  fi
+  rm -f "${_tmp}" >/dev/null 2>&1 || true
+  if ! cp "${_src}" "${_tmp}" >> "${LOG_FILE}" 2>&1; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="atomic_copy_failed"
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  _tmp_sha="$(drumsep_file_sha256 "${_py}" "${_tmp}" 2>> "${LOG_FILE}" || true)"
+  if [ "${_tmp_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ] || ! mv "${_tmp}" "${_dest}"; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="atomic_copy_verification_failed"
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  DRUMSEP_COMPAT_YAML_SHA256="$(drumsep_file_sha256 "${_py}" "${_dest}" 2>> "${LOG_FILE}" || true)"
+  if [ "${DRUMSEP_COMPAT_YAML_SHA256}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+    DRUMSEP_COMPAT_YAML_STATUS="failed"
+    DRUMSEP_COMPAT_YAML_REASON="destination_checksum_mismatch"
+    return 1
+  fi
+  DRUMSEP_COMPAT_YAML_STATUS="created"
+  DRUMSEP_COMPAT_YAML_REASON="materialized_from_payload"
+  log "DRUMSEP_COMPAT_YAML_STATUS=created"
+  return 0
 }
 
 install_with_optional_bundled_wheels() {
@@ -1243,6 +1339,9 @@ write_state() {
       echo "MACOS_STALE_PACKAGE_CLEANUP_REASON=${MACOS_STALE_PACKAGE_CLEANUP_REASON}"
       echo "MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS=${MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS}"
       echo "MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON=${MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON}"
+      echo "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
+      echo "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
+      echo "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
       echo "REQUIRED_SCRIPT_STATUS=${REQUIRED_SCRIPT_STATUS}"
       [ -n "${REQUIRED_SCRIPT_PATH}" ] && echo "REQUIRED_SCRIPT_PATH=${REQUIRED_SCRIPT_PATH}"
       echo "DRUMSEP_PREFETCH_SCRIPT_STATUS=${DRUMSEP_PREFETCH_SCRIPT_STATUS}"
@@ -1452,6 +1551,9 @@ MACOS_STALE_PACKAGE_CLEANUP_STATUS="not_required"
 MACOS_STALE_PACKAGE_CLEANUP_REASON="not_apple_silicon_bundled_repair"
 MACOS_BOOTSTRAP_TOOLS_INSTALL_STATUS="not_run"
 MACOS_BOOTSTRAP_TOOLS_INSTALL_REASON="not_started"
+DRUMSEP_COMPAT_YAML_STATUS="not_run"
+DRUMSEP_COMPAT_YAML_REASON="not_started"
+DRUMSEP_COMPAT_YAML_SHA256=""
 DRUMSEP_PREFETCH_SCRIPT_PATH="${SCRIPT_DIR}/audio_separator_process.py"
 DRUMSEP_PREFETCH_SCRIPT_STATUS="unknown"
 SAMPLERATE_GUARD_SCRIPT_PATH="${SCRIPT_DIR}/_internal/stemwerk_samplerate_guard.py"
@@ -1887,18 +1989,25 @@ fi
 if [ "${STATUS}" = "ok" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   _bundled_drumsep_dir="$(bundled_drumsep_dir || true)"
   if [ -n "${_bundled_drumsep_dir}" ]; then
-    if copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"; then
+    if copy_bundled_drumsep_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"; then
       MACOS_BUNDLED_DRUMSEP_STATUS="seeded"
     else
       MACOS_BUNDLED_DRUMSEP_STATUS="copy_failed"
     fi
   fi
-  if [ "${MAC_ARCH}" = "x86_64" ]; then
+  if [ "${MAC_ARCH}" = "arm64" ] && ! materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}" "$(model_cache_dir)" "${VENV_PY}"; then
+    MACOS_BUNDLED_DRUMSEP_STATUS="copy_failed"
+    log "DRUMSEP_COMPAT_YAML_STATUS=${DRUMSEP_COMPAT_YAML_STATUS}"
+    log "DRUMSEP_COMPAT_YAML_REASON=${DRUMSEP_COMPAT_YAML_REASON}"
+    log "DRUMSEP_COMPAT_YAML_SHA256=${DRUMSEP_COMPAT_YAML_SHA256}"
+    READY_DETAIL="drumsep_compat_yaml_failed"
+    set_status "deps_failed" "drumsep_compat_yaml_failed"
+  elif [ "${MAC_ARCH}" = "x86_64" ]; then
     READY_RUNTIME_STATUS="skipped"
     READY_DRUMSEP_MODEL_STATUS="skipped"
     READY_DETAIL="unsupported_mac_intel"
     log "drumsep_ready_status=unsupported_mac_intel"
-  else
+  elif [ "${STATUS}" = "ok" ]; then
     if ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
       READY_RUNTIME_STATUS="ok"
       READY_DRUMSEP_MODEL_STATUS="ok"
