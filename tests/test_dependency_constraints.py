@@ -103,6 +103,24 @@ def _rocm_gfx1201_runtime_status(
     return allow
 
 
+def _active_linux_torch_policy(backend, *, gfx1201=False):
+    if backend == "rocm" and gfx1201:
+        return {
+            "backend": "rocm",
+            "torch": "2.10.0",
+            "torchvision": "0.25.0",
+            "torchaudio": "2.10.0",
+            "policy": "rocm_gfx1201_allow_2_10_rocm7",
+        }
+    return {
+        "backend": backend,
+        "torch": "2.5.1",
+        "torchvision": "0.20.1",
+        "torchaudio": "2.5.1",
+        "policy": "service_line_default_torch_lt_2_6",
+    }
+
+
 def _core_version(ver):
     return ver.split("+", 1)[0]
 
@@ -2283,6 +2301,57 @@ def test_linux_repair_keeps_corrupt_runtimes_rebuildable_without_cpu_route_for_h
     assert 'Existing venv runtime probe failed; rebuilding .venv' in script
     assert 'EXISTING_MAIN_RUNTIME_HEALTHY="1"' in script
     assert script.index('EXISTING_MAIN_RUNTIME_HEALTHY="1"') < script.index('log_stage "Installing ROCm torch"')
+
+
+def test_linux_active_torch_policy_keeps_cpu_cuda_and_rocm_profiles_separate():
+    assert _active_linux_torch_policy("cpu") == {
+        "backend": "cpu",
+        "torch": "2.5.1",
+        "torchvision": "0.20.1",
+        "torchaudio": "2.5.1",
+        "policy": "service_line_default_torch_lt_2_6",
+    }
+    assert _active_linux_torch_policy("cuda")["backend"] == "cuda"
+    assert _active_linux_torch_policy("cuda")["torch"] == "2.5.1"
+    assert _active_linux_torch_policy("rocm", gfx1201=True)["torch"] == "2.10.0"
+    assert _active_linux_torch_policy("rocm", gfx1201=True)["torchaudio"] == "2.10.0"
+
+
+def test_linux_rocm_preserve_path_selects_policy_before_accepting_noop_runtime():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    preserve = script[script.index('log_stage "Creating venv"') :]
+
+    assert "select_active_torch_policy()" in script
+    assert 'select_active_torch_policy "${BACKEND}"' in preserve
+    assert preserve.index('select_active_torch_policy "${BACKEND}"') < preserve.index('EXISTING_MAIN_RUNTIME_HEALTHY="1"')
+    assert 'PRESERVED_RUNTIME_TORCH_VERSION=' in preserve
+    assert 'ACTIVE_TORCH_POLICY_BACKEND=${_policy_backend}' in script
+    assert 'ACTIVE_TORCH_VERSION=${ACTIVE_TORCH_VERSION}' in script
+    assert 'ACTIVE_TORCHAUDIO_VERSION=${ACTIVE_TORCHAUDIO_VERSION}' in script
+    assert 'PIN_ASSERT_POLICY=torch==${ACTIVE_TORCH_VERSION}' in script
+
+
+def test_linux_rocm_preserve_policy_matches_current_failure_runtime_and_local_suffix():
+    policy = _active_linux_torch_policy("rocm", gfx1201=True)
+    runtime_torch = "2.10.0+rocm7.0"
+    runtime_torchaudio = "2.10.0+rocm7.0"
+
+    assert runtime_torch.split("+", 1)[0] == policy["torch"]
+    assert runtime_torchaudio.split("+", 1)[0] == policy["torchaudio"]
+    assert policy["torch"] != "2.5.1"
+    assert not _rocm_gfx1201_runtime_status("2.11.0", "2.11.0", True, True, 2, "AMD Radeon RX 9070")
+
+
+def test_linux_preserve_policy_does_not_install_delete_or_fallback_and_keeps_hard_assert():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    preserve = script[script.index('elif probe_main_runtime_ready') : script.index('if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]')]
+
+    assert "pip_install_with_scope" not in preserve
+    assert "install_linux_torch_stack" not in preserve
+    assert "falling back to CPU" not in preserve
+    assert 'rm -rf "${RUNTIME_BASE}/.venv"' not in preserve.split("else", 1)[0]
+    assert 'if ! assert_pinned_torch_stack "${VENV_PY}"; then' in script
+    assert 'set_status "deps_failed" "torch_pin_assert_failed"' in script
 
 
 def test_linux_torch_stack_verify_helper_checks_backend_and_all_three_packages():

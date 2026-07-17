@@ -1672,6 +1672,25 @@ PY
   return 1
 }
 
+select_active_torch_policy() {
+  _policy_backend="$1"
+  ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
+  ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
+  ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
+  TORCH_RUNTIME_POLICY="service_line_default_torch_lt_2_6"
+  if [ "${_policy_backend}" = "rocm" ] && [ "${ROCM_GFX1201}" -eq 1 ]; then
+    ACTIVE_TORCH_VERSION="${ROCM7_GFX1201_TORCH_VERSION}"
+    ACTIVE_TORCHVISION_VERSION="${ROCM7_GFX1201_TORCHVISION_VERSION}"
+    ACTIVE_TORCHAUDIO_VERSION="${ROCM7_GFX1201_TORCHAUDIO_VERSION}"
+    TORCH_RUNTIME_POLICY="rocm_gfx1201_allow_2_10_rocm7"
+  fi
+  log_step "ACTIVE_TORCH_POLICY_BACKEND=${_policy_backend}"
+  log_step "ACTIVE_TORCH_VERSION=${ACTIVE_TORCH_VERSION}"
+  log_step "ACTIVE_TORCHVISION_VERSION=${ACTIVE_TORCHVISION_VERSION}"
+  log_step "ACTIVE_TORCHAUDIO_VERSION=${ACTIVE_TORCHAUDIO_VERSION}"
+  log_step "PIN_ASSERT_POLICY=torch==${ACTIVE_TORCH_VERSION} torchvision==${ACTIVE_TORCHVISION_VERSION} torchaudio==${ACTIVE_TORCHAUDIO_VERSION}"
+}
+
 linux_torch_install_args() {
   printf 'torch==%s torchvision==%s torchaudio==%s' \
     "${ACTIVE_TORCH_VERSION:-${PINNED_TORCH_VERSION}}" \
@@ -1991,6 +2010,7 @@ elif [ "${ROCM_MODE}" -eq 1 ]; then
   PROFILE="linux-rocm"
   BACKEND="rocm"
 fi
+select_active_torch_policy "${BACKEND}"
 
 if [ "${MODE}" = "ready-to-go-verify" ]; then
   run_ready_to_go_verify_only
@@ -2320,6 +2340,9 @@ else
       log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
       rm -rf "${RUNTIME_BASE}/.venv"
     elif probe_main_runtime_ready "${RUNTIME_BASE}/.venv/bin/python" "${BACKEND}" >/dev/null; then
+      select_active_torch_policy "${BACKEND}"
+      PRESERVED_RUNTIME_TORCH_VERSION="$("${RUNTIME_BASE}/.venv/bin/python" -c 'import torch; print(getattr(torch, "__version__", "unknown"))' 2>/dev/null || true)"
+      log_step "PRESERVED_RUNTIME_TORCH_VERSION=${PRESERVED_RUNTIME_TORCH_VERSION:-unknown}"
       EXISTING_MAIN_RUNTIME_HEALTHY="1"
       log_step "Preserving healthy existing ${BACKEND} runtime; dependency installation is a no-op"
     else
