@@ -37,6 +37,12 @@ DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm7.0"
 DRUMSEP_ROCM_MIN_FREE_GB="20"
 DRUMSEP_MODEL_FILE="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DRUMSEP_MODEL_YAML="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"
+DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
+DRUMSEP_COMPAT_YAML_EXPECTED_SIZE="2331"
+DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
+DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE="2417"
+DRUMSEP_COMPAT_ONLINE_SOURCE_RELATIVE="assets/drumsep/${DRUMSEP_COMPAT_YAML}"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -72,6 +78,113 @@ log_stage() {
 
 log_step() {
   log " - $*"
+}
+
+drumsep_file_sha256() {
+  sha256sum "$1" 2>/dev/null | awk '{print $1}'
+}
+
+drumsep_file_size() {
+  wc -c < "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+log_linux_drumsep_target() {
+  log "linux_drumsep_config_target_path=$1"
+  log "linux_drumsep_config_target_size=$2"
+  log "linux_drumsep_config_target_sha256=$3"
+  log "linux_drumsep_config_target_status=$4"
+  log "linux_drumsep_config_target_reason=$5"
+  log "DRUMSEP_COMPAT_YAML_STATUS=$4"
+  log "DRUMSEP_COMPAT_YAML_REASON=$5"
+  log "DRUMSEP_COMPAT_YAML_SHA256=$3"
+}
+
+materialize_drumsep_compat_yaml() {
+  _source="${SCRIPT_DIR}/${DRUMSEP_COMPAT_ONLINE_SOURCE_RELATIVE}"
+  _target_dir="$(model_cache_dir)"
+  _target="${_target_dir}/${DRUMSEP_COMPAT_YAML}"
+  _source_size="missing"
+  _source_sha="missing"
+
+  log "linux_drumsep_config_source_path=${_source}"
+  if [ ! -f "${_source}" ]; then
+    log "linux_drumsep_config_source_size=${_source_size}"
+    log "linux_drumsep_config_source_sha256=${_source_sha}"
+    log "linux_drumsep_config_source_status=missing"
+    return 1
+  fi
+  _source_size="$(drumsep_file_size "${_source}" || true)"
+  _source_sha="$(drumsep_file_sha256 "${_source}" || true)"
+  log "linux_drumsep_config_source_size=${_source_size}"
+  log "linux_drumsep_config_source_sha256=${_source_sha}"
+  if [ "${_source_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] || \
+     [ "${_source_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+    log "linux_drumsep_config_source_status=integrity_mismatch"
+    return 1
+  fi
+  log "linux_drumsep_config_source_status=canonical"
+
+  _target_size="missing"
+  _target_sha="missing"
+  _success_status="created"
+  _success_reason="materialized_from_online_inventory"
+  if [ -e "${_target}" ]; then
+    _target_size="$(drumsep_file_size "${_target}" || true)"
+    _target_sha="$(drumsep_file_sha256 "${_target}" || true)"
+    if [ "${_target_size}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] && \
+       [ "${_target_sha}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+      log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "no_op" "already_materialized"
+      return 0
+    fi
+    if [ "${_target_size}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE}" ] && \
+       [ "${_target_sha}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256}" ]; then
+      _success_status="migrated_legacy_crlf"
+      _success_reason="migrated_known_legacy_crlf"
+      log "linux_drumsep_config_target_previous_sha256=${_target_sha}"
+      log "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${_target_sha}"
+      log "DRUMSEP_COMPAT_YAML_MIGRATION=known_legacy_crlf_to_canonical_lf"
+    else
+      log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "existing_checksum_mismatch"
+      return 1
+    fi
+  fi
+
+  mkdir -p "${_target_dir}" >/dev/null 2>&1 || {
+    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "model_cache_create_failed"
+    return 1
+  }
+  _tmp="$(mktemp "${_target}.tmp.XXXXXX" 2>/dev/null || true)"
+  if [ -z "${_tmp}" ]; then
+    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "temporary_file_create_failed"
+    return 1
+  fi
+  if ! cp "${_source}" "${_tmp}" >> "${LOG_FILE}" 2>&1; then
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "atomic_copy_failed"
+    return 1
+  fi
+  _tmp_size="$(drumsep_file_size "${_tmp}" || true)"
+  _tmp_sha="$(drumsep_file_sha256 "${_tmp}" || true)"
+  if [ "${_tmp_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] || \
+     [ "${_tmp_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "temporary_copy_integrity_mismatch"
+    return 1
+  fi
+  if ! mv "${_tmp}" "${_target}"; then
+    rm -f "${_tmp}" >/dev/null 2>&1 || true
+    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "atomic_replace_failed"
+    return 1
+  fi
+  _target_size="$(drumsep_file_size "${_target}" || true)"
+  _target_sha="$(drumsep_file_sha256 "${_target}" || true)"
+  if [ "${_target_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] || \
+     [ "${_target_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
+    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "destination_integrity_mismatch"
+    return 1
+  fi
+  log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "${_success_status}" "${_success_reason}"
+  return 0
 }
 
 is_core_source_bundle() {
@@ -1971,6 +2084,18 @@ fi
 
 if [ "${MODE}" = "ready-to-go-verify" ]; then
   run_ready_to_go_verify_only
+fi
+
+if [ "${MODE}" = "materialize-drumsep-compat-only" ]; then
+  if materialize_drumsep_compat_yaml; then
+    exit 0
+  fi
+  exit 1
+fi
+
+if ! materialize_drumsep_compat_yaml; then
+  log "Bootstrap failed with status=deps_failed reason=drumsep_compat_materialization_failed"
+  exit 1
 fi
 
 set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"

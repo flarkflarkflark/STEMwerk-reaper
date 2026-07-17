@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from tools import release_gate
 
@@ -127,3 +128,28 @@ def test_samplerate_guard_referenced_by_bootstrap_must_be_in_payload(tmp_path: P
     msgs = "\n".join("\n".join(s.messages) for s in sections)
     assert "bootstrap references helper missing from index.xml payload" in msgs
     assert "scripts/reaper/_internal/stemwerk_samplerate_guard.py" in msgs
+
+
+def test_linux_online_drumsep_asset_must_match_contract_and_reapack_inventory(tmp_path: Path) -> None:
+    contract = json.loads(
+        (Path("tools/assets/drumsep/compatibility_config_contract.json")).read_text(encoding="utf-8")
+    )
+    asset = Path("tools/assets/drumsep") / contract["filename"]
+    inventory = contract["online_inventories"]["linux_reapack"]
+    _write(tmp_path / "VERSION", "2.4.0\n")
+    _seed_required_top_level(tmp_path, "2.4.0")
+    _write(tmp_path / "scripts/reaper/STEMwerk_Bootstrap_Linux.sh", "#!/bin/sh\n")
+    (tmp_path / inventory["repository_source_path"]).parent.mkdir(parents=True, exist_ok=True)
+    shutil_target = tmp_path / inventory["repository_source_path"]
+    shutil_target.write_bytes(asset.read_bytes())
+    contract_target = tmp_path / "tools/assets/drumsep/compatibility_config_contract.json"
+    contract_target.write_text(json.dumps(contract), encoding="utf-8")
+    _write(
+        tmp_path / "index.xml",
+        _mk_index("2.4.0", ["STEMwerk.lua", "STEMwerk-SETUP.lua", "STEMwerk_Save_Support_Bundle.lua"]),
+    )
+
+    section = release_gate.check_linux_online_drumsep_distribution(tmp_path)
+
+    assert section.status == "FAIL"
+    assert any("index.xml" in message for message in section.messages)

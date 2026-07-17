@@ -27,6 +27,7 @@ RUNTIME_DEP_REGRESSION_TARGET = "scripts/reaper/_internal/STEMwerk_Timing.lua"
 MODEL_REGISTRY_LUA = "scripts/reaper/_internal/STEMwerk_Model_Registry.lua"
 MODEL_REGISTRY_MANIFEST = "scripts/reaper/models.json"
 BOOTSTRAP_MACOS = "scripts/reaper/STEMwerk_Bootstrap_macOS.sh"
+BOOTSTRAP_LINUX = "scripts/reaper/STEMwerk_Bootstrap_Linux.sh"
 SAMPLERATE_GUARD_REL = "_internal/stemwerk_samplerate_guard.py"
 SAMPLERATE_GUARD_PAYLOAD_PATH = f"scripts/reaper/{SAMPLERATE_GUARD_REL}"
 DRUMSEP_COMPAT_ASSET = "tools/assets/drumsep/config_drumsep_mdx23c.yaml"
@@ -363,6 +364,75 @@ def check_drumsep_compat_asset_contract(root: Path) -> Section:
     return section
 
 
+def check_linux_online_drumsep_distribution(root: Path) -> Section:
+    section = Section("F. Linux online DrumSep compatibility distribution")
+    contract_path = root / DRUMSEP_COMPAT_CONTRACT_PATH
+    if not contract_path.is_file():
+        section.note("shared DrumSep compatibility contract not present; Linux online check not required")
+        return section
+    try:
+        contract = json.loads(read_text(contract_path))
+        inventory = contract["online_inventories"]["linux_reapack"]
+        canonical = contract["canonical"]
+        filename = contract["filename"]
+        repository_source = inventory["repository_source_path"]
+        installed_source = inventory["installed_source_path_relative_to_scripts"]
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        section.fail(f"Linux online inventory is invalid: {exc}")
+        return section
+
+    if Path(repository_source).name != filename or Path(installed_source).name != filename:
+        section.fail("Linux online inventory filename does not match the shared contract")
+    asset = root / repository_source
+    if not asset.is_file():
+        section.fail(f"Linux online inventory source is missing: {repository_source}")
+    else:
+        payload = asset.read_bytes()
+        actual_sha = hashlib.sha256(payload).hexdigest()
+        if len(payload) != canonical.get("size") or actual_sha != canonical.get("sha256"):
+            section.fail("Linux online inventory source fingerprint does not match the shared contract")
+
+    tree, _raw, errors = parse_index(root / inventory["index_path"])
+    for error in errors:
+        section.fail(error)
+    matching_sources: list[SourceEntry] = []
+    if tree is not None:
+        sources, warnings = collect_sources(tree)
+        for warning in warnings:
+            section.warn(warning)
+        wanted_file = f"../{installed_source}"
+        matching_sources = [
+            source
+            for source in sources
+            if source.file_attr == wanted_file and source.repo_path == repository_source
+        ]
+    if len(matching_sources) != 1:
+        section.fail("index.xml must contain exactly one contract-matching Linux online DrumSep source")
+
+    bootstrap = root / BOOTSTRAP_LINUX
+    if not bootstrap.is_file():
+        section.fail(f"missing Linux materializer entrypoint: {BOOTSTRAP_LINUX}")
+    else:
+        bootstrap_text = read_text(bootstrap)
+        required_literals = (
+            str(PurePosixPath(installed_source).parent),
+            filename,
+            str(canonical["size"]),
+            canonical["sha256"],
+            str(contract["legacy_crlf"]["size"]),
+            contract["legacy_crlf"]["sha256"],
+            "materialize_drumsep_compat_yaml",
+        )
+        for literal in required_literals:
+            if literal not in bootstrap_text:
+                section.fail(f"Linux bootstrap is missing contract inventory literal: {literal}")
+    if section.status != "FAIL":
+        section.note(
+            f"validated Linux ReaPack source {repository_source} -> {installed_source}"
+        )
+    return section
+
+
 def run_check(root: Path) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
@@ -386,6 +456,7 @@ def run_check(root: Path) -> tuple[list[Section], int]:
     sections.append(runtime_section)
     sections.append(check_bootstrap_guard_payload(root, payload_paths))
     sections.append(check_drumsep_compat_asset_contract(root))
+    sections.append(check_linux_online_drumsep_distribution(root))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count

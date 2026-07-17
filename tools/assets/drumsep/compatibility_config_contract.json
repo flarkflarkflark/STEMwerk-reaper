@@ -15,6 +15,14 @@
     "status": "supported_migration_source",
     "newlines": "CRLF"
   },
+  "online_inventories": {
+    "linux_reapack": {
+      "index_path": "index.xml",
+      "repository_source_path": "tools/assets/drumsep/config_drumsep_mdx23c.yaml",
+      "installed_source_path_relative_to_scripts": "assets/drumsep/config_drumsep_mdx23c.yaml",
+      "marker_prefix": "linux_drumsep_config"
+    }
+  },
   "platforms": {
     "macos": {
       "distribution_required": true,

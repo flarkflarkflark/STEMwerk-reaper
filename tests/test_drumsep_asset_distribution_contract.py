@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -37,6 +38,40 @@ def _text(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def _linux_online_inventory_conforms() -> bool:
+    inventory = _contract()["online_inventories"]["linux_reapack"]
+    wanted_file = f'../{inventory["installed_source_path_relative_to_scripts"]}'
+    wanted_suffix = f'/main/{inventory["repository_source_path"]}'
+    sources = ET.parse(ROOT / inventory["index_path"]).findall(".//source")
+    return sum(
+        source.get("file") == wanted_file and (source.text or "").strip().endswith(wanted_suffix)
+        for source in sources
+    ) == 1
+
+
+def _linux_materializer_conforms() -> bool:
+    bootstrap = _text("scripts/reaper/STEMwerk_Bootstrap_Linux.sh")
+    if "materialize_drumsep_compat_yaml" not in bootstrap:
+        return False
+    body = _materializer_body(bootstrap, "materialize_drumsep_compat_yaml")
+    required_markers = (
+        "linux_drumsep_config_source_path",
+        "linux_drumsep_config_source_size",
+        "linux_drumsep_config_source_sha256",
+        "linux_drumsep_config_source_status",
+        "migrated_known_legacy_crlf",
+        "existing_checksum_mismatch",
+        "atomic_replace_failed",
+    )
+    return (
+        all(marker in body for marker in required_markers)
+        and "curl" not in body
+        and "wget" not in body
+        and body.index("linux_drumsep_config_source_status=canonical")
+        < body.index('if [ -e "${_target}" ]')
+    )
+
+
 def test_shared_contract_schema_and_canonical_asset_are_closed() -> None:
     contract = _contract()
     payload = ASSET_PATH.read_bytes()
@@ -53,6 +88,12 @@ def test_shared_contract_schema_and_canonical_asset_are_closed() -> None:
         "newlines": "CRLF",
     }
     assert set(contract["platforms"]) == {"macos", "windows", "linux"}
+    assert contract["online_inventories"]["linux_reapack"] == {
+        "index_path": "index.xml",
+        "repository_source_path": "tools/assets/drumsep/config_drumsep_mdx23c.yaml",
+        "installed_source_path_relative_to_scripts": "assets/drumsep/config_drumsep_mdx23c.yaml",
+        "marker_prefix": "linux_drumsep_config",
+    }
 
     for platform_name, obligations in contract["platforms"].items():
         assert set(obligations) == REQUIRED_PLATFORM_FIELDS, platform_name
@@ -157,8 +198,7 @@ def _materializer_body(source: str, function_name: str) -> str:
 LINUX_GAPS = (
     (
         "online-minimal",
-        lambda: "config_drumsep_mdx23c.yaml" in _text("installer/linux/stage_payload.sh")
-        or "config_drumsep_mdx23c.yaml" in _text("index.xml"),
+        _linux_online_inventory_conforms,
         "Linux online-minimal payload does not distribute the canonical DrumSep compatibility config required by the shared contract.",
     ),
     (
@@ -178,15 +218,14 @@ LINUX_GAPS = (
     ),
     (
         "materializer",
-        lambda: "materialize_drumsep_compat" in _text("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").lower(),
+        _linux_materializer_conforms,
         "Linux bootstrap does not implement the contract-declared legacy CRLF to canonical LF migration.",
     ),
     (
         "release-gate",
-        lambda: "build_linux_variant_payload.py" in _text("tools/release_gate.py")
-        and "STEMwerk_Bootstrap_Linux.sh" in _text("tools/release_gate.py")
+        lambda: "STEMwerk_Bootstrap_Linux.sh" in _text("tools/release_gate.py")
         and "config_drumsep_mdx23c.yaml" in _text("tools/release_gate.py"),
-        "Release gate does not enforce Linux DrumSep compatibility-config distribution and materialization.",
+        "Release gate does not enforce Linux online DrumSep compatibility-config distribution and materialization.",
     ),
 )
 
@@ -201,3 +240,14 @@ def test_linux_distribution_conforms_to_contract(_gap: str, evidence, message: s
         "offline-bundled-cuda-allmodels",
     ]
     assert evidence(), message
+
+
+def test_linux_offline_gap_tracking_remains_explicit_and_red() -> None:
+    offline_gaps = {gap: evidence for gap, evidence, _message in LINUX_GAPS if gap.startswith("offline-")}
+
+    assert set(offline_gaps) == {"offline-cpu", "offline-rocm", "offline-nvidia"}
+    assert {gap: evidence() for gap, evidence in offline_gaps.items()} == {
+        "offline-cpu": False,
+        "offline-rocm": False,
+        "offline-nvidia": False,
+    }
