@@ -5253,7 +5253,8 @@ def test_no_stale_onnxruntime_ci_pins():
     assert "onnxruntime>=1.21,<1.22" not in requirements
     assert "onnxruntime>=1.21,<1.22" not in smoke
     assert "\nonnxruntime\n" in requirements
-    assert "pip install onnxruntime-silicon || pip install onnxruntime" in smoke
+    assert 'pip install "onnxruntime==1.27.0"' in smoke
+    assert "onnxruntime-silicon ||" not in smoke
     assert "tests/test_dependency_constraints.py::test_no_stale_onnxruntime_ci_pins" in workflow
 
 
@@ -5307,6 +5308,23 @@ def test_macos_arm64_constraints_are_policy_reference_not_online_fallback():
         assert requirement in constraints
 
 
+def test_apple_silicon_backend_smoke_uses_canonical_samplerate_override_policy():
+    workflow = Path(".github/workflows/macos-apple-silicon-backend-smoke.yml").read_text(encoding="utf-8")
+    canonical = r"audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$"
+
+    assert 'pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.44.3"' not in workflow
+    assert 'pip install "audio-separator==0.44.3"' in workflow
+    assert 'pip install --force-reinstall --no-deps "samplerate==0.2.4"' in workflow
+    assert 'pip install "onnxruntime==1.27.0"' in workflow
+    assert "onnxruntime-silicon ||" not in workflow
+    assert "stemwerk_samplerate_guard.py --validate-only --repair-version 0.2.4" in workflow
+    assert "pip check 2>&1 | tee /tmp/stemwerk-pip-check.log || true" in workflow
+    assert workflow.count(canonical) == 2
+    assert "grep -Eiq" in workflow and "grep -Eivc" in workflow
+    assert 'import audio_separator' in workflow
+    assert 'import torch' in workflow
+
+
 def test_macos_intel_no_payload_route_remains_available():
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
     assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in bootstrap
@@ -5315,14 +5333,20 @@ def test_macos_intel_no_payload_route_remains_available():
     assert 'if [ "${MAC_ARCH}" = "x86_64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then' not in bootstrap
 
 
-def test_macos_pip_check_regex_matches_sanity_workflow_semantics():
-    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
-    sanity = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8")
+def test_macos_pip_check_regex_matches_all_arm64_override_policy_sources():
+    policy_sources = {
+        "bootstrap": Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8"),
+        "sanity": Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8"),
+        "smoke": Path(".github/workflows/macos-apple-silicon-backend-smoke.yml").read_text(encoding="utf-8"),
+    }
     canonical = r"audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$"
-    assert bootstrap.count(canonical) == 2
-    assert sanity.count(canonical) == 2
-    assert "grep -Eiq" in bootstrap and "grep -Eiv" in bootstrap
-    assert "grep -Eiq" in sanity and "grep -Eivc" in sanity
+    assert len(policy_sources) == 3
+    for name, source in policy_sources.items():
+        assert source.count(canonical) == 2, name
+        assert "grep -Eiq" in source, name
+        assert "grep -Eiv" in source, name
+
+    bootstrap = policy_sources["bootstrap"]
     assert "sympy" not in "\n".join(line for line in bootstrap.splitlines() if "pip_check" in line.lower())
     print("MACOS_PIP_CHECK_REGEX_PARITY_TEST=PASS")
 
