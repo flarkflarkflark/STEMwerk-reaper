@@ -1,6 +1,18 @@
 # STEMwerk 2.3.0.5 Release Notes
 
-Status: release planning. No tag, release, or installer build has been created.
+> **Release status: NO-GO**
+>
+> STEMwerk 2.3.0.5 will not be published.
+> The accumulated runtime, payload and cross-platform migration work
+> has exceeded the intended hotfix scope and is being consolidated
+> into STEMwerk 2.4.0.
+>
+> Final investigated main snapshot:
+> `b991b3347ae548d1b5a7ea6274d0ee68dfd768db`
+
+Status: CANCELLED / NO-GO. Superseded by planned 2.4.0 integration work. No tag,
+release, or installer build was created for 2.3.0.5. The historical planning
+and validation record below is retained as input for 2.4.0.
 
 ## Highlights
 
