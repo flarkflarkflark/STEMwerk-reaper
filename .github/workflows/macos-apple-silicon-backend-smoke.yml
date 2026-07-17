@@ -67,10 +67,14 @@ jobs:
           pip install -c scripts/reaper/constraints/macos.txt "numpy==2.4.4" "soundfile>=0.12.1"
           pip install "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
           pip install ./scripts/reaper/vendor/stemwerk-core
-          pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.44.3"
+          pip install "audio-separator==0.44.3"
+          pip install --force-reinstall --no-deps "samplerate==0.2.4"
           pip install --force-reinstall --no-deps "numpy==2.4.4" "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1"
-          pip install onnxruntime-silicon || pip install onnxruntime
-          pip check
+          pip install "onnxruntime==1.27.0"
+          python scripts/reaper/_internal/stemwerk_samplerate_guard.py --validate-only --repair-version 0.2.4
+          pip check 2>&1 | tee /tmp/stemwerk-pip-check.log || true
+          grep -Eiq '^audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' /tmp/stemwerk-pip-check.log
+          test "$(grep -Eivc '^[[:space:]]*$|^audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$' /tmp/stemwerk-pip-check.log)" -eq 0
           pip install pytest
 
       - name: Show backend smoke dependency diagnostics
