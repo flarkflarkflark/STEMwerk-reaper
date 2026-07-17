@@ -1575,7 +1575,9 @@ resolve_core_target() {
 venv_torch_requires_rebuild() {
   _venv_py="$1"
   [ -x "${_venv_py}" ] || return 1
-  _probe="$("${_venv_py}" - <<'PY' 2>/dev/null || true
+  _probe="$(STEMWERK_BACKEND="${BACKEND}" "${_venv_py}" - <<'PY' 2>/dev/null || true
+import os
+
 try:
     import torch
     ver = getattr(torch, "__version__", "")
@@ -1583,7 +1585,27 @@ try:
     parts = core.split(".")
     major = int(parts[0])
     minor = int(parts[1])
-    if major > 2 or (major == 2 and minor >= 6):
+    backend = os.environ.get("STEMWERK_BACKEND", "cpu")
+    hip = getattr(getattr(torch, "version", None), "hip", None)
+    cuda_available = bool(torch.cuda.is_available())
+    cuda_count = int(torch.cuda.device_count()) if cuda_available else 0
+    names = []
+    if cuda_available:
+        for index in range(cuda_count):
+            try:
+                names.append(str(torch.cuda.get_device_name(index)))
+            except Exception:
+                pass
+    dev_text = "|".join(names).lower()
+    allow_rocm7_gfx1201 = (
+        backend == "rocm"
+        and (major, minor) == (2, 10)
+        and hip is not None
+        and cuda_available
+        and cuda_count > 0
+        and ("rx 9070" in dev_text or "gfx1201" in dev_text)
+    )
+    if (major > 2 or (major == 2 and minor >= 6)) and not allow_rocm7_gfx1201:
         print("rebuild|" + ver)
     else:
         print("ok|" + ver)
@@ -1622,7 +1644,8 @@ for name, wanted in expected.items():
     try:
         installed = md.version(name)
     except md.PackageNotFoundError:
-        continue
+        print("rebuild|missing_package:" + name)
+        raise SystemExit(0)
     if name == "numpy":
         try:
             major = int(installed.split(".", 1)[0])
@@ -2291,9 +2314,19 @@ else
   fi
   log_stage "Creating venv"
   log_step "Creating STEMwerk virtual environment..."
-  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && { venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python" || main_runtime_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; }; then
-    log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
-    rm -rf "${RUNTIME_BASE}/.venv"
+  EXISTING_MAIN_RUNTIME_HEALTHY="0"
+  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    if venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python" || main_runtime_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+      log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
+      rm -rf "${RUNTIME_BASE}/.venv"
+    elif probe_main_runtime_ready "${RUNTIME_BASE}/.venv/bin/python" "${BACKEND}" >/dev/null; then
+      EXISTING_MAIN_RUNTIME_HEALTHY="1"
+      log_step "Preserving healthy existing ${BACKEND} runtime; dependency installation is a no-op"
+    else
+      log_step "Existing venv runtime probe failed; rebuilding .venv"
+      log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
+      rm -rf "${RUNTIME_BASE}/.venv"
+    fi
   fi
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     if ! create_venv_with_selected_python; then
@@ -2321,9 +2354,12 @@ else
       set_status "venv_failed" "${VENV_CREATE_REASON}"
     fi
   fi
-  if [ "${STATUS}" = "ok" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
+  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
+  fi
+  if [ "${STATUS}" = "ok" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+    if [ "${EXISTING_MAIN_RUNTIME_HEALTHY}" -ne 1 ]; then
+      set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
     clear_stale_python_backend_reason
     log_step "Upgrading pip/setuptools/wheel"
     pip_install_with_scope main "${VENV_PY}" --upgrade pip setuptools wheel >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
@@ -2771,6 +2807,7 @@ PY
       fi
     else
       log_step "Skipping torch pin repair and ONNX install after audio-separator dependency failure"
+    fi
     fi
   fi
 fi

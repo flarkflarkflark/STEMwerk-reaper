@@ -2252,6 +2252,39 @@ def test_linux_main_runtime_rebuilds_old_numpy1_audio_separator_venv():
     assert script.index("main_runtime_requires_rebuild()") < script.index('log_stage "Creating venv"')
 
 
+def test_linux_repair_preserves_a_healthy_rocm7_gfx1201_main_runtime():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    gate = script[
+        script.index("venv_torch_requires_rebuild()") :
+        script.index("main_runtime_requires_rebuild()")
+    ]
+
+    assert 'STEMWERK_BACKEND="${BACKEND}"' in gate
+    assert 'hip = getattr(getattr(torch, "version", None), "hip", None)' in gate
+    assert '"rx 9070" in dev_text or "gfx1201" in dev_text' in gate
+    assert "allow_rocm7_gfx1201" in gate
+    assert 'EXISTING_MAIN_RUNTIME_HEALTHY="0"' in script
+    assert 'probe_main_runtime_ready "${RUNTIME_BASE}/.venv/bin/python" "${BACKEND}"' in script
+    assert 'EXISTING_MAIN_RUNTIME_HEALTHY="1"' in script
+    assert 'Preserving healthy existing ${BACKEND} runtime; dependency installation is a no-op' in script
+    assert '[ "${EXISTING_MAIN_RUNTIME_HEALTHY}" -ne 1 ]' in script
+    install_gate = script[script.index('log_stage "Creating venv"') :]
+    assert install_gate.index('EXISTING_MAIN_RUNTIME_HEALTHY="1"') < install_gate.index('log_step "Installing pinned STEMwerk backend packages..."')
+
+
+def test_linux_repair_keeps_corrupt_runtimes_rebuildable_without_cpu_route_for_healthy_rocm():
+    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
+    rebuild_gate = script[
+        script.index("main_runtime_requires_rebuild()") :
+        script.index("linux_torch_install_args()")
+    ]
+
+    assert 'print("rebuild|missing_package:" + name)' in rebuild_gate
+    assert 'Existing venv runtime probe failed; rebuilding .venv' in script
+    assert 'EXISTING_MAIN_RUNTIME_HEALTHY="1"' in script
+    assert script.index('EXISTING_MAIN_RUNTIME_HEALTHY="1"') < script.index('log_stage "Installing ROCm torch"')
+
+
 def test_linux_torch_stack_verify_helper_checks_backend_and_all_three_packages():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
