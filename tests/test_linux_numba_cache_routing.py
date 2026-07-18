@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 
 PROCESS_SCRIPT = Path("scripts/reaper/audio_separator_process.py")
 
@@ -74,6 +76,51 @@ def test_non_linux_launch_behavior_does_not_change_numba_environment(monkeypatch
     assert not (tmp_path / "STEMwerk" / "cache" / "numba").exists()
 
 
+def _assert_cli_route_does_not_configure_numba_cache(monkeypatch, argv, route_stub=None):
+    module = _load_process_module()
+    configured = []
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module.sys, "argv", ["audio_separator_process.py", *argv])
+    monkeypatch.setattr(module, "_setup_reaper_io", lambda _output_dir: None)
+    monkeypatch.setattr(module, "emit_phase", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module, "_configure_ffmpeg_runtime", lambda: (None, None, None))
+    monkeypatch.setattr(module, "_configure_model_cache_runtime", lambda: Path("models"))
+    monkeypatch.setattr(module, "_configure_linux_numba_cache_runtime", lambda: configured.append(True))
+    if route_stub:
+        route_stub(module)
+
+    return module, configured
+
+
+def test_list_models_does_not_configure_linux_numba_cache(monkeypatch, capsys):
+    module, configured = _assert_cli_route_does_not_configure_numba_cache(monkeypatch, ["--list-models"])
+
+    assert module.main() == 0
+    assert configured == []
+    assert "Popular models:" in capsys.readouterr().out
+
+
+def test_environment_probe_does_not_configure_linux_numba_cache(monkeypatch):
+    module, configured = _assert_cli_route_does_not_configure_numba_cache(
+        monkeypatch,
+        ["--env-json"],
+        lambda loaded: monkeypatch.setattr(loaded, "list_devices_machine", lambda _skips: None),
+    )
+
+    assert module.main() == 0
+    assert configured == []
+
+
+def test_help_does_not_configure_linux_numba_cache(monkeypatch):
+    module, configured = _assert_cli_route_does_not_configure_numba_cache(monkeypatch, ["--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        module.main()
+
+    assert exc_info.value.code == 0
+    assert configured == []
+
+
 def test_normal_direct_and_kit_split_share_policy_and_helper_inherits_exact_path(monkeypatch, tmp_path):
     module = _load_process_module()
     runtime_base = tmp_path / "STEMwerk"
@@ -133,11 +180,7 @@ def test_real_librosa_jit_cache_is_outside_site_packages_and_results_match(monke
         text=True,
         env=dict(os.environ),
     )
-    if probe.returncode != 0:
-        assert os.environ["NUMBA_CACHE_DIR"] == str(runtime_base / "cache" / "numba")
-        assert venv_fixture.read_text(encoding="utf-8") == "venv-stable"
-        assert model_fixture.read_text(encoding="utf-8") == "model-stable"
-        return
+    assert probe.returncode == 0, probe.stderr
     librosa_root = Path(probe.stdout.strip()).resolve().parent
     site_cache_before = {p.resolve() for pattern in ("*.nbc", "*.nbi") for p in librosa_root.rglob(pattern)}
     env = dict(os.environ)
