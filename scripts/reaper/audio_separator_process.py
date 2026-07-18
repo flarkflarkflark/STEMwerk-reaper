@@ -3328,6 +3328,55 @@ def _configure_model_cache_runtime() -> Path:
     return model_dir
 
 
+def _linux_numba_cache_path_is_safe(runtime_base: Path, cache_dir: Path) -> bool:
+    runtime_base = Path(runtime_base).expanduser().resolve(strict=False)
+    cache_dir = Path(cache_dir).expanduser().resolve(strict=False)
+    try:
+        relative = cache_dir.relative_to(runtime_base)
+    except ValueError:
+        return False
+    if not relative.parts:
+        return False
+    first = relative.parts[0].lower()
+    if first == ".venv" or first.startswith(".venv-"):
+        return False
+    return first not in {"models", "config", "configs", "assets", "source", "sources"}
+
+
+def _configure_linux_numba_cache_runtime(runtime_base: Optional[Path] = None) -> Dict[str, str]:
+    if not sys.platform.startswith("linux"):
+        return {}
+
+    candidates = _runtime_base_candidates()
+    effective_base = Path(runtime_base or (candidates[0] if candidates else Path.home() / ".local" / "share" / "STEMwerk"))
+    effective_base = effective_base.expanduser().resolve(strict=False)
+    cache_dir = (effective_base / "cache" / "numba").resolve(strict=False)
+    if not _linux_numba_cache_path_is_safe(effective_base, cache_dir):
+        raise RuntimeError(f"unsafe Linux Numba cache path: {cache_dir}")
+
+    configured_override = str(os.environ.get("NUMBA_CACHE_DIR") or "").strip()
+    override_rejected = bool(
+        configured_override
+        and Path(configured_override).expanduser().resolve(strict=False) != cache_dir
+    )
+    existed = cache_dir.is_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if not cache_dir.is_dir() or not os.access(cache_dir, os.W_OK):
+        raise RuntimeError(f"Linux Numba cache is not writable: {cache_dir}")
+
+    os.environ["NUMBA_CACHE_DIR"] = str(cache_dir)
+    status = "rejected_override" if override_rejected else ("exists_valid" if existed else "created")
+    policy = {
+        "numba_cache_dir": str(cache_dir),
+        "numba_cache_source": "runtime_policy",
+        "numba_cache_status": status,
+        "numba_cache_inside_venv": "false",
+    }
+    for key, value in policy.items():
+        print(f"{key}={value}", file=sys.stderr)
+    return policy
+
+
 def emit_progress(percent: float, stage: str = ""):
     """Output progress in machine-readable format for Lua to parse."""
     line = f"PROGRESS:{int(percent)}:{stage}\n"
@@ -3896,6 +3945,8 @@ def build_drumsep_subprocess_env(
         "drumsep_cuda_helper_runtime_venv": str(runtime_venv) if backend == "cuda" else "",
         "drumsep_cuda_runtime_lib_dirs": "|".join(_runtime_cuda_library_dirs(runtime_venv)) if backend == "cuda" else "",
         "drumsep_path_starts_with_drumsep_venv": "yes" if sanitized_path and _path_text(sanitized_path[0]) == _path_text(runtime_bin) else "no",
+        "numba_cache_dir": str(env.get("NUMBA_CACHE_DIR", "")),
+        "numba_cache_inherited": "yes" if str(env.get("NUMBA_CACHE_DIR", "")).strip() else "no",
     }
     return env, diagnostics
 
@@ -3992,6 +4043,8 @@ def _emit_drumsep_subprocess_env_diagnostics(diagnostics: Dict[str, str]) -> Non
         "drumsep_cuda_helper_runtime_venv",
         "drumsep_cuda_runtime_lib_dirs",
         "drumsep_path_starts_with_drumsep_venv",
+        "numba_cache_dir",
+        "numba_cache_inherited",
     ):
         print(f"{key}={diagnostics.get(key, '')}", file=sys.stderr)
 
@@ -4666,6 +4719,7 @@ def main():
         parser.print_help()
         return 1
 
+    _configure_linux_numba_cache_runtime()
     _require_core()
     if stemwerk_core_file:
         print(f"STEMWERK_DIAG stemwerk_core_file={stemwerk_core_file}", file=sys.stderr)
