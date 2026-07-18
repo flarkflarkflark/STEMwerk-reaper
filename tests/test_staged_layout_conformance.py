@@ -118,10 +118,9 @@ def test_linux_layout_validation_precedes_every_runtime_mutation_class() -> None
         "create_venv_with_selected_python",
         "pip_install_with_scope",
         "ensure_core_model_cache",
-        "ensure_drumsep_assets",
-        "install_drumsep_runtime",
-        "install_drumsep_rocm_runtime",
-        "write_main_unified_rocm_state",
+        'apply_drumsep_sibling_policy "cpu"',
+        'apply_drumsep_sibling_policy "rocm"',
+        'resolve_main_drumsep_runtime_policy "rocm"',
     )
     for marker in mutation_markers:
         assert validation < execution.index(marker), marker
