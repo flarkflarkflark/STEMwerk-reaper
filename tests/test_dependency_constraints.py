@@ -6037,7 +6037,7 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
-    i18n_internal = Path("scripts/reaper/_internal/STEMwerk_i18n.lua").read_text()
+    i18n_internal = Path("scripts/reaper/_internal/STEMwerk_I18N.lua").read_text()
 
     assert 'trSafeValue("drumkit_complete_title", "Direct Kit completed successfully!")' in main_script
     assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
