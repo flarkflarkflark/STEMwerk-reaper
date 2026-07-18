@@ -32,6 +32,14 @@ SAMPLERATE_GUARD_REL = "_internal/stemwerk_samplerate_guard.py"
 SAMPLERATE_GUARD_PAYLOAD_PATH = f"scripts/reaper/{SAMPLERATE_GUARD_REL}"
 DRUMSEP_COMPAT_ASSET = "tools/assets/drumsep/config_drumsep_mdx23c.yaml"
 DRUMSEP_COMPAT_CONTRACT_PATH = "tools/assets/drumsep/compatibility_config_contract.json"
+LINUX_MANAGED_DIFFQ_WHEEL_NAME = "diffq-0.2.4-cp312-cp312-linux_x86_64.whl"
+LINUX_MANAGED_DIFFQ_REPOSITORY_SOURCE = (
+    f"scripts/reaper/vendor/wheels/linux-x86_64-cp312/{LINUX_MANAGED_DIFFQ_WHEEL_NAME}"
+)
+LINUX_MANAGED_DIFFQ_STAGED_TARGET = (
+    f"vendor/wheels/linux-x86_64-cp312/{LINUX_MANAGED_DIFFQ_WHEEL_NAME}"
+)
+LINUX_MANAGED_DIFFQ_SHA256 = "b829202cba2df9883815f95323f1d40294d657dd9c7a7d1c9706b57932d0a203"
 
 
 @dataclass
@@ -433,6 +441,68 @@ def check_linux_online_drumsep_distribution(root: Path) -> Section:
     return section
 
 
+def is_linux_managed_diffq_wheel_name(filename: str) -> bool:
+    return filename == LINUX_MANAGED_DIFFQ_WHEEL_NAME
+
+
+def check_linux_managed_diffq_distribution(root: Path) -> Section:
+    section = Section("G. Linux managed diffq wheel distribution")
+    bootstrap = root / BOOTSTRAP_LINUX
+    if not bootstrap.is_file():
+        section.note("Linux bootstrap not present; managed diffq wheel check not required")
+        return section
+    bootstrap_text = read_text(bootstrap)
+    if "find_managed_diffq_wheel" not in bootstrap_text:
+        section.note("Linux bootstrap has no managed diffq lookup; wheel check not required")
+        return section
+
+    source_path = root / LINUX_MANAGED_DIFFQ_REPOSITORY_SOURCE
+    if not source_path.is_file():
+        section.fail(f"managed diffq wheel source is missing: {LINUX_MANAGED_DIFFQ_REPOSITORY_SOURCE}")
+    elif hashlib.sha256(source_path.read_bytes()).hexdigest() != LINUX_MANAGED_DIFFQ_SHA256:
+        section.fail("managed diffq wheel fingerprint does not match the distribution contract")
+
+    tree, _raw, errors = parse_index(root / "index.xml")
+    for error in errors:
+        section.fail(error)
+    candidates: list[SourceEntry] = []
+    exact: list[SourceEntry] = []
+    if tree is not None:
+        sources, warnings = collect_sources(tree)
+        for warning in warnings:
+            section.warn(warning)
+        candidates = [
+            source
+            for source in sources
+            if source.file_attr.startswith("../vendor/wheels/linux-x86_64-cp312/diffq-")
+            and source.file_attr.endswith(".whl")
+        ]
+        exact = [
+            source
+            for source in candidates
+            if source.file_attr == f"../{LINUX_MANAGED_DIFFQ_STAGED_TARGET}"
+            and source.repo_path == LINUX_MANAGED_DIFFQ_REPOSITORY_SOURCE
+        ]
+    if len(candidates) != 1 or len(exact) != 1:
+        section.fail("index.xml must contain exactly one contract-matching Linux managed diffq wheel source")
+
+    required_literals = (
+        '"${SCRIPT_DIR}/vendor/wheels/linux-x86_64-cp312"',
+        '"${wheel_dir}"/diffq-*.whl',
+        LINUX_MANAGED_DIFFQ_STAGED_TARGET,
+    )
+    for literal in required_literals:
+        if literal not in bootstrap_text:
+            section.fail(f"Linux bootstrap is missing managed diffq contract literal: {literal}")
+
+    if section.status != "FAIL":
+        section.note(
+            "validated Linux managed diffq source "
+            f"{LINUX_MANAGED_DIFFQ_REPOSITORY_SOURCE} -> {LINUX_MANAGED_DIFFQ_STAGED_TARGET}"
+        )
+    return section
+
+
 def run_check(root: Path) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
@@ -457,6 +527,7 @@ def run_check(root: Path) -> tuple[list[Section], int]:
     sections.append(check_bootstrap_guard_payload(root, payload_paths))
     sections.append(check_drumsep_compat_asset_contract(root))
     sections.append(check_linux_online_drumsep_distribution(root))
+    sections.append(check_linux_managed_diffq_distribution(root))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count

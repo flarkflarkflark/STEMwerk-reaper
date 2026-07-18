@@ -190,7 +190,7 @@ materialize_drumsep_compat_yaml() {
 # This contract is checked before any runtime, venv, package, model, or config
 # mutation. Only the caller-provided state and log files may be written while
 # reporting a failed preflight.
-REQUIRED_REAPER_LAYOUT="audio_separator_process.py _internal/STEMwerk_Managed_Python.sh assets/drumsep/config_drumsep_mdx23c.yaml vendor/stemwerk-core/pyproject.toml vendor/stemwerk-core/src/stemwerk_core/__init__.py vendor/stemwerk-core/src/stemwerk_core/separator.py"
+REQUIRED_REAPER_LAYOUT="audio_separator_process.py _internal/STEMwerk_Managed_Python.sh assets/drumsep/config_drumsep_mdx23c.yaml vendor/stemwerk-core/pyproject.toml vendor/stemwerk-core/src/stemwerk_core/__init__.py vendor/stemwerk-core/src/stemwerk_core/separator.py vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl"
 STAGED_LAYOUT_FAILED_PATH=""
 
 validate_required_reaper_layout() {
