@@ -153,3 +153,16 @@ def test_linux_online_drumsep_asset_must_match_contract_and_reapack_inventory(tm
 
     assert section.status == "FAIL"
     assert any("index.xml" in message for message in section.messages)
+
+
+def test_release_gate_run_includes_linux_managed_diffq_contract(monkeypatch, tmp_path: Path) -> None:
+    seen = False
+
+    def fake_check(root: Path) -> release_gate.Section:
+        nonlocal seen
+        seen = root == tmp_path
+        return release_gate.Section("managed wheel fixture")
+
+    monkeypatch.setattr(release_gate, "check_linux_managed_diffq_distribution", fake_check)
+    release_gate.run_check(tmp_path)
+    assert seen

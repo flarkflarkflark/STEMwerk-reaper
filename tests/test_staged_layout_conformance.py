@@ -18,6 +18,7 @@ REQUIRED_LAYOUT = (
     "vendor/stemwerk-core/pyproject.toml",
     "vendor/stemwerk-core/src/stemwerk_core/__init__.py",
     "vendor/stemwerk-core/src/stemwerk_core/separator.py",
+    "vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl",
 )
 
 PLATFORM_LAYOUT_STATUS = {
@@ -216,3 +217,15 @@ def test_missing_drumsep_compat_asset_fails_before_config_or_runtime_mutation(tm
     assert "INSTALL_CPU_CALLED" not in text
     assert "INSTALL_ROCM_CALLED" not in text
     assert not (tmp_path / "xdg/STEMwerk/models/config_drumsep_mdx23c.yaml").exists()
+
+
+def test_missing_managed_diffq_wheel_fails_before_runtime_mutation(tmp_path: Path) -> None:
+    layout = _make_layout(tmp_path)
+    missing = "vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl"
+    (layout / missing).unlink()
+
+    result, state, log, _sentinel = _run_layout(layout, tmp_path)
+
+    assert result.returncode != 0
+    assert f"STATUS_REASON=staged_layout_incomplete:{missing}" in state.read_text(encoding="utf-8")
+    assert f"staged_layout_validation=failed:{missing}" in log.read_text(encoding="utf-8")
