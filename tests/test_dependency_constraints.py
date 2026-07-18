@@ -823,7 +823,9 @@ def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_ro
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
     launcher = Path("scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh").read_text()
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
-    drumsep_install = bootstrap.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
+    drumsep_install = bootstrap.split("install_drumsep_runtime_body() {", 1)[1].split(
+        "\n\ninstall_drumsep_runtime() {", 1
+    )[0]
 
     assert 'STEP_TOTAL="5"' in bootstrap
     assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
@@ -4791,7 +4793,8 @@ def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins()
     assert 'DRUMSEP_ROCM_MIN_FREE_GB="20"' in script
     assert "drumsep_rocm_disk_preflight()" in script
     assert "resolve_drumsep_rocm_tmpdir()" in script
-    assert 'write_drumsep_rocm_state "disk_space_insufficient" "missing"' in script
+    assert 'DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-disk_space_insufficient}"' in script
+    assert 'run_drumsep_install_transaction "rocm"' in script
     assert 'select_drumsep_rocm_torch_stack() {' in script
     assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}"' in script
     assert '"torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}"' in script
@@ -4831,7 +4834,11 @@ def test_linux_rocm_repair_skips_legacy_runtime_when_main_unified_is_ready():
     assert "probe_main_rocm_dks_ready()" in script
     assert 'metadata.version("audio-separator")' in script
     assert 'metadata.version("numpy")' in script
-    assert 'if probe_main_rocm_dks_ready "${VENV_PY}" && ensure_drumsep_assets' in script
+    resolver = script.split("resolve_main_drumsep_runtime_policy() {", 1)[1].split(
+        "write_drumsep_state() {", 1
+    )[0]
+    assert 'probe_main_rocm_dks_ready "${VENV_PY:-$(main_runtime_python)}"' in resolver
+    assert 'ensure_drumsep_assets "${VENV_PY:-$(main_runtime_python)}"' in resolver
     assert 'write_main_unified_rocm_state "ok"' in script
     assert 'log_step "Legacy DrumSep ROCm install skipped: main_unified_ready"' in script
 
@@ -4846,30 +4853,31 @@ def test_linux_rocm_unified_state_records_selection_and_legacy_skip_reason():
         'echo "DRUMSEP_ROCM_LEGACY_RUNTIME_STATUS=${_legacy_status}"',
         'echo "DRUMSEP_ROCM_LEGACY_INSTALL_SKIPPED=${_legacy_install_skipped}"',
         '"unified_main" "${1:-ok}" "main_unified_ready"',
-        '"$(main_runtime_python)" "main_unified" "${_legacy_status}" "main_unified_ready"',
+        '"$(main_runtime_python)" "main_unified" "not_checked" "main_unified_ready"',
     ):
         assert marker in script
     assert 'ok|skipped|unified_main)' in script
 
 
-def test_linux_rocm_repair_preserves_legacy_fallback_when_main_is_not_ready():
+def test_linux_rocm_repair_preserves_sibling_when_main_is_not_ready():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
     automatic_guard = script.split('READY_DETAIL="${STATUS_REASON}"', 1)[1].split(
         'if [ "${READY_RUNTIME_KIND}" = "rocm" ]', 1
     )[0]
 
-    assert 'if probe_main_rocm_dks_ready "${VENV_PY}" && ensure_drumsep_assets' in automatic_guard
-    assert 'if ! install_drumsep_rocm_runtime; then' in automatic_guard
-    assert 'set_status "deps_failed" "drumsep_ready_runtime_failed"' in automatic_guard
+    assert 'resolve_main_drumsep_runtime_policy "rocm" || true' in automatic_guard
+    assert 'install_drumsep_rocm_runtime' not in automatic_guard
+    assert 'set_status "deps_failed" "drumsep_sibling_rebuild_required"' in script
+    assert 'set_status "deps_failed" "drumsep_sibling_missing"' in script
     assert 'elif [ "${MODE}" = "drumsep-rocm-runtime" ]; then' in script
-    assert 'if install_drumsep_rocm_runtime; then' in script
+    assert 'if apply_drumsep_sibling_policy "rocm"; then' in script
 
 
 def test_linux_rocm_unified_guard_never_deletes_legacy_runtime():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
     unified_writer = script.split("write_main_unified_rocm_state()", 1)[1].split("write_state()", 1)[0]
 
-    assert ".venv-drumsep-rocm" in unified_writer
+    assert ".venv-drumsep-rocm" not in unified_writer
     assert "rm -rf" not in unified_writer
     assert "rmdir" not in unified_writer
     assert "delete" not in unified_writer.lower()
@@ -7834,10 +7842,10 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'CORE_MODEL_PREFETCH_STATUS="skipped"' in linux_bootstrap
     assert 'log_step "core_model_prefetch_skipped=${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in linux_bootstrap
-    assert 'set_status "deps_failed" "drumsep_ready_runtime_failed"' in linux_bootstrap
+    assert 'set_status "deps_failed" "drumsep_sibling_rebuild_required"' in linux_bootstrap
     assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in linux_bootstrap
     assert 'echo "CORE_MODEL_PREFETCH_STATUS=${_core_prefetch_status}"' in linux_bootstrap
-    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
+    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
 
     assert "ready_to_go_state_file()" in macos_bootstrap
     assert "ensure_core_model_cache" in macos_bootstrap
@@ -7907,8 +7915,9 @@ def test_linux_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_ru
     assert 'STATE_FILE=""' in linux_bootstrap
     assert 'verify_existing_ready_runtime "${READY_BACKEND}" || true' in linux_bootstrap
     assert 'probe_main_runtime_ready "$(main_runtime_python)" "${BACKEND}"' in linux_bootstrap
-    assert 'log_step "Existing DrumSep runtime detected; running verification before reinstall"' in linux_bootstrap
-    assert 'log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"' in linux_bootstrap
+    assert 'log_step "Open DrumSep install transaction dominates cached ready state: ${_txn_kind}"' in linux_bootstrap
+    assert 'log_step "Existing DrumSep runtime detected; running verification before reinstall"' not in linux_bootstrap
+    assert 'log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"' not in linux_bootstrap
     assert 'MODE="ready-to-go-verify"' not in linux_bootstrap
     assert 'if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" != "${READY_STATE_FILE}" ]; then' in linux_bootstrap
     assert linux_bootstrap.index('write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${MAIN_READY_STATUS}"') < linux_bootstrap.index('if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then')
