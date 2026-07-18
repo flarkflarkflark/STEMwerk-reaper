@@ -4673,7 +4673,6 @@ def main():
     emit_phase("python_start")
     ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()
-    _configure_linux_numba_cache_runtime()
     if ffmpeg_path is not None:
         print(f"STEMWERK_DIAG ffmpeg_path={ffmpeg_path}", file=sys.stderr)
         print(
@@ -4720,6 +4719,7 @@ def main():
         parser.print_help()
         return 1
 
+    _configure_linux_numba_cache_runtime()
     _require_core()
     if stemwerk_core_file:
         print(f"STEMWERK_DIAG stemwerk_core_file={stemwerk_core_file}", file=sys.stderr)
