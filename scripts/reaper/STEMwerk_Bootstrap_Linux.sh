@@ -187,6 +187,28 @@ materialize_drumsep_compat_yaml() {
   return 0
 }
 
+# This contract is checked before any runtime, venv, package, model, or config
+# mutation. Only the caller-provided state and log files may be written while
+# reporting a failed preflight.
+REQUIRED_REAPER_LAYOUT="audio_separator_process.py _internal/STEMwerk_Managed_Python.sh assets/drumsep/config_drumsep_mdx23c.yaml vendor/stemwerk-core/pyproject.toml vendor/stemwerk-core/src/stemwerk_core/__init__.py vendor/stemwerk-core/src/stemwerk_core/separator.py"
+STAGED_LAYOUT_FAILED_PATH=""
+
+validate_required_reaper_layout() {
+  log "staged_layout_required=${REQUIRED_REAPER_LAYOUT}"
+  for _required_relative in ${REQUIRED_REAPER_LAYOUT}; do
+    _required_path="${SCRIPT_DIR}/${_required_relative}"
+    if [ ! -f "${_required_path}" ] || [ ! -r "${_required_path}" ]; then
+      STAGED_LAYOUT_FAILED_PATH="${_required_relative}"
+      log "required_script_missing=${_required_path}"
+      log "staged_layout_validation=failed:${_required_relative}"
+      return 1
+    fi
+  done
+  STAGED_LAYOUT_FAILED_PATH=""
+  log "staged_layout_validation=ok"
+  return 0
+}
+
 is_core_source_bundle() {
   [ -n "${1:-}" ] \
     && [ -f "$1/pyproject.toml" ] \
@@ -333,26 +355,52 @@ PY
 ensure_drumsep_assets() {
   _py="$1"
   _model_dir="${2:-$(model_cache_dir)}"
-  [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
-  mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
-  copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models" "${_model_dir}" || return 1
+  [ -n "${_py}" ] && [ -x "${_py}" ] || return 20
+  mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 20
+  copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models" "${_model_dir}" || return 20
   "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
 from pathlib import Path
 
 script_path = Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"
-spec = importlib.util.spec_from_file_location("stemwerk_audio_separator_process_ready", script_path)
-module = importlib.util.module_from_spec(spec)
-assert spec and spec.loader
-spec.loader.exec_module(module)
-ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
-    module.DIRECT_DKS_MODEL_ALIAS,
-    Path(r"${_model_dir}"),
-)
+try:
+    spec = importlib.util.spec_from_file_location("stemwerk_audio_separator_process_ready", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("audio_separator_process_loader_missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+except Exception as exc:
+    print(f"DRUMSEP_ASSETS tooling_failure:{type(exc).__name__}:{exc}")
+    raise SystemExit(20)
+try:
+    ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        Path(r"${_model_dir}"),
+    )
+except Exception as exc:
+    print(f"DRUMSEP_ASSETS unexpected_internal_failure:{type(exc).__name__}:{exc}")
+    raise SystemExit(22)
 if not ok:
-    raise SystemExit(str(detail or "drumsep_prefetch_failed"))
+    print(f"DRUMSEP_ASSETS model_assets_failure:{detail or 'drumsep_prefetch_failed'}")
+    raise SystemExit(21)
 print("STEMWERK_DRUMSEP_MODEL_PREFETCH ok")
 PY
+  _assets_rc=$?
+  case "${_assets_rc}" in
+    0|20|21|22) return "${_assets_rc}" ;;
+    *) return 22 ;;
+  esac
+}
+
+classify_drumsep_assets_result() {
+  case "${1:-22}" in
+    0) return 0 ;;
+    20) DRUMSEP_ASSETS_REASON="drumsep_assets_tooling_failed" ;;
+    21) DRUMSEP_ASSETS_REASON="drumsep_assets_model_failed" ;;
+    *) DRUMSEP_ASSETS_REASON="drumsep_assets_internal_failed" ;;
+  esac
+  set_status "deps_failed" "${DRUMSEP_ASSETS_REASON}"
+  return 1
 }
 
 write_ready_to_go_state() {
@@ -363,6 +411,10 @@ write_ready_to_go_state() {
   _main_runtime_status="${5:-ok}"
   _core_prefetch_status="${6:-${CORE_MODEL_PREFETCH_STATUS:-missing}}"
   _core_prefetch_detail="${7:-${CORE_MODEL_PREFETCH_DETAIL:-}}"
+  if [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ]; then
+    _runtime_status="incomplete"
+    _detail="drumsep_install_in_progress"
+  fi
   _out_file="$(ready_to_go_output_file)"
   _core="$(verify_core_model_cache)"
   _model_dir="$(printf "%s\n" "${_core}" | awk -F= '/^model_dir=/{print $2; exit}')"
@@ -410,7 +462,7 @@ write_ready_to_go_state() {
     echo "DRUMSEP_READY_RUNTIME=${_runtime_kind}"
     echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"
     echo "DRUMSEP_READY_MODEL_STATUS=${_drumsep_model_status}"
-  } > "${_out_file}"
+  } | atomic_write_state_file "${_out_file}"
   log_step "ready_to_go_state_file=${_out_file}"
   log_step "ready_to_go_state_written=1"
   log_step "ready_to_go_status=${_ready}"
@@ -497,7 +549,7 @@ probe_main_rocm_dks_ready() {
   _py="${1:-$(main_runtime_python)}"
   [ -x "${_py}" ] || {
     log_step "Main unified DKS probe failed: python_missing"
-    return 1
+    return 30
   }
   _probe="$("${_py}" - <<'PY' 2>/dev/null || true
 import importlib.metadata as metadata
@@ -559,11 +611,11 @@ PY
       ;;
     broken\|*)
       log_step "Main unified DKS probe failed: ${_probe#broken|}"
-      return 1
+      return 30
       ;;
     *)
       log_step "Main unified DKS probe failed: probe_failed"
-      return 1
+      return 31
       ;;
   esac
 }
@@ -577,17 +629,29 @@ main_dks_assets_ready() {
 load_ready_runtime_state() {
   _kind="${1:-cpu}"
   if [ "${_kind}" = "rocm" ] && [ -f "$(drumsep_rocm_state_file)" ]; then
+    DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_ROCM_INSTALL_TXN=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
     READY_RUNTIME_KIND="rocm"
     READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
     READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_ROCM_MODEL_STATUS=/{print $2; exit} /^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
     READY_DETAIL="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
+    if [ "${DRUMSEP_INSTALL_TXN}" = "begin" ]; then
+      READY_RUNTIME_STATUS="incomplete"
+      READY_DRUMSEP_MODEL_STATUS="missing"
+      READY_DETAIL="drumsep_install_in_progress"
+    fi
     return 0
   fi
   if [ -f "$(drumsep_state_file)" ]; then
+    DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_CPU_INSTALL_TXN=/{print $2; exit}' "$(drumsep_state_file)")"
     READY_RUNTIME_KIND="cpu"
     READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
     READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
     READY_DETAIL="$(awk -F= '/^DRUMSEP_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_state_file)")"
+    if [ "${DRUMSEP_INSTALL_TXN}" = "begin" ]; then
+      READY_RUNTIME_STATUS="incomplete"
+      READY_DRUMSEP_MODEL_STATUS="missing"
+      READY_DETAIL="drumsep_install_in_progress"
+    fi
     return 0
   fi
   return 1
@@ -595,6 +659,14 @@ load_ready_runtime_state() {
 
 verify_existing_ready_runtime() {
   _preferred="${1:-cpu}"
+  for _txn_kind in rocm cpu; do
+    DRUMSEP_INSTALL_TXN=""
+    if load_ready_runtime_state "${_txn_kind}" && [ "${DRUMSEP_INSTALL_TXN}" = "begin" ]; then
+      log_step "Open DrumSep install transaction dominates cached ready state: ${_txn_kind}"
+      return 1
+    fi
+  done
+  DRUMSEP_INSTALL_TXN=""
   if [ "${_preferred}" = "rocm" ]; then
     if probe_main_rocm_dks_ready "$(main_runtime_python)" && main_dks_assets_ready; then
       write_main_unified_rocm_state "ok"
@@ -720,11 +792,246 @@ drumsep_rocm_runtime_python() {
   printf "%s/.venv-drumsep-rocm/bin/python\n" "${RUNTIME_BASE}"
 }
 
+atomic_write_state_file() {
+  _atomic_target="$1"
+  _atomic_tmp="$(mktemp "${_atomic_target}.tmp.XXXXXX")" || return 1
+  if ! cat > "${_atomic_tmp}"; then
+    rm -f "${_atomic_tmp}"
+    return 1
+  fi
+  sync -f "${_atomic_tmp}" >/dev/null 2>&1 || true
+  if ! mv -f "${_atomic_tmp}" "${_atomic_target}"; then
+    rm -f "${_atomic_tmp}"
+    return 1
+  fi
+  sync -f "$(dirname "${_atomic_target}")" >/dev/null 2>&1 || true
+  return 0
+}
+
+drumsep_sibling_runtime_dir() {
+  case "${1:-cpu}" in
+    rocm) printf "%s/.venv-drumsep-rocm\n" "${RUNTIME_BASE}" ;;
+    *) printf "%s/.venv-drumsep\n" "${RUNTIME_BASE}" ;;
+  esac
+}
+
+drumsep_sibling_state_file() {
+  case "${1:-cpu}" in
+    rocm) drumsep_rocm_state_file ;;
+    *) drumsep_state_file ;;
+  esac
+}
+
+inspect_drumsep_sibling() {
+  _inspect_backend="${1:-cpu}"
+  _inspect_dir="$(drumsep_sibling_runtime_dir "${_inspect_backend}")"
+  _inspect_state="$(drumsep_sibling_state_file "${_inspect_backend}")"
+  DRUMSEP_SIBLING_PRESENT="absent"
+  # Presence is deliberately one non-recursive directory check. Runtime contents
+  # are never opened, inventoried, imported, or probed by this policy decision.
+  if [ -d "${_inspect_dir}" ]; then
+    DRUMSEP_SIBLING_PRESENT="present"
+  fi
+  DRUMSEP_SIBLING_RECORDED_STATE="missing-record"
+  DRUMSEP_INSTALL_TXN=""
+  if [ -f "${_inspect_state}" ]; then
+    case "${_inspect_backend}" in
+      rocm)
+        DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_ROCM_INSTALL_TXN=/{print $2; exit}' "${_inspect_state}")"
+        _inspect_status="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "${_inspect_state}")"
+        ;;
+      *)
+        DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_CPU_INSTALL_TXN=/{print $2; exit}' "${_inspect_state}")"
+        _inspect_status="$(awk -F= '/^DRUMSEP_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "${_inspect_state}")"
+        ;;
+    esac
+    case "${DRUMSEP_INSTALL_TXN}" in
+      begin) DRUMSEP_SIBLING_RECORDED_STATE="incomplete" ;;
+      failed) DRUMSEP_SIBLING_RECORDED_STATE="failed" ;;
+      commit)
+        case "${_inspect_status}" in
+          ok|unified_main) DRUMSEP_SIBLING_RECORDED_STATE="ready" ;;
+          *) DRUMSEP_SIBLING_RECORDED_STATE="unknown" ;;
+        esac
+        ;;
+      *)
+        case "${_inspect_status}" in
+          ok|unified_main) DRUMSEP_SIBLING_RECORDED_STATE="ready" ;;
+          selected) DRUMSEP_SIBLING_RECORDED_STATE="selected" ;;
+          incomplete) DRUMSEP_SIBLING_RECORDED_STATE="incomplete" ;;
+          install_failed|failed|broken|deps_failed) DRUMSEP_SIBLING_RECORDED_STATE="failed" ;;
+          missing|"") DRUMSEP_SIBLING_RECORDED_STATE="missing-record" ;;
+          *) DRUMSEP_SIBLING_RECORDED_STATE="unknown" ;;
+        esac
+        ;;
+    esac
+  fi
+  DRUMSEP_SIBLING_CONSISTENCY="consistent"
+  if [ "${DRUMSEP_SIBLING_PRESENT}" = "present" ]; then
+    case "${DRUMSEP_SIBLING_RECORDED_STATE}" in
+      ready|selected|incomplete|failed) ;;
+      *) DRUMSEP_SIBLING_CONSISTENCY="inconsistent" ;;
+    esac
+  elif [ "${DRUMSEP_SIBLING_RECORDED_STATE}" != "missing-record" ]; then
+    DRUMSEP_SIBLING_CONSISTENCY="inconsistent"
+  fi
+  log_step "drumsep_sibling_backend=${_inspect_backend} presence=${DRUMSEP_SIBLING_PRESENT} recorded_state=${DRUMSEP_SIBLING_RECORDED_STATE} consistency=${DRUMSEP_SIBLING_CONSISTENCY}"
+}
+
+begin_drumsep_install_txn() {
+  _txn_backend="$1"
+  _txn_reason="$2"
+  _txn_state="$(drumsep_sibling_state_file "${_txn_backend}")"
+  case "${_txn_backend}" in
+    rocm) _txn_prefix="DRUMSEP_ROCM" ;;
+    *) _txn_prefix="DRUMSEP_CPU" ;;
+  esac
+  {
+    echo "${_txn_prefix}_INSTALL_TXN=begin"
+    echo "STATUS=incomplete"
+    echo "STATUS_REASON=drumsep_install_in_progress"
+    echo "${_txn_prefix}_MUTATION_REASON=${_txn_reason}"
+  } | atomic_write_state_file "${_txn_state}" || return 1
+  DRUMSEP_INSTALL_TXN="begin"
+  STATUS="incomplete"
+  STATUS_REASON="drumsep_install_in_progress"
+  log "DRUMSEP_INSTALL_TXN=begin backend=${_txn_backend} mutation_reason=${_txn_reason}"
+}
+
+fail_drumsep_install_txn() {
+  _txn_backend="$1"
+  _txn_reason="$2"
+  _txn_detail="${3:-drumsep_install_failed}"
+  _txn_state="$(drumsep_sibling_state_file "${_txn_backend}")"
+  case "${_txn_backend}" in
+    rocm) _txn_prefix="DRUMSEP_ROCM" ;;
+    *) _txn_prefix="DRUMSEP_CPU" ;;
+  esac
+  {
+    echo "${_txn_prefix}_INSTALL_TXN=failed"
+    echo "STATUS=failed"
+    echo "STATUS_REASON=${_txn_detail}"
+    echo "${_txn_prefix}_MUTATION_REASON=${_txn_reason}"
+  } | atomic_write_state_file "${_txn_state}" || true
+  DRUMSEP_INSTALL_TXN="failed"
+  STATUS="failed"
+  STATUS_REASON="${_txn_detail}"
+  log "DRUMSEP_INSTALL_TXN=failed backend=${_txn_backend} reason=${_txn_detail}"
+  return 1
+}
+
+commit_drumsep_install_txn() {
+  _txn_backend="$1"
+  _txn_reason="$2"
+  case "${_txn_backend}" in
+    rocm)
+      if ! write_drumsep_rocm_state "ok" "ok" "verified_ready" "$(drumsep_rocm_runtime_python)" "legacy_rocm" "present" "" "commit" "${_txn_reason}"; then
+        STATUS="failed"
+        STATUS_REASON="drumsep_state_commit_failed"
+        log "DRUMSEP_INSTALL_TXN=commit_failed backend=${_txn_backend}"
+        return 1
+      fi
+      ;;
+    *)
+      if ! write_drumsep_state "ok" "ok" "verified_ready" "$(drumsep_runtime_python)" "legacy_cpu" "commit" "${_txn_reason}"; then
+        STATUS="failed"
+        STATUS_REASON="drumsep_state_commit_failed"
+        log "DRUMSEP_INSTALL_TXN=commit_failed backend=${_txn_backend}"
+        return 1
+      fi
+      ;;
+  esac
+  DRUMSEP_INSTALL_TXN="commit"
+  STATUS="ok"
+  STATUS_REASON="verified_ready"
+  log "DRUMSEP_INSTALL_TXN=commit backend=${_txn_backend}"
+}
+
+run_drumsep_install_transaction() {
+  _txn_backend="$1"
+  _txn_reason="$2"
+  _txn_action="$3"
+  begin_drumsep_install_txn "${_txn_backend}" "${_txn_reason}" || return 1
+  if ! "${_txn_action}"; then
+    fail_drumsep_install_txn "${_txn_backend}" "${_txn_reason}" "${DRUMSEP_INSTALL_FAILURE_REASON:-drumsep_install_failed}"
+    return 1
+  fi
+  commit_drumsep_install_txn "${_txn_backend}" "${_txn_reason}"
+}
+
+apply_drumsep_sibling_policy() {
+  _policy_backend="${1:-cpu}"
+  inspect_drumsep_sibling "${_policy_backend}"
+  if [ "${DRUMSEP_SIBLING_CONSISTENCY}" != "consistent" ]; then
+    DRUMSEP_SIBLING_STATE="inconsistent"
+    set_status "deps_failed" "drumsep_sibling_state_inconsistent"
+    return 1
+  fi
+  _policy_explicit="no"
+  case "${_policy_backend}:${MODE}" in
+    cpu:drumsep-runtime|rocm:drumsep-rocm-runtime) _policy_explicit="yes" ;;
+  esac
+  if [ "${DRUMSEP_SIBLING_PRESENT}" = "absent" ]; then
+    if [ "${_policy_explicit}" != "yes" ]; then
+      DRUMSEP_SIBLING_STATE="absent_untouched"
+      log_step "Optional DrumSep sibling is missing; run the matching Drum Kit runtime action in Setup."
+      set_status "deps_failed" "drumsep_sibling_missing"
+      return 1
+    fi
+    DRUMSEP_MUTATION_REASON="create_absent"
+  else
+    if [ "${_policy_explicit}" != "yes" ]; then
+      DRUMSEP_SIBLING_STATE="present_untouched"
+      log_step "Optional DrumSep sibling needs an explicit rebuild; run the matching Drum Kit runtime action in Setup."
+      set_status "deps_failed" "drumsep_sibling_rebuild_required"
+      return 1
+    fi
+    DRUMSEP_MUTATION_REASON="rebuild_explicit"
+  fi
+  case "${_policy_backend}" in
+    rocm) install_drumsep_rocm_runtime ;;
+    *) install_drumsep_runtime ;;
+  esac
+}
+
+resolve_main_drumsep_runtime_policy() {
+  _policy_backend="${1:-cpu}"
+  case "${_policy_backend}" in
+    rocm)
+      probe_main_rocm_dks_ready "${VENV_PY:-$(main_runtime_python)}"
+      _probe_rc=$?
+      ;;
+    *) _probe_rc=30 ;;
+  esac
+  case "${_probe_rc}" in
+    0)
+      ensure_drumsep_assets "${VENV_PY:-$(main_runtime_python)}" "$(model_cache_dir)"
+      _assets_rc=$?
+      if ! classify_drumsep_assets_result "${_assets_rc}"; then
+        return 1
+      fi
+      case "${_policy_backend}" in
+        rocm) write_main_unified_rocm_state "ok" ;;
+        *) return 30 ;;
+      esac
+      return 0
+      ;;
+    30) apply_drumsep_sibling_policy "${_policy_backend}" ;;
+    *)
+      set_status "deps_failed" "drumsep_probe_error"
+      return 1
+      ;;
+  esac
+}
+
 write_drumsep_state() {
   _status="$1"
   _model_status="${2:-missing}"
   _detail="${3:-}"
-  _py="$(drumsep_runtime_python)"
+  _py="${4:-$(drumsep_runtime_python)}"
+  _selection="${5:-legacy_cpu}"
+  _install_txn="${6:-}"
+  _mutation_reason="${7:-}"
   _state="$(drumsep_state_file)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
@@ -756,8 +1063,11 @@ PY
   {
     echo "STATUS=${_status}"
     [ -n "${_detail}" ] && echo "STATUS_REASON=${_detail}"
+    [ -n "${_install_txn}" ] && echo "DRUMSEP_CPU_INSTALL_TXN=${_install_txn}"
+    [ -n "${_mutation_reason}" ] && echo "DRUMSEP_CPU_MUTATION_REASON=${_mutation_reason}"
     echo "DRUMSEP_RUNTIME_STATUS=${_status}"
     [ -n "${_detail}" ] && echo "DRUMSEP_RUNTIME_DETAIL=${_detail}"
+    echo "DRUMSEP_RUNTIME_SELECTION=${_selection}"
     echo "DRUMSEP_PYTHON=${_py}"
     if [ -n "${_versions}" ]; then
       printf "%s\n" "${_versions}"
@@ -774,7 +1084,7 @@ PY
     echo "DRUMSEP_MODEL_STATUS=${_model_status}"
     echo "DRUMSEP_MODEL_FILE=${_model_file}"
     echo "DRUMSEP_MODEL_YAML=${_model_yaml}"
-  } > "${_state}"
+  } | atomic_write_state_file "${_state}"
 }
 
 write_drumsep_rocm_state() {
@@ -785,6 +1095,8 @@ write_drumsep_rocm_state() {
   _selection="${5:-legacy_rocm}"
   _legacy_status="${6:-not_checked}"
   _legacy_install_skipped="${7:-}"
+  _install_txn="${8:-}"
+  _mutation_reason="${9:-}"
   _compat_status="${_status}"
   [ "${_status}" = "unified_main" ] && _compat_status="ok"
   _state="$(drumsep_rocm_state_file)"
@@ -854,6 +1166,8 @@ PY
   {
     echo "STATUS=${_compat_status}"
     [ -n "${_detail}" ] && echo "STATUS_REASON=${_detail}"
+    [ -n "${_install_txn}" ] && echo "DRUMSEP_ROCM_INSTALL_TXN=${_install_txn}"
+    [ -n "${_mutation_reason}" ] && echo "DRUMSEP_ROCM_MUTATION_REASON=${_mutation_reason}"
     echo "DRUMSEP_ROCM_RUNTIME_STATUS=${_status}"
     [ -n "${_detail}" ] && echo "DRUMSEP_ROCM_RUNTIME_DETAIL=${_detail}"
     echo "DRUMSEP_ROCM_RUNTIME_SELECTION=${_selection}"
@@ -878,15 +1192,13 @@ PY
     echo "DRUMSEP_ROCM_MODEL_FILE=${_model_file}"
     echo "DRUMSEP_ROCM_MODEL_YAML=${_model_yaml}"
     echo "DRUMSEP_ROCM_TEMP_DIR=${_tmp_dir}"
-  } > "${_state}"
+  } | atomic_write_state_file "${_state}"
 }
 
 write_main_unified_rocm_state() {
-  _legacy_status="missing"
-  [ -d "${RUNTIME_BASE}/.venv-drumsep-rocm" ] && _legacy_status="present"
   write_drumsep_rocm_state \
     "unified_main" "${1:-ok}" "main_unified_ready" \
-    "$(main_runtime_python)" "main_unified" "${_legacy_status}" "main_unified_ready"
+    "$(main_runtime_python)" "main_unified" "not_checked" "main_unified_ready"
   log_step "Legacy DrumSep ROCm install skipped: main_unified_ready"
 }
 
@@ -901,6 +1213,18 @@ write_state() {
     {
       echo "STATUS=${STATUS}"
       [ -n "${STATUS_REASON}" ] && echo "STATUS_REASON=${STATUS_REASON}"
+      if [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ]; then
+        case "${MODE}" in
+          drumsep-rocm-runtime)
+            echo "DRUMSEP_ROCM_INSTALL_TXN=begin"
+            echo "DRUMSEP_ROCM_MUTATION_REASON=${DRUMSEP_MUTATION_REASON:-unknown}"
+            ;;
+          drumsep-runtime)
+            echo "DRUMSEP_CPU_INSTALL_TXN=begin"
+            echo "DRUMSEP_CPU_MUTATION_REASON=${DRUMSEP_MUTATION_REASON:-unknown}"
+            ;;
+        esac
+      fi
       [ -n "${STEP_INDEX}" ] && echo "STEP_INDEX=${STEP_INDEX}"
       [ -n "${STEP_TOTAL}" ] && echo "STEP_TOTAL=${STEP_TOTAL}"
       [ -n "${STEP_LABEL}" ] && echo "STEP_LABEL=${STEP_LABEL}"
@@ -956,7 +1280,7 @@ write_state() {
       echo "NUMBA_LEGACY_CACHE_CLEANUP_STATUS=${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
       [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
-    } > "${STATE_FILE}"
+    } | atomic_write_state_file "${STATE_FILE}"
   fi
 }
 
@@ -965,7 +1289,16 @@ set_status() {
     STATUS="$1"
     STATUS_REASON="$2"
     log "STATUS=${STATUS} REASON=${STATUS_REASON}"
-    write_state
+    if [ "${STAGED_LAYOUT_VALIDATION_ACTIVE:-0}" -eq 1 ]; then
+      if [ -n "${STATE_FILE}" ]; then
+        {
+          echo "STATUS=${STATUS}"
+          echo "STATUS_REASON=${STATUS_REASON}"
+        } > "${STATE_FILE}"
+      fi
+    else
+      write_state
+    fi
   fi
 }
 
@@ -1471,12 +1804,14 @@ PY
 }
 
 verify_drumsep_runtime() {
+  DRUMSEP_VERIFY_DETAIL=""
   _py="$(drumsep_runtime_python)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
   _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
   if [ ! -x "${_py}" ]; then
-    write_drumsep_state "missing" "missing" "python_missing"
+    DRUMSEP_VERIFY_DETAIL="python_missing"
+    [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
     return 1
   fi
   "${_py}" - <<PY >> "$(drumsep_log_file)" 2>&1
@@ -1538,19 +1873,23 @@ PY
   _rc=$?
   case "${_rc}" in
     0)
-      write_drumsep_state "ok" "ok" "ok"
+      DRUMSEP_VERIFY_DETAIL="verified_ready"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "ok" "ok" "ok"
       return 0
       ;;
     2)
-      write_drumsep_state "model_missing" "missing" "model_missing"
+      DRUMSEP_VERIFY_DETAIL="model_missing"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "model_missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
       return 1
       ;;
     3)
-      write_drumsep_state "broken" "load_failed" "model_load_failed"
+      DRUMSEP_VERIFY_DETAIL="model_load_failed"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "broken" "load_failed" "${DRUMSEP_VERIFY_DETAIL}"
       return 1
       ;;
     *)
-      write_drumsep_state "broken" "missing" "verify_failed"
+      DRUMSEP_VERIFY_DETAIL="verify_failed"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "broken" "missing" "${DRUMSEP_VERIFY_DETAIL}"
       return 1
       ;;
   esac
@@ -1609,12 +1948,14 @@ drumsep_rocm_disk_preflight() {
 }
 
 verify_drumsep_rocm_runtime() {
+  DRUMSEP_VERIFY_DETAIL=""
   _py="$(drumsep_rocm_runtime_python)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
   _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
   if [ ! -x "${_py}" ]; then
-    write_drumsep_rocm_state "missing" "missing" "python_missing"
+    DRUMSEP_VERIFY_DETAIL="python_missing"
+    [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
     return 1
   fi
   "${_py}" - <<PY >> "$(drumsep_rocm_log_file)" 2>&1
@@ -1703,25 +2044,29 @@ PY
   _rc=$?
   case "${_rc}" in
     0)
-      write_drumsep_rocm_state "ok" "ok" "ok"
+      DRUMSEP_VERIFY_DETAIL="verified_ready"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "ok" "ok" "ok"
       return 0
       ;;
     2)
-      write_drumsep_rocm_state "model_missing" "missing" "model_missing"
+      DRUMSEP_VERIFY_DETAIL="model_missing"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "model_missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
       return 1
       ;;
     3)
-      write_drumsep_rocm_state "broken" "load_failed" "model_load_failed"
+      DRUMSEP_VERIFY_DETAIL="model_load_failed"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "broken" "load_failed" "${DRUMSEP_VERIFY_DETAIL}"
       return 1
       ;;
     *)
-      write_drumsep_rocm_state "broken" "missing" "verify_failed"
+      DRUMSEP_VERIFY_DETAIL="verify_failed"
+      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "broken" "missing" "${DRUMSEP_VERIFY_DETAIL}"
       return 1
       ;;
   esac
 }
 
-install_drumsep_rocm_runtime() {
+install_drumsep_rocm_runtime_body() {
   _log="$(drumsep_rocm_log_file)"
   _py="$(drumsep_rocm_runtime_python)"
   : > "${_log}" || true
@@ -1729,19 +2074,9 @@ install_drumsep_rocm_runtime() {
   log_step "DrumSep ROCm runtime path: ${RUNTIME_BASE}/.venv-drumsep-rocm"
   log_step "DrumSep ROCm install log: ${_log}"
 
-  # Repair path: if runtime already exists and verifies, succeed without reinstall.
-  if [ -x "${_py}" ]; then
-    log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"
-    if verify_drumsep_rocm_runtime; then
-      log_step "Existing DrumSep ROCm runtime verified; skipping reinstall"
-      return 0
-    fi
-    log_step "Existing DrumSep ROCm runtime failed verification; rebuilding"
-  fi
-
   if ! drumsep_rocm_disk_preflight; then
     log_step "ROCm preflight failed: ${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-unknown}"
-    write_drumsep_rocm_state "disk_space_insufficient" "missing" "${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-disk_space_insufficient}"
+    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-disk_space_insufficient}"
     return 1
   fi
   log_step "ROCm temp dir selected: ${DRUMSEP_ROCM_TMPDIR}"
@@ -1752,17 +2087,17 @@ install_drumsep_rocm_runtime() {
   set_progress "1" "${STEP_TOTAL}" "Creating DrumSep ROCm runtime"
   rm -rf "${RUNTIME_BASE}/.venv-drumsep-rocm"
   if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep-rocm" >> "${_log}" 2>&1; then
-    write_drumsep_rocm_state "install_failed" "missing" "venv_create_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="venv_create_failed"
     return 1
   fi
   if [ ! -x "${_py}" ]; then
-    write_drumsep_rocm_state "install_failed" "missing" "python_missing_after_create"
+    DRUMSEP_INSTALL_FAILURE_REASON="python_missing_after_create"
     return 1
   fi
 
   set_progress "2" "${STEP_TOTAL}" "Upgrading ROCm runtime pip"
   if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --upgrade pip setuptools wheel >> "${_log}" 2>&1; then
-    write_drumsep_rocm_state "install_failed" "missing" "pip_upgrade_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="pip_upgrade_failed"
     return 1
   fi
 
@@ -1771,14 +2106,14 @@ install_drumsep_rocm_runtime() {
     "torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}" \
     "torchvision==${DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION}" \
     "torchaudio==${DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION}" >> "${_log}" 2>&1; then
-    write_drumsep_rocm_state "install_failed" "missing" "rocm_torch_install_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="rocm_torch_install_failed"
     return 1
   fi
 
   set_progress "4" "${STEP_TOTAL}" "Installing DrumSep packages"
   if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps \
     "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" >> "${_log}" 2>&1; then
-    write_drumsep_rocm_state "install_failed" "missing" "audio_separator_install_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="audio_separator_install_failed"
     return 1
   fi
   if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir \
@@ -1792,27 +2127,36 @@ install_drumsep_rocm_runtime() {
     "librosa==0.11.0" "ml_collections==1.1.0" "pydub==0.25.1" "pyyaml==6.0.3" \
     "requests==2.34.2" "resampy==0.4.3" "rotary-embedding-torch==0.6.5" \
     "samplerate==0.1.0" "scipy==1.17.1" "six==1.17.0" "tqdm==4.67.3" >> "${_log}" 2>&1; then
-    write_drumsep_rocm_state "install_failed" "missing" "package_install_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="package_install_failed"
     return 1
   fi
   if ! "${_py}" -m pip check >> "${_log}" 2>&1; then
-    write_drumsep_rocm_state "install_failed" "missing" "pip_check_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="pip_check_failed"
     return 1
   fi
 
   set_progress "5" "${STEP_TOTAL}" "Verifying DrumSep ROCm runtime"
-  if ! ensure_drumsep_assets "${_py}" "$(model_cache_dir)"; then
-    write_drumsep_rocm_state "install_failed" "missing" "model_download_failed"
+  ensure_drumsep_assets "${_py}" "$(model_cache_dir)"
+  _assets_rc=$?
+  if [ "${_assets_rc}" -ne 0 ]; then
+    classify_drumsep_assets_result "${_assets_rc}" || true
+    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ASSETS_REASON:-drumsep_assets_internal_failed}"
     return 1
   fi
   if ! verify_drumsep_rocm_runtime; then
+    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_VERIFY_DETAIL:-verify_failed}"
     return 1
   fi
   log_step "DrumSep ROCm runtime verification complete"
   return 0
 }
 
-install_drumsep_runtime() {
+install_drumsep_rocm_runtime() {
+  DRUMSEP_INSTALL_FAILURE_REASON=""
+  run_drumsep_install_transaction "rocm" "${DRUMSEP_MUTATION_REASON:-rebuild_explicit}" install_drumsep_rocm_runtime_body
+}
+
+install_drumsep_runtime_body() {
   _drumsep_log="$(drumsep_log_file)"
   _drumsep_py="$(drumsep_runtime_python)"
   _drumsep_step_total="4"
@@ -1820,29 +2164,21 @@ install_drumsep_runtime() {
   log_stage "Installing optional DrumSep runtime"
   log_step "DrumSep runtime path: ${RUNTIME_BASE}/.venv-drumsep"
   log_step "DrumSep install log: ${_drumsep_log}"
-  if [ -x "${_drumsep_py}" ]; then
-    log_step "Existing DrumSep runtime detected; running verification before reinstall"
-    if verify_drumsep_runtime; then
-      log_step "Existing DrumSep runtime verified; skipping reinstall"
-      return 0
-    fi
-    log_step "Existing DrumSep runtime failed verification; rebuilding"
-  fi
   clear_drumsep_substep_state
   set_drumsep_substep_progress "1" "${_drumsep_step_total}" "Creating DrumSep runtime"
   rm -rf "${RUNTIME_BASE}/.venv-drumsep"
   if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep" >> "${_drumsep_log}" 2>&1; then
-    write_drumsep_state "install_failed" "missing" "venv_create_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="venv_create_failed"
     return 1
   fi
   if [ ! -x "${_drumsep_py}" ]; then
-    write_drumsep_state "install_failed" "missing" "python_missing_after_create"
+    DRUMSEP_INSTALL_FAILURE_REASON="python_missing_after_create"
     return 1
   fi
 
   set_drumsep_substep_progress "2" "${_drumsep_step_total}" "Upgrading DrumSep pip"
   if ! pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel >> "${_drumsep_log}" 2>&1; then
-    write_drumsep_state "install_failed" "missing" "pip_upgrade_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="pip_upgrade_failed"
     return 1
   fi
 
@@ -1857,20 +2193,29 @@ install_drumsep_runtime() {
     "torch==${DRUMSEP_TORCH_VERSION}" \
     "torchvision==${DRUMSEP_TORCHVISION_VERSION}" \
     "numba==${DRUMSEP_NUMBA_VERSION}" >> "${_drumsep_log}" 2>&1; then
-    write_drumsep_state "install_failed" "missing" "package_install_failed"
+    DRUMSEP_INSTALL_FAILURE_REASON="package_install_failed"
     return 1
   fi
 
   set_drumsep_substep_progress "4" "${_drumsep_step_total}" "Verifying DrumSep runtime"
-  if ! ensure_drumsep_assets "${_drumsep_py}" "$(model_cache_dir)"; then
-    write_drumsep_state "install_failed" "missing" "model_download_failed"
+  ensure_drumsep_assets "${_drumsep_py}" "$(model_cache_dir)"
+  _assets_rc=$?
+  if [ "${_assets_rc}" -ne 0 ]; then
+    classify_drumsep_assets_result "${_assets_rc}" || true
+    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ASSETS_REASON:-drumsep_assets_internal_failed}"
     return 1
   fi
   if ! verify_drumsep_runtime; then
+    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_VERIFY_DETAIL:-verify_failed}"
     return 1
   fi
   log_step "DrumSep runtime verification complete"
   return 0
+}
+
+install_drumsep_runtime() {
+  DRUMSEP_INSTALL_FAILURE_REASON=""
+  run_drumsep_install_transaction "cpu" "${DRUMSEP_MUTATION_REASON:-rebuild_explicit}" install_drumsep_runtime_body
 }
 
 resolve_core_target() {
@@ -2212,6 +2557,28 @@ if [ -z "${RUNTIME_BASE}" ]; then
   exit 1
 fi
 
+STATUS="ok"
+STATUS_REASON=""
+STAGED_LAYOUT_VALIDATION_ACTIVE=1
+if ! validate_required_reaper_layout; then
+  set_status "deps_failed" "staged_layout_incomplete:${STAGED_LAYOUT_FAILED_PATH}"
+  exit 1
+fi
+
+if [ "${MODE}" = "materialize-drumsep-compat-only" ]; then
+  if materialize_drumsep_compat_yaml; then
+    exit 0
+  fi
+  set_status "deps_failed" "drumsep_compat_materialization_failed"
+  exit 1
+fi
+
+if ! materialize_drumsep_compat_yaml; then
+  set_status "deps_failed" "drumsep_compat_materialization_failed"
+  exit 1
+fi
+STAGED_LAYOUT_VALIDATION_ACTIVE=0
+
 log_stage "Bootstrap started"
 log_step "Requested mode: ${MODE}"
 log_step "Downloaded models are kept at: $(model_cache_dir)"
@@ -2354,18 +2721,6 @@ select_active_torch_policy "${BACKEND}"
 
 if [ "${MODE}" = "ready-to-go-verify" ]; then
   run_ready_to_go_verify_only
-fi
-
-if [ "${MODE}" = "materialize-drumsep-compat-only" ]; then
-  if materialize_drumsep_compat_yaml; then
-    exit 0
-  fi
-  exit 1
-fi
-
-if ! materialize_drumsep_compat_yaml; then
-  log "Bootstrap failed with status=deps_failed reason=drumsep_compat_materialization_failed"
-  exit 1
 fi
 
 set_progress "2" "${STEP_TOTAL}" "Installing Python runtime"
@@ -2664,20 +3019,14 @@ if [ -z "${PYTHON}" ]; then
   fi
 else
   if [ "${MODE}" = "drumsep-runtime" ]; then
-    if install_drumsep_runtime; then
-      STATUS="ok"
-      STATUS_REASON=""
-      write_drumsep_state "ok" "ok" "ok"
+    if apply_drumsep_sibling_policy "cpu"; then
       log_stage "DrumSep runtime install finished"
       exit 0
     fi
     log "DrumSep runtime install failed"
     exit 1
   elif [ "${MODE}" = "drumsep-rocm-runtime" ]; then
-    if install_drumsep_rocm_runtime; then
-      STATUS="ok"
-      STATUS_REASON=""
-      write_drumsep_rocm_state "ok" "ok" "ok"
+    if apply_drumsep_sibling_policy "rocm"; then
       log_stage "DrumSep ROCm runtime install finished"
       exit 0
     fi
@@ -3494,18 +3843,10 @@ fi
 if [ "${STATUS}" = "ok" ] && [ "${FINAL_OK}" -eq 1 ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   if [ "${BACKEND}" = "rocm" ]; then
     READY_RUNTIME_KIND="rocm"
-    if probe_main_rocm_dks_ready "${VENV_PY}" && ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"; then
-      write_main_unified_rocm_state "ok"
-    else
-      if ! install_drumsep_rocm_runtime; then
-        set_status "deps_failed" "drumsep_ready_runtime_failed"
-      fi
-    fi
+    resolve_main_drumsep_runtime_policy "rocm" || true
   else
     READY_RUNTIME_KIND="cpu"
-    if ! install_drumsep_runtime; then
-      set_status "deps_failed" "drumsep_ready_runtime_failed"
-    fi
+    resolve_main_drumsep_runtime_policy "cpu" || true
   fi
 fi
 if [ "${READY_RUNTIME_KIND}" = "rocm" ] && [ -f "$(drumsep_rocm_state_file)" ]; then
@@ -3518,8 +3859,14 @@ fi
 if [ -z "${READY_RUNTIME_STATUS}" ]; then READY_RUNTIME_STATUS="missing"; fi
 if [ -z "${READY_DRUMSEP_MODEL_STATUS}" ]; then READY_DRUMSEP_MODEL_STATUS="missing"; fi
 if [ -z "${READY_DETAIL}" ]; then READY_DETAIL="${STATUS_REASON}"; fi
+READY_MAIN_RUNTIME_STATUS="ok"
+if [ "${STATUS}" != "ok" ]; then
+  READY_RUNTIME_STATUS="broken"
+  READY_DETAIL="${STATUS_REASON}"
+  READY_MAIN_RUNTIME_STATUS="broken"
+fi
 READY_STATE_FILE="$(ready_to_go_output_file)"
-write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"
+write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"
 
 if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then
   log_step "ready_to_go_state_persists_in_state_file=1"

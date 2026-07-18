@@ -12,6 +12,16 @@ SOURCE_RELEASE_LINE=cancelled-2.3.0.5
 TARGET_RELEASE=2.4.0
 ```
 
+## Linux optional DrumSep runtime policy
+
+`DRUMSEP_OPTIONAL_RUNTIME_REPAIR_POLICY=preserve_only`
+
+Normal Linux Repair no longer creates or rebuilds the optional CPU or ROCm
+DrumSep sibling runtime. Setup can create an absent sibling through its explicit
+Drum Kit runtime action, and the same user-facing action is required to rebuild
+an existing consistent sibling. Missing, inconsistent, failed, or incomplete
+sibling state is reported without automatic mutation.
+
 Recommended local start branch:
 `feature/2.4-runtime-payload-unification`.
 

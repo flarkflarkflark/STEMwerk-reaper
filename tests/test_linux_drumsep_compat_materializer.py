@@ -12,6 +12,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "scripts/reaper/STEMwerk_Bootstrap_Linux.sh"
+REQUIRED_LAYOUT = (
+    "audio_separator_process.py",
+    "_internal/STEMwerk_Managed_Python.sh",
+    "vendor/stemwerk-core/pyproject.toml",
+    "vendor/stemwerk-core/src/stemwerk_core/__init__.py",
+    "vendor/stemwerk-core/src/stemwerk_core/separator.py",
+)
 CONTRACT = json.loads(
     (ROOT / "tools/assets/drumsep/compatibility_config_contract.json").read_text(encoding="utf-8")
 )
@@ -30,6 +37,10 @@ def materializer(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     source_dir.mkdir(parents=True)
     bootstrap = scripts_dir / BOOTSTRAP.name
     shutil.copy2(BOOTSTRAP, bootstrap)
+    for relative in REQUIRED_LAYOUT:
+        target = scripts_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("fixture\n", encoding="utf-8")
     source = source_dir / CONTRACT["filename"]
     source.write_bytes(CANONICAL)
     data_home = tmp_path / "data"
@@ -130,7 +141,11 @@ def test_materializer_validates_source_before_target_and_fails_closed(
     after_stat = target.stat()
     assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
     markers = log.read_text(encoding="utf-8")
-    assert "linux_drumsep_config_source_status=" in markers
+    if bad_source is None:
+        assert "staged_layout_validation=failed:assets/drumsep/config_drumsep_mdx23c.yaml" in markers
+        assert "linux_drumsep_config_source_status=" not in markers
+    else:
+        assert "linux_drumsep_config_source_status=integrity_mismatch" in markers
     assert "linux_drumsep_config_target_" not in markers
 
 
