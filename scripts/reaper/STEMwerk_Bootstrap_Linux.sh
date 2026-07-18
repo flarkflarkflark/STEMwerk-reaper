@@ -74,6 +74,28 @@ log_step() {
   log " - $*"
 }
 
+# This contract is checked before any runtime, venv, package, model, or config
+# mutation. Only the caller-provided state and log files may be written while
+# reporting a failed preflight.
+REQUIRED_REAPER_LAYOUT="audio_separator_process.py _internal/STEMwerk_Managed_Python.sh vendor/stemwerk-core/pyproject.toml vendor/stemwerk-core/src/stemwerk_core/__init__.py vendor/stemwerk-core/src/stemwerk_core/separator.py"
+STAGED_LAYOUT_FAILED_PATH=""
+
+validate_required_reaper_layout() {
+  log "staged_layout_required=${REQUIRED_REAPER_LAYOUT}"
+  for _required_relative in ${REQUIRED_REAPER_LAYOUT}; do
+    _required_path="${SCRIPT_DIR}/${_required_relative}"
+    if [ ! -f "${_required_path}" ] || [ ! -r "${_required_path}" ]; then
+      STAGED_LAYOUT_FAILED_PATH="${_required_relative}"
+      log "required_script_missing=${_required_path}"
+      log "staged_layout_validation=failed:${_required_relative}"
+      return 1
+    fi
+  done
+  STAGED_LAYOUT_FAILED_PATH=""
+  log "staged_layout_validation=ok"
+  return 0
+}
+
 is_core_source_bundle() {
   [ -n "${1:-}" ] \
     && [ -f "$1/pyproject.toml" ] \
@@ -852,7 +874,16 @@ set_status() {
     STATUS="$1"
     STATUS_REASON="$2"
     log "STATUS=${STATUS} REASON=${STATUS_REASON}"
-    write_state
+    if [ "${STAGED_LAYOUT_VALIDATION_ACTIVE:-0}" -eq 1 ]; then
+      if [ -n "${STATE_FILE}" ]; then
+        {
+          echo "STATUS=${STATUS}"
+          echo "STATUS_REASON=${STATUS_REASON}"
+        } > "${STATE_FILE}"
+      fi
+    else
+      write_state
+    fi
   fi
 }
 
@@ -2098,6 +2129,15 @@ if [ -z "${RUNTIME_BASE}" ]; then
   echo "Missing runtime base" >&2
   exit 1
 fi
+
+STATUS="ok"
+STATUS_REASON=""
+STAGED_LAYOUT_VALIDATION_ACTIVE=1
+if ! validate_required_reaper_layout; then
+  set_status "deps_failed" "staged_layout_incomplete:${STAGED_LAYOUT_FAILED_PATH}"
+  exit 1
+fi
+STAGED_LAYOUT_VALIDATION_ACTIVE=0
 
 log_stage "Bootstrap started"
 log_step "Requested mode: ${MODE}"
