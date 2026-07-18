@@ -1,6 +1,7 @@
 *.bak
 *.reaper-theme.ini
 .DS_Store
+._*
 Thumbs.db
 reaper-theme.ini
 desktop.ini
