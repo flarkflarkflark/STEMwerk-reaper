@@ -155,6 +155,7 @@ def test_windows_dks_extract_stage1_reuses_normal_route_mapping_across_backends(
     monkeypatch, tmp_path, requested_device, resolved_device, _device_label, model_name
 ):
     module = _load_audio_separator_process()
+    monkeypatch.setattr(module.sys, "platform", "win32")
     stem_separator_inits = []
     helper_calls = []
 
@@ -243,6 +244,7 @@ def test_windows_direct_dks_route_stays_on_drumsep_helper_per_backend(
     monkeypatch, tmp_path, requested_device, _resolved_device, _device_label
 ):
     module = _load_audio_separator_process()
+    monkeypatch.setattr(module.sys, "platform", "win32")
     helper_calls = []
 
     def fail_if_normal_route_used(*_args, **_kwargs):

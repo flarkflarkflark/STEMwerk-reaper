@@ -946,6 +946,14 @@ write_state() {
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
+      echo "NUMBA_LEGACY_CACHE_DETECTED=${NUMBA_LEGACY_CACHE_DETECTED}"
+      echo "NUMBA_LEGACY_CACHE_REMOVED=${NUMBA_LEGACY_CACHE_REMOVED}"
+      echo "NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS=${NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS}"
+      echo "NUMBA_LEGACY_CACHE_ANOMALIES=${NUMBA_LEGACY_CACHE_ANOMALIES}"
+      echo "NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING=${NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING}"
+      echo "NUMBA_LEGACY_CACHE_NOT_REMOVED=${NUMBA_LEGACY_CACHE_NOT_REMOVED}"
+      echo "NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=${NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED}"
+      echo "NUMBA_LEGACY_CACHE_CLEANUP_STATUS=${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
       [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
     } > "${STATE_FILE}"
@@ -960,6 +968,217 @@ set_status() {
     write_state
   fi
 }
+
+cleanup_legacy_numba_caches() {
+  _cleanup_venv="$1"
+  _cleanup_detected=0
+  _cleanup_removed=0
+  _cleanup_unexpected=0
+  _cleanup_anomalies=0
+  _cleanup_remaining=0
+  _cleanup_status="not_required"
+  _cleanup_failed=0
+
+  _cleanup_emit() {
+    _cleanup_not_removed=$((_cleanup_detected - _cleanup_removed))
+    printf "NUMBA_LEGACY_CACHE_DETECTED=%s\n" "${_cleanup_detected}"
+    printf "NUMBA_LEGACY_CACHE_REMOVED=%s\n" "${_cleanup_removed}"
+    printf "NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS=%s\n" "${_cleanup_unexpected}"
+    printf "NUMBA_LEGACY_CACHE_ANOMALIES=%s\n" "${_cleanup_anomalies}"
+    printf "NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING=%s\n" "${_cleanup_remaining}"
+    printf "NUMBA_LEGACY_CACHE_NOT_REMOVED=%s\n" "${_cleanup_not_removed}"
+    printf "NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=no\n"
+    printf "NUMBA_LEGACY_CACHE_CLEANUP_STATUS=%s\n" "${_cleanup_status}"
+  }
+
+  if [ ! -d "${_cleanup_venv}" ]; then
+    _cleanup_emit
+    return 0
+  fi
+
+  _cleanup_newline='
+'
+  _cleanup_carriage_return="$(printf '\r')"
+  case "${_cleanup_venv}" in
+    *"${_cleanup_newline}"*|*"${_cleanup_carriage_return}"*)
+      _cleanup_anomalies=1
+      _cleanup_status="blocked_anomaly"
+      _cleanup_emit
+      return 1
+      ;;
+  esac
+
+  _cleanup_venv_real="$(readlink -f -- "${_cleanup_venv}" 2>/dev/null || true)"
+  if [ -z "${_cleanup_venv_real}" ] || [ ! -d "${_cleanup_venv_real}" ]; then
+    _cleanup_anomalies=1
+    _cleanup_status="blocked_anomaly"
+    _cleanup_emit
+    return 1
+  fi
+
+  _cleanup_candidates="$(mktemp "${TMPDIR:-/tmp}/stemwerk-numba-legacy-candidates.XXXXXX")" || {
+    _cleanup_status="failed"
+    _cleanup_emit
+    return 1
+  }
+  trap '/bin/rm -f -- "${_cleanup_candidates}"' EXIT HUP INT TERM
+
+  for _cleanup_parent in \
+    "${_cleanup_venv}"/lib/python*/site-packages/librosa/core/__pycache__ \
+    "${_cleanup_venv}"/lib/python*/site-packages/librosa/util/__pycache__
+  do
+    if [ ! -e "${_cleanup_parent}" ] && [ ! -L "${_cleanup_parent}" ]; then
+      continue
+    fi
+    _cleanup_parent_real="$(readlink -f -- "${_cleanup_parent}" 2>/dev/null || true)"
+    _cleanup_parent_relative=${_cleanup_parent#"${_cleanup_venv}"/}
+    _cleanup_parent_expected="${_cleanup_venv_real}/${_cleanup_parent_relative}"
+    case "${_cleanup_parent_real}:${_cleanup_parent_expected}" in
+      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/core/__pycache__:"${_cleanup_venv_real}"/lib/python*/site-packages/librosa/core/__pycache__|\
+      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/util/__pycache__:"${_cleanup_venv_real}"/lib/python*/site-packages/librosa/util/__pycache__)
+        ;;
+      *)
+        _cleanup_anomalies=$((_cleanup_anomalies + 1))
+        continue
+        ;;
+    esac
+    if [ ! -d "${_cleanup_parent}" ] || [ -L "${_cleanup_parent}" ]; then
+      _cleanup_anomalies=$((_cleanup_anomalies + 1))
+      continue
+    fi
+
+    for _cleanup_path in \
+      "${_cleanup_parent}"/* \
+      "${_cleanup_parent}"/.[!.]* \
+      "${_cleanup_parent}"/..?*
+    do
+      if [ ! -e "${_cleanup_path}" ] && [ ! -L "${_cleanup_path}" ]; then
+        continue
+      fi
+      _cleanup_name=${_cleanup_path##*/}
+      if [ -L "${_cleanup_path}" ]; then
+        _cleanup_anomalies=$((_cleanup_anomalies + 1))
+        continue
+      fi
+      if [ -f "${_cleanup_path}" ]; then
+        case "${_cleanup_name}" in
+          *.nbc|*.nbi)
+            case "${_cleanup_name}" in
+              *[!A-Za-z0-9._-]*)
+                _cleanup_anomalies=$((_cleanup_anomalies + 1))
+                continue
+                ;;
+            esac
+            _cleanup_path_real="$(readlink -f -- "${_cleanup_path}" 2>/dev/null || true)"
+            case "${_cleanup_path_real}" in
+              "${_cleanup_parent_real}"/*)
+                printf "%s\n" "${_cleanup_path}" >> "${_cleanup_candidates}" || _cleanup_failed=1
+                _cleanup_detected=$((_cleanup_detected + 1))
+                ;;
+              *)
+                _cleanup_anomalies=$((_cleanup_anomalies + 1))
+                ;;
+            esac
+            ;;
+          *.nbc.*|*.nbi.*)
+            _cleanup_anomalies=$((_cleanup_anomalies + 1))
+            ;;
+        esac
+      else
+        _cleanup_anomalies=$((_cleanup_anomalies + 1))
+      fi
+    done
+  done
+
+  if ! _cleanup_all_marks="$(find "${_cleanup_venv}" -type f \( -name '*.nbc' -o -name '*.nbi' \) -printf x 2>/dev/null)"; then
+    _cleanup_failed=1
+  fi
+  _cleanup_all_count=${#_cleanup_all_marks}
+  if [ "${_cleanup_all_count}" -ge "${_cleanup_detected}" ]; then
+    _cleanup_unexpected=$((_cleanup_all_count - _cleanup_detected))
+  else
+    _cleanup_failed=1
+  fi
+
+  if [ "${_cleanup_failed}" -ne 0 ]; then
+    _cleanup_status="failed"
+    _cleanup_remaining=${_cleanup_detected}
+    _cleanup_emit
+    /bin/rm -f -- "${_cleanup_candidates}"
+    trap - EXIT HUP INT TERM
+    return 1
+  fi
+  if [ "${_cleanup_anomalies}" -ne 0 ]; then
+    _cleanup_status="blocked_anomaly"
+    _cleanup_remaining=${_cleanup_detected}
+    _cleanup_emit
+    /bin/rm -f -- "${_cleanup_candidates}"
+    trap - EXIT HUP INT TERM
+    return 1
+  fi
+
+  while IFS= read -r _cleanup_candidate; do
+    [ -n "${_cleanup_candidate}" ] || continue
+    _cleanup_candidate_parent=${_cleanup_candidate%/*}
+    _cleanup_candidate_real="$(readlink -f -- "${_cleanup_candidate}" 2>/dev/null || true)"
+    _cleanup_candidate_parent_real="$(readlink -f -- "${_cleanup_candidate_parent}" 2>/dev/null || true)"
+    case "${_cleanup_candidate_parent_real}" in
+      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/core/__pycache__|\
+      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/util/__pycache__)
+        ;;
+      *) _cleanup_failed=1 ;;
+    esac
+    case "${_cleanup_candidate_real}" in
+      "${_cleanup_candidate_parent_real}"/*) ;;
+      *) _cleanup_failed=1 ;;
+    esac
+    if [ ! -f "${_cleanup_candidate}" ] || [ -L "${_cleanup_candidate}" ]; then
+      _cleanup_failed=1
+    fi
+    if [ "${_cleanup_failed}" -ne 0 ]; then
+      break
+    fi
+    if rm -f -- "${_cleanup_candidate}" && [ ! -e "${_cleanup_candidate}" ] && [ ! -L "${_cleanup_candidate}" ]; then
+      _cleanup_removed=$((_cleanup_removed + 1))
+    else
+      _cleanup_failed=1
+      break
+    fi
+  done < "${_cleanup_candidates}"
+
+  _cleanup_remaining=0
+  for _cleanup_parent in \
+    "${_cleanup_venv}"/lib/python*/site-packages/librosa/core/__pycache__ \
+    "${_cleanup_venv}"/lib/python*/site-packages/librosa/util/__pycache__
+  do
+    [ -d "${_cleanup_parent}" ] || continue
+    for _cleanup_path in "${_cleanup_parent}"/*.nbc "${_cleanup_parent}"/*.nbi; do
+      if [ -e "${_cleanup_path}" ] || [ -L "${_cleanup_path}" ]; then
+        _cleanup_remaining=$((_cleanup_remaining + 1))
+      fi
+    done
+  done
+
+  if [ "${_cleanup_failed}" -ne 0 ] || [ "${_cleanup_remaining}" -ne 0 ]; then
+    _cleanup_status="failed"
+    _cleanup_emit
+    /bin/rm -f -- "${_cleanup_candidates}"
+    trap - EXIT HUP INT TERM
+    return 1
+  fi
+  if [ "${_cleanup_unexpected}" -ne 0 ]; then
+    _cleanup_status="partial_unexpected"
+  elif [ "${_cleanup_removed}" -ne 0 ]; then
+    _cleanup_status="removed"
+  else
+    _cleanup_status="not_required"
+  fi
+  _cleanup_emit
+  /bin/rm -f -- "${_cleanup_candidates}"
+  trap - EXIT HUP INT TERM
+  return 0
+}
+# END NUMBA LEGACY CACHE CLEANUP POLICY
 
 detect_build_tools_missing_log() {
   _log="$1"
@@ -2027,6 +2246,14 @@ PYTHON=""
 FFMPEG=""
 VENV_PY=""
 PYTHON_PATH=""
+NUMBA_LEGACY_CACHE_DETECTED="0"
+NUMBA_LEGACY_CACHE_REMOVED="0"
+NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS="0"
+NUMBA_LEGACY_CACHE_ANOMALIES="0"
+NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING="0"
+NUMBA_LEGACY_CACHE_NOT_REMOVED="0"
+NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED="no"
+NUMBA_LEGACY_CACHE_CLEANUP_STATUS="not_required"
 SUPPORTED_PYTHON_FOUND="no"
 DETECTED_PYTHON_VERSION=""
 DETECTED_PYTHON_PATH=""
@@ -2974,6 +3201,39 @@ do
     break
   fi
 done
+
+if [ "${MODE}" = "repair" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
+  log_stage "Cleaning legacy Numba caches"
+  NUMBA_LEGACY_CACHE_OUTPUT="$(cleanup_legacy_numba_caches "${RUNTIME_BASE}/.venv")"
+  NUMBA_LEGACY_CACHE_RC=$?
+  while IFS= read -r _numba_cache_marker; do
+    [ -n "${_numba_cache_marker}" ] && log "${_numba_cache_marker}"
+  done <<EOF
+${NUMBA_LEGACY_CACHE_OUTPUT}
+EOF
+  NUMBA_LEGACY_CACHE_DETECTED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_DETECTED=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_REMOVED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_REMOVED=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_ANOMALIES="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_ANOMALIES=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_NOT_REMOVED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_NOT_REMOVED=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_CLEANUP_STATUS="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_CLEANUP_STATUS=//p' | tail -n 1)"
+  case "${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}" in
+    not_required|removed|partial_unexpected)
+      ;;
+    blocked_anomaly|failed)
+      NUMBA_LEGACY_CACHE_RC=1
+      ;;
+    *)
+      NUMBA_LEGACY_CACHE_CLEANUP_STATUS="failed"
+      NUMBA_LEGACY_CACHE_RC=1
+      ;;
+  esac
+  if [ "${NUMBA_LEGACY_CACHE_RC}" -ne 0 ]; then
+    set_status "deps_failed" "numba_legacy_cache_cleanup_failed"
+  fi
+fi
 
 if [ -z "${FFMPEG}" ]; then
   managed_ffmpeg=""
