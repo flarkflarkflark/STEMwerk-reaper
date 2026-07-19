@@ -1278,6 +1278,12 @@ write_state() {
       echo "NUMBA_LEGACY_CACHE_NOT_REMOVED=${NUMBA_LEGACY_CACHE_NOT_REMOVED}"
       echo "NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=${NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED}"
       echo "NUMBA_LEGACY_CACHE_CLEANUP_STATUS=${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}"
+      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS=${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS}"
+      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}"
+      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST}"
+      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256}"
+      echo "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+      echo "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
       [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
     } | atomic_write_state_file "${STATE_FILE}"
@@ -1301,6 +1307,217 @@ set_status() {
     fi
   fi
 }
+
+audit_legacy_numba_caches_for_rebuild() {
+  _audit_venv="$1"
+  _audit_manifest="$2"
+  NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS="failed"
+  NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED="0"
+  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST="none"
+  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256="none"
+  NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
+  NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="0"
+
+  _audit_emit() {
+    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS=${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS}"
+    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}"
+    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST}"
+    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256}"
+    log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+    log "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
+  }
+
+  _audit_manifest_dir=${_audit_manifest%/*}
+  if [ ! -d "${_audit_manifest_dir}" ] && ! mkdir -p "${_audit_manifest_dir}"; then
+    _audit_emit
+    return 1
+  fi
+  _audit_tmp="$(mktemp "${_audit_manifest_dir}/.numba-legacy-cache-pre-rebuild.XXXXXX")" || {
+    _audit_emit
+    return 1
+  }
+  trap '/bin/rm -f -- "${_audit_tmp}"' EXIT HUP INT TERM
+  : > "${_audit_tmp}" || {
+    _audit_emit
+    return 1
+  }
+
+  if [ ! -e "${_audit_venv}" ] && [ ! -L "${_audit_venv}" ]; then
+    :
+  elif [ ! -d "${_audit_venv}" ] || [ -L "${_audit_venv}" ]; then
+    _audit_emit
+    /bin/rm -f -- "${_audit_tmp}"
+    trap - EXIT HUP INT TERM
+    return 1
+  else
+    _audit_venv_real="$(readlink -f -- "${_audit_venv}" 2>/dev/null || true)"
+    [ -n "${_audit_venv_real}" ] || {
+      _audit_emit
+      /bin/rm -f -- "${_audit_tmp}"
+      trap - EXIT HUP INT TERM
+      return 1
+    }
+    for _audit_parent in \
+      "${_audit_venv}"/lib/python*/site-packages/librosa/core/__pycache__ \
+      "${_audit_venv}"/lib/python*/site-packages/librosa/util/__pycache__
+    do
+      [ -e "${_audit_parent}" ] || [ -L "${_audit_parent}" ] || continue
+      _audit_parent_real="$(readlink -f -- "${_audit_parent}" 2>/dev/null || true)"
+      _audit_parent_relative=${_audit_parent#"${_audit_venv}"/}
+      if [ -L "${_audit_parent}" ] || [ ! -d "${_audit_parent}" ] || [ "${_audit_parent_real}" != "${_audit_venv_real}/${_audit_parent_relative}" ]; then
+        _audit_emit
+        /bin/rm -f -- "${_audit_tmp}"
+        trap - EXIT HUP INT TERM
+        return 1
+      fi
+    done
+    _audit_paths="$(find "${_audit_venv}" \( -name '*.nbc' -o -name '*.nbi' \) -print 2>/dev/null)" || {
+      _audit_emit
+      /bin/rm -f -- "${_audit_tmp}"
+      trap - EXIT HUP INT TERM
+      return 1
+    }
+    while IFS= read -r _audit_path; do
+      [ -n "${_audit_path}" ] || continue
+      _audit_relative=${_audit_path#"${_audit_venv}"/}
+      case "${_audit_relative}" in
+        *"
+"*|*"	"*)
+          _audit_emit
+          /bin/rm -f -- "${_audit_tmp}"
+          trap - EXIT HUP INT TERM
+          return 1
+          ;;
+        lib/python*/site-packages/librosa/core/__pycache__/*.nbc|\
+        lib/python*/site-packages/librosa/core/__pycache__/*.nbi|\
+        lib/python*/site-packages/librosa/util/__pycache__/*.nbc|\
+        lib/python*/site-packages/librosa/util/__pycache__/*.nbi)
+          ;;
+        *)
+          _audit_emit
+          /bin/rm -f -- "${_audit_tmp}"
+          trap - EXIT HUP INT TERM
+          return 1
+          ;;
+      esac
+      if [ -L "${_audit_path}" ] || [ ! -f "${_audit_path}" ]; then
+        _audit_emit
+        /bin/rm -f -- "${_audit_tmp}"
+        trap - EXIT HUP INT TERM
+        return 1
+      fi
+      _audit_real="$(readlink -f -- "${_audit_path}" 2>/dev/null || true)"
+      case "${_audit_real}" in
+        "${_audit_venv_real}"/*) ;;
+        *)
+          _audit_emit
+          /bin/rm -f -- "${_audit_tmp}"
+          trap - EXIT HUP INT TERM
+          return 1
+          ;;
+      esac
+      _audit_size="$(wc -c < "${_audit_path}" 2>/dev/null)" || {
+        _audit_emit
+        /bin/rm -f -- "${_audit_tmp}"
+        trap - EXIT HUP INT TERM
+        return 1
+      }
+      _audit_sha="$(sha256sum "${_audit_path}" 2>/dev/null | awk '{print $1}')"
+      [ "${#_audit_sha}" -eq 64 ] || {
+        _audit_emit
+        /bin/rm -f -- "${_audit_tmp}"
+        trap - EXIT HUP INT TERM
+        return 1
+      }
+      printf '%s\tregular\t%s\t%s\n' "${_audit_relative}" "${_audit_size}" "${_audit_sha}" >> "${_audit_tmp}" || {
+        _audit_emit
+        /bin/rm -f -- "${_audit_tmp}"
+        trap - EXIT HUP INT TERM
+        return 1
+      }
+      NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=$((NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED + 1))
+    done <<EOF
+${_audit_paths}
+EOF
+  fi
+
+  LC_ALL=C sort -o "${_audit_tmp}" "${_audit_tmp}" || {
+    _audit_emit
+    /bin/rm -f -- "${_audit_tmp}"
+    trap - EXIT HUP INT TERM
+    return 1
+  }
+  mv -f -- "${_audit_tmp}" "${_audit_manifest}" || {
+    _audit_emit
+    /bin/rm -f -- "${_audit_tmp}"
+    trap - EXIT HUP INT TERM
+    return 1
+  }
+  trap - EXIT HUP INT TERM
+  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST="${_audit_manifest}"
+  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256="$(sha256sum "${_audit_manifest}" | awk '{print $1}')"
+  NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS="ok"
+  _audit_emit
+  return 0
+}
+
+persist_numba_cache_rebuild_disposition() {
+  _disposition_manifest="$1"
+  _disposition_state="${_disposition_manifest%/*}/numba-legacy-cache-disposition.state"
+  _disposition_tmp="$(mktemp "${_disposition_state}.XXXXXX")" || return 1
+  {
+    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS}"
+    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}"
+    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST}"
+    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256}"
+    printf 'NUMBA_LEGACY_CACHE_DISPOSITION=%s\n' "${NUMBA_LEGACY_CACHE_DISPOSITION}"
+    printf 'NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=%s\n' "${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
+  } > "${_disposition_tmp}" || {
+    /bin/rm -f -- "${_disposition_tmp}"
+    return 1
+  }
+  mv -f -- "${_disposition_tmp}" "${_disposition_state}" || {
+    /bin/rm -f -- "${_disposition_tmp}"
+    return 1
+  }
+}
+
+remove_main_venv_with_numba_audit() {
+  _rebuild_venv="$1"
+  _rebuild_manifest="$2"
+  if ! audit_legacy_numba_caches_for_rebuild "${_rebuild_venv}" "${_rebuild_manifest}"; then
+    NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
+    log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+    return 1
+  fi
+  if [ "${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}" -eq 0 ]; then
+    NUMBA_LEGACY_CACHE_DISPOSITION="none_present"
+  else
+    NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
+  fi
+  log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+  if ! persist_numba_cache_rebuild_disposition "${_rebuild_manifest}"; then
+    NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
+    log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+    return 1
+  fi
+  if [ -e "${_rebuild_venv}" ] || [ -L "${_rebuild_venv}" ]; then
+    if ! rm -rf -- "${_rebuild_venv}" || [ -e "${_rebuild_venv}" ] || [ -L "${_rebuild_venv}" ]; then
+      NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
+      log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+      return 1
+    fi
+  fi
+  if [ "${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}" -ne 0 ]; then
+    NUMBA_LEGACY_CACHE_DISPOSITION="removed_with_venv_rebuild"
+  fi
+  NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="0"
+  log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+  log "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
+  persist_numba_cache_rebuild_disposition "${_rebuild_manifest}" || return 1
+  return 0
+}
+# END NUMBA LEGACY CACHE REBUILD AUDIT POLICY
 
 cleanup_legacy_numba_caches() {
   _cleanup_venv="$1"
@@ -1692,7 +1909,9 @@ classify_venv_failure() {
 }
 
 create_venv_with_selected_python() {
-  rm -rf "${RUNTIME_BASE}/.venv"
+  if [ -e "${RUNTIME_BASE}/.venv" ] || [ -L "${RUNTIME_BASE}/.venv" ]; then
+    remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest" || return 1
+  fi
   _venv_log="${RUNTIME_BASE}/logs/venv_create.log"
   : > "${_venv_log}" || true
   log_step "Creating venv at ${RUNTIME_BASE}/.venv"
@@ -1703,7 +1922,7 @@ create_venv_with_selected_python() {
   cat "${_venv_log}" >> "${LOG_FILE}" 2>/dev/null || true
   VENV_CREATE_REASON="$(classify_venv_failure "${_venv_log}")"
   log_step "Venv creation failed with ${PYTHON}: ${VENV_CREATE_REASON}"
-  rm -rf "${RUNTIME_BASE}/.venv"
+  rm -rf -- "${RUNTIME_BASE}/.venv"
   return 1
 }
 
@@ -2582,9 +2801,13 @@ STAGED_LAYOUT_VALIDATION_ACTIVE=0
 log_stage "Bootstrap started"
 log_step "Requested mode: ${MODE}"
 log_step "Downloaded models are kept at: $(model_cache_dir)"
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
   log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
-  rm -rf "${RUNTIME_BASE}/.venv"
+  if ! remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest"; then
+    log_step "Pre-rebuild Numba cache audit failed; preserving existing virtual environment"
+    exit 1
+  fi
 fi
 log_step "Preparing runtime directories"
 log_step "Clearing GPU override env vars (HIP_VISIBLE_DEVICES/HSA_OVERRIDE_GFX_VERSION/ROCR_VISIBLE_DEVICES/CUDA_VISIBLE_DEVICES)"
@@ -2621,6 +2844,12 @@ NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING="0"
 NUMBA_LEGACY_CACHE_NOT_REMOVED="0"
 NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED="no"
 NUMBA_LEGACY_CACHE_CLEANUP_STATUS="not_required"
+NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS="${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS:-not_applicable}"
+NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED="${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED:-0}"
+NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST="${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST:-none}"
+NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256="${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256:-none}"
+NUMBA_LEGACY_CACHE_DISPOSITION="${NUMBA_LEGACY_CACHE_DISPOSITION:-none_present}"
+NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING:-0}"
 SUPPORTED_PYTHON_FOUND="no"
 DETECTED_PYTHON_VERSION=""
 DETECTED_PYTHON_PATH=""
@@ -3039,7 +3268,9 @@ else
   if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     if venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python" || main_runtime_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
       log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
-      rm -rf "${RUNTIME_BASE}/.venv"
+      if ! remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest"; then
+        set_status "deps_failed" "numba_legacy_cache_pre_rebuild_audit_failed"
+      fi
     elif probe_main_runtime_ready "${RUNTIME_BASE}/.venv/bin/python" "${BACKEND}" >/dev/null; then
       select_active_torch_policy "${BACKEND}"
       PRESERVED_RUNTIME_TORCH_VERSION="$("${RUNTIME_BASE}/.venv/bin/python" -c 'import torch; print(getattr(torch, "__version__", "unknown"))' 2>/dev/null || true)"
@@ -3049,18 +3280,22 @@ else
     else
       log_step "Existing venv runtime probe failed; rebuilding .venv"
       log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
-      rm -rf "${RUNTIME_BASE}/.venv"
+      if ! remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest"; then
+        set_status "deps_failed" "numba_legacy_cache_pre_rebuild_audit_failed"
+      fi
     fi
   fi
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    if ! create_venv_with_selected_python; then
-      if ! try_managed_python_after_venv_failure; then
-        if [ "${VENV_CREATE_REASON}" = "venv_create_failed_missing_ensurepip" ]; then
-          msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
-          log_step "${msg}"
-          printf "%s\n" "${msg}" >&2
+    if [ "${STATUS}" = "ok" ]; then
+      if ! create_venv_with_selected_python; then
+        if ! try_managed_python_after_venv_failure; then
+          if [ "${VENV_CREATE_REASON}" = "venv_create_failed_missing_ensurepip" ]; then
+            msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
+            log_step "${msg}"
+            printf "%s\n" "${msg}" >&2
+          fi
+          set_status "venv_failed" "${VENV_CREATE_REASON:-venv_create_failed}"
         fi
-        set_status "venv_failed" "${VENV_CREATE_REASON:-venv_create_failed}"
       fi
     fi
   fi
@@ -3074,7 +3309,7 @@ else
       msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
       log_step "${msg}"
       printf "%s\n" "${msg}" >&2
-      rm -rf "${RUNTIME_BASE}/.venv"
+      rm -rf -- "${RUNTIME_BASE}/.venv"
       set_status "venv_failed" "${VENV_CREATE_REASON}"
     fi
   fi
@@ -3568,6 +3803,19 @@ EOF
   NUMBA_LEGACY_CACHE_NOT_REMOVED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_NOT_REMOVED=//p' | tail -n 1)"
   NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=//p' | tail -n 1)"
   NUMBA_LEGACY_CACHE_CLEANUP_STATUS="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_CLEANUP_STATUS=//p' | tail -n 1)"
+  NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="${NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING}"
+  if [ "${NUMBA_LEGACY_CACHE_DISPOSITION}" != "removed_with_venv_rebuild" ]; then
+    NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED="${NUMBA_LEGACY_CACHE_DETECTED}"
+    if [ "${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}" = "removed" ]; then
+      NUMBA_LEGACY_CACHE_DISPOSITION="removed_individually"
+    elif [ "${NUMBA_LEGACY_CACHE_DETECTED}" -eq 0 ]; then
+      NUMBA_LEGACY_CACHE_DISPOSITION="none_present"
+    else
+      NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
+    fi
+  fi
+  log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
+  log "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
   case "${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}" in
     not_required|removed|partial_unexpected)
       ;;
