@@ -453,6 +453,140 @@ Keep this section until the next release notes / changelog pass, then remove or 
     - Quality
     - 6-Stem
 
+### Cross-platform Setup & Component Manager (future proposal)
+
+This is a roadmap concept, not a commitment for the current 2.4 release line and
+not a blocker for the existing installers. It requires a separate design phase
+and explicit human approval before implementation.
+
+Core boundary:
+
+- `REAPER_IS_CONTROL_SURFACE=yes`
+- `REAPER_IS_PACKAGE_MANAGER=no`
+- Setup may be launched from REAPER, but dependency resolution, downloads,
+  verification, installation, repair, and removal must run in a separate helper
+  process rather than inside the REAPER process.
+
+#### Product-first selection
+
+- Ask users what they want to do: Normal Stems, 6-Stem, Direct Kit, Kit Split,
+  or a future quality/specialist workflow.
+- Keep model, backend, runtime, wheel, and accelerator names behind an advanced
+  details view. Product intent is the primary input to dependency resolution.
+- Detect OS, architecture, and available accelerators; recommend a compatible
+  backend, block known-incompatible combinations, and always offer an explicit
+  safe CPU choice. Never perform a silent backend fallback.
+- Treat macOS Intel and Apple Silicon as different targets: Intel uses CPU;
+  Apple Silicon may use MPS when the selected component supports it.
+- Resolve shared dependencies once. Direct Kit and Kit Split may require a
+  common base runtime plus their own model/assets, without duplicating the base.
+
+Proposed platform/backend matrix:
+
+| Platform | CPU | AMD | NVIDIA / native accelerator |
+| --- | --- | --- | --- |
+| Windows | supported | DirectML | CUDA |
+| macOS Intel | supported | not applicable | not applicable |
+| macOS Apple Silicon | supported | not applicable | MPS |
+| Linux | supported | ROCm | CUDA |
+
+#### Component lifecycle and distribution modes
+
+- Support explicit `install`, `add`, `remove`, `repair`, `verify`, and
+  `refresh` operations over managed components.
+- Keep three distribution modes distinct:
+  - **Online selective:** download and materialize only the runtime, model, and
+    assets required by the selected product flow.
+  - **Offline runtime:** ship a verified runtime/component payload while models
+    remain separately selectable or obtainable.
+  - **Offline all-models:** ship a complete, platform-specific model payload for
+    environments that require a fully self-contained installer.
+- An offline payload must still materialize only the selected compatible
+  components into managed state; payload presence is not permission to activate
+  every backend or model.
+
+#### Release and payload publication
+
+- Continue publishing normal/small verified assets through GitHub Releases.
+- Large all-models installers may be built in-house and externally hosted, as
+  with the Google Drive distribution line used for 2.3.0.0. The matching GitHub
+  release description should link to the payload and publish its SHA-256.
+- Do not make GitHub chunking a product requirement merely to fit a large
+  installer into GitHub-hosted release assets.
+- Preserve existing Windows CPU, DirectML, and CUDA distribution families;
+  design separate macOS Intel and Apple Silicon families; add Linux CPU, ROCm,
+  and CUDA families only through separately validated follow-up work.
+
+#### Platform frontends
+
+- **Windows:** an external Setup/Component Manager executable that can manage
+  CPU, DirectML, and CUDA component families.
+- **macOS:** separate signed/notarized Intel and Apple Silicon helper or package
+  families, with architecture-specific component catalogs.
+- **Linux:** a user-space helper with transactional installation into managed
+  locations; no implicit system-package mutation or root requirement.
+
+All frontends should consume one shared, versioned component-registry contract.
+Each component entry should declare at least:
+
+- component ID, version, product capability, and dependency edges;
+- supported OS, architecture, accelerator/backend, and distribution mode;
+- source URL or payload-relative source, byte size, and SHA-256;
+- canonical destination and ownership boundary;
+- install/materialization action and verification probe;
+- removal/preservation policy and shared-component reference information;
+- catalog/schema compatibility and minimum manager version.
+
+#### Safety and state model
+
+- Verify checksums and signatures where available before mutation.
+- Stage downloads and extraction outside live managed state, then publish
+  transactionally; failed operations must leave the last verified state usable.
+- Maintain a machine-readable installed-component inventory and operation log.
+- Repair verifies and restores selected managed components; it must not silently
+  add products, switch accelerators, or remove preserved user/runtime state.
+- Removal must respect shared dependencies and never delete user projects,
+  configuration, unmanaged models, or another product's referenced component.
+- Catalog or tooling failure is an explicit error, never an install trigger.
+- Show disk-space impact, download size, destination, selected backend, and
+  intended changes before confirmation; provide actionable failure and recovery
+  guidance afterward.
+
+#### Proposed architecture map
+
+```text
+REAPER control surface
+  -> external Setup / Component Manager
+       -> product-flow resolver
+       -> platform and accelerator detector
+       -> shared versioned component registry
+       -> download / offline-payload source adapter
+       -> checksum and compatibility verifier
+       -> transactional materializer
+       -> installed-component inventory and probes
+```
+
+#### Proposed delivery phases (no release commitment)
+
+- **Phase A — Contract:** define product capabilities, component IDs, registry
+  schema, ownership, state transitions, and compatibility rules.
+- **Phase B — Resolver prototype:** prove deterministic product-to-component
+  resolution and explicit CPU fallback without installing anything.
+- **Phase C — Inventory and verification:** introduce read-only detection of
+  installed managed components and reusable verification probes.
+- **Phase D — Transaction core:** implement staged, checksum-verified,
+  recoverable materialization and preserve-only repair semantics.
+- **Phase E — Windows frontend:** cover existing CPU, DirectML, and CUDA families
+  with online selective and explicitly scoped offline inputs.
+- **Phase F — macOS frontends:** validate separate Intel CPU and Apple Silicon
+  CPU/MPS signed/notarized distribution families.
+- **Phase G — Linux frontend:** validate user-space CPU first, then ROCm and CUDA
+  as independent, evidence-backed follow-ups.
+- **Phase H — Offline publication:** define offline-runtime and all-models build,
+  hosting, checksum/index, provenance, and native validation requirements.
+- **Phase I — REAPER integration and UX:** expose launch/status controls only
+  after the external manager and recovery path are independently proven.
+
 - [ ] DirectML multi-track performance
   - Revisit parallel job processing for Windows DirectML once stability issue is understood
   - Current workaround forces sequential mode for DirectML multi-job runs
