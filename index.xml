@@ -30,6 +30,7 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../STEMwerk_Bootstrap_Linux_Launcher.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh</source>
         <source file="../audio_separator_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/audio_separator_process.py</source>
         <source file="../models.json" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/models.json</source>
+        <source file="../assets/drumsep/config_drumsep_mdx23c.yaml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/tools/assets/drumsep/config_drumsep_mdx23c.yaml</source>
 
         <source file="../_internal/STEMwerk_Devices.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Devices.lua</source>
         <source file="../_internal/STEMwerk_DrumKit_Workflow.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua</source>
@@ -79,6 +80,7 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../vendor/stemwerk-core/src/stemwerk_core/models.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/models.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
+        <source file="../vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl</source>
 
         <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/stemwerk_language_wrapper.lua</source>

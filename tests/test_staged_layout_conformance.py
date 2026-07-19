@@ -14,9 +14,11 @@ WINDOWS_BOOTSTRAP = ROOT / "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1"
 REQUIRED_LAYOUT = (
     "audio_separator_process.py",
     "_internal/STEMwerk_Managed_Python.sh",
+    "assets/drumsep/config_drumsep_mdx23c.yaml",
     "vendor/stemwerk-core/pyproject.toml",
     "vendor/stemwerk-core/src/stemwerk_core/__init__.py",
     "vendor/stemwerk-core/src/stemwerk_core/separator.py",
+    "vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl",
 )
 
 PLATFORM_LAYOUT_STATUS = {
@@ -79,8 +81,12 @@ def test_linux_required_layout_contract_is_explicit_and_main_backed() -> None:
     script = _linux_text()
     assert "validate_required_reaper_layout()" in script
     for relative in REQUIRED_LAYOUT:
-        assert (ROOT / "scripts/reaper" / relative).is_file()
         assert relative in script
+        if relative == "assets/drumsep/config_drumsep_mdx23c.yaml":
+            assert (ROOT / "tools/assets/drumsep/config_drumsep_mdx23c.yaml").is_file()
+            assert relative in (ROOT / "index.xml").read_text(encoding="utf-8")
+        else:
+            assert (ROOT / "scripts/reaper" / relative).is_file()
     assert '_required_path="${SCRIPT_DIR}/${_required_relative}"' in script
 
 
@@ -117,6 +123,7 @@ def test_linux_layout_validation_precedes_every_runtime_mutation_class() -> None
         "install_managed_python_runtime",
         "create_venv_with_selected_python",
         "pip_install_with_scope",
+        "materialize_drumsep_compat_yaml",
         "ensure_core_model_cache",
         'apply_drumsep_sibling_policy "cpu"',
         'apply_drumsep_sibling_policy "rocm"',
@@ -124,6 +131,14 @@ def test_linux_layout_validation_precedes_every_runtime_mutation_class() -> None
     )
     for marker in mutation_markers:
         assert validation < execution.index(marker), marker
+
+
+def test_linux_layout_validation_precedes_drumsep_compat_materialization() -> None:
+    script = _linux_text()
+    execution = script[script.index('if [ -z "${RUNTIME_BASE}" ]'):]
+    validation = execution.index("if ! validate_required_reaper_layout; then")
+    materialization = execution.index("if ! materialize_drumsep_compat_yaml; then")
+    assert validation < materialization
 
 
 def test_complete_layout_reaches_one_safe_post_validation_sentinel(tmp_path: Path) -> None:
@@ -166,3 +181,51 @@ def test_missing_second_contract_file_fails_before_runtime_mutation(tmp_path: Pa
     text = log.read_text(encoding="utf-8")
     assert f"staged_layout_validation=failed:{missing}" in text
     assert "Installing optional DrumSep ROCm" not in text
+
+
+def test_missing_drumsep_compat_asset_fails_before_config_or_runtime_mutation(tmp_path: Path) -> None:
+    layout = _make_layout(tmp_path)
+    bootstrap = layout / LINUX_BOOTSTRAP.name
+    script = bootstrap.read_text(encoding="utf-8")
+    materializer_entry = "materialize_drumsep_compat_yaml() {\n"
+    runtime_entry = 'log_stage "Bootstrap started"\n'
+    assert script.count(materializer_entry) == 1
+    assert script.count(runtime_entry) == 1
+    bootstrap.write_text(
+        script.replace(
+            materializer_entry,
+            materializer_entry + '  log "MATERIALIZER_SENTINEL_REACHED"\n  exit 97\n',
+        ).replace(
+            runtime_entry,
+            'log "RUNTIME_PATH_SENTINEL_REACHED"\nexit 98\n' + runtime_entry,
+        ),
+        encoding="utf-8",
+    )
+    missing = "assets/drumsep/config_drumsep_mdx23c.yaml"
+    (layout / missing).unlink()
+
+    result, state, log, _sentinel = _run_layout(layout, tmp_path)
+
+    assert result.returncode != 0
+    assert f"STATUS_REASON=staged_layout_incomplete:{missing}" in state.read_text(encoding="utf-8")
+    text = log.read_text(encoding="utf-8")
+    assert f"staged_layout_validation=failed:{missing}" in text
+    assert "MATERIALIZER_SENTINEL_REACHED" not in text
+    assert "RUNTIME_PATH_SENTINEL_REACHED" not in text
+    assert "linux_drumsep_config_source_status=" not in text
+    assert "INSPECT_CALLED" not in text
+    assert "INSTALL_CPU_CALLED" not in text
+    assert "INSTALL_ROCM_CALLED" not in text
+    assert not (tmp_path / "xdg/STEMwerk/models/config_drumsep_mdx23c.yaml").exists()
+
+
+def test_missing_managed_diffq_wheel_fails_before_runtime_mutation(tmp_path: Path) -> None:
+    layout = _make_layout(tmp_path)
+    missing = "vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl"
+    (layout / missing).unlink()
+
+    result, state, log, _sentinel = _run_layout(layout, tmp_path)
+
+    assert result.returncode != 0
+    assert f"STATUS_REASON=staged_layout_incomplete:{missing}" in state.read_text(encoding="utf-8")
+    assert f"staged_layout_validation=failed:{missing}" in log.read_text(encoding="utf-8")
