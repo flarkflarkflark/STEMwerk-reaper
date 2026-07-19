@@ -50,6 +50,41 @@ def _runner(venv: Path) -> Path:
     return runner
 
 
+def _rebuild_runner(runtime: Path) -> Path:
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    start = script.index("audit_legacy_numba_caches_for_rebuild() {")
+    end = script.index("# END NUMBA LEGACY CACHE REBUILD AUDIT POLICY")
+    runner = runtime / "numba-rebuild-audit-runner.sh"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text(
+        "#!/bin/sh\nset -u\nlog() { printf '%s\\n' \"$*\"; }\n"
+        + script[start:end]
+        + '\nremove_main_venv_with_numba_audit "$1" "$2"\n',
+        encoding="utf-8",
+    )
+    runner.chmod(0o755)
+    return runner
+
+
+def _run_rebuild_audit(
+    runtime: Path, *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
+    venv = runtime / ".venv"
+    manifest = runtime / "state/numba-legacy-cache-pre-rebuild.manifest"
+    return subprocess.run(
+        ["/bin/sh", str(_rebuild_runner(runtime)), str(venv), str(manifest)],
+        cwd=ROOT,
+        env=run_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
 def _run(venv: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     run_env = os.environ.copy()
     if env:
@@ -380,13 +415,11 @@ def test_status_vocabulary_is_exact() -> None:
     assert "blocked_manifest_mismatch" not in helper
 
 
-def test_product_policy_contains_no_manifest_hash_or_fixed_count() -> None:
+def test_product_policy_contains_no_fixed_manifest_hash_or_count() -> None:
     product = BOOTSTRAP.read_text(encoding="utf-8")
 
-    assert "numba-legacy-cache-manifest" not in product
     assert "ALLOWLIST_EVIDENCE_FILE_COUNT" not in product
     assert "LOCAL_EVIDENCE_MANIFEST" not in product
-    assert "sha256sum" not in product
     assert "/home/flark" not in product
 
 
@@ -448,3 +481,170 @@ def test_bootstrap_persists_cleanup_markers_in_state() -> None:
         "NUMBA_LEGACY_CACHE_CLEANUP_STATUS",
     ):
         assert f'echo "{marker}=${{{marker}}}"' in script
+
+
+def test_rebuild_audit_records_exactly_46_allowlisted_caches_and_removes_venv(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv = _venv(runtime)
+    core, util = _allowlist_parents(venv)
+    caches = [
+        (core if index % 2 == 0 else util) / f"cache-{index:02d}.{'nbc' if index % 3 else 'nbi'}"
+        for index in range(46)
+    ]
+    for index, cache in enumerate(caches):
+        cache.write_bytes(f"cache-{index}".encode())
+
+    result = _run_rebuild_audit(runtime)
+    markers = _markers(result)
+    manifest = runtime / "state/numba-legacy-cache-pre-rebuild.manifest"
+
+    assert result.returncode == 0, result.stdout
+    assert not venv.exists()
+    assert markers["NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS"] == "ok"
+    assert markers["NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED"] == "46"
+    assert markers["NUMBA_LEGACY_CACHE_DISPOSITION"] == "removed_with_venv_rebuild"
+    assert markers["NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING"] == "0"
+    assert len(manifest.read_text(encoding="utf-8").splitlines()) == 46
+    assert markers["NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256"] == __import__("hashlib").sha256(
+        manifest.read_bytes()
+    ).hexdigest()
+    state_markers = _markers(
+        subprocess.CompletedProcess(
+            [], 0, (runtime / "state/numba-legacy-cache-disposition.state").read_text(encoding="utf-8")
+        )
+    )
+    assert state_markers["NUMBA_LEGACY_CACHE_DISPOSITION"] == markers["NUMBA_LEGACY_CACHE_DISPOSITION"]
+    assert state_markers["NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED"] == "46"
+
+
+def test_rebuild_audit_with_no_cache_reports_none_present(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv = _venv(runtime)
+    _allowlist_parents(venv)
+
+    result = _run_rebuild_audit(runtime)
+    markers = _markers(result)
+
+    assert result.returncode == 0, result.stdout
+    assert not venv.exists()
+    assert markers["NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED"] == "0"
+    assert markers["NUMBA_LEGACY_CACHE_DISPOSITION"] == "none_present"
+    assert markers["NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING"] == "0"
+
+
+def test_rebuild_audit_unknown_cache_path_fails_closed_without_removal(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv = _venv(runtime)
+    unknown = venv / "lib/python3.12/site-packages/other/__pycache__/unknown.nbc"
+    unknown.parent.mkdir(parents=True)
+    unknown.write_bytes(b"unknown")
+
+    result = _run_rebuild_audit(runtime)
+    markers = _markers(result)
+
+    assert result.returncode != 0
+    assert unknown.exists()
+    assert markers["NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS"] == "failed"
+    assert markers["NUMBA_LEGACY_CACHE_DISPOSITION"] == "preserved_due_to_failure"
+
+
+def test_rebuild_audit_symlink_is_not_followed_and_blocks_removal(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv = _venv(runtime)
+    core, _ = _allowlist_parents(venv)
+    outside = tmp_path / "outside.nbc"
+    outside.write_bytes(b"outside")
+    (core / "linked.nbc").symlink_to(outside)
+
+    result = _run_rebuild_audit(runtime)
+
+    assert result.returncode != 0
+    assert venv.exists()
+    assert outside.read_bytes() == b"outside"
+
+
+def test_rebuild_audit_cache_named_directory_blocks_removal(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv = _venv(runtime)
+    core, _ = _allowlist_parents(venv)
+    (core / "cache.nbc").mkdir()
+
+    result = _run_rebuild_audit(runtime)
+
+    assert result.returncode != 0
+    assert venv.exists()
+
+
+def test_rebuild_manifest_write_failure_preserves_venv(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv = _venv(runtime)
+    core, _ = _allowlist_parents(venv)
+    (core / "cache.nbc").write_bytes(b"cache")
+    (runtime / "state").write_text("not-a-directory", encoding="utf-8")
+
+    result = _run_rebuild_audit(runtime)
+    markers = _markers(result)
+
+    assert result.returncode != 0
+    assert venv.exists()
+    assert markers["NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS"] == "failed"
+    assert markers["NUMBA_LEGACY_CACHE_DISPOSITION"] == "preserved_due_to_failure"
+
+
+def test_rebuild_removal_failure_reports_preserved(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv = _venv(runtime)
+    core, _ = _allowlist_parents(venv)
+    (core / "cache.nbc").write_bytes(b"cache")
+    env = _fake_rm(tmp_path, "exit 1\n")
+
+    result = _run_rebuild_audit(runtime, env=env)
+    markers = _markers(result)
+
+    assert result.returncode != 0
+    assert venv.exists()
+    assert markers["NUMBA_LEGACY_CACHE_DISPOSITION"] == "preserved_due_to_failure"
+
+
+def test_rebuild_audit_never_scans_sibling(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    _venv(runtime)
+    sibling = runtime / ".venv-drumsep-rocm/lib/python3.12/site-packages/librosa/core/__pycache__"
+    sibling.mkdir(parents=True)
+    cache = sibling / "sibling.nbc"
+    cache.write_bytes(b"sibling")
+
+    result = _run_rebuild_audit(runtime)
+
+    assert result.returncode == 0, result.stdout
+    assert cache.read_bytes() == b"sibling"
+
+
+def test_bootstrap_rebuild_audit_precedes_every_main_venv_removal_and_persists_disposition() -> None:
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+
+    assert 'remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv"' in script
+    assert 'rm -rf "${RUNTIME_BASE}/.venv"' not in script
+    for marker in (
+        "NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS",
+        "NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED",
+        "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST",
+        "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256",
+        "NUMBA_LEGACY_CACHE_DISPOSITION",
+        "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING",
+    ):
+        assert f'echo "{marker}=${{{marker}}}"' in script
+
+
+def test_healthy_repair_maps_existing_cleanup_to_disposition_and_second_repair_none_present() -> None:
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+
+    assert 'NUMBA_LEGACY_CACHE_DISPOSITION="removed_individually"' in script
+    assert 'NUMBA_LEGACY_CACHE_DISPOSITION="none_present"' in script
+    assert 'NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED="${NUMBA_LEGACY_CACHE_DETECTED}"' in script
+    assert 'NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="${NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING}"' in script
+    assert 'if [ "${NUMBA_LEGACY_CACHE_DISPOSITION}" != "removed_with_venv_rebuild" ]; then' in script
+    create_start = script.index("create_venv_with_selected_python() {")
+    create_end = script.index("selected_python_is_managed()", create_start)
+    create_body = script[create_start:create_end]
+    assert 'if [ -e "${RUNTIME_BASE}/.venv" ] || [ -L "${RUNTIME_BASE}/.venv" ]; then' in create_body
