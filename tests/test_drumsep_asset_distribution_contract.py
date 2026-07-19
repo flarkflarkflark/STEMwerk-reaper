@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -251,3 +252,24 @@ def test_linux_offline_gap_tracking_remains_explicit_and_red() -> None:
         "offline-rocm": False,
         "offline-nvidia": False,
     }
+
+
+def test_ci_fast_selects_only_linux_offline_gap_meta_test() -> None:
+    module_path = "tests/test_drumsep_asset_distribution_contract.py"
+    meta_test_name = "test_linux_offline_gap_tracking_remains_explicit_and_red"
+    meta_node_id = f"{module_path}::{meta_test_name}"
+    workflow = _text(".github/workflows/ci-full.yml")
+    ci_fast_selection = workflow.split("- name: Run curated fast pytest coverage", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    distribution_selections = re.findall(
+        rf"{re.escape(module_path)}(?:::[A-Za-z0-9_\[\]-]+)?", ci_fast_selection
+    )
+
+    assert re.search(rf"^def {meta_test_name}\(.*\).*:$", _text(module_path), re.MULTILINE)
+    assert distribution_selections.count(meta_node_id) == 1
+    assert module_path not in distribution_selections
+    assert not {
+        f"{module_path}::test_linux_distribution_conforms_to_contract[{gap}]"
+        for gap in ("offline-cpu", "offline-rocm", "offline-nvidia")
+    }.intersection(distribution_selections)
