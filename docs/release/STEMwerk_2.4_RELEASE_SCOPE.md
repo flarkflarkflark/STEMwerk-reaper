@@ -166,6 +166,82 @@ implementation, every intended backend separately requires model distribution,
 license, packaging, release-gate, and native-smoke evidence. No support claim is
 created merely by listing a generic runtime provider.
 
+## Setup & Component Manager contract
+
+STEMwerk 2.4 must deliver a usable first version of the **STEMwerk Setup &
+Component Manager**. This is required release scope, not future-only work.
+
+The primary user choices are the seven release flows. Technical model names are
+advanced details rather than the primary setup UX. During installation, users
+must be able to select flows/components. After installation, they must be able
+to add components, remove them when safe, repair and verify selected
+components, refresh installed state, see required download and installed size,
+see a recommended backend, and be prevented from selecting incompatible
+choices.
+
+### Shared component contract
+
+The cross-platform contract must cover:
+
+- a flow/component registry and dependency graph;
+- shared components and reference-aware removal policy;
+- backend/provider, platform, and architecture compatibility;
+- conflicts and incompatible selections;
+- checksums and source validation;
+- download size and installed size;
+- machine-readable installed state;
+- install, add, remove, repair, verify, and refresh-status policy.
+
+```text
+COMPONENT_MANAGER_REQUIRED_FOR_2_4=yes
+COMPONENT_MANAGER_MINIMUM_SCOPE_INCLUDES=hardware_detection,flow_selection,install_plan,install,add,remove,repair,verify,refresh_status,installed_state,platform_specific_execution
+REAPER_IS_CONTROL_SURFACE=yes
+REAPER_IS_PACKAGE_MANAGER=no
+ONLINE_SELECTIVE_INSTALL_REQUIRED=yes
+```
+
+REAPER may show status and available flows, start Setup, monitor progress,
+refresh state, and present actionable failures. Heavy installation or runtime
+replacement must execute outside the REAPER/Lua process.
+
+### Platform-specific execution
+
+- **Windows:** use an external Setup executable/component manager. It must
+  account for UAC, Defender, file locking, and native-helper failures, and must
+  perform complete runtime replacement outside REAPER. REAPER may start and
+  monitor Setup.
+- **macOS:** define separate Intel CPU and Apple Silicon MPS contracts, using a
+  signed/notarized helper or `.pkg`. Account for Gatekeeper, quarantine, and
+  architecture. Heavy mutations execute outside REAPER.
+- **Linux:** use a user-space helper/bootstrap process, started and monitored
+  from REAPER where appropriate. Detect CPU, ROCm, and CUDA; keep lifecycle
+  operations transactional; do not perform heavy installation in Lua.
+
+```text
+WINDOWS_EXTERNAL_COMPONENT_MANAGER_REQUIRED=yes
+MACOS_INTEL_AND_SILICON_EXECUTION_EXPLICIT=yes
+LINUX_HELPER_PROCESS_REQUIRED=yes
+```
+
+### Minimum 2.4 capabilities
+
+1. Hardware and OS detection for Windows CPU/DirectML/CUDA, macOS Intel
+   CPU/Apple Silicon MPS, and Linux CPU/ROCm/CUDA.
+2. Selection of exactly the seven release flows.
+3. An install plan listing runtimes, models, configs, providers, shared
+   dependencies, download size, and installed size.
+4. Install, Add, Remove, Repair, Verify, and Refresh status lifecycle actions.
+5. Fail-closed safety: validate source before target, verify checksums, install
+   transactionally, never silently fall back to another backend, never silently
+   go online in offline mode, preserve referenced shared components, and use
+   rollback or preserve-only behavior with consistent state and logs.
+6. Online selective installation with on-demand components and deduplicated
+   models/runtimes. Normal installers do not need to contain every model by
+   default.
+
+Advanced capabilities may remain later extensions, but these minimum
+capabilities are P1 implementation gaps for 2.4 until implemented and accepted.
+
 ## Artifact scope
 
 Required normal 2.4 artifact families:
@@ -180,12 +256,9 @@ Optional 2.4 artifact families:
 1. macOS Apple Silicon bundled `.pkg`
 2. Linux bundled package family
 
-Not required for 2.4:
-
-- new Linux offline installers;
-- new Linux all-models installers;
-- rebuilt Windows or macOS offline all-models families;
-- the future Component Manager.
+Offline runtime and offline/all-models artifact families are not an immediate
+implementation requirement. They are also not definitively excluded from 2.4:
+their final classification is a mandatory release-candidate decision gate.
 
 Required and optional normal/bundled artifacts must carry the product code,
 model download contracts, checksum/integrity contracts, and distribution rules
@@ -193,10 +266,37 @@ needed by all seven flows. Online/on-demand model acquisition is allowed where
 that is the selected normal installer contract. One shared payload/reference
 must serve every flow that uses the same model or runtime.
 
+### Offline/all-models release-candidate review
+
+The review occurs after all seven flows are implemented, the Component Manager
+is functional, normal installers have been built, platform-smoke evidence is
+available, and payload sizes and hosting constraints are known.
+
+It must separately assess Windows CPU/DirectML/CUDA, macOS Intel CPU/Apple
+Silicon MPS, and Linux CPU/ROCm/CUDA. Each variant receives exactly one final
+classification:
+
+- `REQUIRED_FOR_2_4`;
+- `OPTIONAL_FOR_2_4`;
+- `DEFERRED_AFTER_2_4`;
+- `NOT_READY`;
+- `UNSUPPORTED`.
+
+The decision must consider payload closure, checksums, licenses, native smoke,
+no-network installation, artifact size, external hosting availability,
+reproducible inhouse builds, upload/download practicality, release-note links,
+SHA256 publication, support load, and hardware coverage.
+
+Normal and smaller artifacts continue to use GitHub Releases. Large offline or
+all-models artifacts may be built inhouse, hosted externally, linked from the
+GitHub release description, and accompanied by published SHA256 manifests.
+GitHub chunking is not the default policy.
+
 ```text
-LINUX_OFFLINE_REQUIRED_FOR_2_4=no
-LINUX_OFFLINE_ALLMODELS_REQUIRED_FOR_2_4=no
-COMPONENT_MANAGER_REQUIRED_FOR_2_4=no
+OFFLINE_ALLMODELS_2_4_FINAL_DECISION=DEFERRED_UNTIL_RELEASE_CANDIDATE_REVIEW
+OFFLINE_REVIEW_REQUIRED_BEFORE_RELEASE=yes
+OFFLINE_IMPLEMENTATION_REQUIRED_NOW=no
+OFFLINE_ARTIFACT_PUBLICATION_REQUIRED_NOW=no
 ```
 
 ## Outstanding release gates
@@ -215,17 +315,45 @@ following P1 implementation work remains:
 8. Add main-window controls, including De-Reverb `R` and Vocal De-Reverb `E`.
 9. Add translations and tooltips.
 10. Add output, pipeline, cleanup, transaction, and regression tests.
-11. Extend normal/bundled packaging for the seven-flow contract.
-12. Extend release gates to make all required models and flows auditable.
+11. Implement the cross-platform Component Manager minimum scope, shared
+    registry, dependency graph, and installed-state contract.
+12. Implement platform-specific helpers/frontends and flow selection with
+    install, add, remove, repair, verify, and refresh-status lifecycle actions.
+13. Add checksum-verified transactional materialization and shared-component
+    protection.
+14. Extend normal/bundled packaging for the seven-flow and Component Manager
+    contracts.
+15. Extend release gates to make all required models, flows, and component
+    lifecycle contracts auditable.
 
 The following P1 release revalidation remains after implementation:
 
-1. Validate every intended flow/backend combination independently.
-2. Run current-main native smokes on required platform/backend targets.
-3. Build and validate the selected candidate artifact families.
+1. Revalidate Windows current-main routes.
+2. Revalidate macOS current-main routes.
+3. Revalidate Linux CPU and CUDA current-main routes.
+4. Validate every intended flow/backend combination independently.
+5. Validate the Component Manager on every platform contract.
+6. Run current-main native smokes and build selected candidate artifacts.
 
-Neither the Component Manager nor new offline/all-models productisation is a
-P0 or P1 requirement for this release.
+Implementing every offline/all-models artifact now, GitHub chunking, and one
+identical universal frontend across all operating systems are not immediate
+blockers. The per-platform offline/all-models decision remains a mandatory
+final release gate.
+
+## 2.4 implementation phases
+
+The phases below order the required minimum work; they do not commit 2.4 to
+advanced functionality beyond that minimum.
+
+- **Phase A:** component registry and installed-state contract.
+- **Phase B:** read-only detection and install plan.
+- **Phase C:** Linux helper and component lifecycle.
+- **Phase D:** Windows external Setup/component manager.
+- **Phase E:** macOS Intel and Apple Silicon helper/package execution.
+- **Phase F:** REAPER control-surface integration.
+- **Phase G:** seven-flow component mapping.
+- **Phase H:** cross-platform install/add/remove/repair/verify acceptance.
+- **Phase I:** release-candidate offline/all-models review.
 
 ## Acceptance markers
 
@@ -244,4 +372,15 @@ DE_REVERB_SHORTCUT=R
 VOCAL_DE_REVERB_SHORTCUT=E
 VOCALS_HQ_SHARED_BY_VOCAL_DEREVERB=yes
 DEREVERB_ENGINE_SHARED_BY_BOTH_DEREVERB_FLOWS=yes
+COMPONENT_MANAGER_REQUIRED_FOR_2_4=yes
+ONLINE_SELECTIVE_INSTALL_REQUIRED=yes
+REAPER_IS_CONTROL_SURFACE=yes
+REAPER_IS_PACKAGE_MANAGER=no
+WINDOWS_EXTERNAL_COMPONENT_MANAGER_REQUIRED=yes
+MACOS_INTEL_AND_SILICON_EXECUTION_EXPLICIT=yes
+LINUX_HELPER_PROCESS_REQUIRED=yes
+OFFLINE_REVIEW_REQUIRED_BEFORE_RELEASE=yes
+OFFLINE_IMPLEMENTATION_REQUIRED_NOW=no
+OFFLINE_ARTIFACT_PUBLICATION_REQUIRED_NOW=no
+OFFLINE_ALLMODELS_2_4_FINAL_DECISION=DEFERRED_UNTIL_RELEASE_CANDIDATE_REVIEW
 ```
