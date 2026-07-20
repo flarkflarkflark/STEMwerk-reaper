@@ -14,8 +14,7 @@ if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
 }
 Set-Location $Base
 & "$Base/scripts/verify-frozen-fixtures.ps1"
-if (-not (Get-Command sqlite3 -ErrorAction SilentlyContinue)) { throw 'UNSUPPORTED_ENVIRONMENT: sqlite3 absent' }
-if (-not (Get-Command bash -ErrorAction SilentlyContinue)) { throw 'UNSUPPORTED_ENVIRONMENT: Git Bash absent' }
+& "$Base/scripts/assert-windows-native-preflight.ps1" -Implementation $Implementation -DiagnosticMode $DiagnosticMode -DiagnosticCases $DiagnosticCases
 New-Item -ItemType Directory -Force "$Base/bin", "$Base/.caches/cargo-home", "$Base/.caches/cargo-target", "$Base/.caches/go-build", "$Base/.caches/go-mod", "$Base/.caches/go-path", "$Base/reports/results" | Out-Null
 if ($Implementation -eq 'rust') {
   rustc --version --verbose
