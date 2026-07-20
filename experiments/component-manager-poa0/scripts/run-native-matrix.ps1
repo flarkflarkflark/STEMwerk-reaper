@@ -1,9 +1,17 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('rust','go')][string]$Implementation,
-  [string]$ExpectedArch = 'x86_64'
+  [string]$ExpectedArch = 'x86_64',
+  [ValidateSet('normal','windows-rust-copy-hash')][string]$DiagnosticMode = 'normal',
+  [string]$DiagnosticCases = ''
 )
 $ErrorActionPreference = 'Stop'
 $Base = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
+  if ($Implementation -ne 'rust') { throw 'Diagnostic mode is restricted to Rust' }
+  if ($DiagnosticCases -ne 'CMN-001,CMN-008') { throw 'Unsupported diagnostic case selection' }
+} elseif ($DiagnosticCases) {
+  throw 'DiagnosticCases is only valid in diagnostic mode'
+}
 Set-Location $Base
 & "$Base/scripts/verify-frozen-fixtures.ps1"
 if (-not (Get-Command sqlite3 -ErrorAction SilentlyContinue)) { throw 'UNSUPPORTED_ENVIRONMENT: sqlite3 absent' }
@@ -31,6 +39,11 @@ Copy-Item "$Base/scripts/native-poa-wrapper.sh" "$Base/bin/cm-go" -Force
 $BashBase = (& bash -lc "cygpath -u '$Base'").Trim()
 & bash "$BashBase/scripts/verify-implementation-parity.sh"
 if ($LASTEXITCODE -ne 0) { throw 'Implementation parity guard failed' }
+if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
+  & "$Base/scripts/run-windows-rust-copy-hash-diagnostic.ps1" -Cases $DiagnosticCases
+  if ($LASTEXITCODE -ne 0) { throw 'Windows Rust copy/hash diagnostic failed to capture evidence' }
+  exit 0
+}
 & bash "$BashBase/harness/run-matrix.sh"
 if ($LASTEXITCODE -ne 0) { throw 'Common matrix failed' }
 & "$Base/harness/lease-policy-tests.ps1"

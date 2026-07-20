@@ -2,6 +2,22 @@ name: Component Manager POA-0 Native
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnostic_mode:
+        description: Select the normal matrix or the bounded Windows Rust diagnostic
+        required: true
+        default: normal
+        type: choice
+        options:
+          - normal
+          - windows-rust-copy-hash
+      diagnostic_cases:
+        description: Fail-closed case allowlist for the Windows Rust diagnostic
+        required: true
+        default: CMN-001,CMN-008
+        type: choice
+        options:
+          - CMN-001,CMN-008
   push:
     branches:
       - experiment/component-manager-poa0
@@ -18,6 +34,9 @@ concurrency:
 
 jobs:
   native:
+    if: >-
+      (github.event_name == 'push' && github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust copy hash failure') ||
+      (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
       fail-fast: false
@@ -168,5 +187,53 @@ jobs:
           path: |
             experiments/component-manager-poa0/reports/results/
             experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-rust-copy-hash-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'windows-rust-copy-hash'
+    name: Windows x86_64 rust copy hash diagnostic
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout dispatched commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Assert diagnostic selection and checked-out commit
+        shell: pwsh
+        run: |
+          if ('${{ inputs.diagnostic_cases }}' -ne 'CMN-001,CMN-008') { throw 'Unsupported diagnostic case selection' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Checked-out commit mismatch' }
+          $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($arch -notin @('x64', 'x86_64')) { throw "NATIVE_ARCH_FAIL expected x86_64, got $arch" }
+
+      - name: Set up pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --no-self-update
+          rustup default 1.97.0
+
+      - name: Run bounded Windows Rust copy hash diagnostic
+        shell: pwsh
+        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation rust -ExpectedArch x86_64 -DiagnosticMode windows-rust-copy-hash -DiagnosticCases '${{ inputs.diagnostic_cases }}'
+
+      - name: Upload CMN-001 diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rust-copy-hash-diagnostic-CMN-001
+          path: experiments/component-manager-poa0/reports/results/windows-rust-copy-hash-diagnostic-CMN-001/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload CMN-008 diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rust-copy-hash-diagnostic-CMN-008
+          path: experiments/component-manager-poa0/reports/results/windows-rust-copy-hash-diagnostic-CMN-008/
           if-no-files-found: error
           retention-days: 7
