@@ -55,7 +55,8 @@ jobs:
        github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust copy hash failure' &&
        github.event.head_commit.message != 'experiment(cm): fix POA-0 Rust diagnostic preflight' &&
        github.event.head_commit.message != 'experiment(cm): use in-process SHA-256 in Rust POA' &&
-       github.event.head_commit.message != 'experiment(cm): separate POA-0 verifier domains by change class') ||
+       github.event.head_commit.message != 'experiment(cm): separate POA-0 verifier domains by change class' &&
+       github.event.head_commit.message != 'experiment(cm): fetch POA-0 verifier history in targeted CI') ||
       (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
@@ -220,7 +221,34 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: false
           persist-credentials: false
+
+      - name: Assert targeted verifier history
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b
+          target=ec14fdf523524bbd9aec34d429f0b6a5b673a701
+          head="$GITHUB_SHA"
+          git cat-file -e "$baseline^{commit}"
+          echo FEATURE_BASELINE_OBJECT=present
+          git cat-file -e "$target^{commit}"
+          echo FEATURE_TARGET_OBJECT=present
+          git cat-file -e "$head^{commit}"
+          echo WORKFLOW_HEAD_OBJECT=present
+          git merge-base --is-ancestor "$baseline" "$target"
+          echo BASELINE_IS_ANCESTOR_OF_TARGET=yes
+          git merge-base --is-ancestor "$target" "$head"
+          echo TARGET_IS_ANCESTOR_OF_HEAD=yes
+          test "$(git rev-parse HEAD)" = "$head"
+          echo CHECKED_OUT_HEAD_MATCHES_GITHUB_SHA=yes
+          echo "SHALLOW_REPOSITORY=$(git rev-parse --is-shallow-repository)"
+          git diff --name-only "$baseline" "$target" >/dev/null
+          echo GIT_DIFF_FEATURE_EXIT=0
+          git diff --name-only "$target" "$head" >/dev/null
+          echo GIT_DIFF_POST_TARGET_EXIT=0
 
       - name: Assert diagnostic selection and checked-out commit
         shell: pwsh
