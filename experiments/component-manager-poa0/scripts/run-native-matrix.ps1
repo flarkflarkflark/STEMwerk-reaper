@@ -1,4 +1,7 @@
-param([string]$ExpectedArch = 'x86_64')
+param(
+  [Parameter(Mandatory=$true)][ValidateSet('rust','go')][string]$Implementation,
+  [string]$ExpectedArch = 'x86_64'
+)
 $ErrorActionPreference = 'Stop'
 $Base = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location $Base
@@ -6,21 +9,32 @@ Set-Location $Base
 if (-not (Get-Command sqlite3 -ErrorAction SilentlyContinue)) { throw 'UNSUPPORTED_ENVIRONMENT: sqlite3 absent' }
 if (-not (Get-Command bash -ErrorAction SilentlyContinue)) { throw 'UNSUPPORTED_ENVIRONMENT: Git Bash absent' }
 New-Item -ItemType Directory -Force "$Base/bin", "$Base/.caches/cargo-home", "$Base/.caches/cargo-target", "$Base/.caches/go-build", "$Base/.caches/go-mod", "$Base/.caches/go-path", "$Base/reports/results" | Out-Null
-@("rustc=$(rustc --version)","cargo=$(cargo --version)","go=$(go version)","git=$(git --version)") | Set-Content -Encoding utf8NoBOM "$Base/reports/results/toolchains.txt"
-$env:CARGO_HOME = "$Base/.caches/cargo-home"; $env:CARGO_TARGET_DIR = "$Base/.caches/cargo-target"
-cargo test --manifest-path "$Base/rust/Cargo.toml"
-cargo build --release --manifest-path "$Base/rust/Cargo.toml"
-Copy-Item "$env:CARGO_TARGET_DIR/release/component-manager-poa0.exe" "$Base/bin/cm-rust.exe" -Force
-$env:GOCACHE = "$Base/.caches/go-build"; $env:GOMODCACHE = "$Base/.caches/go-mod"; $env:GOPATH = "$Base/.caches/go-path"
-Push-Location "$Base/go"; try { go test ./...; go build -buildvcs=false -trimpath -o "$Base/bin/cm-go.exe" . } finally { Pop-Location }
+if ($Implementation -eq 'rust') {
+  rustc --version --verbose
+  @("implementation=rust","rustc=$(rustc --version)","cargo=$(cargo --version)","git=$(git --version)") | Set-Content -Encoding utf8NoBOM "$Base/reports/results/toolchains.txt"
+  $env:CARGO_HOME = "$Base/.caches/cargo-home"; $env:CARGO_TARGET_DIR = "$Base/.caches/cargo-target"
+  cargo test --manifest-path "$Base/rust/Cargo.toml"
+  cargo build --release --manifest-path "$Base/rust/Cargo.toml"
+  Copy-Item "$env:CARGO_TARGET_DIR/release/component-manager-poa0.exe" "$Base/bin/cm-rust.exe" -Force
+} else {
+  go version
+  go env GOHOSTOS GOHOSTARCH
+  @("implementation=go","go=$(go version)","gohostos=$(go env GOHOSTOS)","gohostarch=$(go env GOHOSTARCH)","git=$(git --version)") | Set-Content -Encoding utf8NoBOM "$Base/reports/results/toolchains.txt"
+  $env:GOCACHE = "$Base/.caches/go-build"; $env:GOMODCACHE = "$Base/.caches/go-mod"; $env:GOPATH = "$Base/.caches/go-path"
+  Push-Location "$Base/go"; try { go test ./...; go build -buildvcs=false -trimpath -o "$Base/bin/cm-go.exe" . } finally { Pop-Location }
+}
+if ($Implementation -eq 'rust') { Copy-Item "$Base/bin/cm-rust.exe" "$Base/bin/cm-go.exe" -Force }
+else { Copy-Item "$Base/bin/cm-go.exe" "$Base/bin/cm-rust.exe" -Force }
 & "$Base/scripts/assert-native-platform.ps1" -ExpectedArch $ExpectedArch | Tee-Object -FilePath "$Base/reports/results/platform-info.txt"
 $env:MSYS_NO_PATHCONV = '0'
 $BashBase = (& bash -lc "cygpath -u '$Base'").Trim()
+& bash "$BashBase/scripts/verify-implementation-parity.sh"
+if ($LASTEXITCODE -ne 0) { throw 'Implementation parity guard failed' }
 & bash "$BashBase/harness/run-matrix.sh"
 if ($LASTEXITCODE -ne 0) { throw 'Common matrix failed' }
 & "$Base/harness/lease-policy-tests.ps1"
 & "$Base/harness/platform-tests.ps1"
-$Summary = [ordered]@{schema_version=1;commit=$env:GITHUB_SHA;os='windows';architecture=$ExpectedArch;rust=@{build='PASS';common_matrix='24/24';classification='PASS_NATIVE'};go=@{build='PASS';common_matrix='24/24';classification='PASS_NATIVE'};mixed_component_visibility_count=0}
+$Summary = [ordered]@{schema_version=1;commit=$env:GITHUB_SHA;os='windows';architecture=$ExpectedArch;implementation=$Implementation;build='PASS';common_matrix='24/24';lease_matrix='10/10';platform='PASS';classification='PASS_NATIVE';mixed_component_visibility_count=0}
 $Summary | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM "$Base/reports/results/native-summary.json"
 $Report = @"
 # POA-0 native matrix result
@@ -29,8 +43,8 @@ $Report = @"
 - Workflow run: $env:GITHUB_RUN_ID
 - Runner image: $env:ImageOS $env:ImageVersion
 - Native OS/architecture: windows / $ExpectedArch
-- Rust: PASS_NATIVE, common matrix 24/24
-- Go: PASS_NATIVE, common matrix 24/24
+- Implementation: $Implementation
+- Result: PASS_NATIVE, common matrix 24/24
 - Platform cases: PASS
 - Lease policy: 10/10
 - Mixed-generation visibility: 0

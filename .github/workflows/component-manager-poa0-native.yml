@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  unix-native:
-    name: ${{ matrix.label }} native Rust and Go
+  native:
+    name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
       fail-fast: false
       matrix:
@@ -27,14 +27,42 @@ jobs:
             runner: ubuntu-latest
             os: linux
             arch: x86_64
+            implementation: rust
+          - label: Linux x86_64
+            runner: ubuntu-latest
+            os: linux
+            arch: x86_64
+            implementation: go
+          - label: Windows x86_64
+            runner: windows-latest
+            os: windows
+            arch: x86_64
+            implementation: rust
+          - label: Windows x86_64
+            runner: windows-latest
+            os: windows
+            arch: x86_64
+            implementation: go
           - label: macOS Intel x86_64
             runner: macos-15-intel
             os: macos
             arch: x86_64
+            implementation: rust
+          - label: macOS Intel x86_64
+            runner: macos-15-intel
+            os: macos
+            arch: x86_64
+            implementation: go
           - label: macOS Apple Silicon arm64
             runner: macos-15
             os: macos
             arch: arm64
+            implementation: rust
+          - label: macOS Apple Silicon arm64
+            runner: macos-15
+            os: macos
+            arch: arm64
+            implementation: go
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
@@ -48,45 +76,64 @@ jobs:
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Run frozen native matrix
+      - name: Assert Unix native architecture and executable mode
+        if: matrix.os != 'windows'
         shell: bash
-        run: experiments/component-manager-poa0/scripts/run-native-matrix.sh "${{ matrix.os }}" "${{ matrix.arch }}"
+        run: |
+          test "$(uname -s)" = "${{ matrix.os == 'linux' && 'Linux' || 'Darwin' }}"
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          test -x experiments/component-manager-poa0/scripts/run-native-matrix.sh
+
+      - name: Assert Windows native architecture
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($arch -notin @('x64', 'x86_64')) { throw "NATIVE_ARCH_FAIL expected x86_64, got $arch" }
+
+      - name: Set up pinned Go
+        if: matrix.implementation == 'go'
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Set up pinned Rust
+        if: matrix.implementation == 'rust'
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --no-self-update
+          rustup default 1.97.0
+
+      # POA_ONLY: production core must use embedded/native SQLite and must not
+      # depend on Chocolatey or an external sqlite3 executable.
+      - name: Provision pinned SQLite CLI for Windows POA
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          choco install sqlite --version=3.53.3 --yes --no-progress --limit-output
+          if ($LASTEXITCODE -notin @(0, 3010)) { throw "Chocolatey sqlite install failed: $LASTEXITCODE" }
+          where.exe sqlite3
+          sqlite3 --version
+
+      - name: Run frozen native matrix on Unix
+        if: matrix.os != 'windows'
+        shell: bash
+        env:
+          POA_EXPECTED_OS: ${{ matrix.os }}
+          POA_EXPECTED_ARCH: ${{ matrix.arch }}
+        run: experiments/component-manager-poa0/scripts/run-native-matrix.sh --implementation "${{ matrix.implementation }}"
+
+      - name: Run frozen native matrix on Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation '${{ matrix.implementation }}' -ExpectedArch '${{ matrix.arch }}'
 
       - name: Upload small POA reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: component-manager-poa0-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            experiments/component-manager-poa0/reports/results/
-            experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md
-          if-no-files-found: error
-          retention-days: 7
-
-  windows-native:
-    name: Windows x86_64 native Rust and Go
-    runs-on: windows-latest
-    timeout-minutes: 25
-    steps:
-      - name: Checkout dispatched commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Assert checked-out commit
-        shell: pwsh
-        run: if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'workflow head mismatch' }
-
-      - name: Run frozen native matrix
-        shell: pwsh
-        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -ExpectedArch x86_64
-
-      - name: Upload small POA reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: component-manager-poa0-windows-x86_64
+          name: component-manager-poa0-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.implementation }}
           path: |
             experiments/component-manager-poa0/reports/results/
             experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md
