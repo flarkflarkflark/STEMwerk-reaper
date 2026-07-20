@@ -37,7 +37,8 @@ jobs:
     if: >-
       (github.event_name == 'push' &&
        github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust copy hash failure' &&
-       github.event.head_commit.message != 'experiment(cm): fix POA-0 Rust diagnostic preflight') ||
+       github.event.head_commit.message != 'experiment(cm): fix POA-0 Rust diagnostic preflight' &&
+       github.event.head_commit.message != 'experiment(cm): use in-process SHA-256 in Rust POA') ||
       (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:

@@ -1,8 +1,9 @@
 // EXPERIMENTAL_DISPOSABLE_POA_ONLY
+use sha2::{Digest, Sha256};
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{self, Command, Stdio},
     sync::OnceLock,
@@ -153,35 +154,112 @@ fn extract(s: &str, key: &str) -> String {
     let rest = &s[start + needle.len()..];
     rest.split('"').next().unwrap_or("").into()
 }
-fn hash(path: &Path) -> Result<String, String> {
-    let out = if cfg!(windows) {
-        let escaped = path.display().to_string().replace('\'', "''");
-        Command::new("powershell")
-            .args(["-NoProfile", "-Command"])
-            .arg(format!(
-                "(Get-FileHash -Algorithm SHA256 -LiteralPath '{}').Hash.ToLower()",
-                escaped
-            ))
-            .output()
-            .map_err(|e| e.to_string())?
-    } else {
-        match Command::new("sha256sum").arg(path).output() {
-            Ok(output) if output.status.success() => output,
-            _ => Command::new("shasum")
-                .args(["-a", "256"])
-                .arg(path)
-                .output()
-                .map_err(|e| e.to_string())?,
+#[derive(Debug)]
+enum HashError {
+    Open {
+        path: PathBuf,
+        cause: String,
+    },
+    Read {
+        path: PathBuf,
+        cause: String,
+    },
+    Mismatch {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+}
+impl HashError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Open { .. } => "HASH_OPEN_FAILED",
+            Self::Read { .. } => "HASH_READ_FAILED",
+            // Preserve the frozen POA error-code contract.
+            Self::Mismatch { .. } => "CHECKSUM_MISMATCH",
         }
-    };
-    if !out.status.success() {
-        return Err("native SHA256 helper failed".into());
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .into())
+    fn message(&self) -> String {
+        match self {
+            Self::Open { path, cause } => {
+                format!("cannot open hash input {}: {cause}", path.display())
+            }
+            Self::Read { path, cause } => {
+                format!("cannot read hash input {}: {cause}", path.display())
+            }
+            Self::Mismatch {
+                path,
+                expected,
+                actual,
+            } => format!(
+                "sha256 mismatch for {}: expected {expected}, actual {actual}",
+                path.display()
+            ),
+        }
+    }
+}
+fn sha256_reader<R: Read>(reader: R, path: &Path) -> Result<String, HashError> {
+    let mut reader = BufReader::new(reader);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let count = reader.read(&mut buffer).map_err(|error| HashError::Read {
+            path: path.to_path_buf(),
+            cause: error.to_string(),
+        })?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    Ok(output)
+}
+fn sha256_file(path: &Path) -> Result<String, HashError> {
+    let file = File::open(path).map_err(|error| HashError::Open {
+        path: path.to_path_buf(),
+        cause: error.to_string(),
+    })?;
+    sha256_reader(file, path)
+}
+fn verified_sha256_file(path: &Path, expected: &str) -> Result<String, HashError> {
+    let actual = sha256_file(path)?;
+    if actual == expected {
+        Ok(actual)
+    } else {
+        Err(HashError::Mismatch {
+            path: path.to_path_buf(),
+            expected: expected.to_string(),
+            actual,
+        })
+    }
+}
+fn operation_hash(
+    op: &str,
+    path: &Path,
+    expected: Option<&str>,
+    active: &str,
+    previous: &str,
+    state: &str,
+) -> Result<String, String> {
+    let hash = match expected {
+        Some(expected) => verified_sha256_file(path, expected),
+        None => sha256_file(path),
+    };
+    match hash {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let message = error.message();
+            match fail(op, error.code(), &message, active, previous, state) {
+                Err(error) => Err(error),
+                Ok(()) => Err(message),
+            }
+        }
+    }
 }
 fn activate(root: &Path, id: &str) -> Result<(), String> {
     let state = root.join("state");
@@ -292,16 +370,7 @@ fn install(op: &str, root: &Path, catalog: &Path) -> Result<(), String> {
     for (i, c) in COMPONENTS.iter().enumerate() {
         let staged = stage.join(c.artifact);
         fs::copy(fixtures.join(c.artifact), &staged).map_err(|e| e.to_string())?;
-        if hash(&staged)? != c.sha {
-            return fail(
-                op,
-                "CHECKSUM_MISMATCH",
-                "fixture sha256 mismatch",
-                &previous,
-                &previous,
-                "preserved",
-            );
-        }
+        operation_hash(op, &staged, Some(c.sha), &previous, &previous, "preserved")?;
         event(op, "artifact_verified");
         let target = root.join("store/components").join(c.id).join("1.0.0");
         let rp = target.join(".stemwerk-component.json");
@@ -365,11 +434,16 @@ fn install(op: &str, root: &Path, catalog: &Path) -> Result<(), String> {
     for c in COMPONENTS {
         rhs.push((
             c.id,
-            hash(
+            operation_hash(
+                op,
                 &root
                     .join("store/components")
                     .join(c.id)
                     .join("1.0.0/.stemwerk-component.json"),
+                None,
+                &previous,
+                &previous,
+                "preserved",
             )?,
         ))
     }
@@ -417,11 +491,16 @@ fn install(op: &str, root: &Path, catalog: &Path) -> Result<(), String> {
     }
     schema(root)?;
     for c in COMPONENTS {
-        let rh = hash(
+        let rh = operation_hash(
+            op,
             &root
                 .join("store/components")
                 .join(c.id)
                 .join("1.0.0/.stemwerk-component.json"),
+            None,
+            &id,
+            &previous,
+            "recovery_required",
         )?;
         sqlite(
             root,
@@ -491,7 +570,9 @@ fn verify(op: &str, root: &Path) -> Result<(), String> {
     }
     for c in COMPONENTS {
         let base = root.join("store/components").join(c.id).join("1.0.0");
-        if hash(&base.join(c.artifact)).unwrap_or_default() != c.sha {
+        let artifact = base.join(c.artifact);
+        let actual = operation_hash(op, &artifact, None, &a, "", "invalid")?;
+        if actual != c.sha {
             return fail(op, "ARTIFACT_DRIFT", "artifact invalid", &a, "", "invalid");
         }
         let Ok(r) = fs::read_to_string(base.join(".stemwerk-component.json")) else {
@@ -525,7 +606,7 @@ fn rebuild(op: &str, root: &Path) -> Result<(), String> {
             &format!(
                 "INSERT INTO inventory VALUES('{}','1.0.0','{}');INSERT INTO consumers VALUES('{}','flow.normal_stems_fixture');",
                 c.id,
-                hash(&rp)?,
+                operation_hash(op, &rp, None, &a, "", "invalid")?,
                 c.id
             ),
         )?
@@ -672,5 +753,148 @@ fn main() {
     if let Err(e) = r {
         eprintln!("{e}");
         process::exit(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    struct TestDir(PathBuf);
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let path =
+                env::temp_dir().join(format!("poa0-sha-{label}-{}-{}", process::id(), now()));
+            fs::create_dir(&path).expect("create test directory");
+            Self(path)
+        }
+        fn file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+            let path = self.0.join(name);
+            fs::write(&path, bytes).expect("write test file");
+            path
+        }
+    }
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn hashes_known_small_fixture() {
+        let dir = TestDir::new("known");
+        let path = dir.file("abc.txt", b"abc");
+        assert_eq!(
+            sha256_file(&path).expect("hash"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+    #[test]
+    fn hashes_empty_file() {
+        let dir = TestDir::new("empty");
+        let path = dir.file("empty", b"");
+        assert_eq!(
+            sha256_file(&path).expect("hash"),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+    #[test]
+    fn hashes_binary_bytes() {
+        let dir = TestDir::new("binary");
+        let path = dir.file("bytes.bin", &[0, 255, 1, 128, 10, 0]);
+        assert_eq!(
+            sha256_file(&path).expect("hash"),
+            "dbc6023624fd4186398804a32cbd629f935787dec7443a8b84dfb4b9da4b7d98"
+        );
+    }
+    #[test]
+    fn hashes_path_with_space() {
+        let dir = TestDir::new("space");
+        let path = dir.file("with space.txt", b"abc");
+        assert!(sha256_file(&path).is_ok());
+    }
+    #[test]
+    fn hashes_unicode_path() {
+        let dir = TestDir::new("unicode");
+        let path = dir.file("hash-é-日.txt", b"abc");
+        assert!(sha256_file(&path).is_ok());
+    }
+    #[test]
+    fn missing_file_is_structured_open_error() {
+        let dir = TestDir::new("missing");
+        let error = sha256_file(&dir.0.join("missing")).expect_err("must fail");
+        assert_eq!(error.code(), "HASH_OPEN_FAILED");
+        assert!(error.message().contains("missing"));
+    }
+    #[test]
+    fn directory_input_is_structured() {
+        let dir = TestDir::new("directory");
+        let error = sha256_file(&dir.0).expect_err("must fail");
+        assert!(matches!(
+            error,
+            HashError::Open { .. } | HashError::Read { .. }
+        ));
+    }
+    #[test]
+    fn output_is_lowercase_64_character_hex() {
+        let digest = sha256_reader(Cursor::new(b"format"), Path::new("format")).expect("hash");
+        assert_eq!(digest.len(), 64);
+        assert!(
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+    }
+    #[test]
+    fn known_digest_verification_matches() {
+        let dir = TestDir::new("match");
+        let path = dir.file("abc", b"abc");
+        assert!(
+            verified_sha256_file(
+                &path,
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            )
+            .is_ok()
+        );
+    }
+    #[test]
+    fn mismatch_fails_closed_with_existing_contract_code() {
+        let dir = TestDir::new("mismatch");
+        let path = dir.file("abc", b"abc");
+        let error = verified_sha256_file(&path, &"0".repeat(64)).expect_err("must fail");
+        assert_eq!(error.code(), "CHECKSUM_MISMATCH");
+        assert!(error.message().contains("expected"));
+        assert!(error.message().contains("actual"));
+    }
+    struct FailingReader;
+    impl Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("injected partial read failure"))
+        }
+    }
+    #[test]
+    fn partial_read_failure_is_structured() {
+        let error = sha256_reader(FailingReader, Path::new("partial.bin")).expect_err("must fail");
+        assert_eq!(error.code(), "HASH_READ_FAILED");
+        assert!(error.message().contains("injected partial read failure"));
+    }
+    #[test]
+    fn streams_file_larger_than_buffer() {
+        let dir = TestDir::new("large");
+        let bytes = vec![0x5a; 16 * 1024 + 37];
+        let path = dir.file("large.bin", &bytes);
+        assert_eq!(
+            sha256_file(&path).expect("hash"),
+            "a3b518bdf526ab7b48e5747db7c912d2a2fe39cb23ff9e1264af20ffc46a301e"
+        );
+    }
+    #[test]
+    fn hash_route_has_no_subprocess_or_powershell() {
+        let source = include_str!("main.rs");
+        assert!(!source.contains(&["Get", "-FileHash"].concat()));
+        assert!(!source.contains(&["Command::new(\"power", "shell\")"].concat()));
+        assert!(!source.contains(&["Command::new(\"sha", "256sum\")"].concat()));
+        assert!(!source.contains(&["Command::new(\"sha", "sum\")"].concat()));
     }
 }
