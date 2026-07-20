@@ -106,6 +106,37 @@ jobs:
           rustup default 1.97.0
 
       # POA_ONLY: production core must use embedded/native SQLite and must not
+      # depend on Homebrew or an external sqlite3 executable.
+      - name: Provision pinned SQLite CLI for macOS POA
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          case "${{ matrix.arch }}" in
+            x86_64)
+              sqlite_archive=sqlite-tools-osx-x64-3530300.zip
+              sqlite_sha256=defe731640fe6a5d9a21e1bf0fac40f0c4a7bab53b52a2094f6c4c4aa04e5a42
+              ;;
+            arm64)
+              sqlite_archive=sqlite-tools-osx-arm64-3530300.zip
+              sqlite_sha256=f7b7c3666fce6efe96cba23e661e288bd56cc695fb9a1581445d4eb41cf4ccac
+              ;;
+            *) exit 2 ;;
+          esac
+          sqlite_dir="$RUNNER_TEMP/poa0-sqlite-3.53.3"
+          mkdir -p "$sqlite_dir"
+          curl --fail --location --silent --show-error \
+            "https://www.sqlite.org/2026/$sqlite_archive" \
+            --output "$RUNNER_TEMP/$sqlite_archive"
+          printf '%s  %s\n' "$sqlite_sha256" "$RUNNER_TEMP/$sqlite_archive" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/$sqlite_archive" -d "$sqlite_dir"
+          chmod +x "$sqlite_dir/sqlite3"
+          xattr -d com.apple.quarantine "$sqlite_dir/sqlite3" 2>/dev/null || true
+          printf '%s\n' "$sqlite_dir" >>"$GITHUB_PATH"
+          export PATH="$sqlite_dir:$PATH"
+          which sqlite3
+          sqlite3 --version
+
+      # POA_ONLY: production core must use embedded/native SQLite and must not
       # depend on Chocolatey or an external sqlite3 executable.
       - name: Provision pinned SQLite CLI for Windows POA
         if: matrix.os == 'windows'
