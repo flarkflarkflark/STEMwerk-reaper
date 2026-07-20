@@ -18,6 +18,22 @@ on:
         type: choice
         options:
           - CMN-001,CMN-008
+      verification_mode:
+        description: Fail-closed frozen-verification policy
+        required: true
+        default: strict
+        type: choice
+        options:
+          - strict
+          - rust-implementation-fix
+      verification_baseline:
+        description: Authorized feature-diff baseline; ignored in strict mode
+        required: false
+        type: string
+      verification_target:
+        description: Authorized feature-diff target; ignored in strict mode
+        required: false
+        type: string
   push:
     branches:
       - experiment/component-manager-poa0
@@ -38,7 +54,8 @@ jobs:
       (github.event_name == 'push' &&
        github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust copy hash failure' &&
        github.event.head_commit.message != 'experiment(cm): fix POA-0 Rust diagnostic preflight' &&
-       github.event.head_commit.message != 'experiment(cm): use in-process SHA-256 in Rust POA') ||
+       github.event.head_commit.message != 'experiment(cm): use in-process SHA-256 in Rust POA' &&
+       github.event.head_commit.message != 'experiment(cm): separate POA-0 verifier domains by change class') ||
       (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
@@ -209,6 +226,9 @@ jobs:
         shell: pwsh
         run: |
           if ('${{ inputs.diagnostic_cases }}' -ne 'CMN-001,CMN-008') { throw 'Unsupported diagnostic case selection' }
+          if ('${{ inputs.verification_mode }}' -ne 'rust-implementation-fix') { throw 'Unsupported verification mode' }
+          if ('${{ inputs.verification_baseline }}' -ne '9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b') { throw 'Unsupported verification baseline' }
+          if ('${{ inputs.verification_target }}' -ne 'ec14fdf523524bbd9aec34d429f0b6a5b673a701') { throw 'Unsupported verification target' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Checked-out commit mismatch' }
           $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
           if ($arch -notin @('x64', 'x86_64')) { throw "NATIVE_ARCH_FAIL expected x86_64, got $arch" }
@@ -221,7 +241,7 @@ jobs:
 
       - name: Run bounded Windows Rust copy hash diagnostic
         shell: pwsh
-        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation rust -ExpectedArch x86_64 -DiagnosticMode windows-rust-copy-hash -DiagnosticCases '${{ inputs.diagnostic_cases }}'
+        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation rust -ExpectedArch x86_64 -DiagnosticMode windows-rust-copy-hash -DiagnosticCases '${{ inputs.diagnostic_cases }}' -VerificationMode '${{ inputs.verification_mode }}' -VerificationBaseline '${{ inputs.verification_baseline }}' -VerificationTarget '${{ inputs.verification_target }}' -WorkflowHead '${{ github.sha }}'
 
       - name: Upload CMN-001 diagnostic evidence
         if: always()

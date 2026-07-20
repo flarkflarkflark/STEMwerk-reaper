@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 base=$(cd "$(dirname "$0")/.." && pwd)
-test "$#" = 2 -a "${1:-}" = --implementation || { printf 'usage: %s --implementation rust|go\n' "$0" >&2; exit 2; }
-implementation=$2
+test "$#" -ge 2 -a "${1:-}" = --implementation || { printf 'usage: %s --implementation rust|go [verification options]\n' "$0" >&2; exit 2; }
+implementation=$2; shift 2
 case "$implementation" in rust|go) ;; *) printf 'unsupported implementation: %s\n' "$implementation" >&2; exit 2;; esac
 expected_os=${POA_EXPECTED_OS:?POA_EXPECTED_OS required}; expected_arch=${POA_EXPECTED_ARCH:?POA_EXPECTED_ARCH required}
 cd "$base"
-scripts/verify-frozen-fixtures.sh
+scripts/verify-frozen-fixtures.sh "$@"
 mkdir -p reports/results
 if test "$implementation" = rust; then
   rustc --version --verbose
