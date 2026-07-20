@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["schema_version","component_id","component_version","artifact_id","artifact_sha256","catalog_version","catalog_entry_hash","platform","architecture","backend","install_timestamp","installed_files_manifest","transaction_id","source_type","provenance_status","manager_version"]}

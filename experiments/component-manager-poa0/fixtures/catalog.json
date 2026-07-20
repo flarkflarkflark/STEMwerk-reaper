@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "catalog_version": "poa0-v1",
+  "components": [
+    {
+      "schema_version": 1, "id": "runtime.fixture", "display_name": "Fixture Runtime",
+      "type": "runtime", "version": "1.0.0", "dependencies": [], "platform": "any",
+      "architecture": "any", "backend": "fixture", "artifact": "runtime-fixture.txt",
+      "sha256": "a159ce98c9da7498ff385b4b799e4bac64313de699878e793654929a95e1bab5",
+      "download_size": 27, "installed_size": 27, "verification": "sha256",
+      "provenance_status": "fixture-only"
+    },
+    {
+      "schema_version": 1, "id": "model.fixture", "display_name": "Fixture Model",
+      "type": "model", "version": "1.0.0", "dependencies": [], "platform": "any",
+      "architecture": "any", "backend": "fixture", "artifact": "model-fixture.txt",
+      "sha256": "d76c207e3cb3217db5350a9c8f58daeac9ff845f5a368d3583df2e05d2f36fcf",
+      "download_size": 25, "installed_size": 25, "verification": "sha256",
+      "provenance_status": "fixture-only"
+    },
+    {
+      "schema_version": 1, "id": "flow.normal_stems_fixture", "display_name": "Normal Stems Fixture",
+      "type": "flow", "version": "1.0.0",
+      "dependencies": ["runtime.fixture", "model.fixture"], "platform": "any",
+      "architecture": "any", "backend": "fixture", "artifact": "",
+      "sha256": "", "download_size": 0, "installed_size": 0,
+      "verification": "dependency-only", "provenance_status": "fixture-only"
+    }
+  ]
+}

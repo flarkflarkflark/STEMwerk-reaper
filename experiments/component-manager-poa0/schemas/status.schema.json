@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["schema_version","active_generation","desired_flows","backend","inventory_count","generation_count"]}

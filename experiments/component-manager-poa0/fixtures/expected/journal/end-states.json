@@ -1,0 +1,1 @@
+{"schema_version":1,"end_states":{"success":"op_completed","failure":"op_failed","cancellation":"op_cancelled","hard_kill":"last durable pre-kill event followed by explicit recover"},"stdout_rule":"every non-status line is one JSON object","normalization":["timestamps","temporary directories","PIDs","operation IDs","generation IDs","run IDs","log paths"]}

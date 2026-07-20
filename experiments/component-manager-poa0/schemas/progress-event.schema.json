@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["schema_version","event","op_id"],"properties":{"event":{"enum":["op_started","plan_ready","staging_started","artifact_verified","receipt_written","generation_built","generation_activated","rollback_started","rollback_completed","state_rebuilt","op_completed","op_failed","op_cancelled"]}}}

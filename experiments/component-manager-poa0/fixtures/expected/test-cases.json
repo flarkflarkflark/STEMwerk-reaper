@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "common_case_ids": [
+    "CMN-001-clean-install", "CMN-002-idempotent-install",
+    "CMN-003-checksum-mismatch", "CMN-004-cancel-staging",
+    "CMN-005-fail-after-receipt", "CMN-006-fail-after-generation-build",
+    "CMN-007-kill-during-staging", "CMN-008-kill-after-active-swap",
+    "CMN-009-recovery", "CMN-010-rollback", "CMN-011-state-rebuild",
+    "CMN-012-receipt-missing", "CMN-013-receipt-mutated",
+    "CMN-014-artifact-mutated", "CMN-015-desired-missing",
+    "CMN-016-active-run-activation", "CMN-017-two-stage-activation",
+    "CMN-018-gc-active-lease", "CMN-019-concurrent-mutations",
+    "CMN-020-zero-mixed-generation", "CMN-021-stale-process-gone",
+    "CMN-022-stale-pid-reuse", "CMN-023-stale-unknown",
+    "CMN-024-frozen-fixture-verification"
+  ]
+}

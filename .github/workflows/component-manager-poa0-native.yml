@@ -1,0 +1,94 @@
+name: Component Manager POA-0 Native
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/component-manager-poa0
+    paths:
+      - experiments/component-manager-poa0/**
+      - .github/workflows/component-manager-poa0-native.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: component-manager-poa0-native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  unix-native:
+    name: ${{ matrix.label }} native Rust and Go
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            runner: ubuntu-latest
+            os: linux
+            arch: x86_64
+          - label: macOS Intel x86_64
+            runner: macos-15-intel
+            os: macos
+            arch: x86_64
+          - label: macOS Apple Silicon arm64
+            runner: macos-15
+            os: macos
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout dispatched commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Assert checked-out commit
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Run frozen native matrix
+        shell: bash
+        run: experiments/component-manager-poa0/scripts/run-native-matrix.sh "${{ matrix.os }}" "${{ matrix.arch }}"
+
+      - name: Upload small POA reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-manager-poa0-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            experiments/component-manager-poa0/reports/results/
+            experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-native:
+    name: Windows x86_64 native Rust and Go
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout dispatched commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Assert checked-out commit
+        shell: pwsh
+        run: if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'workflow head mismatch' }
+
+      - name: Run frozen native matrix
+        shell: pwsh
+        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -ExpectedArch x86_64
+
+      - name: Upload small POA reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-manager-poa0-windows-x86_64
+          path: |
+            experiments/component-manager-poa0/reports/results/
+            experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md
+          if-no-files-found: error
+          retention-days: 7

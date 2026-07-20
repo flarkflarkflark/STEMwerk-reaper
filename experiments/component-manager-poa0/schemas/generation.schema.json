@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["schema_version","generation_id","catalog_version","created_at","selected_flows","backend","components","component_receipt_hashes","previous_generation","plan_hash"]}

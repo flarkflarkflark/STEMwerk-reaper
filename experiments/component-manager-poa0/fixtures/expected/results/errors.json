@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "expected_error_codes": [
+    "ARTIFACT_DRIFT", "CANCELLED", "CHECKSUM_MISMATCH", "DESIRED_MISSING",
+    "INJECTED_FAILURE", "MUTATION_LOCKED", "NO_ACTIVE_GENERATION",
+    "NO_PREVIOUS_GENERATION", "PREVIOUS_GENERATION_INVALID",
+    "RECEIPT_DRIFT", "RECEIPT_MISSING", "STATUS_UNAVAILABLE"
+  ],
+  "failure_state_rules": {
+    "before_active_swap": "preserved",
+    "after_active_swap_before_state_commit": "recovery_required",
+    "verification_drift": "invalid"
+  }
+}

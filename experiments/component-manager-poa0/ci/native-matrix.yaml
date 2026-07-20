@@ -1,0 +1,27 @@
+schema_version: 1
+source_of_truth: native-runner
+include:
+  - os: linux
+    runner: ubuntu-latest
+    arch: x86_64
+    rust_target: x86_64-unknown-linux-gnu
+    go_target: linux/amd64
+    filesystem_test: ext4-generation-activation
+  - os: windows
+    runner: windows-latest
+    arch: x86_64
+    rust_target: x86_64-pc-windows-msvc
+    go_target: windows/amd64
+    filesystem_test: ntfs-generation-activation
+  - os: macos
+    runner: macos-15-intel
+    arch: x86_64
+    rust_target: x86_64-apple-darwin
+    go_target: darwin/amd64
+    filesystem_test: apfs-generation-activation
+  - os: macos
+    runner: macos-15
+    arch: arm64
+    rust_target: aarch64-apple-darwin
+    go_target: darwin/arm64
+    filesystem_test: apfs-generation-activation

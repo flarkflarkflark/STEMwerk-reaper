@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "source_base_sha": "bfe9076f90cd9b4982fabf765e0c779a65e74c74",
+  "poa_version": "POA-0-native-transport-v1",
+  "fixture_files": [
+    {
+      "path": "fixtures/catalog.json",
+      "sha256": "949fce5e9073845ccf159df4d2dda98dc985943bf09777fbfce246a8253670ee"
+    },
+    {
+      "path": "fixtures/artifacts/model-fixture.txt",
+      "sha256": "d76c207e3cb3217db5350a9c8f58daeac9ff845f5a368d3583df2e05d2f36fcf"
+    },
+    {
+      "path": "fixtures/artifacts/runtime-fixture.txt",
+      "sha256": "a159ce98c9da7498ff385b4b799e4bac64313de699878e793654929a95e1bab5"
+    }
+  ],
+  "schemas": [
+    {
+      "path": "schemas/catalog.schema.json",
+      "sha256": "3728130c1104165a6e48bded67cd6ac778a59718093701232612f90380b4c453"
+    },
+    {
+      "path": "schemas/component.schema.json",
+      "sha256": "a3e88aa777d8eb9d12727314ed530fc335754db2328ea710ed9a8fa5a514f5e0"
+    },
+    {
+      "path": "schemas/generation.schema.json",
+      "sha256": "b9d513a16aa8843d578e4b03860a6386168b8dce02329f320063d490ff73ea14"
+    },
+    {
+      "path": "schemas/progress-event.schema.json",
+      "sha256": "e30ae1185eaf03a2808422712e571b82d92dfe6460e10000556194dde239f200"
+    },
+    {
+      "path": "schemas/receipt.schema.json",
+      "sha256": "4b1aa63f241485243a6379d0ad86bacec550175945fa34a049c8d58cf36a6817"
+    },
+    {
+      "path": "schemas/result.schema.json",
+      "sha256": "f92e617681bc6d8b16135753b686db9f238ee661cf83cde2f390c69b27519880"
+    },
+    {
+      "path": "schemas/status.schema.json",
+      "sha256": "b58ea22169e5464e17f070e637837d771e69638e1fb41b359bc7949a9fe18620"
+    }
+  ],
+  "rust_source_tree_hash": "18c0cf3221df7a6420a60c4df711b1ee84aeacbfbba2b1c7373d7800ef602610",
+  "go_source_tree_hash": "cef7c5b1ba8e1c0a781aa7a5d16a910c63a3eae8e4e8a0b2fdb6084f2b36e261",
+  "harness_tree_hash": "e8dfd64ba2adf2d7de344c476ff46addd394988d40d2a1869f541e4baa6c590c",
+  "test_case_ids": [
+    "CMN-001-clean-install",
+    "CMN-002-idempotent-install",
+    "CMN-003-checksum-mismatch",
+    "CMN-004-cancel-staging",
+    "CMN-005-fail-after-receipt",
+    "CMN-006-fail-after-generation-build",
+    "CMN-007-kill-during-staging",
+    "CMN-008-kill-after-active-swap",
+    "CMN-009-recovery",
+    "CMN-010-rollback",
+    "CMN-011-state-rebuild",
+    "CMN-012-receipt-missing",
+    "CMN-013-receipt-mutated",
+    "CMN-014-artifact-mutated",
+    "CMN-015-desired-missing",
+    "CMN-016-active-run-activation",
+    "CMN-017-two-stage-activation",
+    "CMN-018-gc-active-lease",
+    "CMN-019-concurrent-mutations",
+    "CMN-020-zero-mixed-generation",
+    "CMN-021-stale-process-gone",
+    "CMN-022-stale-pid-reuse",
+    "CMN-023-stale-unknown",
+    "CMN-024-frozen-fixture-verification"
+  ],
+  "expected_result_tree_hash": "80ff2e2585f76002dabfadc8b1013715f73d2728edb3ff9bda6463ae22179ec9",
+  "generated_at": "2026-07-20T13:53:38Z",
+  "generator_version": "freeze-manifest-v1",
+  "normalization_note": "Timestamps, temporary directories, PIDs, operation IDs, generation IDs, run IDs, and log paths are normalized before semantic comparison."
+}

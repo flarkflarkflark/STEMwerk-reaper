@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["schema_version","id","display_name","type","version","dependencies","platform","architecture","backend","artifact","sha256","download_size","installed_size","verification","provenance_status"]}
