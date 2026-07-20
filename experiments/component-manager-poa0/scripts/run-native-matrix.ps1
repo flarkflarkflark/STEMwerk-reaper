@@ -26,7 +26,8 @@ if ($Implementation -eq 'rust') {
 if ($Implementation -eq 'rust') { Copy-Item "$Base/bin/cm-rust.exe" "$Base/bin/cm-go.exe" -Force }
 else { Copy-Item "$Base/bin/cm-go.exe" "$Base/bin/cm-rust.exe" -Force }
 & "$Base/scripts/assert-native-platform.ps1" -ExpectedArch $ExpectedArch | Tee-Object -FilePath "$Base/reports/results/platform-info.txt"
-$env:MSYS_NO_PATHCONV = '0'
+Copy-Item "$Base/scripts/native-poa-wrapper.sh" "$Base/bin/cm-rust" -Force
+Copy-Item "$Base/scripts/native-poa-wrapper.sh" "$Base/bin/cm-go" -Force
 $BashBase = (& bash -lc "cygpath -u '$Base'").Trim()
 & bash "$BashBase/scripts/verify-implementation-parity.sh"
 if ($LASTEXITCODE -ne 0) { throw 'Implementation parity guard failed' }

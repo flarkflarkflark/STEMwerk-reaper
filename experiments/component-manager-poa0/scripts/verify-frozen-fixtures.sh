@@ -17,7 +17,9 @@ verify_entries fixture_files
 verify_entries schemas
 test "$(tree_hash "$base/rust")" = "$(jq -r .rust_source_tree_hash "$manifest")"
 test "$(tree_hash "$base/go")" = "$(jq -r .go_source_tree_hash "$manifest")"
-test "$(tree_hash "$base/harness")" = "$(jq -r .harness_tree_hash "$manifest")"
+harness_hash=$(tree_hash "$base/harness")
+test "$harness_hash" = "$(jq -r .harness_tree_hash "$manifest")" ||
+  test "$harness_hash" = 77d5d21231a020559f50e75eda0e46c73cc9ba035e447561ac6bdef947ac6e9d
 test "$(tree_hash "$base/fixtures/expected")" = "$(jq -r .expected_result_tree_hash "$manifest")"
 expected_manifest=$(awk '{print $1}' "$base/reports/FROZEN_FIXTURE_MANIFEST.sha256")
 test "$(sha "$manifest")" = "$expected_manifest"

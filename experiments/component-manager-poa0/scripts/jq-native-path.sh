@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness-portability.sh"
+
 to_native_path_for_jq() {
-  local input=${1:?path required}
-  local kernel=${POA_UNAME_OVERRIDE:-$(uname -s)}
-  case "$kernel" in
-    MINGW*|MSYS*|CYGWIN*) cygpath -m "$input" ;;
-    *) printf '%s\n' "$input" ;;
-  esac
+  to_native_windows_path "$1"
 }
 
 if test "${BASH_SOURCE[0]}" = "$0"; then
