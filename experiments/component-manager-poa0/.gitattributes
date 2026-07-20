@@ -1,0 +1,18 @@
+*.json text eol=lf
+*.jsonl text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+*.go text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.mod text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+*.sha256 text eol=lf
+fixtures/artifacts/*.bin -text
+fixtures/artifacts/*.zip -text
+fixtures/artifacts/*.onnx -text
