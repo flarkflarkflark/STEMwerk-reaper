@@ -74,7 +74,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: a28dea9393296621ab3297a689be0e0920d13609
+          EXPECTED_PARENT: 40fac56be402514ed28bcacb96837f75b79f6db0
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -88,7 +88,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/rust/src/main.rs|experiments/component-manager-poa0/go/process_identity_darwin.go|experiments/component-manager-poa0/go/process_identity_darwin_test.go|experiments/component-manager-poa0/harness/lease-policy-tests.sh|experiments/component-manager-poa0/reports/MACOS_LEASE004_PROCESS_IDENTITY_FIX.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/FROZEN_FIXTURE_MANIFEST.json|experiments/component-manager-poa0/reports/FROZEN_FIXTURE_MANIFEST.sha256|experiments/component-manager-poa0/reports/FROZEN_RUST_TREE_RECONCILIATION.md)
                 ;;
               *)
                 allowed=false
@@ -98,7 +98,7 @@ jobs:
 
           if [[ "$actual_parent" == "$EXPECTED_PARENT" && ${#changed_paths[@]} -gt 0 && "$allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
-            echo 'classification=macos-lease004-only' >>"$GITHUB_OUTPUT"
+            echo 'classification=frozen-manifest-reconciliation-only' >>"$GITHUB_OUTPUT"
           else
             echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
             echo 'classification=other' >>"$GITHUB_OUTPUT"
