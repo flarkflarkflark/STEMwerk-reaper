@@ -68,7 +68,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: fa02db07a2c738c44e386bf2e13e1c4ed632a256
+          EXPECTED_PARENT: 79512d128f6383a405935e0f0b4a1a4a88d2f0a2
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -82,7 +82,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/run-native-matrix.ps1|experiments/component-manager-poa0/scripts/run-windows-rust-copy-hash-diagnostic.ps1|experiments/component-manager-poa0/reports/WINDOWS_CMN008_RECOVERY_EXECUTION.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/assert-windows-native-preflight.ps1|experiments/component-manager-poa0/reports/WINDOWS_CMN008_ONLY_PREFLIGHT_ALLOWLIST_FIX.md)
                 ;;
               *)
                 allowed=false

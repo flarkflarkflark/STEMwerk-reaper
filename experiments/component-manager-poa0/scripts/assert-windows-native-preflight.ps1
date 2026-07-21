@@ -14,7 +14,7 @@ function Test-CommandAvailable([string]$Name) {
 
 if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
   if ($Implementation -ne 'rust') { throw 'Diagnostic mode is restricted to Rust' }
-  if ($DiagnosticCases -ne 'CMN-001,CMN-008') { throw 'Unsupported diagnostic case selection' }
+  if ($DiagnosticCases -cnotin @('CMN-001,CMN-008', 'CMN-008')) { throw 'Unsupported diagnostic case selection' }
   foreach ($Capability in @('bash','powershell','rustc','cargo')) {
     if (-not (Test-CommandAvailable $Capability)) { throw "UNSUPPORTED_ENVIRONMENT: $Capability absent" }
   }
