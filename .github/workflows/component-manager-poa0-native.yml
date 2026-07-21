@@ -57,7 +57,8 @@ jobs:
        github.event.head_commit.message != 'experiment(cm): use in-process SHA-256 in Rust POA' &&
        github.event.head_commit.message != 'experiment(cm): separate POA-0 verifier domains by change class' &&
        github.event.head_commit.message != 'experiment(cm): fetch POA-0 verifier history in targeted CI' &&
-       github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust activation failure') ||
+       github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust activation failure' &&
+       github.event.head_commit.message != 'experiment(cm): open Windows state directory for durability sync') ||
       (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:

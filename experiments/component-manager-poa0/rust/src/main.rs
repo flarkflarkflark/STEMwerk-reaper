@@ -140,6 +140,27 @@ fn write_sync(path: &Path, data: &str) -> Result<(), String> {
     f.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())
 }
+#[cfg(windows)]
+fn open_directory_for_sync(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    if !fs::metadata(path)?.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "directory sync target is not a directory",
+        ));
+    }
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+}
+#[cfg(not(windows))]
+fn open_directory_for_sync(path: &Path) -> std::io::Result<File> {
+    File::open(path)
+}
 fn activation_diagnostic_enabled() -> bool {
     env::var("POA_ACTIVATION_DIAGNOSTIC").as_deref() == Ok("1")
 }
@@ -211,7 +232,7 @@ fn diagnose_directory_open(op: &str, root: &Path) -> Result<(), String> {
         "begin",
         None,
     );
-    match File::open(root) {
+    match open_directory_for_sync(root) {
         Ok(handle) => {
             diagnostic_step(
                 op,
@@ -476,7 +497,7 @@ fn activate(op: &str, root: &Path, id: &str) -> Result<(), String> {
         "begin",
         None,
     );
-    let directory = File::open(&state).map_err(|error| {
+    let directory = open_directory_for_sync(&state).map_err(|error| {
         diagnostic_step(op, "diag_failure_context", "parent_directory_open", "File::open", &state, &state, "error", Some(&error));
         format!("activation step parent_directory_open failed: source={}; target={}; object_type={}; raw_os_error={:?}; error={error}", state.display(), state.display(), path_type(&state), error.raw_os_error())
     })?;
@@ -1045,6 +1066,114 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn directory_sync_helper_opens_existing_directory() {
+        let dir = TestDir::new("directory-sync-open");
+        assert!(open_directory_for_sync(&dir.0).is_ok());
+    }
+
+    #[test]
+    fn directory_sync_helper_reaches_sync_all() {
+        let dir = TestDir::new("directory-sync-flush");
+        let handle = open_directory_for_sync(&dir.0).expect("open directory for sync");
+        handle.sync_all().expect("sync directory");
+    }
+
+    #[test]
+    fn directory_sync_helper_rejects_missing_directory() {
+        let dir = TestDir::new("directory-sync-missing");
+        assert!(open_directory_for_sync(&dir.0.join("missing")).is_err());
+    }
+
+    #[test]
+    fn directory_sync_helper_file_behavior_is_platform_explicit() {
+        let dir = TestDir::new("directory-sync-file");
+        let file = dir.file("not-a-directory", b"fixture");
+        #[cfg(windows)]
+        assert_eq!(
+            open_directory_for_sync(&file)
+                .expect_err("Windows helper rejects files")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        #[cfg(not(windows))]
+        assert!(open_directory_for_sync(&file).is_ok());
+    }
+
+    #[test]
+    fn directory_sync_helper_reports_readonly_directory_behavior() {
+        let dir = TestDir::new("directory-sync-readonly");
+        let mut permissions = fs::metadata(&dir.0).expect("metadata").permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&dir.0, permissions).expect("set readonly");
+        let result = open_directory_for_sync(&dir.0);
+        let mut restore = fs::metadata(&dir.0).expect("metadata").permissions();
+        restore.set_readonly(false);
+        fs::set_permissions(&dir.0, restore).expect("restore permissions");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn windows_directory_sync_helper_uses_only_backup_semantics() {
+        let source = include_str!("main.rs");
+        let start = source.find("fn open_directory_for_sync").expect("helper");
+        let end = source[start..]
+            .find("fn activation_diagnostic_enabled")
+            .expect("helper end")
+            + start;
+        let helper = &source[start..end];
+        assert!(helper.contains("FILE_FLAG_BACKUP_SEMANTICS"));
+        assert!(!helper.contains("share_mode"));
+    }
+
+    #[test]
+    fn directory_sync_helper_uses_no_subprocess_or_dependency() {
+        let source = include_str!("main.rs");
+        let start = source.find("fn open_directory_for_sync").expect("helper");
+        let end = source[start..]
+            .find("fn activation_diagnostic_enabled")
+            .expect("helper end")
+            + start;
+        let helper = &source[start..end];
+        assert!(!helper.contains("Command::new"));
+        assert!(!helper.contains("unsafe"));
+    }
+
+    #[test]
+    fn non_windows_directory_sync_route_remains_file_open() {
+        let source = include_str!("main.rs");
+        assert!(source.contains("#[cfg(not(windows))]\nfn open_directory_for_sync(path: &Path) -> std::io::Result<File> {\n    File::open(path)\n}"));
+    }
+
+    #[test]
+    fn selector_replace_still_precedes_directory_sync() {
+        let source = include_str!("main.rs");
+        let activate = source.find("fn activate(").expect("activate");
+        let replace = source[activate..]
+            .find("fs::rename(&tmp, &active_path)")
+            .expect("replace")
+            + activate;
+        let directory_open = source[activate..]
+            .find("open_directory_for_sync(&state)")
+            .expect("directory open")
+            + activate;
+        let sync = source[activate..]
+            .find("directory.sync_all()")
+            .expect("directory sync")
+            + activate;
+        assert!(replace < directory_open && directory_open < sync);
+    }
+
+    #[test]
+    fn directory_open_and_sync_remain_fail_closed() {
+        let source = include_str!("main.rs");
+        let activate = source.find("fn activate(").expect("activate");
+        let body = &source
+            [activate..source[activate..].find("fn sqlite(").expect("activate end") + activate];
+        assert!(body.contains("open_directory_for_sync(&state).map_err"));
+        assert!(body.contains("directory.sync_all().map_err"));
     }
 
     #[test]
