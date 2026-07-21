@@ -31,3 +31,43 @@ replace, and active-lease GC blocking.
 Every result records commit, runner image, OS, architecture, filesystem,
 language, case ID, classification, exit code, error code, JSONL validity,
 journal status, and mixed-generation count.
+
+## Selector publication durability
+
+### Platform-neutral requirements
+
+1. A generation is completely built and verified before activation.
+2. The selector temporary file is completely written and flushed before
+   publication.
+3. Publication uses one platform-native same-volume replacement.
+4. A partial or invalid selector is never accepted.
+5. Open, write, flush, and replacement failures are fatal.
+6. A processing run pins exactly one complete generation, and every stage of
+   that run uses the same generation.
+7. Rollback selects one complete previous generation.
+8. Startup and recovery revalidate both the selector and its generation.
+
+### POSIX durability
+
+The selector file flush, same-filesystem rename or replacement, and parent
+directory `fsync` are required. Every failure is fatal.
+
+### Windows durability
+
+The following primitives and validations are required, not optional:
+
+| Property | Evidence classification | Requirement |
+| --- | --- | --- |
+| Selector file flush | `required_and_documented` | Flush the completely written selector temporary file through a write-capable handle with `FlushFileBuffers` before publication. |
+| Native selector replacement | `required_and_native_validated` | Publish with one native same-volume replacement; any replacement failure is fatal. |
+| Write-capable parent-directory flush | `required_and_native_validated` | Open the parent directory with `GENERIC_WRITE` and `FILE_FLAG_BACKUP_SEMANTICS`, call `FlushFileBuffers`, and treat open or flush failure as fatal. |
+| Process-crash selector consistency | `required_and_native_validated` | Native tests must show a valid old selector before replacement and a valid new selector after replacement. |
+| POSIX-equivalent parent-directory-entry OS-crash durability | `not_claimed` | Microsoft documentation does not establish equivalence for this directory-handle use. |
+| Power-loss durability | `not_claimed` | Native process-crash probes do not establish power-loss behavior. |
+
+Startup and recovery validation of the selector and generation remain required.
+The required Windows operations may not be skipped, retried into success, or
+have their failures suppressed. Successful native process-crash probes do not
+establish OS-crash or power-loss safety. `MOVEFILE_WRITE_THROUGH` is not treated
+as a general same-volume rename durability guarantee, and `ReplaceFileW` is not
+treated as a durability guarantee.

@@ -144,6 +144,8 @@ fn write_sync(path: &Path, data: &str) -> Result<(), String> {
 fn open_directory_for_sync(path: &Path) -> std::io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
 
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0000_0007;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 
     if !fs::metadata(path)?.is_dir() {
@@ -153,14 +155,47 @@ fn open_directory_for_sync(path: &Path) -> std::io::Result<File> {
         ));
     }
     OpenOptions::new()
-        .read(true)
+        .access_mode(GENERIC_WRITE)
+        .share_mode(FILE_SHARE_READ_WRITE_DELETE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
+}
+#[cfg(windows)]
+fn flush_directory_for_sync(directory: &File) -> std::io::Result<()> {
+    use std::{ffi::c_void, os::windows::io::AsRawHandle};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn FlushFileBuffers(handle: *mut c_void) -> i32;
+        fn GetLastError() -> u32;
+    }
+
+    if unsafe { FlushFileBuffers(directory.as_raw_handle()) } != 0 {
+        return Ok(());
+    }
+    let code = unsafe { GetLastError() };
+    Err(std::io::Error::from_raw_os_error(code as i32))
 }
 #[cfg(not(windows))]
 fn open_directory_for_sync(path: &Path) -> std::io::Result<File> {
     File::open(path)
 }
+#[cfg(not(windows))]
+fn flush_directory_for_sync(directory: &File) -> std::io::Result<()> {
+    directory.sync_all()
+}
+#[cfg(windows)]
+const DIRECTORY_REQUESTED_ACCESS: &str = "GENERIC_WRITE";
+#[cfg(not(windows))]
+const DIRECTORY_REQUESTED_ACCESS: &str = "read";
+#[cfg(windows)]
+const DIRECTORY_SHARE_MODE: &str = "FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE";
+#[cfg(not(windows))]
+const DIRECTORY_SHARE_MODE: &str = "std-default";
+#[cfg(windows)]
+const DIRECTORY_FLUSH_PRIMITIVE: &str = "FlushFileBuffers";
+#[cfg(not(windows))]
+const DIRECTORY_FLUSH_PRIMITIVE: &str = "File::sync_all";
 fn activation_diagnostic_enabled() -> bool {
     env::var("POA_ACTIVATION_DIAGNOSTIC").as_deref() == Ok("1")
 }
@@ -629,7 +664,7 @@ fn diagnostic_step(
     let cwd = env::current_dir().unwrap_or_default();
     let target_metadata = fs::metadata(target).ok();
     emit(&format!(
-        r#"{{"schema_version":1,"event":"{}","op_id":"{}","step_id":"{}","function":"activate","operation":"{}","source":"{}","target":"{}","native_source":"{}","native_target":"{}","object_type":"{}","source_exists":{},"target_exists":{},"parent_exists":{},"target_readonly":{},"target_size":{},"handle_open":false,"handle_closed":true,"requested_access":"read","share_mode":"std-default","rename_replace_flags":"std-fs-rename","flush_sync_primitive":"File::sync_all","status":"{}","raw_os_error":{},"win32_code":{},"error_text":"{}","cwd":"{}","last_successful_activation_step":"{}"}}"#,
+        r#"{{"schema_version":1,"event":"{}","op_id":"{}","step_id":"{}","function":"activate","operation":"{}","source":"{}","target":"{}","native_source":"{}","native_target":"{}","object_type":"{}","source_exists":{},"target_exists":{},"parent_exists":{},"target_readonly":{},"target_size":{},"handle_open":false,"handle_closed":true,"requested_access":"{}","share_mode":"{}","rename_replace_flags":"std-fs-rename","flush_sync_primitive":"{}","status":"{}","raw_os_error":{},"win32_code":{},"error_text":"{}","cwd":"{}","last_successful_activation_step":"{}"}}"#,
         event_name,
         esc(op),
         step,
@@ -646,6 +681,9 @@ fn diagnostic_step(
             .as_ref()
             .is_some_and(|m| m.permissions().readonly()),
         target_metadata.as_ref().map_or(0, fs::Metadata::len),
+        DIRECTORY_REQUESTED_ACCESS,
+        DIRECTORY_SHARE_MODE,
+        DIRECTORY_FLUSH_PRIMITIVE,
         status,
         raw.map_or("null".into(), |v| v.to_string()),
         raw.map_or("null".into(), |v| v.to_string()),
@@ -685,18 +723,18 @@ fn diagnose_directory_open(op: &str, root: &Path) -> Result<(), String> {
                 op,
                 "diag_flush_begin",
                 "probe_directory_sync",
-                "File::sync_all",
+                DIRECTORY_FLUSH_PRIMITIVE,
                 root,
                 root,
                 "begin",
                 None,
             );
-            handle.sync_all().map_err(|error| {
+            flush_directory_for_sync(&handle).map_err(|error| {
                 diagnostic_step(
                     op,
                     "diag_flush_result",
                     "probe_directory_sync",
-                    "File::sync_all",
+                    DIRECTORY_FLUSH_PRIMITIVE,
                     root,
                     root,
                     "error",
@@ -711,7 +749,7 @@ fn diagnose_directory_open(op: &str, root: &Path) -> Result<(), String> {
                 op,
                 "diag_flush_result",
                 "probe_directory_sync",
-                "File::sync_all",
+                DIRECTORY_FLUSH_PRIMITIVE,
                 root,
                 root,
                 "ok",
@@ -952,21 +990,21 @@ fn activate(op: &str, root: &Path, id: &str) -> Result<(), String> {
         op,
         "diag_flush_begin",
         "parent_directory_sync",
-        "File::sync_all",
+        DIRECTORY_FLUSH_PRIMITIVE,
         &state,
         &state,
         "begin",
         None,
     );
-    directory.sync_all().map_err(|error| {
-        diagnostic_step(op, "diag_flush_result", "parent_directory_sync", "File::sync_all", &state, &state, "error", Some(&error));
+    flush_directory_for_sync(&directory).map_err(|error| {
+        diagnostic_step(op, "diag_flush_result", "parent_directory_sync", DIRECTORY_FLUSH_PRIMITIVE, &state, &state, "error", Some(&error));
         format!("activation step parent_directory_sync failed: source={}; target={}; object_type={}; raw_os_error={:?}; error={error}", state.display(), state.display(), path_type(&state), error.raw_os_error())
     })?;
     diagnostic_step(
         op,
         "diag_flush_result",
         "parent_directory_sync",
-        "File::sync_all",
+        DIRECTORY_FLUSH_PRIMITIVE,
         &state,
         &state,
         "ok",
@@ -1557,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_directory_sync_helper_uses_only_backup_semantics() {
+    fn windows_directory_sync_helper_uses_write_access_and_backup_semantics() {
         let source = include_str!("main.rs");
         let start = source.find("fn open_directory_for_sync").expect("helper");
         let end = source[start..]
@@ -1565,8 +1603,12 @@ mod tests {
             .expect("helper end")
             + start;
         let helper = &source[start..end];
+        assert!(helper.contains("GENERIC_WRITE"));
         assert!(helper.contains("FILE_FLAG_BACKUP_SEMANTICS"));
-        assert!(!helper.contains("share_mode"));
+        assert!(helper.contains("FILE_SHARE_READ_WRITE_DELETE"));
+        assert!(helper.contains("FlushFileBuffers"));
+        assert!(helper.contains("GetLastError"));
+        assert!(!helper.contains(".read(true)"));
     }
 
     #[test]
@@ -1579,7 +1621,8 @@ mod tests {
             + start;
         let helper = &source[start..end];
         assert!(!helper.contains("Command::new"));
-        assert!(!helper.contains("unsafe"));
+        assert!(!helper.to_ascii_lowercase().contains("powershell"));
+        assert!(!helper.contains("retry"));
     }
 
     #[test]
@@ -1601,8 +1644,8 @@ mod tests {
             .expect("directory open")
             + activate;
         let sync = source[activate..]
-            .find("directory.sync_all()")
-            .expect("directory sync")
+            .find("flush_directory_for_sync(&directory)")
+            .expect("directory flush")
             + activate;
         assert!(replace < directory_open && directory_open < sync);
     }
@@ -1614,7 +1657,23 @@ mod tests {
         let body = &source
             [activate..source[activate..].find("fn sqlite(").expect("activate end") + activate];
         assert!(body.contains("open_directory_for_sync(&state).map_err"));
-        assert!(body.contains("directory.sync_all().map_err"));
+        assert!(body.contains("flush_directory_for_sync(&directory).map_err"));
+    }
+
+    #[test]
+    fn activation_success_follows_parent_directory_flush() {
+        let source = include_str!("main.rs");
+        let activate = source.find("fn activate(").expect("activate");
+        let body = &source
+            [activate..source[activate..].find("fn sqlite(").expect("activate end") + activate];
+        let flush = body
+            .find("flush_directory_for_sync(&directory)")
+            .expect("parent flush");
+        let success = body.rfind("Ok(())").expect("activation success");
+        assert!(flush < success);
+        assert!(!body.contains("unwrap()"));
+        assert!(!body.contains("expect("));
+        assert!(!body.contains("retry"));
     }
 
     #[test]
