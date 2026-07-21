@@ -108,14 +108,43 @@ function Write-TreeEvidence {
   }
 }
 
+function Invoke-ActivationPrimitiveProbes {
+  param([string]$Root, [string]$Path)
+  $ProbeRoot = Join-Path $Root 'activation-primitive-probes'
+  New-Item -ItemType Directory -Force $ProbeRoot | Out-Null
+  $Results = [Collections.Generic.List[object]]::new()
+  function Probe([string]$Name, [scriptblock]$Body) {
+    $Started = [Diagnostics.Stopwatch]::StartNew(); $ErrorText = ''; $Code = $null; $Passed = $true
+    try { & $Body } catch { $Passed = $false; $ErrorText = $_.Exception.Message; $Code = ($_.Exception.HResult -band 0xffff) }
+    $Started.Stop()
+    $Record = [ordered]@{schema_version=1;event='diag_primitive_probe_result';probe=$Name;pass=$Passed;win32_code=$Code;raw_os_error=$Code;error_text=$ErrorText;elapsed_ms=$Started.ElapsedMilliseconds;root=$ProbeRoot}
+    Write-DiagnosticRecord $Path $Record
+    $Results.Add([pscustomobject]$Record)
+  }
+  Probe 'temp_file_write_flush' { $p=Join-Path $ProbeRoot 'flush.tmp'; $f=[IO.File]::Create($p); try { $b=[Text.Encoding]::UTF8.GetBytes('x'); $f.Write($b,0,$b.Length); $f.Flush($true) } finally { $f.Dispose() } }
+  Probe 'file_rename_new_target' { $s=Join-Path $ProbeRoot 'rename-new.src'; [IO.File]::WriteAllText($s,'x'); [IO.File]::Move($s,(Join-Path $ProbeRoot 'rename-new.dst')) }
+  Probe 'file_replace_existing_target' { $s=Join-Path $ProbeRoot 'replace.src'; $t=Join-Path $ProbeRoot 'replace.dst'; [IO.File]::WriteAllText($s,'new'); [IO.File]::WriteAllText($t,'old'); [IO.File]::Replace($s,$t,$null) }
+  Probe 'source_handle_open_rename' { $s=Join-Path $ProbeRoot 'source-open.src'; [IO.File]::WriteAllText($s,'x'); $h=[IO.File]::OpenRead($s); try { [IO.File]::Move($s,(Join-Path $ProbeRoot 'source-open.dst')) } finally { $h.Dispose() } }
+  Probe 'target_handle_open_replace' { $s=Join-Path $ProbeRoot 'target-open.src'; $t=Join-Path $ProbeRoot 'target-open.dst'; [IO.File]::WriteAllText($s,'new'); [IO.File]::WriteAllText($t,'old'); $h=[IO.File]::OpenRead($t); try { [IO.File]::Replace($s,$t,$null) } finally { $h.Dispose() } }
+  Probe 'directory_rename' { $s=Join-Path $ProbeRoot 'dir.src'; New-Item -ItemType Directory $s | Out-Null; [IO.Directory]::Move($s,(Join-Path $ProbeRoot 'dir.dst')) }
+  Probe 'directory_open_sync' { $env:POA_ACTIVATION_DIAGNOSTIC='1'; try { $r=Invoke-CapturedExternal $Binary @('diagnose-directory-open','--root',$ProbeRoot) (Join-Path $ProbeRoot 'dir-sync.stdout') (Join-Path $ProbeRoot 'dir-sync.stderr'); if ($r.exit_code -ne 0) { throw [IO.IOException]::new($r.stderr) } } finally { Remove-Item Env:POA_ACTIVATION_DIAGNOSTIC -ErrorAction SilentlyContinue } }
+  Probe 'parent_directory_open_sync' { $parent=Split-Path -Parent $ProbeRoot; $env:POA_ACTIVATION_DIAGNOSTIC='1'; try { $r=Invoke-CapturedExternal $Binary @('diagnose-directory-open','--root',$parent) (Join-Path $ProbeRoot 'parent-sync.stdout') (Join-Path $ProbeRoot 'parent-sync.stderr'); if ($r.exit_code -ne 0) { throw [IO.IOException]::new($r.stderr) } } finally { Remove-Item Env:POA_ACTIVATION_DIAGNOSTIC -ErrorAction SilentlyContinue } }
+  Probe 'remove_directory_open_child' { $d=Join-Path $ProbeRoot 'remove-open'; New-Item -ItemType Directory $d | Out-Null; $p=Join-Path $d 'child'; [IO.File]::WriteAllText($p,'x'); $h=[IO.File]::OpenRead($p); try { [IO.Directory]::Delete($d,$true) } finally { $h.Dispose() } }
+  Probe 'selector_temp_write_replace' { $s=Join-Path $ProbeRoot 'active.tmp'; $t=Join-Path $ProbeRoot 'active'; [IO.File]::WriteAllText($s,'new'); [IO.File]::WriteAllText($t,'old'); [IO.File]::Replace($s,$t,$null) }
+  Probe 'readonly_target' { $s=Join-Path $ProbeRoot 'readonly.src'; $t=Join-Path $ProbeRoot 'readonly.dst'; [IO.File]::WriteAllText($s,'new'); [IO.File]::WriteAllText($t,'old'); [IO.File]::SetAttributes($t,[IO.FileAttributes]::ReadOnly); try { [IO.File]::Replace($s,$t,$null) } finally { if (Test-Path $t) { [IO.File]::SetAttributes($t,[IO.FileAttributes]::Normal) } } }
+  Probe 'deny_share_target' { $s=Join-Path $ProbeRoot 'deny.src'; $t=Join-Path $ProbeRoot 'deny.dst'; [IO.File]::WriteAllText($s,'new'); [IO.File]::WriteAllText($t,'old'); $h=[IO.File]::Open($t,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); try { [IO.File]::Replace($s,$t,$null) } finally { $h.Dispose() } }
+  return @($Results)
+}
+
 function Run-CaseDiagnostic {
   param([string]$CaseId)
-  $Artifact = Join-Path $Base "reports/results/windows-rust-copy-hash-diagnostic-$CaseId"
+  $Artifact = Join-Path $Base "reports/results/windows-rust-activation-access-denied-$CaseId"
   $CaseRoot = Join-Path $Base ("poa-roots/diagnostic-{0}-{1}" -f $CaseId, [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force $Artifact, $CaseRoot | Out-Null
   $Commands = Join-Path $Artifact 'commands.jsonl'
   $ProbeDir = Join-Path $Artifact 'probes'
   New-Item -ItemType Directory -Force $ProbeDir | Out-Null
+  $PrimitiveResults = Invoke-ActivationPrimitiveProbes $CaseRoot (Join-Path $Artifact 'primitive-probes.jsonl')
 
   $SourceForward = $Fixture.Replace('\','/')
   $SourceBackward = $Fixture.Replace('/','\')
@@ -163,6 +192,7 @@ function Run-CaseDiagnostic {
   $Stdout = Join-Path $Artifact 'stdout.log'
   $Stderr = Join-Path $Artifact 'stderr.log'
   $Arguments = @('install','--root',$CaseRoot,'--catalog',$Catalog)
+  $env:POA_ACTIVATION_DIAGNOSTIC = '1'
   if ($CaseId -eq 'CMN-008') {
     $PreOut = Join-Path $Artifact 'prerequisite.stdout.log'
     $PreErr = Join-Path $Artifact 'prerequisite.stderr.log'
@@ -178,7 +208,12 @@ function Run-CaseDiagnostic {
   } else {
     $Run = Invoke-CapturedExternal $Binary $Arguments $Stdout $Stderr
   }
+  Remove-Item Env:POA_ACTIVATION_DIAGNOSTIC -ErrorAction SilentlyContinue
   Copy-Item -LiteralPath $Stdout -Destination (Join-Path $Artifact 'jsonl.log')
+  Copy-Item -LiteralPath $Stdout -Destination (Join-Path $Artifact 'events.jsonl')
+  Get-Content -LiteralPath $Stdout | Where-Object { $_ -match '"event":"diag_' } | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'activation-timeline.jsonl')
+  Get-Content -LiteralPath $Stdout | Where-Object { $_ -match 'diag_handle_' } | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'handles.tsv')
+  Get-Content -LiteralPath $Stdout | Where-Object { $_ -match 'diag_failure_context|"status":"error"' } | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'errors.tsv')
 
   $Journal = Join-Path $CaseRoot 'state/journal/operations.jsonl'
   $Active = Join-Path $CaseRoot 'state/active'
@@ -193,6 +228,8 @@ function Run-CaseDiagnostic {
   Write-DiagnosticRecord $Commands ([ordered]@{event='diag_failure_context';phase='process_result';case_id=$CaseId;binary=$Binary;arguments=$Arguments;exit_code=$Run.exit_code;stdout=$Run.stdout;stderr=$Run.stderr;source_harness_path=$Fixture;source_native_forward=$SourceForward;source_native_backslash=$SourceBackward;source_exists=(Test-Path -LiteralPath $Fixture);source_type='file';source_size=$SourceSize;source_sha256=$SourceHash;case_root=$CaseRoot;case_root_parent_exists=(Test-Path -LiteralPath (Split-Path -Parent $CaseRoot));result_envelope_present=[bool]$Envelope;error_code=$ErrorCode;journal_final=$JournalFinal;active_generation=$ActiveValue;half_activated_generation=$HalfActivated})
 
   Write-TreeEvidence $CaseRoot (Join-Path $Artifact 'tree.tsv') (Join-Path $Artifact 'hashes.tsv')
+  "relative_path`tattributes`treadonly" | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'attributes.tsv')
+  Get-ChildItem -Force -Recurse -LiteralPath $CaseRoot | ForEach-Object { "$([IO.Path]::GetRelativePath($CaseRoot,$_.FullName))`t$($_.Attributes)`t$($_.IsReadOnly)" | Add-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'attributes.tsv') }
   $PowerShellCommand = Get-Command powershell -ErrorAction SilentlyContinue
   $PowerShellLookup = if ($PowerShellCommand) { $PowerShellCommand.Source } else { 'missing' }
   $PowerShellVersion = if ($PowerShellCommand) { & $PowerShellCommand.Source -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' } else { 'unavailable' }
@@ -219,7 +256,10 @@ function Run-CaseDiagnostic {
     result_envelope_present=[bool]$Envelope; error_code=$ErrorCode; underlying_stderr_visible=([bool]$Run.stderr)
     journal_final_state=$JournalFinal; active_generation_after_failure=$ActiveValue; half_activated_generation_present=$HalfActivated
     case_root_preserved=$true
+    activation_primitive_probes="$(@($PrimitiveResults).Count)/12"
   } | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'summary.json')
+  if (Test-Path (Join-Path $CaseRoot 'state/journal')) { Copy-Item -Recurse -Force -LiteralPath (Join-Path $CaseRoot 'state/journal') -Destination (Join-Path $Artifact 'journal') }
+  if (Test-Path (Join-Path $CaseRoot 'state')) { Copy-Item -Recurse -Force -LiteralPath (Join-Path $CaseRoot 'state') -Destination (Join-Path $Artifact 'state') }
   Copy-Item -Recurse -Force -LiteralPath $CaseRoot -Destination (Join-Path $Artifact 'case-root')
 }
 

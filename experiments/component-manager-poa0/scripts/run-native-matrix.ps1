@@ -6,7 +6,8 @@ param(
   [ValidateSet('strict','rust-implementation-fix')][string]$VerificationMode = 'strict',
   [string]$VerificationBaseline = '',
   [string]$VerificationTarget = '',
-  [string]$WorkflowHead = ''
+  [string]$WorkflowHead = '',
+  [switch]$SkipFrozenVerification
 )
 $ErrorActionPreference = 'Stop'
 $Base = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
@@ -17,7 +18,10 @@ if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
   throw 'DiagnosticCases is only valid in diagnostic mode'
 }
 Set-Location $Base
-& "$Base/scripts/verify-frozen-fixtures.ps1" -Mode $VerificationMode -Baseline $VerificationBaseline -Target $VerificationTarget -WorkflowHead $WorkflowHead
+if ($SkipFrozenVerification -and $DiagnosticMode -ne 'windows-rust-copy-hash') { throw 'SkipFrozenVerification is diagnostic-only' }
+if (-not $SkipFrozenVerification) {
+  & "$Base/scripts/verify-frozen-fixtures.ps1" -Mode $VerificationMode -Baseline $VerificationBaseline -Target $VerificationTarget -WorkflowHead $WorkflowHead
+}
 & "$Base/scripts/assert-windows-native-preflight.ps1" -Implementation $Implementation -DiagnosticMode $DiagnosticMode -DiagnosticCases $DiagnosticCases
 New-Item -ItemType Directory -Force "$Base/bin", "$Base/.caches/cargo-home", "$Base/.caches/cargo-target", "$Base/.caches/go-build", "$Base/.caches/go-mod", "$Base/.caches/go-path", "$Base/reports/results" | Out-Null
 if ($Implementation -eq 'rust') {

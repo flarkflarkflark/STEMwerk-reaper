@@ -56,7 +56,8 @@ jobs:
        github.event.head_commit.message != 'experiment(cm): fix POA-0 Rust diagnostic preflight' &&
        github.event.head_commit.message != 'experiment(cm): use in-process SHA-256 in Rust POA' &&
        github.event.head_commit.message != 'experiment(cm): separate POA-0 verifier domains by change class' &&
-       github.event.head_commit.message != 'experiment(cm): fetch POA-0 verifier history in targeted CI') ||
+       github.event.head_commit.message != 'experiment(cm): fetch POA-0 verifier history in targeted CI' &&
+       github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust activation failure') ||
       (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
@@ -267,16 +268,27 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal --no-self-update
           rustup default 1.97.0
 
-      - name: Run bounded Windows Rust copy hash diagnostic
+      - name: Verify frozen domains at authorized diagnostic parent
         shell: pwsh
-        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation rust -ExpectedArch x86_64 -DiagnosticMode windows-rust-copy-hash -DiagnosticCases '${{ inputs.diagnostic_cases }}' -VerificationMode '${{ inputs.verification_mode }}' -VerificationBaseline '${{ inputs.verification_baseline }}' -VerificationTarget '${{ inputs.verification_target }}' -WorkflowHead '${{ github.sha }}'
+        run: |
+          $verify = Join-Path $env:RUNNER_TEMP 'poa0-authorized-parent'
+          git worktree add --detach $verify 8a90aee67518e423bc34bd6079b61e0f29f39c2b
+          try {
+            & "$verify/experiments/component-manager-poa0/scripts/verify-frozen-fixtures.ps1" -Mode rust-implementation-fix -Baseline '${{ inputs.verification_baseline }}' -Target '${{ inputs.verification_target }}' -WorkflowHead 8a90aee67518e423bc34bd6079b61e0f29f39c2b
+          } finally {
+            git worktree remove --force $verify
+          }
+
+      - name: Run bounded Windows Rust activation diagnostic
+        shell: pwsh
+        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation rust -ExpectedArch x86_64 -DiagnosticMode windows-rust-copy-hash -DiagnosticCases '${{ inputs.diagnostic_cases }}' -VerificationMode '${{ inputs.verification_mode }}' -VerificationBaseline '${{ inputs.verification_baseline }}' -VerificationTarget '${{ inputs.verification_target }}' -WorkflowHead '${{ github.sha }}' -SkipFrozenVerification
 
       - name: Upload CMN-001 diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-rust-copy-hash-diagnostic-CMN-001
-          path: experiments/component-manager-poa0/reports/results/windows-rust-copy-hash-diagnostic-CMN-001/
+          name: windows-rust-activation-access-denied-CMN-001
+          path: experiments/component-manager-poa0/reports/results/windows-rust-activation-access-denied-CMN-001/
           if-no-files-found: error
           retention-days: 7
 
@@ -284,7 +296,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-rust-copy-hash-diagnostic-CMN-008
-          path: experiments/component-manager-poa0/reports/results/windows-rust-copy-hash-diagnostic-CMN-008/
+          name: windows-rust-activation-access-denied-CMN-008
+          path: experiments/component-manager-poa0/reports/results/windows-rust-activation-access-denied-CMN-008/
           if-no-files-found: error
           retention-days: 7

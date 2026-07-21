@@ -140,6 +140,146 @@ fn write_sync(path: &Path, data: &str) -> Result<(), String> {
     f.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())
 }
+fn activation_diagnostic_enabled() -> bool {
+    env::var("POA_ACTIVATION_DIAGNOSTIC").as_deref() == Ok("1")
+}
+fn path_type(path: &Path) -> &'static str {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => "file",
+        Ok(metadata) if metadata.file_type().is_dir() => "directory",
+        Ok(metadata) if metadata.file_type().is_symlink() => "symlink",
+        Ok(_) => "other",
+        Err(_) => "missing",
+    }
+}
+#[allow(clippy::too_many_arguments)]
+fn diagnostic_step(
+    op: &str,
+    event_name: &str,
+    step: &str,
+    operation: &str,
+    source: &Path,
+    target: &Path,
+    status: &str,
+    error: Option<&std::io::Error>,
+) {
+    if !activation_diagnostic_enabled() {
+        return;
+    }
+    let raw = error.and_then(std::io::Error::raw_os_error);
+    let message = error.map(ToString::to_string).unwrap_or_default();
+    let cwd = env::current_dir().unwrap_or_default();
+    let target_metadata = fs::metadata(target).ok();
+    emit(&format!(
+        r#"{{"schema_version":1,"event":"{}","op_id":"{}","step_id":"{}","function":"activate","operation":"{}","source":"{}","target":"{}","native_source":"{}","native_target":"{}","object_type":"{}","source_exists":{},"target_exists":{},"parent_exists":{},"target_readonly":{},"target_size":{},"handle_open":false,"handle_closed":true,"requested_access":"read","share_mode":"std-default","rename_replace_flags":"std-fs-rename","flush_sync_primitive":"File::sync_all","status":"{}","raw_os_error":{},"win32_code":{},"error_text":"{}","cwd":"{}","last_successful_activation_step":"{}"}}"#,
+        event_name,
+        esc(op),
+        step,
+        operation,
+        esc(&source.display().to_string()),
+        esc(&target.display().to_string()),
+        esc(&source.display().to_string()),
+        esc(&target.display().to_string()),
+        path_type(target),
+        source.exists(),
+        target.exists(),
+        target.parent().is_some_and(Path::exists),
+        target_metadata
+            .as_ref()
+            .is_some_and(|m| m.permissions().readonly()),
+        target_metadata.as_ref().map_or(0, fs::Metadata::len),
+        status,
+        raw.map_or("null".into(), |v| v.to_string()),
+        raw.map_or("null".into(), |v| v.to_string()),
+        esc(&message),
+        esc(&cwd.display().to_string()),
+        match step {
+            "selector_temp_write" => "generation_built",
+            "selector_replace" => "selector_temp_flushed",
+            _ => "selector_replace",
+        }
+    ));
+}
+fn diagnose_directory_open(op: &str, root: &Path) -> Result<(), String> {
+    diagnostic_step(
+        op,
+        "diag_handle_open",
+        "probe_directory_open",
+        "File::open",
+        root,
+        root,
+        "begin",
+        None,
+    );
+    match File::open(root) {
+        Ok(handle) => {
+            diagnostic_step(
+                op,
+                "diag_handle_open",
+                "probe_directory_open",
+                "File::open",
+                root,
+                root,
+                "ok",
+                None,
+            );
+            diagnostic_step(
+                op,
+                "diag_flush_begin",
+                "probe_directory_sync",
+                "File::sync_all",
+                root,
+                root,
+                "begin",
+                None,
+            );
+            handle.sync_all().map_err(|error| {
+                diagnostic_step(
+                    op,
+                    "diag_flush_result",
+                    "probe_directory_sync",
+                    "File::sync_all",
+                    root,
+                    root,
+                    "error",
+                    Some(&error),
+                );
+                format!(
+                    "directory sync probe failed: raw_os_error={:?}; {error}",
+                    error.raw_os_error()
+                )
+            })?;
+            diagnostic_step(
+                op,
+                "diag_flush_result",
+                "probe_directory_sync",
+                "File::sync_all",
+                root,
+                root,
+                "ok",
+                None,
+            );
+            Ok(())
+        }
+        Err(error) => {
+            diagnostic_step(
+                op,
+                "diag_failure_context",
+                "probe_directory_open",
+                "File::open",
+                root,
+                root,
+                "error",
+                Some(&error),
+            );
+            Err(format!(
+                "directory open probe failed: object_type={}; raw_os_error={:?}; {error}",
+                path_type(root),
+                error.raw_os_error()
+            ))
+        }
+    }
+}
 fn active(root: &Path) -> String {
     let Ok(s) = fs::read_to_string(root.join("state/active")) else {
         return String::new();
@@ -261,17 +401,130 @@ fn operation_hash(
         }
     }
 }
-fn activate(root: &Path, id: &str) -> Result<(), String> {
+fn activate(op: &str, root: &Path, id: &str) -> Result<(), String> {
     let state = root.join("state");
     let tmp = state.join("active.tmp");
+    let active_path = state.join("active");
+    diagnostic_step(
+        op,
+        "diag_activation_step_begin",
+        "selector_temp_write",
+        "write_and_flush_file",
+        &tmp,
+        &tmp,
+        "begin",
+        None,
+    );
     write_sync(
         &tmp,
         &format!("{{\"schema_version\":1,\"generation_id\":\"{id}\"}}\n"),
-    )?;
-    fs::rename(&tmp, state.join("active")).map_err(|e| e.to_string())?;
-    File::open(state)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| e.to_string())
+    )
+    .map_err(|error| format!("activation step selector_temp_write failed: {error}"))?;
+    diagnostic_step(
+        op,
+        "diag_activation_step_result",
+        "selector_temp_write",
+        "write_and_flush_file",
+        &tmp,
+        &tmp,
+        "ok",
+        None,
+    );
+    diagnostic_step(
+        op,
+        "diag_replace_begin",
+        "selector_replace",
+        "std::fs::rename",
+        &tmp,
+        &active_path,
+        "begin",
+        None,
+    );
+    fs::rename(&tmp, &active_path).map_err(|error| {
+        diagnostic_step(
+            op,
+            "diag_replace_result",
+            "selector_replace",
+            "std::fs::rename",
+            &tmp,
+            &active_path,
+            "error",
+            Some(&error),
+        );
+        format!(
+            "activation step selector_replace failed: {error}; raw_os_error={:?}",
+            error.raw_os_error()
+        )
+    })?;
+    diagnostic_step(
+        op,
+        "diag_replace_result",
+        "selector_replace",
+        "std::fs::rename",
+        &tmp,
+        &active_path,
+        "ok",
+        None,
+    );
+    diagnostic_step(
+        op,
+        "diag_handle_open",
+        "parent_directory_open",
+        "File::open",
+        &state,
+        &state,
+        "begin",
+        None,
+    );
+    let directory = File::open(&state).map_err(|error| {
+        diagnostic_step(op, "diag_failure_context", "parent_directory_open", "File::open", &state, &state, "error", Some(&error));
+        format!("activation step parent_directory_open failed: source={}; target={}; object_type={}; raw_os_error={:?}; error={error}", state.display(), state.display(), path_type(&state), error.raw_os_error())
+    })?;
+    diagnostic_step(
+        op,
+        "diag_handle_open",
+        "parent_directory_open",
+        "File::open",
+        &state,
+        &state,
+        "ok",
+        None,
+    );
+    diagnostic_step(
+        op,
+        "diag_flush_begin",
+        "parent_directory_sync",
+        "File::sync_all",
+        &state,
+        &state,
+        "begin",
+        None,
+    );
+    directory.sync_all().map_err(|error| {
+        diagnostic_step(op, "diag_flush_result", "parent_directory_sync", "File::sync_all", &state, &state, "error", Some(&error));
+        format!("activation step parent_directory_sync failed: source={}; target={}; object_type={}; raw_os_error={:?}; error={error}", state.display(), state.display(), path_type(&state), error.raw_os_error())
+    })?;
+    diagnostic_step(
+        op,
+        "diag_flush_result",
+        "parent_directory_sync",
+        "File::sync_all",
+        &state,
+        &state,
+        "ok",
+        None,
+    );
+    diagnostic_step(
+        op,
+        "diag_handle_close",
+        "parent_directory_close",
+        "drop(File)",
+        &state,
+        &state,
+        "ok",
+        None,
+    );
+    Ok(())
 }
 fn sqlite(root: &Path, sql: &str) -> Result<(), String> {
     let mut child = Command::new("sqlite3")
@@ -474,7 +727,19 @@ fn install(op: &str, root: &Path, catalog: &Path) -> Result<(), String> {
             "preserved",
         );
     }
-    activate(root, &id)?;
+    if let Err(error) = activate(op, root, &id) {
+        if activation_diagnostic_enabled() {
+            return fail(
+                op,
+                "ACTIVATION_IO_ERROR",
+                &error,
+                &active(root),
+                &previous,
+                "recovery_required",
+            );
+        }
+        return Err(error);
+    }
     event(op, "generation_activated");
     if fault == "kill_after_active_swap" {
         process::abort()
@@ -653,7 +918,7 @@ fn rollback(op: &str, root: &Path) -> Result<(), String> {
             "preserved",
         );
     }
-    activate(root, &previous)?;
+    activate(op, root, &previous)?;
     event(op, "rollback_completed");
     event(op, "op_completed");
     result(true, op, "", "rolled back", &previous, &a, "committed", "");
@@ -748,6 +1013,7 @@ fn main() {
         "rollback" => rollback(&op, &root),
         "run-pin" => run_pin(&op, &root),
         "recover" => rebuild(&op, &root),
+        "diagnose-directory-open" => diagnose_directory_open(&op, &root),
         _ => Err("unknown command".into()),
     };
     if let Err(e) = r {
