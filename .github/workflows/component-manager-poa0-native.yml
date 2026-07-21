@@ -49,9 +49,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  classify-push:
+    name: Classify push before native matrix expansion
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_required: ${{ steps.classify.outputs.matrix_required }}
+      classification: ${{ steps.classify.outputs.classification }}
+    steps:
+      - name: Checkout commit for exact push classification
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Classify exact orchestration-only push
+        id: classify
+        shell: bash
+        env:
+          EXPECTED_PARENT: 46f18ae8331b84e180bd00e29b9fcb882c8a25c0
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != push ]]; then
+            echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
+            echo 'classification=not-push' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          actual_parent=$(git rev-parse "$GITHUB_SHA^")
+          mapfile -t changed_paths < <(git diff --name-only "$actual_parent" "$GITHUB_SHA")
+          allowed=true
+          for path in "${changed_paths[@]}"; do
+            case "$path" in
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/reports/WINDOWS_PINNED_SQLITE_PROVISIONING_FIX.md)
+                ;;
+              *)
+                allowed=false
+                ;;
+            esac
+          done
+
+          if [[ "$actual_parent" == "$EXPECTED_PARENT" && ${#changed_paths[@]} -gt 0 && "$allowed" == true ]]; then
+            echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
+            echo 'classification=orchestration-only' >>"$GITHUB_OUTPUT"
+          else
+            echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
+            echo 'classification=other' >>"$GITHUB_OUTPUT"
+          fi
+
   native:
+    needs: classify-push
     if: >-
-      (github.event_name == 'push' &&
+      needs.classify-push.outputs.matrix_required == 'true' &&
+      ((github.event_name == 'push' &&
        github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust copy hash failure' &&
        github.event.head_commit.message != 'experiment(cm): fix POA-0 Rust diagnostic preflight' &&
        github.event.head_commit.message != 'experiment(cm): use in-process SHA-256 in Rust POA' &&
@@ -60,7 +110,7 @@ jobs:
        github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust activation failure' &&
        github.event.head_commit.message != 'experiment(cm): open Windows state directory for durability sync' &&
        github.event.head_commit.message != 'experiment(cm): probe POA-0 Windows selector durability primitives') ||
-      (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
+      (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal'))
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
       fail-fast: false
@@ -269,6 +319,71 @@ jobs:
         run: |
           rustup toolchain install 1.97.0 --profile minimal --no-self-update
           rustup default 1.97.0
+
+      # POA_ONLY: this CLI is an ephemeral diagnostic dependency. Component
+      # Manager product/runtime code must not depend on Chocolatey or sqlite3.
+      - name: Provision pinned SQLite CLI for targeted Windows Rust diagnostics
+        if: runner.os == 'Windows' && inputs.diagnostic_mode == 'windows-rust-copy-hash' && inputs.diagnostic_cases == 'CMN-001,CMN-008'
+        shell: pwsh
+        run: |
+          choco install sqlite `
+            --version=3.53.3 `
+            --yes `
+            --no-progress `
+            --limit-output
+          if ($LASTEXITCODE -ne 0) { throw "Chocolatey sqlite install failed: $LASTEXITCODE" }
+
+          $packageLines = @(choco list --exact sqlite --limit-output)
+          if ($LASTEXITCODE -ne 0) { throw "Chocolatey sqlite package query failed: $LASTEXITCODE" }
+          $packages = @($packageLines | Where-Object { $_ -match '^sqlite\|' })
+          if ($packages.Count -ne 1 -or $packages[0] -ne 'sqlite|3.53.3') {
+            throw "Expected exactly sqlite|3.53.3, got: $($packages -join ', ')"
+          }
+
+          $candidates = @(Get-Command sqlite3.exe -All -CommandType Application -ErrorAction Stop)
+          if ($candidates.Count -ne 1) { throw "Expected exactly one sqlite3.exe candidate, got $($candidates.Count)" }
+          $sqlite = Get-Command sqlite3.exe -ErrorAction Stop
+          $sqlitePath = $sqlite.Source
+          if (-not [IO.Path]::IsPathFullyQualified($sqlitePath)) { throw "SQLite path is not absolute: $sqlitePath" }
+          if (-not (Test-Path -LiteralPath $sqlitePath -PathType Leaf)) { throw "SQLite executable is missing: $sqlitePath" }
+          if (-not $sqlitePath.EndsWith('sqlite3.exe', [StringComparison]::OrdinalIgnoreCase)) { throw "Unexpected SQLite executable: $sqlitePath" }
+          $chocolateyRoot = [IO.Path]::GetFullPath($env:ChocolateyInstall).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          if (-not $sqlitePath.StartsWith("$chocolateyRoot$([IO.Path]::DirectorySeparatorChar)", [StringComparison]::OrdinalIgnoreCase)) {
+            throw "SQLite executable is outside Chocolatey: $sqlitePath"
+          }
+
+          $sqliteVersion = (& $sqlitePath --version)
+          if ($LASTEXITCODE -ne 0) { throw "SQLite version command failed: $LASTEXITCODE" }
+          if ($sqliteVersion -notmatch '^3\.53\.3(?:\s|$)') { throw "Unexpected SQLite version: $sqliteVersion" }
+          $sqliteDirectory = Split-Path -Parent $sqlitePath
+          "STEMWERK_POA0_SQLITE_EXE=$sqlitePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $sqliteDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "SQLITE_PACKAGE_VERSION_INSTALLED=3.53.3"
+          "SQLITE_EXE_PATH=$sqlitePath"
+          "SQLITE_EXE_VERSION=$sqliteVersion"
+
+      - name: Validate pinned SQLite CLI in a new process
+        if: runner.os == 'Windows' && inputs.diagnostic_mode == 'windows-rust-copy-hash' && inputs.diagnostic_cases == 'CMN-001,CMN-008'
+        shell: pwsh
+        run: |
+          if (-not $env:STEMWERK_POA0_SQLITE_EXE) { throw 'STEMWERK_POA0_SQLITE_EXE is missing' }
+          if (-not [IO.Path]::IsPathFullyQualified($env:STEMWERK_POA0_SQLITE_EXE)) { throw 'STEMWERK_POA0_SQLITE_EXE is not absolute' }
+          if (-not (Test-Path -LiteralPath $env:STEMWERK_POA0_SQLITE_EXE -PathType Leaf)) { throw 'STEMWERK_POA0_SQLITE_EXE does not exist' }
+          $commands = @(Get-Command sqlite3.exe -All -CommandType Application -ErrorAction Stop)
+          if ($commands.Count -ne 1) { throw "Expected exactly one visible sqlite3.exe, got $($commands.Count)" }
+          $command = Get-Command sqlite3.exe -ErrorAction Stop
+          if ($command.Source -ne $env:STEMWERK_POA0_SQLITE_EXE) { throw "PATH/env SQLite mismatch: $($command.Source)" }
+          $whereResults = @(where.exe sqlite3.exe)
+          if ($LASTEXITCODE -ne 0 -or $whereResults.Count -ne 1) { throw "Expected exactly one where.exe result, got $($whereResults.Count)" }
+          $explicitVersion = (& $env:STEMWERK_POA0_SQLITE_EXE --version)
+          if ($LASTEXITCODE -ne 0 -or $explicitVersion -notmatch '^3\.53\.3(?:\s|$)') { throw "Explicit SQLite validation failed: $explicitVersion" }
+          $pathVersion = (sqlite3.exe --version)
+          if ($LASTEXITCODE -ne 0 -or $pathVersion -notmatch '^3\.53\.3(?:\s|$)') { throw "PATH SQLite validation failed: $pathVersion" }
+          "SQLITE_GET_COMMAND_RESULT=$($command.Source)"
+          "SQLITE_WHERE_RESULT=$($whereResults[0])"
+          'SQLITE_GITHUB_PATH_VISIBLE=yes'
+          'SQLITE_ENV_VISIBLE=yes'
+          'SQLITE_NEW_PROCESS_VISIBLE=yes'
 
       - name: Verify frozen domains at authorized diagnostic parent
         shell: pwsh
