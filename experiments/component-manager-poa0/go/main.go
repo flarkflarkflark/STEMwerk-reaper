@@ -130,14 +130,6 @@ func hashFile(path string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
-func syncDir(path string) error {
-	d, e := os.Open(path)
-	if e != nil {
-		return e
-	}
-	defer d.Close()
-	return d.Sync()
-}
 func activate(root, id string) error {
 	state := filepath.Join(root, "state")
 	tmp := filepath.Join(state, "active.tmp")
