@@ -1622,6 +1622,7 @@ mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
 if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then
   log "Apple Silicon Repair requires a complete bundled payload; online fallback is unsupported"
   set_status "deps_failed" "apple_silicon_requires_bundled_payload"
+  write_ready_to_go_state "mps" "missing" "missing" "apple_silicon_requires_bundled_payload" "missing"
   write_state
   exit 1
 fi
@@ -1631,6 +1632,7 @@ if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" = "present
   log "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed"
   log "MACOS_PAYLOAD_PREFLIGHT_REASON=wheelhouse_missing"
   set_status "deps_failed" "payload_preflight_failed"
+  write_ready_to_go_state "mps" "missing" "missing" "payload_preflight_failed" "missing"
   write_state
   exit 1
 fi
@@ -1657,6 +1659,7 @@ if [ "${MAC_ARCH}" = "arm64" ]; then
     log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
     log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
     set_status "deps_failed" "payload_preflight_failed"
+    write_ready_to_go_state "mps" "missing" "missing" "payload_preflight_failed" "missing"
     write_state
     exit 1
   fi

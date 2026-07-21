@@ -166,6 +166,12 @@ def run_arm64_payload_gate_fixture(tmp_path: Path, payload_state: str):
     sentinel = runtime / ".venv" / "sentinel"
     sentinel.parent.mkdir(parents=True)
     sentinel.write_text("preserved\n", encoding="utf-8")
+    ready_to_go = runtime / "state" / "ready_to_go.env"
+    ready_to_go.parent.mkdir(parents=True)
+    ready_to_go.write_text(
+        "READY_TO_GO_STATUS=ok\nMAIN_RUNTIME_STATUS=ok\n",
+        encoding="utf-8",
+    )
 
     def posix(path: Path) -> str:
         result = subprocess.run(
@@ -1078,14 +1084,34 @@ def test_apple_silicon_repair_uses_one_complete_exact_offline_core_transaction()
 
 def test_arm64_requires_bundled_payload_before_mutation(tmp_path):
     result, state, sentinel, invoked = run_arm64_payload_gate_fixture(tmp_path, "missing")
+    ready_to_go = (sentinel.parents[1] / "state" / "ready_to_go.env").read_text(encoding="utf-8")
     assert result.returncode != 0
     assert "STATUS_REASON=apple_silicon_requires_bundled_payload" in state
     assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state
     assert sentinel.read_text(encoding="utf-8") == "preserved\n"
+    assert "READY_TO_GO_STATUS=missing" in ready_to_go
+    assert "MAIN_RUNTIME_STATUS=missing" in ready_to_go
+    assert "apple_silicon_requires_bundled_payload" in ready_to_go
     assert not (sentinel.parents[1] / "bin").exists()
     assert not (sentinel.parents[1] / "python").exists()
     assert not invoked.exists()
     print("MACOS_APPLE_SILICON_BUNDLED_PAYLOAD_REQUIRED_TEST=PASS")
+
+
+def test_arm64_missing_payload_reconciles_ready_state_before_exit():
+    script = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    gate_start = script.index(
+        'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then'
+    )
+    gate_end = script.index("\nfi", gate_start)
+    gate = script[gate_start:gate_end]
+
+    reconcile = (
+        'write_ready_to_go_state "mps" "missing" "missing" '
+        '"apple_silicon_requires_bundled_payload" "missing"'
+    )
+    assert reconcile in gate
+    assert gate.index(reconcile) < gate.index("write_state") < gate.index("exit 1")
 
 
 def test_damaged_arm64_payload_without_wheelhouse_fails_before_mutation(tmp_path):
