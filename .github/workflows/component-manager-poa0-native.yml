@@ -58,7 +58,8 @@ jobs:
        github.event.head_commit.message != 'experiment(cm): separate POA-0 verifier domains by change class' &&
        github.event.head_commit.message != 'experiment(cm): fetch POA-0 verifier history in targeted CI' &&
        github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust activation failure' &&
-       github.event.head_commit.message != 'experiment(cm): open Windows state directory for durability sync') ||
+       github.event.head_commit.message != 'experiment(cm): open Windows state directory for durability sync' &&
+       github.event.head_commit.message != 'experiment(cm): probe POA-0 Windows selector durability primitives') ||
       (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal')
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
@@ -288,8 +289,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-rust-activation-access-denied-CMN-001
-          path: experiments/component-manager-poa0/reports/results/windows-rust-activation-access-denied-CMN-001/
+          name: windows-selector-durability-CMN-001
+          path: experiments/component-manager-poa0/reports/results/windows-selector-durability-CMN-001/
           if-no-files-found: error
           retention-days: 7
 
@@ -297,7 +298,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-rust-activation-access-denied-CMN-008
-          path: experiments/component-manager-poa0/reports/results/windows-rust-activation-access-denied-CMN-008/
+          name: windows-selector-durability-CMN-008
+          path: experiments/component-manager-poa0/reports/results/windows-selector-durability-CMN-008/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows selector durability probes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-selector-durability-probes
+          path: experiments/component-manager-poa0/reports/results/windows-selector-durability-probes/
           if-no-files-found: error
           retention-days: 7

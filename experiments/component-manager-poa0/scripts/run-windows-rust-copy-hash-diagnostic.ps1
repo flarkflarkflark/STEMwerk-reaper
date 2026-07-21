@@ -138,7 +138,7 @@ function Invoke-ActivationPrimitiveProbes {
 
 function Run-CaseDiagnostic {
   param([string]$CaseId)
-  $Artifact = Join-Path $Base "reports/results/windows-rust-activation-access-denied-$CaseId"
+  $Artifact = Join-Path $Base "reports/results/windows-selector-durability-$CaseId"
   $CaseRoot = Join-Path $Base ("poa-roots/diagnostic-{0}-{1}" -f $CaseId, [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force $Artifact, $CaseRoot | Out-Null
   $Commands = Join-Path $Artifact 'commands.jsonl'
@@ -260,8 +260,35 @@ function Run-CaseDiagnostic {
   } | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'summary.json')
   if (Test-Path (Join-Path $CaseRoot 'state/journal')) { Copy-Item -Recurse -Force -LiteralPath (Join-Path $CaseRoot 'state/journal') -Destination (Join-Path $Artifact 'journal') }
   if (Test-Path (Join-Path $CaseRoot 'state')) { Copy-Item -Recurse -Force -LiteralPath (Join-Path $CaseRoot 'state') -Destination (Join-Path $Artifact 'state') }
+  foreach ($ProbeEvidence in @('api-probes.jsonl','win32-errors.tsv','flags.tsv','selector-hashes.tsv','process-crash-probes.tsv')) {
+    Copy-Item -Force -LiteralPath (Join-Path $ProbeArtifact $ProbeEvidence) -Destination (Join-Path $Artifact $ProbeEvidence)
+  }
   Copy-Item -Recurse -Force -LiteralPath $CaseRoot -Destination (Join-Path $Artifact 'case-root')
 }
 
 Set-Location $Base
+$ProbeArtifact = Join-Path $Base 'reports/results/windows-selector-durability-probes'
+$ProbeRoot = Join-Path $Base ("poa-roots/durability-probes-{0}" -f [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $ProbeArtifact, $ProbeRoot | Out-Null
+$ProbeStdout = Join-Path $ProbeArtifact 'api-probes.jsonl'
+$ProbeStderr = Join-Path $ProbeArtifact 'stderr.log'
+$env:POA_ACTIVATION_DIAGNOSTIC = '1'
+try {
+  $ProbeRun = Invoke-CapturedExternal $Binary @('diagnose-selector-durability','--root',$ProbeRoot) $ProbeStdout $ProbeStderr
+} finally {
+  Remove-Item Env:POA_ACTIVATION_DIAGNOSTIC -ErrorAction SilentlyContinue
+}
+if ($ProbeRun.exit_code -ne 0) { throw "Windows selector durability probes failed: $($ProbeRun.stderr)" }
+$ProbeRecords = @(Get-Content -LiteralPath $ProbeStdout | ForEach-Object { $_ | ConvertFrom-Json })
+if ($ProbeRecords.Count -ne 18) { throw "Expected 18 durability probes, got $($ProbeRecords.Count)" }
+Copy-Item -LiteralPath $ProbeStdout -Destination (Join-Path $ProbeArtifact 'activation-timeline.jsonl')
+$ProbeRecords | Where-Object { $_.win32_code -ne 0 } | ForEach-Object { "$($_.candidate_id)`t$($_.api)`t$($_.win32_code)" } | Set-Content -Encoding utf8NoBOM (Join-Path $ProbeArtifact 'win32-errors.tsv')
+$ProbeRecords | ForEach-Object { "$($_.candidate_id)`t$($_.api)`t$($_.flags)`t$($_.handle_access)`t$($_.handle_share)" } | Set-Content -Encoding utf8NoBOM (Join-Path $ProbeArtifact 'flags.tsv')
+Get-ChildItem -File -Recurse -LiteralPath $ProbeRoot | ForEach-Object { "$([IO.Path]::GetRelativePath($ProbeRoot,$_.FullName))`t$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())" } | Set-Content -Encoding utf8NoBOM (Join-Path $ProbeArtifact 'selector-hashes.tsv')
+$ProbeRecords | Where-Object { $_.candidate_id -ge 16 } | ConvertTo-Csv -Delimiter "`t" -NoTypeInformation | Set-Content -Encoding utf8NoBOM (Join-Path $ProbeArtifact 'process-crash-probes.tsv')
+Copy-Item -LiteralPath $ProbeStdout -Destination (Join-Path $ProbeArtifact 'stdout.log')
+Copy-Item -LiteralPath $ProbeStdout -Destination (Join-Path $ProbeArtifact 'events.jsonl')
+Write-TreeEvidence $ProbeRoot (Join-Path $ProbeArtifact 'tree.tsv') (Join-Path $ProbeArtifact 'selector-hashes-full.tsv')
+[ordered]@{schema_version=1;probe_count=$ProbeRecords.Count;process_exit_code=$ProbeRun.exit_code;power_loss_claim=$false} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $ProbeArtifact 'summary.json')
+Copy-Item -Recurse -Force -LiteralPath $ProbeRoot -Destination (Join-Path $ProbeArtifact 'case-root')
 foreach ($CaseId in $Cases.Split(',')) { Run-CaseDiagnostic $CaseId }
