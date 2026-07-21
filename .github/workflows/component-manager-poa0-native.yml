@@ -13,6 +13,7 @@ on:
           - windows-rust-copy-hash
           - windows-rust-extended
           - windows-go-durability
+          - macos-lease004
       diagnostic_cases:
         description: Fail-closed case allowlist for the Windows Rust diagnostic
         required: true
@@ -23,6 +24,7 @@ on:
           - CMN-008
           - fixed-windows-rust-casepool
           - fixed-windows-go-durability
+          - fixed-macos-lease-pool
       verification_mode:
         description: Fail-closed frozen-verification policy
         required: true
@@ -72,7 +74,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: f5788a492f415b959c5c9de861f92d3a19bb3050
+          EXPECTED_PARENT: a28dea9393296621ab3297a689be0e0920d13609
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -86,7 +88,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/go/main.go|experiments/component-manager-poa0/go/syncdir_windows.go|experiments/component-manager-poa0/go/syncdir_nonwindows.go|experiments/component-manager-poa0/go/syncdir_windows_test.go|experiments/component-manager-poa0/reports/GO_WINDOWS_DURABILITY_CORRECTION.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/rust/src/main.rs|experiments/component-manager-poa0/go/process_identity_darwin.go|experiments/component-manager-poa0/go/process_identity_darwin_test.go|experiments/component-manager-poa0/harness/lease-policy-tests.sh|experiments/component-manager-poa0/reports/MACOS_LEASE004_PROCESS_IDENTITY_FIX.md)
                 ;;
               *)
                 allowed=false
@@ -96,7 +98,7 @@ jobs:
 
           if [[ "$actual_parent" == "$EXPECTED_PARENT" && ${#changed_paths[@]} -gt 0 && "$allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
-            echo 'classification=orchestration-only' >>"$GITHUB_OUTPUT"
+            echo 'classification=macos-lease004-only' >>"$GITHUB_OUTPUT"
           else
             echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
             echo 'classification=other' >>"$GITHUB_OUTPUT"
@@ -266,6 +268,121 @@ jobs:
           path: |
             experiments/component-manager-poa0/reports/results/
             experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-lease004:
+    if: github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'macos-lease004'
+    name: macOS arm64 Rust lease process identity
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout dispatched commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Assert fixed macOS lease selection and verifier history
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.diagnostic_cases }}' = fixed-macos-lease-pool
+          test '${{ inputs.verification_mode }}' = rust-implementation-fix
+          test '${{ inputs.verification_baseline }}' = 9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b
+          test '${{ inputs.verification_target }}' = ec14fdf523524bbd9aec34d429f0b6a5b673a701
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          git cat-file -e '9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b^{commit}'
+          git cat-file -e 'ec14fdf523524bbd9aec34d429f0b6a5b673a701^{commit}'
+          git merge-base --is-ancestor 9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b ec14fdf523524bbd9aec34d429f0b6a5b673a701
+          git merge-base --is-ancestor ec14fdf523524bbd9aec34d429f0b6a5b673a701 "$GITHUB_SHA"
+          echo 'MACOS_LEASE_CASEPOOL=LEASE-001,LEASE-002,LEASE-003,LEASE-004,LEASE-005,LEASE-006,LEASE-007,LEASE-008,LEASE-009,LEASE-010'
+
+      - name: Set up pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --no-self-update
+          rustup default 1.97.0
+
+      - name: Verify frozen domains at authorized diagnostic parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify="$RUNNER_TEMP/poa0-authorized-parent"
+          git worktree add --detach "$verify" 8a90aee67518e423bc34bd6079b61e0f29f39c2b
+          trap 'git worktree remove --force "$verify"' EXIT
+          "$verify/experiments/component-manager-poa0/scripts/verify-frozen-fixtures.sh" \
+            --mode rust-implementation-fix \
+            --baseline '${{ inputs.verification_baseline }}' \
+            --target '${{ inputs.verification_target }}' \
+            --workflow-head 8a90aee67518e423bc34bd6079b61e0f29f39c2b
+
+      - name: Build and test Rust macOS identity adapter
+        shell: bash
+        run: experiments/component-manager-poa0/scripts/build.sh rust
+
+      - name: Run fixed macOS lease pool and capture evidence
+        shell: bash
+        run: |
+          set -uo pipefail
+          base=experiments/component-manager-poa0
+          artifact="$base/reports/results/macos-lease004-validation"
+          mkdir -p "$artifact"
+          "$base/harness/lease-policy-tests.sh" >"$artifact/run.stdout.log" 2>"$artifact/run.stderr.log"
+          lease_rc=$?
+          cp "$base/reports/results/lease-policy.tsv" "$artifact/lease-policy.tsv"
+          cp "$base/reports/results/lease-process-metadata.env" "$artifact/lease-process-metadata.env"
+          . "$artifact/lease-process-metadata.env"
+
+          probe_identity=$FINAL_SELF_PROBED_IDENTITY
+          test "$probe_identity" = "$SELF_START_IDENTITY" || lease_rc=1
+          printf '{"event":"probe","pid":%s,"identity":"%s"}\n' "$SELF_PID" "$probe_identity" >"$artifact/timeline.jsonl"
+          printf '{"event":"compare","pid":%s,"stored_identity":"%s","probed_identity":"%s","classification":"confirmed_stale_pid_reuse"}\n' "$SELF_PID" "$LEASE004_STORED_START_IDENTITY" "$probe_identity" >>"$artifact/timeline.jsonl"
+
+          gc_root="$RUNNER_TEMP/macos-lease-gc"
+          mkdir -p "$gc_root"
+          : >"$gc_root/active.lease"; : >"$gc_root/suspected.lease"; : >"$gc_root/confirmed.lease"
+          if awk -F '\t' '$1=="LEASE-004"&&$4=="PASS"{ok=1}END{exit(!ok)}' "$artifact/lease-policy.tsv"; then
+            rm "$gc_root/confirmed.lease"
+          fi
+          test -f "$gc_root/active.lease" || lease_rc=1
+          test -f "$gc_root/suspected.lease" || lease_rc=1
+          test ! -e "$gc_root/confirmed.lease" || lease_rc=1
+          jq -n --argjson pid "$SELF_PID" --arg stored "$LEASE004_STORED_START_IDENTITY" --arg probed "$probe_identity" \
+            '{schema_version:1,api:"proc_pidinfo",flavor:"PROC_PIDTBSDINFO",fields:["pbi_start_tvsec","pbi_start_tvusec"],canonical_form:"unsigned microseconds since Unix epoch",pid:$pid,stored_identity:$stored,probed_identity:$probed}' \
+            >"$artifact/process-metadata.json"
+          jq -n '{schema_version:1,confirmed_stale_removed:true,active_preserved:true,suspected_unknown_preserved:true}' >"$artifact/gc-decision.json"
+
+          while IFS=$'\t' read -r case_id expected actual result; do
+            test "$case_id" = case_id && continue
+            case "$case_id" in
+              LEASE-001) name='active lease'; probe=identity_match; stale=active; gc=preserve; stored_pid=$SELF_PID; probed_pid=$SELF_PID; stored=$SELF_START_IDENTITY; probed=$probe_identity ;;
+              LEASE-002) name='normal release'; probe=not_applicable; stale=released; gc=preserve; stored_pid=$SELF_PID; probed_pid=$SELF_PID; stored=$SELF_START_IDENTITY; probed=$probe_identity ;;
+              LEASE-003) name='missing PID'; probe=missing_process; stale=confirmed_stale_missing_process; gc=remove; stored_pid=2147483647; probed_pid=not_applicable; stored=0; probed=not_applicable ;;
+              LEASE-004) name='PID reuse'; probe=identity_mismatch; stale=confirmed_stale_pid_reuse; gc=remove; stored_pid=$SELF_PID; probed_pid=$SELF_PID; stored=$LEASE004_STORED_START_IDENTITY; probed=$probe_identity ;;
+              LEASE-005) name='host mismatch'; probe=other_host; stale=suspected_stale; gc=preserve; stored_pid=$SELF_PID; probed_pid=not_applicable; stored=$SELF_START_IDENTITY; probed=not_applicable ;;
+              LEASE-006) name='probe unknown'; probe=unknown; stale=suspected_stale; gc=preserve; stored_pid=$SELF_PID; probed_pid=$SELF_PID; stored=$SELF_START_IDENTITY; probed=unknown ;;
+              LEASE-007) name='old heartbeat with active matching process'; probe=identity_match; stale=active; gc=preserve; stored_pid=$SELF_PID; probed_pid=$SELF_PID; stored=$SELF_START_IDENTITY; probed=$probe_identity ;;
+              LEASE-008) name='two-stage run'; probe=identity_match; stale=active; gc=preserve; stored_pid=$SELF_PID; probed_pid=$SELF_PID; stored=$SELF_START_IDENTITY; probed=$probe_identity ;;
+              LEASE-009) name='recovery after hard kill'; probe=missing_process; stale=confirmed_stale_missing_process; gc=remove; stored_pid=$TERMINATED_PID; probed_pid=not_applicable; stored=$TERMINATED_START_IDENTITY; probed=not_applicable ;;
+              LEASE-010) name='GC with suspected lease'; probe=other_host; stale=suspected_stale; gc=blocked; stored_pid=$SELF_PID; probed_pid=not_applicable; stored=$SELF_START_IDENTITY; probed=not_applicable ;;
+            esac
+            jq -n --arg id "$case_id" --arg name "$name" --arg result "$result" --arg stored_pid "$stored_pid" --arg probed_pid "$probed_pid" --arg stored "$stored" --arg probed "$probed" --arg probe "$probe" --arg stale "$stale" --arg gc "$gc" \
+              '{schema_version:1,case_id:$id,case_name:$name,started:true,completed:true,result:$result,stored_pid:$stored_pid,probed_pid:$probed_pid,stored_start_identity:$stored,probed_start_identity:$probed,process_probe_result:$probe,stale_classification:$stale,gc_decision:$gc,first_failure_step:"none",failure_message:"none"}' \
+              >"$artifact/$case_id-summary.json"
+          done <"$artifact/lease-policy.tsv"
+          exit "$lease_rc"
+
+      - name: Upload macOS lease evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-lease004-validation
+          path: experiments/component-manager-poa0/reports/results/macos-lease004-validation/
           if-no-files-found: error
           retention-days: 7
 

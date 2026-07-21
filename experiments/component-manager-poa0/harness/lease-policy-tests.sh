@@ -9,10 +9,16 @@ host_id=$(cat /etc/machine-id 2>/dev/null || hostname)
 boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || sysctl -n kern.boottime 2>/dev/null || printf unknown)
 process_start() {
   local pid=$1
-  if test "$os" = Linux; then awk '{print $22}' "/proc/$pid/stat" 2>/dev/null; else ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//'; fi
+  if test "$os" = Linux; then
+    awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+  else
+    "$base/bin/cm-rust" process-start-identity --pid "$pid" 2>/dev/null
+  fi
 }
 process_exists() { if test "$os" = Linux; then test -r "/proc/$1/stat"; else kill -0 "$1" 2>/dev/null; fi; }
 self_start=$(process_start $$)
+printf 'SELF_PID=%s\nSELF_START_IDENTITY=%s\nLEASE004_STORED_START_IDENTITY=%s\n' \
+  "$$" "$self_start" "$((self_start+1))" >"$base/reports/results/lease-process-metadata.env"
 
 classify() {
   local lease_host=$1 pid=$2 expected_start=$3 probe=$4 state=$5
@@ -37,10 +43,12 @@ check LEASE-008 ACTIVE "$(classify "$host_id" $$ "$self_start" ok active)"
 
 sleep 5 & killed_pid=$!
 killed_start=$(process_start "$killed_pid")
+printf 'TERMINATED_PID=%s\nTERMINATED_START_IDENTITY=%s\n' "$killed_pid" "$killed_start" >>"$base/reports/results/lease-process-metadata.env"
 kill -9 "$killed_pid" 2>/dev/null || true
 wait "$killed_pid" 2>/dev/null || true
 check LEASE-009 CONFIRMED_STALE "$(classify "$host_id" "$killed_pid" "$killed_start" ok active)"
 check LEASE-010 GC_BLOCKED "$(test "$(classify other-host $$ "$self_start" ok active)" = SUSPECTED_STALE && printf GC_BLOCKED || printf GC_ALLOWED)"
+printf 'FINAL_SELF_PROBED_IDENTITY=%s\n' "$(process_start $$)" >>"$base/reports/results/lease-process-metadata.env"
 
 awk -F '\t' 'NR>1{n++;if($4=="PASS")p++} END{printf "LEASE_POLICY_TESTS=%d/%d\n",p,n;exit(p!=n)}' "$out"
 printf 'BOOT_IDENTITY=%s\n' "$boot_id"

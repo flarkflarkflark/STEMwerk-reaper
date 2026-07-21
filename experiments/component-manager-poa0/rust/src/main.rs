@@ -34,6 +34,73 @@ const COMPONENTS: [Component; 2] = [
 ];
 static JOURNAL_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct ProcBsdInfo {
+    flags: u32,
+    status: u32,
+    xstatus: u32,
+    pid: u32,
+    ppid: u32,
+    uid: u32,
+    gid: u32,
+    ruid: u32,
+    rgid: u32,
+    svuid: u32,
+    svgid: u32,
+    rfu_1: u32,
+    command: [u8; 16],
+    name: [u8; 32],
+    nfiles: u32,
+    pgid: u32,
+    pjobc: u32,
+    e_tdev: u32,
+    e_tpgid: u32,
+    nice: i32,
+    start_tvsec: u64,
+    start_tvusec: u64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut u8, size: i32) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+fn process_start_identity(pid: i32) -> Result<u64, String> {
+    const PROC_PIDTBSDINFO: i32 = 3;
+    let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::zeroed();
+    let size = std::mem::size_of::<ProcBsdInfo>();
+    let read = unsafe {
+        proc_pidinfo(
+            pid,
+            PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size as i32,
+        )
+    };
+    if read != size as i32 {
+        return Err(format!(
+            "proc_pidinfo failed for pid {pid}: returned {read}"
+        ));
+    }
+    let info = unsafe { info.assume_init() };
+    if info.start_tvsec == 0 || info.start_tvusec >= 1_000_000 {
+        return Err(format!("invalid process start identity for pid {pid}"));
+    }
+    info.start_tvsec
+        .checked_mul(1_000_000)
+        .and_then(|seconds| seconds.checked_add(info.start_tvusec))
+        .ok_or_else(|| format!("process start identity overflow for pid {pid}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_start_identity(_pid: i32) -> Result<u64, String> {
+    Err("process start identity is only available on macOS".into())
+}
+
 fn now() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1489,6 +1556,20 @@ fn main() {
         process::exit(2)
     }
     let command = &args[1];
+    if command == "process-start-identity" {
+        let pid = arg("--pid", "")
+            .parse::<i32>()
+            .map_err(|_| "valid --pid required".to_string())
+            .and_then(process_start_identity);
+        match pid {
+            Ok(identity) => println!("{identity}"),
+            Err(error) => {
+                eprintln!("{error}");
+                process::exit(1)
+            }
+        }
+        return;
+    }
     let root = PathBuf::from(arg("--root", ""));
     let _ = JOURNAL_ROOT.set(root.clone());
     let catalog = PathBuf::from(arg("--catalog", ""));
@@ -1545,6 +1626,33 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn macos_process_identity_uses_native_microsecond_epoch_value() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("struct ProcBsdInfo")
+            .expect("macOS process adapter");
+        let end = source[start..]
+            .find("fn now()")
+            .expect("macOS process adapter end")
+            + start;
+        let adapter = &source[start..end];
+        assert!(adapter.contains("proc_pidinfo"));
+        assert!(adapter.contains("PROC_PIDTBSDINFO"));
+        assert!(adapter.contains("start_tvsec"));
+        assert!(adapter.contains("start_tvusec"));
+        assert!(adapter.contains("checked_mul(1_000_000)"));
+        assert!(!adapter.contains("Command::new"));
+        assert!(!adapter.contains("process name"));
+        assert!(!adapter.contains("retry"));
+    }
+
+    #[test]
+    fn process_identity_is_fail_closed_off_macos() {
+        #[cfg(not(target_os = "macos"))]
+        assert!(process_start_identity(process::id() as i32).is_err());
     }
 
     #[test]
