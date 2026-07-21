@@ -788,7 +788,7 @@ local function prettyCheckError(err)
     if lower == "torchaudio_missing_for_demucs" then
         return "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
     end
-    if lower == "numpy_too_new_for_demucs" then return "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv/Repair" end
+    if lower == "numpy_numba_runtime_probe_failed" then return "NumPy/Numba runtime compatibility check failed; run Rebuild venv/Repair" end
     if lower == "macos_demucs_runtime_incompatible" then return "macOS Demucs/audio-separator runtime check failed; run Rebuild venv/Repair" end
     return humanizeToken(err)
 end
@@ -1076,11 +1076,13 @@ except Exception:
     torchaudio_present = "no"
 
 try:
-    import numpy
-    numpy_ver = core(getattr(numpy, "__version__", "0.0.0"))
-    numpy_major = int(numpy_ver.split(".", 1)[0])
+    import numpy, numba
+    @numba.njit
+    def _stemwerk_numba_probe(x):
+        return x + 1
+    numpy_numba_ok = _stemwerk_numba_probe(1) == 2
 except Exception:
-    numpy_major = 0
+    numpy_numba_ok = False
 
 major, minor = parse_major_minor(torch_ver)
 torch_supported = (major, minor) < (2, 6)
@@ -1114,8 +1116,8 @@ if not torch_supported:
     reason = "torch_too_new_for_demucs"
 elif torchaudio_present != "yes":
     reason = "torchaudio_missing_for_demucs"
-elif numpy_major >= 2:
-    reason = "numpy_too_new_for_demucs"
+elif not numpy_numba_ok:
+    reason = "numpy_numba_runtime_probe_failed"
 
 print("TORCH_VERSION=" + str(torch_ver))
 print("TORCHAUDIO_VERSION=" + str(torchaudio_ver))
@@ -1143,8 +1145,8 @@ sys.exit(0 if not reason else 1)
         result.error = "torchaudio_missing_for_demucs"
     elseif result.driftReason == "torch_too_new_for_demucs" then
         result.error = "torch_too_new_for_demucs"
-    elseif result.driftReason == "numpy_too_new_for_demucs" then
-        result.error = "numpy_too_new_for_demucs"
+    elseif result.driftReason == "numpy_numba_runtime_probe_failed" then
+        result.error = "numpy_numba_runtime_probe_failed"
     elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then
         result.error = "torch_runtime_probe_failed"
     elseif result.ok then

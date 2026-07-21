@@ -318,8 +318,13 @@ def test_macos_runtime_verification_rejects_torch_26_plus():
 
     assert "torch_too_new_for_demucs" in runtime_setup
     assert "torch_too_new_for_demucs" in setup_internal
-    assert "numpy_too_new_for_demucs" in runtime_setup
-    assert "numpy_too_new_for_demucs" in setup_internal
+    assert "numpy_numba_runtime_probe_failed" in runtime_setup
+    assert "numpy_numba_runtime_probe_failed" in setup_internal
+    for source in (runtime_setup, setup_internal):
+        assert "import numpy, numba" in source
+        assert "@numba.njit" in source
+        assert "_stemwerk_numba_probe(1)" in source
+        assert "numpy_too_new" not in source
 
 
 def test_runtime_setup_binds_trim_before_compat_probe_use():

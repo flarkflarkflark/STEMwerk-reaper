@@ -70,7 +70,13 @@ resolve_python_candidate() {
 }
 
 bundled_payload_available() {
-  [ "${MAC_ARCH:-unknown}" = "arm64" ] && [ -d "${BUNDLED_PAYLOAD_DIR}" ]
+  [ "${MAC_ARCH:-unknown}" = "arm64" ] \
+    && [ -f "${BUNDLED_PAYLOAD_DIR}/manifest.json" ] \
+    && [ -d "${BUNDLED_PAYLOAD_DIR}/wheels" ] \
+    && [ -d "${BUNDLED_PAYLOAD_DIR}/python" ] \
+    && [ -d "${BUNDLED_PAYLOAD_DIR}/models" ] \
+    && [ -d "${BUNDLED_PAYLOAD_DIR}/drumsep" ] \
+    && { [ -x "${BUNDLED_PAYLOAD_DIR}/ffmpeg/ffmpeg" ] || [ -x "${BUNDLED_PAYLOAD_DIR}/ffmpeg/bin/ffmpeg" ]; }
 }
 
 bundled_ffmpeg_path() {
@@ -1089,11 +1095,6 @@ else
 fi
 log "Selected torch stack profile: ${PINNED_TORCH_STACK_LABEL}"
 log "Selected torch stack versions: torch==${PINNED_TORCH_VERSION} torchvision==${PINNED_TORCHVISION_VERSION} torchaudio==${PINNED_TORCHAUDIO_VERSION}"
-if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
-  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
-  rm -rf "${RUNTIME_BASE}/.venv"
-fi
-
 MACOS_BUNDLED_PAYLOAD_STATUS="missing"
 MACOS_BUNDLED_FFMPEG_STATUS="missing"
 MACOS_BUNDLED_WHEELHOUSE_STATUS="missing"
@@ -1169,6 +1170,19 @@ SYSTEM_PYTHON_USED="no"
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
+fi
+
+if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then
+  log "Apple Silicon Repair requires a complete bundled payload; online fallback is unsupported"
+  set_status "deps_failed" "apple_silicon_requires_bundled_payload"
+  write_ready_to_go_state "mps" "missing" "missing" "apple_silicon_requires_bundled_payload" "missing"
+  write_state
+  exit 1
+fi
+
+if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
+  log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
 fi
 
 set_progress "1" "${STEP_TOTAL}" "Preparing runtime"

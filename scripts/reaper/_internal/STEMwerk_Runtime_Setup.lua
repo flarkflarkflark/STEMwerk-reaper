@@ -645,17 +645,14 @@ if (tmj > 2 or (tmj == 2 and tmn >= 6)) and not allow_rocm7_gfx1201:
     print("torch_too_new:" + t)
     sys.exit(2)
 try:
-    import numpy
+    import numpy, numba
+    @numba.njit
+    def _stemwerk_numba_probe(x):
+        return x + 1
+    if _stemwerk_numba_probe(1) != 2:
+        raise RuntimeError("unexpected JIT result")
 except Exception as exc:
-    print("numpy_import_failed:" + str(exc))
-    sys.exit(1)
-n = core(getattr(numpy, "__version__", "0.0.0"))
-try:
-    nmj = int(n.split(".", 1)[0])
-except Exception:
-    nmj = 0
-if nmj >= 2:
-    print("numpy_too_new:" + n)
+    print("numpy_numba_probe_failed:" + str(exc))
     sys.exit(3)
 print("ok")
 ]=]
@@ -684,8 +681,8 @@ print("ok")
     if text:find("torchaudio_missing:", 1, true) then
         return false, "torchaudio_missing_for_demucs"
     end
-    if text:find("numpy_too_new:", 1, true) then
-        return false, "numpy_too_new_for_demucs"
+    if text:find("numpy_numba_probe_failed:", 1, true) then
+        return false, "numpy_numba_runtime_probe_failed"
     end
     return false, "demucs_runtime_incompatible"
 end
@@ -935,8 +932,8 @@ function M.ensureDependenciesInteractive()
             if err == "torchaudio_missing_for_demucs" then
                 missing[#missing + 1] = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
             end
-            if err == "numpy_too_new_for_demucs" then
-                missing[#missing + 1] = "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv or Repair"
+            if err == "numpy_numba_runtime_probe_failed" then
+                missing[#missing + 1] = "NumPy/Numba runtime compatibility check failed; run Rebuild venv or Repair"
             end
         end
         if hasSamplerate then missing[#missing + 1] = "samplerate runtime" end

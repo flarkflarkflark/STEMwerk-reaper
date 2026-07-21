@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib.metadata as metadata
 import inspect
 import json
@@ -39,6 +40,70 @@ class DirectDemixValidationError(RuntimeError):
     def __init__(self, reason: str, message: str):
         super().__init__(message)
         self.reason = reason
+
+
+class ManagedDrumSepResolution:
+    def __init__(self, model_name: str, model_path: Path, config_path: Path, action: str):
+        self.model_name = model_name
+        self.model_path = model_path
+        self.config_path = config_path
+        self.action = action
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_managed_drumsep_checkpoint(model_dir: Path, requested_model: str) -> ManagedDrumSepResolution:
+    """Resolve ASEP catalog aliases to existing managed files without mutating the cache."""
+    model_dir = Path(model_dir)
+    requested_name = Path(str(requested_model or "")).name
+    canonical = model_dir / DRUMSEP_MODEL_FILENAME
+    config = model_dir / DRUMSEP_MODEL_YAML
+    alias = model_dir / DRUMSEP_MODEL_ALIAS
+    known = {DRUMSEP_MODEL_ALIAS, DRUMSEP_MODEL_FILENAME}
+    if requested_name not in known:
+        return ManagedDrumSepResolution(str(requested_model or ""), model_dir / requested_name, config, "none")
+    if not canonical.is_file():
+        raise DirectDemixValidationError(
+            "drumsep_canonical_checkpoint_missing",
+            "Managed canonical DrumSep checkpoint is missing; run STEMwerk Repair before processing.",
+        )
+    if not config.is_file():
+        raise DirectDemixValidationError(
+            "drumsep_canonical_config_missing",
+            "Managed canonical DrumSep config is missing; run STEMwerk Repair before processing.",
+        )
+    action = "use_canonical"
+    if alias.is_file() and alias.resolve() != canonical.resolve():
+        if _sha256_file(alias) != _sha256_file(canonical):
+            raise DirectDemixValidationError(
+                "drumsep_checkpoint_alias_checksum_mismatch",
+                "Existing DrumSep checkpoint alias differs from the managed canonical checkpoint; run STEMwerk Repair.",
+            )
+        action = "use_canonical_alias_compatible"
+    return ManagedDrumSepResolution(DRUMSEP_MODEL_FILENAME, canonical, config, action)
+
+
+def _configure_managed_drumsep_checkpoint(separator: Any, resolution: ManagedDrumSepResolution) -> None:
+    original_download_model_files = separator.download_model_files
+
+    def resolve_model_files(model_filename: str):
+        if Path(str(model_filename or "")).name not in {DRUMSEP_MODEL_ALIAS, DRUMSEP_MODEL_FILENAME}:
+            return original_download_model_files(model_filename)
+        return (
+            DRUMSEP_MODEL_FILENAME,
+            "MDXC",
+            "STEMwerk managed DrumSep 6stem",
+            str(resolution.model_path),
+            resolution.config_path.name,
+        )
+
+    separator.download_model_files = resolve_model_files
 
 
 def _probe_gpu_device(device: str) -> tuple[bool, str, dict[str, str]]:
@@ -540,7 +605,13 @@ def run(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir).expanduser().resolve()
     model_dir = Path(args.model_dir).expanduser().resolve()
     result_json = Path(args.result_json).expanduser().resolve()
-    model_name = str(args.model)
+    requested_model_name = str(args.model)
+    try:
+        model_resolution = _resolve_managed_drumsep_checkpoint(model_dir, requested_model_name)
+    except DirectDemixValidationError as exc:
+        write_result(result_json, _error_payload(exc.reason, "stage2_runtime", str(exc)))
+        return 1
+    model_name = model_resolution.model_name
 
     output_dir.mkdir(parents=True, exist_ok=True)
     before = {p.resolve() for p in output_dir.glob("*.wav")}
@@ -608,6 +679,8 @@ def run(args: argparse.Namespace) -> int:
                 }
             )
         sep = Separator(**separator_kwargs)
+        if model_resolution.action != "none":
+            _configure_managed_drumsep_checkpoint(sep, model_resolution)
         if args.route in {"mps-direct-demix", "direct-demix"}:
             _apply_separator_requested_device(sep, str(args.device or "cpu"))
         sep.load_model(model_name)
