@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $Base = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
   if ($Implementation -ne 'rust') { throw 'Diagnostic mode is restricted to Rust' }
-  if ($DiagnosticCases -ne 'CMN-001,CMN-008') { throw 'Unsupported diagnostic case selection' }
+  if ($DiagnosticCases -notin @('CMN-001,CMN-008', 'CMN-008')) { throw 'Unsupported diagnostic case selection' }
 } elseif ($DiagnosticCases) {
   throw 'DiagnosticCases is only valid in diagnostic mode'
 }

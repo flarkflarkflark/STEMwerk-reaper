@@ -18,6 +18,7 @@ on:
         type: choice
         options:
           - CMN-001,CMN-008
+          - CMN-008
       verification_mode:
         description: Fail-closed frozen-verification policy
         required: true
@@ -67,7 +68,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: 46f18ae8331b84e180bd00e29b9fcb882c8a25c0
+          EXPECTED_PARENT: fa02db07a2c738c44e386bf2e13e1c4ed632a256
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -81,7 +82,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/reports/WINDOWS_PINNED_SQLITE_PROVISIONING_FIX.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/run-native-matrix.ps1|experiments/component-manager-poa0/scripts/run-windows-rust-copy-hash-diagnostic.ps1|experiments/component-manager-poa0/reports/WINDOWS_CMN008_RECOVERY_EXECUTION.md)
                 ;;
               *)
                 allowed=false
@@ -306,7 +307,7 @@ jobs:
       - name: Assert diagnostic selection and checked-out commit
         shell: pwsh
         run: |
-          if ('${{ inputs.diagnostic_cases }}' -ne 'CMN-001,CMN-008') { throw 'Unsupported diagnostic case selection' }
+          if ('${{ inputs.diagnostic_cases }}' -notin @('CMN-001,CMN-008', 'CMN-008')) { throw 'Unsupported diagnostic case selection' }
           if ('${{ inputs.verification_mode }}' -ne 'rust-implementation-fix') { throw 'Unsupported verification mode' }
           if ('${{ inputs.verification_baseline }}' -ne '9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b') { throw 'Unsupported verification baseline' }
           if ('${{ inputs.verification_target }}' -ne 'ec14fdf523524bbd9aec34d429f0b6a5b673a701') { throw 'Unsupported verification target' }
@@ -323,7 +324,7 @@ jobs:
       # POA_ONLY: this CLI is an ephemeral diagnostic dependency. Component
       # Manager product/runtime code must not depend on Chocolatey or sqlite3.
       - name: Provision pinned SQLite CLI for targeted Windows Rust diagnostics
-        if: runner.os == 'Windows' && inputs.diagnostic_mode == 'windows-rust-copy-hash' && inputs.diagnostic_cases == 'CMN-001,CMN-008'
+        if: runner.os == 'Windows' && inputs.diagnostic_mode == 'windows-rust-copy-hash' && (inputs.diagnostic_cases == 'CMN-001,CMN-008' || inputs.diagnostic_cases == 'CMN-008')
         shell: pwsh
         run: |
           choco install sqlite `
@@ -363,7 +364,7 @@ jobs:
           "SQLITE_EXE_VERSION=$sqliteVersion"
 
       - name: Validate pinned SQLite CLI in a new process
-        if: runner.os == 'Windows' && inputs.diagnostic_mode == 'windows-rust-copy-hash' && inputs.diagnostic_cases == 'CMN-001,CMN-008'
+        if: runner.os == 'Windows' && inputs.diagnostic_mode == 'windows-rust-copy-hash' && (inputs.diagnostic_cases == 'CMN-001,CMN-008' || inputs.diagnostic_cases == 'CMN-008')
         shell: pwsh
         run: |
           if (-not $env:STEMWERK_POA0_SQLITE_EXE) { throw 'STEMWERK_POA0_SQLITE_EXE is missing' }
@@ -401,7 +402,7 @@ jobs:
         run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation rust -ExpectedArch x86_64 -DiagnosticMode windows-rust-copy-hash -DiagnosticCases '${{ inputs.diagnostic_cases }}' -VerificationMode '${{ inputs.verification_mode }}' -VerificationBaseline '${{ inputs.verification_baseline }}' -VerificationTarget '${{ inputs.verification_target }}' -WorkflowHead '${{ github.sha }}' -SkipFrozenVerification
 
       - name: Upload CMN-001 diagnostic evidence
-        if: always()
+        if: always() && inputs.diagnostic_cases == 'CMN-001,CMN-008'
         uses: actions/upload-artifact@v4
         with:
           name: windows-selector-durability-CMN-001
@@ -415,6 +416,15 @@ jobs:
         with:
           name: windows-selector-durability-CMN-008
           path: experiments/component-manager-poa0/reports/results/windows-selector-durability-CMN-008/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload CMN-008 recovery validation
+        if: always() && inputs.diagnostic_cases == 'CMN-008'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rust-CMN-008-recovery-validation
+          path: experiments/component-manager-poa0/reports/results/windows-rust-CMN-008-recovery-validation/
           if-no-files-found: error
           retention-days: 7
 

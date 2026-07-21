@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Base = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-if ($Cases -ne 'CMN-001,CMN-008') { throw 'Unsupported diagnostic case selection' }
+if ($Cases -notin @('CMN-001,CMN-008', 'CMN-008')) { throw 'Unsupported diagnostic case selection' }
 $Binary = Join-Path $Base 'bin/cm-rust.exe'
 $Catalog = Join-Path $Base 'fixtures/catalog.json'
 $Fixture = Join-Path $Base 'fixtures/artifacts/runtime-fixture.txt'
@@ -32,16 +32,18 @@ function Invoke-CapturedExternal {
   $Info.RedirectStandardOutput = $true
   $Info.RedirectStandardError = $true
   foreach ($Argument in $Arguments) { [void]$Info.ArgumentList.Add($Argument) }
-  $Output = ''; $ErrorOutput = ''; $OutputBytes = [byte[]]@(); $ErrorBytes = [byte[]]@(); $Code = -1
+  $Output = ''; $ErrorOutput = ''; $OutputBytes = [byte[]]@(); $ErrorBytes = [byte[]]@(); $Code = -1; $ProcessId = 0; $HasExited = $false
   try {
     $Process = [Diagnostics.Process]::new()
     $Process.StartInfo = $Info
     [void]$Process.Start()
+    $ProcessId = $Process.Id
     $OutputBuffer = [IO.MemoryStream]::new()
     $ErrorBuffer = [IO.MemoryStream]::new()
     $Process.StandardOutput.BaseStream.CopyTo($OutputBuffer)
     $Process.StandardError.BaseStream.CopyTo($ErrorBuffer)
     $Process.WaitForExit()
+    $HasExited = $Process.HasExited
     $Code = $Process.ExitCode
     $OutputBytes = $OutputBuffer.ToArray()
     $ErrorBytes = $ErrorBuffer.ToArray()
@@ -66,6 +68,8 @@ function Invoke-CapturedExternal {
     stdout_byte_count = $OutputBytes.Length
     stdout_hex = [Convert]::ToHexString($OutputBytes).ToLowerInvariant()
     stderr_byte_count = $ErrorBytes.Length
+    process_id = $ProcessId
+    has_exited = $HasExited
   }
 }
 
@@ -106,6 +110,157 @@ function Write-TreeEvidence {
       "$Relative`t$Size`t$Hash" | Add-Content -Encoding utf8NoBOM -LiteralPath $HashesPath
     }
   }
+}
+
+function Save-RecoveryState {
+  param([string]$Root, [string]$Destination)
+  New-Item -ItemType Directory -Force $Destination | Out-Null
+  $State = Join-Path $Root 'state'
+  $Generations = Join-Path $Root 'generations'
+  foreach ($Relative in @('state/active','state/active.tmp','state/journal/operations.jsonl','state/state.db','state/state.db-wal','state/state.db-shm')) {
+    $Source = Join-Path $Root $Relative
+    if (Test-Path -LiteralPath $Source -PathType Leaf) {
+      $Target = Join-Path $Destination $Relative
+      New-Item -ItemType Directory -Force (Split-Path -Parent $Target) | Out-Null
+      Copy-Item -Force -LiteralPath $Source -Destination $Target
+    }
+  }
+  if (Test-Path -LiteralPath $Generations -PathType Container) {
+    Copy-Item -Recurse -Force -LiteralPath $Generations -Destination (Join-Path $Destination 'generationtree')
+  }
+  Write-TreeEvidence $Root (Join-Path $Destination 'tree.tsv') (Join-Path $Destination 'hashes.tsv')
+}
+
+function Invoke-CMN008RecoveryValidation {
+  param(
+    [string]$Root,
+    [string]$Artifact,
+    [System.Collections.IDictionary]$KillRun,
+    [string]$PreKillGeneration
+  )
+  New-Item -ItemType Directory -Force $Artifact | Out-Null
+  $Timeline = Join-Path $Artifact 'timeline.jsonl'
+  $Errors = Join-Path $Artifact 'errors.tsv'
+  "category`tdetail" | Set-Content -Encoding utf8NoBOM -LiteralPath $Errors
+  $Failures = [Collections.Generic.List[object]]::new()
+  $Require = {
+    param([bool]$Condition, [string]$Category, [string]$Detail)
+    if (-not $Condition) {
+      $Failures.Add([pscustomobject]@{category=$Category;detail=$Detail})
+      "$Category`t$Detail" | Add-Content -Encoding utf8NoBOM -LiteralPath $Errors
+    }
+  }
+
+  Save-RecoveryState $Root (Join-Path $Artifact 'post-kill')
+  Write-DiagnosticRecord $Timeline ([ordered]@{schema_version=1;event='post_kill_state_captured';root=$Root;process_id=$KillRun.process_id;exit_code=$KillRun.exit_code;child_terminated=$KillRun.has_exited})
+  & $Require ([bool]$KillRun.has_exited) 'CHILD_NOT_TERMINATED' "pid=$($KillRun.process_id)"
+  & $Require ($KillRun.exit_code -ne 0) 'ORCHESTRATION_FAILURE' "injected kill exited $($KillRun.exit_code), expected non-zero"
+  & $Require (Test-Path -LiteralPath $Root -PathType Container) 'ORCHESTRATION_FAILURE' 'case root missing after kill'
+  & $Require (Test-Path -LiteralPath (Join-Path $Root 'state') -PathType Container) 'ORCHESTRATION_FAILURE' 'state root missing after kill'
+  $PostKillSelector = $null
+  try { $PostKillSelector = Get-Content -Raw -LiteralPath (Join-Path $Root 'state/active') | ConvertFrom-Json -ErrorAction Stop } catch {}
+  $PostKillGeneration = if ($PostKillSelector) { [string]$PostKillSelector.generation_id } else { '' }
+  & $Require ($PostKillGeneration -match '^gen-[0-9]+$') 'SELECTOR_INVALID_AFTER_RECOVERY' 'post-kill selector is missing or malformed'
+  & $Require ($PostKillGeneration -ne $PreKillGeneration) 'ORCHESTRATION_FAILURE' "kill point not reached: pre=$PreKillGeneration post=$PostKillGeneration"
+  if ($Failures.Count -gt 0) {
+    [ordered]@{schema_version=1;case_id='CMN-008';result='FAIL';pre_kill_generation=$PreKillGeneration;post_kill_generation=$PostKillGeneration;kill_exit_code=$KillRun.exit_code;child_terminated=$KillRun.has_exited;recovery_invoked=$false;failures=$Failures} | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'summary.json')
+    throw "CMN-008 pre-recovery gate failed: $($Failures[0].category): $($Failures[0].detail)"
+  }
+
+  $RecoverStdout = Join-Path $Artifact 'recover-stdout.log'
+  $RecoverStderr = Join-Path $Artifact 'recover-stderr.log'
+  $RecoverArguments = @('recover','--root',$Root)
+  Write-DiagnosticRecord $Timeline ([ordered]@{schema_version=1;event='recover_begin';binary=$Binary;arguments=$RecoverArguments;root=$Root})
+  $RecoverRun = Invoke-CapturedExternal $Binary $RecoverArguments $RecoverStdout $RecoverStderr
+  Write-DiagnosticRecord $Timeline ([ordered]@{schema_version=1;event='recover_result';exit_code=$RecoverRun.exit_code;root=$Root})
+  & $Require ($RecoverRun.exit_code -eq 0) 'RECOVER_NONZERO_EXIT' "exit=$($RecoverRun.exit_code); stderr=$($RecoverRun.stderr)"
+
+  $RecoverObjects = @()
+  Get-Content -LiteralPath $RecoverStdout -ErrorAction SilentlyContinue | ForEach-Object { try { $RecoverObjects += ($_ | ConvertFrom-Json -ErrorAction Stop) } catch {} }
+  $RecoverEnvelope = $RecoverObjects | Where-Object { $_.PSObject.Properties.Name -contains 'ok' } | Select-Object -Last 1
+  if ($RecoverEnvelope) { $RecoverEnvelope | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'recover-result.json') }
+  else { '{}' | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'recover-result.json') }
+  & $Require ([bool]$RecoverEnvelope) 'RECOVER_RESULT_INVALID' 'structured result envelope missing'
+  if ($RecoverEnvelope) {
+    & $Require ([bool]$RecoverEnvelope.ok) 'RECOVER_RESULT_INVALID' "ok=$($RecoverEnvelope.ok)"
+    & $Require ($RecoverEnvelope.state -eq 'rebuilt') 'RECOVER_RESULT_INVALID' "state=$($RecoverEnvelope.state)"
+  }
+
+  $ActivePath = Join-Path $Root 'state/active'
+  $Selector = $null
+  try { $Selector = Get-Content -Raw -LiteralPath $ActivePath | ConvertFrom-Json -ErrorAction Stop } catch {}
+  $RecoveredGeneration = if ($Selector) { [string]$Selector.generation_id } else { '' }
+  $GenerationPath = Join-Path $Root "generations/$RecoveredGeneration"
+  $GenerationManifestPath = Join-Path $GenerationPath 'generation.json'
+  $SelectorValid = [bool]$Selector -and $RecoveredGeneration -match '^gen-[0-9]+$'
+  & $Require $SelectorValid 'SELECTOR_INVALID_AFTER_RECOVERY' 'selector is missing or malformed'
+  & $Require ($RecoveredGeneration -eq $PostKillGeneration) 'SELECTOR_INVALID_AFTER_RECOVERY' "post_kill=$PostKillGeneration recovered=$RecoveredGeneration"
+  & $Require (Test-Path -LiteralPath $GenerationPath -PathType Container) 'SELECTOR_POINTS_TO_MISSING_GENERATION' "generation=$RecoveredGeneration"
+  [ordered]@{schema_version=1;valid=$SelectorValid;generation_id=$RecoveredGeneration;generation_exists=(Test-Path -LiteralPath $GenerationPath -PathType Container)} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'selector-validation.json')
+
+  $Manifest = $null
+  try { $Manifest = Get-Content -Raw -LiteralPath $GenerationManifestPath | ConvertFrom-Json -ErrorAction Stop } catch {}
+  $ExpectedComponents = @('model.fixture@1.0.0','runtime.fixture@1.0.0')
+  $ManifestValid = [bool]$Manifest -and $Manifest.generation_id -eq $RecoveredGeneration -and @($Manifest.components).Count -eq 2 -and (@($Manifest.components | Sort-Object) -join ',') -eq (($ExpectedComponents | Sort-Object) -join ',')
+  & $Require $ManifestValid 'MANIFEST_INVALID_AFTER_RECOVERY' "generation=$RecoveredGeneration"
+
+  $ReceiptResults = [Collections.Generic.List[object]]::new()
+  foreach ($Component in @(@{id='model.fixture';artifact='model-fixture.txt'},@{id='runtime.fixture';artifact='runtime-fixture.txt'})) {
+    $ReceiptPath = Join-Path $Root "store/components/$($Component.id)/1.0.0/.stemwerk-component.json"
+    $ArtifactPath = Join-Path $Root "store/components/$($Component.id)/1.0.0/$($Component.artifact)"
+    $Receipt = $null
+    try { $Receipt = Get-Content -Raw -LiteralPath $ReceiptPath | ConvertFrom-Json -ErrorAction Stop } catch {}
+    $ArtifactHash = if (Test-Path -LiteralPath $ArtifactPath -PathType Leaf) { (Get-FileHash -Algorithm SHA256 -LiteralPath $ArtifactPath).Hash.ToLowerInvariant() } else { '' }
+    $ReceiptHash = if (Test-Path -LiteralPath $ReceiptPath -PathType Leaf) { (Get-FileHash -Algorithm SHA256 -LiteralPath $ReceiptPath).Hash.ToLowerInvariant() } else { '' }
+    $Valid = [bool]$Receipt -and $Receipt.component_id -eq $Component.id -and $Receipt.artifact_sha256 -eq $ArtifactHash -and $Manifest.component_receipt_hashes.($Component.id) -eq $ReceiptHash
+    $ReceiptResults.Add([pscustomobject]@{component_id=$Component.id;valid=$Valid;receipt_hash=$ReceiptHash;artifact_hash=$ArtifactHash})
+    & $Require $Valid 'RECEIPTS_INVALID_AFTER_RECOVERY' "component=$($Component.id)"
+  }
+  $ReceiptResults | ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'generation-validation.json')
+
+  $SqliteDir = Join-Path $Artifact 'post-recovery'
+  New-Item -ItemType Directory -Force $SqliteDir | Out-Null
+  $Database = Join-Path $Root 'state/state.db'
+  $GenerationQuery = Invoke-CapturedExternal $env:STEMWERK_POA0_SQLITE_EXE @('-json',$Database,'SELECT generation_id,active,previous_generation FROM generations ORDER BY generation_id;') (Join-Path $SqliteDir 'sqlite-generations.json') (Join-Path $SqliteDir 'sqlite-generations.stderr.log')
+  $InventoryQuery = Invoke-CapturedExternal $env:STEMWERK_POA0_SQLITE_EXE @('-json',$Database,'SELECT component_id,version,receipt_hash FROM inventory ORDER BY component_id;') (Join-Path $SqliteDir 'sqlite-inventory.json') (Join-Path $SqliteDir 'sqlite-inventory.stderr.log')
+  $GenerationRows = @(); $InventoryRows = @()
+  try { $GenerationRows = @(Get-Content -Raw -LiteralPath (Join-Path $SqliteDir 'sqlite-generations.json') | ConvertFrom-Json -ErrorAction Stop) } catch {}
+  try { $InventoryRows = @(Get-Content -Raw -LiteralPath (Join-Path $SqliteDir 'sqlite-inventory.json') | ConvertFrom-Json -ErrorAction Stop) } catch {}
+  $InventoryHashesValid = $InventoryRows.Count -eq 2
+  foreach ($Row in $InventoryRows) {
+    $ExpectedReceipt = $ReceiptResults | Where-Object { $_.component_id -eq $Row.component_id } | Select-Object -First 1
+    if (-not $ExpectedReceipt -or $Row.version -ne '1.0.0' -or $Row.receipt_hash -ne $ExpectedReceipt.receipt_hash) { $InventoryHashesValid = $false }
+  }
+  $SqliteValid = $GenerationQuery.exit_code -eq 0 -and $InventoryQuery.exit_code -eq 0 -and $GenerationRows.Count -eq 1 -and $GenerationRows[0].generation_id -eq $RecoveredGeneration -and [int]$GenerationRows[0].active -eq 1 -and $InventoryHashesValid
+  & $Require $SqliteValid 'SQLITE_STATE_MISMATCH' "generation_rows=$($GenerationRows.Count); inventory_rows=$($InventoryRows.Count); active=$RecoveredGeneration"
+  [ordered]@{schema_version=1;valid=$SqliteValid;generation_rows=$GenerationRows;inventory_rows=$InventoryRows} | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'sqlite-validation.json')
+
+  $JournalPath = Join-Path $Root 'state/journal/operations.jsonl'
+  $JournalObjects = @()
+  Get-Content -LiteralPath $JournalPath -ErrorAction SilentlyContinue | ForEach-Object { try { $JournalObjects += ($_ | ConvertFrom-Json -ErrorAction Stop) } catch {} }
+  $JournalFinal = $JournalObjects | Select-Object -Last 1
+  $JournalFinalEvent = $JournalObjects | Where-Object { $_.PSObject.Properties.Name -contains 'event' } | Select-Object -Last 1
+  $JournalValid = [bool]$JournalFinalEvent -and $JournalFinalEvent.event -eq 'op_completed' -and $RecoverEnvelope -and $JournalFinal.op_id -eq $RecoverEnvelope.op_id -and $JournalFinal.state -eq 'rebuilt' -and [bool]$JournalFinal.ok
+  & $Require $JournalValid 'JOURNAL_STATE_MISMATCH' "final_event=$($JournalFinalEvent.event); final_state=$($JournalFinal.state)"
+  [ordered]@{schema_version=1;valid=$JournalValid;final_event=$JournalFinalEvent;final_result=$JournalFinal} | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'journal-validation.json')
+
+  $GenerationDirs = @(Get-ChildItem -Directory -LiteralPath (Join-Path $Root 'generations') -ErrorAction SilentlyContinue)
+  $Incomplete = @($GenerationDirs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $_.FullName 'generation.json') -PathType Leaf) })
+  $MixedReferences = if ($ManifestValid -and (@($Manifest.components | Select-Object -Unique).Count -eq 2)) { 0 } else { 1 }
+  $LeaseFiles = @(Get-ChildItem -File -LiteralPath (Join-Path $Root 'state/leases') -ErrorAction SilentlyContinue)
+  $TempSelectorActive = Test-Path -LiteralPath (Join-Path $Root 'state/active.tmp') -PathType Leaf
+  & $Require ($Incomplete.Count -eq 0) 'INCOMPLETE_GENERATION_NOT_HANDLED' "count=$($Incomplete.Count)"
+  & $Require ($MixedReferences -eq 0) 'MIXED_GENERATION_VISIBLE' "count=$MixedReferences"
+  & $Require ($LeaseFiles.Count -eq 0) 'RECOVER_RESULT_INVALID' "open_leases=$($LeaseFiles.Count)"
+  & $Require (-not $TempSelectorActive) 'SELECTOR_INVALID_AFTER_RECOVERY' 'stale active.tmp remains'
+  [ordered]@{schema_version=1;valid=($ManifestValid -and $ReceiptResults.valid -notcontains $false);generation_id=$RecoveredGeneration;manifest_valid=$ManifestValid;receipts=$ReceiptResults;incomplete_generation_count=$Incomplete.Count;mixed_generation_references=$MixedReferences;open_lease_count=$LeaseFiles.Count;temp_selector_present=$TempSelectorActive} | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'generation-validation.json')
+
+  Save-RecoveryState $Root (Join-Path $Artifact 'post-recovery')
+  Write-TreeEvidence $Root (Join-Path $Artifact 'tree.tsv') (Join-Path $Artifact 'hashes.tsv')
+  $Passed = $Failures.Count -eq 0
+  [ordered]@{schema_version=1;case_id='CMN-008';result=if($Passed){'PASS'}else{'FAIL'};same_state_root=$true;pre_kill_generation=$PreKillGeneration;post_kill_generation=$PostKillGeneration;kill_exit_code=$KillRun.exit_code;child_terminated=$KillRun.has_exited;recover_command="$Binary recover --root $Root";recover_exit_code=$RecoverRun.exit_code;recover_status=if($RecoverEnvelope){$RecoverEnvelope.state}else{'missing'};recovered_generation=$RecoveredGeneration;selector_valid=$SelectorValid;generation_exists=(Test-Path -LiteralPath $GenerationPath -PathType Container);manifest_valid=$ManifestValid;receipts_valid=($ReceiptResults.valid -notcontains $false);sqlite_valid=$SqliteValid;journal_valid=$JournalValid;journal_final_event=$JournalFinalEvent.event;journal_final_state=$JournalFinal.state;incomplete_generation_count=$Incomplete.Count;incomplete_generation_disposition=if($Incomplete.Count -eq 0){'none present; non-active staging preserved'}else{'invalid incomplete generation present'};mixed_generation_references=$MixedReferences;failures=$Failures} | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $Artifact 'summary.json')
+  Write-DiagnosticRecord $Timeline ([ordered]@{schema_version=1;event='recovery_validation_complete';result=if($Passed){'PASS'}else{'FAIL'};generation=$RecoveredGeneration;failure_count=$Failures.Count})
+  if (-not $Passed) { throw "CMN-008 recovery validation failed: $($Failures[0].category): $($Failures[0].detail)" }
 }
 
 function Invoke-ActivationPrimitiveProbes {
@@ -194,16 +349,24 @@ function Run-CaseDiagnostic {
   $Arguments = @('install','--root',$CaseRoot,'--catalog',$Catalog)
   $env:POA_ACTIVATION_DIAGNOSTIC = '1'
   if ($CaseId -eq 'CMN-008') {
+    $RecoveryArtifact = Join-Path $Base 'reports/results/windows-rust-CMN-008-recovery-validation'
+    New-Item -ItemType Directory -Force $RecoveryArtifact | Out-Null
     $PreOut = Join-Path $Artifact 'prerequisite.stdout.log'
     $PreErr = Join-Path $Artifact 'prerequisite.stderr.log'
     Write-DiagnosticRecord $Commands ([ordered]@{event='diag_failure_context';phase='prerequisite_begin';case_id=$CaseId;binary=$Binary;arguments=$Arguments;root=$CaseRoot;catalog=$Catalog})
     $Run = Invoke-CapturedExternal $Binary $Arguments $PreOut $PreErr
     if ($Run.exit_code -eq 0) {
+      $PreKillSelector = Get-Content -Raw -LiteralPath (Join-Path $CaseRoot 'state/active') | ConvertFrom-Json -ErrorAction Stop
+      $PreKillGeneration = [string]$PreKillSelector.generation_id
+      Save-RecoveryState $CaseRoot (Join-Path $RecoveryArtifact 'pre-kill')
+      Write-DiagnosticRecord (Join-Path $RecoveryArtifact 'timeline.jsonl') ([ordered]@{schema_version=1;event='pre_kill_state_captured';root=$CaseRoot;generation=$PreKillGeneration})
       $env:POA_FAULT = 'kill_after_active_swap'
       try { $Run = Invoke-CapturedExternal $Binary $Arguments $Stdout $Stderr } finally { Remove-Item Env:POA_FAULT -ErrorAction SilentlyContinue }
+      Invoke-CMN008RecoveryValidation $CaseRoot $RecoveryArtifact $Run $PreKillGeneration
     } else {
       Copy-Item -LiteralPath $PreOut -Destination $Stdout
       Copy-Item -LiteralPath $PreErr -Destination $Stderr
+      throw "CMN-008 prerequisite failed: exit=$($Run.exit_code); stderr=$($Run.stderr)"
     }
   } else {
     $Run = Invoke-CapturedExternal $Binary $Arguments $Stdout $Stderr
