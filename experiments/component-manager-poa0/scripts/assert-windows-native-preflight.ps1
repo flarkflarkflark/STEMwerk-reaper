@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('rust','go')][string]$Implementation,
-  [ValidateSet('normal','windows-rust-copy-hash')][string]$DiagnosticMode = 'normal',
+  [ValidateSet('normal','windows-rust-copy-hash','windows-rust-extended')][string]$DiagnosticMode = 'normal',
   [string]$DiagnosticCases = '',
   [string[]]$AvailableCommands
 )
@@ -22,6 +22,11 @@ if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
   'SQLITE3_REQUIRED_FOR_SELECTED_ROUTE=no'
   'SQLITE3_PREFLIGHT_SKIPPED_REASON=selected cases do not use sqlite3 before instrumented copy/hash interval'
   return
+}
+
+if ($DiagnosticMode -eq 'windows-rust-extended') {
+  if ($Implementation -ne 'rust') { throw 'Extended diagnostic mode is restricted to Rust' }
+  if ($DiagnosticCases) { throw 'Extended diagnostic casepool is fixed' }
 }
 
 if ($DiagnosticCases) { throw 'DiagnosticCases is only valid in diagnostic mode' }

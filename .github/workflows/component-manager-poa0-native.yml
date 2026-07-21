@@ -11,6 +11,7 @@ on:
         options:
           - normal
           - windows-rust-copy-hash
+          - windows-rust-extended
       diagnostic_cases:
         description: Fail-closed case allowlist for the Windows Rust diagnostic
         required: true
@@ -19,6 +20,7 @@ on:
         options:
           - CMN-001,CMN-008
           - CMN-008
+          - fixed-windows-rust-casepool
       verification_mode:
         description: Fail-closed frozen-verification policy
         required: true
@@ -68,7 +70,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: 79512d128f6383a405935e0f0b4a1a4a88d2f0a2
+          EXPECTED_PARENT: 002ddfc1514c429039efe9c763e290b4766b23ac
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -82,7 +84,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/assert-windows-native-preflight.ps1|experiments/component-manager-poa0/reports/WINDOWS_CMN008_ONLY_PREFLIGHT_ALLOWLIST_FIX.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/assert-windows-native-preflight.ps1|experiments/component-manager-poa0/scripts/run-native-matrix.ps1|experiments/component-manager-poa0/reports/WINDOWS_RUST_EXTENDED_MODE.md)
                 ;;
               *)
                 allowed=false
@@ -262,6 +264,110 @@ jobs:
           path: |
             experiments/component-manager-poa0/reports/results/
             experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-rust-extended:
+    if: github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'windows-rust-extended'
+    name: Windows x86_64 rust extended native regression
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout dispatched commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Assert fixed extended selection and verifier history
+        shell: pwsh
+        run: |
+          if ('${{ inputs.diagnostic_cases }}' -cne 'fixed-windows-rust-casepool') { throw 'Extended diagnostic casepool is fixed' }
+          if ('${{ inputs.verification_mode }}' -cne 'rust-implementation-fix') { throw 'Unsupported verification mode' }
+          if ('${{ inputs.verification_baseline }}' -cne '9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b') { throw 'Unsupported verification baseline' }
+          if ('${{ inputs.verification_target }}' -cne 'ec14fdf523524bbd9aec34d429f0b6a5b673a701') { throw 'Unsupported verification target' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Checked-out commit mismatch' }
+          git cat-file -e '9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b^{commit}'
+          git cat-file -e 'ec14fdf523524bbd9aec34d429f0b6a5b673a701^{commit}'
+          git merge-base --is-ancestor 9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b ec14fdf523524bbd9aec34d429f0b6a5b673a701
+          git merge-base --is-ancestor ec14fdf523524bbd9aec34d429f0b6a5b673a701 $env:GITHUB_SHA
+          $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($arch -notin @('x64', 'x86_64')) { throw "NATIVE_ARCH_FAIL expected x86_64, got $arch" }
+          'EXTENDED_WINDOWS_RUST_CASEPOOL=CMN-001..CMN-024,LEASE-001..LEASE-010,WIN-001..WIN-009'
+
+      - name: Set up pinned Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --no-self-update
+          rustup default 1.97.0
+
+      - name: Provision pinned SQLite CLI for extended Windows Rust regression
+        shell: pwsh
+        run: |
+          choco install sqlite `
+            --version=3.53.3 `
+            --yes `
+            --no-progress `
+            --limit-output
+          if ($LASTEXITCODE -ne 0) { throw "Chocolatey sqlite install failed: $LASTEXITCODE" }
+          $packageLines = @(choco list --exact sqlite --limit-output)
+          $packages = @($packageLines | Where-Object { $_ -match '^sqlite\|' })
+          if ($LASTEXITCODE -ne 0 -or $packages.Count -ne 1 -or $packages[0] -ne 'sqlite|3.53.3') { throw "Expected exactly sqlite|3.53.3" }
+          $candidates = @(Get-Command sqlite3.exe -All -CommandType Application -ErrorAction Stop)
+          if ($candidates.Count -ne 1) { throw "Expected exactly one sqlite3.exe candidate, got $($candidates.Count)" }
+          $sqlitePath = $candidates[0].Source
+          if (-not [IO.Path]::IsPathFullyQualified($sqlitePath) -or -not (Test-Path -LiteralPath $sqlitePath -PathType Leaf)) { throw "Invalid SQLite path: $sqlitePath" }
+          $sqliteVersion = (& $sqlitePath --version)
+          if ($LASTEXITCODE -ne 0 -or $sqliteVersion -notmatch '^3\.53\.3(?:\s|$)') { throw "Unexpected SQLite version: $sqliteVersion" }
+          "STEMWERK_POA0_SQLITE_EXE=$sqlitePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          (Split-Path -Parent $sqlitePath) | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'SQLITE_PACKAGE_VERSION_INSTALLED=3.53.3'
+          "SQLITE_EXE_PATH=$sqlitePath"
+          "SQLITE_EXE_VERSION=$sqliteVersion"
+
+      - name: Validate pinned SQLite CLI in a new process
+        shell: pwsh
+        run: |
+          if (-not $env:STEMWERK_POA0_SQLITE_EXE -or -not [IO.Path]::IsPathFullyQualified($env:STEMWERK_POA0_SQLITE_EXE)) { throw 'STEMWERK_POA0_SQLITE_EXE is missing or not absolute' }
+          $commands = @(Get-Command sqlite3.exe -All -CommandType Application -ErrorAction Stop)
+          $whereResults = @(where.exe sqlite3.exe)
+          if ($commands.Count -ne 1 -or $commands[0].Source -ne $env:STEMWERK_POA0_SQLITE_EXE -or $whereResults.Count -ne 1) { throw 'SQLite PATH/env validation failed' }
+          $version = (& $env:STEMWERK_POA0_SQLITE_EXE --version)
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^3\.53\.3(?:\s|$)') { throw "Explicit SQLite validation failed: $version" }
+          'SQLITE_NEW_PROCESS_VISIBLE=yes'
+
+      - name: Verify frozen domains at authorized diagnostic parent
+        shell: pwsh
+        run: |
+          $verify = Join-Path $env:RUNNER_TEMP 'poa0-authorized-parent'
+          git worktree add --detach $verify 8a90aee67518e423bc34bd6079b61e0f29f39c2b
+          try {
+            & "$verify/experiments/component-manager-poa0/scripts/verify-frozen-fixtures.ps1" -Mode rust-implementation-fix -Baseline '${{ inputs.verification_baseline }}' -Target '${{ inputs.verification_target }}' -WorkflowHead 8a90aee67518e423bc34bd6079b61e0f29f39c2b
+          } finally {
+            git worktree remove --force $verify
+          }
+
+      - name: Run isolated extended Windows Rust regression
+        shell: pwsh
+        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation rust -ExpectedArch x86_64 -DiagnosticMode windows-rust-extended -VerificationMode '${{ inputs.verification_mode }}' -VerificationBaseline '${{ inputs.verification_baseline }}' -VerificationTarget '${{ inputs.verification_target }}' -WorkflowHead '${{ github.sha }}' -SkipFrozenVerification
+
+      - name: Upload extended Windows Rust matrix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-manager-poa0-windows-x86_64-rust-extended
+          path: experiments/component-manager-poa0/reports/results/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload CMN-008 recovery validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rust-extended-CMN-008-recovery-validation
+          path: experiments/component-manager-poa0/reports/results/windows-rust-CMN-008-recovery-validation/
           if-no-files-found: error
           retention-days: 7
 

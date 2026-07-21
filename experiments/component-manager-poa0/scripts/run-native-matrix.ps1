@@ -1,7 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('rust','go')][string]$Implementation,
   [string]$ExpectedArch = 'x86_64',
-  [ValidateSet('normal','windows-rust-copy-hash')][string]$DiagnosticMode = 'normal',
+  [ValidateSet('normal','windows-rust-copy-hash','windows-rust-extended')][string]$DiagnosticMode = 'normal',
   [string]$DiagnosticCases = '',
   [ValidateSet('strict','rust-implementation-fix')][string]$VerificationMode = 'strict',
   [string]$VerificationBaseline = '',
@@ -14,11 +14,14 @@ $Base = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
   if ($Implementation -ne 'rust') { throw 'Diagnostic mode is restricted to Rust' }
   if ($DiagnosticCases -notin @('CMN-001,CMN-008', 'CMN-008')) { throw 'Unsupported diagnostic case selection' }
+} elseif ($DiagnosticMode -eq 'windows-rust-extended') {
+  if ($Implementation -ne 'rust') { throw 'Extended diagnostic mode is restricted to Rust' }
+  if ($DiagnosticCases) { throw 'Extended diagnostic casepool is fixed' }
 } elseif ($DiagnosticCases) {
   throw 'DiagnosticCases is only valid in diagnostic mode'
 }
 Set-Location $Base
-if ($SkipFrozenVerification -and $DiagnosticMode -ne 'windows-rust-copy-hash') { throw 'SkipFrozenVerification is diagnostic-only' }
+if ($SkipFrozenVerification -and $DiagnosticMode -notin @('windows-rust-copy-hash','windows-rust-extended')) { throw 'SkipFrozenVerification is diagnostic-only' }
 if (-not $SkipFrozenVerification) {
   & "$Base/scripts/verify-frozen-fixtures.ps1" -Mode $VerificationMode -Baseline $VerificationBaseline -Target $VerificationTarget -WorkflowHead $WorkflowHead
 }
@@ -55,6 +58,10 @@ if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
 if ($LASTEXITCODE -ne 0) { throw 'Common matrix failed' }
 & "$Base/harness/lease-policy-tests.ps1"
 & "$Base/harness/platform-tests.ps1"
+if ($DiagnosticMode -eq 'windows-rust-extended') {
+  & "$Base/scripts/run-windows-rust-copy-hash-diagnostic.ps1" -Cases 'CMN-008'
+  if ($LASTEXITCODE -ne 0) { throw 'CMN-008 recovery regression failed to capture evidence' }
+}
 $Summary = [ordered]@{schema_version=1;commit=$env:GITHUB_SHA;os='windows';architecture=$ExpectedArch;implementation=$Implementation;build='PASS';common_matrix='24/24';lease_matrix='10/10';platform='PASS';classification='PASS_NATIVE';mixed_component_visibility_count=0}
 $Summary | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM "$Base/reports/results/native-summary.json"
 $Report = @"
