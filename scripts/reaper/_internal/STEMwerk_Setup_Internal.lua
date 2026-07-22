@@ -694,6 +694,10 @@ local function prettySetupReason(reason)
             part = "stemwerk-core is missing after setup"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "runtime_policy_mismatch_requires_rebuild" then
+            part = "Existing runtime uses a different dependency policy; use Rebuild venv to replace it"
+        elseif lower == "runtime_broken_requires_rebuild" then
+            part = "Existing runtime is incomplete; use Rebuild venv to replace it"
         elseif lower == "samplerate_reinstall_failed" then
             part = "samplerate repair failed on Apple Silicon"
         elseif lower == "samplerate_arch_mismatch_requires_runtime_rebuild" then
@@ -883,6 +887,18 @@ local function knownRuntimeFailureState(state)
         or reason == "onnxruntime_install_failed"
         or reason == "torch_pin_assert_failed"
         or reason == "torch_pin_repair_failed"
+        or reason == "runtime_policy_mismatch_requires_rebuild"
+        or reason == "runtime_broken_requires_rebuild"
+end
+
+local function runtimePolicyRequiresRebuild(state)
+    state = state or {}
+    local reason = trim(state.STATUS_REASON or ""):lower()
+    local policyStatus = trim(state.MACOS_RUNTIME_POLICY_STATUS or ""):lower()
+    return reason == "runtime_policy_mismatch_requires_rebuild"
+        or reason == "runtime_broken_requires_rebuild"
+        or policyStatus == "mismatch"
+        or policyStatus == "broken"
 end
 
 local function hasPythonDiagnosticPath(state)
@@ -2715,9 +2731,11 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         trim(state.STATUS or "") == "ok"
         and hasBootstrapRuntimeVerificationPass()
     )
-    local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified
+    local runtimePolicyBlocked = runtimePolicyRequiresRebuild(state)
+    local effectiveBootstrapSuccess = (not runtimePolicyBlocked)
+        and (bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified)
 
-    if verifiedRuntimeOk then
+    if verifiedRuntimeOk and not runtimePolicyBlocked then
         if appendLogLine then
             appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
         else
@@ -2731,7 +2749,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
     end
-    if authoritativeBootstrapVerified then
+    if authoritativeBootstrapVerified and not runtimePolicyBlocked then
         state.STATUS = "ok"
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
@@ -3907,7 +3925,8 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     local pid = readBootstrapPid(pidFile)
     local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy
     local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)
-    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running") and readyHealthy and bootstrapComplete
+    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")
+        and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)
     if staleRunning or staleGuardFailed or staleFailedState then
         status = "ok"
         reason = ""

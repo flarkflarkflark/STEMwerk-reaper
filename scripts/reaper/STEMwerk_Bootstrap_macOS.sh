@@ -8,6 +8,11 @@ MACOS_ARM_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos.txt"
 MACOS_INTEL_CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints/macos-intel.txt"
 MACOS_CONSTRAINTS_FILE=""
 PINNED_NUMPY_VERSION="1.26.4"
+PINNED_NUMBA_VERSION="0.59.1"
+PINNED_LLVMLITE_VERSION="0.42.0"
+PINNED_AUDIO_SEPARATOR_VERSION="0.23.0"
+PINNED_SAMPLERATE_VERSION="0.1.0"
+PINNED_PYTHON_MAJOR_MINOR="3.12"
 PINNED_TORCH_VERSION=""
 PINNED_TORCHVISION_VERSION=""
 PINNED_TORCHAUDIO_VERSION=""
@@ -330,6 +335,80 @@ accept_python_version() {
     10|11|12) return 0 ;;
   esac
   return 1
+}
+
+probe_existing_runtime_policy() {
+  _venv_py="$1"
+  [ -x "${_venv_py}" ] || return 2
+  "${_venv_py}" - <<PY 2>/dev/null
+import importlib
+import platform
+import sys
+from importlib.metadata import PackageNotFoundError, version
+
+expected = {
+    "audio-separator": "${PINNED_AUDIO_SEPARATOR_VERSION}",
+    "numpy": "${PINNED_NUMPY_VERSION}",
+    "numba": "${PINNED_NUMBA_VERSION}",
+    "llvmlite": "${PINNED_LLVMLITE_VERSION}",
+    "torch": "${PINNED_TORCH_VERSION}",
+    "torchaudio": "${PINNED_TORCHAUDIO_VERSION}",
+    "samplerate": "${PINNED_SAMPLERATE_VERSION}",
+}
+imports = {
+    "audio-separator": "audio_separator",
+    "numpy": "numpy",
+    "numba": "numba",
+    "llvmlite": "llvmlite",
+    "torch": "torch",
+    "torchaudio": "torchaudio",
+    "samplerate": "samplerate",
+}
+
+def core(value):
+    return str(value).split("+", 1)[0]
+
+observed = {
+    "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+    "architecture": platform.machine(),
+}
+broken = []
+for distribution, module in imports.items():
+    try:
+        observed[distribution] = version(distribution)
+    except PackageNotFoundError:
+        observed[distribution] = "missing"
+        broken.append(distribution + ":missing")
+        continue
+    except Exception as exc:
+        observed[distribution] = "metadata_error"
+        broken.append(distribution + ":metadata_error:" + str(exc))
+        continue
+    try:
+        importlib.import_module(module)
+    except Exception as exc:
+        broken.append(distribution + ":import_error:" + str(exc))
+
+mismatch = []
+if observed["python"] != "${PINNED_PYTHON_MAJOR_MINOR}":
+    mismatch.append("python:" + observed["python"])
+if observed["architecture"] != "${MAC_ARCH}":
+    mismatch.append("architecture:" + observed["architecture"])
+for distribution, wanted in expected.items():
+    if core(observed.get(distribution, "missing")) != wanted:
+        mismatch.append(distribution + ":" + observed.get(distribution, "missing"))
+
+summary = ";".join(
+    key + "=" + str(observed.get(key, "missing")).replace("\n", " ")
+    for key in ("python", "architecture", "audio-separator", "numpy", "numba", "llvmlite", "torch", "torchaudio", "samplerate")
+)
+if broken:
+    print("broken|" + summary + ";errors=" + ",".join(item.replace("\n", " ") for item in broken))
+elif mismatch:
+    print("mismatch|" + summary + ";different=" + ",".join(mismatch))
+else:
+    print("match|" + summary)
+PY
 }
 
 verify_audio_separator_runtime_deps() {
@@ -679,7 +758,7 @@ expected_numpy = "${PINNED_NUMPY_VERSION}"
 expected_torch = "${PINNED_TORCH_VERSION}"
 expected_torchvision = "${PINNED_TORCHVISION_VERSION}"
 expected_torchaudio = "${PINNED_TORCHAUDIO_VERSION}"
-expected_audio_separator = "0.23.0"
+expected_audio_separator = "${PINNED_AUDIO_SEPARATOR_VERSION}"
 expected_profile = "${PINNED_TORCH_STACK_LABEL}"
 mac_arch = "${MAC_ARCH}"
 
@@ -983,6 +1062,14 @@ write_state() {
       echo "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
       echo "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
       echo "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+      echo "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=${MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED}"
+      echo "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+      echo "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+      echo "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
+      echo "MACOS_RUNTIME_POLICY_MUTATION_STARTED=${MACOS_RUNTIME_POLICY_MUTATION_STARTED}"
       [ -n "${PYTHON}" ] && echo "PYTHON_PATH=${PYTHON}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
@@ -1114,7 +1201,7 @@ log "MACOS_BUNDLED_WHEELHOUSE_STATUS=${MACOS_BUNDLED_WHEELHOUSE_STATUS}"
 log "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
 log "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
 
-mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
 
 STATUS="ok"
 STATUS_REASON=""
@@ -1122,7 +1209,7 @@ PYTHON=""
 FFMPEG=""
 VENV_PY=""
 # Conservative default on macOS to avoid GPU extras with limited wheel support.
-PACKAGE="audio-separator==0.23.0"
+PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
 ONNX_PACKAGE="onnxruntime"
 ONNX_FALLBACK_PACKAGE=""
 if [ "$(uname -m)" = "arm64" ]; then
@@ -1167,18 +1254,96 @@ AUDIO_SEPARATOR_DEPS_COMPLETE="unknown"
 SYSTEM_PYTHON_PATH=""
 SYSTEM_PYTHON_VERSION=""
 SYSTEM_PYTHON_USED="no"
+MACOS_PAYLOAD_PREFLIGHT_STATUS="not_required"
+MACOS_PAYLOAD_PREFLIGHT_REASON="not_apple_silicon"
+MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE="${BUNDLED_WHEELS_DIR}"
+MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"
+MACOS_RUNTIME_POLICY_STATUS="not_checked"
+MACOS_RUNTIME_POLICY_REASON=""
+MACOS_RUNTIME_POLICY_OBSERVED=""
+MACOS_RUNTIME_POLICY_MUTATION_STARTED="false"
 
 if command -v managed_python_init_state >/dev/null 2>&1; then
   managed_python_init_state
 fi
 
 if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_payload_missing_or_incomplete"
   log "Apple Silicon Repair requires a complete bundled payload; online fallback is unsupported"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+  log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+  log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
   set_status "deps_failed" "apple_silicon_requires_bundled_payload"
   write_ready_to_go_state "mps" "missing" "missing" "apple_silicon_requires_bundled_payload" "missing"
   write_state
   exit 1
 fi
+
+if [ "${MAC_ARCH}" = "arm64" ]; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="ok"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="bundled_payload_complete"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+  log "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE=${MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE}"
+  log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
+fi
+
+if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
+  _runtime_policy_probe="$(probe_existing_runtime_policy "${RUNTIME_BASE}/.venv/bin/python" || true)"
+  MACOS_RUNTIME_POLICY_OBSERVED="${_runtime_policy_probe}"
+  case "${_runtime_policy_probe}" in
+    match\|*)
+      MACOS_RUNTIME_POLICY_STATUS="match"
+      MACOS_RUNTIME_POLICY_REASON="runtime_policy_match"
+      log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+      log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+      log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
+      log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+      ;;
+    mismatch\|*)
+      MACOS_RUNTIME_POLICY_STATUS="mismatch"
+      MACOS_RUNTIME_POLICY_REASON="runtime_policy_mismatch_requires_rebuild"
+      log "Existing managed runtime is operational but does not match the bundled 2.3.0.6 dependency policy"
+      log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+      log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+      log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
+      log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+      set_status "repair_required" "${MACOS_RUNTIME_POLICY_REASON}"
+      write_state
+      exit 1
+      ;;
+    *)
+      MACOS_RUNTIME_POLICY_STATUS="broken"
+      MACOS_RUNTIME_POLICY_REASON="runtime_broken_requires_rebuild"
+      log "Existing managed runtime could not pass the installed dependency policy probe"
+      log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+      log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+      log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
+      log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+      set_status "rebuild_required" "${MACOS_RUNTIME_POLICY_REASON}"
+      write_state
+      exit 1
+      ;;
+  esac
+elif [ "${MODE}" = "repair" ]; then
+  MACOS_RUNTIME_POLICY_STATUS="missing"
+  MACOS_RUNTIME_POLICY_REASON="missing_runtime_recovery"
+  log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+  log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+  log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+else
+  MACOS_RUNTIME_POLICY_STATUS="explicit_rebuild"
+  MACOS_RUNTIME_POLICY_REASON="explicit_rebuild_after_payload_preflight"
+  log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+  log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+  log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+fi
+
+MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
+MACOS_RUNTIME_POLICY_MUTATION_STARTED="true"
+mkdir -p "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
   log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"
@@ -1340,7 +1505,8 @@ else
     fi
 
     log "Preinstalling numba/llvmlite (macOS wheels)"
-    install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: "llvmlite==0.42.0" "numba==0.59.1" >> "${LOG_FILE}" 2>&1 || \
+    install_with_optional_bundled_wheels "${VENV_PY}" --only-binary=:all: \
+      "llvmlite==${PINNED_LLVMLITE_VERSION}" "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1 || \
       log "WARN: numba/llvmlite wheel install failed; continuing with audio-separator install"
 
     if ! "${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1; then
