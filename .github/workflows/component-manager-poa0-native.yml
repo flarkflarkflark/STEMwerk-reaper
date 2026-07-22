@@ -77,7 +77,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: 97e46a2f6e6897ae12eca9b633f5a9dcedbb3792
+          EXPECTED_PARENT: 45e69a329afda2cea3267643569c756e60541be8
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -91,7 +91,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/macos-filesystem-probe.py|experiments/component-manager-poa0/scripts/macos-statfs-layout.c|experiments/component-manager-poa0/scripts/test-macos-statfs-abi.py|experiments/component-manager-poa0/reports/MACOS_X86_64_STATFS_ABI_FIX.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/test-macos-nm-symbol-matcher.py|experiments/component-manager-poa0/reports/MACOS_ARM64_NM_SYMBOL_MATCHER_FIX.md)
                 ;;
               *)
                 allowed=false
@@ -101,7 +101,7 @@ jobs:
 
           if [[ "$actual_parent" == "$EXPECTED_PARENT" && ${#changed_paths[@]} -gt 0 && "$allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
-            echo 'classification=macos-x86-statfs-only' >>"$GITHUB_OUTPUT"
+            echo 'classification=macos-arm64-nm-matcher-only' >>"$GITHUB_OUTPUT"
           else
             echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
             echo 'classification=other' >>"$GITHUB_OUTPUT"
@@ -348,11 +348,11 @@ jobs:
           layout_raw="$RUNNER_TEMP/macos-statfs-layout.json"
           clang -std=c11 -Wall -Wextra -Werror "$base/scripts/macos-statfs-layout.c" -o "$layout_binary"
           nm -u "$layout_binary" >"$evidence/abi-native-symbols.txt"
-          if test '${{ matrix.arch }}' = x86_64; then
-            grep -F '_statfs$INODE64' "$evidence/abi-native-symbols.txt"
-          else
-            grep -E ' U _statfs$' "$evidence/abi-native-symbols.txt"
-          fi
+          python3 "$base/scripts/test-macos-nm-symbol-matcher.py" --match \
+            --input "$evidence/abi-native-symbols.txt" \
+            --arch '${{ matrix.arch }}' \
+            --normalized-output "$evidence/abi-normalized-symbols.txt" \
+            --summary-output "$evidence/abi-symbol-match.json"
           "$layout_binary" "$base/reports/results" >"$layout_raw"
           jq --arg sdk_path "$(xcrun --sdk macosx --show-sdk-path)" \
              --arg sdk_version "$(xcrun --sdk macosx --show-sdk-version)" \
