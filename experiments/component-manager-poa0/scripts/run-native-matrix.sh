@@ -23,7 +23,11 @@ if test "$implementation" = rust; then cp bin/cm-rust bin/cm-go; else cp bin/cm-
 scripts/assert-native-platform.sh "$expected_os" "$expected_arch" | tee reports/results/platform-info.txt
 harness/run-matrix.sh
 harness/lease-policy-tests.sh
-EXPECTED_ARCH="$expected_arch" harness/platform-tests.sh
+if test "$expected_os" = macos; then
+  EXPECTED_ARCH="$expected_arch" POA_IMPLEMENTATION="$implementation" scripts/macos-platform-tests.sh
+else
+  EXPECTED_ARCH="$expected_arch" harness/platform-tests.sh
+fi
 harness/contract-smoke.sh
 matrix_bad=$(awk -F '\t' 'NR>1&&$3!="PASS"{n++}END{print n+0}' reports/results/matrix.tsv)
 selected_cases=$(awk -F '\t' -v impl="$implementation" 'NR>1&&$1==impl{n++}END{print n+0}' reports/results/matrix.tsv)
