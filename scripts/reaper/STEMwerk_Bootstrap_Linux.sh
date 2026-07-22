@@ -1145,6 +1145,62 @@ resolve_drumsep_rocm_tmpdir() {
   return 1
 }
 
+validate_explicit_drumsep_rocm_tmpdir() {
+  _requested_tmpdir="$1"
+  DRUMSEP_ROCM_TMPDIR_RESOLVED=""
+  DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL=""
+
+  case "${_requested_tmpdir}" in
+    /*) ;;
+    *)
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="relative_path"
+      return 1
+      ;;
+  esac
+
+  if ! command -v realpath >/dev/null 2>&1; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="realpath_unavailable"
+    return 1
+  fi
+  _resolved_tmpdir="$(realpath -m -- "${_requested_tmpdir}" 2>/dev/null || true)"
+  if [ -z "${_resolved_tmpdir}" ]; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="resolve_failed"
+    return 1
+  fi
+  if [ "${_resolved_tmpdir}" = "/" ]; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="root_path"
+    return 1
+  fi
+
+  _model_dir="$(model_cache_dir)"
+  case "${_resolved_tmpdir}" in
+    "${RUNTIME_BASE}")
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="runtime_root"
+      return 1
+      ;;
+    "${SCRIPT_DIR}"|"${SCRIPT_DIR}"/*)
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="source_path"
+      return 1
+      ;;
+    "${_model_dir}"|"${_model_dir}"/*)
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="model_path"
+      return 1
+      ;;
+  esac
+
+  if ! mkdir -p "${_resolved_tmpdir}" >/dev/null 2>&1; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="create_failed"
+    return 1
+  fi
+  if [ ! -d "${_resolved_tmpdir}" ] || [ ! -w "${_resolved_tmpdir}" ]; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="not_writable"
+    return 1
+  fi
+
+  DRUMSEP_ROCM_TMPDIR_RESOLVED="${_resolved_tmpdir}"
+  return 0
+}
+
 drumsep_rocm_disk_preflight() {
   _required_kb="$((DRUMSEP_ROCM_MIN_FREE_GB * 1024 * 1024))"
   _target_dir="${RUNTIME_BASE}"
@@ -1159,11 +1215,25 @@ drumsep_rocm_disk_preflight() {
     return 1
   fi
 
-  DRUMSEP_ROCM_TMPDIR="$(resolve_drumsep_rocm_tmpdir "${_required_kb}" || true)"
+  if [ -n "${DRUMSEP_ROCM_TMPDIR:-}" ]; then
+    DRUMSEP_ROCM_TMPDIR_SOURCE="explicit"
+    if ! validate_explicit_drumsep_rocm_tmpdir "${DRUMSEP_ROCM_TMPDIR}"; then
+      DRUMSEP_ROCM_PREFLIGHT_DETAIL="explicit_temp_dir_${DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL:-invalid}"
+      log_step "DRUMSEP_ROCM_TMPDIR_SOURCE=${DRUMSEP_ROCM_TMPDIR_SOURCE}"
+      log_step "DRUMSEP_ROCM_TMPDIR_RESOLVED="
+      return 1
+    fi
+    DRUMSEP_ROCM_TMPDIR="${DRUMSEP_ROCM_TMPDIR_RESOLVED}"
+  else
+    DRUMSEP_ROCM_TMPDIR_SOURCE="auto"
+    DRUMSEP_ROCM_TMPDIR="$(resolve_drumsep_rocm_tmpdir "${_required_kb}" || true)"
+  fi
   if [ -z "${DRUMSEP_ROCM_TMPDIR}" ]; then
     DRUMSEP_ROCM_PREFLIGHT_DETAIL="temp_dir_free_space_insufficient"
     return 1
   fi
+  log_step "DRUMSEP_ROCM_TMPDIR_SOURCE=${DRUMSEP_ROCM_TMPDIR_SOURCE}"
+  log_step "DRUMSEP_ROCM_TMPDIR_RESOLVED=${DRUMSEP_ROCM_TMPDIR}"
   _tmp_avail_kb="$(free_kb_for_path "${DRUMSEP_ROCM_TMPDIR}")"
   _tmp_avail_gb=$(( _tmp_avail_kb / 1024 / 1024 ))
   log_step "ROCm disk preflight tmp=${DRUMSEP_ROCM_TMPDIR} free_gb=${_tmp_avail_gb} required_gb=${DRUMSEP_ROCM_MIN_FREE_GB}"
