@@ -2,10 +2,9 @@
 
 ## Corrective hotfix scope
 
-STEMwerk 2.3.0.6 is a narrow corrective release based directly on the official
-2.3.0.4 tag. An unreleased 2.3.0.5 planning build was briefly exposed through
-the moving ReaPack `main` branch; there was no official 2.3.0.5 tag or GitHub
-release.
+STEMwerk 2.3.0.6 is the official narrow corrective hotfix based directly on the
+official 2.3.0.4 tag. Version 2.3.0.5 was unintentionally exposed through the
+moving ReaPack `main` branch; there was no official 2.3.0.5 GitHub release.
 
 ## Fixes
 
@@ -23,6 +22,14 @@ release.
   alias. A conflicting pre-existing alias fails closed without modifying the
   model cache.
 - macOS package staging excludes AppleDouble `._*` sidecars.
+- The bundled Apple Silicon payload is resolved as one coherent, closed
+  dependency set. Its NumPy/Numba combination is verified with live imports and
+  a compiled Numba JIT probe, and its DrumSep compatibility configuration is
+  hash-verified during payload assembly.
+- Ordinary Repair probes an existing operational runtime before mutation. If
+  its dependency policy differs from the bundled 2.3.0.6 policy, Repair reports
+  `runtime_policy_mismatch_requires_rebuild` and directs the user to explicit
+  `Rebuild venv` without changing the environment or readiness state.
 
 The available support evidence does not establish why the reported managed
 `.venv` disappeared. In particular, it does not prove that the last logged
@@ -47,6 +54,33 @@ The package must pass a package-originated M1 fresh-install, missing-runtime
 Repair, healthy-runtime Repair, Normal Stems, Direct Kit, Kit Split, and
 no-network payload smoke before publication.
 
+The final bundled Apple Silicon candidate is:
+
+`STEMwerk-2.3.0.6-bundled-apple-silicon.pkg`
+
+SHA256:
+
+`eedd4d293e4c7e351c2e2a07b641b18db0388d368504379b84636cfac3908856`
+
+## Final Apple Silicon evidence
+
+The final installed-package smoke on M1 passed:
+
+- Package receipt version and installed script provenance matched 2.3.0.6.
+- Ordinary Repair detected the newer operational runtime policy, returned
+  `repair_required`, and preserved the full pip inventory, readiness state,
+  Python environment, and sentinel byte-for-byte.
+- Missing-runtime recovery restored managed Python and the complete bundled
+  dependency/model policy without requiring network access.
+- Explicit `Rebuild venv` completed only after full payload preflight; the
+  rebuilt NumPy/Numba imports and compiled JIT probe passed.
+- Canonical DrumSep checkpoint/catalog resolution passed without creating a
+  conflicting model alias.
+- A live 25-second Kit Split run used MPS for both stages and produced the six
+  canonical drum outputs with `output_validation_reason=ok`.
+- The original production runtime was restored and matched the retained full
+  backup for pip inventory, readiness, and model inventory.
+
 ## Explicit exclusions
 
 - No model-registry v2 or Vocals HQ proof.
@@ -58,5 +92,6 @@ no-network payload smoke before publication.
 - No 2.4 design or handoff work.
 - The retired Windows update-patch path is not restored.
 - Offline/allmodels products are not rebuilt or replaced.
+- No 2.4 runtime architecture is included.
 
 No push, tag, installer build, or publication is part of release preparation.
