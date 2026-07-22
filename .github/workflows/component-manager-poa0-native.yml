@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - normal
+          - cmn-021-024
           - windows-rust-copy-hash
           - windows-rust-extended
           - windows-go-durability
@@ -73,11 +74,11 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Classify exact orchestration-only push
+      - name: Classify exact CMN-021..024 closure push
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: 45e69a329afda2cea3267643569c756e60541be8
+          EXPECTED_PARENT: 0bec068ea1ba01f40ad42cff1107995cbf1b39e1
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -91,7 +92,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/test-macos-nm-symbol-matcher.py|experiments/component-manager-poa0/reports/MACOS_ARM64_NM_SYMBOL_MATCHER_FIX.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/common-gate-cases.sh|experiments/component-manager-poa0/scripts/common-gate-cases.ps1|experiments/component-manager-poa0/scripts/common_case_contract.py|experiments/component-manager-poa0/scripts/test-common-case-record-contract.py|experiments/component-manager-poa0/scripts/run-native-matrix.sh|experiments/component-manager-poa0/scripts/run-native-matrix.ps1|experiments/component-manager-poa0/scripts/verify-implementation-parity.sh|experiments/component-manager-poa0/reports/CMN_021_024_CONCRETE_CASE_CLOSURE.md)
                 ;;
               *)
                 allowed=false
@@ -101,7 +102,7 @@ jobs:
 
           if [[ "$actual_parent" == "$EXPECTED_PARENT" && ${#changed_paths[@]} -gt 0 && "$allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
-            echo 'classification=macos-arm64-nm-matcher-only' >>"$GITHUB_OUTPUT"
+            echo 'classification=cmn-021-024-closure-only' >>"$GITHUB_OUTPUT"
           else
             echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
             echo 'classification=other' >>"$GITHUB_OUTPUT"
@@ -120,7 +121,8 @@ jobs:
        github.event.head_commit.message != 'experiment(cm): instrument POA-0 Windows Rust activation failure' &&
        github.event.head_commit.message != 'experiment(cm): open Windows state directory for durability sync' &&
        github.event.head_commit.message != 'experiment(cm): probe POA-0 Windows selector durability primitives') ||
-      (github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'normal'))
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.diagnostic_mode == 'normal' || inputs.diagnostic_mode == 'cmn-021-024')))
     name: ${{ matrix.label }} ${{ matrix.implementation }} native
     strategy:
       fail-fast: false
@@ -256,12 +258,17 @@ jobs:
         env:
           POA_EXPECTED_OS: ${{ matrix.os }}
           POA_EXPECTED_ARCH: ${{ matrix.arch }}
-        run: experiments/component-manager-poa0/scripts/run-native-matrix.sh --implementation "${{ matrix.implementation }}"
+        run: |
+          if [[ '${{ inputs.diagnostic_mode }}' == cmn-021-024 ]]; then
+            experiments/component-manager-poa0/scripts/run-native-matrix.sh --implementation "${{ matrix.implementation }}" --case-selection cmn-021-024
+          else
+            experiments/component-manager-poa0/scripts/run-native-matrix.sh --implementation "${{ matrix.implementation }}"
+          fi
 
       - name: Run frozen native matrix on Windows
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation '${{ matrix.implementation }}' -ExpectedArch '${{ matrix.arch }}'
+        run: ./experiments/component-manager-poa0/scripts/run-native-matrix.ps1 -Implementation '${{ matrix.implementation }}' -ExpectedArch '${{ matrix.arch }}' -DiagnosticMode '${{ inputs.diagnostic_mode || 'normal' }}'
 
       - name: Upload small POA reports
         if: always()

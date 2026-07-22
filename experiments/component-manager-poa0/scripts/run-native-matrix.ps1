@@ -1,7 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('rust','go')][string]$Implementation,
   [string]$ExpectedArch = 'x86_64',
-  [ValidateSet('normal','windows-rust-copy-hash','windows-rust-extended')][string]$DiagnosticMode = 'normal',
+  [ValidateSet('normal','windows-rust-copy-hash','windows-rust-extended','cmn-021-024')][string]$DiagnosticMode = 'normal',
   [string]$DiagnosticCases = '',
   [ValidateSet('strict','rust-implementation-fix')][string]$VerificationMode = 'strict',
   [string]$VerificationBaseline = '',
@@ -25,7 +25,8 @@ if ($SkipFrozenVerification -and $DiagnosticMode -notin @('windows-rust-copy-has
 if (-not $SkipFrozenVerification) {
   & "$Base/scripts/verify-frozen-fixtures.ps1" -Mode $VerificationMode -Baseline $VerificationBaseline -Target $VerificationTarget -WorkflowHead $WorkflowHead
 }
-& "$Base/scripts/assert-windows-native-preflight.ps1" -Implementation $Implementation -DiagnosticMode $DiagnosticMode -DiagnosticCases $DiagnosticCases
+$PreflightMode = if ($DiagnosticMode -eq 'cmn-021-024') { 'normal' } else { $DiagnosticMode }
+& "$Base/scripts/assert-windows-native-preflight.ps1" -Implementation $Implementation -DiagnosticMode $PreflightMode -DiagnosticCases $DiagnosticCases
 New-Item -ItemType Directory -Force "$Base/bin", "$Base/.caches/cargo-home", "$Base/.caches/cargo-target", "$Base/.caches/go-build", "$Base/.caches/go-mod", "$Base/.caches/go-path", "$Base/reports/results" | Out-Null
 if ($Implementation -eq 'rust') {
   rustc --version --verbose
@@ -54,15 +55,27 @@ if ($DiagnosticMode -eq 'windows-rust-copy-hash') {
   if ($LASTEXITCODE -ne 0) { throw 'Windows Rust copy/hash diagnostic failed to capture evidence' }
   exit 0
 }
-& bash "$BashBase/harness/run-matrix.sh"
-if ($LASTEXITCODE -ne 0) { throw 'Common matrix failed' }
-& "$Base/harness/lease-policy-tests.ps1"
-& "$Base/harness/platform-tests.ps1"
+if ($DiagnosticMode -eq 'cmn-021-024') {
+  "implementation`tcase`tresult`texitcode`terror_code`tjsonl_valid`tactive_generation`tjournal_status`treceipt_status`texpected_state" | Set-Content -Encoding utf8NoBOM "$Base/reports/results/matrix.tsv"
+} else {
+  & bash "$BashBase/harness/run-matrix.sh"
+  if ($LASTEXITCODE -ne 0) { throw 'Common matrix failed' }
+}
+& "$Base/scripts/common-gate-cases.ps1" -Implementation $Implementation
+if ($DiagnosticMode -ne 'cmn-021-024') {
+  & "$Base/harness/lease-policy-tests.ps1"
+  & "$Base/harness/platform-tests.ps1"
+}
 if ($DiagnosticMode -eq 'windows-rust-extended') {
   & "$Base/scripts/run-windows-rust-copy-hash-diagnostic.ps1" -Cases 'CMN-008'
   if ($LASTEXITCODE -ne 0) { throw 'CMN-008 recovery regression failed to capture evidence' }
 }
-$Summary = [ordered]@{schema_version=1;commit=$env:GITHUB_SHA;os='windows';architecture=$ExpectedArch;implementation=$Implementation;build='PASS';common_matrix='24/24';lease_matrix='10/10';platform='PASS';classification='PASS_NATIVE';mixed_component_visibility_count=0}
+$ExpectedIds = if ($DiagnosticMode -eq 'cmn-021-024') { 'CMN-021,CMN-022,CMN-023,CMN-024' } else { (1..24 | ForEach-Object { 'CMN-{0:D3}' -f $_ }) -join ',' }
+$CommonSummary = (& python "$Base/scripts/common_case_contract.py" --matrix "$Base/reports/results/matrix.tsv" --implementation $Implementation --expected $ExpectedIds --output "$Base/reports/results/common-summary.json").Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Common case record contract failed' }
+$LeaseSummary = if ($DiagnosticMode -eq 'cmn-021-024') { 'not_run' } else { '10/10' }
+$PlatformSummary = if ($DiagnosticMode -eq 'cmn-021-024') { 'not_run' } else { 'PASS' }
+$Summary = [ordered]@{schema_version=1;commit=$env:GITHUB_SHA;os='windows';architecture=$ExpectedArch;implementation=$Implementation;build='PASS';common_matrix=$CommonSummary;lease_matrix=$LeaseSummary;platform=$PlatformSummary;classification='PASS_NATIVE';mixed_component_visibility_count=0}
 $Summary | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM "$Base/reports/results/native-summary.json"
 $Report = @"
 # POA-0 native matrix result
@@ -72,9 +85,9 @@ $Report = @"
 - Runner image: $env:ImageOS $env:ImageVersion
 - Native OS/architecture: windows / $ExpectedArch
 - Implementation: $Implementation
-- Result: PASS_NATIVE, common matrix 24/24
-- Platform cases: PASS
-- Lease policy: 10/10
+- Result: PASS_NATIVE, common matrix $CommonSummary
+- Platform cases: $PlatformSummary
+- Lease policy: $LeaseSummary
 - Mixed-generation visibility: 0
 - Cross-build classification: not used for this result
 - Final language decision: pending_native_ci until all four native jobs complete

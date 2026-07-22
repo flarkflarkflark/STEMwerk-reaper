@@ -2,15 +2,19 @@
 set -euo pipefail
 base=$(cd "$(dirname "$0")/.." && pwd)
 matrix="$base/harness/run-matrix.sh"
+common_gates="$base/scripts/common-gate-cases.sh"
 source "$base/scripts/jq-native-path.sh"
 source "$base/scripts/harness-portability.sh"
 hash_stdin() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'; else shasum -a 256 | awk '{print $1}'; fi; }
 case_count=$(grep -oE 'CMN-[0-9]{3}' "$matrix" | sort -u | count_lines_portable)
+gate_case_count=$(grep -oE 'CMN-[0-9]{3}' "$common_gates" | sort -u | count_lines_portable)
 names_count=$(normalize_numeric_count "$(grep -c '^names=(' "$matrix")")
 modes_count=$(normalize_numeric_count "$(grep -c '^modes=(' "$matrix")")
 runner_count=$(normalize_numeric_count "$(grep -c '^run_case()' "$matrix")")
 loop_count=$(normalize_numeric_count "$(grep -c '^for impl in rust go;' "$matrix")")
 test "$case_count" -eq 20
+test "$gate_case_count" -eq 4
+test "$((case_count + gate_case_count))" -eq 24
 test "$names_count" -eq 1
 test "$modes_count" -eq 1
 test "$runner_count" -eq 1
