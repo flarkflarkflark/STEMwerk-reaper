@@ -20,6 +20,9 @@ from typing import Any
 
 
 EXPECTED_CASE_NAME = "apfs-active-replace"
+MFSNAMELEN = 15
+MFSTYPENAMELEN = MFSNAMELEN + 1
+MNAMELEN = 1024
 ARTIFACT_NAMES = (
     "probe-summary.json",
     "filesystem-metadata.json",
@@ -47,6 +50,128 @@ class ProbeFailure(RuntimeError):
 
     def __str__(self) -> str:
         return f"MAC-001 {self.step}: {self.operation}({self.path}): {self.message} errno={self.errno}"
+
+
+class StatFsBindingError(RuntimeError):
+    pass
+
+
+class DarwinStatFs64(ctypes.Structure):
+    """Darwin __DARWIN_STRUCT_STATFS64 from the native sys/mount.h ABI."""
+
+    _fields_ = [
+        ("f_bsize", ctypes.c_uint32), ("f_iosize", ctypes.c_int32),
+        ("f_blocks", ctypes.c_uint64), ("f_bfree", ctypes.c_uint64),
+        ("f_bavail", ctypes.c_uint64), ("f_files", ctypes.c_uint64),
+        ("f_ffree", ctypes.c_uint64), ("f_fsid", ctypes.c_int32 * 2),
+        ("f_owner", ctypes.c_uint32), ("f_type", ctypes.c_uint32),
+        ("f_flags", ctypes.c_uint32), ("f_fssubtype", ctypes.c_uint32),
+        ("f_fstypename", ctypes.c_char * MFSTYPENAMELEN),
+        ("f_mntonname", ctypes.c_char * MNAMELEN),
+        ("f_mntfromname", ctypes.c_char * MNAMELEN),
+        ("f_flags_ext", ctypes.c_uint32),
+        ("f_reserved", ctypes.c_uint32 * 7),
+    ]
+
+
+class DarwinStatFsLegacy(ctypes.Structure):
+    """Legacy x86_64 statfs ABI, retained only for regression reproduction."""
+
+    _fields_ = [
+        ("f_otype", ctypes.c_int16), ("f_oflags", ctypes.c_int16),
+        ("f_bsize", ctypes.c_long), ("f_iosize", ctypes.c_long),
+        ("f_blocks", ctypes.c_long), ("f_bfree", ctypes.c_long),
+        ("f_bavail", ctypes.c_long), ("f_files", ctypes.c_long),
+        ("f_ffree", ctypes.c_long), ("f_fsid", ctypes.c_int32 * 2),
+        ("f_owner", ctypes.c_uint32), ("f_reserved1", ctypes.c_int16),
+        ("f_type", ctypes.c_int16), ("f_flags", ctypes.c_long),
+        ("f_reserved2", ctypes.c_long * 2),
+        ("f_fstypename", ctypes.c_char * MFSNAMELEN),
+        ("f_mntonname", ctypes.c_char * 90),
+        ("f_mntfromname", ctypes.c_char * 90),
+        ("f_reserved3", ctypes.c_char), ("f_reserved4", ctypes.c_long * 4),
+    ]
+
+
+def decode_c_field(value: bytes) -> str:
+    return bytes(value).split(b"\0", 1)[0].decode("utf-8", "replace")
+
+
+def validate_statfs_metadata(filesystem_type: str, mount_point: str, mounted_from: str) -> None:
+    missing = [name for name, value in (
+        ("f_fstypename", filesystem_type),
+        ("f_mntonname", mount_point),
+        ("f_mntfromname", mounted_from),
+    ) if not value]
+    if missing:
+        raise StatFsBindingError(f"empty required statfs field: {','.join(missing)}")
+
+
+def statfs_layout(architecture: str) -> dict[str, Any]:
+    if architecture not in {"arm64", "x86_64"}:
+        raise StatFsBindingError(f"unsupported Darwin architecture: {architecture}")
+    return {
+        "architecture": architecture,
+        "structure": "__DARWIN_STRUCT_STATFS64",
+        "size": ctypes.sizeof(DarwinStatFs64),
+        "alignment": ctypes.alignment(DarwinStatFs64),
+        "offsets": {
+            name: getattr(DarwinStatFs64, name).offset
+            for name in ("f_fstypename", "f_mntonname", "f_mntfromname")
+        },
+    }
+
+
+def validate_native_layout(native: dict[str, Any], architecture: str) -> dict[str, Any]:
+    expected = statfs_layout(architecture)
+    comparisons = {
+        "size_match": native.get("size") == expected["size"],
+        "alignment_match": native.get("alignment") == expected["alignment"],
+        "fstypename_offset_match": native.get("offsets", {}).get("f_fstypename") == expected["offsets"]["f_fstypename"],
+        "mntonname_offset_match": native.get("offsets", {}).get("f_mntonname") == expected["offsets"]["f_mntonname"],
+        "mntfromname_offset_match": native.get("offsets", {}).get("f_mntfromname") == expected["offsets"]["f_mntfromname"],
+    }
+    if native.get("architecture") != architecture or not all(comparisons.values()):
+        raise StatFsBindingError(f"native/ctypes statfs layout mismatch: {comparisons}")
+    return {**expected, **comparisons}
+
+
+def decode_statfs64_buffer(value: bytes) -> dict[str, Any]:
+    padded = value.ljust(ctypes.sizeof(DarwinStatFs64), b"\0")
+    native = DarwinStatFs64.from_buffer_copy(padded[:ctypes.sizeof(DarwinStatFs64)])
+    return {
+        "filesystem_type": decode_c_field(native.f_fstypename),
+        "mount_point": decode_c_field(native.f_mntonname),
+        "mounted_from": decode_c_field(native.f_mntfromname),
+        "mount_flags": native.f_flags,
+    }
+
+
+def call_statfs(path: Path, architecture: str, *, libc=None) -> dict[str, Any]:
+    library = libc or ctypes.CDLL(None, use_errno=True)
+    symbol = "statfs$INODE64" if architecture == "x86_64" else "statfs"
+    try:
+        function = getattr(library, symbol)
+    except AttributeError as error:
+        raise StatFsBindingError(f"missing Darwin symbol: {symbol}") from error
+    function.argtypes = [ctypes.c_char_p, ctypes.POINTER(DarwinStatFs64)]
+    function.restype = ctypes.c_int
+    native = DarwinStatFs64()
+    ctypes.set_errno(0)
+    return_code = function(ctypes.c_char_p(os.fsencode(path.resolve())), ctypes.byref(native))
+    if return_code != 0:
+        captured = ctypes.get_errno()
+        raise OSError(captured, os.strerror(captured), str(path))
+    metadata = decode_statfs64_buffer(bytes(native))
+    validate_statfs_metadata(
+        metadata["filesystem_type"], metadata["mount_point"], metadata["mounted_from"]
+    )
+    metadata.update(
+        statfs_symbol=symbol,
+        statfs_return_code=return_code,
+        ctypes_layout=statfs_layout(architecture),
+    )
+    return metadata
 
 
 class ProbeOps:
@@ -102,33 +227,7 @@ def filesystem_metadata(path: Path) -> dict[str, Any]:
     if sys.platform != "darwin":
         return metadata
 
-    class StatFs(ctypes.Structure):
-        _fields_ = [
-            ("f_bsize", ctypes.c_uint32), ("f_iosize", ctypes.c_int32),
-            ("f_blocks", ctypes.c_uint64), ("f_bfree", ctypes.c_uint64),
-            ("f_bavail", ctypes.c_uint64), ("f_files", ctypes.c_uint64),
-            ("f_ffree", ctypes.c_uint64), ("f_fsid", ctypes.c_int32 * 2),
-            ("f_owner", ctypes.c_uint32), ("f_type", ctypes.c_uint32),
-            ("f_flags", ctypes.c_uint32), ("f_fssubtype", ctypes.c_uint32),
-            ("f_fstypename", ctypes.c_char * 16),
-            ("f_mntonname", ctypes.c_char * 1024),
-            ("f_mntfromname", ctypes.c_char * 1024),
-            ("f_reserved", ctypes.c_uint32 * 8),
-        ]
-
-    native = StatFs()
-    libc = ctypes.CDLL(None, use_errno=True)
-    encoded = os.fsencode(path.resolve())
-    if libc.statfs(ctypes.c_char_p(encoded), ctypes.byref(native)) != 0:
-        captured = ctypes.get_errno()
-        raise OSError(captured, os.strerror(captured), str(path))
-    decode = lambda value: bytes(value).split(b"\0", 1)[0].decode("utf-8", "replace")
-    metadata.update(
-        filesystem_type=decode(native.f_fstypename),
-        mount_point=decode(native.f_mntonname),
-        mounted_from=decode(native.f_mntfromname),
-        mount_flags=native.f_flags,
-    )
+    metadata.update(call_statfs(path, platform.machine()))
     return metadata
 
 
@@ -180,8 +279,8 @@ def run_probe(
         result["timeline"].append({"time": now(), "step": step, "event": "start"})
         try:
             value = function(*arguments)
-        except OSError as error:
-            captured = error.errno
+        except (OSError, StatFsBindingError) as error:
+            captured = getattr(error, "errno", None)
             result["steps"][step] = "FAIL"
             result["syscalls"].append({"step": step, "api": operation, "path": str(path), "result": "FAIL", "errno": captured})
             raise ProbeFailure(step, operation, str(path), captured, str(error)) from error
@@ -198,7 +297,9 @@ def run_probe(
         destination = root / "selector.active"
         temporary = root / "selector.tmp"
         result["temp_path"] = str(temporary)
-        result["filesystem"] = filesystem_metadata(root)
+        result["filesystem"] = action(
+            "filesystem_metadata", "statfs", root, filesystem_metadata, root
+        )
         if sys.platform == "darwin" and result["filesystem"]["filesystem_type"] != "apfs":
             raise ProbeFailure(
                 "filesystem_type", "statfs", str(root), None,
@@ -261,13 +362,19 @@ def main() -> int:
     parser.add_argument("--expected-arch", choices=("x86_64", "arm64"), required=True)
     parser.add_argument("--implementation", choices=("rust", "go"), required=True)
     parser.add_argument("--platform-tsv", type=Path)
+    parser.add_argument("--native-layout", type=Path)
     arguments = parser.parse_args()
     if platform.system() != "Darwin" or platform.machine() != arguments.expected_arch:
         print("MAC-001 native platform mismatch", file=sys.stderr)
         return 1
     try:
+        if arguments.native_layout:
+            native_layout = json.loads(arguments.native_layout.read_text())
+            ctypes_layout = validate_native_layout(native_layout, arguments.expected_arch)
+            arguments.artifact_dir.mkdir(parents=True, exist_ok=True)
+            _write_json(arguments.artifact_dir / "abi-ctypes.json", ctypes_layout)
         result = run_probe(arguments.parent, arguments.artifact_dir, expected_arch=arguments.expected_arch, implementation=arguments.implementation)
-    except ProbeFailure as error:
+    except (ProbeFailure, StatFsBindingError, OSError, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
     if arguments.platform_tsv:

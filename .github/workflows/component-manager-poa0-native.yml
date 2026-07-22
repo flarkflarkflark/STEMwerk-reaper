@@ -77,7 +77,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: d76bedcb3b767d6b1821d9e6ed44a26d74751d26
+          EXPECTED_PARENT: 97e46a2f6e6897ae12eca9b633f5a9dcedbb3792
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -91,7 +91,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/macos-filesystem-probe.py|experiments/component-manager-poa0/scripts/macos-platform-tests.sh|experiments/component-manager-poa0/scripts/run-native-matrix.sh|experiments/component-manager-poa0/scripts/test-macos-filesystem-probe.py|experiments/component-manager-poa0/reports/MACOS_MAC001_FILESYSTEM_PROBE_FIX.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/macos-filesystem-probe.py|experiments/component-manager-poa0/scripts/macos-statfs-layout.c|experiments/component-manager-poa0/scripts/test-macos-statfs-abi.py|experiments/component-manager-poa0/reports/MACOS_X86_64_STATFS_ABI_FIX.md)
                 ;;
               *)
                 allowed=false
@@ -101,7 +101,7 @@ jobs:
 
           if [[ "$actual_parent" == "$EXPECTED_PARENT" && ${#changed_paths[@]} -gt 0 && "$allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
-            echo 'classification=macos-mac001-only' >>"$GITHUB_OUTPUT"
+            echo 'classification=macos-x86-statfs-only' >>"$GITHUB_OUTPUT"
           else
             echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
             echo 'classification=other' >>"$GITHUB_OUTPUT"
@@ -344,11 +344,25 @@ jobs:
           set -euo pipefail
           base=experiments/component-manager-poa0
           evidence="$base/reports/results/macos-mac001-${{ matrix.arch }}-${{ matrix.implementation }}"
+          layout_binary="$RUNNER_TEMP/macos-statfs-layout"
+          layout_raw="$RUNNER_TEMP/macos-statfs-layout.json"
+          clang -std=c11 -Wall -Wextra -Werror "$base/scripts/macos-statfs-layout.c" -o "$layout_binary"
+          nm -u "$layout_binary" >"$evidence/abi-native-symbols.txt"
+          if test '${{ matrix.arch }}' = x86_64; then
+            grep -F '_statfs$INODE64' "$evidence/abi-native-symbols.txt"
+          else
+            grep -E ' U _statfs$' "$evidence/abi-native-symbols.txt"
+          fi
+          "$layout_binary" "$base/reports/results" >"$layout_raw"
+          jq --arg sdk_path "$(xcrun --sdk macosx --show-sdk-path)" \
+             --arg sdk_version "$(xcrun --sdk macosx --show-sdk-version)" \
+             '. + {sdk_path:$sdk_path,sdk_version:$sdk_version}' "$layout_raw" >"$evidence/abi-native.json"
           python3 "$base/scripts/macos-filesystem-probe.py" \
             --parent "$base/reports/results" \
             --artifact-dir "$evidence" \
             --expected-arch '${{ matrix.arch }}' \
-            --implementation '${{ matrix.implementation }}'
+            --implementation '${{ matrix.implementation }}' \
+            --native-layout "$evidence/abi-native.json"
 
       - name: Upload MAC-001 evidence
         if: always()
