@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-"""Prepare a bundled Apple Silicon macOS payload for STEMwerk package variants."""
+"""Prepare a closed, arm64-only Apple Silicon payload for STEMwerk 2.3.x."""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.request
+import zipfile
+from email.parser import BytesParser
 from pathlib import Path
 
 
@@ -29,47 +38,34 @@ DRUMSEP_FILES = (
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt",
     "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml",
 )
+DRUMSEP_COMPAT_FILENAME = "config_drumsep_mdx23c.yaml"
+DRUMSEP_COMPAT_SIZE = 2328
+DRUMSEP_COMPAT_SHA256 = "132231a5ab49141b8987b0daffcdd21d11e73df3669f1ac0755d697497b5f31b"
 
+# Keep the official 2.3.0.4 runtime generation coherent.  In particular,
+# audio-separator 0.23.0 requires samplerate 0.1.0 in its wheel metadata.
 BOOTSTRAP_REQUIREMENTS = (
-    "pip",
-    "setuptools",
-    "wheel",
+    "pip==26.1.2",
+    "setuptools==83.0.0",
+    "wheel==0.47.0",
 )
-
-MAIN_REQUIREMENTS = (
+RUNTIME_REQUIREMENTS = (
     "numpy==1.26.4",
     "torch==2.5.1",
     "torchvision==0.20.1",
     "torchaudio==2.5.1",
     "audio-separator==0.23.0",
+    "samplerate==0.1.0",
     "llvmlite==0.42.0",
     "numba==0.59.1",
-    "onnxruntime",
+    "onnxruntime==1.27.0",
+    "diffq==0.2.4",
 )
 
-DIFFQ_REQUIREMENT = "diffq==0.2.4"
-SAMPLERATE_REPAIR_REQUIREMENT = "samplerate==0.2.4"
-
-REQUIRED_WHEEL_PREFIXES = (
-    "pip-",
-    "setuptools-",
-    "wheel-",
-    "audio_separator-",
-    "diffq-",
-    "llvmlite-",
-    "numba-",
-    "numpy-",
-    "onnxruntime-",
-    "scipy-",
-    "stemwerk_core-",
-    "torch-",
-    "torchaudio-",
-    "torchvision-",
-)
-
-REQUIRED_WHEEL_PATTERNS = (
-    "samplerate-0.2.4-*.whl",
-)
+SAMPLERATE_WHEEL_SHA256 = "f55e5c9d0a8ba3c82a53b7d9c34a2d145439c61166a7f310efaec88f2781b8f8"
+LIBSAMPLERATE_VERSION = "0.2.2"
+LIBSAMPLERATE_URL = "https://github.com/libsndfile/libsamplerate/archive/refs/tags/0.2.2.tar.gz"
+LIBSAMPLERATE_SHA256 = "16e881487f184250deb4fcb60432d7556ab12cb58caea71ef23960aec6c0405a"
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,16 +82,40 @@ def parse_args() -> argparse.Namespace:
         "--managed-python",
         default=str(Path.home() / "Library" / "Application Support" / "STEMwerk" / "python"),
     )
+    parser.add_argument("--constraints", default="scripts/reaper/constraints/macos.txt")
     parser.add_argument(
-        "--constraints",
-        default="scripts/reaper/constraints/macos.txt",
+        "--drumsep-compat-config",
+        default="tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml",
     )
     return parser.parse_args()
+
+
+def command_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+    env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    return env
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def ensure_file(path: Path, label: str) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"Missing required {label}: {path}")
+
+
+def verify_file(path: Path, label: str, *, size: int | None = None, sha256: str | None = None) -> None:
+    ensure_file(path, label)
+    if size is not None and path.stat().st_size != size:
+        raise RuntimeError(f"Invalid {label} size: {path.stat().st_size}, expected {size}")
+    if sha256 is not None and sha256_file(path) != sha256:
+        raise RuntimeError(f"Invalid {label} SHA256: {path}")
 
 
 def reset_dir(path: Path) -> None:
@@ -112,12 +132,27 @@ def copy_files(src_root: Path, dest_root: Path, names: tuple[str, ...], label: s
         shutil.copy2(src, dest_root / name)
 
 
-def copy_ffmpeg(ffmpeg_path: Path, ffprobe_path: Path, dest_root: Path) -> None:
-    ensure_file(ffmpeg_path, "ffmpeg binary")
-    ensure_file(ffprobe_path, "ffprobe binary")
-    dest_root.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ffmpeg_path, dest_root / "ffmpeg")
-    shutil.copy2(ffprobe_path, dest_root / "ffprobe")
+def copy_drumsep_assets(model_cache: Path, compat_config: Path, dest_root: Path) -> dict[str, object]:
+    verify_file(
+        compat_config,
+        "DrumSep compatibility config",
+        size=DRUMSEP_COMPAT_SIZE,
+        sha256=DRUMSEP_COMPAT_SHA256,
+    )
+    copy_files(model_cache, dest_root, DRUMSEP_FILES, "DrumSep payload file")
+    shutil.copy2(compat_config, dest_root / DRUMSEP_COMPAT_FILENAME)
+    copied = dest_root / DRUMSEP_COMPAT_FILENAME
+    verify_file(
+        copied,
+        "copied DrumSep compatibility config",
+        size=DRUMSEP_COMPAT_SIZE,
+        sha256=DRUMSEP_COMPAT_SHA256,
+    )
+    return {
+        "path": f"drumsep/{DRUMSEP_COMPAT_FILENAME}",
+        "size": copied.stat().st_size,
+        "sha256": sha256_file(copied),
+    }
 
 
 def copy_tree(src_root: Path, dest_root: Path, label: str) -> None:
@@ -126,19 +161,14 @@ def copy_tree(src_root: Path, dest_root: Path, label: str) -> None:
     shutil.copytree(src_root, dest_root)
 
 
-def command_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
-    return env
-
-
 def python_version(python_executable: str) -> tuple[int, int]:
-    cmd = [
-        python_executable,
-        "-c",
-        "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')",
-    ]
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True, env=command_env())
+    result = subprocess.run(
+        [python_executable, "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=command_env(),
+    )
     major, minor = result.stdout.strip().split(".", 1)
     return int(major), int(minor)
 
@@ -151,92 +181,373 @@ def payload_python() -> str:
         Path(sys.executable),
     )
     for candidate in candidates:
-        if not candidate.is_file():
-            continue
-        version = python_version(str(candidate))
-        if version == (3, 12):
+        if candidate.is_file() and python_version(str(candidate)) == (3, 12):
             return str(candidate)
-    raise RuntimeError("Missing native Python 3.12 interpreter for macOS Apple Silicon payload wheel downloads")
+    raise RuntimeError("Missing native Python 3.12 interpreter for Apple Silicon payload assembly")
 
 
-def run_pip_download(requirements: tuple[str, ...], wheels_dir: Path, constraints_file: Path, python_executable: str) -> None:
-    wheels_dir.mkdir(parents=True, exist_ok=True)
+def normalize_distribution(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def validate_declared_policy(requirements: tuple[str, ...]) -> None:
+    versions = {}
     for requirement in requirements:
-        cmd = [
+        if "==" not in requirement:
+            raise RuntimeError(f"Unpinned payload requirement: {requirement}")
+        name, version = requirement.split("==", 1)
+        versions[normalize_distribution(name)] = version
+    if versions.get("audio-separator") == "0.23.0" and versions.get("samplerate") != "0.1.0":
+        raise RuntimeError("Conflicting policy: audio-separator 0.23.0 requires samplerate 0.1.0")
+    if versions.get("numba") == "0.59.1" and versions.get("llvmlite") != "0.42.0":
+        raise RuntimeError("Conflicting policy: numba 0.59.1 requires llvmlite 0.42.x")
+
+
+def build_diffq_wheel(wheels_dir: Path, python_executable: str) -> None:
+    subprocess.run(
+        [
             python_executable,
             "-m",
             "pip",
-            "download",
-            "--dest",
+            "wheel",
+            "--no-deps",
+            "--wheel-dir",
             str(wheels_dir),
-            "--only-binary=:all:",
-            "--find-links",
-            str(wheels_dir),
-        ]
-        if constraints_file.is_file() and requirement not in BOOTSTRAP_REQUIREMENTS:
-            cmd += ["-c", str(constraints_file)]
-        cmd.append(requirement)
-        subprocess.run(cmd, check=True, env=command_env())
+            "diffq==0.2.4",
+        ],
+        check=True,
+        env=command_env(),
+    )
 
 
-def wheel_builder_python() -> str:
-    return payload_python()
-
-
-def ensure_diffq_wheel(wheels_dir: Path) -> None:
-    if any(wheels_dir.glob("diffq-*.whl")):
-        return
-    cmd = [wheel_builder_python(), "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheels_dir), DIFFQ_REQUIREMENT]
-    subprocess.run(cmd, check=True, env=command_env())
-
-
-def ensure_samplerate_repair_wheel(wheels_dir: Path) -> None:
-    if any(wheels_dir.glob("samplerate-0.2.4-*.whl")):
-        return
+def download_closed_wheelhouse(
+    wheels_dir: Path, constraints_file: Path, python_executable: str
+) -> None:
+    wheels_dir.mkdir(parents=True, exist_ok=True)
+    build_diffq_wheel(wheels_dir, python_executable)
     cmd = [
-        wheel_builder_python(),
+        python_executable,
         "-m",
         "pip",
         "download",
         "--dest",
         str(wheels_dir),
         "--only-binary=:all:",
-        "--no-deps",
-        SAMPLERATE_REPAIR_REQUIREMENT,
+        "--find-links",
+        str(wheels_dir),
     ]
+    if constraints_file.is_file():
+        cmd += ["-c", str(constraints_file)]
+    cmd += [*BOOTSTRAP_REQUIREMENTS, *RUNTIME_REQUIREMENTS]
     subprocess.run(cmd, check=True, env=command_env())
-
-
-def ensure_wheelhouse_complete(wheels_dir: Path) -> None:
-    missing = [prefix for prefix in REQUIRED_WHEEL_PREFIXES if not any(wheels_dir.glob(f"{prefix}*.whl"))]
-    missing += [pattern for pattern in REQUIRED_WHEEL_PATTERNS if not any(wheels_dir.glob(pattern))]
-    if missing:
-        missing_list = ", ".join(missing)
-        raise RuntimeError(f"Incomplete wheelhouse for offline Apple Silicon payload: missing {missing_list}")
 
 
 def build_stemwerk_core_wheel(repo_root: Path, wheels_dir: Path, python_executable: str) -> None:
-    if any(wheels_dir.glob("stemwerk_core-*.whl")):
-        return
+    subprocess.run(
+        [
+            python_executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--no-build-isolation",
+            "--wheel-dir",
+            str(wheels_dir),
+            str(repo_root / "scripts" / "reaper" / "vendor" / "stemwerk-core"),
+        ],
+        check=True,
+        env=command_env(),
+    )
+
+
+def _download_verified(url: str, destination: Path, expected_sha256: str) -> None:
+    urllib.request.urlretrieve(url, destination)
+    if sha256_file(destination) != expected_sha256:
+        raise RuntimeError(f"Downloaded source SHA256 mismatch: {destination.name}")
+
+
+def _build_native_libsamplerate(work_dir: Path) -> Path:
+    archive = work_dir / f"libsamplerate-{LIBSAMPLERATE_VERSION}.tar.gz"
+    _download_verified(LIBSAMPLERATE_URL, archive, LIBSAMPLERATE_SHA256)
+    with tarfile.open(archive, "r:gz") as source_tar:
+        source_tar.extractall(work_dir, filter="data")
+    source = work_dir / f"libsamplerate-{LIBSAMPLERATE_VERSION}"
+    build_dir = work_dir / "libsamplerate-build"
+    build_dir.mkdir()
+    (build_dir / "config.h").touch()
+    output = build_dir / "libsamplerate.dylib"
     cmd = [
-        python_executable,
-        "-m",
-        "pip",
-        "wheel",
-        "--no-deps",
-        "--no-build-isolation",
-        "--wheel-dir",
-        str(wheels_dir),
-        str(repo_root / "scripts" / "reaper" / "vendor" / "stemwerk-core"),
+        "xcrun",
+        "clang",
+        "-dynamiclib",
+        "-arch",
+        "arm64",
+        "-O2",
+        "-fPIC",
+        f"-I{build_dir}",
+        f"-I{source / 'include'}",
+        f"-I{source / 'src'}",
+        '-DPACKAGE="libsamplerate"',
+        f'-DVERSION="{LIBSAMPLERATE_VERSION}"',
+        "-DCPU_IS_BIG_ENDIAN=0",
+        "-DCPU_IS_LITTLE_ENDIAN=1",
+        "-DHAVE_LRINT=1",
+        "-DHAVE_LRINTF=1",
+        "-DHAVE_STDBOOL_H=1",
+        "-DHAVE_STDINT_H=1",
+        "-DHAVE_UNISTD_H=1",
+        "-DENABLE_SINC_FAST_CONVERTER=1",
+        "-DENABLE_SINC_MEDIUM_CONVERTER=1",
+        "-DENABLE_SINC_BEST_CONVERTER=1",
+        "-DSIZEOF_INT=4",
+        "-DSIZEOF_LONG=8",
+        "-install_name",
+        "@loader_path/libsamplerate.dylib",
+        "-current_version",
+        "3.2.0",
+        "-compatibility_version",
+        "3.0.0",
+        "-o",
+        str(output),
+        str(source / "src" / "samplerate.c"),
+        str(source / "src" / "src_linear.c"),
+        str(source / "src" / "src_sinc.c"),
+        str(source / "src" / "src_zoh.c"),
     ]
     subprocess.run(cmd, check=True, env=command_env())
+    assert_arm64_macho(output)
+    return output
 
 
-def write_manifest(output_dir: Path, version: str) -> None:
+def _wheel_dist_info(root: Path) -> Path:
+    matches = list(root.glob("*.dist-info"))
+    if len(matches) != 1:
+        raise RuntimeError(f"Wheel must contain one .dist-info directory: {root}")
+    return matches[0]
+
+
+def _record_digest(path: Path) -> str:
+    digest = base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest()).rstrip(b"=").decode("ascii")
+    return f"sha256={digest}"
+
+
+def _repack_wheel(root: Path, output: Path) -> None:
+    dist_info = _wheel_dist_info(root)
+    record = dist_info / "RECORD"
+    rows = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path == record:
+            continue
+        rows.append((path.relative_to(root).as_posix(), _record_digest(path), str(path.stat().st_size)))
+    rows.append((record.relative_to(root).as_posix(), "", ""))
+    with record.open("w", encoding="utf-8", newline="") as handle:
+        csv.writer(handle, lineterminator="\n").writerows(rows)
+    if output.exists():
+        output.unlink()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                info = zipfile.ZipInfo(path.relative_to(root).as_posix(), date_time=(2023, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
+                archive.writestr(info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+
+def macho_architectures(path: Path) -> tuple[str, ...]:
+    with path.open("rb") as handle:
+        magic = handle.read(4)
+    macho_magics = {
+        b"\xfe\xed\xfa\xce",
+        b"\xfe\xed\xfa\xcf",
+        b"\xce\xfa\xed\xfe",
+        b"\xcf\xfa\xed\xfe",
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+        b"\xca\xfe\xba\xbf",
+        b"\xbf\xba\xfe\xca",
+    }
+    if magic not in macho_magics:
+        return ()
+    output = subprocess.run(
+        ["lipo", "-archs", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout
+    return tuple(output.strip().split())
+
+
+def assert_arm64_macho(path: Path) -> None:
+    architectures = macho_architectures(path)
+    if architectures and architectures != ("arm64",):
+        raise RuntimeError(f"Non-arm64-only Mach-O object: {path} ({' '.join(architectures)})")
+
+
+def _retag_wheel_file(original: Path, root: Path, *, force_samplerate: bool = False) -> Path:
+    wheel_metadata = _wheel_dist_info(root) / "WHEEL"
+    text = wheel_metadata.read_text(encoding="utf-8")
+    if force_samplerate:
+        text = re.sub(r"^Root-Is-Purelib:.*$", "Root-Is-Purelib: false", text, flags=re.MULTILINE)
+        text = re.sub(r"^Tag:.*$", "Tag: py3-none-macosx_11_0_arm64", text, flags=re.MULTILINE)
+        target_name = "samplerate-0.1.0-py3-none-macosx_11_0_arm64.whl"
+    else:
+        text = text.replace("universal2", "arm64")
+        target_name = original.name.replace("universal2", "arm64")
+        # macOS arm64 starts at deployment target 11.0.  Universal2 wheels may
+        # advertise an older x86-compatible target that is invalid once the
+        # x86_64 slice has been removed.
+        text = re.sub(r"macosx_10_[0-9]+_arm64", "macosx_11_0_arm64", text)
+        target_name = re.sub(r"macosx_10_[0-9]+_arm64", "macosx_11_0_arm64", target_name)
+    wheel_metadata.write_text(text, encoding="utf-8")
+    target = original.with_name(target_name)
+    _repack_wheel(root, target)
+    if original != target and original.exists():
+        original.unlink()
+    return target
+
+
+def replace_samplerate_with_native_arm64(wheels_dir: Path) -> Path:
+    matches = list(wheels_dir.glob("samplerate-0.1.0-*.whl"))
+    if len(matches) != 1:
+        raise RuntimeError("Expected exactly one samplerate 0.1.0 wheel before native rebuild")
+    original = matches[0]
+    if sha256_file(original) != SAMPLERATE_WHEEL_SHA256:
+        raise RuntimeError("Unexpected samplerate 0.1.0 upstream wheel SHA256")
+    with tempfile.TemporaryDirectory(prefix="stemwerk-samplerate-arm64-") as temp_name:
+        temp = Path(temp_name)
+        unpacked = temp / "wheel"
+        with zipfile.ZipFile(original) as archive:
+            archive.extractall(unpacked)
+        native_library = _build_native_libsamplerate(temp)
+        destination = unpacked / "samplerate" / "_samplerate_data" / "libsamplerate.dylib"
+        shutil.copy2(native_library, destination)
+        target = _retag_wheel_file(original, unpacked, force_samplerate=True)
+    return target
+
+
+def thin_universal_wheels(wheels_dir: Path) -> None:
+    for wheel in sorted(wheels_dir.glob("*.whl")):
+        with tempfile.TemporaryDirectory(prefix="stemwerk-wheel-arm64-") as temp_name:
+            root = Path(temp_name) / "wheel"
+            with zipfile.ZipFile(wheel) as archive:
+                archive.extractall(root)
+            changed = False
+            for candidate in root.rglob("*"):
+                if not candidate.is_file():
+                    continue
+                architectures = macho_architectures(candidate)
+                if not architectures:
+                    continue
+                if "arm64" not in architectures:
+                    raise RuntimeError(f"Wheel contains x86_64-only Mach-O object: {wheel.name}:{candidate.relative_to(root)}")
+                if architectures != ("arm64",):
+                    thinned = candidate.with_name(candidate.name + ".arm64")
+                    subprocess.run(["lipo", str(candidate), "-thin", "arm64", "-output", str(thinned)], check=True)
+                    thinned.replace(candidate)
+                    changed = True
+                assert_arm64_macho(candidate)
+            if changed:
+                _retag_wheel_file(wheel, root)
+
+
+def wheel_metadata(wheel: Path) -> tuple[str, str]:
+    with zipfile.ZipFile(wheel) as archive:
+        metadata_names = [
+            name
+            for name in archive.namelist()
+            if name.endswith(".dist-info/METADATA") and name.count("/") == 1
+        ]
+        if len(metadata_names) != 1:
+            raise RuntimeError(f"Invalid wheel metadata: {wheel.name}")
+        metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
+    return str(metadata["Name"]), str(metadata["Version"])
+
+
+def resolved_wheel_inventory(wheels_dir: Path) -> list[dict[str, object]]:
+    distributions: dict[str, Path] = {}
+    inventory = []
+    for wheel in sorted(wheels_dir.glob("*.whl")):
+        name, version = wheel_metadata(wheel)
+        normalized = normalize_distribution(name)
+        if normalized in distributions:
+            raise RuntimeError(
+                f"Duplicate wheel distribution {normalized}: {distributions[normalized].name}, {wheel.name}"
+            )
+        distributions[normalized] = wheel
+        inventory.append(
+            {
+                "name": name,
+                "normalized_name": normalized,
+                "version": version,
+                "filename": wheel.name,
+                "size": wheel.stat().st_size,
+                "sha256": sha256_file(wheel),
+            }
+        )
+    expected = {normalize_distribution(item.split("==", 1)[0]) for item in RUNTIME_REQUIREMENTS}
+    missing = sorted(expected - distributions.keys())
+    if missing:
+        raise RuntimeError(f"Incomplete wheelhouse: missing {', '.join(missing)}")
+    return inventory
+
+
+def verify_offline_resolution(wheels_dir: Path, python_executable: str) -> None:
+    subprocess.run(
+        [
+            python_executable,
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--ignore-installed",
+            "--no-cache-dir",
+            "--no-index",
+            "--find-links",
+            str(wheels_dir),
+            "--only-binary=:all:",
+            *RUNTIME_REQUIREMENTS,
+        ],
+        check=True,
+        env=command_env(),
+    )
+
+
+def verify_payload_architectures(output_dir: Path) -> None:
+    for root in (output_dir / "ffmpeg", output_dir / "python"):
+        for candidate in root.rglob("*"):
+            if candidate.is_file():
+                assert_arm64_macho(candidate)
+    for wheel in (output_dir / "wheels").glob("*.whl"):
+        with tempfile.TemporaryDirectory(prefix="stemwerk-wheel-audit-") as temp_name:
+            root = Path(temp_name)
+            with zipfile.ZipFile(wheel) as archive:
+                archive.extractall(root)
+            for candidate in root.rglob("*"):
+                if candidate.is_file():
+                    assert_arm64_macho(candidate)
+
+
+def write_manifest(
+    output_dir: Path,
+    version: str,
+    wheel_inventory: list[dict[str, object]],
+    compatibility_config: dict[str, object],
+) -> None:
     manifest = {
-        "platform": "macos-apple-silicon",
+        "platform": "macos-apple-silicon-arm64",
         "version": version,
-        "runtime_policy": "mps_preferred_cpu_fallback",
+        "runtime_policy": "stemwerk-2.3.0.4-coherent-mps",
+        "declared_requirements": list(RUNTIME_REQUIREMENTS),
+        "resolved_packages": wheel_inventory,
+        "drumsep_compatibility_config": compatibility_config,
+        "source_provenance": {
+            "samplerate_python_wheel_sha256": SAMPLERATE_WHEEL_SHA256,
+            "libsamplerate_version": LIBSAMPLERATE_VERSION,
+            "libsamplerate_source_url": LIBSAMPLERATE_URL,
+            "libsamplerate_source_sha256": LIBSAMPLERATE_SHA256,
+        },
         "contains": {
             "ffmpeg": True,
             "python": True,
@@ -245,7 +556,9 @@ def write_manifest(output_dir: Path, version: str) -> None:
             "drumsep": True,
         },
     }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def main() -> int:
@@ -257,23 +570,31 @@ def main() -> int:
     ffprobe_path = Path(args.ffprobe).expanduser().resolve()
     managed_python_dir = Path(args.managed_python).expanduser().resolve()
     constraints_file = (repo_root / args.constraints).resolve()
+    compat_config = (repo_root / args.drumsep_compat_config).resolve()
     python_executable = payload_python()
 
+    validate_declared_policy(RUNTIME_REQUIREMENTS)
     reset_dir(output_dir)
-    copy_ffmpeg(ffmpeg_path, ffprobe_path, output_dir / "ffmpeg")
-    try:
-        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file, python_executable)
-    except subprocess.CalledProcessError:
-        ensure_diffq_wheel(output_dir / "wheels")
-        run_pip_download(BOOTSTRAP_REQUIREMENTS + MAIN_REQUIREMENTS, output_dir / "wheels", constraints_file, python_executable)
-    ensure_samplerate_repair_wheel(output_dir / "wheels")
-    build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)
-    ensure_wheelhouse_complete(output_dir / "wheels")
+    ensure_file(ffmpeg_path, "ffmpeg binary")
+    ensure_file(ffprobe_path, "ffprobe binary")
+    (output_dir / "ffmpeg").mkdir(parents=True)
+    shutil.copy2(ffmpeg_path, output_dir / "ffmpeg" / "ffmpeg")
+    shutil.copy2(ffprobe_path, output_dir / "ffmpeg" / "ffprobe")
+
+    wheels_dir = output_dir / "wheels"
+    download_closed_wheelhouse(wheels_dir, constraints_file, python_executable)
+    build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)
+    replace_samplerate_with_native_arm64(wheels_dir)
+    thin_universal_wheels(wheels_dir)
+    inventory = resolved_wheel_inventory(wheels_dir)
+    verify_offline_resolution(wheels_dir, python_executable)
+
     copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")
     copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
-    copy_files(model_cache, output_dir / "drumsep", DRUMSEP_FILES, "drumsep payload file")
-    write_manifest(output_dir, args.version)
-    print(f"Prepared Apple Silicon macOS payload at {output_dir}")
+    compatibility = copy_drumsep_assets(model_cache, compat_config, output_dir / "drumsep")
+    verify_payload_architectures(output_dir)
+    write_manifest(output_dir, args.version, inventory, compatibility)
+    print(f"Prepared closed arm64 Apple Silicon payload at {output_dir}")
     return 0
 
 
