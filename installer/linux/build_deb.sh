@@ -81,6 +81,6 @@ chmod 0755 "$PKG_ROOT/DEBIAN/postinst"
 
 # Build deb
 DEB_FILE="$OUT_DIR/stemwerk_${VERSION}_${ARCH}${OUTPUT_SUFFIX}.deb"
-dpkg-deb --build "$PKG_ROOT" "$DEB_FILE"
+dpkg-deb --root-owner-group --build "$PKG_ROOT" "$DEB_FILE"
 
 echo "Built variant ${VARIANT}: $DEB_FILE"

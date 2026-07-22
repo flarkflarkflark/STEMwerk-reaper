@@ -1,4 +1,3 @@
-#!/home/flark/STEMwerk/.venv/bin/python -u
 """
 Audio Separator Script for STEMwerk
 Thin wrapper around stemwerk-core for REAPER.
