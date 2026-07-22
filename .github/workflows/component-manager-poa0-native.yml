@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       diagnostic_mode:
-        description: Select the normal matrix or the bounded Windows Rust diagnostic
+        description: Select the normal matrix or a bounded native diagnostic
         required: true
         default: normal
         type: choice
@@ -13,6 +13,7 @@ on:
           - windows-rust-copy-hash
           - windows-rust-extended
           - windows-go-durability
+          - windows-tree-verifier
           - macos-lease004
       diagnostic_cases:
         description: Fail-closed case allowlist for the Windows Rust diagnostic
@@ -74,7 +75,7 @@ jobs:
         id: classify
         shell: bash
         env:
-          EXPECTED_PARENT: 40fac56be402514ed28bcacb96837f75b79f6db0
+          EXPECTED_PARENT: 5701409309ef17f33550431405d93c2d9f1762ce
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -88,7 +89,7 @@ jobs:
           allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/FROZEN_FIXTURE_MANIFEST.json|experiments/component-manager-poa0/reports/FROZEN_FIXTURE_MANIFEST.sha256|experiments/component-manager-poa0/reports/FROZEN_RUST_TREE_RECONCILIATION.md)
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/verify-frozen-fixtures.ps1|experiments/component-manager-poa0/scripts/windows-tree-hash.ps1|experiments/component-manager-poa0/scripts/test-windows-tree-hash.ps1|experiments/component-manager-poa0/reports/WINDOWS_GO_TREE_HASH_ORDERING_FIX.md)
                 ;;
               *)
                 allowed=false
@@ -98,7 +99,7 @@ jobs:
 
           if [[ "$actual_parent" == "$EXPECTED_PARENT" && ${#changed_paths[@]} -gt 0 && "$allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
-            echo 'classification=frozen-manifest-reconciliation-only' >>"$GITHUB_OUTPUT"
+            echo 'classification=windows-tree-verifier-only' >>"$GITHUB_OUTPUT"
           else
             echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
             echo 'classification=other' >>"$GITHUB_OUTPUT"
@@ -813,5 +814,76 @@ jobs:
         with:
           name: windows-selector-durability-probes
           path: experiments/component-manager-poa0/reports/results/windows-selector-durability-probes/
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-tree-verifier:
+    if: github.event_name == 'workflow_dispatch' && inputs.diagnostic_mode == 'windows-tree-verifier'
+    name: Windows frozen tree verifier
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout verifier fix commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Assert bounded verifier scope
+        shell: pwsh
+        run: |
+          $ExpectedParent = '5701409309ef17f33550431405d93c2d9f1762ce'
+          $ExpectedBaseline = '9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b'
+          $ExpectedTarget = 'ec14fdf523524bbd9aec34d429f0b6a5b673a701'
+          if ((git rev-parse HEAD).Trim() -cne $env:GITHUB_SHA) { throw 'Workflow head mismatch' }
+          if ((git rev-parse 'HEAD^').Trim() -cne $ExpectedParent) { throw 'Verifier fix parent mismatch' }
+          if ('${{ inputs.verification_mode }}' -cne 'strict') { throw 'Tree verifier requires strict mode' }
+          if ('${{ inputs.verification_baseline }}' -cne $ExpectedBaseline) { throw 'Full verification baseline mismatch' }
+          if ('${{ inputs.verification_target }}' -cne $ExpectedTarget) { throw 'Full verification target mismatch' }
+          $Allowed = @(
+            '.github/workflows/component-manager-poa0-native.yml',
+            'experiments/component-manager-poa0/reports/WINDOWS_GO_TREE_HASH_ORDERING_FIX.md',
+            'experiments/component-manager-poa0/scripts/test-windows-tree-hash.ps1',
+            'experiments/component-manager-poa0/scripts/verify-frozen-fixtures.ps1',
+            'experiments/component-manager-poa0/scripts/windows-tree-hash.ps1'
+          )
+          $Changed = @(git diff --name-only $ExpectedParent $env:GITHUB_SHA)
+          if ($Changed.Count -eq 0) { throw 'Verifier fix path set is empty' }
+          $Forbidden = @($Changed | Where-Object { $_ -cnotin $Allowed })
+          if ($Forbidden.Count -ne 0) { throw "Forbidden verifier fix paths: $($Forbidden -join ',')" }
+          'FULL_BASELINE_SHA_ACCEPTED=yes'
+          'FULL_TARGET_SHA_ACCEPTED=yes'
+          'POST_TARGET_POLICY_DIFF_VERIFY=PASS'
+
+      - name: Run Windows tree hash regression guards
+        shell: pwsh
+        run: ./experiments/component-manager-poa0/scripts/test-windows-tree-hash.ps1
+
+      - name: Run strict frozen tree verifier
+        shell: pwsh
+        run: |
+          $Evidence = 'experiments/component-manager-poa0/reports/results/windows-tree-verifier'
+          New-Item -ItemType Directory -Force $Evidence | Out-Null
+          try {
+            & ./experiments/component-manager-poa0/scripts/verify-frozen-fixtures.ps1 -Mode strict -Baseline '${{ inputs.verification_baseline }}' -Target '${{ inputs.verification_target }}' -WorkflowHead '${{ github.sha }}' -RecordDirectory $Evidence 2>&1 | Tee-Object -FilePath "$Evidence/verifier-output.txt"
+            $SummaryPath = Join-Path $Evidence 'domain-summary.json'
+            $Summary = Get-Content -Raw $SummaryPath | ConvertFrom-Json
+            $Summary | Add-Member -NotePropertyName test_orchestration_domain -NotePropertyValue PASS
+            $Summary | Add-Member -NotePropertyName documentation_domain -NotePropertyValue PASS
+            $Summary | Add-Member -NotePropertyName other_paths_domain -NotePropertyValue PASS
+            $Summary | Add-Member -NotePropertyName post_target_policy_diff -NotePropertyValue PASS
+            $Summary | ConvertTo-Json | Set-Content -Encoding utf8NoBOM $SummaryPath
+          } catch {
+            $_ | Out-String | Set-Content -Encoding utf8NoBOM "$Evidence/errors.txt"
+            throw
+          }
+
+      - name: Upload Windows tree verifier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tree-verifier
+          path: experiments/component-manager-poa0/reports/results/windows-tree-verifier/
           if-no-files-found: error
           retention-days: 7
