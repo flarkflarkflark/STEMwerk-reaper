@@ -1,25 +1,23 @@
 # Contract v1 open policies
 
-## Blocking before implementation
+## Implementation blockers
 
-1. Trusted-root distribution and enrollment.
-2. Approved signing algorithms and which objects require signatures.
-3. Revocation distribution, freshness, compromised-content response, key rotation,
-   offline verification, expired-signature handling, and catalog rollback protection.
-4. Garbage-collection retention count and retention age.
-5. Supported schema-version windows and downgrade matrix.
-
-These values are `TO_BE_DEFINED`. They are not guessed by this contract. A separate
-policy/security architecture decision MUST resolve or explicitly accept each blocker
-before production implementation starts.
+None. The five prior implementation-policy blockers are resolved by ADR-001 through
+ADR-005 and normative Contract v1 sections 9, 27, 28, 37, 38, 39 and 43.
 
 ## Deferred non-blocking
 
 - Presentation wording and localization of viewmodel messages.
 - Optional heartbeat transport; correctness does not depend on heartbeat age.
-- Diagnostic retention and aggregation beyond stable event shape.
+- Diagnostic retention and aggregation beyond the stable event shape.
+- Operational key ceremonies, incident runbooks and concrete trusted public keys.
+- Exact library selection for JCS and signature verification.
+
+These items MUST NOT weaken the accepted policy. They do not authorize production
+implementation; a separate Production Readiness Gate remains REQUIRED.
 
 ## Out of scope
 
 Production packaging, package-manager integration, remote fleet management, complete
-UI design, release mechanics, and cryptographic infrastructure implementation.
+UI design, release mechanics, cryptographic infrastructure, private-key management,
+signing services, and production certificate issuance.

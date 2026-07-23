@@ -13,7 +13,9 @@
     "publisher": "STEMwerk project",
     "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "trust_status": "trusted",
-    "revocation_state": "not_revoked"
+    "revocation_state": "not_revoked",
+    "trust_root_ref": "root.official.artifact.test",
+    "trust_scope": "official.artifact"
   },
   "installed_at": "2026-07-23T00:00:00Z",
   "installer_identity": "component-manager-contract-test",

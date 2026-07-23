@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0.0",
+  "snapshot_version": 1,
+  "sequence": 42,
+  "issued_at": "2026-07-23T00:00:00Z",
+  "expires_at": "2026-08-22T00:00:00Z",
+  "trusted_keys": [
+    "ed25519:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  ],
+  "revoked_keys": [],
+  "artifact_revocations": [],
+  "minimum_catalog_sequence": 41,
+  "rotations": [
+    {
+      "old_key": "ed25519:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "new_key": "ed25519:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "overlap_days": 30,
+      "authorized_by_old_key": true
+    }
+  ],
+  "trust_scope": "official.catalog",
+  "signature": {
+    "schema_version": "1.0.0",
+    "envelope_version": 1,
+    "key_fingerprint": "ed25519:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "algorithm": "Ed25519",
+    "payload_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "canonicalization": "RFC8785-JCS",
+    "signature": "dGVzdC1zaWduYXR1cmU",
+    "trust_scope": "official.catalog",
+    "signer": "STEMwerk release test identity",
+    "signed_at": "2026-07-23T00:00:00Z",
+    "expires_at": "2026-08-22T00:00:00Z"
+  },
+  "$schema_ref": "../schemas/trust-snapshot.schema.json"
+}

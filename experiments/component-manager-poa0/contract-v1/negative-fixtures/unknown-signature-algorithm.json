@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/signature-envelope.schema.json",
+  "expected_error": "policy:unknown_algorithm",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

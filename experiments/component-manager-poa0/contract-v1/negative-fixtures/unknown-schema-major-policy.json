@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/schema-capabilities.schema.json",
+  "expected_error": "policy:schema_major_unknown",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

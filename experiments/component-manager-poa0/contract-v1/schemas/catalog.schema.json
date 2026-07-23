@@ -9,6 +9,13 @@
     "trust_status",
     "components",
     "flows"
+    ,"catalog_id"
+    ,"sequence"
+    ,"digest"
+    ,"previous_digest"
+    ,"minimum_accepted_sequence"
+    ,"channel"
+    ,"signature"
   ],
   "additionalProperties": false,
   "properties": {
@@ -32,6 +39,13 @@
     },
     "flows": {
       "type": "array"
-    }
+    },
+    "catalog_id": {"type": "string"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "previous_digest": {"type": ["string", "null"]},
+    "minimum_accepted_sequence": {"type": "integer", "minimum": 0},
+    "channel": {"type": "string"},
+    "signature": {"$ref": "signature-envelope.schema.json"}
   }
 }

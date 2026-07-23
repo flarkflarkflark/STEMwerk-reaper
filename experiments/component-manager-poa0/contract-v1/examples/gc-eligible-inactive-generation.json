@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0.0",
+  "minimum_rollback_generations": 2,
+  "inactive_retention_count": 3,
+  "minimum_inactive_age_days": 30,
+  "failed_install_cleanup_age_days": 7,
+  "revoked_retention_days": 90,
+  "audit_retention_days": 365,
+  "count_and_age_required": true,
+  "dry_run_required": true,
+  "$schema_ref": "../schemas/retention-policy.schema.json"
+}

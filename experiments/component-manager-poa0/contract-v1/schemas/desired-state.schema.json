@@ -9,6 +9,7 @@
     "requested_flows",
     "allowed_backends",
     "retained_generations"
+    ,"retention_policy"
   ],
   "additionalProperties": false,
   "properties": {
@@ -26,6 +27,7 @@
     },
     "retained_generations": {
       "type": "array"
-    }
+    },
+    "retention_policy": {"$ref": "retention-policy.schema.json"}
   }
 }

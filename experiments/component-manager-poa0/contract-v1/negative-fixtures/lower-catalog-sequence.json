@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/catalog.schema.json",
+  "expected_error": "policy:catalog_sequence_rollback",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

@@ -11,6 +11,8 @@
     "artifact_digest",
     "trust_status",
     "revocation_state"
+    ,"trust_root_ref"
+    ,"trust_scope"
   ],
   "additionalProperties": false,
   "properties": {
@@ -47,6 +49,8 @@
         "revoked",
         "unknown"
       ]
-    }
+    },
+    "trust_root_ref": {"type": "string", "minLength": 1},
+    "trust_scope": {"enum": ["official.catalog", "official.artifact", "official.helper", "user.catalog", "development.local"]}
   }
 }

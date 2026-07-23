@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/trust-root.schema.json",
+  "expected_error": "policy:unknown_official_trust_root",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

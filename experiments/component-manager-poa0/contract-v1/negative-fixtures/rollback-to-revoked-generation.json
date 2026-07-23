@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/revocation-statement.schema.json",
+  "expected_error": "policy:rollback_revoked",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

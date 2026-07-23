@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/trust-snapshot.schema.json",
+  "title": "Signed offline trust snapshot",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "snapshot_version",
+    "sequence",
+    "issued_at",
+    "expires_at",
+    "trusted_keys",
+    "revoked_keys",
+    "artifact_revocations",
+    "minimum_catalog_sequence",
+    "rotations",
+    "trust_scope",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "snapshot_version": {
+      "const": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "issued_at": {
+      "type": "string"
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "trusted_keys": {
+      "type": "array"
+    },
+    "revoked_keys": {
+      "type": "array"
+    },
+    "artifact_revocations": {
+      "type": "array"
+    },
+    "minimum_catalog_sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rotations": {
+      "type": "array"
+    },
+    "trust_scope": {
+      "enum": [
+        "official.catalog",
+        "official.artifact",
+        "official.helper",
+        "user.catalog",
+        "development.local"
+      ]
+    },
+    "signature": {
+      "$ref": "signature-envelope.schema.json"
+    }
+  }
+}

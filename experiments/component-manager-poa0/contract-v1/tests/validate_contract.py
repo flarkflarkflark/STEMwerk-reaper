@@ -18,6 +18,16 @@ KNOWN_NEGATIVE = {
     "semantic:lease_identity_unknown", "semantic:active_generation_gc",
     "semantic:provenance_untrusted", "semantic:unsupported_schema_major",
     "semantic:same_version_different_digest", "semantic:duplicate_component_identity",
+    "policy:unknown_official_trust_root", "policy:official_tofu_forbidden",
+    "policy:invalid_signature", "policy:unknown_algorithm", "policy:unsigned_official",
+    "policy:revoked_signing_key", "policy:broken_rotation_chain",
+    "policy:offline_snapshot_expired", "policy:catalog_sequence_rollback",
+    "policy:catalog_digest_fork", "policy:gc_count_protected",
+    "policy:gc_age_protected", "policy:gc_suspected_lease",
+    "policy:gc_unknown_ownership", "policy:schema_major_unknown",
+    "policy:lossy_downgrade", "policy:schema_handshake_mismatch",
+    "policy:development_scope_escape", "policy:rollback_revoked",
+    "policy:clock_rollback",
 }
 SCHEMA_DOCS = {}
 
@@ -152,8 +162,14 @@ def main():
     for forbidden in ["/home/flark/.local/share/STEMwerk", ".venv-drumsep-rocm"]:
         if forbidden in all_text:
             failures.append(f"forbidden runtime path: {forbidden}")
-    if "TO_BE_DEFINED" not in (ROOT / "CONTRACT_V1_OPEN_POLICIES.md").read_text(encoding="utf-8"):
-        failures.append("open policy markers absent")
+    open_policies = (ROOT / "CONTRACT_V1_OPEN_POLICIES.md").read_text(encoding="utf-8")
+    if "None." not in open_policies or "BLOCKING_BEFORE_IMPLEMENTATION" in open_policies:
+        failures.append("implementation blocker closure not reflected in open policies")
+    closure = (ROOT / "CONTRACT_V1_POLICY_CLOSURE.md").read_text(encoding="utf-8")
+    if "IMPLEMENTATION_BLOCKERS_CLOSED=5/5" not in closure:
+        failures.append("blocker closure marker absent")
+    if len(list((ROOT / "decisions").glob("ADR-*.md"))) != 5:
+        failures.append("expected five policy ADRs")
 
     if failures:
         for item in failures:

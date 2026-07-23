@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/trust-snapshot.schema.json",
+  "expected_error": "policy:offline_snapshot_expired",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

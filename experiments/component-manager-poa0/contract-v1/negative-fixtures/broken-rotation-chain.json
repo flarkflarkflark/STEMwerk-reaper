@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/trust-snapshot.schema.json",
+  "expected_error": "policy:broken_rotation_chain",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

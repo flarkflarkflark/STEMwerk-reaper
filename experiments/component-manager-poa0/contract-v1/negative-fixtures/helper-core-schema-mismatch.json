@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/schema-capabilities.schema.json",
+  "expected_error": "policy:schema_handshake_mismatch",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

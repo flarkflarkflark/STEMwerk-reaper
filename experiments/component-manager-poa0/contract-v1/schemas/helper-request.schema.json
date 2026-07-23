@@ -9,6 +9,7 @@
     "operation",
     "payload_digest",
     "requested_by"
+    ,"schema_capabilities"
   ],
   "additionalProperties": false,
   "properties": {
@@ -30,6 +31,7 @@
     "requested_by": {
       "type": "string",
       "minLength": 1
-    }
+    },
+    "schema_capabilities": {"$ref": "schema-capabilities.schema.json"}
   }
 }

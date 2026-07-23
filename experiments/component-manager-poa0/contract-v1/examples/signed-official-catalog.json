@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "catalog_version": "1.0.0",
+  "trust_status": "trusted",
+  "components": [],
+  "flows": [],
+  "catalog_id": "catalog.official.stable",
+  "sequence": 42,
+  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "previous_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "minimum_accepted_sequence": 41,
+  "channel": "stable",
+  "signature": {
+    "schema_version": "1.0.0",
+    "envelope_version": 1,
+    "key_fingerprint": "ed25519:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "algorithm": "Ed25519",
+    "payload_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "canonicalization": "RFC8785-JCS",
+    "signature": "dGVzdC1zaWduYXR1cmU",
+    "trust_scope": "official.catalog",
+    "signer": "STEMwerk release test identity",
+    "signed_at": "2026-07-23T00:00:00Z",
+    "expires_at": "2026-08-22T00:00:00Z"
+  },
+  "$schema_ref": "../schemas/catalog.schema.json"
+}

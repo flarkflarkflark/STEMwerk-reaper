@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/revocation-statement.schema.json",
+  "title": "Signed key or artifact revocation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "statement_id",
+    "subject_type",
+    "subject_id",
+    "status",
+    "effective_at",
+    "reason",
+    "scope",
+    "critical_deny",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "statement_id": {
+      "type": "string"
+    },
+    "subject_type": {
+      "enum": [
+        "key",
+        "artifact",
+        "publisher"
+      ]
+    },
+    "subject_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "revoked",
+        "expired"
+      ]
+    },
+    "effective_at": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "replacement_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "enum": [
+        "official.catalog",
+        "official.artifact",
+        "official.helper",
+        "user.catalog",
+        "development.local"
+      ]
+    },
+    "critical_deny": {
+      "type": "boolean"
+    },
+    "signature": {
+      "$ref": "signature-envelope.schema.json"
+    }
+  }
+}

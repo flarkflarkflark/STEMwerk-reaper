@@ -1,6 +1,6 @@
 # STEMwerk Component Manager Contract v1
 
-Status: **APPROVED_WITH_IMPLEMENTATION_BLOCKERS**. This is a normative design,
+Status: **APPROVED** with all five implementation-policy blockers closed. This is a normative design,
 not production code. Authority is the corrected POA-0 evidence freeze at
 `be0a34a628064aebb8936120d8b23f3846589a0d`, evidence run `29976687812`, and
 evidence-index SHA-256 `18aa77c30eab9fd3874730c55da3e6b16883971443a20f3917b7181186c34b23`.
@@ -72,9 +72,16 @@ again before activation when integrity is unknown.
 
 Provenance MUST include source type, stable locator, publisher/owner, retrieved
 digest, license evidence when available, trust decision, and revocation state.
-Trust roots, mandatory signature algorithms, offline verification, and revocation
-distribution remain `TO_BE_DEFINED` and BLOCKING_BEFORE_IMPLEMENTATION. Unknown,
-untrusted, or revoked provenance MUST fail closed for activation.
+Five isolated trust scopes are REQUIRED: `official.catalog`, `official.artifact`,
+`official.helper`, `user.catalog`, and `development.local`. Official roots MUST arrive
+through an already trusted installer/release channel with an authenticated algorithm,
+fingerprint, and scope; official TOFU is forbidden. A catalog MUST NOT authorize its
+own root. User roots require explicit informed confirmation, displayed fingerprint,
+source and least scope, a durable audit record, and remain disabled until verified.
+One public key MAY hold multiple scopes only when every scope is explicitly enrolled
+and audited. User/development scope MUST NOT imply official scope. Root removal and
+revocation MUST be audited; root records MUST NOT contain private key material.
+Unknown, untrusted, or revoked provenance MUST fail closed for activation.
 
 ## 10. Component model
 
@@ -200,16 +207,32 @@ GC eligibility requires: not active, not pinned, no active/suspected lease, not
 retained for rollback, not desired, no install/repair/recovery operation, known
 ownership, and sufficient integrity knowledge. Shared components MUST use complete
 receipt/generation reference accounting. Unknown ownership defaults to KEEP.
-Retention count and age remain `TO_BE_DEFINED` and BLOCKING_BEFORE_IMPLEMENTATION;
-user pins are always retained and at least one known-good rollback generation SHOULD
-be retained pending final policy.
+Automatic GC MUST retain the active generation, every pinned/leased/suspected or
+user-retained generation, at least two proven rollback generations, and the three
+newest otherwise eligible inactive generations. A normal candidate MUST be inactive
+for at least 30 days and exceed the count threshold; both conditions are REQUIRED.
+Failed incomplete installs MAY be cleaned after 7 days only when unreferenced,
+ownership is known, and no operation or suspected lease exists. Revoked generations
+MUST be retained for 90 days after a validated replacement exists; critical-deny
+content MUST NOT be auto-deleted before forensic/audit preservation. Shared content
+requires exact zero references. Every deletion requires a dry run, explicit candidate
+list, durable journal entry and receipt/tombstone evidence retained for 365 days.
+Disk pressure MUST NOT bypass safety rules.
 
 ## 28. Catalog
 
 The catalog is a declarative, versioned, trust-validated source of components,
 flows, dependencies, compatibility, artifact locators, provenance, presentation,
 installability, deprecation, and channels. Unknown or untrusted catalogs MUST NOT
-drive installation or activation.
+drive installation or activation. Each channel has a monotonic unsigned 64-bit
+sequence, catalog digest, previous accepted digest, minimum accepted sequence,
+publication time, signature envelope, and `official.catalog` or `user.catalog` scope.
+A lower sequence, equal sequence with another digest, or chain break MUST fail closed.
+A channel switch creates a distinct audited sequence namespace and MUST NOT reset the
+prior namespace. Manual rollback requires an explicit recovery authorization naming
+the target digest/sequence and creates an audit record; it MUST NOT alter active state.
+The durable last-accepted sequence/digest record is content-addressed evidence outside
+SQLite; SQLite MAY index it.
 
 ## 29. Viewmodel
 
@@ -265,28 +288,59 @@ forbidden. Existing active state SHOULD remain untouched when safety is uncertai
 
 ## 37. Schema evolution
 
-Schema versions use SemVer. An unknown major MUST fail closed; known older majors MAY
-be read only by an explicit adapter. Immutable receipts/manifests MUST NOT be migrated
-in place. Migration creates a new record/artifact with source digest, target version,
-tool identity, timestamp, result digest, and journal entry. Old active generations
-remain usable only while their schema major is supported. Exact support windows and
-downgrade matrix are BLOCKING_BEFORE_IMPLEMENTATION.
+Schema versions use SemVer independently from Contract v1. All v1 schema families
+support major 1 with minimum readable `1.0.0` and current writable `1.0.0`. Readers
+MUST accept supported 1.x versions no newer than their advertised minor; because v1
+schemas are strict, an unknown newer minor or feature gate MUST fail closed unless an
+explicit compatible adapter exists. Writers MUST emit exactly their current advertised
+version. Unknown majors MUST fail closed. Immutable receipts/manifests MUST NOT be
+migrated in place. Migration creates a new record/artifact with source digest, target
+version, tool identity, timestamp, result digest, and journal entry. Before any write,
+migration, activation, or downgrade the core MUST prove that all active persistent
+objects and at least two rollback generations are readable by the target. Lossy
+downgrade is forbidden. Helper and core MUST exchange contract version, schema-family
+read/write ranges, feature gates, and fail closed on no compatible intersection.
 
 ## 38. Security
 
 Catalogs, artifacts, models, helpers, receipts, manifests, and channels cross trust
 boundaries and MUST be validated before use. Digests protect integrity, not publisher
-identity. Production MUST NOT start until trust-root distribution, signing algorithms,
-signature requirements, key rotation, offline verification, and rollback protection
-are approved separately.
+identity. Signature envelope version `1` uses RFC 8785 JCS canonical JSON, SHA-256
+payload digests, and primary algorithm `Ed25519`. `ECDSA-P256-SHA256` is the sole
+transition algorithm and MUST use strict DER, low-S and named-curve validation. The
+algorithm-policy profile is versioned; unknown algorithms or profiles fail closed.
+The envelope MUST carry version, key fingerprint, algorithm, payload digest,
+canonicalization, signature bytes, trust scope, signer metadata, and optional signing
+and expiry time. Official catalogs, artifact metadata, trust snapshots, rotation and
+revocation statements MUST be signed. Artifact bytes MUST match the signed digest.
+Helpers/installers require platform-native code signing plus manager trust metadata.
+Receipts and generation manifests MAY be unsigned because they are locally
+content-addressed and bound to validated receipts. Unsigned official objects fail
+closed. Unsigned development objects require explicit, visible, isolated
+`development.local` mode and MUST NOT enter an official generation.
 
 ## 39. Trust revocation
 
-Revoked artifacts, publishers, or keys MUST block new installation and activation.
-The response for already-active content, revocation freshness, list distribution, and
-offline grace remain `TO_BE_DEFINED` and BLOCKING_BEFORE_IMPLEMENTATION. Unsigned local
-development MAY exist only behind an explicit non-production mode, isolated state root,
-visible diagnostics, and prohibition on importing trust into production.
+Key status is `active`, `retiring`, `revoked`, `expired`, or `unknown`, with effective
+time, reason, replacement fingerprint, scope and signed statement. Rotation requires
+either an old-valid-key signature over the replacement or a new root delivered through
+an already trusted channel, with a minimum 30-day overlap, audit chain, and explicit
+old-key termination. Unknown chains fail closed for install and activation.
+
+Revoked keys/artifacts MUST block download, installation, new activation and rollback.
+An already active, locally valid generation MAY continue in controlled recovery with
+an explicit diagnostic until replacement exists, unless a signed `critical_deny`
+requires immediate processing refusal. Emergency deny MUST NOT silently delete bytes.
+
+Offline verification MUST use the last locally persisted and validated signed trust
+snapshot containing version, monotonic sequence, issued/expiry times, scoped trusted
+and revoked keys, artifact revocations, minimum catalog sequence, rotations and
+signature. Maximum trust age is 30 days; no grace period applies to official install,
+repair, activation or rollback after expiry. Existing locally valid active use remains
+available unless the last valid snapshot contains a critical deny. Network absence
+MUST NOT skip verification. Unknown revocation status blocks state-changing operations.
+Persisted last-trusted wall time and snapshot sequence MUST detect clock or sequence
+rollback; either ambiguity fails closed.
 
 ## 40. Testing and conformance
 
@@ -309,10 +363,11 @@ OUT_OF_SCOPE_V1.
 
 ## 43. Open policy decisions
 
-Implementation blockers are: trusted-root distribution; signing algorithms and
-signature requirements; revocation/freshness/key rotation/offline rules; catalog
-rollback protection; GC retention count/age; and schema support/downgrade windows.
-No production implementation is authorized until separately resolved or accepted by ADR.
+The five former implementation blockers are resolved by ADR-001 through ADR-005.
+Residual non-blocking work is implementation planning, operational runbooks, and
+platform validation of the specified interfaces. Contract policy gate is READY, but
+production implementation remains unauthorized until a separate Production Readiness
+Gate approves package boundaries, bindings, storage layout and vertical slices.
 
 ## 44. Appendices and examples
 

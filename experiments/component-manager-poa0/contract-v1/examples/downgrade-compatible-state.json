@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.0.0",
+  "contract_version": "1.0.0",
+  "families": [
+    {
+      "family": "component",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "artifact",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "provenance",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "receipt",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "generation",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "selector",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "desired-state",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "lease",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "run-pin",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "catalog",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "viewmodel",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "helper-request",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "helper-result",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "error",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    },
+    {
+      "family": "diagnostic-event",
+      "read_min": "1.0.0",
+      "read_max": "1.0.0",
+      "write": "1.0.0"
+    }
+  ],
+  "feature_gates": [],
+  "$schema_ref": "../schemas/schema-capabilities.schema.json"
+}

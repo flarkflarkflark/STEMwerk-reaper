@@ -90,5 +90,24 @@
       ]
     }
   ],
+  "catalog_id": "catalog.official.test",
+  "sequence": 1,
+  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "previous_digest": null,
+  "minimum_accepted_sequence": 0,
+  "channel": "stable",
+  "signature": {
+    "schema_version": "1.0.0",
+    "envelope_version": 1,
+    "key_fingerprint": "ed25519:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "algorithm": "Ed25519",
+    "payload_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "canonicalization": "RFC8785-JCS",
+    "signature": "dGVzdC1zaWduYXR1cmU",
+    "trust_scope": "official.catalog",
+    "signer": "STEMwerk release test identity",
+    "signed_at": "2026-07-23T00:00:00Z",
+    "expires_at": "2026-08-22T00:00:00Z"
+  },
   "$schema_ref": "../schemas/catalog.schema.json"
 }

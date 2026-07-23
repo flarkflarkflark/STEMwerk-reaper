@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/schema-capabilities.schema.json",
+  "expected_error": "policy:lossy_downgrade",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

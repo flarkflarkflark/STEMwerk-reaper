@@ -6,5 +6,7 @@
   "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "trust_status": "trusted",
   "revocation_state": "not_revoked",
+  "trust_root_ref": "root.official.artifact.test",
+  "trust_scope": "official.artifact",
   "$schema_ref": "../schemas/provenance.schema.json"
 }

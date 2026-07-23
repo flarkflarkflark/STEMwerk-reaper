@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/retention-policy.schema.json",
+  "title": "Deterministic GC retention policy",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "minimum_rollback_generations",
+    "inactive_retention_count",
+    "minimum_inactive_age_days",
+    "failed_install_cleanup_age_days",
+    "revoked_retention_days",
+    "audit_retention_days",
+    "count_and_age_required",
+    "dry_run_required"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "minimum_rollback_generations": {
+      "const": 2
+    },
+    "inactive_retention_count": {
+      "const": 3
+    },
+    "minimum_inactive_age_days": {
+      "const": 30
+    },
+    "failed_install_cleanup_age_days": {
+      "const": 7
+    },
+    "revoked_retention_days": {
+      "const": 90
+    },
+    "audit_retention_days": {
+      "const": 365
+    },
+    "count_and_age_required": {
+      "const": true
+    },
+    "dry_run_required": {
+      "const": true
+    }
+  }
+}

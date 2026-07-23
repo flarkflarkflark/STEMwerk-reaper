@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/retention-policy.schema.json",
+  "expected_error": "policy:gc_unknown_ownership",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

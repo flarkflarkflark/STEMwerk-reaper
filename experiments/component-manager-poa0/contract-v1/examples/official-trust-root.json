@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "root_id": "root.official.catalog.test",
+  "key_fingerprint": "ed25519:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "algorithm": "Ed25519",
+  "public_key": "TEST_PUBLIC_KEY_MATERIAL_ONLY",
+  "trust_scopes": [
+    "official.catalog"
+  ],
+  "origin": "trusted_distribution",
+  "enrollment": {
+    "confirmed": true,
+    "audit_ref": "audit:test"
+  },
+  "status": "active",
+  "$schema_ref": "../schemas/trust-root.schema.json"
+}

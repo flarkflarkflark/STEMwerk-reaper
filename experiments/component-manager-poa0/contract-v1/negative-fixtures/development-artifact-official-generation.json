@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/generation.schema.json",
+  "expected_error": "policy:development_scope_escape",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

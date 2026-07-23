@@ -1,6 +1,8 @@
 # Component Manager Contract v1
 
-Status: **APPROVED_WITH_IMPLEMENTATION_BLOCKERS**.
+Status: **APPROVED**. The five Contract v1 implementation-policy blockers are
+closed; production implementation is still not authorized until a separate
+Production Readiness Gate.
 
 This directory contains the normative design derived only from the corrected POA-0
 baseline. It is not a production core, CLI, daemon, helper, installer, UI, or REAPER
@@ -20,6 +22,8 @@ integration.
 - `CONTRACT_V1_OPEN_POLICIES.md`: implementation blockers and exclusions
 - `CONTRACT_V1_TRACEABILITY.md`: architecture-to-schema/test mapping
 - `CONTRACT_V1_REVIEW.md`: architecture, security, and implementability reviews
+- `CONTRACT_V1_POLICY_CLOSURE.md`: blocker sources, decisions, interactions and gate
+- `decisions/`: five accepted policy ADRs
 - `schemas/`: Draft 2020-12 record schemas
 - `examples/`: schema-valid records
 - `negative-fixtures/`: required fail-closed rejection scenarios
@@ -31,6 +35,7 @@ From the repository root:
 
 ```sh
 python3 experiments/component-manager-poa0/contract-v1/tests/validate_contract.py
+python3 experiments/component-manager-poa0/contract-v1/tests/test_policy_closure.py
 python3 experiments/component-manager-poa0/scripts/test-verifier-policy.py
 git diff --check
 ```
