@@ -1,0 +1,243 @@
+{
+  "aggregate_results": {
+    "artifact_file_count": 470,
+    "case_fail": 0,
+    "case_not_run": 0,
+    "case_pass": 326,
+    "case_total": 326,
+    "independent_failures": 0,
+    "jobs_success": 8,
+    "jobs_total": 8,
+    "missing_artifact_files": 0,
+    "strict_verifiers_pass": 8,
+    "strict_verifiers_total": 8
+  },
+  "architecture_approval": {
+    "approved_count": 14,
+    "blocking_count": 0,
+    "classification": "APPROVED_WITH_NON_BLOCKING_CONTRACT_FOLLOWUPS",
+    "open_non_blocking_count": 9,
+    "platform_specific_count": 5,
+    "rejected_count": 0
+  },
+  "authoritative_run": {
+    "conclusion": "success",
+    "event": "workflow_dispatch",
+    "head": "7519ca21dba57f01c9b3b6b0cae046e511bb8f6c",
+    "id": 29976687812,
+    "mode": "normal",
+    "run_attempt": 1
+  },
+  "branch": "experiment/component-manager-poa0",
+  "case_counting": {
+    "authoritative_metric": "concrete unique selected completed case-result records summed per native job",
+    "counterpart_alias_rows": 160,
+    "method_a_completed_selected_sum": 326,
+    "method_b_unique_pass_ids_per_job_sum": 326,
+    "method_c_selected_result_record_sum": 326,
+    "methods_agree": true,
+    "non_case_probe_rows": 64,
+    "raw_result_rows": 486,
+    "selected_result_rows": 326
+  },
+  "contract_v1_gate": {
+    "blockers": [],
+    "input_topics": 35,
+    "status": "READY"
+  },
+  "guarantee_boundaries": [
+    "process-crash evidence is limited to tested native runners and fault boundaries",
+    "no OS-crash durability guarantee",
+    "no power-loss durability guarantee",
+    "no production packaging, signing, notarization or installer claim",
+    "no production performance, REAPER integration or model provenance claim"
+  ],
+  "head": "7519ca21dba57f01c9b3b6b0cae046e511bb8f6c",
+  "language_decision": {
+    "confidence": "HIGH",
+    "dual_core_approved": false,
+    "rust_functionally_disqualified": false,
+    "selected_core_language": "Go",
+    "status": "APPROVED"
+  },
+  "matrix": [
+    {
+      "arch": "x86_64",
+      "artifact": {
+        "id": 8551682412,
+        "name": "component-manager-poa0-linux-x86_64-rust",
+        "sha256": "b56b29a2f0f4e2bb7e3f35910f7c96b6b6edb093d55d37a2e880242d53ff9421",
+        "zip_size_bytes": 20759
+      },
+      "artifact_file_count": 55,
+      "common_case_count": 24,
+      "implementation": "Rust",
+      "job_id": 89109864046,
+      "lease_case_count": 10,
+      "os": "Linux",
+      "platform_case_count": 4,
+      "result": "PASS",
+      "runner": "ubuntu-latest",
+      "selected_case_count": 38
+    },
+    {
+      "arch": "x86_64",
+      "artifact": {
+        "id": 8551682282,
+        "name": "component-manager-poa0-linux-x86_64-go",
+        "sha256": "b609333a0c211dc893356394e6cb8bc75dbe299e04741adefd847bc173526ab7",
+        "zip_size_bytes": 20343
+      },
+      "artifact_file_count": 55,
+      "common_case_count": 24,
+      "implementation": "Go",
+      "job_id": 89109864080,
+      "lease_case_count": 10,
+      "os": "Linux",
+      "platform_case_count": 4,
+      "result": "PASS",
+      "runner": "ubuntu-latest",
+      "selected_case_count": 38
+    },
+    {
+      "arch": "x86_64",
+      "artifact": {
+        "id": 8551703379,
+        "name": "component-manager-poa0-windows-x86_64-rust",
+        "sha256": "f2e6ca8af8afa4db3c945d90cd614f84c8602cd8d39ece75055b1605f14396d4",
+        "zip_size_bytes": 20364
+      },
+      "artifact_file_count": 54,
+      "common_case_count": 24,
+      "implementation": "Rust",
+      "job_id": 89109864031,
+      "lease_case_count": 10,
+      "os": "Windows",
+      "platform_case_count": 9,
+      "result": "PASS",
+      "runner": "windows-latest",
+      "selected_case_count": 43
+    },
+    {
+      "arch": "x86_64",
+      "artifact": {
+        "id": 8551710347,
+        "name": "component-manager-poa0-windows-x86_64-go",
+        "sha256": "0e2ea059092f0d96e9eac90b22175ce82f95e756ab1559d4ae3cbbced28808f3",
+        "zip_size_bytes": 19933
+      },
+      "artifact_file_count": 54,
+      "common_case_count": 24,
+      "implementation": "Go",
+      "job_id": 89109864048,
+      "lease_case_count": 10,
+      "os": "Windows",
+      "platform_case_count": 9,
+      "result": "PASS",
+      "runner": "windows-latest",
+      "selected_case_count": 43
+    },
+    {
+      "arch": "x86_64",
+      "artifact": {
+        "id": 8551692336,
+        "name": "component-manager-poa0-macos-x86_64-rust",
+        "sha256": "412e33298022a805ae4579b62ad79fc5b8575da949c175a947be33e36033ddde",
+        "zip_size_bytes": 24104
+      },
+      "artifact_file_count": 63,
+      "common_case_count": 24,
+      "implementation": "Rust",
+      "job_id": 89109864033,
+      "lease_case_count": 10,
+      "os": "macOS Intel",
+      "platform_case_count": 7,
+      "result": "PASS",
+      "runner": "macos-15-intel",
+      "selected_case_count": 41
+    },
+    {
+      "arch": "x86_64",
+      "artifact": {
+        "id": 8551690194,
+        "name": "component-manager-poa0-macos-x86_64-go",
+        "sha256": "e57af5880ad0621f6f06df681ef52374178c99dda033e7bdec71d844bde05282",
+        "zip_size_bytes": 23634
+      },
+      "artifact_file_count": 63,
+      "common_case_count": 24,
+      "implementation": "Go",
+      "job_id": 89109864037,
+      "lease_case_count": 10,
+      "os": "macOS Intel",
+      "platform_case_count": 7,
+      "result": "PASS",
+      "runner": "macos-15-intel",
+      "selected_case_count": 41
+    },
+    {
+      "arch": "arm64",
+      "artifact": {
+        "id": 8551684671,
+        "name": "component-manager-poa0-macos-arm64-rust",
+        "sha256": "2cebdf82d800ba744e1ee8760106dcde2929d0c2064ec3aad8692dd9e6284d9f",
+        "zip_size_bytes": 24033
+      },
+      "artifact_file_count": 63,
+      "common_case_count": 24,
+      "implementation": "Rust",
+      "job_id": 89109864059,
+      "lease_case_count": 10,
+      "os": "macOS",
+      "platform_case_count": 7,
+      "result": "PASS",
+      "runner": "macos-15",
+      "selected_case_count": 41
+    },
+    {
+      "arch": "arm64",
+      "artifact": {
+        "id": 8551685154,
+        "name": "component-manager-poa0-macos-arm64-go",
+        "sha256": "05bc1b0ab3e12b23648ea6c7f6a3917ff1ea92fe1efc4302e132aab6e6e3a146",
+        "zip_size_bytes": 23596
+      },
+      "artifact_file_count": 63,
+      "common_case_count": 24,
+      "implementation": "Go",
+      "job_id": 89109864030,
+      "lease_case_count": 10,
+      "os": "macOS",
+      "platform_case_count": 7,
+      "result": "PASS",
+      "runner": "macos-15",
+      "selected_case_count": 41
+    }
+  ],
+  "non_blocking_followups": [
+    "generation compatibility policy",
+    "precise runtime.main boundary",
+    "precise optional runtime.drumsep boundary",
+    "model-component policy",
+    "catalog/viewmodel boundary",
+    "REAPER consumer integration",
+    "installer/helper boundaries"
+  ],
+  "poa_id": "component-manager-poa0",
+  "repository": "STEMwerk-reaper",
+  "schema_version": "1.0.0",
+  "source_documents": [
+    "experiments/component-manager-poa0/reports/NATIVE_MATRIX_RESULTS.md",
+    "experiments/component-manager-poa0/reports/POA_0_ARCHITECTURE_APPROVAL.md",
+    "experiments/component-manager-poa0/reports/POA_0_EVIDENCE_BASELINE.md",
+    "experiments/component-manager-poa0/reports/POA_0_VERDICT.md",
+    "experiments/component-manager-poa0/reports/CONTRACT_V1_INPUTS.md"
+  ],
+  "status": "validated_with_non_blocking_followups",
+  "verification": {
+    "feature_diff_baseline": "9bf06029f2c1b24db0fd4e680f8d8e2e289dcd6b",
+    "feature_diff_target": "ec14fdf523524bbd9aec34d429f0b6a5b673a701",
+    "frozen_manifest": "PASS",
+    "strict_mode": true
+  }
+}

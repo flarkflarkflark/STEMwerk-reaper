@@ -1,87 +1,70 @@
-# Component Manager POA-0 verdict
+# Component Manager POA-0 formal verdict
 
-## Basis and scope
+## Status
 
-`origin/main` was `d22e67e36b3d0b4ef014dbfa91a4f6ad8541708a` after fetch. PR #107
-was open and draft, with remote head
-`bfe9076f90cd9b4982fabf765e0c779a65e74c74`; that head was selected because
-it contains only the current 2.4 scope document above confirmed main. This
-disposable branch contains no product, installer, runtime, release, or workflow
-changes.
+- Evidence baseline: run `29976687812`, attempt 1.
+- Branch/head: `experiment/component-manager-poa0` at
+  `7519ca21dba57f01c9b3b6b0cae046e511bb8f6c`.
+- Matrix: 8/8 jobs and strict verifiers PASS.
+- Concrete results: 326/326 PASS; zero FAIL and NOT_RUN.
+- Artifact audit: 470/470 files valid.
+- Selected core language: Go, confidence HIGH.
+- Architecture: `APPROVED_WITH_NON_BLOCKING_CONTRACT_FOLLOWUPS`.
+- Contract-v1 native gate: `READY`; blockers: none.
 
-Linux toolchains: Rust 1.95.0, Cargo 1.95.0, Go 1.26.5-X, Git 2.55.0, GCC
-16.1.1. The worktree is on ext4 with 22,698,520,576 free bytes at preflight.
-No Windows cross-toolchain or macOS SDK was present.
+The corrected total is `2*38 + 2*43 + 4*41 = 326`. Independent completed,
+unique-PASS-ID and selected-record counts all equal 326. Of 486 raw rows, 160
+counterpart aliases are excluded. Exactly 64 timeline/probe events are not
+case records. CMN-001..024 and record-derived common set equality pass in all
+eight jobs; CMN-021..024 each pass 8/8.
 
-## Evidence
+## Fifteen-criterion language scorecard
 
-Rust and Go both implement the same eight-command fixture CLI and consume the
-same catalog and seven schemas. The 20-case harness passed 20/20 for each
-implementation. It proved dependency closure, pre-materialization SHA256,
-advisory-read-only component directories, immutable receipts, generation-level
-activation, rollback by changing only `state/active`, projection rebuild from
-receipts/generations, structured failures, cancellation, deterministic crash
-boundaries, recovery, a mutation lock, and JSON-only stdout.
+| Criterion | Rust | Go | Outcome |
+|---|---|---|---|
+| Native functional correctness | PASS | PASS | tie |
+| Cross-platform consistency | PASS | PASS | tie |
+| Platform-native API integration | PASS | PASS | tie |
+| Durability correctness | PASS | PASS | tie |
+| Process-crash recovery | PASS | PASS | tie |
+| Lease/process-identity correctness | PASS | PASS | tie |
+| Fail-closed behavior | PASS | PASS | tie |
+| Artifact and diagnostic quality | PASS | PASS | tie |
+| Implementation complexity | MINOR_CONCERN | PASS | Go |
+| Dependency footprint | MINOR_CONCERN | PASS | Go |
+| Build simplicity | MINOR_CONCERN | PASS | Go |
+| Distribution and packaging simplicity | PASS | PASS | tie |
+| Maintainability | MINOR_CONCERN | PASS | Go |
+| Testability | PASS | PASS | tie |
+| Shared Component Manager core suitability | PASS | PASS | Go |
 
-The active selector uses a flushed `active.tmp` and same-volume rename. The
-reader matrix observed `MIXED_COMPONENT_VISIBILITY_COUNT=0`. A run resolves
-active once, writes a generation lease, emits two stages using that same
-generation while a concurrent install changes active, and removes its lease on
-normal exit. The harness confirms a would-be GC must stop while that lease is
-present; POA-0 intentionally exposes no GC command.
+Rust scores 11 PASS and 4 MINOR_CONCERN; Go scores 15 PASS. Both are
+functionally equivalent in the native matrix and Rust is not disqualified. Go
+wins the predetermined tie-break because the POA has zero Go module
+dependencies, simpler build/distribution, lower platform-separated complexity
+and lower expected maintenance load. One shared Go production core is
+approved; a dual-core design is not. The Rust POA remains reference evidence.
+Reopening the language decision requires a separate ADR.
 
-SQLite/WAL contains only inventory, ownership, consumers, generation history,
-and operation metadata. `desired.json` and `settings.json` remain outside it.
-Quarantining `state.db` and running `state-rebuild` restored two inventory rows
-without reinstalling artifacts. A missing `desired.json`, receipt drift, and
-artifact drift fail closed.
+## Architecture and native gate
 
-## Architecture assessment
+Immutable generations, generation-atomic publication, run pinning, lease
+identity, rollback, recovery, rebuildable SQLite state, immutable receipts,
+fail-closed integrity, component independence and concrete case records are
+validated. Platform durability remains governed by explicit Windows, macOS and
+Linux contracts. There are zero blocking and zero rejected criteria.
 
-- Option B: supported locally, pending native filesystem evidence.
-- Receipts: supported, with the caveat that filesystem read-only flags are
-  advisory and cryptographic drift checks remain essential.
-- Rebuildable SQLite projection plus external desired/settings: supported.
-- Generation activation and single active-file primitive: supported on ext4.
-- Lease/run pinning: supported locally; stale-lease expiry policy is not yet a
-  Contract v1 decision.
-- REAPER viewmodel-only boundary: architecturally consistent but not exercised;
-  no REAPER code exists in this POA.
+Non-blocking Contract-v1 work remains: generation compatibility policy,
+precise `runtime.main` and optional `runtime.drumsep` boundaries, model policy,
+catalog/viewmodel boundary, REAPER consumer integration and installer/helper
+boundaries. These do not block `CONTRACT_V1_NATIVE_GATE=READY`.
 
-The architecture needs one revision before Contract v1: production candidates
-must embed SQLite and use real JSON/schema libraries rather than depend on
-`sqlite3`, `sha256sum`, or manual parsing. That is a POA implementation
-limitation, not a falsification of generation-level activation.
+## Erratum and limits
 
-## Platform and language verdict
+Historical pre-closure run `29934682382` correctly had 294 concrete records.
+The earlier apparent 326 was a hardcoded phantom total; 328 was a manual
+arithmetic error. Only run `29976687812` establishes the current corrected 326.
+Targeted run `29941607856` is closure evidence only.
 
-Go cross-compiles from Linux to Windows amd64 and macOS amd64/arm64. Those
-outputs were not executed. Rust cross-builds were unavailable because no
-cross-targets/toolchains were installed. Native Windows, macOS Intel, and macOS
-arm64 tests remain NOT_RUN. Output inspection shows Rust dynamically links
-glibc/libgcc and Go is statically linked, but external process dependencies
-mean neither is self-contained.
-
-Both languages are locally viable. Rust leads local binary/RSS/build metrics;
-Go has easier standard-library JSON/SHA ergonomics and exposed one Windows
-crashhook portability fix. The objective preliminary preference is `none`.
-`FINAL_LANGUAGE_DECISION=pending_native_ci`.
-
-## Blockers and next step
-
-Before Contract v1: run the unchanged behavioral contract natively on Windows
-NTFS, macOS Intel APFS, and macOS arm64 APFS; define stale-lease recovery;
-replace external process/manual-JSON shortcuts in any production
-reimplementation; and decide whether Windows exit-137 fault injection is an
-adequate crash proxy under Defender. Then review schemas explicitly and choose
-a language using native evidence. Do not copy this POA into product code.
-
-## Native transport addendum
-
-The experimental branch now freezes fixtures, schemas, source/harness tree
-hashes, expected semantic results, 24 common native case IDs, and a formal
-stale-lease policy. A dedicated workflow targets Linux x86_64, Windows x86_64,
-macOS Intel x86_64, and macOS arm64 with native architecture/filesystem gates.
-The authoritative experiment commit and run ID are recorded by `GITHUB_SHA`
-and `GITHUB_RUN_ID` in each uploaded job report. Language status remains
-`pending_native_ci`; this addendum does not rewrite the original Linux result.
+No OS-crash or power-loss guarantee is claimed. Evidence freeze is governance,
+not Contract v1, final production schemas, product code, packaging or release.
