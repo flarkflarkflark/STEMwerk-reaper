@@ -216,7 +216,9 @@ def test_setup_does_not_normalize_runtime_policy_mismatch_back_to_ok():
     assert 'reason == "runtime_broken_requires_rebuild"' in script
     assert 'local runtimePolicyBlocked = runtimePolicyRequiresRebuild(state)' in script
     assert 'if verifiedRuntimeOk and not runtimePolicyBlocked then' in script
-    assert 'if authoritativeBootstrapVerified and not runtimePolicyBlocked then' in script
+    assert 'if authoritativeRuntimeVerified and not runtimePolicyBlocked then' in script
+    assert 'local authoritativeRuntimeVerified = authoritativeBootstrapVerified' in script
+    assert 'and not windowsTorchaudioVerificationFailed' in script
     assert 'and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)' in script
 
 

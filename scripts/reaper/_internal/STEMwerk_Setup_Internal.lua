@@ -738,6 +738,8 @@ local function prettySetupReason(reason)
             part = "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "torchaudio_missing_for_demucs" then
             part = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
+        elseif lower == "torchaudio_version_mismatch" then
+            part = "Incompatible Torch runtime detected: torch and torchaudio versions do not match. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "backend_runtime_install_failed" then
             part = "GPU backend runtime install failed; CPU fallback used"
         elseif lower == "backend_runtime_verify_failed" then
@@ -791,6 +793,9 @@ local function prettyCheckError(err)
     end
     if lower == "torchaudio_missing_for_demucs" then
         return "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
+    end
+    if lower == "torchaudio_version_mismatch" then
+        return "Incompatible Torch runtime detected: torch and torchaudio versions do not match. Run Repair/Rebuild to restore the supported runtime."
     end
     if lower == "numpy_numba_runtime_probe_failed" then return "NumPy/Numba runtime compatibility check failed; run Rebuild venv/Repair" end
     if lower == "macos_demucs_runtime_incompatible" then return "macOS Demucs/audio-separator runtime check failed; run Rebuild venv/Repair" end
@@ -1132,6 +1137,8 @@ if not torch_supported:
     reason = "torch_too_new_for_demucs"
 elif torchaudio_present != "yes":
     reason = "torchaudio_missing_for_demucs"
+elif torchaudio_ver != torch_ver:
+    reason = "torchaudio_version_mismatch"
 elif not numpy_numba_ok:
     reason = "numpy_numba_runtime_probe_failed"
 
@@ -1159,6 +1166,8 @@ sys.exit(0 if not reason else 1)
     result.ok = tonumber(rc) == 0 and result.driftDetected == "no"
     if result.driftReason == "torchaudio_missing_for_demucs" then
         result.error = "torchaudio_missing_for_demucs"
+    elseif result.driftReason == "torchaudio_version_mismatch" then
+        result.error = "torchaudio_version_mismatch"
     elseif result.driftReason == "torch_too_new_for_demucs" then
         result.error = "torch_too_new_for_demucs"
     elseif result.driftReason == "numpy_numba_runtime_probe_failed" then
@@ -2731,9 +2740,21 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         trim(state.STATUS or "") == "ok"
         and hasBootstrapRuntimeVerificationPass()
     )
+    local windowsTorchaudioVerificationFailed = false
+    if OS == "Windows" then
+        for _, verificationError in ipairs(errors or {}) do
+            if verificationError == "torchaudio_missing_for_demucs"
+                or verificationError == "torchaudio_version_mismatch" then
+                windowsTorchaudioVerificationFailed = true
+                break
+            end
+        end
+    end
+    local authoritativeRuntimeVerified = authoritativeBootstrapVerified
+        and not windowsTorchaudioVerificationFailed
     local runtimePolicyBlocked = runtimePolicyRequiresRebuild(state)
     local effectiveBootstrapSuccess = (not runtimePolicyBlocked)
-        and (bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified)
+        and (bootstrapSuccess or verifiedRuntimeOk or authoritativeRuntimeVerified)
 
     if verifiedRuntimeOk and not runtimePolicyBlocked then
         if appendLogLine then
@@ -2749,7 +2770,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
     end
-    if authoritativeBootstrapVerified and not runtimePolicyBlocked then
+    if authoritativeRuntimeVerified and not runtimePolicyBlocked then
         state.STATUS = "ok"
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
@@ -2876,7 +2897,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
         coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
     end
-    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
+    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeRuntimeVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -2914,7 +2935,17 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local verificationStatus = verificationSuccess and "ok" or "failed"
     local runtimeDriftDetected = verification.runtimeDriftDetected
     local runtimeDriftReason = verification.runtimeDriftReason
-    if verificationSuccess or authoritativeBootstrapVerified then
+    local windowsTorchaudioContractFailed = OS == "Windows"
+        and (runtimeDriftReason == "torchaudio_missing_for_demucs"
+            or runtimeDriftReason == "torchaudio_version_mismatch")
+    authoritativeRuntimeVerified = authoritativeRuntimeVerified
+        and not windowsTorchaudioContractFailed
+    if windowsTorchaudioContractFailed then
+        state.STATUS = "repair_required"
+        state.STATUS_REASON = runtimeDriftReason
+        state.RUNTIME_VERIFY_DETAIL = runtimeDriftReason
+    end
+    if verificationSuccess or authoritativeRuntimeVerified then
         runtimeDriftDetected = "no"
         runtimeDriftReason = ""
     end
@@ -2947,15 +2978,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local resolvedCudaCount = firstNonEmpty(state.CUDA_COUNT, envJsonValue(envJson, "cuda_count"))
     local resolvedTorchHip = firstNonEmpty(state.TORCH_HIP, envJsonValue(envJson, "torch_hip"))
     local resolvedRuntimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
-    if verificationSuccess or authoritativeBootstrapVerified then
+    if verificationSuccess or authoritativeRuntimeVerified then
         resolvedRuntimeVerifyDetail = "ok"
     elseif resolvedRuntimeVerifyDetail == "" then
         resolvedRuntimeVerifyDetail = trim(state.STATUS_REASON or "")
     end
-    local bootstrapReason = (verificationSuccess or authoritativeBootstrapVerified) and "" or (state.STATUS_REASON or "")
+    local bootstrapReason = (verificationSuccess or authoritativeRuntimeVerified) and "" or (state.STATUS_REASON or "")
     local resolvedTorchSupported = trim(verification.torchSupported or "")
     local resolvedTorchaudioPresent = trim(verification.torchaudioPresent or "")
-    if verificationSuccess or authoritativeBootstrapVerified then
+    if verificationSuccess or authoritativeRuntimeVerified then
         if resolvedTorchSupported == "" or resolvedTorchSupported == "no" then
             resolvedTorchSupported = "yes"
         end
@@ -3020,17 +3051,17 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         torchaudioPresent = resolvedTorchaudioPresent,
         runtimeDriftDetected = runtimeDriftDetected,
         runtimeDriftReason = runtimeDriftReason,
-        runtimeDriftDetail = (verificationSuccess or authoritativeBootstrapVerified) and "" or runtimeDriftReason,
+        runtimeDriftDetail = (verificationSuccess or authoritativeRuntimeVerified) and "" or runtimeDriftReason,
         runtimeVerifyDetail = resolvedRuntimeVerifyDetail,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
-        status = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or (state.STATUS or ""),
+        status = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or (state.STATUS or ""),
         bootstrapStatus = state.STATUS or "",
         bootstrapReason = bootstrapReason,
-        verification = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or verificationStatus,
-        audioSeparator = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or audioStatus,
-        stemwerkCore = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or coreStatus,
+        verification = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or verificationStatus,
+        audioSeparator = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or audioStatus,
+        stemwerkCore = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or coreStatus,
         deviceNames = deviceNames,
         torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
         cudaAvailable = resolvedCudaAvailable,
@@ -3060,7 +3091,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         BACKEND_NOTE = backendNote or "",
         STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
     }
-    if verificationStatus == "ok" or authoritativeBootstrapVerified then
+    if verificationStatus == "ok" or authoritativeRuntimeVerified then
         syncKv.STATUS = "ok"
         syncKv.STATUS_REASON = ""
         syncKv.RUNTIME_VERIFY_DETAIL = "ok"

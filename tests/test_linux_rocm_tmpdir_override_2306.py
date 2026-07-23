@@ -184,7 +184,7 @@ def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
             "7cab0f6b042014825dfe65dd4a9ea8d23012cb15282be5d26ec5612575b5b466"
         ),
         "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1": (
-            "ca5d3bc5346765fb9ef860321ab5c1d9674ea38b7f83ba11a0cc3b015c8e6d2e"
+            "796410bcda94fe9e931bb6a3f152d9a0e1e421ea766e1c30a2465351feddb899"
         ),
     }
     for relative, wanted in expected.items():

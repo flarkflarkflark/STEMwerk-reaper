@@ -121,6 +121,8 @@ $audioSeparatorOk = $false
 $stemwerkCoreOk = $false
 $samplerateOk = $false
 $juliusOk = $false
+$torchAudioOk = $false
+$pytorchCpuIndex = "https://download.pytorch.org/whl/cpu"
 $pytorchCudaIndex = "https://download.pytorch.org/whl/cu121"
 $package = "audio-separator==$audioSeparatorVersion"
 $coreExtra = ""
@@ -859,6 +861,7 @@ function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
         LogProgress "Installing PyTorch CUDA runtime"
         $torchCudaReq = "torch==$torchVersion$torchCudaSuffix"
         $torchVisionCudaReq = "torchvision==$torchVisionVersion$torchCudaSuffix"
+        $torchAudioCudaReq = "torchaudio==$torchAudioVersion$torchCudaSuffix"
         $installArgs = @(
             "--upgrade","--force-reinstall",
             "--index-url",$pytorchCudaIndex,
@@ -866,7 +869,8 @@ function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
             "-c",$cudaConstraints,
             "numpy<2",
             $torchCudaReq,
-            $torchVisionCudaReq
+            $torchVisionCudaReq,
+            $torchAudioCudaReq
         )
         # Offline bundle mode cannot satisfy CUDA index installs unless explicit wheels are bundled.
         if (HasBundledWheels) {
@@ -876,7 +880,8 @@ function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
                 "-c",$cudaConstraints,
                 "numpy<2",
                 $torchCudaReq,
-                $torchVisionCudaReq
+                $torchVisionCudaReq,
+                $torchAudioCudaReq
             )
         }
         InstallWithPip $PythonPath $installArgs "Install PyTorch CUDA runtime"
@@ -964,6 +969,123 @@ function GetAudioRuntimeDependencyList([string]$BackendName) {
         $deps += @("torch==$torchVersion", "torchvision==$torchVisionVersion", "onnxruntime")
     }
     return $deps
+}
+
+function GetMatchedTorchaudioContract([string]$BackendName) {
+    if ($BackendName -eq "cuda") {
+        return @{
+            Requirement = "torchaudio==$torchAudioVersion$torchCudaSuffix"
+            Index = $pytorchCudaIndex
+            Backend = "cuda"
+        }
+    }
+    return @{
+        Requirement = "torchaudio==$torchAudioVersion+cpu"
+        Index = $pytorchCpuIndex
+        Backend = if ($BackendName -eq "directml") { "directml" } else { "cpu" }
+    }
+}
+
+function TestMainTorchAudioRuntime([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) {
+        return @{ Status = "repair_required"; Reason = "python_missing" }
+    }
+    $contract = GetMatchedTorchaudioContract $BackendName
+    $probeResultPath = Join-Path $RuntimeBase "state\torch_audio_probe.txt"
+    Remove-Item -Path $probeResultPath -Force -ErrorAction SilentlyContinue
+    $probeCode = @'
+import os
+from pathlib import Path
+
+result_path = Path(os.environ["STEMWERK_TORCHAUDIO_RESULT"])
+backend = os.environ.get("STEMWERK_TORCHAUDIO_BACKEND", "cpu")
+expected = os.environ.get("STEMWERK_TORCHAUDIO_VERSION", "2.4.1")
+errors = []
+try:
+    import torch
+except Exception:
+    errors.append("torch_import_failed")
+    torch = None
+try:
+    import torchaudio
+except Exception:
+    errors.append("torchaudio_missing")
+    torchaudio = None
+
+def split_version(value):
+    text = str(value or "")
+    core, sep, build = text.partition("+")
+    return core, (build.lower() if sep else "")
+
+if torch is not None and torchaudio is not None:
+    torch_core, torch_build = split_version(getattr(torch, "__version__", ""))
+    audio_core, audio_build = split_version(getattr(torchaudio, "__version__", ""))
+    if torch_core != expected:
+        errors.append("torch_version_unsupported")
+    elif audio_core != expected or torch_core != audio_core:
+        errors.append("torchaudio_version_mismatch")
+    if backend == "cuda":
+        if torch_build != "cu121" or audio_build != "cu121":
+            errors.append("torchaudio_backend_mismatch")
+    else:
+        allowed_torch_builds = ("", "cpu") if backend == "directml" else ("cpu",)
+        if torch_build not in allowed_torch_builds or audio_build != "cpu":
+            errors.append("torchaudio_backend_mismatch")
+
+if errors:
+    result_path.write_text("repair_required|" + errors[0], encoding="utf-8")
+else:
+    result_path.write_text("ok|torch_torchaudio_compatible", encoding="utf-8")
+'@
+    $previousResult = $env:STEMWERK_TORCHAUDIO_RESULT
+    $previousBackend = $env:STEMWERK_TORCHAUDIO_BACKEND
+    $previousVersion = $env:STEMWERK_TORCHAUDIO_VERSION
+    try {
+        $env:STEMWERK_TORCHAUDIO_RESULT = $probeResultPath
+        $env:STEMWERK_TORCHAUDIO_BACKEND = [string]$contract.Backend
+        $env:STEMWERK_TORCHAUDIO_VERSION = $torchAudioVersion
+        RunHidden $PythonPath @("-c", $probeCode) "Verify matched Torch/torchaudio runtime" | Out-Null
+    } finally {
+        $env:STEMWERK_TORCHAUDIO_RESULT = $previousResult
+        $env:STEMWERK_TORCHAUDIO_BACKEND = $previousBackend
+        $env:STEMWERK_TORCHAUDIO_VERSION = $previousVersion
+    }
+    $probeText = ""
+    if (Test-Path $probeResultPath) {
+        $probeText = ([string](Get-Content $probeResultPath -ErrorAction SilentlyContinue | Select-Object -First 1)).Trim()
+    }
+    $parts = $probeText.Split('|', 2)
+    if ($LASTEXITCODE -eq 0 -and $parts.Count -eq 2 -and $parts[0] -eq "ok") {
+        return @{ Status = "ok"; Reason = $parts[1] }
+    }
+    $reason = if ($parts.Count -eq 2 -and $parts[1]) { $parts[1] } else { "torchaudio_probe_failed" }
+    return @{ Status = "repair_required"; Reason = $reason }
+}
+
+function EnsureMatchedTorchaudioRuntime([string]$PythonPath, [string]$BackendName) {
+    $probe = TestMainTorchAudioRuntime $PythonPath $BackendName
+    if ($probe.Status -eq "ok") {
+        $script:torchAudioOk = $true
+        return $true
+    }
+    if ($probe.Reason -eq "torch_import_failed" -or $probe.Reason -eq "torch_version_unsupported" -or $probe.Reason -eq "python_missing") {
+        LogLine ("Cannot repair torchaudio without a healthy supported Torch runtime: " + $probe.Reason)
+        return $false
+    }
+    $contract = GetMatchedTorchaudioContract $BackendName
+    LogProgress ("Repairing matched torchaudio runtime: " + $contract.Requirement)
+    InstallWithPip $PythonPath @(
+        "--upgrade", "--force-reinstall", "--no-deps",
+        "--index-url", $contract.Index,
+        $contract.Requirement
+    ) "Install matched torchaudio runtime"
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $probe = TestMainTorchAudioRuntime $PythonPath $BackendName
+    $script:torchAudioOk = ($probe.Status -eq "ok")
+    if (-not $script:torchAudioOk) {
+        LogLine ("Matched torchaudio verification failed: " + $probe.Reason)
+    }
+    return $script:torchAudioOk
 }
 
 function GetReadyToGoStatePath {
@@ -1070,6 +1192,9 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
     } elseif ($runtimeStatusValue -ne "ok" -and $runtimeStatusValue -ne "skipped") {
         $readyStatus = "missing"
     }
+    if ($mainRuntimeStatus -ne "ok") {
+        $readyStatus = "repair_required"
+    }
     $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     @(
         "READY_TO_GO_STATUS=$readyStatus",
@@ -1157,6 +1282,10 @@ function ProbeMainRuntimeReady([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) {
         return @{ Status = "missing"; Detail = "python_missing" }
     }
+    $torchAudioProbe = TestMainTorchAudioRuntime $PythonPath $BackendName
+    if ($torchAudioProbe.Status -ne "ok") {
+        return @{ Status = "repair_required"; Detail = [string]$torchAudioProbe.Reason }
+    }
     $probeBackend = if ([string]::IsNullOrWhiteSpace($BackendName)) { "cpu" } else { $BackendName }
     $probeResultPath = Join-Path $RuntimeBase "state\\main_runtime_ready_probe.txt"
     if (Test-Path $probeResultPath) {
@@ -1181,6 +1310,14 @@ try:
             errors.append("cuda_runtime_probe_failed")
 except Exception as exc:
     errors.append("torch_import_failed:" + str(exc))
+try:
+    import torchaudio
+    torch_core = str(torch.__version__).split("+", 1)[0]
+    audio_core = str(torchaudio.__version__).split("+", 1)[0]
+    if torch_core != audio_core:
+        errors.append("torchaudio_version_mismatch")
+except Exception:
+    errors.append("torchaudio_missing")
 if errors:
     result_path.write_text("broken|" + ";".join(errors), encoding="utf-8")
 else:
@@ -1315,8 +1452,8 @@ function RunReadyToGoVerifyOnly {
         $status = "ok"
         $statusReason = ""
     } else {
-        $status = "deps_failed"
-        $statusReason = "ready_to_go_verify_only"
+        $status = "repair_required"
+        $statusReason = $mainReadyDetail
     }
     WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainReadyStatus
     $readyStatePath = GetReadyToGoStatePath
@@ -1462,6 +1599,10 @@ function InstallAndVerifyAudioSeparator([string]$PythonPath, [string]$BackendNam
 
     if (-not (InstallAudioRuntimeDependencies $PythonPath $BackendName)) {
         return "audio_runtime_deps_install_failed"
+    }
+
+    if (-not (EnsureMatchedTorchaudioRuntime $PythonPath $BackendName)) {
+        return "torchaudio_runtime_repair_failed"
     }
 
     if (-not (EnsureJuliusRuntime $PythonPath)) {
@@ -2897,7 +3038,7 @@ if ($RuntimeBase) {
     $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
     $bootstrapStatusValue = $status
     $bootstrapReasonValue = $statusReason
-    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk -and $samplerateOk) { "ok" } else { "failed" }
+    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk -and $samplerateOk -and $torchAudioOk) { "ok" } else { "failed" }
     $audioSeparatorValue = if ($audioSeparatorOk) { "ok" } else { "missing" }
     $stemwerkCoreValue = if ($stemwerkCoreOk) { "ok" } else { "missing" }
     $samplerateValue = if ($samplerateOk) { "ok" } else { "not_checked" }
