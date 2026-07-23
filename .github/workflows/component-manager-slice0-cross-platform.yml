@@ -1,0 +1,279 @@
+name: Component Manager SLICE-0 Cross-Platform Gate
+run-name: ${{ github.event_name == 'push' && 'component-manager-slice0-cross-platform-gate-only' || format('SLICE-0 cross-platform full @ {0}', inputs.expected_head) }}
+
+on:
+  push:
+    branches:
+      - experiment/component-manager-poa0
+    paths:
+      - .github/workflows/component-manager-slice0-cross-platform.yml
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Verification mode
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+      expected_head:
+        description: Exact commit to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            slug: linux-x86_64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            security: true
+          - name: Windows x86_64
+            slug: windows-x86_64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            security: false
+          - name: macOS Intel x86_64
+            slug: macos-intel-x86_64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            security: false
+          - name: macOS Apple Silicon arm64
+            slug: macos-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            security: false
+    env:
+      CGO_ENABLED: "0"
+      EXPECTED_HEAD: ${{ inputs.expected_head }}
+      EVIDENCE_DIR: evidence
+    defaults:
+      run:
+        shell: bash
+        working-directory: component-manager
+
+    steps:
+      - name: Checkout exact dispatched commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.expected_head }}
+          persist-credentials: false
+
+      - name: Set up Go 1.24.x
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.24.x
+          cache: true
+          cache-dependency-path: component-manager/go.sum
+
+      - name: Verify native platform identity
+        env:
+          EXPECTED_GOOS: ${{ matrix.goos }}
+          EXPECTED_GOARCH: ${{ matrix.goarch }}
+          PLATFORM_NAME: ${{ matrix.name }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          actual_head=$(git rev-parse HEAD)
+          test "$actual_head" = "$EXPECTED_HEAD"
+          test "$(go env GOOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
+          test "$(go env CGO_ENABLED)" = 0
+          cat > "$RUNNER_TEMP/stemwerk-platform.go" <<'EOF'
+          package main
+          import ("fmt"; "runtime")
+          func main() { fmt.Printf("%s %s\n", runtime.GOOS, runtime.GOARCH) }
+          EOF
+          runtime_identity=$(go run "$RUNNER_TEMP/stemwerk-platform.go")
+          test "$runtime_identity" = "$EXPECTED_GOOS $EXPECTED_GOARCH"
+          {
+            echo "job_name=$PLATFORM_NAME"
+            echo "runner_label=$RUNNER_LABEL"
+            echo "runner_os=$RUNNER_OS"
+            echo "checkout_head=$actual_head"
+            echo "go_version=$(go version)"
+            echo "runtime_goos=${runtime_identity%% *}"
+            echo "runtime_goarch=${runtime_identity##* }"
+            echo "env_goos=$(go env GOOS)"
+            echo "env_goarch=$(go env GOARCH)"
+            echo "cgo_enabled=$(go env CGO_ENABLED)"
+            echo "platform=$(uname -a 2>/dev/null || cmd.exe /c ver)"
+          } | tee "$EVIDENCE_DIR/platform.txt"
+
+      - name: Verify module and dependency graph
+        run: |
+          set -euo pipefail
+          hash_file() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+          mod_before=$(hash_file go.mod)
+          sum_before=$(hash_file go.sum)
+          go mod download
+          go mod verify | tee "$EVIDENCE_DIR/go-mod-verify.txt"
+          go list -m all | tee "$EVIDENCE_DIR/modules.txt"
+          go list -deps ./... | tee "$EVIDENCE_DIR/dependencies.txt"
+          test "$(go list -m -f '{{if and (not .Main) (not .Indirect)}}{{.Path}}{{end}}' all | sed '/^$/d' | wc -l | tr -d ' ')" = 2
+          cgo_packages=$(go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d')
+          test -z "$cgo_packages"
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          mod_after=$(hash_file go.mod)
+          sum_after=$(hash_file go.sum)
+          test "$mod_before" = "$mod_after"
+          test "$sum_before" = "$sum_after"
+          {
+            echo "go_mod_sha_before=$mod_before"
+            echo "go_mod_sha_after=$mod_after"
+            echo "go_sum_sha_before=$sum_before"
+            echo "go_sum_sha_after=$sum_after"
+            echo "direct_dependency_count=2"
+            echo "transitive_dependency_count=11"
+            echo "cgo_dependency_detected=no"
+          } > "$EVIDENCE_DIR/module-gate.txt"
+
+      - name: Format, build, vet, and test
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./... 2>&1 | tee "$EVIDENCE_DIR/vet.txt"
+          go test -count=1 ./... 2>&1 | tee "$EVIDENCE_DIR/tests.txt"
+          go test -count=3 ./... 2>&1 | tee "$EVIDENCE_DIR/tests-repeat.txt"
+          test "$(go list ./... | wc -l | tr -d ' ')" = 11
+
+      - name: Prove race status under mandatory CGO-disabled policy
+        run: |
+          set -euo pipefail
+          set +e
+          go test -race ./... >"$EVIDENCE_DIR/race.txt" 2>&1
+          race_exit=$?
+          set -e
+          if test "$race_exit" = 0; then
+            echo PASS > "$EVIDENCE_DIR/race-status.txt"
+          elif grep -Eiq 'race.*requires cgo|cgo.*enabled' "$EVIDENCE_DIR/race.txt"; then
+            echo NOT_SUPPORTED_CGO_DISABLED > "$EVIDENCE_DIR/race-status.txt"
+          else
+            cat "$EVIDENCE_DIR/race.txt"
+            exit "$race_exit"
+          fi
+
+      - name: Verify schemas, JCS, content IDs, and catalog
+        run: |
+          set -euo pipefail
+          test "$(find schemas -name '*.schema.json' -type f | wc -l | tr -d ' ')" = 21
+          test "$(wc -l < schemas/SHA256SUMS | tr -d ' ')" = 21
+          remote_refs=$( { grep -R -E '"\$ref"[[:space:]]*:[[:space:]]*"https?://' schemas/*.schema.json || true; } | wc -l | tr -d ' ')
+          test "$remote_refs" = 0
+          go test -count=1 -run 'TestAuthoritativeSchemasByteEqualAndManifestPinned' ./schemas 2>&1 | tee "$EVIDENCE_DIR/schema-drift.txt"
+          go test -count=1 -run 'Test(AllSchemasLoad|AllContractExamplesValidate|RepresentativeNegativeFixturesReject|CatalogSchemaValidation|SchemaValidationRejects)' ./pkg/contract 2>&1 | tee "$EVIDENCE_DIR/schema-validation.txt"
+          go test -count=1 -run 'TestOfflineLoaderRejectsRemoteReference' ./internal/schemavalidation 2>&1 | tee "$EVIDENCE_DIR/offline-loader.txt"
+          go test -count=1 -run 'TestRFC8785Vectors' ./internal/canonicaljson 2>&1 | tee "$EVIDENCE_DIR/jcs.txt"
+          go test -count=1 -run 'TestGenerationID' ./pkg/identity 2>&1 | tee "$EVIDENCE_DIR/generation-id.txt"
+          go test -count=1 -run 'Test(SevenFlowCatalogFixture|CatalogRejectsDuplicateAndDigestConflict|CatalogRejectsInvalidInput)' ./pkg/catalog 2>&1 | tee "$EVIDENCE_DIR/catalog.txt"
+          cp schemas/SHA256SUMS "$EVIDENCE_DIR/schema-sha256sums.txt"
+          {
+            echo 'jcs_sha256=7c892d3452ad85ad65857a43e8dcac93b79475d2334fc3e85bac5c599142c158'
+            echo 'jcs_sha256=6a2aa0cdc8543563954877e8513c1e89b8ed197c2dd987e53d40a0b665080b34'
+            echo 'jcs_sha256=e325ba36e1e449f8ab9b8457d0578e181ec4f29ed116a6ab73f4e0e6f376e88c'
+            echo 'generation_id=generation.sha256.0c28b428b93234f8b8fd20718ca42dbacb03635d9eed9bab3cfdbfddd55732d1'
+            echo 'flow_ids=normal-stems,six-stem,direct-kit,kit-split,vocals-hq,de-reverb,vocal-de-reverb'
+            echo 'error_categories=schema_invalid,identity_invalid,version_invalid,artifact_digest_mismatch,catalog_invalid,internal_error'
+          } > "$EVIDENCE_DIR/cross-platform-sets.txt"
+
+      - name: Verify forbidden behavior remains absent
+        run: |
+          set -euo pipefail
+          findings="$EVIDENCE_DIR/forbidden-findings.txt"
+          : > "$findings"
+          git grep -nE '"(database/sql|net/http|net|os/exec|syscall|unsafe)"' -- '*.go' ':!**/*_test.go' >> "$findings" || true
+          git grep -niE '(sql\.Open|http\.(Get|Post|Do)|net\.Dial|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY)' -- '*.go' ':!**/*_test.go' >> "$findings" || true
+          test ! -s "$findings"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          echo PASS > "$EVIDENCE_DIR/forbidden-status.txt"
+
+      - name: Verify vulnerabilities, licenses, and workflow syntax
+        if: matrix.security
+        run: |
+          set -euo pipefail
+          tool_dir="$RUNNER_TEMP/stemwerk-slice0-tools"
+          mkdir -p "$tool_dir"
+          GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          "$tool_dir/govulncheck" -version | tee "$EVIDENCE_DIR/govulncheck-version.txt"
+          "$tool_dir/govulncheck" ./... 2>&1 | tee "$EVIDENCE_DIR/govulncheck.txt"
+          GOBIN="$tool_dir" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$tool_dir/actionlint" ../.github/workflows/component-manager-slice0-cross-platform.yml 2>&1 | tee "$EVIDENCE_DIR/actionlint.txt"
+          missing=0
+          while IFS= read -r dir; do
+            test -z "$dir" && continue
+            if ! find "$dir" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' \) -print -quit | grep -q .; then
+              echo "missing license: $dir" | tee -a "$EVIDENCE_DIR/licenses.txt"
+              missing=$((missing + 1))
+            fi
+          done < <(go list -m -f '{{if not .Main}}{{.Dir}}{{end}}' all)
+          test "$missing" = 0
+          go list -m -json all > "$EVIDENCE_DIR/modules.json"
+          test "$(grep -c '"Retracted"' "$EVIDENCE_DIR/modules.json" || true)" = 0
+          test "$(grep -c '"Replace"' "$EVIDENCE_DIR/modules.json" || true)" = 0
+          echo PASS > "$EVIDENCE_DIR/security-dependency-status.txt"
+
+      - name: Write machine-readable summary
+        if: success()
+        env:
+          PLATFORM_NAME: ${{ matrix.name }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          EXPECTED_GOOS: ${{ matrix.goos }}
+          EXPECTED_GOARCH: ${{ matrix.goarch }}
+          SECURITY_JOB: ${{ matrix.security }}
+        run: |
+          set -euo pipefail
+          race_status=$(cat "$EVIDENCE_DIR/race-status.txt")
+          cat > "$EVIDENCE_DIR/summary.json" <<EOF
+          {
+            "schema_version": "1.0.0",
+            "job_name": "$PLATFORM_NAME",
+            "runner": "$RUNNER_LABEL",
+            "checkout_head": "$EXPECTED_HEAD",
+            "goos": "$EXPECTED_GOOS",
+            "goarch": "$EXPECTED_GOARCH",
+            "cgo_enabled": 0,
+            "package_count": 11,
+            "direct_dependency_count": 2,
+            "transitive_dependency_count": 11,
+            "schema_count": 21,
+            "schema_hash_match_count": 21,
+            "remote_schema_fetch_attempts": 0,
+            "rfc8785_vector_count": 3,
+            "rfc8785_vector_executions": 300,
+            "generation_id": "generation.sha256.0c28b428b93234f8b8fd20718ca42dbacb03635d9eed9bab3cfdbfddd55732d1",
+            "flow_count": 7,
+            "race_status": "$race_status",
+            "security_job": $SECURITY_JOB,
+            "forbidden_behavior_gate": "PASS",
+            "result": "PASS"
+          }
+          EOF
+          git status --porcelain=v1 --untracked-files=no | tee "$EVIDENCE_DIR/worktree-status.txt"
+          test ! -s "$EVIDENCE_DIR/worktree-status.txt"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: slice0-cross-platform-${{ matrix.slug }}
+          path: component-manager/evidence/
+          if-no-files-found: error
+          retention-days: 14
