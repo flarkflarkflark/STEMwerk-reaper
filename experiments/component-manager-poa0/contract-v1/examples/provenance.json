@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0.0",
+  "source_type": "project",
+  "source_locator": "https://example.invalid/releases/runtime-main",
+  "publisher": "STEMwerk project",
+  "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "trust_status": "trusted",
+  "revocation_state": "not_revoked",
+  "$schema_ref": "../schemas/provenance.schema.json"
+}

@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/artifact.schema.json",
+  "expected_error": "semantic:artifact_digest_mismatch",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "request_id": "request.sample",
+  "status": "success",
+  "changed_paths": [],
+  "diagnostics": [],
+  "$schema_ref": "../schemas/helper-result.schema.json"
+}

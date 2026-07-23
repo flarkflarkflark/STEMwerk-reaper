@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/viewmodel.schema.json",
+  "title": "Component Manager viewmodel",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "manager_available",
+    "active_generation",
+    "installed_components",
+    "missing_components",
+    "flow_readiness",
+    "action_capabilities"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "manager_available": {
+      "type": "boolean"
+    },
+    "active_generation": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "installed_components": {
+      "type": "array"
+    },
+    "missing_components": {
+      "type": "array"
+    },
+    "flow_readiness": {
+      "type": "array"
+    },
+    "action_capabilities": {
+      "type": "array"
+    }
+  }
+}

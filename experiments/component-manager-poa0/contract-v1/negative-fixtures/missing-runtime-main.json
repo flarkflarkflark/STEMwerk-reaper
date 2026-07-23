@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/generation.schema.json",
+  "expected_error": "semantic:runtime_main_required",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

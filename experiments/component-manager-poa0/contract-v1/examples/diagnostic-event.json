@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "event.sample",
+  "operation": "activation",
+  "phase": "verify",
+  "severity": "info",
+  "message": "Verification complete",
+  "$schema_ref": "../schemas/diagnostic-event.schema.json"
+}

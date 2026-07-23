@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/receipt.schema.json",
+  "expected_error": "semantic:receipt_invalid",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

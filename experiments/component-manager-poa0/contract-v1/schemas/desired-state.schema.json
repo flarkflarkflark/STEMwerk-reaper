@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/desired-state.schema.json",
+  "title": "Component Manager desired-state",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "desired_components",
+    "requested_flows",
+    "allowed_backends",
+    "retained_generations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "desired_components": {
+      "type": "array"
+    },
+    "requested_flows": {
+      "type": "array"
+    },
+    "allowed_backends": {
+      "type": "array"
+    },
+    "retained_generations": {
+      "type": "array"
+    }
+  }
+}

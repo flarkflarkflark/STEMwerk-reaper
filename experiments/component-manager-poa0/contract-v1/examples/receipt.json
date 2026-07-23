@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0.0",
+  "receipt_id": "receipt.sample",
+  "component_id": "runtime.main",
+  "version": {},
+  "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "install_location_ref": "store:sha256/aa",
+  "provenance": {
+    "schema_version": "1.0.0",
+    "source_type": "project",
+    "source_locator": "https://example.invalid/source",
+    "publisher": "STEMwerk project",
+    "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "trust_status": "trusted",
+    "revocation_state": "not_revoked"
+  },
+  "installed_at": "2026-07-23T00:00:00Z",
+  "installer_identity": "component-manager-contract-test",
+  "validation": "valid",
+  "platform": "linux",
+  "architecture": "x86_64",
+  "backend": "cpu",
+  "ownership": "user",
+  "$schema_ref": "../schemas/receipt.schema.json"
+}

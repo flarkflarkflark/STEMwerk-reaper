@@ -80,6 +80,7 @@ jobs:
         env:
           CMN_CLOSURE_PARENT: 0bec068ea1ba01f40ad42cff1107995cbf1b39e1
           EVIDENCE_FREEZE_PARENT: 7519ca21dba57f01c9b3b6b0cae046e511bb8f6c
+          CONTRACT_V1_PARENT: be0a34a628064aebb8936120d8b23f3846589a0d
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -92,6 +93,7 @@ jobs:
           mapfile -t changed_paths < <(git diff --name-only "$actual_parent" "$GITHUB_SHA")
           closure_allowed=true
           evidence_freeze_allowed=true
+          contract_v1_allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
               .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/common-gate-cases.sh|experiments/component-manager-poa0/scripts/common-gate-cases.ps1|experiments/component-manager-poa0/scripts/common_case_contract.py|experiments/component-manager-poa0/scripts/test-common-case-record-contract.py|experiments/component-manager-poa0/scripts/run-native-matrix.sh|experiments/component-manager-poa0/scripts/run-native-matrix.ps1|experiments/component-manager-poa0/scripts/verify-implementation-parity.sh|experiments/component-manager-poa0/reports/CMN_021_024_CONCRETE_CASE_CLOSURE.md)
@@ -107,6 +109,13 @@ jobs:
                 evidence_freeze_allowed=false
                 ;;
             esac
+            case "$path" in
+              .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/contract-v1/*|experiments/component-manager-poa0/contract-v1/**/*)
+                ;;
+              *)
+                contract_v1_allowed=false
+                ;;
+            esac
           done
 
           if [[ "$actual_parent" == "$CMN_CLOSURE_PARENT" && ${#changed_paths[@]} -gt 0 && "$closure_allowed" == true ]]; then
@@ -115,6 +124,9 @@ jobs:
           elif [[ "$actual_parent" == "$EVIDENCE_FREEZE_PARENT" && ${#changed_paths[@]} -gt 0 && "$evidence_freeze_allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
             echo 'classification=poa0-corrected-evidence-freeze-only' >>"$GITHUB_OUTPUT"
+          elif [[ "$actual_parent" == "$CONTRACT_V1_PARENT" && ${#changed_paths[@]} -gt 0 && "$contract_v1_allowed" == true ]]; then
+            echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
+            echo 'classification=poa0-contract-v1-design-only' >>"$GITHUB_OUTPUT"
           else
             echo 'matrix_required=true' >>"$GITHUB_OUTPUT"
             echo 'classification=other' >>"$GITHUB_OUTPUT"

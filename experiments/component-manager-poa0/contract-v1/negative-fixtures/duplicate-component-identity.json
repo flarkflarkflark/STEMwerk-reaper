@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/generation.schema.json",
+  "expected_error": "semantic:duplicate_component_identity",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

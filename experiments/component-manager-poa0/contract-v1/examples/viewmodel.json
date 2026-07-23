@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0.0",
+  "manager_available": true,
+  "active_generation": "generation.sample",
+  "installed_components": [],
+  "missing_components": [],
+  "flow_readiness": [],
+  "action_capabilities": [
+    "start_processing"
+  ],
+  "$schema_ref": "../schemas/viewmodel.schema.json"
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "artifact_id": "artifact.sha256.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "size_bytes": 1024,
+  "provenance": {
+    "schema_version": "1.0.0",
+    "source_type": "project",
+    "source_locator": "https://example.invalid/source",
+    "publisher": "STEMwerk project",
+    "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "trust_status": "trusted",
+    "revocation_state": "not_revoked"
+  },
+  "$schema_ref": "../schemas/artifact.schema.json"
+}

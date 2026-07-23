@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0.0",
+  "lease_id": "lease.sample",
+  "run_id": "run.sample",
+  "generation_id": "generation.sample",
+  "pid": 1234,
+  "process_start_identity": "linux-proc-start:100",
+  "acquired_at": "2026-07-23T00:00:00Z",
+  "state": "active",
+  "$schema_ref": "../schemas/lease.schema.json"
+}

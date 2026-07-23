@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/run-pin.schema.json",
+  "expected_error": "semantic:mixed_generation",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

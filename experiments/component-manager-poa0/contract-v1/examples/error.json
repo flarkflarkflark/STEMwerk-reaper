@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "code": "CM_ARTIFACT_DIGEST_MISMATCH",
+  "category": "artifact_digest_mismatch",
+  "operation": "install",
+  "phase": "verify",
+  "message": "Artifact digest does not match",
+  "diagnostic_detail": {},
+  "retryable": false,
+  "recoverable": true,
+  "affected": {},
+  "log_reference": "diagnostic:sample",
+  "$schema_ref": "../schemas/error.schema.json"
+}

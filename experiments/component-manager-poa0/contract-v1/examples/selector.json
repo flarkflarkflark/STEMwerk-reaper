@@ -1,0 +1,6 @@
+{
+  "schema_version": "1.0.0",
+  "generation_id": "generation.sample",
+  "generation_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "$schema_ref": "../schemas/selector.schema.json"
+}

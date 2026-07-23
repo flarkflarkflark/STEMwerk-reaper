@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/provenance.schema.json",
+  "title": "Component Manager provenance",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source_type",
+    "source_locator",
+    "publisher",
+    "artifact_digest",
+    "trust_status",
+    "revocation_state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "source_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_locator": {
+      "type": "string",
+      "minLength": 1
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "trust_status": {
+      "enum": [
+        "trusted",
+        "untrusted",
+        "unknown",
+        "revoked"
+      ]
+    },
+    "revocation_state": {
+      "enum": [
+        "not_revoked",
+        "revoked",
+        "unknown"
+      ]
+    }
+  }
+}

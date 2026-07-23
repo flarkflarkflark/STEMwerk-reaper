@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "run.sample",
+  "generation_id": "generation.sample",
+  "lease_id": "lease.sample",
+  "created_at": "2026-07-23T00:00:00Z",
+  "$schema_ref": "../schemas/run-pin.schema.json"
+}

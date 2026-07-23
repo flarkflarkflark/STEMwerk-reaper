@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/component.schema.json",
+  "expected_error": "semantic:provenance_untrusted",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

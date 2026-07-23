@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0",
+  "generation_id": "generation.sample",
+  "manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "components": [
+    {
+      "component_id": "runtime.main",
+      "receipt_id": "receipt.sample"
+    },
+    {
+      "component_id": "model.bs_roformer.vocals_hq",
+      "receipt_id": "receipt.model"
+    }
+  ],
+  "compatibility_result": "compatible",
+  "created_by": "component-manager-contract-test",
+  "$schema_ref": "../schemas/generation.schema.json"
+}

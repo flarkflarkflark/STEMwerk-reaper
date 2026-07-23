@@ -1,0 +1,7 @@
+{
+  "$schema_ref": "../schemas/selector.schema.json",
+  "expected_error": "semantic:unsupported_schema_major",
+  "fixture": {
+    "schema_version": "1.0.0"
+  }
+}

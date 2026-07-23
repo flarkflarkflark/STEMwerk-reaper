@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/error.schema.json",
+  "title": "Component Manager error",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "code",
+    "category",
+    "operation",
+    "phase",
+    "message",
+    "diagnostic_detail",
+    "retryable",
+    "recoverable",
+    "affected",
+    "log_reference"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "phase": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "diagnostic_detail": {
+      "type": "object"
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "recoverable": {
+      "type": "boolean"
+    },
+    "affected": {
+      "type": "object"
+    },
+    "log_reference": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

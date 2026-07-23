@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "request_id": "request.sample",
+  "operation": "publish_selector",
+  "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "requested_by": "component-manager-core",
+  "$schema_ref": "../schemas/helper-request.schema.json"
+}

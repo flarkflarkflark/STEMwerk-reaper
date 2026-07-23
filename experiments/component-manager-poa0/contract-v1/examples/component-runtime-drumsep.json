@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0.0",
+  "component_id": "runtime.drumsep",
+  "component_kind": "runtime",
+  "version": {},
+  "artifact": {
+    "schema_version": "1.0.0",
+    "artifact_id": "artifact.sample",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 1024,
+    "provenance": {
+      "schema_version": "1.0.0",
+      "source_type": "project",
+      "source_locator": "https://example.invalid/source",
+      "publisher": "STEMwerk project",
+      "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "trust_status": "trusted",
+      "revocation_state": "not_revoked"
+    }
+  },
+  "compatibility": {},
+  "dependencies": [
+    "runtime.main"
+  ],
+  "conflicts": [],
+  "required": false,
+  "$schema_ref": "../schemas/component.schema.json"
+}

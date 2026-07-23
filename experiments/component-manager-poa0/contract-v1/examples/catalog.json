@@ -1,0 +1,94 @@
+{
+  "schema_version": "1.0.0",
+  "catalog_version": "2026.07.23",
+  "trust_status": "trusted",
+  "components": [],
+  "flows": [
+    {
+      "flow_id": "normal-stems",
+      "required_components": [
+        "runtime.main",
+        "model.separation.normal"
+      ],
+      "outputs": [
+        "stems"
+      ]
+    },
+    {
+      "flow_id": "six-stem",
+      "required_components": [
+        "runtime.main",
+        "model.separation.six_stem"
+      ],
+      "outputs": [
+        "six stems"
+      ]
+    },
+    {
+      "flow_id": "direct-kit",
+      "required_components": [
+        "runtime.main",
+        "runtime.drumsep",
+        "model.drumsep",
+        "config.drumsep"
+      ],
+      "outputs": [
+        "direct kit"
+      ]
+    },
+    {
+      "flow_id": "kit-split",
+      "required_components": [
+        "runtime.main",
+        "runtime.drumsep",
+        "model.drumsep",
+        "config.drumsep"
+      ],
+      "outputs": [
+        "kit split"
+      ]
+    },
+    {
+      "flow_id": "vocals-hq",
+      "required_components": [
+        "runtime.main",
+        "model.bs_roformer.vocals_hq"
+      ],
+      "model_filename": "model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+      "outputs": [
+        "Vocals",
+        "Other"
+      ]
+    },
+    {
+      "flow_id": "de-reverb",
+      "required_components": [
+        "runtime.main",
+        "model.foxjoy.de_reverb"
+      ],
+      "model_filename": "Reverb_HQ_By_FoxJoy.onnx",
+      "outputs": [
+        "Dry",
+        "Reverb"
+      ]
+    },
+    {
+      "flow_id": "vocal-de-reverb",
+      "required_components": [
+        "runtime.main",
+        "model.bs_roformer.vocals_hq",
+        "model.foxjoy.de_reverb"
+      ],
+      "pipeline": [
+        "vocals-hq",
+        "de-reverb-vocals-only"
+      ],
+      "outputs": [
+        "Dry Vocal",
+        "Vocal Reverb",
+        "Other"
+      ]
+    }
+  ],
+  "$schema_ref": "../schemas/catalog.schema.json"
+}

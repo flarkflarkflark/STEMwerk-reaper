@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "desired_components": [
+    "runtime.main"
+  ],
+  "requested_flows": [
+    "normal-stems"
+  ],
+  "allowed_backends": [
+    "cpu"
+  ],
+  "retained_generations": [
+    "generation.sample"
+  ],
+  "$schema_ref": "../schemas/desired-state.schema.json"
+}

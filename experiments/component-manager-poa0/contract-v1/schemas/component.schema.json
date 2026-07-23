@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/component.schema.json",
+  "title": "Component Manager component",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "component_id",
+    "component_kind",
+    "version",
+    "artifact",
+    "compatibility",
+    "dependencies",
+    "conflicts",
+    "required"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "component_kind": {
+      "enum": [
+        "runtime",
+        "model",
+        "config",
+        "catalog",
+        "helper",
+        "integration",
+        "metadata"
+      ]
+    },
+    "version": {
+      "type": "object"
+    },
+    "artifact": {
+      "$ref": "artifact.schema.json"
+    },
+    "compatibility": {
+      "type": "object"
+    },
+    "dependencies": {
+      "type": "array"
+    },
+    "conflicts": {
+      "type": "array"
+    },
+    "required": {
+      "type": "boolean"
+    }
+  }
+}
