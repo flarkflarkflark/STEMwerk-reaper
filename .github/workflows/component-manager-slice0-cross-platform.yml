@@ -1,5 +1,5 @@
 name: Component Manager SLICE-0 Cross-Platform Gate
-run-name: ${{ github.event_name == 'push' && 'component-manager-slice0-cross-platform-gate-only' || format('SLICE-0 cross-platform full @ {0}', inputs.expected_head) }}
+run-name: ${{ github.event_name == 'push' && 'component-manager-slice0-xpg001-toolchain-isolation-only' || format('SLICE-0 cross-platform {0} @ {1}', inputs.mode, inputs.expected_head) }}
 
 on:
   push:
@@ -16,6 +16,7 @@ on:
         type: choice
         options:
           - full
+          - xpg-001
       expected_head:
         description: Exact commit to verify
         required: true
@@ -26,38 +27,14 @@ permissions:
 
 jobs:
   verify:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
+    if: github.event_name == 'workflow_dispatch'
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux x86_64
-            slug: linux-x86_64
-            runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            security: true
-          - name: Windows x86_64
-            slug: windows-x86_64
-            runner: windows-latest
-            goos: windows
-            goarch: amd64
-            security: false
-          - name: macOS Intel x86_64
-            slug: macos-intel-x86_64
-            runner: macos-15-intel
-            goos: darwin
-            goarch: amd64
-            security: false
-          - name: macOS Apple Silicon arm64
-            slug: macos-arm64
-            runner: macos-15
-            goos: darwin
-            goarch: arm64
-            security: false
+        include: ${{ fromJSON(inputs.mode == 'xpg-001' && '[{"name":"XPG-001 Linux x86_64","slug":"xpg001-linux-x86-64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true}]' || '[{"name":"Linux x86_64","slug":"linux-x86_64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true},{"name":"Windows x86_64","slug":"windows-x86_64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false},{"name":"macOS Intel x86_64","slug":"macos-intel-x86_64","runner":"macos-15-intel","goos":"darwin","goarch":"amd64","security":false},{"name":"macOS Apple Silicon arm64","slug":"macos-arm64","runner":"macos-15","goos":"darwin","goarch":"arm64","security":false}]') }}
     env:
       CGO_ENABLED: "0"
       EXPECTED_HEAD: ${{ inputs.expected_head }}
@@ -74,14 +51,15 @@ jobs:
           ref: ${{ inputs.expected_head }}
           persist-credentials: false
 
-      - name: Set up Go 1.24.x
+      - name: Set up product Go 1.24.13
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
-          go-version: 1.24.x
+          go-version: 1.24.13
           cache: true
           cache-dependency-path: component-manager/go.sum
 
       - name: Verify native platform identity
+        if: inputs.mode == 'full'
         env:
           EXPECTED_GOOS: ${{ matrix.goos }}
           EXPECTED_GOARCH: ${{ matrix.goarch }}
@@ -117,6 +95,7 @@ jobs:
           } | tee "$EVIDENCE_DIR/platform.txt"
 
       - name: Verify module and dependency graph
+        if: inputs.mode == 'full'
         run: |
           set -euo pipefail
           hash_file() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
@@ -146,6 +125,7 @@ jobs:
           } > "$EVIDENCE_DIR/module-gate.txt"
 
       - name: Format, build, vet, and test
+        if: inputs.mode == 'full'
         run: |
           set -euo pipefail
           test -z "$(gofmt -l .)"
@@ -156,6 +136,7 @@ jobs:
           test "$(go list ./... | wc -l | tr -d ' ')" = 11
 
       - name: Prove race status under mandatory CGO-disabled policy
+        if: inputs.mode == 'full'
         run: |
           set -euo pipefail
           set +e
@@ -172,6 +153,7 @@ jobs:
           fi
 
       - name: Verify schemas, JCS, content IDs, and catalog
+        if: inputs.mode == 'full'
         run: |
           set -euo pipefail
           test "$(find schemas -name '*.schema.json' -type f | wc -l | tr -d ' ')" = 21
@@ -195,6 +177,7 @@ jobs:
           } > "$EVIDENCE_DIR/cross-platform-sets.txt"
 
       - name: Verify forbidden behavior remains absent
+        if: inputs.mode == 'full'
         run: |
           set -euo pipefail
           findings="$EVIDENCE_DIR/forbidden-findings.txt"
@@ -205,17 +188,14 @@ jobs:
           test -z "$(git status --porcelain=v1 --untracked-files=no)"
           echo PASS > "$EVIDENCE_DIR/forbidden-status.txt"
 
-      - name: Verify vulnerabilities, licenses, and workflow syntax
-        if: matrix.security
+      - name: Verify licenses and workflow syntax with product Go
+        if: inputs.mode == 'full' && matrix.security
         run: |
           set -euo pipefail
           tool_dir="$RUNNER_TEMP/stemwerk-slice0-tools"
           mkdir -p "$tool_dir"
-          GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
-          "$tool_dir/govulncheck" -version | tee "$EVIDENCE_DIR/govulncheck-version.txt"
-          "$tool_dir/govulncheck" ./... 2>&1 | tee "$EVIDENCE_DIR/govulncheck.txt"
           GOBIN="$tool_dir" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          "$tool_dir/actionlint" ../.github/workflows/component-manager-slice0-cross-platform.yml 2>&1 | tee "$EVIDENCE_DIR/actionlint.txt"
+          "$tool_dir/actionlint" -ignore 'label "macos-15-intel" is unknown' ../.github/workflows/component-manager-slice0-cross-platform.yml 2>&1 | tee "$EVIDENCE_DIR/actionlint.txt"
           missing=0
           while IFS= read -r dir; do
             test -z "$dir" && continue
@@ -230,8 +210,28 @@ jobs:
           test "$(grep -c '"Replace"' "$EVIDENCE_DIR/modules.json" || true)" = 0
           echo PASS > "$EVIDENCE_DIR/security-dependency-status.txt"
 
+      - name: Set up isolated security-tool Go 1.25.11
+        if: inputs.mode == 'full' && matrix.security
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.25.11
+          cache: false
+
+      - name: Scan vulnerabilities with isolated security-tool Go
+        if: inputs.mode == 'full' && matrix.security
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = go1.25.11
+          tool_dir="$RUNNER_TEMP/stemwerk-slice0-security-tools"
+          mkdir -p "$tool_dir"
+          GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          "$tool_dir/govulncheck" -version | tee "$EVIDENCE_DIR/govulncheck-version.txt"
+          grep -Fx 'Go: go1.25.11' "$EVIDENCE_DIR/govulncheck-version.txt"
+          grep -Fx 'Scanner: govulncheck@v1.6.0' "$EVIDENCE_DIR/govulncheck-version.txt"
+          "$tool_dir/govulncheck" ./... 2>&1 | tee "$EVIDENCE_DIR/govulncheck.txt"
+
       - name: Write machine-readable summary
-        if: success()
+        if: inputs.mode == 'full' && success()
         env:
           PLATFORM_NAME: ${{ matrix.name }}
           RUNNER_LABEL: ${{ matrix.runner }}
@@ -270,10 +270,107 @@ jobs:
           test ! -s "$EVIDENCE_DIR/worktree-status.txt"
 
       - name: Upload verification evidence
-        if: always()
+        if: inputs.mode == 'full' && always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: slice0-cross-platform-${{ matrix.slug }}
+          path: component-manager/evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify product toolchain, module, and licenses
+        if: inputs.mode == 'xpg-001'
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(go env GOVERSION)" = go1.24.13
+          test "$(go env GOOS)" = linux
+          test "$(go env GOARCH)" = amd64
+          test "$(go env CGO_ENABLED)" = 0
+          go version | tee "$EVIDENCE_DIR/product-go-version.txt"
+          go env GOOS GOARCH CGO_ENABLED | tee "$EVIDENCE_DIR/product-platform.txt"
+          sha256sum go.mod | awk '{print $1}' | tee "$EVIDENCE_DIR/go-mod-sha-before.txt"
+          sha256sum go.sum | awk '{print $1}' | tee "$EVIDENCE_DIR/go-sum-sha-before.txt"
+          git ls-files -z -- . | xargs -0 sha256sum | sha256sum | awk '{print $1}' | tee "$EVIDENCE_DIR/tracked-tree-sha-before.txt"
+          go mod verify | tee "$EVIDENCE_DIR/go-mod-verify.txt"
+          missing=0
+          : > "$EVIDENCE_DIR/licenses.txt"
+          while IFS= read -r dir; do
+            test -z "$dir" && continue
+            if ! find "$dir" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' \) -print -quit | grep -q .; then
+              echo "missing license: $dir" | tee -a "$EVIDENCE_DIR/licenses.txt"
+              missing=$((missing + 1))
+            fi
+          done < <(go list -m -f '{{if not .Main}}{{.Dir}}{{end}}' all)
+          test "$missing" = 0
+          echo PASS | tee "$EVIDENCE_DIR/license-status.txt"
+
+      - name: Set up isolated security-tool Go 1.25.11
+        if: inputs.mode == 'xpg-001'
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: 1.25.11
+          cache: false
+
+      - name: Install and run pinned govulncheck only
+        if: inputs.mode == 'xpg-001'
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = go1.25.11
+          go version | tee "$EVIDENCE_DIR/security-go-version.txt"
+          tool_dir="$RUNNER_TEMP/stemwerk-xpg001-security-tools"
+          mkdir -p "$tool_dir"
+          GOBIN="$tool_dir" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          "$tool_dir/govulncheck" -version | tee "$EVIDENCE_DIR/govulncheck-version.txt"
+          grep -Fx 'Go: go1.25.11' "$EVIDENCE_DIR/govulncheck-version.txt"
+          grep -Fx 'Scanner: govulncheck@v1.6.0' "$EVIDENCE_DIR/govulncheck-version.txt"
+          "$tool_dir/govulncheck" ./... 2>&1 | tee "$EVIDENCE_DIR/govulncheck.txt"
+
+      - name: Prove product module remained unchanged
+        if: inputs.mode == 'xpg-001'
+        run: |
+          set -euo pipefail
+          sha256sum go.mod | awk '{print $1}' | tee "$EVIDENCE_DIR/go-mod-sha-after.txt"
+          sha256sum go.sum | awk '{print $1}' | tee "$EVIDENCE_DIR/go-sum-sha-after.txt"
+          git ls-files -z -- . | xargs -0 sha256sum | sha256sum | awk '{print $1}' | tee "$EVIDENCE_DIR/tracked-tree-sha-after.txt"
+          cmp "$EVIDENCE_DIR/go-mod-sha-before.txt" "$EVIDENCE_DIR/go-mod-sha-after.txt"
+          cmp "$EVIDENCE_DIR/go-sum-sha-before.txt" "$EVIDENCE_DIR/go-sum-sha-after.txt"
+          cmp "$EVIDENCE_DIR/tracked-tree-sha-before.txt" "$EVIDENCE_DIR/tracked-tree-sha-after.txt"
+          git diff --exit-code -- go.mod go.sum
+          git diff --exit-code -- . ':!evidence/**'
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+      - name: Write XPG-001 machine-readable summary
+        if: inputs.mode == 'xpg-001'
+        run: |
+          set -euo pipefail
+          cat > "$EVIDENCE_DIR/summary.json" <<EOF
+          {
+            "schema_version": "1.0.0",
+            "gate": "xpg-001",
+            "checkout_head": "$EXPECTED_HEAD",
+            "runner": "ubuntu-latest",
+            "product_go_version": "1.24.13",
+            "security_tool_go_version": "1.25.11",
+            "govulncheck_version": "v1.6.0",
+            "reachable_vulnerability_count": 0,
+            "disallowed_license_count": 0,
+            "go125_product_build_command_count": 0,
+            "go125_product_test_command_count": 0,
+            "go125_product_tidy_command_count": 0,
+            "go_mod_unchanged": true,
+            "go_sum_unchanged": true,
+            "tracked_product_tree_unchanged": true,
+            "result": "PASS"
+          }
+          EOF
+
+      - name: Upload XPG-001 verification evidence
+        if: inputs.mode == 'xpg-001' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: slice0-xpg001-toolchain-isolation-linux-x86-64
           path: component-manager/evidence/
           if-no-files-found: error
           retention-days: 14
