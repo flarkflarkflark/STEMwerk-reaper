@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/catalog.schema.json",
+  "title": "Component Manager catalog",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "catalog_version",
+    "trust_status",
+    "components",
+    "flows"
+    ,"catalog_id"
+    ,"sequence"
+    ,"digest"
+    ,"previous_digest"
+    ,"minimum_accepted_sequence"
+    ,"channel"
+    ,"signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "catalog_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trust_status": {
+      "enum": [
+        "trusted",
+        "untrusted",
+        "unknown",
+        "revoked"
+      ]
+    },
+    "components": {
+      "type": "array"
+    },
+    "flows": {
+      "type": "array"
+    },
+    "catalog_id": {"type": "string"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "previous_digest": {"type": ["string", "null"]},
+    "minimum_accepted_sequence": {"type": "integer", "minimum": 0},
+    "channel": {"type": "string"},
+    "signature": {"$ref": "signature-envelope.schema.json"}
+  }
+}

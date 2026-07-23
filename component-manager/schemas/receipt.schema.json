@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/receipt.schema.json",
+  "title": "Component Manager receipt",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "component_id",
+    "version",
+    "artifact_digest",
+    "payload_digest",
+    "install_location_ref",
+    "provenance",
+    "installed_at",
+    "installer_identity",
+    "validation",
+    "platform",
+    "architecture",
+    "backend",
+    "ownership"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "component_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "object"
+    },
+    "artifact_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "payload_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "install_location_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provenance": {
+      "$ref": "provenance.schema.json"
+    },
+    "installed_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "installer_identity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "validation": {
+      "enum": [
+        "valid",
+        "invalid",
+        "unknown"
+      ]
+    },
+    "platform": {
+      "enum": [
+        "linux",
+        "windows",
+        "macos"
+      ]
+    },
+    "architecture": {
+      "enum": [
+        "x86_64",
+        "arm64"
+      ]
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ownership": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

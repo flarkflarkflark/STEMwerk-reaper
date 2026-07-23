@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/trust-root.schema.json",
+  "title": "Scoped public trust root",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "root_id",
+    "key_fingerprint",
+    "algorithm",
+    "public_key",
+    "trust_scopes",
+    "origin",
+    "enrollment",
+    "status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "root_id": {
+      "type": "string"
+    },
+    "key_fingerprint": {
+      "type": "string",
+      "pattern": "^(ed25519|ecdsa-p256):[a-f0-9]{64}$"
+    },
+    "algorithm": {
+      "enum": [
+        "Ed25519",
+        "ECDSA-P256-SHA256"
+      ]
+    },
+    "public_key": {
+      "type": "string",
+      "minLength": 16
+    },
+    "trust_scopes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "official.catalog",
+          "official.artifact",
+          "official.helper",
+          "user.catalog",
+          "development.local"
+        ]
+      }
+    },
+    "origin": {
+      "enum": [
+        "trusted_distribution",
+        "user_enrollment",
+        "development"
+      ]
+    },
+    "enrollment": {
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "active",
+        "retiring",
+        "revoked",
+        "expired",
+        "unknown"
+      ]
+    }
+  }
+}

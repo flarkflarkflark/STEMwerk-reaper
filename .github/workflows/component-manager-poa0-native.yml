@@ -49,6 +49,7 @@ on:
     branches:
       - experiment/component-manager-poa0
     paths:
+      - component-manager/**
       - experiments/component-manager-poa0/**
       - .github/workflows/component-manager-poa0-native.yml
 
@@ -83,6 +84,7 @@ jobs:
           CONTRACT_V1_PARENT: be0a34a628064aebb8936120d8b23f3846589a0d
           CONTRACT_V1_POLICY_PARENT: e3deb4e83732033ff4e37e4d4c61bf1f61e99f5d
           PRODUCTION_READINESS_PARENT: 6cbe79ac045cfb4575d481b4e8d82373aa157dcb
+          SLICE0_PARENT: 5036fa90917bc2a81756015c2077a59483cd8057
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -98,6 +100,7 @@ jobs:
           contract_v1_allowed=true
           contract_v1_policy_allowed=true
           production_readiness_allowed=true
+          slice0_allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
               .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/common-gate-cases.sh|experiments/component-manager-poa0/scripts/common-gate-cases.ps1|experiments/component-manager-poa0/scripts/common_case_contract.py|experiments/component-manager-poa0/scripts/test-common-case-record-contract.py|experiments/component-manager-poa0/scripts/run-native-matrix.sh|experiments/component-manager-poa0/scripts/run-native-matrix.ps1|experiments/component-manager-poa0/scripts/verify-implementation-parity.sh|experiments/component-manager-poa0/reports/CMN_021_024_CONCRETE_CASE_CLOSURE.md)
@@ -134,9 +137,19 @@ jobs:
                 production_readiness_allowed=false
                 ;;
             esac
+            case "$path" in
+              .github/workflows/component-manager-poa0-native.yml|component-manager/*|component-manager/**/*)
+                ;;
+              *)
+                slice0_allowed=false
+                ;;
+            esac
           done
 
-          if [[ "$actual_parent" == "$CMN_CLOSURE_PARENT" && ${#changed_paths[@]} -gt 0 && "$closure_allowed" == true ]]; then
+          if [[ "$actual_parent" == "$SLICE0_PARENT" && ${#changed_paths[@]} -gt 0 && "$slice0_allowed" == true ]]; then
+            echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
+            echo 'classification=component-manager-slice0-only' >>"$GITHUB_OUTPUT"
+          elif [[ "$actual_parent" == "$CMN_CLOSURE_PARENT" && ${#changed_paths[@]} -gt 0 && "$closure_allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
             echo 'classification=cmn-021-024-closure-only' >>"$GITHUB_OUTPUT"
           elif [[ "$actual_parent" == "$EVIDENCE_FREEZE_PARENT" && ${#changed_paths[@]} -gt 0 && "$evidence_freeze_allowed" == true ]]; then

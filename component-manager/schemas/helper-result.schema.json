@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/helper-result.schema.json",
+  "title": "Component Manager helper-result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "request_id",
+    "status",
+    "changed_paths",
+    "diagnostics"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "status": {
+      "enum": [
+        "success",
+        "failure",
+        "cancelled"
+      ]
+    },
+    "changed_paths": {
+      "type": "array"
+    },
+    "diagnostics": {
+      "type": "array"
+    }
+  }
+}

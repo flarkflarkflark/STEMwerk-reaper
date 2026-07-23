@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/lease.schema.json",
+  "title": "Component Manager lease",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "lease_id",
+    "run_id",
+    "generation_id",
+    "pid",
+    "process_start_identity",
+    "acquired_at",
+    "state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "lease_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "generation_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "process_start_identity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "acquired_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "enum": [
+        "active",
+        "released",
+        "suspected"
+      ]
+    }
+  }
+}

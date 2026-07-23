@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemwerk.example/contracts/component-manager/v1/schema-capabilities.schema.json",
+  "title": "Core/helper schema capability advertisement",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "contract_version",
+    "families",
+    "feature_gates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "contract_version": {
+      "const": "1.0.0"
+    },
+    "families": {
+      "type": "array",
+      "minItems": 15,
+      "items": {
+        "type": "object"
+      }
+    },
+    "feature_gates": {
+      "type": "array",
+      "uniqueItems": true
+    }
+  }
+}
