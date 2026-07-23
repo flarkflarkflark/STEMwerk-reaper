@@ -227,11 +227,17 @@ function TestRuntimeWritable([string]$Path) {
 }
 
 function LogExecutionPolicyStatus {
+    $effective = "Unknown"
     try {
         $effective = [string](Get-ExecutionPolicy)
         if ([string]::IsNullOrWhiteSpace($effective)) { $effective = "Unknown" }
         LogProgress ("PowerShell execution policy (effective): " + $effective)
+    } catch {
+        LogLine "Execution policy effective-value probe failed"
+        return
+    }
 
+    try {
         $policyList = Get-ExecutionPolicy -List
         if ($policyList) {
             $parts = @()
@@ -244,12 +250,16 @@ function LogExecutionPolicyStatus {
                 LogLine ("Execution policy list: " + ($parts -join "; "))
             }
         }
-
-        if ($effective -eq "Restricted" -or $effective -eq "AllSigned") {
-            LogStatusDetail ("PowerShell policy is restrictive (" + $effective + "). Manual script runs may need CurrentUser RemoteSigned.")
-        }
     } catch {
-        LogLine "Execution policy check failed"
+        LogLine "Execution policy scope-list probe unavailable; effective policy remains authoritative"
+    }
+
+    if ($effective -eq "Restricted" -or $effective -eq "AllSigned") {
+        LogProgress "EXECUTION_POLICY_STATUS=failed"
+        LogStatusDetail ("PowerShell policy is restrictive (" + $effective + "). Manual script runs may need CurrentUser RemoteSigned.")
+        Set-Status "failed" "execution_policy_restricted"
+    } else {
+        LogProgress "EXECUTION_POLICY_STATUS=ok"
     }
 }
 

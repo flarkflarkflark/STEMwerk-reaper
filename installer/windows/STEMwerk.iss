@@ -18,6 +18,12 @@
   #error STEMWERK_VERSION is not set and VERSION could not be read.
 #endif
 
+; The installer build timestamp is authoritative when no release date is supplied.
+#define MyBuildDate GetEnv('STEMWERK_BUILD_DATE')
+#if MyBuildDate == ""
+  #define MyBuildDate GetDateTimeString('yyyy-mm-dd', '-', ':')
+#endif
+
 #define BundleRuntime GetEnv('STEMWERK_BUNDLE_RUNTIME')
 #define OutputSuffix GetEnv('STEMWERK_OUTPUT_SUFFIX')
 
@@ -43,6 +49,7 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
+VersionInfoDescription={#MyAppName} {#MyAppVersion} build {#MyBuildDate}
 #if FileExists('..\assets\stemwerk.ico')
 SetupIconFile=..\assets\stemwerk.ico
 #endif
@@ -95,6 +102,13 @@ Name: "cleanup_runtime"; Description: "{cm:TaskCleanupRuntime}"; Flags: unchecke
 #if BundleRuntime != "1"
 Name: "cleanup_models"; Description: "{cm:TaskCleanupModels}"; Flags: unchecked
 #endif
+
+[InstallDelete]
+; {app} is the fully STEMwerk-owned REAPER Scripts\STEMwerk-reaper root.
+; Replace its contents before staging so upgrades cannot retain files that are
+; absent from the current Windows payload manifest. Runtime/models live under
+; {localappdata}\STEMwerk and are deliberately outside this cleanup boundary.
+Type: filesandordirs; Name: "{app}\*"
 
 [Files]
 ; Platform-aware allowlist for the normal Windows payload.
@@ -970,7 +984,8 @@ begin
   WelcomeInfoLabel.Width := WizardForm.WelcomePage.ClientWidth - WelcomeX - ScaleX(10);
   WelcomeInfoLabel.Height := ScaleY(120);
   WelcomeInfoLabel.Caption :=
-    LText('Version: ', 'Versie: ', 'Version: ') + VersionTag + #13#10 + #13#10 +
+    LText('Version: ', 'Versie: ', 'Version: ') + VersionTag + #13#10 +
+    LText('Build date: ', 'Builddatum: ', 'Build-Datum: ') + '{#MyBuildDate}' + #13#10 + #13#10 +
     LText(
       'This installer will guide you through a clean STEMwerk setup.',
       'Deze installer begeleidt je door een schone STEMwerk setup.',
