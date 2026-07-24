@@ -3071,6 +3071,19 @@ local function updateRunFromTimingJson(entry, path, stat)
         if model then kvAssignIfUnknown(entry, "model", model) end
         local device = parseJsonStringField(line, "device")
         if device then kvAssignIfUnknown(entry, "device", device) end
+        local outputNames = parseJsonStringField(line, "output_names")
+            or parseJsonStringField(line, "found_stems")
+            or parseJsonStringField(line, "found_files")
+        if outputNames then
+            kvAssignLast(entry, "found_stems", outputNames)
+            kvAssignLast(entry, "found_files", outputNames)
+        end
+        local outputCount = parseJsonNumberField(line, "output_count")
+        if outputCount and tostring(entry.found_stems or "unknown") == "unknown" then
+            kvAssignLast(entry, "found_stems", tostring(outputCount))
+        end
+        local validationReason = parseJsonStringField(line, "output_validation_reason")
+        if validationReason then kvAssignLast(entry, "output_validation_reason", validationReason) end
         local result = parseJsonStringField(line, "result")
         if result then
             local lr = result:lower()

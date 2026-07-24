@@ -494,6 +494,14 @@ local function createPresentScenario(baseRoot)
     writeFile(joinPath(tempDir, "nested", "debug.log"), "nested log " .. projectPath .. "\n")
     writeFile(joinPath(tempRoot, "STEMwerk_debug.log"), "debug " .. joinPath(tempDir, "other.wav") .. "\n")
 
+    local intelJob = joinPath(env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_intel_six", "single")
+    mkdirP(intelJob)
+    writeFile(joinPath(intelJob, "phase_events.jsonl"),
+        '{"time":1,"model":"htdemucs_6s","device":"cpu","result":"success","output_count":6,"output_names":"bass,drums,guitar,other,piano,vocals","output_validation_reason":"ok"}\n')
+    writeFile(joinPath(intelJob, "timing_events.jsonl"), '{"time":2,"result":"success"}\n')
+    writeFile(joinPath(intelJob, "done.txt"), "done\n")
+    writeFile(joinPath(intelJob, "exit_code.txt"), "0\n")
+
     local evidenceRoot = joinPath(runtimeBase, "evidence", "current-session")
     local sessionId = "native-apple-silicon-2306-final"
     mkdirP(evidenceRoot)
@@ -683,6 +691,7 @@ local function assertPresentScenario(bundleDir, context)
     local tempInventory = readFile(joinPath(bundleDir, "temp_inventory.txt")) or ""
     local allText = readBundleText(bundleDir)
     local evidenceManifest = readFile(joinPath(bundleDir, "support_evidence_manifest.txt")) or ""
+    local processingSummary = readFile(joinPath(bundleDir, "processing_summary.txt")) or ""
 
     assertf(diagnostics:find("STEMwerk package version", 1, true) ~= nil, "diagnostics missing version block")
     if IS_WINDOWS then
@@ -716,6 +725,10 @@ local function assertPresentScenario(bundleDir, context)
     assertf(evidenceManifest:find("historical_errors_scope:%s+runtime_logs_except_current_bootstrap_and_current_session_evidence") ~= nil,
         "historical error scope not separated")
     assertf(fileExists(joinPath(bundleDir, "runtime_logs", "historical-repair.log")), "historical error log was not preserved")
+    assertf(processingSummary:find("found_stems: bass,drums,guitar,other,piano,vocals", 1, true) ~= nil,
+        "six-stem output names were not parsed from actual phase evidence")
+    assertf(processingSummary:find("output_validation_reason: ok", 1, true) ~= nil,
+        "actual output validation reason was not preserved")
     for _, phase in ipairs({ "verify", "online_normal", "online_drum", "bundled_recovery", "post_bundled_normal", "post_bundled_drum" }) do
         assertf(fileExists(joinPath(bundleDir, "current_session_evidence", phase, "evidence.env")), "phase evidence missing: " .. phase)
         assertf(fileExists(joinPath(bundleDir, "current_session_evidence", phase, "phase_events.jsonl")), "phase events missing: " .. phase)
