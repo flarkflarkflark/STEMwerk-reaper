@@ -133,6 +133,7 @@ $python = $null
 $ffmpeg = $null
 $venvPy = Join-NormalizedWindowsPath $RuntimeBase @(".venv", "Scripts", "python.exe")
 $installerMode = ($env:STEMWERK_INSTALLER -eq "1")
+$bundledRuntimeMode = ($env:STEMWERK_BUNDLED_RUNTIME -eq "1")
 $offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bundledRuntimeDir = Join-NormalizedWindowsPath $scriptRoot @("_bundled")
@@ -143,6 +144,9 @@ $ffmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegArchiveFileName"
 $bundledPythonInstaller = Join-NormalizedWindowsPath $bundledRuntimeDir @("python", $pythonInstallerFileName)
 $bundledFfmpegZip = Join-NormalizedWindowsPath $bundledRuntimeDir @("ffmpeg", $ffmpegArchiveFileName)
 $script:FfmpegSource = "missing"
+$script:FfmpegValidated = $false
+$script:FfmpegValidationReason = "ffmpeg_path_missing"
+$script:FfprobePath = ""
 $bundledWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("wheels")
 $bundledDrumsepWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-wheels")
 $bundledDrumsepModelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-models")
@@ -236,7 +240,7 @@ function LogExecutionPolicyStatus {
         LogProgress ("PowerShell execution policy (effective): " + $effective)
     } catch {
         LogLine "Execution policy effective-value probe failed"
-        return
+        return $false
     }
 
     try {
@@ -265,7 +269,7 @@ function LogExecutionPolicyStatus {
     }
 }
 
-function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue, [string]$SamplerateValue, [string]$JuliusValue) {
+function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$FfprobePathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue, [string]$SamplerateValue, [string]$JuliusValue) {
     $lines = @()
     $lines += "CAP_VERSION=1"
     $lines += "PROFILE=$ProfileValue"
@@ -273,6 +277,7 @@ function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$Backen
     $lines += "BACKEND_REASON=$BackendReasonValue"
     $lines += "PYTHON_PATH=$PythonPathValue"
     $lines += "FFMPEG_PATH=$FfmpegPathValue"
+    $lines += "FFPROBE_PATH=$FfprobePathValue"
     $lines += "RUNTIME_BASE=$RuntimeBaseValue"
     $lines += "BOOTSTRAP_STATUS=$BootstrapStatusValue"
     $lines += "BOOTSTRAP_REASON=$BootstrapReasonValue"
@@ -539,9 +544,123 @@ function InstallPythonDirect {
     return $null
 }
 
+function GetFfprobePathForFfmpeg([string]$FfmpegPath) {
+    if ([string]::IsNullOrWhiteSpace($FfmpegPath)) { return "" }
+    return Join-Path (Split-Path -Parent $FfmpegPath) "ffprobe.exe"
+}
+
+function TestFfmpegPair([string]$FfmpegPath) {
+    if ([string]::IsNullOrWhiteSpace($FfmpegPath)) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffmpeg_path_missing"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    if (-not (Test-Path $FfmpegPath -PathType Leaf)) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffmpeg_executable_missing"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    $ffprobePath = GetFfprobePathForFfmpeg $FfmpegPath
+    if ([string]::IsNullOrWhiteSpace($ffprobePath) -or -not (Test-Path $ffprobePath -PathType Leaf)) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffprobe_executable_missing"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    RunHidden $FfmpegPath @("-version") "Validate FFmpeg executable" | Out-Null
+    $ffmpegExit = $LASTEXITCODE
+    if ($ffmpegExit -ne 0) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffmpeg_validation_failed"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    RunHidden $ffprobePath @("-version") "Validate ffprobe executable" | Out-Null
+    $ffprobeExit = $LASTEXITCODE
+    if ($ffprobeExit -ne 0) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffprobe_validation_failed"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    return @{ Status = "ok"; Reason = "ffmpeg_pair_valid"; FfmpegPath = $FfmpegPath; FfprobePath = $ffprobePath }
+}
+
+function TestFfmpegArchive([string]$ArchivePath) {
+    if ([string]::IsNullOrWhiteSpace($ArchivePath) -or -not (Test-Path $ArchivePath -PathType Leaf)) { return $false }
+    try {
+        if ((Get-Item $ArchivePath).Length -lt 1MB) { return $false }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+        try {
+            $names = @($archive.Entries | ForEach-Object { $_.FullName.ToLowerInvariant().Replace("\", "/") })
+            $hasFfmpeg = @($names | Where-Object { $_ -like "*/bin/ffmpeg.exe" }).Count -gt 0
+            $hasFfprobe = @($names | Where-Object { $_ -like "*/bin/ffprobe.exe" }).Count -gt 0
+            return ($hasFfmpeg -and $hasFfprobe)
+        } finally {
+            $archive.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
+function GetFfmpegDownloadFailure([System.Exception]$Exception) {
+    $failureClass = "unknown"
+    $httpStatus = 0
+    if ($Exception -is [System.Net.WebException]) {
+        switch ([string]$Exception.Status) {
+            "NameResolutionFailure" { $failureClass = "dns" }
+            "ProxyNameResolutionFailure" { $failureClass = "proxy" }
+            "TrustFailure" { $failureClass = "tls" }
+            "SecureChannelFailure" { $failureClass = "tls" }
+            "Timeout" { $failureClass = "timeout" }
+            "ConnectionClosed" { $failureClass = "connection_reset" }
+            "ReceiveFailure" { $failureClass = "connection_reset" }
+            "SendFailure" { $failureClass = "connection_reset" }
+            "ProtocolError" { $failureClass = "http_status" }
+        }
+        if ($Exception.Response -and $Exception.Response.StatusCode) {
+            $httpStatus = [int]$Exception.Response.StatusCode
+        }
+    } elseif ($Exception.GetType().FullName -like "*HttpRequestException*") {
+        $failureClass = "connection_reset"
+        if ($Exception.StatusCode) { $httpStatus = [int]$Exception.StatusCode }
+    }
+    $retryable = $failureClass -in @("dns", "timeout", "connection_reset", "partial_download", "unknown")
+    if ($failureClass -eq "http_status" -and ($httpStatus -eq 408 -or $httpStatus -eq 429 -or $httpStatus -ge 500)) {
+        $retryable = $true
+    }
+    return @{ Class = $failureClass; HttpStatus = $httpStatus; Retryable = $retryable; ErrorType = $Exception.GetType().FullName; HResult = $Exception.HResult }
+}
+
+function DownloadFfmpegArchive([string]$Url, [string]$TargetPath) {
+    $maxAttempts = 3
+    $partialPath = $TargetPath + ".partial"
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        Remove-Item -Path $partialPath -Force -ErrorAction SilentlyContinue
+        LogProgress ("FFMPEG_DOWNLOAD_ATTEMPT=" + $attempt + "/" + $maxAttempts)
+        try {
+            $response = Invoke-WebRequest -Uri $Url -OutFile $partialPath -UseBasicParsing -TimeoutSec 120 -MaximumRedirection 5
+            $httpStatus = if ($response -and $response.StatusCode) { [int]$response.StatusCode } else { 200 }
+            LogProgress ("FFMPEG_DOWNLOAD_HTTP_STATUS=" + $httpStatus)
+            if (-not (Test-Path $partialPath -PathType Leaf) -or (Get-Item $partialPath).Length -lt 1MB) {
+                LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=partial_download"
+                if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds $attempt; continue }
+                return $false
+            }
+            LogProgress ("FFMPEG_DOWNLOAD_BYTES=" + (Get-Item $partialPath).Length)
+            if (-not (TestFfmpegArchive $partialPath)) {
+                LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=archive_invalid"
+                Remove-Item -Path $partialPath -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+            Move-Item -Path $partialPath -Destination $TargetPath -Force
+            LogProgress "FFMPEG_DOWNLOAD_STATUS=ok"
+            return $true
+        } catch {
+            $failure = GetFfmpegDownloadFailure $_.Exception
+            LogProgress ("FFMPEG_DOWNLOAD_FAILURE_CLASS=" + $failure.Class)
+            LogProgress ("FFMPEG_DOWNLOAD_HTTP_STATUS=" + $failure.HttpStatus)
+            LogLine ("FFmpeg download diagnostic: error_type=" + $failure.ErrorType + " hresult=" + $failure.HResult)
+            Remove-Item -Path $partialPath -Force -ErrorAction SilentlyContinue
+            if (-not $failure.Retryable -or $attempt -ge $maxAttempts) { return $false }
+            Start-Sleep -Seconds $attempt
+        }
+    }
+    return $false
+}
+
 function InstallFfmpegDirect {
     $zipPath = Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg", "ffmpeg.zip")
-    if (Test-Path $bundledFfmpegZip) {
+    if ($bundledRuntimeMode -and (Test-Path $bundledFfmpegZip)) {
         $script:FfmpegSource = "bundled"
         try {
             LogStatusDetail "Installing bundled FFmpeg..."
@@ -552,14 +671,21 @@ function InstallFfmpegDirect {
             LogLine "Bundled FFmpeg archive copy failed"
             return $null
         }
+        if (-not (TestFfmpegArchive $zipPath)) {
+            LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=archive_invalid"
+            LogLine "Bundled FFmpeg archive validation failed"
+            return $null
+        }
+    } elseif ($bundledRuntimeMode) {
+        $script:FfmpegSource = "bundled_missing"
+        LogLine "Bundled runtime mode requires the current bundled FFmpeg archive; online fallback is disabled."
+        return $null
     } else {
         $script:FfmpegSource = "download"
-        try {
-            LogStatusDetail "Downloading FFmpeg..."
-            LogProgress "FFMPEG_SOURCE=download"
-            LogProgress ("Downloading FFmpeg (gyan.dev release): " + $ffmpegArchiveUrl)
-            Invoke-WebRequest -Uri $ffmpegArchiveUrl -OutFile $zipPath -UseBasicParsing | Out-Null
-        } catch {
+        LogStatusDetail "Downloading FFmpeg..."
+        LogProgress "FFMPEG_SOURCE=download"
+        LogProgress ("Downloading FFmpeg (gyan.dev release): " + $ffmpegArchiveUrl)
+        if (-not (DownloadFfmpegArchive $ffmpegArchiveUrl $zipPath)) {
             LogLine "FFmpeg download failed"
             return $null
         }
@@ -583,13 +709,33 @@ function InstallFfmpegDirect {
         }
         Expand-Archive -Path $zipPath -DestinationPath (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")) -Force
     } catch {
+        LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=extraction_failed"
         LogLine "FFmpeg extract failed"
         return $null
     }
-    LogProgress "Searching extracted files for ffmpeg.exe"
+    LogProgress "Searching extracted files for ffmpeg.exe and ffprobe.exe"
     $ff = Get-ChildItem -Path (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")) -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
-    if ($ff) { return $ff.FullName }
-    LogLine "FFmpeg binary not found after extract"
+    if (-not $ff) {
+        $script:FfmpegValidationReason = "ffmpeg_executable_missing"
+        LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=binary_missing"
+        LogLine "FFmpeg binary not found after extract"
+        return $null
+    }
+    $pair = TestFfmpegPair $ff.FullName
+    if ($pair.Status -eq "ok") {
+        $script:FfmpegValidated = $true
+        $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+        $script:FfprobePath = [string]$pair.FfprobePath
+        return [string]$pair.FfmpegPath
+    }
+    $script:FfmpegValidationReason = [string]$pair.Reason
+    $failureClass = if ($pair.Reason -eq "ffmpeg_executable_missing" -or $pair.Reason -eq "ffprobe_executable_missing") {
+        "binary_missing"
+    } else {
+        "binary_execution_failed"
+    }
+    LogProgress ("FFMPEG_DOWNLOAD_FAILURE_CLASS=" + $failureClass)
+    LogLine ("FFmpeg pair validation failed after extract: " + $pair.Reason)
     return $null
 }
 
@@ -610,7 +756,14 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
             if (IsFfmpegShim $p) {
                 LogProgress ("Ignoring shim FFmpeg path: " + $p)
             } else {
-                return $p
+                $pair = TestFfmpegPair $p
+                if ($pair.Status -eq "ok") {
+                    $script:FfmpegValidated = $true
+                    $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+                    $script:FfprobePath = [string]$pair.FfprobePath
+                    return [string]$pair.FfmpegPath
+                }
+                LogProgress ("Ignoring invalid FFmpeg pair: " + $p + " reason=" + $pair.Reason)
             }
         }
     }
@@ -623,7 +776,14 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
                 if (IsFfmpegShim $runtimeFfmpeg.FullName) {
                     LogProgress ("Ignoring shim FFmpeg path: " + $runtimeFfmpeg.FullName)
                 } else {
-                    return $runtimeFfmpeg.FullName
+                    $pair = TestFfmpegPair $runtimeFfmpeg.FullName
+                    if ($pair.Status -eq "ok") {
+                        $script:FfmpegValidated = $true
+                        $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+                        $script:FfprobePath = [string]$pair.FfprobePath
+                        return [string]$pair.FfmpegPath
+                    }
+                    LogProgress ("Ignoring invalid runtime FFmpeg pair: " + $pair.Reason)
                 }
             }
         } catch {
@@ -635,7 +795,14 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
         if (IsFfmpegShim $cmd.Source) {
             LogProgress ("Ignoring shim FFmpeg path: " + $cmd.Source)
         } else {
-            return $cmd.Source
+            $pair = TestFfmpegPair $cmd.Source
+            if ($pair.Status -eq "ok") {
+                $script:FfmpegValidated = $true
+                $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+                $script:FfprobePath = [string]$pair.FfprobePath
+                return [string]$pair.FfmpegPath
+            }
+            LogProgress ("Ignoring invalid PATH FFmpeg pair: " + $pair.Reason)
         }
     }
 
@@ -1174,6 +1341,11 @@ print("STEMWERK_CORE_MODEL_PREFETCH ok")
 
 function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [string]$DrumsepModelStatus, [hashtable]$CoreStatus, [string]$Detail, [string]$MainRuntimeStatus = "") {
     $readyPath = GetReadyToGoStatePath
+    if (-not $script:FfmpegValidated) {
+        Remove-Item -Path $readyPath -Force -ErrorAction SilentlyContinue
+        LogProgress ("ready_to_go_state_written=0 reason=" + $script:FfmpegValidationReason)
+        return
+    }
     $modelDir = if ($CoreStatus -and $CoreStatus.Contains("model_dir")) { [string]$CoreStatus["model_dir"] } else { Join-Path $RuntimeBase "models" }
     $fastStatus = if ($CoreStatus -and $CoreStatus.Contains("fast")) { [string]$CoreStatus["fast"] } else { "missing" }
     $qualityStatus = if ($CoreStatus -and $CoreStatus.Contains("quality")) { [string]$CoreStatus["quality"] } else { "missing" }
@@ -1209,6 +1381,7 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
         "DRUMSEP_READY_RUNTIME_STATUS=$runtimeStatusValue",
         "DRUMSEP_READY_MODEL_STATUS=$drumsepModelValue"
     ) | Out-File -FilePath $readyPath -Encoding ascii
+    return $true
 }
 
 function GetReadyToGoRuntimeState([string]$BackendName) {
@@ -1433,6 +1606,8 @@ function RunReadyToGoVerifyOnly {
         LogProgress "ffmpeg_download_skipped=existing_ok"
     } else {
         LogProgress "ffmpeg_existing_ok=missing"
+        $mainReadyStatus = "missing_ffmpeg"
+        $mainReadyDetail = $script:FfmpegValidationReason
     }
 
     $readyRuntimeState = VerifyExistingReadyRuntime $readyBackend
@@ -1455,12 +1630,12 @@ function RunReadyToGoVerifyOnly {
         $status = "repair_required"
         $statusReason = $mainReadyDetail
     }
-    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainReadyStatus
+    $readyMarkerWritten = WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainReadyStatus
     $readyStatePath = GetReadyToGoStatePath
     $normalizedReadyStatePath = [System.IO.Path]::GetFullPath($readyStatePath)
     $normalizedStateFile = if ([string]::IsNullOrWhiteSpace($StateFile)) { "" } else { [System.IO.Path]::GetFullPath($StateFile) }
     LogProgress ("ready_to_go_state_file=" + $readyStatePath)
-    LogProgress "ready_to_go_state_written=1"
+    LogProgress ("ready_to_go_state_written=" + $(if ($readyMarkerWritten) { "1" } else { "0" }))
     $readyState = ReadEnvMap $readyStatePath
     LogProgress ("ready_to_go_status=" + [string]$readyState["READY_TO_GO_STATUS"])
     if ($normalizedStateFile -and ($normalizedStateFile -ieq $normalizedReadyStatePath)) {
@@ -2886,6 +3061,7 @@ if ($ffmpeg -and (Test-Path $ffmpeg)) {
 
 if ($ffmpeg) {
     LogProgress ("FFmpeg ready: " + $ffmpeg)
+    LogProgress ("ffprobe ready: " + $script:FfprobePath)
 } else {
     Set-Status "missing_ffmpeg" "ffmpeg_install_failed"
 }
@@ -3028,10 +3204,10 @@ if (Test-Path $venvPy) {
         $readyDetail = $statusReason
     }
     $mainRuntimeStatus = if ($status -eq "ok") { "ok" } else { "broken" }
-    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainRuntimeStatus
+    [void](WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainRuntimeStatus)
 } else {
     LogProgress "Skipping core install (Python venv unavailable)"
-    WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable" "missing"
+    [void](WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable" "missing")
 }
 
 if ($RuntimeBase) {
@@ -3045,7 +3221,7 @@ if ($RuntimeBase) {
     $juliusValue = if ($juliusOk) { "ok" } else { "not_checked" }
     $pythonValue = if ($python) { $python } else { "" }
     $ffmpegValue = if ($ffmpeg) { $ffmpeg } else { "" }
-    $wroteCapabilities = WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue $samplerateValue $juliusValue
+    $wroteCapabilities = WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $script:FfprobePath $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue $samplerateValue $juliusValue
     if (-not $wroteCapabilities) {
         Set-Status "deps_failed" "capabilities_write_failed"
     }
@@ -3060,6 +3236,7 @@ if ($backendReason) { $lines += "BACKEND_REASON=$backendReason" }
 if ($python) { $lines += "PYTHON_PATH=$python" }
 if (Test-Path $venvPy) { $lines += "VENV_PYTHON=$venvPy" }
 if ($ffmpeg) { $lines += "FFMPEG_PATH=$ffmpeg" }
+if ($script:FfprobePath) { $lines += "FFPROBE_PATH=$script:FfprobePath" }
 if ($script:FfmpegSource) { $lines += "FFMPEG_SOURCE=$script:FfmpegSource" }
 if ($installerMode) { $lines += "INSTALLER=1" }
 if ($RuntimeBase) { $lines += "RUNTIME_BASE=$RuntimeBase" }

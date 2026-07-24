@@ -171,7 +171,8 @@ def test_clean_runtime_remains_opt_in_and_models_require_their_own_option() -> N
 def test_online_bootstrap_uses_download_when_no_current_bundle_exists() -> None:
     text = BOOTSTRAP.read_text(encoding="utf-8-sig")
     assert '$bundledFfmpegZip = Join-NormalizedWindowsPath $bundledRuntimeDir' in text
-    assert 'if (Test-Path $bundledFfmpegZip)' in text
+    assert 'if ($bundledRuntimeMode -and (Test-Path $bundledFfmpegZip))' in text
+    assert '} elseif ($bundledRuntimeMode) {' in text
     assert 'LogProgress "FFMPEG_SOURCE=download"' in text
 
 

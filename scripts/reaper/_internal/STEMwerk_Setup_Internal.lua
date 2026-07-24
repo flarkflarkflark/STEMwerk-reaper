@@ -682,6 +682,16 @@ local function prettySetupReason(reason)
             part = "Could not upgrade pip/setuptools/wheel"
         elseif lower == "ffmpeg_install_failed" then
             part = "FFmpeg install failed"
+        elseif lower == "ffmpeg_path_missing" then
+            part = "FFmpeg path is missing"
+        elseif lower == "ffmpeg_executable_missing" then
+            part = "ffmpeg.exe is missing"
+        elseif lower == "ffprobe_executable_missing" then
+            part = "ffprobe.exe is missing"
+        elseif lower == "ffmpeg_validation_failed" then
+            part = "FFmpeg executable validation failed"
+        elseif lower == "ffprobe_validation_failed" then
+            part = "ffprobe executable validation failed"
         elseif lower == "ffmpeg_not_found" then
             part = "STEMwerk could not find FFmpeg"
         elseif lower == "ffmpeg_shim_path" then
@@ -1033,9 +1043,25 @@ local function canRunPython(path)
     return true
 end
 
-local function canRunFfmpeg(path)
+local function canRunFfmpegPair(path, requirePair)
     path = resolvePath(path)
-    return runCommandWithProbe(path, " -version", "ffmpeg version", 8000)
+    if path == "" then return false, "ffmpeg_path_missing", "" end
+    if not fileExists(path) then return false, "ffmpeg_executable_missing", "" end
+    if not runCommandWithProbe(path, " -version", "ffmpeg version", 8000) then
+        return false, "ffmpeg_validation_failed", ""
+    end
+    if requirePair == false then return true, "ffmpeg_valid", "" end
+    local parent = path:match("^(.*)[/\\][^/\\]+$") or ""
+    local ffprobePath = parent ~= ""
+        and (parent .. PATH_SEP .. (OS == "Windows" and "ffprobe.exe" or "ffprobe"))
+        or ""
+    if ffprobePath == "" or not fileExists(ffprobePath) then
+        return false, "ffprobe_executable_missing", ""
+    end
+    if not runCommandWithProbe(ffprobePath, " -version", "ffprobe version", 8000) then
+        return false, "ffprobe_validation_failed", ""
+    end
+    return true, "ffmpeg_pair_valid", ffprobePath
 end
 
 local function pythonVersionText(path)
@@ -1687,7 +1713,7 @@ local function readyStateIndicatesHealthyRuntime(readyState, capState)
         and (drumsepModelStatus == "" or drumsepModelStatus == "ok" or drumsepModelStatus == "skipped")
         and (audioSeparator == "" or audioSeparator == "ok")
         and (stemwerkCore == "" or stemwerkCore == "ok")
-        and (capVerification == "" or capVerification == "ok" or capVerification == "failed")
+        and (capVerification == "" or capVerification == "ok")
 end
 
 local function resolveVerifyOnlyPythonPath(runtime, state, capState)
@@ -1717,13 +1743,8 @@ local function resolveVerifyOnlyFfmpegPath(state, capState)
     }
     for _, candidate in ipairs(candidates) do
         local resolved = resolvePath(candidate)
-        if resolved ~= "" and fileExists(resolved) and canRunFfmpeg(resolved) then
-            return resolved
-        end
-    end
-    for _, candidate in ipairs(candidates) do
-        local resolved = resolvePath(candidate)
-        if resolved ~= "" and fileExists(resolved) then
+        local pairOk = resolved ~= "" and canRunFfmpegPair(resolved)
+        if pairOk then
             return resolved
         end
     end
@@ -2567,7 +2588,7 @@ local function verifyRuntimePaths(state)
         end
     end
     local resolvedFfmpegPath = resolvePath(state.FFMPEG_PATH or "")
-    if OS ~= "Windows" and (resolvedFfmpegPath == "" or not fileExists(resolvedFfmpegPath) or not canRunFfmpeg(resolvedFfmpegPath)) then
+    if OS ~= "Windows" and (resolvedFfmpegPath == "" or not fileExists(resolvedFfmpegPath) or not canRunFfmpegPair(resolvedFfmpegPath, false)) then
         local autoFfmpegPath = resolveUnixFfmpegFallback()
         if autoFfmpegPath ~= "" then
             resolvedFfmpegPath = resolvePath(autoFfmpegPath)
@@ -2580,6 +2601,7 @@ local function verifyRuntimePaths(state)
     local errors = {}
     local pythonOk = false
     local ffmpegOk = false
+    local ffprobePath = ""
     local audioOk = false
     local torchRuntime = {
         ok = false,
@@ -2627,11 +2649,13 @@ local function verifyRuntimePaths(state)
     if resolved.ffmpegPath == "" then
         errors[#errors + 1] = "ffmpeg_missing"
     else
-        if canRunFfmpeg(resolved.ffmpegPath) then
+        local pairOk, pairReason, resolvedFfprobe = canRunFfmpegPair(resolved.ffmpegPath)
+        if pairOk then
             ffmpegOk = true
+            ffprobePath = resolvedFfprobe
             setExt("ffmpegPath", resolved.ffmpegPath)
         else
-            errors[#errors + 1] = "ffmpeg_unusable"
+            errors[#errors + 1] = pairReason ~= "" and pairReason or "ffmpeg_unusable"
         end
     end
 
@@ -2655,6 +2679,7 @@ local function verifyRuntimePaths(state)
     return {
         pythonPath = resolved.pythonPath,
         ffmpegPath = resolved.ffmpegPath,
+        ffprobePath = ffprobePath,
         pythonOk = pythonOk,
         ffmpegOk = ffmpegOk,
         audioOk = audioOk,
@@ -2740,18 +2765,29 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         trim(state.STATUS or "") == "ok"
         and hasBootstrapRuntimeVerificationPass()
     )
+    local currentBootstrapFailureReason = trim(state.STATUS_REASON or "")
+    local windowsFfmpegVerificationFailed = OS == "Windows"
+        and (trim(state.STATUS or "") == "missing_ffmpeg"
+            or currentBootstrapFailureReason == "ffmpeg_install_failed")
     local windowsTorchaudioVerificationFailed = false
     if OS == "Windows" then
         for _, verificationError in ipairs(errors or {}) do
             if verificationError == "torchaudio_missing_for_demucs"
                 or verificationError == "torchaudio_version_mismatch" then
                 windowsTorchaudioVerificationFailed = true
-                break
+            elseif verificationError == "ffmpeg_missing"
+                or verificationError == "ffmpeg_unusable"
+                or verificationError == "ffmpeg_executable_missing"
+                or verificationError == "ffmpeg_validation_failed"
+                or verificationError == "ffprobe_executable_missing"
+                or verificationError == "ffprobe_validation_failed" then
+                windowsFfmpegVerificationFailed = true
             end
         end
     end
     local authoritativeRuntimeVerified = authoritativeBootstrapVerified
         and not windowsTorchaudioVerificationFailed
+        and not windowsFfmpegVerificationFailed
     local runtimePolicyBlocked = runtimePolicyRequiresRebuild(state)
     local effectiveBootstrapSuccess = (not runtimePolicyBlocked)
         and (bootstrapSuccess or verifiedRuntimeOk or authoritativeRuntimeVerified)
@@ -2774,6 +2810,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         state.STATUS = "ok"
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
+    end
+    if windowsFfmpegVerificationFailed then
+        state.STATUS = "missing_ffmpeg"
+        state.STATUS_REASON = currentBootstrapFailureReason ~= ""
+            and currentBootstrapFailureReason or "ffmpeg_validation_failed"
+        state.RUNTIME_VERIFY_DETAIL = state.STATUS_REASON
     end
 
     local finalMessage = {}
@@ -3105,7 +3147,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
+    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeRuntimeVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -3360,7 +3402,8 @@ local function findWindowsFfmpegFallback(runtime)
     return ""
 end
 local function isValidFfmpegPath(path)
-    return path ~= "" and fileExists(path) and not isWindowsFfmpegShimPath(path)
+    if path == "" or not fileExists(path) or isWindowsFfmpegShimPath(path) then return false end
+    return canRunFfmpegPair(path)
 end
 
 local WINDOWS_VERIFY = nil
@@ -3551,10 +3594,11 @@ local function windowsVerifyTick()
     end
 
     if step == 5 then
-        WINDOWS_VERIFY.statusLines = { "Checking FFmpeg..." }
-        local ffmpegOk = WINDOWS_VERIFY.ffmpegPath ~= "" and fileExists(WINDOWS_VERIFY.ffmpegPath)
-            and canRunFfmpeg(WINDOWS_VERIFY.ffmpegPath)
+        WINDOWS_VERIFY.statusLines = { "Checking FFmpeg and ffprobe..." }
+        local ffmpegOk, ffmpegReason, ffprobePath = canRunFfmpegPair(WINDOWS_VERIFY.ffmpegPath)
         WINDOWS_VERIFY.ffmpegOk = ffmpegOk
+        WINDOWS_VERIFY.ffmpegReason = ffmpegReason
+        WINDOWS_VERIFY.ffprobePath = ffprobePath
         WINDOWS_VERIFY.step = 6
         reaper.defer(windowsVerifyTick)
         return
@@ -3594,11 +3638,13 @@ local function windowsVerifyTick()
             state.STATUS_REASON = ""
             state.PYTHON_PATH = WINDOWS_VERIFY.pythonPath
             state.FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath
+            state.FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath
             updateBootstrapEnv(stateFile, {
                 STATUS = "ok",
                 STATUS_REASON = "",
                 PYTHON_PATH = WINDOWS_VERIFY.pythonPath,
                 FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath,
+                FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath,
             })
             local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript)
             if not metadataComplete then
@@ -3618,6 +3664,16 @@ local function windowsVerifyTick()
             lines[#lines + 1] = ""
             lines[#lines + 1] = "Detected unsupported Windows FFmpeg shim:"
             lines[#lines + 1] = "  " .. tostring(WINDOWS_VERIFY.ffmpegShim)
+        end
+        if not WINDOWS_VERIFY.ffmpegOk and WINDOWS_VERIFY.ffmpegReason and WINDOWS_VERIFY.ffmpegReason ~= "" then
+            state.STATUS = "missing_ffmpeg"
+            state.STATUS_REASON = state.STATUS_REASON ~= "" and state.STATUS_REASON or WINDOWS_VERIFY.ffmpegReason
+            updateBootstrapEnv(stateFile, {
+                STATUS = "missing_ffmpeg",
+                STATUS_REASON = state.STATUS_REASON,
+                FFMPEG_PATH = "",
+                FFPROBE_PATH = "",
+            })
         end
         lines[#lines + 1] = ""
         if not WINDOWS_VERIFY.pythonOk then

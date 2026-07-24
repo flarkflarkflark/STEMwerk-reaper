@@ -324,6 +324,7 @@ begin
     Result := Result + ' -CleanModels';
   #endif
   #if BundleRuntime == "1"
+  Result := Result + ' -BundledRuntime';
   #if DrumsepWheelPayloadSubdir != ""
   #if DrumsepModelPayloadSubdir != ""
   Result := Result + ' -OfflineBundledAllmodels';

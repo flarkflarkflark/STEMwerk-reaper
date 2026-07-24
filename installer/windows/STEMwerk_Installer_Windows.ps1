@@ -2,6 +2,7 @@ param(
     [string]$RuntimeBase = "",
     [switch]$CleanRuntime,
     [switch]$CleanModels,
+    [switch]$BundledRuntime,
     [switch]$OfflineBundledAllmodels
 )
 
@@ -121,6 +122,11 @@ if (-not (Test-Path $bootstrap)) {
 }
 
 $env:STEMWERK_INSTALLER = "1"
+if ($BundledRuntime.IsPresent) {
+    $env:STEMWERK_BUNDLED_RUNTIME = "1"
+} else {
+    Remove-Item Env:STEMWERK_BUNDLED_RUNTIME -ErrorAction SilentlyContinue
+}
 if ($OfflineBundledAllmodels.IsPresent) {
     $env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS = "1"
 }
