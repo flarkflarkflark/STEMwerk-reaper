@@ -113,11 +113,21 @@ jobs:
         if: inputs.mode == 'xpg-002'
         run: python scripts/verify_module_integrity_test.py 2>&1 | tee "$EVIDENCE_DIR/module-integrity-tests.txt"
 
-      - name: Format, build, vet, and test
+      - name: Run format-verifier fault-injection tests
+        if: inputs.mode == 'xpg-002'
+        run: python scripts/verify_go_format_test.py 2>&1 | tee "$EVIDENCE_DIR/go-format-tests.txt"
+
+      - name: Verify tracked Go formatting
         if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
-          test -z "$(gofmt -l .)"
+          python scripts/verify_go_format.py --module-dir . --summary "$EVIDENCE_DIR/go-format-summary.json"
+          python -m json.tool "$EVIDENCE_DIR/go-format-summary.json" >/dev/null
+
+      - name: Build, vet, and test
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        run: |
+          set -euo pipefail
           go build ./...
           go vet ./... 2>&1 | tee "$EVIDENCE_DIR/vet.txt"
           go test -count=1 ./... 2>&1 | tee "$EVIDENCE_DIR/tests.txt"

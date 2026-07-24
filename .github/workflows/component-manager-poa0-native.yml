@@ -87,6 +87,7 @@ jobs:
           SLICE0_PARENT: 5036fa90917bc2a81756015c2077a59483cd8057
           XPG002_SUPPRESSION_REPAIR_PARENT: f455e99749223b95f7d11219ceaf338be3d32e74
           XPG002_FIXTURE_FIX_PARENT: 76ff083c5275ad6083293dbcc7d35c22c51e1a55
+          WINDOWS_GOFMT_FIX_PARENT: 32a5f6ebb17c0b8f9aff5918d8a95b6c91c005d5
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" != push ]]; then
@@ -105,6 +106,7 @@ jobs:
           slice0_allowed=true
           xpg002_suppression_repair_allowed=true
           xpg002_fixture_fix_allowed=true
+          windows_gofmt_fix_allowed=true
           for path in "${changed_paths[@]}"; do
             case "$path" in
               .github/workflows/component-manager-poa0-native.yml|experiments/component-manager-poa0/scripts/common-gate-cases.sh|experiments/component-manager-poa0/scripts/common-gate-cases.ps1|experiments/component-manager-poa0/scripts/common_case_contract.py|experiments/component-manager-poa0/scripts/test-common-case-record-contract.py|experiments/component-manager-poa0/scripts/run-native-matrix.sh|experiments/component-manager-poa0/scripts/run-native-matrix.ps1|experiments/component-manager-poa0/scripts/verify-implementation-parity.sh|experiments/component-manager-poa0/reports/CMN_021_024_CONCRETE_CASE_CLOSURE.md)
@@ -162,9 +164,19 @@ jobs:
                 xpg002_fixture_fix_allowed=false
                 ;;
             esac
+            case "$path" in
+              .github/workflows/component-manager-poa0-native.yml|.github/workflows/component-manager-slice0-cross-platform.yml|component-manager/scripts/verify_go_format.py|component-manager/scripts/verify_go_format_test.py)
+                ;;
+              *)
+                windows_gofmt_fix_allowed=false
+                ;;
+            esac
           done
 
-          if [[ "$actual_parent" == "$XPG002_FIXTURE_FIX_PARENT" && ${#changed_paths[@]} -eq 2 && "$xpg002_fixture_fix_allowed" == true ]]; then
+          if [[ "$actual_parent" == "$WINDOWS_GOFMT_FIX_PARENT" && ${#changed_paths[@]} -eq 4 && "$windows_gofmt_fix_allowed" == true ]]; then
+            echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
+            echo 'classification=component-manager-slice0-windows-gofmt-fix-only' >>"$GITHUB_OUTPUT"
+          elif [[ "$actual_parent" == "$XPG002_FIXTURE_FIX_PARENT" && ${#changed_paths[@]} -eq 2 && "$xpg002_fixture_fix_allowed" == true ]]; then
             echo 'matrix_required=false' >>"$GITHUB_OUTPUT"
             echo 'classification=component-manager-slice0-xpg002-fixture-fix-only' >>"$GITHUB_OUTPUT"
           elif [[ "$actual_parent" == "$XPG002_SUPPRESSION_REPAIR_PARENT" && ${#changed_paths[@]} -gt 0 && "$xpg002_suppression_repair_allowed" == true ]]; then
