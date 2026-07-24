@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT_DIR="$ROOT_DIR/installer/macos/dist"
 SCRIPTS_DIR="$ROOT_DIR/installer/macos/scripts"
 BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"
+PAYLOAD_MANIFEST="$ROOT_DIR/installer/macos/payload-manifest.txt"
+PAYLOAD_AUDITOR="$ROOT_DIR/installer/macos/audit_payload.py"
 
 VERSION="${STEMWERK_VERSION:-}"
 PKG_ID="com.flarkaudio.stemwerk"
@@ -103,25 +105,19 @@ repack_pkg_without_appledouble() {
 rm -rf "$STAGE"
 mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper"
 
-# Copy only what we need
-rsync -a --delete \
-  --exclude='._*' \
-  --exclude='*.bak' \
-  --exclude='*.bak2' \
-  --exclude='sync_to_reaper.sh' \
-  --exclude='STEMwerk_Enable_Debug.lua' \
-  --exclude='STEMwerk_Disable_Debug.lua' \
-  --exclude='STEMwerk_Set_FFmpegPath.lua' \
-  --exclude='STEMwerk_Set_PythonPath.lua' \
-  --exclude='STEMwerk_separate.lua' \
-  "$ROOT_DIR/scripts/reaper/" \
-  "$ROOT_DIR/i18n" \
-  "$ROOT_DIR/installer/assets/stemwerk.svg" \
-  "$ROOT_DIR/docs" \
-  "$ROOT_DIR/README.md" \
-  "$ROOT_DIR/LICENSE" \
-  "$ROOT_DIR/TODO.md" \
-  "$STAGE/Users/Shared/STEMwerk-reaper/"
+PAYLOAD_ROOT="$STAGE/Users/Shared/STEMwerk-reaper"
+awk -F '\t' '
+  $0 !~ /^#/ && NF >= 2 { if (seen[$2]++) { print "ERROR: duplicate payload destination: " $2 > "/dev/stderr"; exit 1 } }
+' "$PAYLOAD_MANIFEST"
+while IFS=$'\t' read -r source destination; do
+  [[ -n "$source" && "${source:0:1}" != "#" ]] || continue
+  [[ -e "$ROOT_DIR/$source" ]] || {
+    echo "ERROR: manifest source is missing: $source" >&2
+    exit 1
+  }
+  mkdir -p "$(dirname "$PAYLOAD_ROOT/$destination")"
+  cp -p "$ROOT_DIR/$source" "$PAYLOAD_ROOT/$destination"
+done < "$PAYLOAD_MANIFEST"
 
 case "$VARIANT" in
   online)
@@ -130,7 +126,10 @@ case "$VARIANT" in
   bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)
     if [[ -d "$BUNDLED_PAYLOAD_ROOT" ]]; then
       mkdir -p "$(dirname "$PAYLOAD_DEST")"
-      rsync -a --delete --exclude='._*' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
+      rsync -a --delete \
+        --exclude='._*' --exclude='*.exe' --exclude='*.dll' \
+        --exclude='*.bat' --exclude='*.cmd' --exclude='*.ps1' \
+        "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
     else
       mkdir -p "$PAYLOAD_DEST"
       cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF
@@ -142,6 +141,13 @@ EOF
 esac
 
 remove_appledouble_sidecars "$STAGE"
+python3 "$PAYLOAD_AUDITOR" --root "$PAYLOAD_ROOT" \
+  --variant "$VARIANT" --inventory "$ROOT_DIR/installer/macos/build/$VARIANT/payload-inventory.json"
+
+if [[ "${STEMWERK_STAGE_ONLY:-0}" == "1" ]]; then
+  echo "Staged and audited: $PAYLOAD_ROOT"
+  exit 0
+fi
 
 # Ensure pkg scripts are executable
 chmod +x "$SCRIPTS_DIR/postinstall" 2>/dev/null || true
