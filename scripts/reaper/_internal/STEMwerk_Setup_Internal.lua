@@ -2578,8 +2578,9 @@ local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
     return true
 end
 
-local function verifyRuntimePaths(state)
+local function verifyRuntimePaths(state, publishExtState)
     state = state or {}
+    if publishExtState == nil then publishExtState = true end
     local pythonCandidate = state.PYTHON_PATH or ""
     if OS == "macOS" then
         local venvCandidate = trim(state.VENV_PYTHON_PATH or state.VENV_PYTHON or "")
@@ -2632,7 +2633,7 @@ local function verifyRuntimePaths(state)
         if canRunPython(resolved.pythonPath) then
             pythonOk = true
             supportedPythonFound = supportedPythonFound ~= "" and supportedPythonFound or "yes"
-            setExt("pythonPath", resolved.pythonPath)
+            if publishExtState then setExt("pythonPath", resolved.pythonPath) end
         else
             if (OS == "Linux" or OS == "macOS") and detectedPythonVersion ~= "" then
                 errors[#errors + 1] = "python_unsupported"
@@ -2653,7 +2654,7 @@ local function verifyRuntimePaths(state)
         if pairOk then
             ffmpegOk = true
             ffprobePath = resolvedFfprobe
-            setExt("ffmpegPath", resolved.ffmpegPath)
+            if publishExtState then setExt("ffmpegPath", resolved.ffmpegPath) end
         else
             errors[#errors + 1] = pairReason ~= "" and pairReason or "ffmpeg_unusable"
         end
@@ -5958,21 +5959,14 @@ verifyExistingSetup = function(runtime, separatorScript)
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
-    ensureDir(runtime.runtimeState)
-    ensureDir(runtime.runtimeLogs)
-    appendSetupLog(runtime, "Verify-only run (" .. setupUiLabel() .. ")", not fileExists(logFile))
-    appendSetupLog(runtime, "Mode: verify-only (file checks, no subprocess, no package import)", false)
-    appendSetupLog(runtime, "Models kept: " .. getModelCacheDir(), false)
-
     local state = parseStateFile(stateFile)
     local capState = parseStateFile(capFile)
     local readyState = readReadyState(runtime)
     local effectiveState = buildVerifyOnlyState(runtime, state, capState, readyState)
     local pythonPath = trim(resolvePath(effectiveState.PYTHON_PATH or effectiveState.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(effectiveState)))
     local ffmpegPath = trim(resolvePath(effectiveState.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(effectiveState)))
-    local verification = verifyRuntimePaths(effectiveState)
-    local verifyErrors = verification.errors or {}
-    local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
+    local verification = verifyRuntimePaths(effectiveState, false)
+    local deviceOut, _, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
     local envJson = extractEnvJson(deviceOut or "")
     local deviceNames = collectDeviceNames(deviceOut or "")
     local backend, backendReason = detectBackendFromProbe(deviceOut, envJson)
@@ -5981,7 +5975,6 @@ verifyExistingSetup = function(runtime, separatorScript)
     end
     local profile = profileForBackend(backend)
     local checkProbe = reconcileCheckVerification(effectiveState, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)
-    local adjustedErrors = checkProbe.adjustedErrors
     local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then
         state.STATUS = "ok"
@@ -6006,107 +5999,16 @@ verifyExistingSetup = function(runtime, separatorScript)
     }
     local allOk = true
     for _, c in ipairs(checks) do
-        appendSetupLog(runtime, (c.ok and "  OK: " or "FAIL: ") .. c.label .. ": " .. tostring(c.detail), false)
         if not c.ok then allOk = false end
     end
 
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
-    writeCapabilities(capFile, {
-        profile = profile,
-        backend = backend,
-        backendReason = backendReason,
-        backendNote = state.BACKEND_NOTE or "",
-        supportedPythonFound = verification.supportedPythonFound,
-        detectedPythonVersion = verification.detectedPythonVersion,
-        supportedPythonRange = verification.supportedPythonRange,
-        managedPythonEnabled = state.MANAGED_PYTHON_ENABLED or "",
-        managedPythonStatus = state.MANAGED_PYTHON_STATUS or "",
-        managedPythonVersion = state.MANAGED_PYTHON_VERSION or "",
-        managedPythonRelease = state.MANAGED_PYTHON_RELEASE or "",
-        managedPythonPlatform = state.MANAGED_PYTHON_PLATFORM or "",
-        managedPythonArch = state.MANAGED_PYTHON_ARCH or "",
-        managedPythonUrl = state.MANAGED_PYTHON_URL or "",
-        managedPythonSha256Ok = state.MANAGED_PYTHON_SHA256_OK or "",
-        managedPythonPath = state.MANAGED_PYTHON_PATH or "",
-        managedPythonReplaced = state.MANAGED_PYTHON_REPLACED or "",
-        managedPythonRollback = state.MANAGED_PYTHON_ROLLBACK or "",
-        audioSeparatorImport = state.AUDIO_SEPARATOR_IMPORT or (verifiedRuntimeOk and "ok" or ""),
-        audioSeparatorDepsComplete = state.AUDIO_SEPARATOR_DEPS_COMPLETE or (verifiedRuntimeOk and "yes" or ""),
-        backendDepsComplete = state.BACKEND_DEPS_COMPLETE or "",
-        backendDepsReason = state.BACKEND_DEPS_REASON or "",
-        buildToolsMissing = state.BUILD_TOOLS_MISSING or "",
-        systemPythonPath = state.SYSTEM_PYTHON_PATH or "",
-        systemPythonVersion = state.SYSTEM_PYTHON_VERSION or "",
-        systemPythonUsed = state.SYSTEM_PYTHON_USED or "",
-        venvPythonPath = state.VENV_PYTHON_PATH or state.VENV_PYTHON or "",
-        torchVersion = checkProbe.torchVersion,
-        torchaudioVersion = checkProbe.torchaudioVersion,
-        torchvisionVersion = checkProbe.torchvisionVersion,
-        numpyVersion = checkProbe.numpyVersion,
-        numbaVersion = checkProbe.numbaVersion,
-        llvmliteVersion = checkProbe.llvmliteVersion,
-        audioSeparatorVersion = checkProbe.audioSeparatorVersion,
-        onnxruntimeVersion = checkProbe.onnxruntimeVersion,
-        torchSupported = checkProbe.torchSupported,
-        torchaudioPresent = checkProbe.torchaudioPresent,
-        runtimeDriftDetected = checkProbe.runtimeDriftDetected,
-        runtimeDriftReason = checkProbe.runtimeDriftReason,
-        runtimeDriftDetail = verifiedRuntimeOk and "" or checkProbe.runtimeDriftReason,
-        runtimeVerifyDetail = checkProbe.runtimeVerifyDetail,
-        pythonPath = verification.pythonPath,
-        ffmpegPath = verification.ffmpegPath,
-        runtimeBase = runtime.base,
-        status = state.STATUS or "",
-        bootstrapStatus = state.STATUS or "",
-        bootstrapReason = verifiedRuntimeOk and "" or (state.STATUS_REASON or ""),
-        verification = verifiedRuntimeOk and "ok" or "failed",
-        audioSeparator = verifiedRuntimeOk and "ok" or "",
-        stemwerkCore = verifiedRuntimeOk and "ok" or "",
-        deviceNames = deviceNames,
-        torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
-        cudaAvailable = checkProbe.cudaAvailable,
-        cudaCount = checkProbe.cudaCount,
-        torchHip = checkProbe.torchHip,
-        selectedTorchIndex = state.SELECTED_TORCH_INDEX or "",
-        selectedTorchStack = state.SELECTED_TORCH_STACK or "",
-        rocmDetectedDevices = state.ROCM_DETECTED_DEVICES or "",
-        rocmSelectedDevice = state.ROCM_SELECTED_DEVICE or "",
-        rocmFallbackReason = state.ROCM_FALLBACK_REASON or "",
-        drumsepStatus = drumsepStatus,
-        dksSupported = dksSupported,
-        normalStemsSupported = normalStemsSupported,
-        envJson = envJson,
-    }, deviceOut)
-
-    updateBootstrapEnv(stateFile, {
-        STATUS = state.STATUS or "",
-        STATUS_REASON = state.STATUS_REASON or "",
-        PROFILE = profile or "",
-        BACKEND = backend or "",
-        BACKEND_REASON = backendReason or "",
-        RUNTIME_VERIFY_DETAIL = checkProbe.runtimeVerifyDetail,
-        STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
-    })
-
-    if #adjustedErrors > 0 then
-        appendSetupLog(runtime, "Verify runtime errors: " .. table.concat(adjustedErrors, ", "), false)
-    end
     allOk = allOk and verifiedRuntimeOk
-
-    appendSetupLog(runtime, "Result: " .. (allOk and "OK (runtime checks passed)" or "FAIL (needs repair)"), false)
-    appendSetupLog(runtime, "Note: Check refreshed capabilities from current runtime probe.", false)
-
-    if runtime.base and runtime.base ~= "" then
-        updateBootstrapEnv(stateFile, {
-            RUNTIME_BASE = runtime.base,
-            STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
-        })
-    end
 
     local finalMessage = {}
     if allOk then
         finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
-        finalMessage[#finalMessage + 1] = "(Capabilities refreshed from current probe)"
+        finalMessage[#finalMessage + 1] = "No files or settings were changed."
     else
         finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
         finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
@@ -6116,7 +6018,10 @@ verifyExistingSetup = function(runtime, separatorScript)
         finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
     end
     finalMessage[#finalMessage + 1] = ""
-    finalMessage[#finalMessage + 1] = "Log: " .. tostring(logFile)
+    finalMessage[#finalMessage + 1] = "Detected backend: " .. tostring(backend)
+    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus)
+    finalMessage[#finalMessage + 1] = "DKS supported: " .. tostring(dksSupported)
+    finalMessage[#finalMessage + 1] = "Normal Stems supported: " .. tostring(normalStemsSupported)
 
     showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript)
 end
@@ -7183,9 +7088,11 @@ do
     end
 
     local runtime = getRuntimePaths()
-    setExt("runtimeBase", runtime.base)
+    if OS ~= "macOS" then
+        setExt("runtimeBase", runtime.base)
+    end
     local separatorScript = SCRIPT_DIR .. "audio_separator_process.py"
-    if fileExists(separatorScript) then
+    if OS ~= "macOS" and fileExists(separatorScript) then
         setExt("separatorScript", separatorScript)
     end
 
