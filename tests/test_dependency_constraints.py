@@ -1468,7 +1468,7 @@ def test_tooltip_lang_strings_keep_23_0_2_right_click_hint_compatibility():
         assert 'tooltip_lang = "Sprache wechseln. Rechtsklick: Tooltips ein/aus.",' in text
 
 
-def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
+def test_verify_only_computes_capabilities_without_publishing_current_runtime_probe():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
     assert "function firstNonEmpty(...)" in setup_internal
@@ -1482,14 +1482,17 @@ def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     assert "removeError(\"torch_runtime_unsupported\")" in setup_internal
     assert "removeError(\"torchaudio_missing_for_demucs\")" in setup_internal
     assert "local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0" in setup_internal
-    assert "writeCapabilities(capFile, {" in setup_internal
-    assert "verification = verifiedRuntimeOk and \"ok\" or \"failed\"" in setup_internal
-    assert "torchVersion = checkProbe.torchVersion" in setup_internal
-    assert "torchaudioVersion = checkProbe.torchaudioVersion" in setup_internal
-    assert "runtimeDriftDetected = checkProbe.runtimeDriftDetected" in setup_internal
+    verify_body = setup_internal.split("verifyExistingSetup = function(runtime, separatorScript)", 1)[1].split(
+        "-- (showExistingRuntimeSetupMenu removed", 1
+    )[0]
+    assert "writeCapabilities(capFile, {" not in verify_body
+    assert "updateBootstrapEnv(stateFile, {" not in verify_body
+    assert "appendSetupLog(" not in verify_body
+    assert "setExt(" not in verify_body
+    assert "local checkProbe = reconcileCheckVerification(" in verify_body
     assert "runtimeDriftDetected = runtimeDriftDetected" in setup_internal
     assert "runtimeDriftReason = runtimeDriftReason" in setup_internal
-    assert "updateBootstrapEnv(stateFile, {" in setup_internal
+    assert "verifyRuntimePaths(effectiveState, false)" in verify_body
 
 
 def test_post_bootstrap_trusts_verified_bootstrap_log_over_stale_probe_failures():
@@ -1513,7 +1516,7 @@ def test_post_bootstrap_trusts_verified_bootstrap_log_over_stale_probe_failures(
 def test_verify_only_accepts_intel_macos_cpu_fallback_when_imports_and_paths_are_ok():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
-    assert "function reconcileCheckVerification(state, verification, envJson, deviceNames, backend, backendReason, logFile)" in setup_internal
+    assert "function reconcileCheckVerification(state, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)" in setup_internal
     assert "local canAcceptMacIntelCpuFallback = (" in setup_internal
     assert 'OS == "macOS"' in setup_internal
     assert 'MAC_ARCH == "x86_64"' in setup_internal
@@ -1573,7 +1576,7 @@ def test_verify_only_prefers_current_macos_ffmpeg_and_python_over_stale_bootstra
     assert 'capState.FFMPEG_PATH or ""' in setup_internal
     assert "resolveUnixFfmpegFallback()" in setup_internal
     assert "local effectiveState = buildVerifyOnlyState(runtime, state, capState, readyState)" in setup_internal
-    assert "local verification = verifyRuntimePaths(effectiveState)" in setup_internal
+    assert "local verification = verifyRuntimePaths(effectiveState, false)" in setup_internal
 
 
 def test_verify_only_uses_ready_to_go_health_to_avoid_stale_macos_runtime_failures():
@@ -5180,7 +5183,9 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
 
     assert 'BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"' in script
     assert 'rm -rf "$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"' in script
-    assert 'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
+    assert "rsync -a --delete \\" in script
+    assert "--exclude='._*' --exclude='*.exe' --exclude='*.dll'" in script
+    assert '"$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
     assert 'cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF' in script
     assert 'payload_status=missing' in script
 
