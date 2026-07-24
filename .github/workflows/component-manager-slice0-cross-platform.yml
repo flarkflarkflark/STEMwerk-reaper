@@ -124,12 +124,34 @@ jobs:
           python scripts/verify_go_format.py --module-dir . --summary "$EVIDENCE_DIR/go-format-summary.json"
           python -m json.tool "$EVIDENCE_DIR/go-format-summary.json" >/dev/null
 
-      - name: Build, vet, and test
+      - name: Build and vet
         if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           go build ./...
           go vet ./... 2>&1 | tee "$EVIDENCE_DIR/vet.txt"
+
+      - name: Verify schema Git-blob authority
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        run: |
+          set -euo pipefail
+          if [[ '${{ inputs.mode }}' == xpg-002 ]]; then
+            python scripts/verify_schema_authority_test.py 2>&1 | tee "$EVIDENCE_DIR/schema-authority-tests.txt"
+          fi
+          python scripts/verify_schema_authority.py \
+            --repository .. \
+            --authority-dir experiments/component-manager-poa0/contract-v1/schemas \
+            --embedded-dir component-manager/schemas \
+            --manifest component-manager/schemas/SHA256SUMS \
+            --expected-count 21 \
+            --summary "$EVIDENCE_DIR/schema-authority-summary.json"
+          python scripts/verify_schema_authority.py --validate-summary "$EVIDENCE_DIR/schema-authority-summary.json"
+          go test -count=1 -run 'TestAuthoritativeSchemasByteEqualAndManifestPinned' ./schemas 2>&1 | tee "$EVIDENCE_DIR/schema-authority-runtime-embed.txt"
+
+      - name: Test
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        run: |
+          set -euo pipefail
           go test -count=1 ./... 2>&1 | tee "$EVIDENCE_DIR/tests.txt"
           go test -count=3 ./... 2>&1 | tee "$EVIDENCE_DIR/tests-repeat.txt"
           test "$(go list ./... | wc -l | tr -d ' ')" = 11
