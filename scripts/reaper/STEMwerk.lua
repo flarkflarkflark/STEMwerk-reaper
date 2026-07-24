@@ -2038,6 +2038,35 @@ applyPresetAll = function() GLUE_HELPERS.applyPresetAll(STEMS) end
 
 local dialogWorkflowSource = ""
 
+function intelMacDksPolicyBlocked()
+    return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")
+end
+
+function recordIntelMacDksPolicyBlock(source)
+    local selectedMode = source == DKS_WORKFLOW.SOURCE_EXTRACT and "kit_split" or "direct_kit"
+    local detail = table.concat({
+        "platform=macOS", "architecture=x86_64", "selected_mode=" .. selectedMode,
+        "policy_reason=unsupported_mac_intel", "DKS_SUPPORTED=false",
+        "worker_started=false", "handled=true", "fatal=false",
+    }, " ")
+    debugLog("intel_dks_policy_block " .. detail)
+    if SW_LOG and SW_LOG.logExecResult then
+        SW_LOG.logExecResult("intel_dks_policy_block", 0, detail)
+    end
+end
+
+function showIntelMacDksPolicyBlock(source)
+    recordIntelMacDksPolicyBlock(source)
+    local title = trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
+    local body = trSafeValue(
+        "drumsep_intel_mac_unsupported_body",
+        "Drum Kit Split is not available on Intel Mac in STEMwerk 2.3.0.6. Normal CPU stem separation, including the normal six-stem mode, remains available."
+    )
+    if reaper and type(reaper.ShowMessageBox) == "function" then
+        reaper.ShowMessageBox(tostring(body), tostring(title), 0)
+    end
+end
+
 local function clearDialogWorkflowSelection()
     dialogWorkflowSource = ""
     SETTINGS.workflowMode = ""
@@ -2048,27 +2077,44 @@ local function clearDialogWorkflowSelection()
 end
 
 local function selectDirectDrumKitWorkflow()
+    if intelMacDksPolicyBlocked() then
+        clearDialogWorkflowSelection()
+        showIntelMacDksPolicyBlock(DKS_WORKFLOW.SOURCE_DIRECT)
+        return false
+    end
     dialogWorkflowSource = DKS_WORKFLOW.SOURCE_DIRECT
     SETTINGS.workflowMode = DKS_WORKFLOW.WORKFLOW_DRUMKIT
     SETTINGS.workflowSource = DKS_WORKFLOW.SOURCE_DIRECT
     reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
     reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)
     activateWorkflowStemSet(true)
+    return true
 end
 
 local function selectExtractDrumKitWorkflow()
+    if intelMacDksPolicyBlocked() then
+        clearDialogWorkflowSelection()
+        showIntelMacDksPolicyBlock(DKS_WORKFLOW.SOURCE_EXTRACT)
+        return false
+    end
     dialogWorkflowSource = DKS_WORKFLOW.SOURCE_EXTRACT
     SETTINGS.workflowMode = DKS_WORKFLOW.WORKFLOW_DRUMKIT
     SETTINGS.workflowSource = DKS_WORKFLOW.SOURCE_EXTRACT
     reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
     reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_EXTRACT, false)
     activateWorkflowStemSet(true)
+    return true
 end
 
 restoreDialogWorkflowSelection = function()
     local mode = tostring(SETTINGS.workflowMode or "")
     local source = tostring(SETTINGS.workflowSource or "")
     local drumkit = mode == DKS_WORKFLOW.WORKFLOW_DRUMKIT and DKS_WORKFLOW.isDrumKitSource(source)
+    if drumkit and intelMacDksPolicyBlocked() then
+        clearDialogWorkflowSelection()
+        recordIntelMacDksPolicyBlock(source)
+        return
+    end
     if drumkit and source == DKS_WORKFLOW.SOURCE_EXTRACT then
         selectExtractDrumKitWorkflow()
         return
@@ -9085,7 +9131,9 @@ local function showIntelMacDrumsepUnsupportedMessage()
         "drumsep_intel_mac_unsupported_body",
         "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform."
     )
-    SW_SETUP.showMessageBox(title, body, 0)
+    if reaper and type(reaper.ShowMessageBox) == "function" then
+        reaper.ShowMessageBox(tostring(body), tostring(title), 0)
+    end
 end
 
 function renderResultTitleArea(ctx)
@@ -12555,21 +12603,23 @@ function renderMainColumns(ctx)
 
     presetY = presetY + presetSectionGap
 
-    if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
-    setTooltipWithShortcut(
-        col1X, presetY, colW, btnH,
-        trSafe("workflow_drumkit_label", "Direct Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "For drum-only tracks or samples. Splits the drum signal directly into kit parts."),
-        "Z", {170, 150, 240}
-    )
-    presetY = presetY + presetStep
+    if not intelMacDksPolicyBlocked() then
+        if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
+        setTooltipWithShortcut(
+            col1X, presetY, colW, btnH,
+            trSafe("workflow_drumkit_label", "Direct Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "For drum-only tracks or samples. Splits the drum signal directly into kit parts."),
+            "Z", {170, 150, 240}
+        )
+        presetY = presetY + presetStep
 
-    if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
-    setTooltipWithShortcut(
-        col1X, presetY, colW, btnH,
-        trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Quality mode for full mixes. Separates drums first, then splits them into kit parts."),
-        "X", {150, 132, 228}
-    )
-    presetY = presetY + presetSectionGap
+        if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
+        setTooltipWithShortcut(
+            col1X, presetY, colW, btnH,
+            trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Quality mode for full mixes. Separates drums first, then splits them into kit parts."),
+            "X", {150, 132, 228}
+        )
+        presetY = presetY + presetSectionGap
+    end
 
     if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals, true) then clearDialogWorkflowSelection(); applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
@@ -22607,7 +22657,7 @@ function runSeparationWorkflow()
     end
     if isDrumKitWorkflow and intelMacDrumsepUnsupported() then
         debugLog("Intel Mac DrumSep/DKS policy block: workflow aborted before runtime setup")
-        showIntelMacDrumsepUnsupportedMessage()
+        showIntelMacDksPolicyBlock(workflowSourceState)
         isProcessingActive = false
         return
     end
