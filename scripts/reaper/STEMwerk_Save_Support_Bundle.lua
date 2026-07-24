@@ -2292,6 +2292,160 @@ local function collectRuntimeLogs(runtimeDir, bundleDir, copiedFiles)
     return lines
 end
 
+local CURRENT_EVIDENCE_PHASES = {
+    { id = "verify", label = "Verify / Check existing setup" },
+    { id = "online_normal", label = "Online Normal Stems" },
+    { id = "online_drum", label = "Online Direct Kit or Kit Split" },
+    { id = "bundled_recovery", label = "Bundled recovery or rebuild" },
+    { id = "post_bundled_normal", label = "Post-bundled Normal Stems" },
+    { id = "post_bundled_drum", label = "Post-bundled Direct Kit or Kit Split" },
+}
+
+local CURRENT_EVIDENCE_ALLOWED = {
+    ["evidence.env"] = true,
+    ["phase_events.jsonl"] = true,
+    ["timing_events.jsonl"] = true,
+    ["console.log"] = true,
+    ["stdout.txt"] = true,
+    ["stderr.txt"] = true,
+    ["separation_log.txt"] = true,
+    ["output_validation.txt"] = true,
+    ["before.sha256"] = true,
+    ["after.sha256"] = true,
+    ["mutation_check.txt"] = true,
+    ["package_metadata.txt"] = true,
+}
+
+local function findCurrentEvidenceRoot(runtimeBase, cacheLogDir)
+    local candidates = {
+        joinPath(runtimeBase, "evidence", "current-session"),
+        joinPath(cacheLogDir, "support_evidence", "current-session"),
+    }
+    for _, candidate in ipairs(candidates) do
+        if fileExists(joinPath(candidate, "session.env")) then
+            return candidate
+        end
+    end
+    return ""
+end
+
+local function classifyOnnxFallback(bootstrapLog, runtimeState)
+    local text = tostring(readFile(bootstrapLog, "rb") or "")
+    local lower = text:lower()
+    local lookupFailed = lower:find("no matching distribution found for onnxruntime%-silicon") ~= nil
+        or lower:find("could not find a version that satisfies the requirement onnxruntime%-silicon") ~= nil
+    local fallbackAttempted = lower:find("falling back to onnxruntime", 1, true) ~= nil
+    local fallbackVersion = text:match("Successfully installed[^\r\n]-onnxruntime%-([%d%.]+)")
+        or text:match("[\r\n]onnxruntime=([%d%.]+)")
+        or ""
+    local runtimeHealthy = lower:find("runtime verification passed.", 1, true) ~= nil
+        and trim(runtimeState.STATUS or ""):lower() == "ok"
+        and trim(runtimeState.RUNTIME_VERIFY_DETAIL or ""):lower() == "ok"
+    local handled = lookupFailed and fallbackAttempted and fallbackVersion ~= "" and runtimeHealthy
+    local fatal = lookupFailed and not handled
+    return {
+        lookupFailed = lookupFailed,
+        fallbackAttempted = fallbackAttempted,
+        fallbackVersion = fallbackVersion,
+        runtimeHealthy = runtimeHealthy,
+        handled = handled,
+        fatal = fatal,
+    }
+end
+
+local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLogDir, bundleDir, copiedFiles, runtimeState)
+    local lines = {
+        "STEMwerk Support Evidence Manifest",
+        "schema=1",
+    }
+    local sourceRoot = findCurrentEvidenceRoot(runtimeBase, cacheLogDir)
+    local session = sourceRoot ~= "" and readEnvFile(joinPath(sourceRoot, "session.env")) or {}
+    local sessionId = trim(session.SESSION_ID or "")
+    local destinationRoot = joinPath(bundleDir, "current_session_evidence")
+    ensureDir(destinationRoot)
+    appendKey(lines, "source_root", sourceRoot ~= "" and sourceRoot or "missing")
+    appendKey(lines, "session_id", sessionId ~= "" and sessionId or "missing")
+    appendKey(lines, "session_started_utc", trim(session.SESSION_STARTED_UTC or "") ~= "" and session.SESSION_STARTED_UTC or "missing")
+
+    local included = 0
+    local missing = 0
+    local currentFatalErrors = 0
+    for _, phase in ipairs(CURRENT_EVIDENCE_PHASES) do
+        local phaseSource = sourceRoot ~= "" and joinPath(sourceRoot, phase.id) or ""
+        local evidencePath = phaseSource ~= "" and joinPath(phaseSource, "evidence.env") or ""
+        local evidence = evidencePath ~= "" and readEnvFile(evidencePath) or {}
+        local phaseSessionId = trim(evidence.SESSION_ID or "")
+        local phaseIdentity = trim(evidence.PHASE or "")
+        local identityMatches = fileExists(evidencePath)
+            and phaseIdentity == phase.id
+            and sessionId ~= ""
+            and phaseSessionId == sessionId
+        appendLine(lines, "")
+        appendLine(lines, "[phase " .. phase.id .. "]")
+        appendKey(lines, "label", phase.label)
+        appendKey(lines, "expected_source", evidencePath ~= "" and evidencePath or "missing")
+        if identityMatches then
+            included = included + 1
+            appendKey(lines, "selection", "included")
+            local phaseStatus = trim(evidence.STATUS or ""):lower()
+            appendKey(lines, "status", phaseStatus ~= "" and phaseStatus or "unknown")
+            appendKey(lines, "timestamp_utc", trim(evidence.TIMESTAMP_UTC or "") ~= "" and evidence.TIMESTAMP_UTC or "unknown")
+            appendKey(lines, "backend", trim(evidence.BACKEND or "") ~= "" and evidence.BACKEND or "unknown")
+            appendKey(lines, "device", trim(evidence.DEVICE or "") ~= "" and evidence.DEVICE or "unknown")
+            appendKey(lines, "runtime_arch", trim(evidence.RUNTIME_ARCH or "") ~= "" and evidence.RUNTIME_ARCH or "unknown")
+            appendKey(lines, "output_validation_reason", trim(evidence.OUTPUT_VALIDATION_REASON or "") ~= "" and evidence.OUTPUT_VALIDATION_REASON or "not_applicable")
+            appendKey(lines, "distribution", trim(evidence.DISTRIBUTION or "") ~= "" and evidence.DISTRIBUTION or "unknown")
+            local phaseFatal = tonumber(evidence.CURRENT_FATAL_ERROR_COUNT or "0") or 0
+            if phaseFatal == 0 and (phaseStatus == "fail" or phaseStatus == "failed" or phaseStatus == "error" or phaseStatus == "fatal") then
+                phaseFatal = 1
+            end
+            currentFatalErrors = currentFatalErrors + math.max(0, phaseFatal)
+            appendKey(lines, "current_fatal_error_count", tostring(math.max(0, phaseFatal)))
+            local phaseDestination = joinPath(destinationRoot, phase.id)
+            ensureDir(phaseDestination)
+            for _, fileName in ipairs(enumerateFiles(phaseSource)) do
+                if CURRENT_EVIDENCE_ALLOWED[fileName:lower()] then
+                    local ok, mode = copySupportTextFile(
+                        joinPath(phaseSource, fileName),
+                        joinPath(phaseDestination, fileName),
+                        1024 * 1024
+                    )
+                    if ok then
+                        copiedFiles[#copiedFiles + 1] = "current_session_evidence/" .. phase.id .. "/" .. fileName .. " (" .. mode .. ")"
+                    end
+                end
+            end
+        else
+            missing = missing + 1
+            appendKey(lines, "selection", "missing")
+            appendKey(lines, "warning", fileExists(evidencePath) and "session_or_phase_identity_mismatch" or "evidence_not_found")
+        end
+    end
+
+    local onnx = classifyOnnxFallback(joinPath(runtimeLogDir, "bootstrap.log"), runtimeState or {})
+    if onnx.fatal then currentFatalErrors = currentFatalErrors + 1 end
+    appendLine(lines, "")
+    appendLine(lines, "[error classification]")
+    appendKey(lines, "onnxruntime_silicon_lookup_failed", onnx.lookupFailed and "yes" or "no")
+    appendKey(lines, "handled_recovery_event", onnx.handled and "yes" or "no")
+    appendKey(lines, "local_onnxruntime_fallback_recorded", onnx.fallbackVersion ~= "" and "yes" or "no")
+    appendKey(lines, "local_onnxruntime_version", onnx.fallbackVersion ~= "" and onnx.fallbackVersion or "none")
+    appendKey(lines, "final_runtime_health", onnx.runtimeHealthy and "ok" or "not_proven")
+    appendKey(lines, "current_fatal_error_count", tostring(currentFatalErrors))
+    appendKey(lines, "current_fatal_errors", currentFatalErrors == 0 and "none" or tostring(currentFatalErrors))
+    appendKey(lines, "historical_errors_scope", "runtime_logs_except_current_bootstrap_and_current_session_evidence")
+    appendLine(lines, "")
+    appendKey(lines, "phases_expected", tostring(#CURRENT_EVIDENCE_PHASES))
+    appendKey(lines, "phases_included", tostring(included))
+    appendKey(lines, "phases_missing", tostring(missing))
+    appendKey(lines, "manifest_status", missing == 0 and currentFatalErrors == 0 and "complete" or "warning")
+
+    local manifestPath = joinPath(bundleDir, "support_evidence_manifest.txt")
+    writeFile(manifestPath, table.concat(lines, "\n") .. "\n", "wb")
+    copiedFiles[#copiedFiles + 1] = "support_evidence_manifest.txt"
+    return lines
+end
+
 local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFiles)
     local lines = {}
     local runsRoot = joinPath(cacheLogDir, "runs")
@@ -4046,6 +4200,19 @@ local function performBundleCollection()
     phaseDone("collect_recent_runs", recentRunsStartedAt)
     appendLine(diagnostics, "")
 
+    appendLine(diagnostics, "Current Session Evidence")
+    for _, line in ipairs(collectCurrentSessionEvidence(
+        runtimePaths.base,
+        runtimePaths.runtimeLogs,
+        cacheLogDir,
+        bundleDir,
+        copiedFiles,
+        runtimeState
+    )) do
+        appendLine(diagnostics, line)
+    end
+    appendLine(diagnostics, "")
+
     local drumsepDiagnosticsStartedAt = phaseStart("collect_drumsep_runtime")
     local drumsepDiagnostics = buildDrumsepRuntimeDiagnostics(runtimePaths.base, runtimePaths.runtimeState, runtimePaths.runtimeLogs, cacheLogDir)
     phaseDone("collect_drumsep_runtime", drumsepDiagnosticsStartedAt)
@@ -4173,6 +4340,7 @@ local function performBundleCollection()
         "- runtime state files from the STEMwerk state folder when present",
         "- runtime logs from the STEMwerk logs folder when present",
         "- recent persisted run diagnostics/logs",
+        "- support_evidence_manifest.txt and semantic current-session evidence when supplied",
         "- processing_summary.txt with recent processing speed/results",
         "- minimal temp_inventory.txt from recent STEMwerk temp folders",
         "- support_bundle_timings.txt with phase timing checkpoints",
