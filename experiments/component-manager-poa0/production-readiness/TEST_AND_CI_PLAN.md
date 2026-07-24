@@ -65,6 +65,14 @@ CI_GATE_COUNT=18
 
 SLICE_1_REQUIRED_GATES=gofmt/vet/test, static analysis, dependency/license audit when applicable, schema validation, generated drift, unit, contract and cross-platform compile
 
+SLICE_1_EXIT_EVIDENCE=four native jobs; positive/negative/fault fixture matrix; 100 deterministic repetitions per positive preview fixture; canonical preview bytes and digests equal across platforms; import graph and forbidden behavior clean; isolated license/vulnerability summary; clean worktrees; Contract-v1/schema equality; nine machine-readable artifact records per platform
+
+SLICE_1_NATIVE_RUNNERS=Linux x86_64; Windows x86_64; macOS Intel x86_64; macOS Apple Silicon arm64
+
+SLICE_1_ARTIFACT_CONTENTS=test-summary; fixture-matrix; preview-digests; determinism-table; import-graph; forbidden-behavior; security-summary; worktree-hygiene; gate-summary
+
+SLICE_1_EXIT_RESULT_MARKER=SLICE1_EXIT=PASS
+
 PRE_BETA_REQUIRED_GATES=1-13 plus migration and rollback/recovery, all claimed native adapters green
 
 PRE_RELEASE_REQUIRED_GATES=all 18 gates including installer and consumer smoke, SBOM and provenance

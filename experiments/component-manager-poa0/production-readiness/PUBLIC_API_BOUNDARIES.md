@@ -39,6 +39,23 @@ OVER_ABSTRACTION_FINDINGS=none
 
 API_BOUNDARY_STATUS=RESOLVED
 
+## SLICE-1 pure API subset
+
+SLICE-1 adds no service interface and implements neither `CatalogService.Refresh`
+nor any store. Its exact concrete pure surface is:
+
+- `artifact.Parse`, producing `artifact.Artifact`/`ArtifactSet`;
+- `provenance.Parse`, producing untrusted provenance facts;
+- `compatibility.Evaluate`, producing `compatibility.Result` from caller facts and
+  importing no generation or platform probe;
+- `resolution.Preview`, `resolution.CanonicalizePreview` and
+  `resolution.DerivePreviewDigest`, producing `ResolutionPreview` whose closed trust
+  representation can only be `UNVERIFIED`;
+- the existing parsers listed in `component-manager/docs/SLICE_1_SCOPE.md`.
+
+The names are normative future SLICE-1 symbols. No `Refresh`, store, installation,
+signature verification, trust, activation or platform-probe API belongs to SLICE-1.
+
 ## Commands
 
 All fifteen commands use a validated request, OperationID idempotency key, explicit authorization descriptor, context cancellation between atomic boundaries, bounded retry only for busy/transient errors, journal begin/events/terminal result, and structured progress events. Reuse of a key with different request digest is conflict. Each command fails closed before effects on invalid schema, privilege, trust or state.

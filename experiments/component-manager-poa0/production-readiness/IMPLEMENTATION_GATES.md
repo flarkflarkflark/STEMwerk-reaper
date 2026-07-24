@@ -15,10 +15,14 @@
 
 IMPLEMENTATION_GATE_COUNT=10
 
-GATES_READY=6
+GATES_READY=9
 
-GATES_BLOCKED=4
+GATES_BLOCKED=1
 
-BLOCKED_GATES=GATE-P2 pending SLICE-0 spike; GATE-P4 pending SLICE-0 implementation; GATE-P7 pending actual dependency candidates; GATE-P9 intentionally pending first mutation task
+BLOCKED_GATES=GATE-P9 intentionally pending first mutation task
 
-P0, P1, P3, P5, P6 and P8 are ready for SLICE-0 entry. A gate described as blocked is a chronological hold for the work it names, not a readiness blocker for earlier work. Gate state never grants implementation authority by itself.
+P2 and P4 passed through the approved SLICE-0 implementation and final corrected cross-platform evidence at `ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3`. P7 passed for the existing two pinned dependencies and is re-applied to every proposed dependency; SLICE-1 forbids new dependencies. P8 passed, including XPG-001 and XPG-002. Gate state never grants implementation authority by itself.
+
+SLICE_1_AUTHORIZATION_GATE=approved documentation-closure head plus separate explicit owner authorization naming component-manager/docs/SLICE_1_SCOPE.md
+
+SLICE_1_FINAL_EXIT_GATE=exactly one owner-approved full four-platform native dispatch on a pinned candidate head; same-head rerun only for evidenced infrastructure failure

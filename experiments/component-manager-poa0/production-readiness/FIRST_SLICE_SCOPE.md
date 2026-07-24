@@ -4,7 +4,7 @@ FIRST_SLICE_ID=SLICE-0
 
 FIRST_SLICE_TITLE=Production skeleton and contract bindings
 
-FIRST_SLICE_ALLOWED_PATHS=component-manager/go.mod; component-manager/go.sum only if an approved pinned dependency is selected; component-manager/contract/**; component-manager/identity/**; component-manager/version/**; component-manager/digest/**; component-manager/canonicaljson/**; component-manager/internal/schema/**; component-manager/testdata/**; component-manager/README.md; exact CI checks scoped to this module
+FIRST_SLICE_ALLOWED_PATHS=component-manager/go.mod; component-manager/go.sum only for the approved pinned dependencies; component-manager/pkg/contract/**; component-manager/pkg/identity/**; component-manager/pkg/version/**; component-manager/pkg/digest/**; component-manager/pkg/schemaversion/**; component-manager/pkg/platform/**; component-manager/pkg/component/**; component-manager/pkg/catalog/**; component-manager/internal/canonicaljson/**; component-manager/internal/schemavalidation/**; component-manager/schemas/**; component-manager/scripts/**; component-manager/docs/**; component-manager/README.md; .github/workflows/component-manager-slice0-cross-platform.yml
 
 FIRST_SLICE_FORBIDDEN_PATHS=all experiments/component-manager-poa0 POA/evidence/contract-v1 paths; runtime/model/consumer/installer/release paths; component-manager/internal/store/**; component-manager/internal/platform/**; component-manager/internal/helper/**; component-manager/internal/app mutation handlers
 
@@ -23,6 +23,8 @@ FIRST_SLICE_MAX_PUSH_COUNT=1
 FIRST_SLICE_IMPLEMENTATION_AUTHORIZATION_REQUIRED=yes
 
 FIRST_SLICE_SCOPE_STATUS=RESOLVED
+
+FIRST_SLICE_PATH_RECORD_CORRECTED_AT_SLICE1_CLOSURE=yes; this correction records the approved SLICE-0 repository reality and grants no new implementation scope
 
 FIRST_SLICE_READY_FOR_SEPARATE_IMPLEMENTATION_TASK=yes
 

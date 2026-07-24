@@ -21,9 +21,13 @@ OPTIONAL_DEPENDENCIES=CLI parser, structured logging, platform syscall support a
 
 SPIKE_REQUIRED_DEPENDENCIES=JSON Schema validator/generator; RFC 8785 canonical JSON; SQLite driver
 
-CGO_POLICY=TO_BE_DECIDED
+CGO_POLICY=disabled for SLICE-0 and SLICE-1; SQLite-driver spike must select and document the coherent later-slice policy before SLICE-2
 
 SQLITE_DRIVER_DECISION=spike_required
+
+SLICE_1_NEW_EXTERNAL_DEPENDENCIES=forbidden
+
+SLICE_1_ACCEPTED_DIRECT_DEPENDENCIES=github.com/santhosh-tekuri/jsonschema/v6@v6.0.2; github.com/gowebpki/jcs@v1.0.1
 
 DEPENDENCY_BUDGET_STATUS=RESOLVED
 

@@ -1,11 +1,38 @@
 # Readiness traceability
 
-Every approved Contract-v1 requirement maps to a production package/API or concrete value, storage authority where applicable, its normative schema, first realizing slice, test layer and implementation gate. Status READY means design-mapped, not implemented or authorized.
+Every approved Contract-v1 requirement maps to a production package/API or concrete value, storage authority where applicable, its normative schema, realization levels, test layer and implementation gate. Status READY means design-mapped, not implemented or authorized.
+
+## Realization-level model
+
+For every row below, the required fields are defined as follows. Unless the row is
+listed in the split table, `TYPE_LEVEL_SLICE`, `POLICY_LEVEL_SLICE`,
+`CAPABILITY_LEVEL_SLICE` and `FIRST_EXERCISED_SLICE` all equal its `Vertical slice`;
+`REVERIFIED_IN_SLICES` is that slice and every later slice consuming the requirement;
+`RATIONALE` is single-slice realization; and `SOURCE_SECTION` is the matching
+requirement row in `contract-v1/CONTRACT_V1_TRACEABILITY.md` and its referenced
+Contract-v1 section. Thus every one of the 65 rows has all eight required fields,
+while the following explicit splits override the defaults.
+
+| Requirement ID | TYPE_LEVEL_SLICE | POLICY_LEVEL_SLICE | CAPABILITY_LEVEL_SLICE | FIRST_EXERCISED_SLICE | REVERIFIED_IN_SLICES | RATIONALE | SOURCE_SECTION |
+|---|---|---|---|---|---|---|---|
+| CMV1-STATE-001 | SLICE-3 | SLICE-3 | SLICE-4 | SLICE-3 | SLICE-4 | no state capability in SLICE-1; pure value precedes stateful activation capability | Contract v1 §§16,19,21 |
+| CMV1-FAIL-001 | SLICE-0 | SLICE-1 | SLICE-1 | SLICE-0 | SLICE-1 | artifact type foundation precedes read-only validation policy | Contract v1 §§8,36 |
+| CMV1-FAIL-002 | SLICE-3 | SLICE-3 | SLICE-3 | SLICE-3 | SLICE-4 | mixed-generation rejection belongs to generation policy | Contract v1 §§14,20,36 |
+| CMV1-FAIL-003 | SLICE-1 | SLICE-1 | SLICE-3 | SLICE-1 | SLICE-3 | compatibility input is parsed in SLICE-1; generation decision is SLICE-3 | Contract v1 §§15,20,36 |
+| CMV1-FAIL-004 | SLICE-1 | SLICE-1 | SLICE-3 | SLICE-1 | SLICE-3 | unknown input is represented in SLICE-1; generation fails closed in SLICE-3 | Contract v1 §§15,20,36 |
+| CMV1-FAIL-005 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | run-pin capability | Contract v1 §§25,36 |
+| CMV1-FAIL-006 | SLICE-2 | SLICE-2 | SLICE-2 | SLICE-2 | SLICE-4 | receipt/state publication capability | Contract v1 §§18,36 |
+| CMV1-FAIL-007 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | lease identity capability | Contract v1 §§26,36 |
+| CMV1-FAIL-008 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | conservative GC capability | Contract v1 §§27,36 |
+| CMV1-FAIL-009 | SLICE-1 | SLICE-1 | SLICE-6 | SLICE-1 | SLICE-6 | provenance/signature structure precedes trust decision | Contract v1 §§9,38,39 |
+| CMV1-FAIL-010 | SLICE-0 | SLICE-0 | SLICE-0 | SLICE-0 | every parser slice | parser fail-closed baseline is continuously regressed | Contract v1 §§6,22,36 |
+| CMV1-FAIL-011 | SLICE-0 | SLICE-0/SLICE-1 | SLICE-1 | SLICE-0 | SLICE-1 | catalog duplicate policy exists in SLICE-0 and is exercised by preview | Contract v1 §§10,28,36 |
+| CMV1-FAIL-012 | SLICE-0 | SLICE-1/SLICE-3 | SLICE-3 | SLICE-0 | SLICE-1,SLICE-3 | catalog digest conflict precedes generation-level decision | Contract v1 §§7,20,28,36 |
 
 | Contract requirement | ADR | Package | Interface | Storage object | Schema | Vertical slice | Test layer | Implementation gate | Status |
 |---|---|---|---|---|---|---|---|---|---|
 | CMV1-CORE-001 | none | component | none (concrete value) | components/artifacts | component | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
-| CMV1-STATE-001 | none | state | none (concrete value) | state | desired-state | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
+| CMV1-STATE-001 | none | state | none (concrete value) | state | desired-state | SLICE-3 | 1/2 | P4/P5/P6/P7/P9 | READY |
 | CMV1-RECEIPT-001 | none | receipt | ReceiptStore | receipts | receipt | SLICE-2 | 3/4/5 | P4/P5/P6/P7/P9 | READY |
 | CMV1-GEN-001 | none | generation/state/lifecycle | GenerationStore/CompatibilityResolver | generations/selectors/journals | generation | SLICE-3 | 1/2 | P4/P5/P6/P7/P9 | READY |
 | CMV1-GEN-002 | none | generation/state/lifecycle | GenerationStore/CompatibilityResolver | generations/selectors/journals | selector | SLICE-4 | 5/6/13 | P4/P5/P6/P7/P9 | READY |
@@ -33,15 +60,15 @@ Every approved Contract-v1 requirement maps to a production package/API or concr
 | CMV1-HELPER-001 | none | internal/platform/helperprotocol | HelperClient | none | helper-result | SLICE-9 | 9/10/13 | P4/P5/P6/P7/P9 | READY |
 | CMV1-ERROR-001 | none | diagnostics | DiagnosticSink | diagnostics | error | SLICE-8 | 11/12 | P4/P5/P6/P7/P9 | READY |
 | CMV1-FAIL-001 | none | contract plus owning policy package | none (concrete value) | none | artifact | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
-| CMV1-FAIL-002 | none | contract plus owning policy package | none (concrete value) | none | generation | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
+| CMV1-FAIL-002 | none | contract plus owning policy package | none (concrete value) | none | generation | SLICE-3 | 1/2 | P4/P5/P6/P7 | READY |
 | CMV1-FAIL-003 | none | contract plus owning policy package | none (concrete value) | none | generation | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
 | CMV1-FAIL-004 | none | contract plus owning policy package | none (concrete value) | none | generation | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
-| CMV1-FAIL-005 | none | contract plus owning policy package | none (concrete value) | none | run-pin | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
-| CMV1-FAIL-006 | none | contract plus owning policy package | none (concrete value) | none | receipt | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
-| CMV1-FAIL-007 | none | contract plus owning policy package | none (concrete value) | none | lease | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
-| CMV1-FAIL-008 | none | contract plus owning policy package | none (concrete value) | none | generation | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
+| CMV1-FAIL-005 | none | contract plus owning policy package | none (concrete value) | none | run-pin | SLICE-5 | 1/2 | P4/P5/P6/P7 | READY |
+| CMV1-FAIL-006 | none | contract plus owning policy package | none (concrete value) | none | receipt | SLICE-2 | 1/2 | P4/P5/P6/P7 | READY |
+| CMV1-FAIL-007 | none | contract plus owning policy package | none (concrete value) | none | lease | SLICE-5 | 1/2 | P4/P5/P6/P7 | READY |
+| CMV1-FAIL-008 | none | contract plus owning policy package | none (concrete value) | none | generation | SLICE-5 | 1/2 | P4/P5/P6/P7 | READY |
 | CMV1-FAIL-009 | none | contract plus owning policy package | none (concrete value) | none | component | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
-| CMV1-FAIL-010 | none | contract plus owning policy package | none (concrete value) | none | selector | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
+| CMV1-FAIL-010 | none | contract plus owning policy package | none (concrete value) | none | selector | SLICE-0 | 1/2 | P4/P5/P6/P7 | READY |
 | CMV1-FAIL-011 | none | contract plus owning policy package | none (concrete value) | none | component | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
 | CMV1-FAIL-012 | none | contract plus owning policy package | none (concrete value) | none | generation | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
 | CMV1-TRUST-001 | ADR-001 | trust | TrustVerifier | trust | official-trust-root | SLICE-6 | 2/7/9 | P4/P5/P6/P7/P9 | READY |

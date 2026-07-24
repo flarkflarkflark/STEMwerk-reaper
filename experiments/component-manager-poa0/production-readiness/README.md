@@ -24,5 +24,10 @@ Production readiness is READY_FOR_FIRST_VERTICAL_SLICE. The production core has 
 | Risks | RISK_REGISTER.md |
 | First bounded implementation task | FIRST_SLICE_SCOPE.md |
 | Requirement mapping | READINESS_TRACEABILITY.md |
+| HYBRID roadmap and SLICE-1 architecture decision | SLICE_1_AND_ROADMAP_ARCHITECTURE_DECISION.md |
+
+The executable proposed scope for SLICE-1 is
+`component-manager/docs/SLICE_1_SCOPE.md`. It remains subject to explicit owner
+approval and separate implementation authorization.
 
 These are design records, not runtime configuration. Provisional platform paths are adapter configuration, never identities. No functional production code, database, helper, installer, signing infrastructure, network access, runtime access or consumer integration is present.
