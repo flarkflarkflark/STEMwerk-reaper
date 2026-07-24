@@ -49,13 +49,11 @@ class ModuleIntegrityTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.module = self.root / "module"
         self.module.mkdir()
-        (self.module / "go.mod").write_text(
-            "module example.test/module\n\ngo 1.24.0\n\nrequire example.test/dependency v1.0.0\n",
-            encoding="utf-8",
+        (self.module / "go.mod").write_bytes(
+            b"module example.test/module\n\ngo 1.24.0\n\nrequire example.test/dependency v1.0.0\n",
         )
-        (self.module / "go.sum").write_text(
-            "example.test/dependency v1.0.0 h1:checksum\n",
-            encoding="utf-8",
+        (self.module / "go.sum").write_bytes(
+            b"example.test/dependency v1.0.0 h1:checksum\n",
         )
         (self.root / "README.md").write_text("fixture\n", encoding="utf-8")
         self.fake_go = self.root / "fake_go.py"
