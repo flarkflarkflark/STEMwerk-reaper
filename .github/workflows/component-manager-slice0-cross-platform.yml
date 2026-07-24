@@ -102,6 +102,9 @@ jobs:
           go mod download
           python scripts/verify_module_integrity.py --module-dir . --evidence-dir "$EVIDENCE_DIR"
           python scripts/verify_module_integrity.py --validate-summary "$EVIDENCE_DIR/module-integrity-summary.json"
+          module_check_status=$(git status --porcelain=v1 --untracked-files=no)
+          printf '%s' "$module_check_status" | tee "$EVIDENCE_DIR/worktree-status-after-module-check.txt"
+          test -z "$module_check_status"
           cp "$EVIDENCE_DIR/modules-after.txt" "$EVIDENCE_DIR/modules.txt"
           go list -deps ./... | tee "$EVIDENCE_DIR/dependencies.txt"
           test "$(go list -m -f '{{if and (not .Main) (not .Indirect)}}{{.Path}}{{end}}' all | sed '/^$/d' | wc -l | tr -d ' ')" = 2
@@ -206,8 +209,15 @@ jobs:
           git grep -nE '"(database/sql|net/http|net|os/exec|syscall|unsafe)"' -- '*.go' ':!**/*_test.go' >> "$findings" || true
           git grep -niE '(sql\.Open|http\.(Get|Post|Do)|net\.Dial|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY)' -- '*.go' ':!**/*_test.go' >> "$findings" || true
           test ! -s "$findings"
-          test -z "$(git status --porcelain=v1 --untracked-files=no)"
           echo PASS > "$EVIDENCE_DIR/forbidden-status.txt"
+
+      - name: Verify final worktree hygiene
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 --untracked-files=no | tee "$EVIDENCE_DIR/final-worktree-status.txt"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          echo PASS > "$EVIDENCE_DIR/worktree-hygiene-status.txt"
 
       - name: Verify licenses and workflow syntax with product Go
         if: inputs.mode == 'full' && matrix.security
