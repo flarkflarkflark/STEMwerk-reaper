@@ -1,5 +1,5 @@
 name: Component Manager SLICE-0 Cross-Platform Gate
-run-name: ${{ github.event_name == 'push' && 'component-manager-slice0-xpg001-toolchain-isolation-only' || format('SLICE-0 cross-platform {0} @ {1}', inputs.mode, inputs.expected_head) }}
+run-name: ${{ github.event_name == 'push' && (github.event.before == '0c37bc97fbc65b86e42f0392d717bf7f1aa28862' && 'component-manager-slice0-xpg001-toolchain-isolation-only' || github.event.before == '1aacb2c3e07197e095a7c15d2d2414b31669e9b8' && 'component-manager-slice0-xpg002-only' || 'component-manager-slice0-cross-platform-gate-only') || format('SLICE-0 cross-platform {0} @ {1}', inputs.mode, inputs.expected_head) }}
 
 on:
   push:
@@ -17,6 +17,7 @@ on:
         options:
           - full
           - xpg-001
+          - xpg-002
       expected_head:
         description: Exact commit to verify
         required: true
@@ -34,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.mode == 'xpg-001' && '[{"name":"XPG-001 Linux x86_64","slug":"xpg001-linux-x86-64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true}]' || '[{"name":"Linux x86_64","slug":"linux-x86_64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true},{"name":"Windows x86_64","slug":"windows-x86_64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false},{"name":"macOS Intel x86_64","slug":"macos-intel-x86_64","runner":"macos-15-intel","goos":"darwin","goarch":"amd64","security":false},{"name":"macOS Apple Silicon arm64","slug":"macos-arm64","runner":"macos-15","goos":"darwin","goarch":"arm64","security":false}]') }}
+        include: ${{ fromJSON(inputs.mode == 'xpg-001' && '[{"name":"XPG-001 Linux x86_64","slug":"xpg001-linux-x86-64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true}]' || inputs.mode == 'xpg-002' && '[{"name":"XPG-002 Windows x86_64","slug":"xpg002-windows-x86-64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false}]' || '[{"name":"Linux x86_64","slug":"linux-x86_64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true},{"name":"Windows x86_64","slug":"windows-x86_64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false},{"name":"macOS Intel x86_64","slug":"macos-intel-x86_64","runner":"macos-15-intel","goos":"darwin","goarch":"amd64","security":false},{"name":"macOS Apple Silicon arm64","slug":"macos-arm64","runner":"macos-15","goos":"darwin","goarch":"arm64","security":false}]') }}
     env:
       CGO_ENABLED: "0"
       EXPECTED_HEAD: ${{ inputs.expected_head }}
@@ -59,7 +60,7 @@ jobs:
           cache-dependency-path: component-manager/go.sum
 
       - name: Verify native platform identity
-        if: inputs.mode == 'full'
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         env:
           EXPECTED_GOOS: ${{ matrix.goos }}
           EXPECTED_GOARCH: ${{ matrix.goarch }}
@@ -95,37 +96,25 @@ jobs:
           } | tee "$EVIDENCE_DIR/platform.txt"
 
       - name: Verify module and dependency graph
-        if: inputs.mode == 'full'
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
-          hash_file() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
-          mod_before=$(hash_file go.mod)
-          sum_before=$(hash_file go.sum)
           go mod download
-          go mod verify | tee "$EVIDENCE_DIR/go-mod-verify.txt"
-          go list -m all | tee "$EVIDENCE_DIR/modules.txt"
+          python scripts/verify_module_integrity.py --module-dir . --evidence-dir "$EVIDENCE_DIR"
+          python scripts/verify_module_integrity.py --validate-summary "$EVIDENCE_DIR/module-integrity-summary.json"
+          cp "$EVIDENCE_DIR/modules-after.txt" "$EVIDENCE_DIR/modules.txt"
           go list -deps ./... | tee "$EVIDENCE_DIR/dependencies.txt"
           test "$(go list -m -f '{{if and (not .Main) (not .Indirect)}}{{.Path}}{{end}}' all | sed '/^$/d' | wc -l | tr -d ' ')" = 2
           cgo_packages=$(go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d')
           test -z "$cgo_packages"
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-          mod_after=$(hash_file go.mod)
-          sum_after=$(hash_file go.sum)
-          test "$mod_before" = "$mod_after"
-          test "$sum_before" = "$sum_after"
-          {
-            echo "go_mod_sha_before=$mod_before"
-            echo "go_mod_sha_after=$mod_after"
-            echo "go_sum_sha_before=$sum_before"
-            echo "go_sum_sha_after=$sum_after"
-            echo "direct_dependency_count=2"
-            echo "transitive_dependency_count=11"
-            echo "cgo_dependency_detected=no"
-          } > "$EVIDENCE_DIR/module-gate.txt"
+          cp "$EVIDENCE_DIR/module-integrity-summary.json" "$EVIDENCE_DIR/module-gate.json"
+
+      - name: Run module-integrity fault-injection tests
+        if: inputs.mode == 'xpg-002'
+        run: python scripts/verify_module_integrity_test.py 2>&1 | tee "$EVIDENCE_DIR/module-integrity-tests.txt"
 
       - name: Format, build, vet, and test
-        if: inputs.mode == 'full'
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           test -z "$(gofmt -l .)"
@@ -136,7 +125,7 @@ jobs:
           test "$(go list ./... | wc -l | tr -d ' ')" = 11
 
       - name: Prove race status under mandatory CGO-disabled policy
-        if: inputs.mode == 'full'
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           set +e
@@ -153,7 +142,7 @@ jobs:
           fi
 
       - name: Verify schemas, JCS, content IDs, and catalog
-        if: inputs.mode == 'full'
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           test "$(find schemas -name '*.schema.json' -type f | wc -l | tr -d ' ')" = 21
@@ -177,7 +166,7 @@ jobs:
           } > "$EVIDENCE_DIR/cross-platform-sets.txt"
 
       - name: Verify forbidden behavior remains absent
-        if: inputs.mode == 'full'
+        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           findings="$EVIDENCE_DIR/forbidden-findings.txt"
@@ -231,7 +220,7 @@ jobs:
           "$tool_dir/govulncheck" ./... 2>&1 | tee "$EVIDENCE_DIR/govulncheck.txt"
 
       - name: Write machine-readable summary
-        if: inputs.mode == 'full' && success()
+        if: (inputs.mode == 'full' || inputs.mode == 'xpg-002') && success()
         env:
           PLATFORM_NAME: ${{ matrix.name }}
           RUNNER_LABEL: ${{ matrix.runner }}
@@ -270,7 +259,7 @@ jobs:
           test ! -s "$EVIDENCE_DIR/worktree-status.txt"
 
       - name: Upload verification evidence
-        if: inputs.mode == 'full' && always()
+        if: (inputs.mode == 'full' || inputs.mode == 'xpg-002') && always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: slice0-cross-platform-${{ matrix.slug }}
