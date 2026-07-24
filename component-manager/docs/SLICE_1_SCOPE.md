@@ -14,15 +14,84 @@ VERTICAL_DEMO=caller-supplied catalog bytes -> catalogschema and structural vali
 
 ## Inputs and outputs
 
-INPUTS=caller-supplied catalog bytes; caller-supplied selector; caller-supplied compatibility context; explicit input-size limit
+INPUTS=caller-supplied catalog bytes; caller-supplied ComponentSelector; caller-supplied compatibility Context; explicit input-size limit
 
 OUTPUTS=ResolutionPreview; resolution_preview_digest; typed contract error on rejection
 
 `ResolutionPreview` contains the selected component identity, kind and version;
 artifact descriptors; provenance facts; structural signature presence as
-`UNVERIFIED`; compatibility result (`Runnable`, `NotRunnable` or explained
-rejection); canonicalization metadata; deterministic diagnostics. It contains no
+`UNVERIFIED`; compatibility `ContractStatus`, `Runnable` and ordered typed reasons;
+canonicalization metadata; deterministic diagnostics. It contains no
 installation instruction, local path, mutable state reference or trusted decision.
+
+## Component selection
+
+SELECTOR_TYPE=resolution.ComponentSelector
+
+SELECTOR_FIELDS=ComponentID identity.ComponentID; Version resolution.VersionSelector
+
+`VersionSelector` is a closed discriminated union with exactly one active variant
+chosen from these two variants:
+
+| Variant | Fields | Exact comparison |
+|---|---|---|
+| Software | `SoftwareVersion version.SoftwareVersion` | exact SemVer text including build metadata and exact non-negative package revision; case-sensitive |
+| Model | `ModelRevision version.ModelRevision`; `ArtifactDigest digest.Digest` | exact case-sensitive publisher revision and exact SHA-256 digest |
+
+`version.SoftwareVersion` is the existing composite value containing SemVer and
+package revision; no new generic component-version scalar is introduced. Model
+digest is required because publisher revision alone does not provide immutable-byte
+identity. Selection occurs only within the supplied catalog: exactly one match is
+required. Zero or multiple matches fail closed. Duplicate identity/version and
+same-version/different-digest checks run before selection. This is not the Contract-v1
+generation selector, active-generation selector or desired-state selector, and it
+does no filesystem lookup.
+
+## Compatibility boundary
+
+COMPATIBILITY_STATUS_MODEL=Compatible|Incompatible|Unknown
+
+RUNNABLE_MAPPING=Compatible:true; Incompatible:false; Unknown:false
+
+`compatibility.Result` contains `ContractStatus compatibility.ContractStatus`,
+`Runnable bool`, and `Reasons []compatibility.Reason`. `Unknown` remains distinct
+from `Incompatible`; neither is runnable. An empty, structurally valid compatibility
+predicate object produces `Compatible`, `Runnable=true`, and an empty reason list.
+A field required by a declared predicate but absent from caller context produces
+`Unknown`, `Runnable=false`, and its typed unknown reason.
+
+| CONTEXT_FIELD | TYPE | SOURCE_REQUIREMENT | REQUIRED_OR_OPTIONAL | UNKNOWN_BEHAVIOR | COMPARISON_RULE | REASON_CODE |
+|---|---|---|---|---|---|---|
+| Platform | `platform.Platform` | Contract v1 §15 platform | required when predicate declared | Unknown | exact validated enum equality | `platform_unknown` when absent; `platform_mismatch` when unequal |
+| Architecture | `platform.Architecture` | Contract v1 §15 architecture | required when predicate declared | Unknown | exact validated enum equality | `architecture_unknown` when absent; `architecture_mismatch` when unequal |
+| Backend | `platform.Backend` | Contract v1 §15 backend | required when predicate declared | Unknown | exact validated enum equality | `backend_unknown` when absent; `backend_mismatch` when unequal |
+| ComponentKind | `component.ComponentKind` | Contract v1 §§10,15 components | required when predicate declared | Unknown | exact seven-kind enum equality | `component_kind_unknown` when absent; `component_kind_mismatch` when unequal |
+| SchemaVersion | `schemaversion.Version` | Contract v1 §§15,37 catalog schema | required when predicate declared | Unknown | supported major/minor window via existing value semantics | `schema_capability_unknown` |
+
+| §15 predicate domain | SLICE-1 classification | Rationale |
+|---|---|---|
+| platform; architecture; backend; component kind; catalog schema | SLICE1_EVALUATED | caller and selected-component facts have existing value types |
+| runtime/Python capability; component relations | SLICE1_PARSED_ONLY | preserve declared facts; closure needs a generation candidate |
+| models; flows | SLICE1_PARSED_ONLY | preserve catalog facts; multi-component/flow readiness is SLICE-3 or later |
+| helper contract | DEFERRED_TO_SLICE3_OR_LATER | helper capability and negotiation are later slices |
+
+| COMPATIBILITY_FACT_FIELD | SOURCE | PROJECTED_IN_SLICE1 | EVALUATED_IN_SLICE1 | DEFERRED_SLICE | RATIONALE |
+|---|---|---|---|---|---|
+| ComponentID | component schema | yes | no | none | selection identity, not a compatibility predicate |
+| ComponentKind | component schema | yes | yes | none | existing closed enum |
+| SoftwareVersion or ModelRevision | component schema/Contract §§7,12 | yes | no | none | exact selection identity |
+| ArtifactID and Digest | artifact schema | yes | no | none | immutable selection evidence |
+| Provenance facts | provenance schema | yes | no | SLICE-6 policy | structure only; always unverified |
+| Platform/Architecture/Backend predicates | component compatibility | yes | yes | none | caller context has existing values |
+| SchemaVersion predicate | component/catalog schema | yes | yes | none | existing schema-version semantics |
+| Runtime/Python/component/model/flow relations | component compatibility | yes | no | SLICE-3 | requires generation-level closure |
+
+REASON_PRIORITY_ORDER=platform_unknown; platform_mismatch; architecture_unknown; architecture_mismatch; backend_unknown; backend_mismatch; component_kind_unknown; component_kind_mismatch; schema_capability_unknown; required_relation_unknown; incompatible_declared_constraint
+
+Reasons are closed typed codes, ordered first by the above normative priority and
+then lexically by code as a stable tie-break. Map iteration order and free-form
+strings never define semantics. Compatibility results are domain outcomes, not
+automatically `contract.Error`.
 
 ## Requirement boundary
 
@@ -36,7 +105,7 @@ OUT_OF_SCOPE_REQUIREMENTS=CMV1-STATE-001 capability; CMV1-FAIL-002; CMV1-FAIL-00
 
 ALLOWED_PACKAGES=future pkg/artifact; future pkg/provenance; future pkg/compatibility; future pkg/resolution; existing pkg/catalog; existing pkg/component; existing pkg/identity; existing pkg/version; existing pkg/digest; existing pkg/platform; existing pkg/schemaversion; existing pkg/contract; existing internal/canonicaljson; existing internal/schemavalidation; existing schemas
 
-ALLOWED_TYPES=future artifact.Artifact; future artifact.ArtifactSet; future provenance.Provenance; future compatibility.Context; future compatibility.Result; future compatibility.Status; future resolution.Selector; future resolution.ResolutionPreview; future resolution.TrustRepresentation; existing catalog.Catalog; existing catalog.Component; existing component.ComponentKind; existing identity.ComponentID; existing identity.ArtifactID; existing version.CatalogVersion; existing digest.Digest; existing schemaversion.Version; existing contract.Category; existing contract.Error
+ALLOWED_TYPES=future artifact.Artifact; future artifact.ArtifactSet; future provenance.Provenance; future compatibility.Context; future compatibility.Result; future compatibility.ContractStatus; future compatibility.Reason; future resolution.ComponentSelector; future resolution.VersionSelector; future resolution.ResolutionPreview; future resolution.TrustRepresentation; existing catalog.Catalog; existing catalog.Component; existing component.ComponentKind; existing identity.ComponentID; existing identity.ArtifactID; existing version.SoftwareVersion; existing version.ModelRevision; existing version.CatalogVersion; existing digest.Digest; existing schemaversion.Version; existing contract.Category; existing contract.Error
 
 ALLOWED_FUNCTIONS=future artifact.Parse; future provenance.Parse; future compatibility.Evaluate; future resolution.Preview; future resolution.CanonicalizePreview; future resolution.DerivePreviewDigest; existing catalog.ParseBytes; existing catalog.ParseReader; existing identity.ParseComponentID; existing identity.ParseArtifactID; existing component.ParseKind; existing digest.Parse; existing contract.ValidateJSON; existing canonicaljson.Canonicalize
 
@@ -45,15 +114,22 @@ service interface or effect abstraction is authorized. `ResolutionPreview` trust
 represented by a closed domain type whose only constructible SLICE-1 value is
 `UNVERIFIED`.
 
+FUTURE_ALLOWED_PATHS=component-manager/pkg/artifact/**; component-manager/pkg/provenance/**; component-manager/pkg/compatibility/**; component-manager/pkg/resolution/**; component-manager/testdata/slice1/**; .github/workflows/component-manager-slice1-cross-platform.yml
+
 FORBIDDEN_APIS=CatalogService.Refresh; any Store; Install; VerifySignature; Trust; Revocation; Activate; filesystem APIs; network APIs; database/sql; clock/time reads; random sources; platform probes
 
 ALLOWED_PATHS=component-manager/pkg/artifact/**; component-manager/pkg/provenance/**; component-manager/pkg/compatibility/**; component-manager/pkg/resolution/**; component-manager/pkg/catalog/**; component-manager/pkg/component/**; component-manager/pkg/identity/**; component-manager/pkg/version/**; component-manager/pkg/digest/**; component-manager/pkg/platform/**; component-manager/pkg/schemaversion/**; component-manager/pkg/contract/**; component-manager/internal/canonicaljson/**; component-manager/internal/schemavalidation/**; component-manager/testdata/slice1/**; component-manager/docs/SLICE_1_SCOPE.md; component-manager/docs/CONTRACT_TRACEABILITY.md; component-manager/scripts/**; .github/workflows/component-manager-slice1-cross-platform.yml
 
-FORBIDDEN_PATHS=component-manager/go.mod; component-manager/go.sum; component-manager/schemas/**; experiments/component-manager-poa0/contract-v1/**; experiments/component-manager-poa0/fixtures/**; experiments/component-manager-poa0/go/**; experiments/component-manager-poa0/rust/**; experiments/component-manager-poa0/harness/**; experiments/component-manager-poa0/reports/**; component-manager/internal/store/**; component-manager/internal/platform/**; component-manager/internal/helper/**; runtime/**; models/**; installer/**; REAPER/**
+FORBIDDEN_PATHS=component-manager/go.mod; component-manager/go.sum; component-manager/schemas/**; experiments/component-manager-poa0/contract-v1/**; experiments/component-manager-poa0/fixtures/**; experiments/component-manager-poa0/go/**; experiments/component-manager-poa0/rust/**; experiments/component-manager-poa0/harness/**; experiments/component-manager-poa0/reports/**; component-manager/internal/store/**; component-manager/internal/platform/**; component-manager/internal/helper/**
 
 Allowed and forbidden patterns are evaluated against repository-relative paths;
 unknown paths fail closed. Existing schemas may be read and tested through the
 embedded API, but their paths and bytes are frozen.
+
+Contract-v1 examples and negative fixtures are read directly from the frozen
+authority whenever possible. A `testdata/slice1` copy is allowed only for a
+slice-specific transformation or fixture with no authority equivalent; every copied
+authority fixture records its source path and SHA-256 and has a byte-drift guard.
 
 ## Dependency policy
 
@@ -69,7 +145,20 @@ EXIT_GATES=four native jobs PASS; artifacts 4/4 valid; all positive, negative an
 
 POSITIVE_FIXTURES=seven-flow catalog; runtime.main; runtime.drumsep; model component; artifact descriptor; provenance; structurally valid signature envelope; runnable compatibility context; multiple valid artifact selections
 
-NEGATIVE_FIXTURES=malformed JSON; oversized input; unsupported schema major; duplicate component identity; same version/different digest; digest mismatch; missing selector target; malformed signature envelope; unknown compatibility; incompatible backend; incompatible platform; incompatible architecture; malformed provenance; missing required fields; unknown enums; canonicalization/digest mismatch
+NEGATIVE_FIXTURES=malformed JSON; oversized input; unsupported schema major; duplicate component identity before selection; same version/different digest before selection; digest mismatch; missing selector target; ambiguous selector target; malformed signature envelope; unknown compatibility; incompatible backend; incompatible platform; incompatible architecture; malformed provenance; missing required fields; unknown enums; canonicalization/digest mismatch
+
+SELECTOR_FIXTURES=software component exact match; model component exact revision-plus-digest match; missing target; ambiguous target; duplicate rejected before selection; same-version/different-digest rejected before selection
+
+| Failure or result | Existing category/result | Rule |
+|---|---|---|
+| malformed JSON, schema or signature-envelope structure | `schema_invalid` | typed `contract.Error`; malformed signature is never success |
+| invalid component/artifact identity | `identity_invalid` | typed `contract.Error` |
+| invalid software or model version | `version_invalid` | typed `contract.Error` |
+| same version with different digest or digest mismatch | `artifact_digest_mismatch` | typed `contract.Error` |
+| duplicate, missing selector target, ambiguous selector target or invalid catalog relation | `catalog_invalid` | typed `contract.Error` |
+| compatible | domain result `Compatible`, runnable | not a contract error |
+| incompatible | domain result `Incompatible`, not runnable | preserve typed ordered reasons |
+| missing fact or unresolved relation | domain result `Unknown`, not runnable | preserve typed ordered reasons |
 
 FAULT_INJECTION=truncation; reader errors; limit boundary; duplicate JSON members under an explicit reject policy; Unicode/normalization; malformed nested objects; empty arrays; deterministic serialization; machine-readable summary-write failure outside product code; artifact-upload failure classified as CI infrastructure failure
 

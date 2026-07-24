@@ -20,12 +20,12 @@ In each row, API lists exported types/interfaces; deps are allowed internal impo
 | trust | trust policy and roots | Verifier, RootStore, Decision | identity, provenance, contract | transport, SQLite | no | yes | no | policy vectors |
 | signature | signature envelopes/mechanism | Verifier, Envelope | digest, canonicaljson, contract | trust policy, network | no | yes | no | crypto vectors |
 | revocation | rotation/revocation policy | Provider, Evaluator, Snapshot | trust, signature, identity, contract | network transport | no | yes | no | policy matrix |
-| catalog | catalog records and read-only projection; trust-aware service begins SLICE-6 | Catalog, CatalogService | component, artifact, provenance, contract; trust/revocation only from SLICE-6 | CLI, SQLite, concrete trust/revocation before SLICE-6 | no | yes | no | schema/sequence |
+| catalog | catalog records and read-only projection; trust-aware service begins SLICE-6 | Catalog, CatalogService | component, artifact, provenance, contract | CLI, SQLite, concrete trust/revocation before SLICE-6 | no | yes | no | schema/sequence |
 | component | component aggregate | Component, RuntimeRole | identity, version, artifact, provenance, contract | store, CLI | no | yes | no | invariants |
 | receipt | immutable receipt aggregate | Receipt, ReceiptStore | component, artifact, digest, contract | SQLite, CLI | no | yes | no | contract store |
 | generation | immutable generation aggregate | Generation, GenerationStore | component, identity, digest, contract | selector, SQLite | no | yes | no | invariants |
-| compatibility | declarative compatibility over caller-supplied facts | Resolver, Result | component, contract | generation, platform probes directly | no | yes | no | target matrix |
-| resolution | deterministic read-only resolution preview | ResolutionPreview, Selector, TrustRepresentation | artifact, provenance, component, catalog, compatibility, identity, digest, canonicaljson, contract | generation, trust, revocation, stores, platform, network, clock, random | no | yes | no | vertical preview |
+| compatibility | declarative compatibility over caller-supplied facts | Context, Facts, ContractStatus, Result, Reason | component, platform values, schemaversion, contract | generation, platform probes directly | no | yes | no | target matrix |
+| resolution | deterministic read-only resolution preview | ResolutionPreview, ComponentSelector, VersionSelector, TrustRepresentation | artifact, provenance, component, catalog, compatibility, identity, version, digest, canonicaljson, contract | generation, state, trust, revocation, stores, platform adapters, network, clock, random | no | yes | no | vertical preview |
 | state | desired state and selector policy | DesiredState, Store, SelectorPublisher | generation, identity, contract | SQLite shape, CLI | no | yes | no | contract/fault |
 | lifecycle | activation, rollback and recovery policy | Activator, RecoveryService | generation, state, receipt, compatibility, journal, contract | concrete adapters | no | no | no | orchestration fakes |
 | lease | conservative lease policy | Lease, LeaseStore | identity, generation, clock, contract | OS calls, SQLite | no | yes | no | PID-reuse matrix |
@@ -58,6 +58,6 @@ IMPORT_CYCLE_COUNT=0
 
 PACKAGE_PLAN_STATUS=RESOLVED
 
-SLICE-1 also extracts `pkg/artifact` and `pkg/provenance` as the normative owners of their descriptors. Existing `pkg/catalog.Artifact` may be a temporary alias or controlled adapter only; duplicate independent artifact domain types are forbidden. SLICE-1's structural signature projection is owned by `resolution` and can represent only `UNVERIFIED`; the cryptographic `signature` package remains a SLICE-6 capability.
+SLICE-1 also extracts `pkg/artifact` and `pkg/provenance` as the normative owners of their descriptors. Existing `pkg/catalog.Artifact` may be a temporary alias or controlled adapter only and is removed before the SLICE-1 exit gate; duplicate independent artifact domain types are forbidden. SLICE-1's structural signature projection is owned by `resolution` and can represent only `UNVERIFIED`; the cryptographic `signature` package remains a SLICE-6 capability.
 
 The apparent lifecycle package has policy composition but no I/O; all effects pass through injected interfaces. The application layer alone orders transactions. Storage implements interfaces and never owns policy. The viewmodel exposes domain projections, never database rows.

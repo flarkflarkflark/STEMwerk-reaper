@@ -73,6 +73,12 @@ SLICE_1_ARTIFACT_CONTENTS=test-summary; fixture-matrix; preview-digests; determi
 
 SLICE_1_EXIT_RESULT_MARKER=SLICE1_EXIT=PASS
 
+SLICE_1_COMPATIBILITY_TESTS=empty predicates Compatible/runnable/no reasons; Compatible distinct; Incompatible distinct/not runnable; Unknown distinct/not runnable; missing declared context becomes Unknown; fixed reason priority plus lexical tie-break; repeated and cross-platform reason order equality
+
+SLICE_1_SELECTOR_TESTS=software exact SemVer-text-plus-package-revision match; model exact case-sensitive publisher-revision-plus-digest match; zero match; multiple match; duplicate rejected before selection; same-version/different-digest rejected before selection; no generation-selector interpretation
+
+SLICE_1_FIXTURE_AUTHORITY=read frozen Contract-v1 fixtures directly where possible; transformed or slice-specific copies only under testdata/slice1 with source path, SHA-256 and byte-drift guard
+
 PRE_BETA_REQUIRED_GATES=1-13 plus migration and rollback/recovery, all claimed native adapters green
 
 PRE_RELEASE_REQUIRED_GATES=all 18 gates including installer and consumer smoke, SBOM and provenance

@@ -46,8 +46,9 @@ nor any store. Its exact concrete pure surface is:
 
 - `artifact.Parse`, producing `artifact.Artifact`/`ArtifactSet`;
 - `provenance.Parse`, producing untrusted provenance facts;
-- `compatibility.Evaluate`, producing `compatibility.Result` from caller facts and
-  importing no generation or platform probe;
+- `compatibility.Evaluate(Context, Facts)`, producing a `compatibility.Result` with
+  preserved `Compatible`/`Incompatible`/`Unknown` status, runnable mapping and
+  deterministic typed reasons, importing no generation or platform probe;
 - `resolution.Preview`, `resolution.CanonicalizePreview` and
   `resolution.DerivePreviewDigest`, producing `ResolutionPreview` whose closed trust
   representation can only be `UNVERIFIED`;
@@ -55,6 +56,10 @@ nor any store. Its exact concrete pure surface is:
 
 The names are normative future SLICE-1 symbols. No `Refresh`, store, installation,
 signature verification, trust, activation or platform-probe API belongs to SLICE-1.
+The selector input is `resolution.ComponentSelector{ComponentID, Version}` where
+`Version` is the closed software/model union defined in `SLICE_1_SCOPE.md`; the
+generic name `resolution.Selector` is forbidden to prevent collision with the
+generation selector.
 
 ## Commands
 

@@ -25,9 +25,9 @@ while the following explicit splits override the defaults.
 | CMV1-FAIL-007 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | lease identity capability | Contract v1 §§26,36 |
 | CMV1-FAIL-008 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | SLICE-5 | conservative GC capability | Contract v1 §§27,36 |
 | CMV1-FAIL-009 | SLICE-1 | SLICE-1 | SLICE-6 | SLICE-1 | SLICE-6 | provenance/signature structure precedes trust decision | Contract v1 §§9,38,39 |
-| CMV1-FAIL-010 | SLICE-0 | SLICE-0 | SLICE-0 | SLICE-0 | every parser slice | parser fail-closed baseline is continuously regressed | Contract v1 §§6,22,36 |
-| CMV1-FAIL-011 | SLICE-0 | SLICE-0/SLICE-1 | SLICE-1 | SLICE-0 | SLICE-1 | catalog duplicate policy exists in SLICE-0 and is exercised by preview | Contract v1 §§10,28,36 |
-| CMV1-FAIL-012 | SLICE-0 | SLICE-1/SLICE-3 | SLICE-3 | SLICE-0 | SLICE-1,SLICE-3 | catalog digest conflict precedes generation-level decision | Contract v1 §§7,20,28,36 |
+| CMV1-FAIL-010 | SLICE-0 | SLICE-0 | SLICE-0 | SLICE-0 | SLICE-0,SLICE-1,SLICE-2,SLICE-3,SLICE-4,SLICE-5,SLICE-6,SLICE-7,SLICE-8,SLICE-9,SLICE-10 | parser fail-closed baseline is continuously regressed | Contract v1 §§6,22,36 |
+| CMV1-FAIL-011 | SLICE-0 | SLICE-0 | SLICE-1 | SLICE-0 | SLICE-0,SLICE-1 | catalog duplicate policy exists in SLICE-0 and is exercised by preview | Contract v1 §§10,28,36 |
+| CMV1-FAIL-012 | SLICE-0 | SLICE-1 | SLICE-3 | SLICE-0 | SLICE-0,SLICE-1,SLICE-3 | catalog digest conflict precedes generation-level decision | Contract v1 §§7,20,28,36 |
 
 | Contract requirement | ADR | Package | Interface | Storage object | Schema | Vertical slice | Test layer | Implementation gate | Status |
 |---|---|---|---|---|---|---|---|---|---|

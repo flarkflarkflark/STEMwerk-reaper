@@ -18,6 +18,8 @@ non-breaking migration.
 
 ROADMAP_OPTION=HYBRID
 
+SLICE1_VERTICAL_OUTPUT=ResolutionPreview
+
 SLICE_NUMBERING=SLICE-0..SLICE-10_UNCHANGED
 
 REQUIREMENT_REALIZATION_LEVELS=TYPE_LEVEL_SLICE; POLICY_LEVEL_SLICE; CAPABILITY_LEVEL_SLICE
@@ -37,17 +39,27 @@ revocation decision.
 
 - `pkg/artifact` is the normative owner of `Artifact` and `ArtifactSet`.
   `pkg/catalog.Artifact` may temporarily be a documented alias or adapter while
-  callers migrate. Independent duplicate artifact domain types are forbidden.
+  callers migrate. It is removed before the SLICE-1 exit gate; SLICE-2 never sees
+  the alias. Independent duplicate artifact domain types are forbidden.
 - `pkg/provenance` owns parsed provenance facts without deciding trust.
 - `pkg/compatibility` evaluates caller-supplied declarative facts and MUST NOT import
   `pkg/generation` or probe a platform.
 - `pkg/resolution` composes only pure read-only domain packages and owns
-  `ResolutionPreview` and `resolution_preview_digest` derivation.
+  `ResolutionPreview`, `ComponentSelector`, its closed `VersionSelector`, and
+  `resolution_preview_digest` derivation. `ComponentSelector` is catalog-local and
+  cannot represent the generation selector from Contract v1 §22.
 - `pkg/catalog` MUST NOT import concrete trust or revocation packages before
   SLICE-6.
 - No new service interface is introduced. SLICE-1 uses concrete pure functions;
   `Refresh`, stores, installation, signature verification, trust and activation are
   excluded.
+
+Compatibility preserves Contract v1 §15's `Compatible`, `Incompatible` and
+`Unknown` as a closed `ContractStatus`. Only `Compatible` is runnable;
+`Incompatible` and `Unknown` are not runnable and remain distinguishable. Reasons
+are closed typed codes ordered by the fixed priority in `SLICE_1_SCOPE.md` and then
+lexically by code. An empty valid predicate set is `Compatible` with no reasons;
+missing context for a declared predicate is `Unknown`.
 
 ## Signature and trust boundary
 
@@ -59,7 +71,10 @@ unsigned input.
 
 The domain representation has one constructible state: `UNVERIFIED`. Caller-supplied
 `trust_status` is input data, never a policy decision. SLICE-1 cannot construct
-`trusted` or `verified`.
+`trusted` or `verified`. During SLICE-1 the existing `catalog.TrustStatus string` is
+replaced in the resolution path by the closed `TrustRepresentation`; no parallel
+long-lived trust representation is permitted and the string does not cross the
+`ResolutionPreview` boundary.
 
 ## Error decision
 
@@ -71,7 +86,32 @@ SLICE-1 must use the demonstrably applicable member. A required rejection withou
 such a member blocks implementation and requires a separately authorized Contract-v1
 decision; it may not invent a category.
 
+## Later HYBRID phases
+
+SLICE-6 first adds pure cryptographic verification and trust/revocation policy over
+caller-supplied material. Stateful enrollment, root mutation, monotone offline
+snapshots and persisted revocation/catalog sequence evidence follow within SLICE-6
+only after their mutation authorization and storage gates. Slice numbering is not
+changed by this internal phase boundary.
+
 ## Governance
+
+## Owner review controls
+
+- [ ] Exact SLICE-1 scope and vertical demonstration accepted
+- [ ] Realization-level traceability accepted
+- [ ] Package graph and API subset accepted
+- [ ] Compatibility tri-state and reason ordering accepted
+- [ ] ComponentSelector semantics accepted
+- [ ] Entry and exit evidence accepted
+- [ ] Governance and mutation budgets accepted
+- [ ] Error, signature and UNVERIFIED trust boundaries accepted
+
+All eight controls remain unchecked while this decision is proposed. Checking them
+requires a separate owner-review action and still does not itself authorize
+implementation.
+
+## Governance execution
 
 The SLICE-1 implementation branch is `slice/1-read-only-resolution-preview`, based
 on the approved documentation-closure head. It permits at most five content commits,

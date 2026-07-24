@@ -21,7 +21,7 @@ GATES_BLOCKED=1
 
 BLOCKED_GATES=GATE-P9 intentionally pending first mutation task
 
-P2 and P4 passed through the approved SLICE-0 implementation and final corrected cross-platform evidence at `ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3`. P7 passed for the existing two pinned dependencies and is re-applied to every proposed dependency; SLICE-1 forbids new dependencies. P8 passed, including XPG-001 and XPG-002. Gate state never grants implementation authority by itself.
+P2's JCS and runtime-schema-tool portions and P4 passed through the approved SLICE-0 implementation and final corrected cross-platform evidence at `ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3`. `SCHEMA_BINDINGS_PLAN.md` still records `SCHEMA_GENERATOR=TO_BE_SELECTED`: SLICE-1 introduces no generated binding, and any proposal to do so reopens the generator portion of P2 before merge. P7 passed for the existing two pinned dependencies and is re-applied to every proposed dependency; SLICE-1 forbids new dependencies. P8 passed, including XPG-001 and XPG-002. Gate state never grants implementation authority by itself.
 
 SLICE_1_AUTHORIZATION_GATE=approved documentation-closure head plus separate explicit owner authorization naming component-manager/docs/SLICE_1_SCOPE.md
 
