@@ -16,6 +16,7 @@ on:
         type: choice
         options:
           - full
+          - linux-security
           - xpg-001
           - xpg-002
       expected_head:
@@ -35,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.mode == 'xpg-001' && '[{"name":"XPG-001 Linux x86_64","slug":"xpg001-linux-x86-64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true}]' || inputs.mode == 'xpg-002' && '[{"name":"XPG-002 Windows x86_64","slug":"xpg002-windows-x86-64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false}]' || '[{"name":"Linux x86_64","slug":"linux-x86_64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true},{"name":"Windows x86_64","slug":"windows-x86_64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false},{"name":"macOS Intel x86_64","slug":"macos-intel-x86_64","runner":"macos-15-intel","goos":"darwin","goarch":"amd64","security":false},{"name":"macOS Apple Silicon arm64","slug":"macos-arm64","runner":"macos-15","goos":"darwin","goarch":"arm64","security":false}]') }}
+        include: ${{ fromJSON(inputs.mode == 'linux-security' && '[{"name":"Linux x86_64","slug":"linux-x86_64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true}]' || inputs.mode == 'xpg-001' && '[{"name":"XPG-001 Linux x86_64","slug":"xpg001-linux-x86-64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true}]' || inputs.mode == 'xpg-002' && '[{"name":"XPG-002 Windows x86_64","slug":"xpg002-windows-x86-64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false}]' || '[{"name":"Linux x86_64","slug":"linux-x86_64","runner":"ubuntu-latest","goos":"linux","goarch":"amd64","security":true},{"name":"Windows x86_64","slug":"windows-x86_64","runner":"windows-latest","goos":"windows","goarch":"amd64","security":false},{"name":"macOS Intel x86_64","slug":"macos-intel-x86_64","runner":"macos-15-intel","goos":"darwin","goarch":"amd64","security":false},{"name":"macOS Apple Silicon arm64","slug":"macos-arm64","runner":"macos-15","goos":"darwin","goarch":"arm64","security":false}]') }}
     env:
       CGO_ENABLED: "0"
       EXPECTED_HEAD: ${{ inputs.expected_head }}
@@ -60,7 +61,7 @@ jobs:
           cache-dependency-path: component-manager/go.sum
 
       - name: Verify native platform identity
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         env:
           EXPECTED_GOOS: ${{ matrix.goos }}
           EXPECTED_GOARCH: ${{ matrix.goarch }}
@@ -96,7 +97,7 @@ jobs:
           } | tee "$EVIDENCE_DIR/platform.txt"
 
       - name: Verify module and dependency graph
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           go mod download
@@ -121,24 +122,26 @@ jobs:
         run: python scripts/verify_go_format_test.py 2>&1 | tee "$EVIDENCE_DIR/go-format-tests.txt"
 
       - name: Verify tracked Go formatting
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           python scripts/verify_go_format.py --module-dir . --summary "$EVIDENCE_DIR/go-format-summary.json"
           python -m json.tool "$EVIDENCE_DIR/go-format-summary.json" >/dev/null
 
       - name: Build and vet
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           go build ./...
           go vet ./... 2>&1 | tee "$EVIDENCE_DIR/vet.txt"
 
       - name: Verify schema Git-blob authority
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
+        env:
+          VERIFICATION_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          if [[ '${{ inputs.mode }}' == xpg-002 ]]; then
+          if [[ "$VERIFICATION_MODE" == xpg-002 ]]; then
             python scripts/verify_schema_authority_test.py 2>&1 | tee "$EVIDENCE_DIR/schema-authority-tests.txt"
           fi
           python scripts/verify_schema_authority.py \
@@ -152,7 +155,7 @@ jobs:
           go test -count=1 -run 'TestAuthoritativeSchemasByteEqualAndManifestPinned' ./schemas 2>&1 | tee "$EVIDENCE_DIR/schema-authority-runtime-embed.txt"
 
       - name: Test
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           go test -count=1 ./... 2>&1 | tee "$EVIDENCE_DIR/tests.txt"
@@ -160,7 +163,7 @@ jobs:
           test "$(go list ./... | wc -l | tr -d ' ')" = 11
 
       - name: Prove race status under mandatory CGO-disabled policy
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           set +e
@@ -177,12 +180,12 @@ jobs:
           fi
 
       - name: Verify schemas, JCS, content IDs, and catalog
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           test "$(find schemas -name '*.schema.json' -type f | wc -l | tr -d ' ')" = 21
           test "$(wc -l < schemas/SHA256SUMS | tr -d ' ')" = 21
-          remote_refs=$( { grep -R -E '"\$ref"[[:space:]]*:[[:space:]]*"https?://' schemas/*.schema.json || true; } | wc -l | tr -d ' ')
+          remote_refs=$( { grep -R -E "\"\\\$ref\"[[:space:]]*:[[:space:]]*\"https?://" schemas/*.schema.json || true; } | wc -l | tr -d ' ')
           test "$remote_refs" = 0
           go test -count=1 -run 'TestAuthoritativeSchemasByteEqualAndManifestPinned' ./schemas 2>&1 | tee "$EVIDENCE_DIR/schema-drift.txt"
           go test -count=1 -run 'Test(AllSchemasLoad|AllContractExamplesValidate|RepresentativeNegativeFixturesReject|CatalogSchemaValidation|SchemaValidationRejects)' ./pkg/contract 2>&1 | tee "$EVIDENCE_DIR/schema-validation.txt"
@@ -201,7 +204,7 @@ jobs:
           } > "$EVIDENCE_DIR/cross-platform-sets.txt"
 
       - name: Verify forbidden behavior remains absent
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           findings="$EVIDENCE_DIR/forbidden-findings.txt"
@@ -212,7 +215,7 @@ jobs:
           echo PASS > "$EVIDENCE_DIR/forbidden-status.txt"
 
       - name: Verify final worktree hygiene
-        if: inputs.mode == 'full' || inputs.mode == 'xpg-002'
+        if: inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002'
         run: |
           set -euo pipefail
           git status --porcelain=v1 --untracked-files=no | tee "$EVIDENCE_DIR/final-worktree-status.txt"
@@ -220,7 +223,7 @@ jobs:
           echo PASS > "$EVIDENCE_DIR/worktree-hygiene-status.txt"
 
       - name: Verify licenses and workflow syntax with product Go
-        if: inputs.mode == 'full' && matrix.security
+        if: (inputs.mode == 'full' || inputs.mode == 'linux-security') && matrix.security
         run: |
           set -euo pipefail
           tool_dir="$RUNNER_TEMP/stemwerk-slice0-tools"
@@ -242,14 +245,14 @@ jobs:
           echo PASS > "$EVIDENCE_DIR/security-dependency-status.txt"
 
       - name: Set up isolated security-tool Go 1.25.11
-        if: inputs.mode == 'full' && matrix.security
+        if: (inputs.mode == 'full' || inputs.mode == 'linux-security') && matrix.security
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version: 1.25.11
           cache: false
 
       - name: Scan vulnerabilities with isolated security-tool Go
-        if: inputs.mode == 'full' && matrix.security
+        if: (inputs.mode == 'full' || inputs.mode == 'linux-security') && matrix.security
         run: |
           set -euo pipefail
           test "$(go env GOVERSION)" = go1.25.11
@@ -262,7 +265,7 @@ jobs:
           "$tool_dir/govulncheck" ./... 2>&1 | tee "$EVIDENCE_DIR/govulncheck.txt"
 
       - name: Write machine-readable summary
-        if: (inputs.mode == 'full' || inputs.mode == 'xpg-002') && success()
+        if: (inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002') && success()
         env:
           PLATFORM_NAME: ${{ matrix.name }}
           RUNNER_LABEL: ${{ matrix.runner }}
@@ -301,7 +304,7 @@ jobs:
           test ! -s "$EVIDENCE_DIR/worktree-status.txt"
 
       - name: Upload verification evidence
-        if: (inputs.mode == 'full' || inputs.mode == 'xpg-002') && always()
+        if: (inputs.mode == 'full' || inputs.mode == 'linux-security' || inputs.mode == 'xpg-002') && always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: slice0-cross-platform-${{ matrix.slug }}
