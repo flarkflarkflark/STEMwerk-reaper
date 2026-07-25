@@ -14,6 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "component-manager/scripts/verify_slice1_documentation.py"
+REVIEW_HEAD = "856b5bc0643fe3fc6effb824b195d15fa3abf758"
+DOCUMENTATION_BASE = "ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3"
+APPROVAL_HEAD = "0199c870ef143d67017571b777b2193b1ed80902"
 FILES = [
     "experiments/component-manager-poa0/production-readiness/VERTICAL_SLICES.md",
     "experiments/component-manager-poa0/production-readiness/READINESS_TRACEABILITY.md",
@@ -30,13 +33,20 @@ FILES = [
 
 
 class DocumentationCheckerTests(unittest.TestCase):
-    def fixture(self) -> tuple[Path, str]:
+    def fixture(self, ref: str | None = REVIEW_HEAD) -> tuple[Path, str]:
         temporary = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, temporary)
         for relative in FILES:
             target = temporary / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(ROOT / relative, target)
+            if ref is None:
+                shutil.copy2(ROOT / relative, target)
+            else:
+                content = subprocess.run(
+                    ["git", "-C", str(ROOT), "show", f"{ref}:{relative}"],
+                    check=True, capture_output=True,
+                ).stdout
+                target.write_bytes(content)
         subprocess.run(["git", "init", "-q"], cwd=temporary, check=True)
         subprocess.run(["git", "config", "user.name", "Fixture"], cwd=temporary, check=True)
         subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=temporary, check=True)
@@ -48,10 +58,12 @@ class DocumentationCheckerTests(unittest.TestCase):
         ).stdout.strip()
         return temporary, base
 
-    def run_checker(self, root: Path, base: str | None) -> subprocess.CompletedProcess[str]:
+    def run_checker(self, root: Path, base: str | None, mode: str | None = "review") -> subprocess.CompletedProcess[str]:
         command = [sys.executable, str(CHECKER), "--repository", str(root)]
         if base is not None:
             command.extend(["--base-ref", base])
+        if mode is not None:
+            command.extend(["--mode", mode])
         return subprocess.run(command, text=True, capture_output=True)
 
     def mutate(self, root: Path, relative: str, old: str, new: str) -> None:
@@ -60,18 +72,127 @@ class DocumentationCheckerTests(unittest.TestCase):
         self.assertIn(old, text)
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-    def assert_fails(self, root: Path, base: str) -> None:
-        result = self.run_checker(root, base)
+    def assert_fails(self, root: Path, base: str, mode: str = "review") -> subprocess.CompletedProcess[str]:
+        result = self.run_checker(root, base, mode)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["result"], "FAIL")
+        return result
+
+    def assert_error_code(self, root: Path, base: str, mode: str, code: str) -> None:
+        result = self.assert_fails(root, base, mode)
+        codes = {error["code"] for error in json.loads(result.stdout)["errors"]}
+        self.assertIn(code, codes, result.stdout)
 
     def commit(self, root: Path, message: str) -> None:
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", message], cwd=root, check=True)
 
-    def test_current_documents_pass(self) -> None:
-        result = self.run_checker(ROOT, "ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3")
+    def test_current_documents_pass_approved_mode(self) -> None:
+        result = self.run_checker(ROOT, DOCUMENTATION_BASE, "approved")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["mode"], "approved")
+
+    def test_review_mode_passes_on_immutable_review_head_documents(self) -> None:
+        root, base = self.fixture(REVIEW_HEAD)
+        result = self.run_checker(root, base, "review")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["mode"], "review")
+
+    def test_missing_mode_fails_closed(self) -> None:
+        root, base = self.fixture()
+        result = self.run_checker(root, base, None)
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"], "FAIL")
+        self.assertEqual(payload["errors"][0]["code"], "mode_missing")
+
+    def test_unknown_mode_fails_closed(self) -> None:
+        root, base = self.fixture()
+        result = self.run_checker(root, base, "sideways")
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"], "FAIL")
+        self.assertEqual(payload["errors"][0]["code"], "mode_invalid")
+
+    def test_review_mode_rejects_approved_documents(self) -> None:
+        root, base = self.fixture(None)
+        self.assert_error_code(root, base, "review", "review_status_invalid")
+
+    def test_review_mode_rejects_checked_owner_controls(self) -> None:
+        root, base = self.fixture(None)
+        self.assert_error_code(root, base, "review", "review_checkbox_state_invalid")
+
+    def test_approved_mode_rejects_proposed_status(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "Status: APPROVED_BY_OWNER", "Status: PROPOSED_FOR_OWNER_APPROVAL")
+        self.assert_error_code(root, base, "approved", "approved_status_invalid")
+
+    def test_approved_mode_rejects_zero_checked_controls(self) -> None:
+        root, base = self.fixture(None)
+        path = root / FILES[3]
+        path.write_text(path.read_text().replace("- [x]", "- [ ]"), encoding="utf-8")
+        self.assert_error_code(root, base, "approved", "approved_checkbox_state_invalid")
+
+    def test_approved_mode_rejects_six_checked_controls(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "- [x] Total HYBRID roadmap approved", "- [ ] Total HYBRID roadmap approved")
+        self.assert_error_code(root, base, "approved", "approved_checkbox_state_invalid")
+
+    def test_approved_mode_rejects_checked_implementation_control(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "- [ ] Implementation may be authorized", "- [x] Implementation may be authorized")
+        self.assert_error_code(root, base, "approved", "approved_checkbox_state_invalid")
+
+    def test_approved_mode_rejects_implementation_authorized_yes(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[4], "IMPLEMENTATION_AUTHORIZED=no", "IMPLEMENTATION_AUTHORIZED=yes")
+        self.assert_fails(root, base, "approved")
+
+    def test_approved_mode_rejects_authorized_implementation_status(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "SLICE1_IMPLEMENTATION_STATUS=NOT_AUTHORIZED", "SLICE1_IMPLEMENTATION_STATUS=AUTHORIZED")
+        self.assert_error_code(root, base, "approved", "implementation_authorization_overclaim")
+
+    def test_approved_mode_rejects_missing_review_head(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "OWNER_APPROVED_REVIEW_HEAD=856b5bc0643fe3fc6effb824b195d15fa3abf758\n\n", "")
+        self.assert_error_code(root, base, "approved", "approved_review_head_invalid")
+
+    def test_approved_mode_rejects_malformed_review_head(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "OWNER_APPROVED_REVIEW_HEAD=856b5bc0643fe3fc6effb824b195d15fa3abf758", "OWNER_APPROVED_REVIEW_HEAD=856b5bc")
+        self.assert_error_code(root, base, "approved", "approved_review_head_invalid")
+
+    def test_approved_mode_rejects_missing_approval_date(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "OWNER_APPROVAL_DATE=2026-07-25\n\n", "")
+        self.assert_error_code(root, base, "approved", "approval_date_invalid")
+
+    def test_approved_mode_rejects_malformed_approval_date(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[3], "OWNER_APPROVAL_DATE=2026-07-25", "OWNER_APPROVAL_DATE=2026-13-99")
+        self.assert_error_code(root, base, "approved", "approval_date_invalid")
+
+    def test_approved_mode_still_detects_architecture_drift(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[4], "Compatible:true; Incompatible:false", "Compatible:false; Incompatible:true")
+        self.assert_fails(root, base, "approved")
+
+    def test_approved_mode_still_detects_forbidden_path(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[5], "# STEMwerk", "# Changed STEMwerk")
+        self.commit(root, "change contract")
+        self.assert_error_code(root, base, "approved", "changed_path_forbidden")
+
+    def test_approved_mode_still_detects_packagegraph_drift(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[2], "| component, platform values, schemaversion, contract |", "| component, generation, platform values, schemaversion, contract |")
+        self.assert_fails(root, base, "approved")
+
+    def test_approved_mode_rejects_facts_removal(self) -> None:
+        root, base = self.fixture(None)
+        self.mutate(root, FILES[4], "future compatibility.Facts; ", "")
+        self.assert_error_code(root, base, "approved", "allowed_types_invalid")
 
     def test_base_ref_is_required(self) -> None:
         root, _ = self.fixture()

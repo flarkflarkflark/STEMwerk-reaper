@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""Fail-closed, read-only consistency gate for proposed SLICE-1 documents."""
+"""Fail-closed, read-only consistency gate for SLICE-1 documents.
+
+Lifecycle modes:
+- ``review``: the documentation closure is PROPOSED with 0/8 owner controls
+  checked. This mode is frozen to the immutable review-head semantics.
+- ``approved``: the documentation closure is APPROVED_BY_OWNER with exactly
+  7/8 owner controls checked and implementation NOT_AUTHORIZED.
+
+The mode is explicit and required; unknown or missing modes fail closed.
+"""
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import re
 import subprocess
@@ -31,6 +41,13 @@ ALLOWED_CHANGED_PATHS = {
     "experiments/component-manager-poa0/production-readiness/SLICE_1_AND_ROADMAP_ARCHITECTURE_DECISION.md",
     "experiments/component-manager-poa0/production-readiness/TEST_AND_CI_PLAN.md",
     "experiments/component-manager-poa0/production-readiness/VERTICAL_SLICES.md",
+}
+# Post-approval governance-only paths, valid exclusively in approved mode.
+APPROVED_EXTRA_ALLOWED_CHANGED_PATHS = {
+    "component-manager/scripts/verify_slice1_changed_paths.py",
+    "component-manager/scripts/verify_slice1_changed_paths_test.py",
+    "component-manager/scripts/run_slice1_fast_gate.py",
+    "component-manager/scripts/run_slice1_fast_gate_test.py",
 }
 REQUIRED_SCOPE_KEYS = {
     "OFFICIAL_NAME", "ONE_SENTENCE_GOAL", "VERTICAL_DEMO", "INPUTS", "OUTPUTS",
@@ -152,7 +169,7 @@ def add_error(errors: list[dict[str, str]], code: str, message: str) -> None:
     errors.append({"code": code, "message": message})
 
 
-def run_check(root: Path, base_ref: str, head: str) -> tuple[dict[str, str], list[dict[str, str]], dict[str, object]]:
+def run_check(root: Path, base_ref: str, head: str, mode: str) -> tuple[dict[str, str], list[dict[str, str]], dict[str, object]]:
     checks: dict[str, str] = {}
     errors: list[dict[str, str]] = []
     metrics: dict[str, object] = {}
@@ -300,7 +317,6 @@ def run_check(root: Path, base_ref: str, head: str) -> tuple[dict[str, str], lis
     record("slice0_status", status_ok, "slice0_status_stale", "SLICE-0 current status is stale or inconsistent")
 
     cross = {
-        "decision status remains proposed": "Status: PROPOSED_FOR_OWNER_APPROVAL" in decision,
         "roadmap is HYBRID": decision_values.get("ROADMAP_OPTION") == "HYBRID",
         "official name": scope_values.get("OFFICIAL_NAME") == "Read-only catalog and component validation",
         "output": decision_values.get("SLICE1_VERTICAL_OUTPUT") == "ResolutionPreview" and "ResolutionPreview" in scope_values.get("OUTPUTS", ""),
@@ -311,14 +327,85 @@ def run_check(root: Path, base_ref: str, head: str) -> tuple[dict[str, str], lis
     }
     for name, passed in cross.items():
         record("cross_" + name.replace(" ", "_"), passed, "cross_document_invariant", name + " failed")
-    all_boxes = len(re.findall(r"^\s*- \[[ xX]\]", decision + "\n" + scope, re.MULTILINE))
-    checked_boxes = len(re.findall(r"^\s*- \[[xX]\]", decision + "\n" + scope, re.MULTILINE))
-    record("owner_checkboxes", all_boxes == 8 and checked_boxes == 0, "owner_checkbox_invalid", f"owner checkboxes {checked_boxes}/{all_boxes}")
-    record("no_approval_overclaim", not re.search(r"(?:Status:|STATUS=)\s*APPROVED", decision + "\n" + scope), "approval_overclaim", "documentation claims approval")
+    box_lines = re.findall(r"^\s*- \[([ xX])\] (.+)$", decision + "\n" + scope, re.MULTILINE)
+    all_boxes = len(box_lines)
+    checked_boxes = sum(1 for mark, _ in box_lines if mark in "xX")
 
+    if mode == "review":
+        record(
+            "lifecycle_status",
+            "Status: PROPOSED_FOR_OWNER_APPROVAL" in decision
+            and scope_values.get("STATUS") == "PROPOSED_FOR_OWNER_APPROVAL",
+            "review_status_invalid",
+            "review mode requires PROPOSED_FOR_OWNER_APPROVAL decision and scope status",
+        )
+        record("owner_checkboxes", all_boxes == 8 and checked_boxes == 0, "review_checkbox_state_invalid", f"owner checkboxes {checked_boxes}/{all_boxes}")
+        record(
+            "no_approval_overclaim",
+            not re.search(r"(?:Status:|STATUS=)\s*APPROVED", decision + "\n" + scope),
+            "implementation_authorization_overclaim",
+            "documentation claims approval",
+        )
+    else:
+        record(
+            "lifecycle_status",
+            "Status: APPROVED_BY_OWNER" in decision
+            and scope_values.get("STATUS") == "APPROVED_BY_OWNER"
+            and decision_values.get("DOCUMENTATION_CLOSURE_STATUS") == "APPROVED_BY_OWNER",
+            "approved_status_invalid",
+            "approved mode requires APPROVED_BY_OWNER decision, scope and closure status",
+        )
+        unchecked = [text for mark, text in box_lines if mark == " "]
+        record(
+            "owner_checkboxes",
+            all_boxes == 8
+            and checked_boxes == 7
+            and len(unchecked) == 1
+            and "Implementation may be authorized" in unchecked[0],
+            "approved_checkbox_state_invalid",
+            f"owner checkboxes {checked_boxes}/{all_boxes}; implementation control must remain unchecked",
+        )
+        record(
+            "implementation_not_authorized",
+            decision_values.get("SLICE1_IMPLEMENTATION_STATUS") == "NOT_AUTHORIZED"
+            and decision_values.get("SLICE1_IMPLEMENTATION_AUTHORIZED") == "no",
+            "implementation_authorization_overclaim",
+            "SLICE-1 implementation must remain NOT_AUTHORIZED",
+        )
+        approved_head = decision_values.get("OWNER_APPROVED_REVIEW_HEAD", "")
+        record(
+            "approved_review_head",
+            bool(re.fullmatch(r"[0-9a-f]{40}", approved_head)),
+            "approved_review_head_invalid",
+            "OWNER_APPROVED_REVIEW_HEAD must be a 40-character lowercase hex SHA",
+        )
+        approval_date = decision_values.get("OWNER_APPROVAL_DATE", "")
+        date_ok = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", approval_date))
+        if date_ok:
+            try:
+                datetime.date.fromisoformat(approval_date)
+            except ValueError:
+                date_ok = False
+        record(
+            "approval_date",
+            date_ok,
+            "approval_date_invalid",
+            "OWNER_APPROVAL_DATE must be a valid ISO calendar date",
+        )
+        allowed_types = {entry.strip() for entry in scope_values.get("ALLOWED_TYPES", "").split(";") if entry.strip()}
+        record(
+            "allowed_types_facts",
+            "future compatibility.Facts" in allowed_types,
+            "allowed_types_invalid",
+            "ALLOWED_TYPES must contain future compatibility.Facts",
+        )
+
+    allowed_changed = set(ALLOWED_CHANGED_PATHS)
+    if mode == "approved":
+        allowed_changed |= APPROVED_EXTRA_ALLOWED_CHANGED_PATHS
     paths = path_sets(root, base_ref)
     for category, values in paths.items():
-        unknown = sorted(values - ALLOWED_CHANGED_PATHS)
+        unknown = sorted(values - allowed_changed)
         record(f"changed_paths_{category}", not unknown, "changed_path_forbidden", f"{category}: " + ",".join(unknown))
 
     metrics.update({
@@ -332,10 +419,11 @@ def run_check(root: Path, base_ref: str, head: str) -> tuple[dict[str, str], lis
     return checks, errors, metrics
 
 
-def result_payload(base_ref: str | None, head: str | None, errors: list[dict[str, str]], checks: dict[str, str], metrics: dict[str, object] | None = None) -> dict[str, object]:
+def result_payload(base_ref: str | None, head: str | None, mode: str | None, errors: list[dict[str, str]], checks: dict[str, str], metrics: dict[str, object] | None = None) -> dict[str, object]:
     payload: dict[str, object] = {
         "result": "FAIL" if errors else "PASS",
         "gate": GATE,
+        "mode": mode,
         "base_ref": base_ref,
         "head": head,
         "errors": errors,
@@ -349,6 +437,7 @@ def result_payload(base_ref: str | None, head: str | None, errors: list[dict[str
 def main(argv: list[str] | None = None) -> int:
     base_ref: str | None = None
     head: str | None = None
+    mode: str | None = None
     checks: dict[str, str] = {}
     errors: list[dict[str, str]] = []
     metrics: dict[str, object] = {}
@@ -357,7 +446,13 @@ def main(argv: list[str] | None = None) -> int:
         parser = JSONArgumentParser(add_help=False)
         parser.add_argument("--repository", type=Path, default=Path(__file__).resolve().parents[2])
         parser.add_argument("--base-ref")
+        parser.add_argument("--mode")
         args = parser.parse_args(argv)
+        mode = args.mode
+        if not mode:
+            raise GateFailure("mode_missing", "--mode is required: review|approved")
+        if mode not in ("review", "approved"):
+            raise GateFailure("mode_invalid", f"unknown mode {mode!r}: expected review|approved")
         base_ref = args.base_ref
         if not base_ref:
             raise GateFailure("base_ref_missing", "--base-ref is required")
@@ -371,12 +466,12 @@ def main(argv: list[str] | None = None) -> int:
             if error.code == "base_ref_not_ancestor":
                 raise GateFailure("base_ref_not_ancestor", f"base ref {base_ref} is not an ancestor of HEAD") from error
             raise
-        checks, errors, metrics = run_check(root, base_ref, head)
+        checks, errors, metrics = run_check(root, base_ref, head, mode)
     except GateFailure as error:
         errors = [{"code": error.code, "message": str(error)}]
     except Exception as error:  # Last-resort fail-closed boundary.
         errors = [{"code": "internal_checker_error", "message": str(error)}]
-    payload = result_payload(base_ref, head, errors, checks, metrics)
+    payload = result_payload(base_ref, head, mode, errors, checks, metrics)
     sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return 0 if payload["result"] == "PASS" else 1
 

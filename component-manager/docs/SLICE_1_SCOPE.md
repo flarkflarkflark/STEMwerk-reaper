@@ -111,7 +111,7 @@ OUT_OF_SCOPE_REQUIREMENTS=CMV1-STATE-001 capability; CMV1-FAIL-002; CMV1-FAIL-00
 
 ALLOWED_PACKAGES=future pkg/artifact; future pkg/provenance; future pkg/compatibility; future pkg/resolution; existing pkg/catalog; existing pkg/component; existing pkg/identity; existing pkg/version; existing pkg/digest; existing pkg/platform; existing pkg/schemaversion; existing pkg/contract; existing internal/canonicaljson; existing internal/schemavalidation; existing schemas
 
-ALLOWED_TYPES=future artifact.Artifact; future artifact.ArtifactSet; future provenance.Provenance; future compatibility.Context; future compatibility.Result; future compatibility.ContractStatus; future compatibility.Reason; future resolution.ComponentSelector; future resolution.VersionSelector; future resolution.ResolutionPreview; future resolution.TrustRepresentation; existing catalog.Catalog; existing catalog.Component; existing component.ComponentKind; existing identity.ComponentID; existing identity.ArtifactID; existing version.SoftwareVersion; existing version.ModelRevision; existing version.CatalogVersion; existing digest.Digest; existing schemaversion.Version; existing contract.Category; existing contract.Error
+ALLOWED_TYPES=future artifact.Artifact; future artifact.ArtifactSet; future provenance.Provenance; future compatibility.Facts; future compatibility.Context; future compatibility.Result; future compatibility.ContractStatus; future compatibility.Reason; future resolution.ComponentSelector; future resolution.VersionSelector; future resolution.ResolutionPreview; future resolution.TrustRepresentation; existing catalog.Catalog; existing catalog.Component; existing component.ComponentKind; existing identity.ComponentID; existing identity.ArtifactID; existing version.SoftwareVersion; existing version.ModelRevision; existing version.CatalogVersion; existing digest.Digest; existing schemaversion.Version; existing contract.Category; existing contract.Error
 
 ALLOWED_FUNCTIONS=future artifact.Parse; future provenance.Parse; future compatibility.Evaluate; future resolution.Preview; future resolution.CanonicalizePreview; future resolution.DerivePreviewDigest; existing catalog.ParseBytes; existing catalog.ParseReader; existing identity.ParseComponentID; existing identity.ParseArtifactID; existing component.ParseKind; existing digest.Parse; existing contract.ValidateJSON; existing canonicaljson.Canonicalize
 
@@ -207,3 +207,73 @@ STOP_CONDITIONS=head mismatch; dirty preflight; missing explicit implementation 
 Malformed signature material always returns a typed fail-closed error. A valid
 structural envelope is `UNVERIFIED`; malformed is never a successful preview state.
 No implementation may invent an error category beyond the existing binding set.
+
+## Local verification gates
+
+These read-only governance scripts close the SLICE-1 implementation entry
+gates. They contain no product semantics and write nothing into the
+repository. This section records usage only; it does not authorize
+implementation, which remains NOT_AUTHORIZED until a separate explicit owner
+decision.
+
+### Documentation checker lifecycle modes
+
+`component-manager/scripts/verify_slice1_documentation.py` requires an
+explicit `--mode`:
+
+- `--mode review` validates the immutable proposed documentation closure:
+  proposed decision and scope status, exactly 0/8 owner controls checked, and
+  no approval overclaim. It is used against the approved review head recorded
+  in the architecture decision and its semantics are frozen.
+- `--mode approved` validates the approved documentation closure: decision,
+  scope and closure status APPROVED_BY_OWNER, exactly 8 owner controls with
+  exactly 7/8 checked, the implementation control unchecked, implementation
+  status NOT_AUTHORIZED, a valid approved review head and ISO approval date,
+  plus every architecture, path, packagegraph, compatibility, selector, error
+  and frozen-tree check that review mode performs.
+
+A missing or unknown mode fails closed with one machine-readable JSON result
+and a nonzero exit. No check is disabled in approved mode.
+
+### Changed-path gate
+
+`component-manager/scripts/verify_slice1_changed_paths.py` enforces the exact
+path sets above for the future branch `slice/1-read-only-resolution-preview`.
+The allowed, future and forbidden patterns are parsed from this document; the
+script never invents its own allowlist. Usage:
+
+    python3 component-manager/scripts/verify_slice1_changed_paths.py \
+      --base-ref <approved-base> --head-ref HEAD --phase pre-commit
+
+Phases: `pre-commit` inspects committed, staged, unstaged and untracked paths;
+`pre-push` additionally requires a clean worktree; `exit` additionally
+requires the four new package path classes and the exact named SLICE-1 exit
+workflow. Unknown phase, unknown path, forbidden path, allowed/forbidden
+overlap, malformed path sets, invalid refs and non-ancestor bases all fail
+closed with one machine-readable JSON result and a nonzero exit.
+
+### Local fast gate
+
+`component-manager/scripts/run_slice1_fast_gate.py` orchestrates the existing
+read-only checks in fixed fail-fast order: preflight, documentation checker in
+the given mode, changed-path gate, gofmt list-only check, go vet, go test,
+module integrity, schema and Contract-v1 drift guard, SLICE-1 import and
+package graph guards, and worktree hygiene. Usage:
+
+    python3 component-manager/scripts/run_slice1_fast_gate.py \
+      --base-ref <approved-base> --documentation-mode approved --phase pre-push
+
+For `pre-commit`, staged review is allowed and open changes may exist; module
+integrity then defers to `pre-push`, which always requires a clean worktree
+and runs the full compare. The gate uses read-only module policy (no tidy, no
+downloads) and redirects every helper summary to a temporary directory outside
+the repository. Unknown modes or phases fail closed; the first failing step
+stops all later steps, reported as NOT_RUN in one machine-readable JSON
+summary.
+
+### Base-ref policy
+
+The base ref for both gates is the approved documentation-closure head pinned
+by the owner implementation authorization (currently the governance head on
+`experiment/component-manager-poa0`). The gates verify that the base is an
+ancestor of the compared head; anything else fails closed.
