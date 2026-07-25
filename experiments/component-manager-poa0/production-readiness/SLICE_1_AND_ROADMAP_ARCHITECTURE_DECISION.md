@@ -1,6 +1,20 @@
 # SLICE-1 and roadmap architecture decision
 
-Status: PROPOSED_FOR_OWNER_APPROVAL
+Status: APPROVED_BY_OWNER
+
+OWNER_APPROVAL_DATE=2026-07-25
+
+OWNER_APPROVED_REVIEW_HEAD=856b5bc0643fe3fc6effb824b195d15fa3abf758
+
+DOCUMENTATION_CLOSURE_STATUS=APPROVED_BY_OWNER
+
+SLICE1_IMPLEMENTATION_STATUS=NOT_AUTHORIZED
+
+SLICE1_IMPLEMENTATION_AUTHORIZED=no
+
+Approval of this documentation closure does not authorize implementation.
+SLICE-1 implementation requires a separate explicit owner authorization after
+integration and entry-gate reverification.
 
 Decision basis: owner-selected HYBRID roadmap reviewed against commit
 `ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3`. This decision does not authorize
@@ -98,22 +112,20 @@ snapshots and persisted revocation/catalog sequence evidence follow within SLICE
 only after their mutation authorization and storage gates. Slice numbering is not
 changed by this internal phase boundary.
 
-## Governance
-
 ## Owner review controls
 
-- [ ] Exact SLICE-1 scope and vertical demonstration accepted
-- [ ] Realization-level traceability accepted
-- [ ] Package graph and API subset accepted
-- [ ] Compatibility tri-state and reason ordering accepted
-- [ ] ComponentSelector semantics accepted
-- [ ] Entry and exit evidence accepted
-- [ ] Governance and mutation budgets accepted
-- [ ] Error, signature and UNVERIFIED trust boundaries accepted
+- [x] Total HYBRID roadmap approved
+- [x] SLICE-1 requirements approved
+- [x] SLICE-1 API subset approved
+- [x] Package graph approved
+- [x] Vertical ResolutionPreview demo approved
+- [x] Exit evidence approved
+- [x] Governance approved
+- [ ] Implementation may be authorized
 
-All eight controls remain unchecked while this decision is proposed. Checking them
-requires a separate owner-review action and still does not itself authorize
-implementation.
+The owner checked the first seven controls on 2026-07-25. The eighth control
+remains unchecked: checking it requires a separate explicit owner authorization
+after integration and entry-gate reverification.
 
 ## Governance execution
 

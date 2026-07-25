@@ -4,7 +4,7 @@ OFFICIAL_NAME=Read-only catalog and component validation
 
 ONE_SENTENCE_GOAL=Valideer caller-supplied catalogus- en componentbytes en produceer een deterministische, machine-leesbare ResolutionPreview die iedere keuze en afwijzing verklaart, zonder netwerk, writes, persistent state of trustbeslissingen.
 
-STATUS=PROPOSED_FOR_OWNER_APPROVAL
+STATUS=APPROVED_BY_OWNER
 
 IMPLEMENTATION_AUTHORIZED=no
 
