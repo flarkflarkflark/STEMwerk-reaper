@@ -6,7 +6,7 @@ ONE_SENTENCE_GOAL=Valideer caller-supplied catalogus- en componentbytes en produ
 
 STATUS=APPROVED_BY_OWNER
 
-IMPLEMENTATION_AUTHORIZED=no
+IMPLEMENTATION_AUTHORIZED=yes
 
 ## Vertical demonstration
 
@@ -212,9 +212,9 @@ No implementation may invent an error category beyond the existing binding set.
 
 These read-only governance scripts close the SLICE-1 implementation entry
 gates. They contain no product semantics and write nothing into the
-repository. This section records usage only; it does not authorize
-implementation, which remains NOT_AUTHORIZED until a separate explicit owner
-decision.
+repository. This section records usage only. Implementation was authorized by
+the separate explicit owner decision recorded in the architecture decision
+document; it had remained NOT_AUTHORIZED until that decision.
 
 ### Documentation checker lifecycle modes
 

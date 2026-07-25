@@ -11,8 +11,8 @@ subsequent corrections strengthened the baseline, and corrected full-gate run
 `30092525685` supplied the final exit evidence at the frozen basis commit. GATE-P8
 is PASS and XPG-001/XPG-002 are closed. This status records completed SLICE-0
 evidence and the owner-approved SLICE-1 documentation closure: SLICE-1
-implementation is not authorized. POA code remains evidence and
-reference material only and may not be promoted directly.
+implementation is authorized by the owner but not started. POA code remains
+evidence and reference material only and may not be promoted directly.
 
 The readiness status inside `PRODUCTION_READINESS_GATE.md` is the preserved
 pre-implementation gate outcome, not the current implementation status.
@@ -40,8 +40,8 @@ pre-implementation gate outcome, not the current implementation status.
 | HYBRID roadmap and SLICE-1 architecture decision | SLICE_1_AND_ROADMAP_ARCHITECTURE_DECISION.md |
 
 The executable approved scope for SLICE-1 is
-`component-manager/docs/SLICE_1_SCOPE.md`. It is approved by the owner and remains
-subject to separate explicit implementation authorization.
+`component-manager/docs/SLICE_1_SCOPE.md`. It is approved by the owner and its
+implementation is authorized but not started.
 
 These are design records, not runtime configuration. Provisional platform paths are
 adapter configuration, never identities. The bounded SLICE-0 production skeleton and

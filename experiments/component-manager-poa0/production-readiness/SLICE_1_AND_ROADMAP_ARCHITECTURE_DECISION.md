@@ -8,13 +8,37 @@ OWNER_APPROVED_REVIEW_HEAD=856b5bc0643fe3fc6effb824b195d15fa3abf758
 
 DOCUMENTATION_CLOSURE_STATUS=APPROVED_BY_OWNER
 
-SLICE1_IMPLEMENTATION_STATUS=NOT_AUTHORIZED
+SLICE1_IMPLEMENTATION_STATUS=AUTHORIZED_NOT_STARTED
 
-SLICE1_IMPLEMENTATION_AUTHORIZED=no
+SLICE1_IMPLEMENTATION_AUTHORIZED=yes
+
+SLICE1_IMPLEMENTATION_STARTED=no
 
 Approval of this documentation closure does not authorize implementation.
 SLICE-1 implementation requires a separate explicit owner authorization after
 integration and entry-gate reverification.
+
+## Owner implementation authorization
+
+OWNER_IMPLEMENTATION_AUTHORIZATION_DATE=2026-07-25
+
+OWNER_IMPLEMENTATION_BASELINE=e0fe346e8f643a2643f97bcb50cd6616769e1362
+
+OWNER_IMPLEMENTATION_BRANCH=slice/1-read-only-resolution-preview
+
+I authorize implementation of SLICE-1 — Read-only catalog and component
+validation from approved governance baseline
+e0fe346e8f643a2643f97bcb50cd6616769e1362, on branch
+slice/1-read-only-resolution-preview, under the exact allowed-path, API,
+dependency, test, governance and stop-condition contract in
+component-manager/docs/SLICE_1_SCOPE.md. This authorization does not extend to
+SLICE-2 or later capabilities.
+
+SLICE-2 and later slices are not authorized. No exit claim is permitted.
+No release is permitted. Product implementation has not started. The branch
+permits at most five content commits, requires the local fast gate before
+every push, fails closed on unknown paths, permits no new dependency without
+a new GATE-P7 review, and keeps Contract v1 and schemas frozen.
 
 Decision basis: owner-selected HYBRID roadmap reviewed against commit
 `ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3`. This decision does not authorize
@@ -121,11 +145,11 @@ changed by this internal phase boundary.
 - [x] Vertical ResolutionPreview demo approved
 - [x] Exit evidence approved
 - [x] Governance approved
-- [ ] Implementation may be authorized
+- [x] Implementation may be authorized
 
-The owner checked the first seven controls on 2026-07-25. The eighth control
-remains unchecked: checking it requires a separate explicit owner authorization
-after integration and entry-gate reverification.
+The owner checked the first seven controls on 2026-07-25 and the eighth
+control on 2026-07-25 after integration and entry-gate reverification. All
+eight controls are now checked.
 
 ## Governance execution
 
