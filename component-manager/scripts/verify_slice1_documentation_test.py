@@ -17,6 +17,8 @@ CHECKER = ROOT / "component-manager/scripts/verify_slice1_documentation.py"
 REVIEW_HEAD = "856b5bc0643fe3fc6effb824b195d15fa3abf758"
 DOCUMENTATION_BASE = "ab59eef7d00de7e0d6e4d2467fb815a3d0975eb3"
 APPROVAL_HEAD = "0199c870ef143d67017571b777b2193b1ed80902"
+PREAUTH_HEAD = "e0fe346e8f643a2643f97bcb50cd6616769e1362"
+AUTHORIZATION_HEAD = "12dd6a3d4ece3a3bc30cd377f742632458f34a3c"
 FILES = [
     "experiments/component-manager-poa0/production-readiness/VERTICAL_SLICES.md",
     "experiments/component-manager-poa0/production-readiness/READINESS_TRACEABILITY.md",
@@ -87,8 +89,19 @@ class DocumentationCheckerTests(unittest.TestCase):
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", message], cwd=root, check=True)
 
-    def test_current_documents_pass_approved_mode(self) -> None:
-        result = self.run_checker(ROOT, DOCUMENTATION_BASE, "approved")
+    def test_current_documents_pass_authorized_mode(self) -> None:
+        result = self.run_checker(ROOT, AUTHORIZATION_HEAD, "authorized")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["mode"], "authorized")
+
+    def test_authorized_mode_passes_on_authorized_documents(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        result = self.run_checker(root, base, "authorized")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_approved_mode_passes_on_preauthorization_documents(self) -> None:
+        root, base = self.fixture(PREAUTH_HEAD)
+        result = self.run_checker(root, base, "approved")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["mode"], "approved")
 
@@ -115,82 +128,98 @@ class DocumentationCheckerTests(unittest.TestCase):
         self.assertEqual(payload["errors"][0]["code"], "mode_invalid")
 
     def test_review_mode_rejects_approved_documents(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.assert_error_code(root, base, "review", "review_status_invalid")
 
     def test_review_mode_rejects_checked_owner_controls(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.assert_error_code(root, base, "review", "review_checkbox_state_invalid")
 
+    def test_review_mode_rejects_authorized_documents(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.assert_error_code(root, base, "review", "review_status_invalid")
+
+    def test_approved_mode_rejects_authorized_documents(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.assert_error_code(root, base, "approved", "implementation_authorization_overclaim")
+
+    def test_authorized_mode_rejects_review_documents(self) -> None:
+        root, base = self.fixture(REVIEW_HEAD)
+        self.assert_error_code(root, base, "authorized", "authorized_status_invalid")
+
+    def test_authorized_mode_rejects_approved_documents(self) -> None:
+        root, base = self.fixture(PREAUTH_HEAD)
+        self.assert_error_code(root, base, "authorized", "authorized_checkbox_state_invalid")
+
     def test_approved_mode_rejects_proposed_status(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "Status: APPROVED_BY_OWNER", "Status: PROPOSED_FOR_OWNER_APPROVAL")
         self.assert_error_code(root, base, "approved", "approved_status_invalid")
 
     def test_approved_mode_rejects_zero_checked_controls(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         path = root / FILES[3]
         path.write_text(path.read_text().replace("- [x]", "- [ ]"), encoding="utf-8")
         self.assert_error_code(root, base, "approved", "approved_checkbox_state_invalid")
 
     def test_approved_mode_rejects_six_checked_controls(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "- [x] Total HYBRID roadmap approved", "- [ ] Total HYBRID roadmap approved")
         self.assert_error_code(root, base, "approved", "approved_checkbox_state_invalid")
 
     def test_approved_mode_rejects_checked_implementation_control(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "- [ ] Implementation may be authorized", "- [x] Implementation may be authorized")
         self.assert_error_code(root, base, "approved", "approved_checkbox_state_invalid")
 
     def test_approved_mode_rejects_implementation_authorized_yes(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[4], "IMPLEMENTATION_AUTHORIZED=no", "IMPLEMENTATION_AUTHORIZED=yes")
         self.assert_fails(root, base, "approved")
 
     def test_approved_mode_rejects_authorized_implementation_status(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "SLICE1_IMPLEMENTATION_STATUS=NOT_AUTHORIZED", "SLICE1_IMPLEMENTATION_STATUS=AUTHORIZED")
         self.assert_error_code(root, base, "approved", "implementation_authorization_overclaim")
 
     def test_approved_mode_rejects_missing_review_head(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "OWNER_APPROVED_REVIEW_HEAD=856b5bc0643fe3fc6effb824b195d15fa3abf758\n\n", "")
         self.assert_error_code(root, base, "approved", "approved_review_head_invalid")
 
     def test_approved_mode_rejects_malformed_review_head(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "OWNER_APPROVED_REVIEW_HEAD=856b5bc0643fe3fc6effb824b195d15fa3abf758", "OWNER_APPROVED_REVIEW_HEAD=856b5bc")
         self.assert_error_code(root, base, "approved", "approved_review_head_invalid")
 
     def test_approved_mode_rejects_missing_approval_date(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "OWNER_APPROVAL_DATE=2026-07-25\n\n", "")
         self.assert_error_code(root, base, "approved", "approval_date_invalid")
 
     def test_approved_mode_rejects_malformed_approval_date(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[3], "OWNER_APPROVAL_DATE=2026-07-25", "OWNER_APPROVAL_DATE=2026-13-99")
         self.assert_error_code(root, base, "approved", "approval_date_invalid")
 
     def test_approved_mode_still_detects_architecture_drift(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[4], "Compatible:true; Incompatible:false", "Compatible:false; Incompatible:true")
         self.assert_fails(root, base, "approved")
 
     def test_approved_mode_still_detects_forbidden_path(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[5], "# STEMwerk", "# Changed STEMwerk")
         self.commit(root, "change contract")
         self.assert_error_code(root, base, "approved", "changed_path_forbidden")
 
     def test_approved_mode_still_detects_packagegraph_drift(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[2], "| component, platform values, schemaversion, contract |", "| component, generation, platform values, schemaversion, contract |")
         self.assert_fails(root, base, "approved")
 
     def test_approved_mode_rejects_facts_removal(self) -> None:
-        root, base = self.fixture(None)
+        root, base = self.fixture(PREAUTH_HEAD)
         self.mutate(root, FILES[4], "future compatibility.Facts; ", "")
         self.assert_error_code(root, base, "approved", "allowed_types_invalid")
 
@@ -539,6 +568,191 @@ class DocumentationCheckerTests(unittest.TestCase):
         root, base = self.fixture()
         self.mutate(root, FILES[3], "Independent duplicate artifact domain types are forbidden", "Independent artifact types are permitted")
         self.assert_fails(root, base)
+
+    # --- authorized lifecycle mode ---
+
+    def test_authorized_mode_rejects_seven_checked_controls(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "- [x] Governance approved", "- [ ] Governance approved")
+        self.assert_error_code(root, base, "authorized", "authorized_checkbox_state_invalid")
+
+    def test_authorized_mode_rejects_six_checked_controls(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "- [x] Governance approved", "- [ ] Governance approved")
+        self.mutate(root, FILES[3], "- [x] Exit evidence approved", "- [ ] Exit evidence approved")
+        self.assert_error_code(root, base, "authorized", "authorized_checkbox_state_invalid")
+
+    def test_authorized_mode_rejects_unchecked_implementation_control(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "- [x] Implementation may be authorized", "- [ ] Implementation may be authorized")
+        self.assert_error_code(root, base, "authorized", "authorized_checkbox_state_invalid")
+
+    def test_authorized_mode_rejects_not_authorized_status(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "SLICE1_IMPLEMENTATION_STATUS=AUTHORIZED_NOT_STARTED", "SLICE1_IMPLEMENTATION_STATUS=NOT_AUTHORIZED")
+        self.assert_error_code(root, base, "authorized", "authorized_implementation_status_invalid")
+
+    def test_authorized_mode_rejects_implementation_flag_no(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "SLICE1_IMPLEMENTATION_AUTHORIZED=yes", "SLICE1_IMPLEMENTATION_AUTHORIZED=no")
+        self.assert_error_code(root, base, "authorized", "authorized_implementation_flag_invalid")
+
+    def test_authorized_mode_rejects_scope_flag_no(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[4], "IMPLEMENTATION_AUTHORIZED=yes", "IMPLEMENTATION_AUTHORIZED=no")
+        self.assert_error_code(root, base, "authorized", "authorized_implementation_flag_invalid")
+
+    def test_authorized_mode_rejects_started_yes(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "SLICE1_IMPLEMENTATION_STARTED=no", "SLICE1_IMPLEMENTATION_STARTED=yes")
+        self.assert_error_code(root, base, "authorized", "authorized_started_state_invalid")
+
+    def test_authorized_mode_rejects_missing_authorization_date(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "OWNER_IMPLEMENTATION_AUTHORIZATION_DATE=2026-07-25\n\n", "")
+        self.assert_error_code(root, base, "authorized", "authorization_date_invalid")
+
+    def test_authorized_mode_rejects_malformed_authorization_date(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "OWNER_IMPLEMENTATION_AUTHORIZATION_DATE=2026-07-25", "OWNER_IMPLEMENTATION_AUTHORIZATION_DATE=2026-13-99")
+        self.assert_error_code(root, base, "authorized", "authorization_date_invalid")
+
+    def test_authorized_mode_rejects_missing_baseline(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "OWNER_IMPLEMENTATION_BASELINE=e0fe346e8f643a2643f97bcb50cd6616769e1362\n\n", "")
+        self.assert_error_code(root, base, "authorized", "authorization_baseline_invalid")
+
+    def test_authorized_mode_rejects_malformed_baseline(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "OWNER_IMPLEMENTATION_BASELINE=e0fe346e8f643a2643f97bcb50cd6616769e1362", "OWNER_IMPLEMENTATION_BASELINE=e0fe346")
+        self.assert_error_code(root, base, "authorized", "authorization_baseline_invalid")
+
+    def test_authorized_mode_rejects_wrong_baseline(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "OWNER_IMPLEMENTATION_BASELINE=e0fe346e8f643a2643f97bcb50cd6616769e1362", "OWNER_IMPLEMENTATION_BASELINE=ffffffffffffffffffffffffffffffffffffffff")
+        self.assert_error_code(root, base, "authorized", "authorization_baseline_invalid")
+
+    def test_authorized_mode_rejects_missing_branch(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "OWNER_IMPLEMENTATION_BRANCH=slice/1-read-only-resolution-preview\n\n", "")
+        self.assert_error_code(root, base, "authorized", "authorization_branch_invalid")
+
+    def test_authorized_mode_rejects_wrong_branch(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "OWNER_IMPLEMENTATION_BRANCH=slice/1-read-only-resolution-preview", "OWNER_IMPLEMENTATION_BRANCH=slice/2-immutable-local-store")
+        self.assert_error_code(root, base, "authorized", "authorization_branch_invalid")
+
+    def test_authorized_mode_rejects_missing_owner_sentence(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "I authorize implementation of SLICE-1 — Read-only catalog and component", "I note SLICE-1")
+        self.assert_error_code(root, base, "authorized", "authorization_text_invalid")
+
+    def test_authorized_mode_rejects_owner_sentence_without_slice2_exclusion(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "This authorization does not extend to\nSLICE-2 or later capabilities.", "This authorization covers all slices.")
+        self.assert_error_code(root, base, "authorized", "authorization_text_invalid")
+
+    def test_authorized_mode_rejects_owner_sentence_wrong_baseline(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(
+            root, FILES[3],
+            "from approved governance baseline\ne0fe346e8f643a2643f97bcb50cd6616769e1362, on branch",
+            "from approved governance baseline\nffffffffffffffffffffffffffffffffffffffff, on branch",
+        )
+        self.assert_error_code(root, base, "authorized", "authorization_text_invalid")
+
+    def test_authorized_mode_rejects_owner_sentence_wrong_branch(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(
+            root, FILES[3],
+            ", on branch\nslice/1-read-only-resolution-preview, under",
+            ", on branch\nslice/9-wrong-branch, under",
+        )
+        self.assert_error_code(root, base, "authorized", "authorization_text_invalid")
+
+    def test_authorized_mode_rejects_slice2_overclaim(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "SLICE-2 and later slices are not authorized", "SLICE-2 and later slices are authorized")
+        self.assert_error_code(root, base, "authorized", "later_slice_authorization_overclaim")
+
+    def test_authorized_mode_rejects_exit_overclaim(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "No exit claim is permitted", "Exit claim is permitted")
+        self.assert_error_code(root, base, "authorized", "exit_or_release_overclaim")
+
+    def test_authorized_mode_rejects_release_overclaim(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[3], "No release is permitted", "Release is permitted")
+        self.assert_error_code(root, base, "authorized", "exit_or_release_overclaim")
+
+    def test_authorized_mode_still_detects_architecture_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[4], "Compatible:true; Incompatible:false", "Compatible:false; Incompatible:true")
+        self.assert_fails(root, base, "authorized")
+
+    def test_authorized_mode_still_detects_selector_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[4], "SELECTOR_FIELDS=ComponentID identity.ComponentID; Version resolution.VersionSelector", "SELECTOR_FIELDS=ComponentID identity.ComponentID; Version resolution.VersionSelector; Channel string")
+        self.assert_fails(root, base, "authorized")
+
+    def test_authorized_mode_still_detects_error_result_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[4], "| oversized input | `schema_invalid` |", "| oversized input | `catalog_invalid` |")
+        self.assert_fails(root, base, "authorized")
+
+    def test_authorized_mode_still_detects_packagegraph_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[2], "| component, platform values, schemaversion, contract |", "| component, generation, platform values, schemaversion, contract |")
+        self.assert_fails(root, base, "authorized")
+
+    def test_authorized_mode_rejects_facts_removal(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[4], "future compatibility.Facts; ", "")
+        self.assert_error_code(root, base, "authorized", "allowed_types_invalid")
+
+    def test_authorized_mode_still_detects_forbidden_product_path(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        path = root / "component-manager/cmd/new_product.go"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("package main\n")
+        self.commit(root, "add product")
+        self.assert_error_code(root, base, "authorized", "changed_path_forbidden")
+
+    def test_authorized_mode_still_detects_contract_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[5], "# STEMwerk", "# Changed STEMwerk")
+        self.commit(root, "change contract")
+        self.assert_error_code(root, base, "authorized", "changed_path_forbidden")
+
+    def test_authorized_mode_still_detects_schema_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        self.mutate(root, FILES[6], '"title":', '"description": "changed",\n  "title":')
+        self.commit(root, "change schema")
+        self.assert_error_code(root, base, "authorized", "changed_path_forbidden")
+
+    def test_authorized_mode_still_detects_dependency_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        path = root / "component-manager/go.mod"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("module changed\n")
+        self.commit(root, "change go.mod")
+        self.assert_error_code(root, base, "authorized", "changed_path_forbidden")
+
+    def test_authorized_mode_still_detects_workflow_drift(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        path = root / ".github/workflows/other.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("name: forbidden\n")
+        self.commit(root, "add workflow")
+        self.assert_error_code(root, base, "authorized", "changed_path_forbidden")
+
+    def test_authorized_mode_rejects_unknown_governance_script_path(self) -> None:
+        root, base = self.fixture(AUTHORIZATION_HEAD)
+        path = root / "component-manager/scripts/evil_gate.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("print('evil')\n")
+        self.commit(root, "add unknown script")
+        self.assert_error_code(root, base, "authorized", "changed_path_forbidden")
 
 
 if __name__ == "__main__":

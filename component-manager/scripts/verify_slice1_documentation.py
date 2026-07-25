@@ -6,6 +6,9 @@ Lifecycle modes:
   checked. This mode is frozen to the immutable review-head semantics.
 - ``approved``: the documentation closure is APPROVED_BY_OWNER with exactly
   7/8 owner controls checked and implementation NOT_AUTHORIZED.
+- ``authorized``: implementation is authorized (8/8 owner controls checked)
+  but not started, on branch slice/1-read-only-resolution-preview from
+  governance baseline e0fe346e8f643a2643f97bcb50cd6616769e1362.
 
 The mode is explicit and required; unknown or missing modes fail closed.
 """
@@ -49,6 +52,8 @@ APPROVED_EXTRA_ALLOWED_CHANGED_PATHS = {
     "component-manager/scripts/run_slice1_fast_gate.py",
     "component-manager/scripts/run_slice1_fast_gate_test.py",
 }
+AUTHORIZED_BASELINE = "e0fe346e8f643a2643f97bcb50cd6616769e1362"
+AUTHORIZED_BRANCH = "slice/1-read-only-resolution-preview"
 REQUIRED_SCOPE_KEYS = {
     "OFFICIAL_NAME", "ONE_SENTENCE_GOAL", "VERTICAL_DEMO", "INPUTS", "OUTPUTS",
     "IN_SCOPE_REQUIREMENTS", "OUT_OF_SCOPE_REQUIREMENTS", "SPLIT_REQUIREMENTS",
@@ -118,6 +123,16 @@ def git(root: Path, *arguments: str, failure_code: str = "git_command_failed") -
 
 def assignments(text: str) -> dict[str, str]:
     return dict(re.findall(r"^([A-Z0-9_]+)=(.*)$", text, re.MULTILINE))
+
+
+def valid_iso_date(value: str) -> bool:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 def table_rows(text: str) -> list[list[str]]:
@@ -323,7 +338,6 @@ def run_check(root: Path, base_ref: str, head: str, mode: str) -> tuple[dict[str
         "malformed signature": "A malformed envelope returns a typed fail-closed error" in decision and "malformed is never a successful preview state" in scope,
         "trust unverified": "only constructible SLICE-1 value is\n`UNVERIFIED`" in scope and "cannot construct\n`trusted` or `verified`" in decision,
         "no new dependencies": "no new external dependency" in scope_values.get("DEPENDENCY_POLICY", ""),
-        "implementation unauthorized": scope_values.get("IMPLEMENTATION_AUTHORIZED") == "no",
     }
     for name, passed in cross.items():
         record("cross_" + name.replace(" ", "_"), passed, "cross_document_invariant", name + " failed")
@@ -346,7 +360,13 @@ def run_check(root: Path, base_ref: str, head: str, mode: str) -> tuple[dict[str
             "implementation_authorization_overclaim",
             "documentation claims approval",
         )
-    else:
+        record(
+            "cross_implementation_unauthorized",
+            scope_values.get("IMPLEMENTATION_AUTHORIZED") == "no",
+            "cross_document_invariant",
+            "implementation unauthorized failed",
+        )
+    elif mode == "approved":
         record(
             "lifecycle_status",
             "Status: APPROVED_BY_OWNER" in decision
@@ -372,6 +392,12 @@ def run_check(root: Path, base_ref: str, head: str, mode: str) -> tuple[dict[str
             "implementation_authorization_overclaim",
             "SLICE-1 implementation must remain NOT_AUTHORIZED",
         )
+        record(
+            "cross_implementation_unauthorized",
+            scope_values.get("IMPLEMENTATION_AUTHORIZED") == "no",
+            "cross_document_invariant",
+            "implementation unauthorized failed",
+        )
         approved_head = decision_values.get("OWNER_APPROVED_REVIEW_HEAD", "")
         record(
             "approved_review_head",
@@ -380,18 +406,109 @@ def run_check(root: Path, base_ref: str, head: str, mode: str) -> tuple[dict[str
             "OWNER_APPROVED_REVIEW_HEAD must be a 40-character lowercase hex SHA",
         )
         approval_date = decision_values.get("OWNER_APPROVAL_DATE", "")
-        date_ok = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", approval_date))
-        if date_ok:
-            try:
-                datetime.date.fromisoformat(approval_date)
-            except ValueError:
-                date_ok = False
         record(
             "approval_date",
-            date_ok,
+            valid_iso_date(approval_date),
             "approval_date_invalid",
             "OWNER_APPROVAL_DATE must be a valid ISO calendar date",
         )
+    else:
+        record(
+            "lifecycle_status",
+            "Status: APPROVED_BY_OWNER" in decision
+            and scope_values.get("STATUS") == "APPROVED_BY_OWNER"
+            and decision_values.get("DOCUMENTATION_CLOSURE_STATUS") == "APPROVED_BY_OWNER",
+            "authorized_status_invalid",
+            "authorized mode requires APPROVED_BY_OWNER decision, scope and closure status",
+        )
+        unchecked = [text for mark, text in box_lines if mark == " "]
+        impl_box_checked = any(
+            mark in "xX" and "Implementation may be authorized" in text for mark, text in box_lines
+        )
+        record(
+            "owner_checkboxes",
+            all_boxes == 8 and checked_boxes == 8 and not unchecked and impl_box_checked,
+            "authorized_checkbox_state_invalid",
+            f"owner checkboxes {checked_boxes}/{all_boxes}; all eight controls must be checked",
+        )
+        record(
+            "implementation_status",
+            decision_values.get("SLICE1_IMPLEMENTATION_STATUS") == "AUTHORIZED_NOT_STARTED",
+            "authorized_implementation_status_invalid",
+            "SLICE1_IMPLEMENTATION_STATUS must be AUTHORIZED_NOT_STARTED",
+        )
+        record(
+            "implementation_flag",
+            decision_values.get("SLICE1_IMPLEMENTATION_AUTHORIZED") == "yes"
+            and scope_values.get("IMPLEMENTATION_AUTHORIZED") == "yes",
+            "authorized_implementation_flag_invalid",
+            "SLICE1_IMPLEMENTATION_AUTHORIZED and IMPLEMENTATION_AUTHORIZED must be yes",
+        )
+        record(
+            "started_state",
+            decision_values.get("SLICE1_IMPLEMENTATION_STARTED") == "no",
+            "authorized_started_state_invalid",
+            "SLICE1_IMPLEMENTATION_STARTED must be no",
+        )
+        record(
+            "authorization_date",
+            valid_iso_date(decision_values.get("OWNER_IMPLEMENTATION_AUTHORIZATION_DATE", "")),
+            "authorization_date_invalid",
+            "OWNER_IMPLEMENTATION_AUTHORIZATION_DATE must be a valid ISO calendar date",
+        )
+        record(
+            "authorization_baseline",
+            decision_values.get("OWNER_IMPLEMENTATION_BASELINE") == AUTHORIZED_BASELINE,
+            "authorization_baseline_invalid",
+            f"OWNER_IMPLEMENTATION_BASELINE must be exactly {AUTHORIZED_BASELINE}",
+        )
+        record(
+            "authorization_branch",
+            decision_values.get("OWNER_IMPLEMENTATION_BRANCH") == AUTHORIZED_BRANCH,
+            "authorization_branch_invalid",
+            f"OWNER_IMPLEMENTATION_BRANCH must be exactly {AUTHORIZED_BRANCH}",
+        )
+        owner_text_ok = (
+            "I authorize implementation of SLICE-1 — Read-only catalog and component\nvalidation" in decision
+            and "from approved governance baseline\n" + AUTHORIZED_BASELINE + ", on branch\n" + AUTHORIZED_BRANCH in decision
+            and "component-manager/docs/SLICE_1_SCOPE.md" in decision
+            and "does not extend to\nSLICE-2 or later capabilities" in decision
+        )
+        record(
+            "authorization_text",
+            owner_text_ok,
+            "authorization_text_invalid",
+            "owner authorization sentence must name SLICE-1, the exact baseline and branch, the scope document and the SLICE-2 exclusion",
+        )
+        later_overclaim = any(
+            "SLICE-2" in line
+            and re.search(r"\bauthorized\b", line)
+            and "not authorized" not in line
+            and "does not extend" not in line
+            for line in (decision + "\n" + scope).splitlines()
+        )
+        record(
+            "no_later_slice_overclaim",
+            "SLICE-2 and later slices are not authorized" in decision and not later_overclaim,
+            "later_slice_authorization_overclaim",
+            "SLICE-2 or later slices must not be claimed authorized",
+        )
+        exit_release_overclaim = bool(
+            re.search(
+                r"EXIT_PASS|RELEASE_READY|SLICE1_IMPLEMENTATION_STARTED=yes|IMPLEMENTATION_STARTED=yes|\bIMPLEMENTED\b|\bCOMPLETE\b",
+                decision + "\n" + scope,
+            )
+        )
+        record(
+            "no_exit_or_release_overclaim",
+            "No exit claim is permitted" in decision
+            and "No release is permitted" in decision
+            and not exit_release_overclaim,
+            "exit_or_release_overclaim",
+            "no started, implemented, complete, exit-pass or release-ready claim is permitted",
+        )
+
+    if mode in ("approved", "authorized"):
         allowed_types = {entry.strip() for entry in scope_values.get("ALLOWED_TYPES", "").split(";") if entry.strip()}
         record(
             "allowed_types_facts",
@@ -401,7 +518,7 @@ def run_check(root: Path, base_ref: str, head: str, mode: str) -> tuple[dict[str
         )
 
     allowed_changed = set(ALLOWED_CHANGED_PATHS)
-    if mode == "approved":
+    if mode in ("approved", "authorized"):
         allowed_changed |= APPROVED_EXTRA_ALLOWED_CHANGED_PATHS
     paths = path_sets(root, base_ref)
     for category, values in paths.items():
@@ -450,9 +567,9 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
         mode = args.mode
         if not mode:
-            raise GateFailure("mode_missing", "--mode is required: review|approved")
-        if mode not in ("review", "approved"):
-            raise GateFailure("mode_invalid", f"unknown mode {mode!r}: expected review|approved")
+            raise GateFailure("mode_missing", "--mode is required: review|approved|authorized")
+        if mode not in ("review", "approved", "authorized"):
+            raise GateFailure("mode_invalid", f"unknown mode {mode!r}: expected review|approved|authorized")
         base_ref = args.base_ref
         if not base_ref:
             raise GateFailure("base_ref_missing", "--base-ref is required")

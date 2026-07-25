@@ -21,7 +21,7 @@ from pathlib import Path
 
 GATE = "slice1_fast_gate"
 PHASES = ("pre-commit", "pre-push")
-MODES = ("review", "approved")
+MODES = ("review", "approved", "authorized")
 SCRIPTS = "component-manager/scripts"
 MODULE = "component-manager"
 SCHEMA_AUTHORITY_DIR = "experiments/component-manager-poa0/contract-v1/schemas"

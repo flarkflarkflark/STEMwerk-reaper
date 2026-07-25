@@ -230,7 +230,16 @@ explicit `--mode`:
   exactly 7/8 checked, the implementation control unchecked, implementation
   status NOT_AUTHORIZED, a valid approved review head and ISO approval date,
   plus every architecture, path, packagegraph, compatibility, selector, error
-  and frozen-tree check that review mode performs.
+  and frozen-tree check that review mode performs. It applies while
+  implementation is approved but not yet authorized.
+- `--mode authorized` validates the authorized-but-not-started state:
+  APPROVED_BY_OWNER statuses, exactly 8/8 owner controls checked, the exact
+  owner authorization sentence with baseline, branch and SLICE-2 exclusion,
+  valid ISO authorization date, implementation status AUTHORIZED_NOT_STARTED,
+  started flag no, and no later-slice, exit or release overclaim, plus every
+  non-lifecycle check the other modes perform. The implementation branch
+  `slice/1-read-only-resolution-preview` uses this mode; it must PASS before
+  the first product content push.
 
 A missing or unknown mode fails closed with one machine-readable JSON result
 and a nonzero exit. No check is disabled in approved mode.

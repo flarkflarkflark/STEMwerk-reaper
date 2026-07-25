@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "component-manager/scripts/run_slice1_fast_gate.py"
-APPROVAL_HEAD = "0199c870ef143d67017571b777b2193b1ed80902"
+APPROVAL_HEAD = "12dd6a3d4ece3a3bc30cd377f742632458f34a3c"
 STUB_PASS = "#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n"
 STUB_FAIL = "#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n"
 STUB_SCRIPTS = (
@@ -231,10 +231,21 @@ class FastGateTests(unittest.TestCase):
             for key in ("name", "result", "exit_code", "summary"):
                 self.assertIn(key, entry)
 
-    def test_real_repository_approval_head_passes(self) -> None:
+    def test_real_repository_approved_mode_fails_on_authorized_branch(self) -> None:
         result = subprocess.run(
             [sys.executable, str(GATE), "--repository", str(ROOT),
              "--documentation-mode", "approved", "--base-ref", APPROVAL_HEAD, "--phase", "pre-commit"],
+            text=True, capture_output=True,
+        )
+        data = json.loads(result.stdout)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(data["result"], "FAIL")
+        self.assertEqual(self.step(data, "documentation_checker")["result"], "FAIL")
+
+    def test_real_repository_authorized_head_passes(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(GATE), "--repository", str(ROOT),
+             "--documentation-mode", "authorized", "--base-ref", APPROVAL_HEAD, "--phase", "pre-commit"],
             text=True, capture_output=True,
         )
         data = json.loads(result.stdout)
