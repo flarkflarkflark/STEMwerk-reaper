@@ -34,9 +34,9 @@ while the following explicit splits override the defaults.
 | CMV1-CORE-001 | none | component | none (concrete value) | components/artifacts | component | SLICE-1 | 1/2 | P4/P5/P6/P7 | READY |
 | CMV1-STATE-001 | none | state | none (concrete value) | state | desired-state | SLICE-3 | 1/2 | P4/P5/P6/P7/P9 | READY |
 | CMV1-RECEIPT-001 | none | receipt | ReceiptStore | receipts | receipt | SLICE-2 | 3/4/5 | P4/P5/P6/P7/P9 | READY |
-| CMV1-GEN-001 | none | generation/state/lifecycle | GenerationStore/CompatibilityResolver | generations/selectors/journals | generation | SLICE-3 | 1/2 | P4/P5/P6/P7/P9 | READY |
-| CMV1-GEN-002 | none | generation/state/lifecycle | GenerationStore/CompatibilityResolver | generations/selectors/journals | selector | SLICE-4 | 5/6/13 | P4/P5/P6/P7/P9 | READY |
-| CMV1-GEN-003 | none | generation/state/lifecycle | GenerationStore/CompatibilityResolver | generations/selectors/journals | generation | SLICE-3 | 1/2 | P4/P5/P6/P7/P9 | READY |
+| CMV1-GEN-001 | none | generation/state/lifecycle | GenerationStore/GenerationCompatibilityCoordinator | generations/selectors/journals | generation | SLICE-3 | 1/2 | P4/P5/P6/P7/P9 | READY |
+| CMV1-GEN-002 | none | generation/state/lifecycle | GenerationStore/GenerationCompatibilityCoordinator | generations/selectors/journals | selector | SLICE-4 | 5/6/13 | P4/P5/P6/P7/P9 | READY |
+| CMV1-GEN-003 | none | generation/state/lifecycle | GenerationStore/GenerationCompatibilityCoordinator | generations/selectors/journals | generation | SLICE-3 | 1/2 | P4/P5/P6/P7/P9 | READY |
 | CMV1-PIN-001 | none | runpin | RunPinStore | generations/locks-leases | run-pin | SLICE-5 | 13/14/15 | P4/P5/P6/P7/P9 | READY |
 | CMV1-LEASE-001 | none | lease | LeaseStore | generations/locks-leases | lease | SLICE-5 | 13/14/15 | P4/P5/P6/P7/P9 | READY |
 | CMV1-LEASE-002 | none | lease | LeaseStore | generations/locks-leases | lease | SLICE-5 | 13/14/15 | P4/P5/P6/P7/P9 | READY |

@@ -1,5 +1,9 @@
 # First production slice scope
 
+HISTORICAL_SCOPE_RECORD=yes
+
+CURRENT_STATUS=SLICE_0_IMPLEMENTED_AND_GATED
+
 FIRST_SLICE_ID=SLICE-0
 
 FIRST_SLICE_TITLE=Production skeleton and contract bindings
@@ -26,6 +30,10 @@ FIRST_SLICE_SCOPE_STATUS=RESOLVED
 
 FIRST_SLICE_PATH_RECORD_CORRECTED_AT_SLICE1_CLOSURE=yes; this correction records the approved SLICE-0 repository reality and grants no new implementation scope
 
-FIRST_SLICE_READY_FOR_SEPARATE_IMPLEMENTATION_TASK=yes
+FIRST_SLICE_READY_FOR_SEPARATE_IMPLEMENTATION_TASK=no
 
-The dependency-selection spikes are part of SLICE-0 and must conclude before external package code is accepted. They may recommend standard-library-only binding stubs if candidates fail review. No second slice may begin in the same task.
+This file preserves the approved historical SLICE-0 scope. Implementation began at
+`ea4184e6b17c7cf2e94233ccacf05bd5c8487e38`; later corrections and full-gate run
+`30092525685` delivered the corrected exit evidence. GATE-P8 is PASS and XPG-001 and
+XPG-002 are closed. These facts grant no SLICE-1 owner approval or implementation
+authorization; no second slice may begin without its separate gates and authority.

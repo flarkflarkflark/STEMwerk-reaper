@@ -2,7 +2,20 @@
 
 This directory is the implementation-ready translation of approved Contract v1. Contract v1 is approved, its policy gate is READY, and its implementation blocker count is zero.
 
-Production readiness is READY_FOR_FIRST_VERTICAL_SLICE. The production core has not started. SLICE-0 requires a separate, explicit implementation task; this gate does not authorize it. POA code is evidence and reference material only and may not be promoted directly.
+CURRENT_STATUS=SLICE_0_IMPLEMENTED_AND_GATED
+
+HISTORICAL_READINESS_GATE_RECORD=PRODUCTION_READINESS_GATE.md
+
+SLICE-0 was implemented beginning at `ea4184e6b17c7cf2e94233ccacf05bd5c8487e38`;
+subsequent corrections strengthened the baseline, and corrected full-gate run
+`30092525685` supplied the final exit evidence at the frozen basis commit. GATE-P8
+is PASS and XPG-001/XPG-002 are closed. This status records completed SLICE-0
+evidence only: SLICE-1 documentation remains proposed, owner approval has not been
+given, and SLICE-1 implementation is not authorized. POA code remains evidence and
+reference material only and may not be promoted directly.
+
+The readiness status inside `PRODUCTION_READINESS_GATE.md` is the preserved
+pre-implementation gate outcome, not the current implementation status.
 
 ## Decision index
 
@@ -30,4 +43,7 @@ The executable proposed scope for SLICE-1 is
 `component-manager/docs/SLICE_1_SCOPE.md`. It remains subject to explicit owner
 approval and separate implementation authorization.
 
-These are design records, not runtime configuration. Provisional platform paths are adapter configuration, never identities. No functional production code, database, helper, installer, signing infrastructure, network access, runtime access or consumer integration is present.
+These are design records, not runtime configuration. Provisional platform paths are
+adapter configuration, never identities. The bounded SLICE-0 production skeleton and
+contract bindings exist; no database, helper, installer, signing infrastructure,
+network access, runtime access or consumer integration is present.

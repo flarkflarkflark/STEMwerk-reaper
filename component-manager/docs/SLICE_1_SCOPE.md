@@ -60,6 +60,12 @@ predicate object produces `Compatible`, `Runnable=true`, and an empty reason lis
 A field required by a declared predicate but absent from caller context produces
 `Unknown`, `Runnable=false`, and its typed unknown reason.
 
+UNKNOWN_CONTEXT_FIELD_POLICY=typed Go Context is closed and cannot represent unknown fields; JSON context fixtures reject unknown properties; generic map[string]any is forbidden
+
+The production boundary is the closed typed Go `compatibility.Context`; it does not
+accept a generic property map. JSON exists only at contract-test or transport-fixture
+boundaries, where decoding is strict and every unknown property fails closed.
+
 | CONTEXT_FIELD | TYPE | SOURCE_REQUIREMENT | REQUIRED_OR_OPTIONAL | UNKNOWN_BEHAVIOR | COMPARISON_RULE | REASON_CODE |
 |---|---|---|---|---|---|---|
 | Platform | `platform.Platform` | Contract v1 §15 platform | required when predicate declared | Unknown | exact validated enum equality | `platform_unknown` when absent; `platform_mismatch` when unequal |
@@ -149,16 +155,24 @@ NEGATIVE_FIXTURES=malformed JSON; oversized input; unsupported schema major; dup
 
 SELECTOR_FIXTURES=software component exact match; model component exact revision-plus-digest match; missing target; ambiguous target; duplicate rejected before selection; same-version/different-digest rejected before selection
 
-| Failure or result | Existing category/result | Rule |
-|---|---|---|
-| malformed JSON, schema or signature-envelope structure | `schema_invalid` | typed `contract.Error`; malformed signature is never success |
-| invalid component/artifact identity | `identity_invalid` | typed `contract.Error` |
-| invalid software or model version | `version_invalid` | typed `contract.Error` |
-| same version with different digest or digest mismatch | `artifact_digest_mismatch` | typed `contract.Error` |
-| duplicate, missing selector target, ambiguous selector target or invalid catalog relation | `catalog_invalid` | typed `contract.Error` |
-| compatible | domain result `Compatible`, runnable | not a contract error |
-| incompatible | domain result `Incompatible`, not runnable | preserve typed ordered reasons |
-| missing fact or unresolved relation | domain result `Unknown`, not runnable | preserve typed ordered reasons |
+| FAILURE_OR_RESULT | CATEGORY_OR_STATUS | ERROR_OR_DOMAIN_RESULT | SOURCE | STABLE_REASON | NOTES |
+|---|---|---|---|---|---|
+| malformed JSON | `schema_invalid` | contract error | `contract.ValidateJSON` and Contract v1 §36 | `schema_invalid` | malformed input never reaches projection |
+| oversized input | `schema_invalid` | contract error | schema/parse input boundary and `contract.MaxJSONInputSize` | `schema_invalid` | the SLICE-1 boundary normalizes the existing catalog parser's current `catalog_invalid` oversize result to the schema-boundary category before implementation |
+| unsupported schema major | `schema_invalid` | contract error | `schemaversion.Parse`, schema validator and Contract v1 §37 | `schema_version_unsupported` | unknown major fails closed |
+| invalid identity | `identity_invalid` | contract error | `pkg/identity` and Contract v1 §6 | `identity_invalid` | component and artifact identities use their existing validators |
+| duplicate identity | `catalog_invalid` | contract error | catalog semantic validation and Contract v1 §§28,36 | `catalog_invalid` | rejected before selection |
+| same-version/different-digest | `artifact_digest_mismatch` | contract error | Contract v1 §§7,36 and catalog binding | `artifact_digest_mismatch` | rejected before selection |
+| artifact digest mismatch | `artifact_digest_mismatch` | contract error | Contract v1 §§7,8,36 | `artifact_digest_mismatch` | applies only to artifact identity/integrity |
+| missing selector | `catalog_invalid` | contract error | SLICE-1 selector contract | `catalog_invalid` | zero match fails closed |
+| multiple selector matches | `catalog_invalid` | contract error | SLICE-1 selector contract | `catalog_invalid` | ambiguity fails closed |
+| malformed provenance | `schema_invalid` | contract error | provenance schema and Contract v1 §§9,36 | `schema_invalid` | structural failure, not a trust decision |
+| malformed signature | `schema_invalid` | contract error | signature-envelope schema and Contract v1 §§36,38 | `schema_invalid` | malformed is never a successful preview |
+| compatibility Compatible | `Compatible` | domain result | Contract v1 §15 | none | runnable is true |
+| compatibility Incompatible | `Incompatible` | domain result | Contract v1 §15 | ordered typed compatibility reasons | runnable is false; not a contract error |
+| compatibility Unknown | `Unknown` | domain result | Contract v1 §§15,36 | ordered typed unknown reasons | runnable is false and status remains distinct |
+| canonicalization failure | `schema_invalid or internal_error` | contract error | canonical JSON boundary and existing binding categories | `schema_invalid` for invalid input; `internal_error` for unexpected canonicalizer failure | classification is based on cause, never fallback |
+| resolution-preview digest mismatch | `CI/gate failure; no product category` | evidence failure | deterministic exit gate | stable gate diagnostic | derivation is a pure return value; no expected digest is a SLICE-1 API input and `artifact_digest_mismatch` is forbidden here |
 
 FAULT_INJECTION=truncation; reader errors; limit boundary; duplicate JSON members under an explicit reject policy; Unicode/normalization; malformed nested objects; empty arrays; deterministic serialization; machine-readable summary-write failure outside product code; artifact-upload failure classified as CI infrastructure failure
 

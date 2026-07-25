@@ -58,6 +58,12 @@ IMPORT_CYCLE_COUNT=0
 
 PACKAGE_PLAN_STATUS=RESOLVED
 
+ARTIFACT_NORMATIVE_OWNER=pkg/artifact
+
+SLICE1_PURE_PACKAGES=artifact;provenance;catalog;component;compatibility;resolution
+
+SLICE1_PACKAGEGRAPH_INVARIANTS=compatibility_no_generation;catalog_no_concrete_trust;catalog_no_revocation;resolution_no_state;resolution_no_storage;resolution_no_network;resolution_no_time;resolution_no_random;artifact_no_catalog;single_artifact_owner;pure_graph_no_later_effect_package
+
 SLICE-1 also extracts `pkg/artifact` and `pkg/provenance` as the normative owners of their descriptors. Existing `pkg/catalog.Artifact` may be a temporary alias or controlled adapter only and is removed before the SLICE-1 exit gate; duplicate independent artifact domain types are forbidden. SLICE-1's structural signature projection is owned by `resolution` and can represent only `UNVERIFIED`; the cryptographic `signature` package remains a SLICE-6 capability.
 
 The apparent lifecycle package has policy composition but no I/O; all effects pass through injected interfaces. The application layer alone orders transactions. Storage implements interfaces and never owns policy. The viewmodel exposes domain projections, never database rows.

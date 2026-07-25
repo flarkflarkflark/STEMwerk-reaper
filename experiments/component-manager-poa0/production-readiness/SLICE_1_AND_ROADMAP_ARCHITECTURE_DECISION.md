@@ -44,6 +44,10 @@ revocation decision.
 - `pkg/provenance` owns parsed provenance facts without deciding trust.
 - `pkg/compatibility` evaluates caller-supplied declarative facts and MUST NOT import
   `pkg/generation` or probe a platform.
+- Later generation compatibility orchestration is owned by `pkg/generation` or a
+  higher application layer. It projects a candidate to `compatibility.Facts` and
+  invokes `compatibility.Evaluate(Facts, Context)`; no generation object crosses
+  into `pkg/compatibility`.
 - `pkg/resolution` composes only pure read-only domain packages and owns
   `ResolutionPreview`, `ComponentSelector`, its closed `VersionSelector`, and
   `resolution_preview_digest` derivation. `ComponentSelector` is catalog-local and

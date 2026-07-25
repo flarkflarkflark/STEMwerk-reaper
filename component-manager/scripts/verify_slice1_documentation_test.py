@@ -23,6 +23,9 @@ FILES = [
     "experiments/component-manager-poa0/contract-v1/COMPONENT_MANAGER_CONTRACT_V1.md",
     "component-manager/schemas/artifact.schema.json",
     "component-manager/pkg/contract/error.go",
+    "experiments/component-manager-poa0/production-readiness/PUBLIC_API_BOUNDARIES.md",
+    "experiments/component-manager-poa0/production-readiness/README.md",
+    "experiments/component-manager-poa0/production-readiness/FIRST_SLICE_SCOPE.md",
 ]
 
 
@@ -72,7 +75,216 @@ class DocumentationCheckerTests(unittest.TestCase):
 
     def test_base_ref_is_required(self) -> None:
         root, _ = self.fixture()
-        self.assertNotEqual(self.run_checker(root, None).returncode, 0)
+        result = self.run_checker(root, None)
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"], "FAIL")
+        self.assertEqual(payload["errors"][0]["code"], "base_ref_missing")
+
+    def test_invalid_base_ref_is_machine_readable(self) -> None:
+        root, _ = self.fixture()
+        result = self.run_checker(root, "not-a-ref")
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "base_ref_invalid")
+
+    def test_help_like_cli_exit_is_machine_readable(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(CHECKER), "--help"], text=True, capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"][0]["code"], "cli_invalid")
+
+    def test_non_ancestor_base_ref_fails_closed(self) -> None:
+        root, _ = self.fixture()
+        subprocess.run(["git", "checkout", "--orphan", "unrelated"], cwd=root, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "unrelated"], cwd=root, check=True)
+        unrelated = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, text=True, capture_output=True).stdout.strip()
+        subprocess.run(["git", "checkout", "-q", "master"], cwd=root, check=True)
+        result = self.run_checker(root, unrelated)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], "base_ref_not_ancestor")
+
+    def test_committed_unknown_product_path_fails_closed(self) -> None:
+        root, base = self.fixture()
+        path = root / "component-manager/cmd/new_product.go"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("package main\n")
+        self.commit(root, "add product")
+        self.assert_fails(root, base)
+
+    def test_committed_workflow_fails_closed(self) -> None:
+        root, base = self.fixture()
+        path = root / ".github/workflows/new.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("name: forbidden\n")
+        self.commit(root, "add workflow")
+        self.assert_fails(root, base)
+
+    def test_committed_installer_path_fails_closed(self) -> None:
+        root, base = self.fixture()
+        path = root / "installer/new.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("forbidden\n")
+        self.commit(root, "add installer")
+        self.assert_fails(root, base)
+
+    def test_staged_product_path_fails_closed(self) -> None:
+        root, base = self.fixture()
+        path = root / "component-manager/cmd/staged.go"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("package main\n")
+        subprocess.run(["git", "add", str(path.relative_to(root))], cwd=root, check=True)
+        self.assert_fails(root, base)
+
+    def test_unstaged_product_path_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[7], "package contract", "package changed")
+        self.assert_fails(root, base)
+
+    def test_untracked_product_path_fails_closed(self) -> None:
+        root, base = self.fixture()
+        path = root / "component-manager/cmd/untracked.go"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("package main\n")
+        self.assert_fails(root, base)
+
+    def test_catalog_revocation_dependency_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "component, artifact, provenance, contract |", "component, artifact, provenance, revocation, contract |")
+        self.assert_fails(root, base)
+
+    def test_resolution_state_dependency_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "canonicaljson, contract | generation", "canonicaljson, state, contract | generation")
+        self.assert_fails(root, base)
+
+    def test_resolution_storage_dependency_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "canonicaljson, contract | generation", "canonicaljson, storage, contract | generation")
+        self.assert_fails(root, base)
+
+    def test_resolution_network_dependency_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "canonicaljson, contract | generation", "canonicaljson, network, contract | generation")
+        self.assert_fails(root, base)
+
+    def test_resolution_time_dependency_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "canonicaljson, contract | generation", "canonicaljson, time, contract | generation")
+        self.assert_fails(root, base)
+
+    def test_resolution_random_dependency_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "canonicaljson, contract | generation", "canonicaljson, random, contract | generation")
+        self.assert_fails(root, base)
+
+    def test_duplicate_artifact_owner_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "ARTIFACT_NORMATIVE_OWNER=pkg/artifact", "ARTIFACT_NORMATIVE_OWNER=pkg/artifact;pkg/catalog")
+        self.assert_fails(root, base)
+
+    def test_later_effect_package_in_pure_graph_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[2], "SLICE1_PURE_PACKAGES=artifact;provenance;catalog;component;compatibility;resolution", "SLICE1_PURE_PACKAGES=artifact;provenance;catalog;component;compatibility;resolution;lifecycle")
+        self.assert_fails(root, base)
+
+    def test_context_field_removed_fails_closed(self) -> None:
+        root, base = self.fixture()
+        path = root / FILES[4]
+        lines = [line for line in path.read_text().splitlines() if not line.startswith("| Backend |")]
+        path.write_text("\n".join(lines) + "\n")
+        self.assert_fails(root, base)
+
+    def test_extra_context_field_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "| SchemaVersion |", "| Extra | `string` | none | optional | Unknown | exact | `extra_unknown` |\n| SchemaVersion |")
+        self.assert_fails(root, base)
+
+    def test_fact_field_removed_fails_closed(self) -> None:
+        root, base = self.fixture()
+        path = root / FILES[4]
+        lines = [line for line in path.read_text().splitlines() if not line.startswith("| Provenance facts |")]
+        path.write_text("\n".join(lines) + "\n")
+        self.assert_fails(root, base)
+
+    def test_extra_fact_field_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "| ComponentID |", "| ExtraFact | none | yes | no | none | forbidden |\n| ComponentID |")
+        self.assert_fails(root, base)
+
+    def test_reason_code_removed_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "; incompatible_declared_constraint", "")
+        self.assert_fails(root, base)
+
+    def test_duplicate_reason_priority_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "incompatible_declared_constraint", "platform_unknown")
+        self.assert_fails(root, base)
+
+    def test_runnable_mapping_reversal_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "Compatible:true; Incompatible:false", "Compatible:false; Incompatible:true")
+        self.assert_fails(root, base)
+
+    def test_unknown_removed_from_preview_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "compatibility `ContractStatus`, `Runnable` and ordered typed reasons", "compatibility `Runnable` and ordered typed reasons")
+        self.assert_fails(root, base)
+
+    def test_unknown_context_policy_removal_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "UNKNOWN_CONTEXT_FIELD_POLICY=", "REMOVED_UNKNOWN_CONTEXT_FIELD_POLICY=")
+        self.assert_fails(root, base)
+
+    def test_model_digest_removal_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "; `ArtifactDigest digest.Digest`", "")
+        self.assert_fails(root, base)
+
+    def test_selector_field_addition_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "SELECTOR_FIELDS=ComponentID identity.ComponentID; Version resolution.VersionSelector", "SELECTOR_FIELDS=ComponentID identity.ComponentID; Version resolution.VersionSelector; Channel string")
+        self.assert_fails(root, base)
+
+    def test_oversized_mapping_removal_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "| oversized input | `schema_invalid` |", "| oversized input | `catalog_invalid` |")
+        self.assert_fails(root, base)
+
+    def test_unsupported_major_mapping_removal_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "| unsupported schema major | `schema_invalid` |", "| unsupported schema major | `catalog_invalid` |")
+        self.assert_fails(root, base)
+
+    def test_canonicalization_mapping_removal_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "| canonicalization failure | `schema_invalid or internal_error` |", "| canonicalization failure | `catalog_invalid` |")
+        self.assert_fails(root, base)
+
+    def test_preview_digest_artifact_error_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "| resolution-preview digest mismatch | `CI/gate failure; no product category` |", "| resolution-preview digest mismatch | `artifact_digest_mismatch` |")
+        self.assert_fails(root, base)
+
+    def test_compatibility_resolver_generation_conflict_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[8], "GenerationCompatibilityCoordinator / generation", "CompatibilityResolver / compatibility")
+        self.mutate(root, FILES[8], "EvaluateCandidate(GenerationCandidate,CompatibilityContext)", "Resolve(Target,Generation)")
+        self.assert_fails(root, base)
+
+    def test_stale_slice0_status_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[9], "CURRENT_STATUS=SLICE_0_IMPLEMENTED_AND_GATED", "CURRENT_STATUS=READY_FOR_FIRST_VERTICAL_SLICE")
+        self.assert_fails(root, base)
+
+    def test_implementation_approval_overclaim_fails_closed(self) -> None:
+        root, base = self.fixture()
+        self.mutate(root, FILES[4], "IMPLEMENTATION_AUTHORIZED=no", "IMPLEMENTATION_AUTHORIZED=APPROVED")
+        self.assert_fails(root, base)
 
     def test_missing_slice_fails_closed(self) -> None:
         root, base = self.fixture()

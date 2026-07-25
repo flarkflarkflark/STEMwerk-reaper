@@ -12,7 +12,7 @@ Signatures are design contracts without implementations. Every method receives c
 | GenerationStore / generation | Get(GenerationID) (Generation,error); Put(Generation,OperationID) error | immutable generation | content-idempotent atomic publish | mixed/invalid generation rejected; yes |
 | DesiredStateStore / state | Get() (DesiredState,error); CompareAndSwap(StateVersion,DesiredState,OperationID) error | state/version | CAS transaction | stale/unknown version rejected; yes |
 | SelectorPublisher / state | Read() (Selector,error); Publish(Selector,ExpectedSelector,OperationID) error | selector values | durable compare-and-replace | uncertain durability is failure; yes |
-| CompatibilityResolver / compatibility | Resolve(Target,Generation) (CompatibilityResult,error) | declarative facts | pure/read-only | unknown is non-runnable; yes |
+| GenerationCompatibilityCoordinator / generation | EvaluateCandidate(GenerationCandidate,CompatibilityContext) (CompatibilityResult,error) | generation candidate projected to compatibility facts/context | pure orchestration; calls compatibility.Evaluate without reverse import | unknown is non-runnable; yes |
 | TrustVerifier / trust | Evaluate(TrustInput) (TrustDecision,error) | root/scope/time | read-only policy decision | any unknown/expired scope rejects; yes |
 | SignatureVerifier / signature | Verify(Envelope,CanonicalPayload) error | bytes/envelope | pure | unlisted algorithm/signature rejects; yes |
 | RevocationProvider / revocation | Current(Scope) (Snapshot,error); Evaluate(KeyID,At) (RevocationDecision,error) | scope/time | monotone state read | stale/rollback/critical deny rejects mutation; yes |
@@ -46,7 +46,7 @@ nor any store. Its exact concrete pure surface is:
 
 - `artifact.Parse`, producing `artifact.Artifact`/`ArtifactSet`;
 - `provenance.Parse`, producing untrusted provenance facts;
-- `compatibility.Evaluate(Context, Facts)`, producing a `compatibility.Result` with
+- `compatibility.Evaluate(Facts, Context)`, producing a `compatibility.Result` with
   preserved `Compatible`/`Incompatible`/`Unknown` status, runnable mapping and
   deterministic typed reasons, importing no generation or platform probe;
 - `resolution.Preview`, `resolution.CanonicalizePreview` and
@@ -60,6 +60,12 @@ The selector input is `resolution.ComponentSelector{ComponentID, Version}` where
 `Version` is the closed software/model union defined in `SLICE_1_SCOPE.md`; the
 generic name `resolution.Selector` is forbidden to prevent collision with the
 generation selector.
+
+The later `GenerationCompatibilityCoordinator` is owned by `pkg/generation` (or a
+higher application orchestrator). It projects generation/component data into
+`compatibility.Facts` and caller-supplied `compatibility.Context`, invokes
+`compatibility.Evaluate(Facts, Context)`, and aggregates results for construction or
+activation. `pkg/compatibility` never imports or accepts a generation object.
 
 ## Commands
 
