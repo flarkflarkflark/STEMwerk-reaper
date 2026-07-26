@@ -3571,7 +3571,7 @@ def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, 
     assert "stage2_model_load" not in captured.err
 
 
-def test_drumsep_runtime_broken_reports_import_error(tmp_path):
+def test_drumsep_runtime_broken_reports_import_error(tmp_path, monkeypatch):
     module = _load_audio_separator_process_module()
     runtime_python = module._drumsep_runtime_python_path(tmp_path)
     runtime_python.parent.mkdir(parents=True)
@@ -3583,7 +3583,7 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path):
         stdout = ""
         stderr = "ImportError: audio_separator missing"
 
-    module.subprocess.run = lambda *args, **kwargs: Completed()
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Completed())
 
     ok, detail, _payload = module._verify_drumsep_runtime(runtime_python)
 
