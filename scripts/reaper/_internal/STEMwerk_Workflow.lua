@@ -231,7 +231,9 @@ local function preflightNormalWorkflowDeviceRoute(runOptions)
     debugLog("normal_workflow_live_gpu_available=" .. (gpuAvailable and "yes" or "no"))
 
     local normalizedRequest = string.lower(tostring(requestedUiDevice or "auto"))
-    if normalizedRequest ~= "" and normalizedRequest ~= "cpu" and not gpuAvailable then
+    -- Only explicit GPU requests are blocked on a CPU-only runtime; "auto" is
+    -- allowed because it resolves to the best available device (GPU or CPU).
+    if normalizedRequest ~= "" and normalizedRequest ~= "cpu" and normalizedRequest ~= "auto" and not gpuAvailable then
         debugLog("normal_workflow_fallback_reason=live_runtime_cpu_only")
         local msg =
             "Normal STEMwerk processing was stopped because the live normal runtime reports CPU-only devices.\n\n"
