@@ -288,7 +288,6 @@ def check_bootstrap_guard_payload(root: Path, payload_paths: set[str]) -> Sectio
 
     if not (root / SAMPLERATE_GUARD_PAYLOAD_PATH).exists():
         section.fail(f"bootstrap references missing local helper: {SAMPLERATE_GUARD_PAYLOAD_PATH}")
-
     if SAMPLERATE_GUARD_PAYLOAD_PATH not in payload_paths:
         section.fail(
             "bootstrap references helper missing from index.xml payload: "
@@ -300,7 +299,80 @@ def check_bootstrap_guard_payload(root: Path, payload_paths: set[str]) -> Sectio
     return section
 
 
-def run_check(root: Path) -> tuple[list[Section], int]:
+VENDOR_WHEELS_ROOT = "scripts/reaper/vendor/wheels"
+
+
+def sha256_file(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def check_vendor_wheel_index_parity(root: Path, sources: list[SourceEntry], network: bool = False) -> Section:
+    """Every vendor wheel has exactly one <source> in index.xml and vice versa.
+
+    diffq lesson (2.3.0.7): a wheel without a <source> line is not distributed by ReaPack.
+    With --network each wheel-source URL is fetched and its bytes must hash-match the repo file.
+    """
+    section = Section("E. Vendor wheel ↔ index parity")
+    wheels_root = root / VENDOR_WHEELS_ROOT
+    disk_wheels = {
+        posix_path(p.relative_to(root))
+        for p in sorted(wheels_root.rglob("*.whl"))
+    } if wheels_root.exists() else set()
+
+    wheel_sources: dict[str, list[SourceEntry]] = {}
+    for s in sources:
+        if s.repo_path and s.repo_path.startswith(f"{VENDOR_WHEELS_ROOT}/") and s.repo_path.endswith(".whl"):
+            wheel_sources.setdefault(s.repo_path, []).append(s)
+
+    for wheel in sorted(disk_wheels):
+        count = len(wheel_sources.get(wheel, []))
+        if count == 0:
+            section.fail(f"vendor wheel without index.xml <source>: {wheel}")
+        elif count > 1:
+            section.fail(f"vendor wheel with {count} index.xml <source> entries (expected 1): {wheel}")
+    for repo_path in sorted(wheel_sources):
+        if repo_path not in disk_wheels:
+            section.fail(f"index.xml wheel <source> without repo file: {repo_path}")
+
+    if not disk_wheels and not wheel_sources:
+        section.note("no vendor wheels present")
+    elif section.status != "FAIL":
+        section.note(f"{len(disk_wheels)} vendor wheels, each with exactly one index.xml <source>")
+
+    if network and wheel_sources:
+        import urllib.request
+
+        for repo_path in sorted(wheel_sources):
+            for s in wheel_sources[repo_path]:
+                if not s.url:
+                    section.warn(f"no URL for wheel source: {repo_path}")
+                    continue
+                try:
+                    with urllib.request.urlopen(s.url, timeout=60) as resp:
+                        import hashlib
+
+                        remote_sha = hashlib.sha256(resp.read()).hexdigest()
+                except Exception as exc:  # noqa: BLE001 - release gate reports, never raises
+                    section.fail(f"could not fetch wheel URL {s.url}: {exc}")
+                    continue
+                local_sha = sha256_file(root / repo_path)
+                if remote_sha != local_sha:
+                    section.fail(
+                        f"wheel URL hash mismatch for {repo_path}: remote {remote_sha} != local {local_sha}"
+                    )
+                else:
+                    section.note(f"hash-match remote ↔ repo: {repo_path}")
+
+    return section
+
+
+def run_check(root: Path, network: bool = False) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
 
@@ -322,6 +394,7 @@ def run_check(root: Path) -> tuple[list[Section], int]:
     runtime_section = check_runtime_dependencies(root, payload_paths)
     sections.append(runtime_section)
     sections.append(check_bootstrap_guard_payload(root, payload_paths))
+    sections.append(check_vendor_wheel_index_parity(root, sources, network=network))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count
@@ -346,12 +419,13 @@ def print_report(sections: list[Section], fail_count: int) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="STEMwerk release gate / ReaPack payload audit")
     parser.add_argument("--check", action="store_true", help="Run release gate checks")
+    parser.add_argument("--network", action="store_true", help="Also verify wheel <source> URLs hash-match the repo files")
     args = parser.parse_args(argv)
 
     if not args.check:
         parser.error("only --check is supported")
 
-    sections, fail_count = run_check(ROOT)
+    sections, fail_count = run_check(ROOT, network=args.network)
     print_report(sections, fail_count)
     return 1 if fail_count else 0
 

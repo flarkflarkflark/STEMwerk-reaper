@@ -6213,6 +6213,50 @@ def test_linux_managed_diffq_wheel_payload_is_present_and_resolvable():
     assert scripts_wheels, "missing managed diffq cp312 linux_x86_64 wheel payload in scripts vendor wheel path"
 
 
+def test_vendor_wheels_have_exactly_one_index_source():
+    import xml.etree.ElementTree as ET
+
+    wheels_root = Path("scripts/reaper/vendor/wheels")
+    disk_wheels = sorted(wheels_root.rglob("*.whl"))
+    assert disk_wheels, "no vendor wheels found under scripts/reaper/vendor/wheels"
+
+    index = ET.parse("index.xml")
+    source_files = [s.get("file", "") for s in index.findall(".//source")]
+    wheel_sources = [f for f in source_files if f.endswith(".whl")]
+
+    def source_to_repo_path(file_attr: str) -> str:
+        rel = file_attr
+        while rel.startswith("../"):
+            rel = rel[3:]
+        return f"scripts/reaper/{rel}"
+
+    source_repo_paths = [source_to_repo_path(f) for f in wheel_sources]
+    for wheel in disk_wheels:
+        rel = wheel.as_posix()
+        count = source_repo_paths.count(rel)
+        assert count == 1, f"vendor wheel {rel} has {count} index.xml <source> entries (expected exactly 1)"
+    for rel in source_repo_paths:
+        assert Path(rel).is_file(), f"index.xml wheel <source> without repo file: {rel}"
+
+
+def test_darwin_wheelhouse_sha256_identity():
+    import hashlib
+
+    expected = {
+        "scripts/reaper/vendor/wheels/darwin-arm64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_arm64.whl": "bf65321f2360e0be40bc6441e299531aec547eb0024382182c179206e37d29db",
+        "scripts/reaper/vendor/wheels/darwin-arm64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_arm64.whl": "adb4c3e63fae815e6856e6a75d24d09e47f614d478316dc4cad479301d685531",
+        "scripts/reaper/vendor/wheels/darwin-arm64-cp312/stemwerk_core-0.1.1-py3-none-any.whl": "e4555cd9179a5927c0121b140e3f98c36bfd6d4a5bb7b7d25a1786be7250a981",
+        "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/diffq-0.2.4-cp312-cp312-macosx_11_0_x86_64.whl": "d06a8ccdf3048d76442a680dd89fd0932837cd56b62a9d0564f7584bf57a9a68",
+        "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/samplerate-0.1.0-py3-none-macosx_11_0_x86_64.whl": "3d5bcd3b72cf45b9d447cd8b5903b3b62b32fe9405384d9388eecb197a4a78f6",
+        "scripts/reaper/vendor/wheels/darwin-x86_64-cp312/stemwerk_core-0.1.1-py3-none-any.whl": "e4555cd9179a5927c0121b140e3f98c36bfd6d4a5bb7b7d25a1786be7250a981",
+    }
+    for rel, want in expected.items():
+        path = Path(rel)
+        assert path.is_file(), f"missing darwin wheelhouse wheel: {rel}"
+        got = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert got == want, f"sha256 identity mismatch for {rel}: {got} != {want} (see tools/darwin-wheelhouse/PROVENANCE.md)"
+
+
 def test_audio_separator_dependency_status_fields_are_reported():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
     support_bundle = Path("scripts/reaper/STEMwerk_Save_Support_Bundle.lua").read_text()
