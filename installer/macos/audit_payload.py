@@ -109,7 +109,12 @@ def main() -> int:
     if args.variant == "online" and (args.root / "_bundled/macos/apple-silicon").exists():
         raise SystemExit("ERROR: online payload contains bundled Apple Silicon runtime")
     if args.variant != "online":
-        for path in ("manifest.json", "python", "wheels", "models", "drumsep", "ffmpeg"):
+        required_payload = ["manifest.json", "python", "wheels", "ffmpeg"]
+        if args.variant == "offline-bundled-apple-silicon-mps-allmodels":
+            # Alleen het allmodels-megapack bundelt modellen; sinds 2.3.1.0 is
+            # bundled-apple-silicon runtime-only (modellen komen via de online catalogus).
+            required_payload += ["models", "drumsep"]
+        for path in required_payload:
             if not (args.root / "_bundled/macos/apple-silicon" / path).exists():
                 missing.append(f"_bundled/macos/apple-silicon/{path}")
     args.inventory.parent.mkdir(parents=True, exist_ok=True)

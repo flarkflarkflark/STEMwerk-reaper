@@ -87,6 +87,12 @@ def parse_args() -> argparse.Namespace:
         "--drumsep-compat-config",
         default="tools/assets/macos/drumsep/config_drumsep_mdx23c.yaml",
     )
+    parser.add_argument(
+        "--with-models",
+        action="store_true",
+        help="Include core models + DrumSep checkpoints (megapack). Default since 2.3.1.0 is "
+        "runtime-only (models download via the online catalog on first Setup/Repair).",
+    )
     return parser.parse_args()
 
 
@@ -533,7 +539,8 @@ def write_manifest(
     output_dir: Path,
     version: str,
     wheel_inventory: list[dict[str, object]],
-    compatibility_config: dict[str, object],
+    compatibility_config: dict[str, object] | None,
+    with_models: bool,
 ) -> None:
     manifest = {
         "platform": "macos-apple-silicon-arm64",
@@ -552,8 +559,8 @@ def write_manifest(
             "ffmpeg": True,
             "python": True,
             "wheels": True,
-            "core_models": True,
-            "drumsep": True,
+            "core_models": bool(with_models),
+            "drumsep": bool(with_models),
         },
     }
     (output_dir / "manifest.json").write_text(
@@ -590,10 +597,14 @@ def main() -> int:
     verify_offline_resolution(wheels_dir, python_executable)
 
     copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")
-    copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
-    compatibility = copy_drumsep_assets(model_cache, compat_config, output_dir / "drumsep")
+    compatibility: dict[str, object] | None = None
+    if args.with_models:
+        copy_files(model_cache, output_dir / "models", CORE_MODEL_FILES, "core model payload file")
+        compatibility = copy_drumsep_assets(model_cache, compat_config, output_dir / "drumsep")
+    else:
+        print("runtime-only payload: models/ and drumsep/ are not bundled (online catalog supplies them)")
     verify_payload_architectures(output_dir)
-    write_manifest(output_dir, args.version, inventory, compatibility)
+    write_manifest(output_dir, args.version, inventory, compatibility, args.with_models)
     print(f"Prepared closed arm64 Apple Silicon payload at {output_dir}")
     return 0
 
