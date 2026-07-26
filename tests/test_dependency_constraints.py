@@ -6343,8 +6343,9 @@ def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64()
 
     assert "repair_samplerate_if_arch_mismatch" in script
     assert "stemwerk_samplerate_guard.py" in script
-    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"' in script
-    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"' in script
+    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --repair-version "${PINNED_SAMPLERATE_VERSION}" 2>&1)"' in script
+    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" --repair-version "${PINNED_SAMPLERATE_VERSION}" 2>&1)"' in script
+    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${MANAGED_WHEELS_DIR}" --repair-version "${PINNED_SAMPLERATE_VERSION}" 2>&1)"' in script
     assert '_guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"' not in script
     assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
@@ -6385,7 +6386,7 @@ def test_macos_bootstrap_runs_samplerate_guard_before_final_dependency_verificat
 
     assert script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then') < script.index('if ! "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1; then')
     assert script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then') < script.index('if ! verify_audio_separator_runtime_deps; then')
-    assert script.index('if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then') < script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then')
+    assert script.index('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then') < script.index('if ! repair_samplerate_if_arch_mismatch "pre_final_dependency_verification"; then')
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
 
 
@@ -6404,7 +6405,7 @@ def test_macos_bootstrap_only_clears_stale_torch_pin_status_after_real_final_che
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     line_no = lambda needle: next(i for i, line in enumerate(script.splitlines(), 1) if needle in line)
-    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if ! "${VENV_PY}" -c "import onnxruntime" >/dev/null 2>&1; then')
+    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
     assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
 
 

@@ -180,8 +180,10 @@ def test_runtime_xdg_and_rocm_dependency_contracts_remain_unchanged() -> None:
 
 def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
     expected = {
+        # 2.3.1.0: macOS online Repair (managed wheelhouse, deep preflight,
+        # arch guard, per-arch onnxruntime pins) — hash updated from 2.3.0.7.
         "scripts/reaper/STEMwerk_Bootstrap_macOS.sh": (
-            "7cab0f6b042014825dfe65dd4a9ea8d23012cb15282be5d26ec5612575b5b466"
+            "bb08afa3326df4f8948078d2b9eeb10eb5982825db06ee158090400924774ef3"
         ),
         "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1": (
             "facfd0090c87d9ef0ebadbe6d9d79c68e27307b39695cd7c75e75d63cf436679"
