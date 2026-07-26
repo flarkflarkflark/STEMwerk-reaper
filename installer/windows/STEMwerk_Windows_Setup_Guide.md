@@ -1,6 +1,6 @@
 ﻿# STEMwerk Windows Setup Guide
 
-This guide is for the Windows installer build of STEMwerk 2.3.0.4.
+This guide is for the Windows installer build of STEMwerk 2.3.0.6.
 
 ## What the installer just did
 
@@ -14,7 +14,7 @@ The Windows installer:
 
 The Windows installer remains the recommended fresh-install and repair route on Windows.
 
-If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.0.4` fresh. This avoids stale runtime/backend state.
+If you are updating an older Windows STEMwerk install, uninstall the old version first and then install `2.3.0.6` fresh. This avoids stale runtime/backend state.
 
 ## Installer types
 

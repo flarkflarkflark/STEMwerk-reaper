@@ -26,9 +26,6 @@ copy_linux_payload() {
     --exclude='vendor/stemwerk-core/build/' \
     --exclude='vendor/stemwerk-core/src/*.egg-info/' \
     "$root_dir/scripts/reaper/" \
-    "$dest_dir/"
-
-  rsync -a \
     "$root_dir/i18n" \
     "$root_dir/installer/assets/stemwerk.svg" \
     "$root_dir/installer/assets/stemwerk.png" \

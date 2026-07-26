@@ -7,15 +7,12 @@ BUNDLED_PAYLOAD_DIR="${SCRIPT_DIR}/_bundled"
 PINNED_TORCH_VERSION="2.5.1"
 PINNED_TORCHAUDIO_VERSION="2.5.1"
 PINNED_TORCHVISION_VERSION="0.20.1"
-PINNED_AUDIO_SEPARATOR_VERSION="0.44.3"
 ROCM7_GFX1201_TORCH_VERSION="2.10.0"
 ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0"
 ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0"
-PINNED_NUMPY_VERSION="2.4.4"
-PINNED_SCIPY_VERSION="1.18.0"
-PINNED_NUMBA_VERSION="0.66.0"
-PINNED_LLVM_VERSION="0.48.0"
-PINNED_BEARTYPE_VERSION="0.18.5"
+PINNED_NUMPY_VERSION="1.26.4"
+PINNED_NUMBA_VERSION="0.59.1"
+PINNED_LLVM_VERSION="0.42.0"
 PINNED_IMAGEIO_FFMPEG_VERSION="0.6.0"
 DRUMSEP_AUDIO_SEPARATOR_VERSION="0.34.1"
 DRUMSEP_NUMPY_VERSION="2.4.6"
@@ -37,12 +34,6 @@ DRUMSEP_ROCM7_GFX1201_TORCH_INDEX_URL="https://download.pytorch.org/whl/rocm7.0"
 DRUMSEP_ROCM_MIN_FREE_GB="20"
 DRUMSEP_MODEL_FILE="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 DRUMSEP_MODEL_YAML="aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
-DRUMSEP_COMPAT_YAML="config_drumsep_mdx23c.yaml"
-DRUMSEP_COMPAT_YAML_EXPECTED_SHA256="b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
-DRUMSEP_COMPAT_YAML_EXPECTED_SIZE="2331"
-DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
-DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE="2417"
-DRUMSEP_COMPAT_ONLINE_SOURCE_RELATIVE="assets/drumsep/${DRUMSEP_COMPAT_YAML}"
 
 RUNTIME_BASE=""
 STATE_FILE=""
@@ -78,135 +69,6 @@ log_stage() {
 
 log_step() {
   log " - $*"
-}
-
-drumsep_file_sha256() {
-  sha256sum "$1" 2>/dev/null | awk '{print $1}'
-}
-
-drumsep_file_size() {
-  wc -c < "$1" 2>/dev/null | tr -d '[:space:]'
-}
-
-log_linux_drumsep_target() {
-  log "linux_drumsep_config_target_path=$1"
-  log "linux_drumsep_config_target_size=$2"
-  log "linux_drumsep_config_target_sha256=$3"
-  log "linux_drumsep_config_target_status=$4"
-  log "linux_drumsep_config_target_reason=$5"
-  log "DRUMSEP_COMPAT_YAML_STATUS=$4"
-  log "DRUMSEP_COMPAT_YAML_REASON=$5"
-  log "DRUMSEP_COMPAT_YAML_SHA256=$3"
-}
-
-materialize_drumsep_compat_yaml() {
-  _source="${SCRIPT_DIR}/${DRUMSEP_COMPAT_ONLINE_SOURCE_RELATIVE}"
-  _target_dir="$(model_cache_dir)"
-  _target="${_target_dir}/${DRUMSEP_COMPAT_YAML}"
-  _source_size="missing"
-  _source_sha="missing"
-
-  log "linux_drumsep_config_source_path=${_source}"
-  if [ ! -f "${_source}" ]; then
-    log "linux_drumsep_config_source_size=${_source_size}"
-    log "linux_drumsep_config_source_sha256=${_source_sha}"
-    log "linux_drumsep_config_source_status=missing"
-    return 1
-  fi
-  _source_size="$(drumsep_file_size "${_source}" || true)"
-  _source_sha="$(drumsep_file_sha256 "${_source}" || true)"
-  log "linux_drumsep_config_source_size=${_source_size}"
-  log "linux_drumsep_config_source_sha256=${_source_sha}"
-  if [ "${_source_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] || \
-     [ "${_source_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
-    log "linux_drumsep_config_source_status=integrity_mismatch"
-    return 1
-  fi
-  log "linux_drumsep_config_source_status=canonical"
-
-  _target_size="missing"
-  _target_sha="missing"
-  _success_status="created"
-  _success_reason="materialized_from_online_inventory"
-  if [ -e "${_target}" ]; then
-    _target_size="$(drumsep_file_size "${_target}" || true)"
-    _target_sha="$(drumsep_file_sha256 "${_target}" || true)"
-    if [ "${_target_size}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] && \
-       [ "${_target_sha}" = "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
-      log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "no_op" "already_materialized"
-      return 0
-    fi
-    if [ "${_target_size}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SIZE}" ] && \
-       [ "${_target_sha}" = "${DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256}" ]; then
-      _success_status="migrated_legacy_crlf"
-      _success_reason="migrated_known_legacy_crlf"
-      log "linux_drumsep_config_target_previous_sha256=${_target_sha}"
-      log "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${_target_sha}"
-      log "DRUMSEP_COMPAT_YAML_MIGRATION=known_legacy_crlf_to_canonical_lf"
-    else
-      log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "existing_checksum_mismatch"
-      return 1
-    fi
-  fi
-
-  mkdir -p "${_target_dir}" >/dev/null 2>&1 || {
-    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "model_cache_create_failed"
-    return 1
-  }
-  _tmp="$(mktemp "${_target}.tmp.XXXXXX" 2>/dev/null || true)"
-  if [ -z "${_tmp}" ]; then
-    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "temporary_file_create_failed"
-    return 1
-  fi
-  if ! cp "${_source}" "${_tmp}" >> "${LOG_FILE}" 2>&1; then
-    rm -f "${_tmp}" >/dev/null 2>&1 || true
-    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "atomic_copy_failed"
-    return 1
-  fi
-  _tmp_size="$(drumsep_file_size "${_tmp}" || true)"
-  _tmp_sha="$(drumsep_file_sha256 "${_tmp}" || true)"
-  if [ "${_tmp_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] || \
-     [ "${_tmp_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
-    rm -f "${_tmp}" >/dev/null 2>&1 || true
-    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "temporary_copy_integrity_mismatch"
-    return 1
-  fi
-  if ! mv "${_tmp}" "${_target}"; then
-    rm -f "${_tmp}" >/dev/null 2>&1 || true
-    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "atomic_replace_failed"
-    return 1
-  fi
-  _target_size="$(drumsep_file_size "${_target}" || true)"
-  _target_sha="$(drumsep_file_sha256 "${_target}" || true)"
-  if [ "${_target_size}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SIZE}" ] || \
-     [ "${_target_sha}" != "${DRUMSEP_COMPAT_YAML_EXPECTED_SHA256}" ]; then
-    log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "failed" "destination_integrity_mismatch"
-    return 1
-  fi
-  log_linux_drumsep_target "${_target}" "${_target_size}" "${_target_sha}" "${_success_status}" "${_success_reason}"
-  return 0
-}
-
-# This contract is checked before any runtime, venv, package, model, or config
-# mutation. Only the caller-provided state and log files may be written while
-# reporting a failed preflight.
-REQUIRED_REAPER_LAYOUT="audio_separator_process.py _internal/STEMwerk_Managed_Python.sh assets/drumsep/config_drumsep_mdx23c.yaml vendor/stemwerk-core/pyproject.toml vendor/stemwerk-core/src/stemwerk_core/__init__.py vendor/stemwerk-core/src/stemwerk_core/separator.py vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl"
-STAGED_LAYOUT_FAILED_PATH=""
-
-validate_required_reaper_layout() {
-  log "staged_layout_required=${REQUIRED_REAPER_LAYOUT}"
-  for _required_relative in ${REQUIRED_REAPER_LAYOUT}; do
-    _required_path="${SCRIPT_DIR}/${_required_relative}"
-    if [ ! -f "${_required_path}" ] || [ ! -r "${_required_path}" ]; then
-      STAGED_LAYOUT_FAILED_PATH="${_required_relative}"
-      log "required_script_missing=${_required_path}"
-      log "staged_layout_validation=failed:${_required_relative}"
-      return 1
-    fi
-  done
-  STAGED_LAYOUT_FAILED_PATH=""
-  log "staged_layout_validation=ok"
-  return 0
 }
 
 is_core_source_bundle() {
@@ -355,52 +217,26 @@ PY
 ensure_drumsep_assets() {
   _py="$1"
   _model_dir="${2:-$(model_cache_dir)}"
-  [ -n "${_py}" ] && [ -x "${_py}" ] || return 20
-  mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 20
-  copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models" "${_model_dir}" || return 20
+  [ -n "${_py}" ] && [ -x "${_py}" ] || return 1
+  mkdir -p "${_model_dir}" >/dev/null 2>&1 || return 1
+  copy_bundled_models_to_cache "${BUNDLED_PAYLOAD_DIR}/drumsep-models" "${_model_dir}" || return 1
   "${_py}" - <<PY >> "${LOG_FILE}" 2>&1
 import importlib.util
 from pathlib import Path
 
 script_path = Path(r"${SCRIPT_DIR}") / "audio_separator_process.py"
-try:
-    spec = importlib.util.spec_from_file_location("stemwerk_audio_separator_process_ready", script_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("audio_separator_process_loader_missing")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-except Exception as exc:
-    print(f"DRUMSEP_ASSETS tooling_failure:{type(exc).__name__}:{exc}")
-    raise SystemExit(20)
-try:
-    ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
-        module.DIRECT_DKS_MODEL_ALIAS,
-        Path(r"${_model_dir}"),
-    )
-except Exception as exc:
-    print(f"DRUMSEP_ASSETS unexpected_internal_failure:{type(exc).__name__}:{exc}")
-    raise SystemExit(22)
+spec = importlib.util.spec_from_file_location("stemwerk_audio_separator_process_ready", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec and spec.loader
+spec.loader.exec_module(module)
+ok, _requested, _resolved, detail = module._direct_dks_preflight_check(
+    module.DIRECT_DKS_MODEL_ALIAS,
+    Path(r"${_model_dir}"),
+)
 if not ok:
-    print(f"DRUMSEP_ASSETS model_assets_failure:{detail or 'drumsep_prefetch_failed'}")
-    raise SystemExit(21)
+    raise SystemExit(str(detail or "drumsep_prefetch_failed"))
 print("STEMWERK_DRUMSEP_MODEL_PREFETCH ok")
 PY
-  _assets_rc=$?
-  case "${_assets_rc}" in
-    0|20|21|22) return "${_assets_rc}" ;;
-    *) return 22 ;;
-  esac
-}
-
-classify_drumsep_assets_result() {
-  case "${1:-22}" in
-    0) return 0 ;;
-    20) DRUMSEP_ASSETS_REASON="drumsep_assets_tooling_failed" ;;
-    21) DRUMSEP_ASSETS_REASON="drumsep_assets_model_failed" ;;
-    *) DRUMSEP_ASSETS_REASON="drumsep_assets_internal_failed" ;;
-  esac
-  set_status "deps_failed" "${DRUMSEP_ASSETS_REASON}"
-  return 1
 }
 
 write_ready_to_go_state() {
@@ -411,10 +247,6 @@ write_ready_to_go_state() {
   _main_runtime_status="${5:-ok}"
   _core_prefetch_status="${6:-${CORE_MODEL_PREFETCH_STATUS:-missing}}"
   _core_prefetch_detail="${7:-${CORE_MODEL_PREFETCH_DETAIL:-}}"
-  if [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ]; then
-    _runtime_status="incomplete"
-    _detail="drumsep_install_in_progress"
-  fi
   _out_file="$(ready_to_go_output_file)"
   _core="$(verify_core_model_cache)"
   _model_dir="$(printf "%s\n" "${_core}" | awk -F= '/^model_dir=/{print $2; exit}')"
@@ -428,7 +260,7 @@ write_ready_to_go_state() {
     *) _ready="missing" ;;
   esac
   case "${_runtime_status}" in
-    ok|skipped|unified_main) ;;
+    ok|skipped) ;;
     broken|load_failed|verify_failed|install_failed|disk_space_insufficient)
       _ready="broken"
       ;;
@@ -462,7 +294,7 @@ write_ready_to_go_state() {
     echo "DRUMSEP_READY_RUNTIME=${_runtime_kind}"
     echo "DRUMSEP_READY_RUNTIME_STATUS=${_runtime_status}"
     echo "DRUMSEP_READY_MODEL_STATUS=${_drumsep_model_status}"
-  } | atomic_write_state_file "${_out_file}"
+  } > "${_out_file}"
   log_step "ready_to_go_state_file=${_out_file}"
   log_step "ready_to_go_state_written=1"
   log_step "ready_to_go_status=${_ready}"
@@ -545,113 +377,20 @@ PY
   esac
 }
 
-probe_main_rocm_dks_ready() {
-  _py="${1:-$(main_runtime_python)}"
-  [ -x "${_py}" ] || {
-    log_step "Main unified DKS probe failed: python_missing"
-    return 30
-  }
-  _probe="$("${_py}" - <<'PY' 2>/dev/null || true
-import importlib.metadata as metadata
-import re
-
-
-def version_tuple(value):
-    return tuple(int(part) for part in re.findall(r"\d+", value)[:3])
-
-
-errors = []
-try:
-    from audio_separator.separator import Separator  # noqa: F401
-except Exception as exc:
-    errors.append(f"audio_separator_import_failed:{type(exc).__name__}:{exc}")
-
-try:
-    audio_separator_version = metadata.version("audio-separator")
-except Exception:
-    audio_separator_version = ""
-if version_tuple(audio_separator_version) < (0, 44, 3):
-    errors.append(f"audio_separator_lt_0_44_3:{audio_separator_version or 'missing'}")
-
-try:
-    numpy_version = metadata.version("numpy")
-except Exception:
-    numpy_version = ""
-if version_tuple(numpy_version) < (2, 0, 0):
-    errors.append(f"numpy_lt_2:{numpy_version or 'missing'}")
-
-try:
-    import torch
-    hip = str(getattr(getattr(torch, "version", None), "hip", "") or "")
-    cuda_available = bool(torch.cuda.is_available())
-    device_count = int(torch.cuda.device_count()) if cuda_available else 0
-    if not hip:
-        errors.append("rocm_no_hip")
-    if not cuda_available:
-        errors.append("rocm_cuda_unavailable")
-    if device_count <= 0:
-        errors.append("rocm_no_devices")
-    if device_count > 0:
-        torch.empty(1, device="cuda:0")
-        if not str(torch.cuda.get_device_name(0)).strip():
-            errors.append("rocm_device_name_missing")
-except Exception as exc:
-    errors.append(f"rocm_device_probe_failed:{type(exc).__name__}:{exc}")
-
-if errors:
-    print("broken|" + ";".join(errors))
-else:
-    print("ok")
-PY
-)"
-  case "${_probe}" in
-    ok)
-      log_step "Main unified DKS probe passed: ${_py}"
-      return 0
-      ;;
-    broken\|*)
-      log_step "Main unified DKS probe failed: ${_probe#broken|}"
-      return 30
-      ;;
-    *)
-      log_step "Main unified DKS probe failed: probe_failed"
-      return 31
-      ;;
-  esac
-}
-
-main_dks_assets_ready() {
-  _model_dir="$(model_cache_dir)"
-  [ -f "${_model_dir}/${DRUMSEP_MODEL_FILE}" ] \
-    && [ -f "${_model_dir}/${DRUMSEP_MODEL_YAML}" ]
-}
-
 load_ready_runtime_state() {
   _kind="${1:-cpu}"
   if [ "${_kind}" = "rocm" ] && [ -f "$(drumsep_rocm_state_file)" ]; then
-    DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_ROCM_INSTALL_TXN=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
     READY_RUNTIME_KIND="rocm"
     READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
     READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_ROCM_MODEL_STATUS=/{print $2; exit} /^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
     READY_DETAIL="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_rocm_state_file)")"
-    if [ "${DRUMSEP_INSTALL_TXN}" = "begin" ]; then
-      READY_RUNTIME_STATUS="incomplete"
-      READY_DRUMSEP_MODEL_STATUS="missing"
-      READY_DETAIL="drumsep_install_in_progress"
-    fi
     return 0
   fi
   if [ -f "$(drumsep_state_file)" ]; then
-    DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_CPU_INSTALL_TXN=/{print $2; exit}' "$(drumsep_state_file)")"
     READY_RUNTIME_KIND="cpu"
     READY_RUNTIME_STATUS="$(awk -F= '/^DRUMSEP_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
     READY_DRUMSEP_MODEL_STATUS="$(awk -F= '/^DRUMSEP_MODEL_STATUS=/{print $2; exit}' "$(drumsep_state_file)")"
     READY_DETAIL="$(awk -F= '/^DRUMSEP_RUNTIME_DETAIL=/{print $2; exit} /^STATUS_REASON=/{print $2; exit}' "$(drumsep_state_file)")"
-    if [ "${DRUMSEP_INSTALL_TXN}" = "begin" ]; then
-      READY_RUNTIME_STATUS="incomplete"
-      READY_DRUMSEP_MODEL_STATUS="missing"
-      READY_DETAIL="drumsep_install_in_progress"
-    fi
     return 0
   fi
   return 1
@@ -659,20 +398,7 @@ load_ready_runtime_state() {
 
 verify_existing_ready_runtime() {
   _preferred="${1:-cpu}"
-  for _txn_kind in rocm cpu; do
-    DRUMSEP_INSTALL_TXN=""
-    if load_ready_runtime_state "${_txn_kind}" && [ "${DRUMSEP_INSTALL_TXN}" = "begin" ]; then
-      log_step "Open DrumSep install transaction dominates cached ready state: ${_txn_kind}"
-      return 1
-    fi
-  done
-  DRUMSEP_INSTALL_TXN=""
   if [ "${_preferred}" = "rocm" ]; then
-    if probe_main_rocm_dks_ready "$(main_runtime_python)" && main_dks_assets_ready; then
-      write_main_unified_rocm_state "ok"
-      load_ready_runtime_state "rocm"
-      return 0
-    fi
     if verify_drumsep_rocm_runtime; then
       load_ready_runtime_state "rocm"
       return 0
@@ -792,246 +518,11 @@ drumsep_rocm_runtime_python() {
   printf "%s/.venv-drumsep-rocm/bin/python\n" "${RUNTIME_BASE}"
 }
 
-atomic_write_state_file() {
-  _atomic_target="$1"
-  _atomic_tmp="$(mktemp "${_atomic_target}.tmp.XXXXXX")" || return 1
-  if ! cat > "${_atomic_tmp}"; then
-    rm -f "${_atomic_tmp}"
-    return 1
-  fi
-  sync -f "${_atomic_tmp}" >/dev/null 2>&1 || true
-  if ! mv -f "${_atomic_tmp}" "${_atomic_target}"; then
-    rm -f "${_atomic_tmp}"
-    return 1
-  fi
-  sync -f "$(dirname "${_atomic_target}")" >/dev/null 2>&1 || true
-  return 0
-}
-
-drumsep_sibling_runtime_dir() {
-  case "${1:-cpu}" in
-    rocm) printf "%s/.venv-drumsep-rocm\n" "${RUNTIME_BASE}" ;;
-    *) printf "%s/.venv-drumsep\n" "${RUNTIME_BASE}" ;;
-  esac
-}
-
-drumsep_sibling_state_file() {
-  case "${1:-cpu}" in
-    rocm) drumsep_rocm_state_file ;;
-    *) drumsep_state_file ;;
-  esac
-}
-
-inspect_drumsep_sibling() {
-  _inspect_backend="${1:-cpu}"
-  _inspect_dir="$(drumsep_sibling_runtime_dir "${_inspect_backend}")"
-  _inspect_state="$(drumsep_sibling_state_file "${_inspect_backend}")"
-  DRUMSEP_SIBLING_PRESENT="absent"
-  # Presence is deliberately one non-recursive directory check. Runtime contents
-  # are never opened, inventoried, imported, or probed by this policy decision.
-  if [ -d "${_inspect_dir}" ]; then
-    DRUMSEP_SIBLING_PRESENT="present"
-  fi
-  DRUMSEP_SIBLING_RECORDED_STATE="missing-record"
-  DRUMSEP_INSTALL_TXN=""
-  if [ -f "${_inspect_state}" ]; then
-    case "${_inspect_backend}" in
-      rocm)
-        DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_ROCM_INSTALL_TXN=/{print $2; exit}' "${_inspect_state}")"
-        _inspect_status="$(awk -F= '/^DRUMSEP_ROCM_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "${_inspect_state}")"
-        ;;
-      *)
-        DRUMSEP_INSTALL_TXN="$(awk -F= '/^DRUMSEP_CPU_INSTALL_TXN=/{print $2; exit}' "${_inspect_state}")"
-        _inspect_status="$(awk -F= '/^DRUMSEP_RUNTIME_STATUS=/{print $2; exit} /^STATUS=/{print $2; exit}' "${_inspect_state}")"
-        ;;
-    esac
-    case "${DRUMSEP_INSTALL_TXN}" in
-      begin) DRUMSEP_SIBLING_RECORDED_STATE="incomplete" ;;
-      failed) DRUMSEP_SIBLING_RECORDED_STATE="failed" ;;
-      commit)
-        case "${_inspect_status}" in
-          ok|unified_main) DRUMSEP_SIBLING_RECORDED_STATE="ready" ;;
-          *) DRUMSEP_SIBLING_RECORDED_STATE="unknown" ;;
-        esac
-        ;;
-      *)
-        case "${_inspect_status}" in
-          ok|unified_main) DRUMSEP_SIBLING_RECORDED_STATE="ready" ;;
-          selected) DRUMSEP_SIBLING_RECORDED_STATE="selected" ;;
-          incomplete) DRUMSEP_SIBLING_RECORDED_STATE="incomplete" ;;
-          install_failed|failed|broken|deps_failed) DRUMSEP_SIBLING_RECORDED_STATE="failed" ;;
-          missing|"") DRUMSEP_SIBLING_RECORDED_STATE="missing-record" ;;
-          *) DRUMSEP_SIBLING_RECORDED_STATE="unknown" ;;
-        esac
-        ;;
-    esac
-  fi
-  DRUMSEP_SIBLING_CONSISTENCY="consistent"
-  if [ "${DRUMSEP_SIBLING_PRESENT}" = "present" ]; then
-    case "${DRUMSEP_SIBLING_RECORDED_STATE}" in
-      ready|selected|incomplete|failed) ;;
-      *) DRUMSEP_SIBLING_CONSISTENCY="inconsistent" ;;
-    esac
-  elif [ "${DRUMSEP_SIBLING_RECORDED_STATE}" != "missing-record" ]; then
-    DRUMSEP_SIBLING_CONSISTENCY="inconsistent"
-  fi
-  log_step "drumsep_sibling_backend=${_inspect_backend} presence=${DRUMSEP_SIBLING_PRESENT} recorded_state=${DRUMSEP_SIBLING_RECORDED_STATE} consistency=${DRUMSEP_SIBLING_CONSISTENCY}"
-}
-
-begin_drumsep_install_txn() {
-  _txn_backend="$1"
-  _txn_reason="$2"
-  _txn_state="$(drumsep_sibling_state_file "${_txn_backend}")"
-  case "${_txn_backend}" in
-    rocm) _txn_prefix="DRUMSEP_ROCM" ;;
-    *) _txn_prefix="DRUMSEP_CPU" ;;
-  esac
-  {
-    echo "${_txn_prefix}_INSTALL_TXN=begin"
-    echo "STATUS=incomplete"
-    echo "STATUS_REASON=drumsep_install_in_progress"
-    echo "${_txn_prefix}_MUTATION_REASON=${_txn_reason}"
-  } | atomic_write_state_file "${_txn_state}" || return 1
-  DRUMSEP_INSTALL_TXN="begin"
-  STATUS="incomplete"
-  STATUS_REASON="drumsep_install_in_progress"
-  log "DRUMSEP_INSTALL_TXN=begin backend=${_txn_backend} mutation_reason=${_txn_reason}"
-}
-
-fail_drumsep_install_txn() {
-  _txn_backend="$1"
-  _txn_reason="$2"
-  _txn_detail="${3:-drumsep_install_failed}"
-  _txn_state="$(drumsep_sibling_state_file "${_txn_backend}")"
-  case "${_txn_backend}" in
-    rocm) _txn_prefix="DRUMSEP_ROCM" ;;
-    *) _txn_prefix="DRUMSEP_CPU" ;;
-  esac
-  {
-    echo "${_txn_prefix}_INSTALL_TXN=failed"
-    echo "STATUS=failed"
-    echo "STATUS_REASON=${_txn_detail}"
-    echo "${_txn_prefix}_MUTATION_REASON=${_txn_reason}"
-  } | atomic_write_state_file "${_txn_state}" || true
-  DRUMSEP_INSTALL_TXN="failed"
-  STATUS="failed"
-  STATUS_REASON="${_txn_detail}"
-  log "DRUMSEP_INSTALL_TXN=failed backend=${_txn_backend} reason=${_txn_detail}"
-  return 1
-}
-
-commit_drumsep_install_txn() {
-  _txn_backend="$1"
-  _txn_reason="$2"
-  case "${_txn_backend}" in
-    rocm)
-      if ! write_drumsep_rocm_state "ok" "ok" "verified_ready" "$(drumsep_rocm_runtime_python)" "legacy_rocm" "present" "" "commit" "${_txn_reason}"; then
-        STATUS="failed"
-        STATUS_REASON="drumsep_state_commit_failed"
-        log "DRUMSEP_INSTALL_TXN=commit_failed backend=${_txn_backend}"
-        return 1
-      fi
-      ;;
-    *)
-      if ! write_drumsep_state "ok" "ok" "verified_ready" "$(drumsep_runtime_python)" "legacy_cpu" "commit" "${_txn_reason}"; then
-        STATUS="failed"
-        STATUS_REASON="drumsep_state_commit_failed"
-        log "DRUMSEP_INSTALL_TXN=commit_failed backend=${_txn_backend}"
-        return 1
-      fi
-      ;;
-  esac
-  DRUMSEP_INSTALL_TXN="commit"
-  STATUS="ok"
-  STATUS_REASON="verified_ready"
-  log "DRUMSEP_INSTALL_TXN=commit backend=${_txn_backend}"
-}
-
-run_drumsep_install_transaction() {
-  _txn_backend="$1"
-  _txn_reason="$2"
-  _txn_action="$3"
-  begin_drumsep_install_txn "${_txn_backend}" "${_txn_reason}" || return 1
-  if ! "${_txn_action}"; then
-    fail_drumsep_install_txn "${_txn_backend}" "${_txn_reason}" "${DRUMSEP_INSTALL_FAILURE_REASON:-drumsep_install_failed}"
-    return 1
-  fi
-  commit_drumsep_install_txn "${_txn_backend}" "${_txn_reason}"
-}
-
-apply_drumsep_sibling_policy() {
-  _policy_backend="${1:-cpu}"
-  inspect_drumsep_sibling "${_policy_backend}"
-  if [ "${DRUMSEP_SIBLING_CONSISTENCY}" != "consistent" ]; then
-    DRUMSEP_SIBLING_STATE="inconsistent"
-    set_status "deps_failed" "drumsep_sibling_state_inconsistent"
-    return 1
-  fi
-  _policy_explicit="no"
-  case "${_policy_backend}:${MODE}" in
-    cpu:drumsep-runtime|rocm:drumsep-rocm-runtime) _policy_explicit="yes" ;;
-  esac
-  if [ "${DRUMSEP_SIBLING_PRESENT}" = "absent" ]; then
-    if [ "${_policy_explicit}" != "yes" ]; then
-      DRUMSEP_SIBLING_STATE="absent_untouched"
-      log_step "Optional DrumSep sibling is missing; run the matching Drum Kit runtime action in Setup."
-      set_status "deps_failed" "drumsep_sibling_missing"
-      return 1
-    fi
-    DRUMSEP_MUTATION_REASON="create_absent"
-  else
-    if [ "${_policy_explicit}" != "yes" ]; then
-      DRUMSEP_SIBLING_STATE="present_untouched"
-      log_step "Optional DrumSep sibling needs an explicit rebuild; run the matching Drum Kit runtime action in Setup."
-      set_status "deps_failed" "drumsep_sibling_rebuild_required"
-      return 1
-    fi
-    DRUMSEP_MUTATION_REASON="rebuild_explicit"
-  fi
-  case "${_policy_backend}" in
-    rocm) install_drumsep_rocm_runtime ;;
-    *) install_drumsep_runtime ;;
-  esac
-}
-
-resolve_main_drumsep_runtime_policy() {
-  _policy_backend="${1:-cpu}"
-  case "${_policy_backend}" in
-    rocm)
-      probe_main_rocm_dks_ready "${VENV_PY:-$(main_runtime_python)}"
-      _probe_rc=$?
-      ;;
-    *) _probe_rc=30 ;;
-  esac
-  case "${_probe_rc}" in
-    0)
-      ensure_drumsep_assets "${VENV_PY:-$(main_runtime_python)}" "$(model_cache_dir)"
-      _assets_rc=$?
-      if ! classify_drumsep_assets_result "${_assets_rc}"; then
-        return 1
-      fi
-      case "${_policy_backend}" in
-        rocm) write_main_unified_rocm_state "ok" ;;
-        *) return 30 ;;
-      esac
-      return 0
-      ;;
-    30) apply_drumsep_sibling_policy "${_policy_backend}" ;;
-    *)
-      set_status "deps_failed" "drumsep_probe_error"
-      return 1
-      ;;
-  esac
-}
-
 write_drumsep_state() {
   _status="$1"
   _model_status="${2:-missing}"
   _detail="${3:-}"
-  _py="${4:-$(drumsep_runtime_python)}"
-  _selection="${5:-legacy_cpu}"
-  _install_txn="${6:-}"
-  _mutation_reason="${7:-}"
+  _py="$(drumsep_runtime_python)"
   _state="$(drumsep_state_file)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
@@ -1063,11 +554,8 @@ PY
   {
     echo "STATUS=${_status}"
     [ -n "${_detail}" ] && echo "STATUS_REASON=${_detail}"
-    [ -n "${_install_txn}" ] && echo "DRUMSEP_CPU_INSTALL_TXN=${_install_txn}"
-    [ -n "${_mutation_reason}" ] && echo "DRUMSEP_CPU_MUTATION_REASON=${_mutation_reason}"
     echo "DRUMSEP_RUNTIME_STATUS=${_status}"
     [ -n "${_detail}" ] && echo "DRUMSEP_RUNTIME_DETAIL=${_detail}"
-    echo "DRUMSEP_RUNTIME_SELECTION=${_selection}"
     echo "DRUMSEP_PYTHON=${_py}"
     if [ -n "${_versions}" ]; then
       printf "%s\n" "${_versions}"
@@ -1084,21 +572,14 @@ PY
     echo "DRUMSEP_MODEL_STATUS=${_model_status}"
     echo "DRUMSEP_MODEL_FILE=${_model_file}"
     echo "DRUMSEP_MODEL_YAML=${_model_yaml}"
-  } | atomic_write_state_file "${_state}"
+  } > "${_state}"
 }
 
 write_drumsep_rocm_state() {
   _status="$1"
   _model_status="${2:-missing}"
   _detail="${3:-}"
-  _py="${4:-$(drumsep_rocm_runtime_python)}"
-  _selection="${5:-legacy_rocm}"
-  _legacy_status="${6:-not_checked}"
-  _legacy_install_skipped="${7:-}"
-  _install_txn="${8:-}"
-  _mutation_reason="${9:-}"
-  _compat_status="${_status}"
-  [ "${_status}" = "unified_main" ] && _compat_status="ok"
+  _py="$(drumsep_rocm_runtime_python)"
   _state="$(drumsep_rocm_state_file)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
@@ -1164,16 +645,11 @@ PY
   fi
 
   {
-    echo "STATUS=${_compat_status}"
+    echo "STATUS=${_status}"
     [ -n "${_detail}" ] && echo "STATUS_REASON=${_detail}"
-    [ -n "${_install_txn}" ] && echo "DRUMSEP_ROCM_INSTALL_TXN=${_install_txn}"
-    [ -n "${_mutation_reason}" ] && echo "DRUMSEP_ROCM_MUTATION_REASON=${_mutation_reason}"
     echo "DRUMSEP_ROCM_RUNTIME_STATUS=${_status}"
     [ -n "${_detail}" ] && echo "DRUMSEP_ROCM_RUNTIME_DETAIL=${_detail}"
-    echo "DRUMSEP_ROCM_RUNTIME_SELECTION=${_selection}"
     echo "DRUMSEP_ROCM_PYTHON=${_py}"
-    echo "DRUMSEP_ROCM_LEGACY_RUNTIME_STATUS=${_legacy_status}"
-    echo "DRUMSEP_ROCM_LEGACY_INSTALL_SKIPPED=${_legacy_install_skipped}"
     if [ -n "${_versions}" ]; then
       printf "%s\n" "${_versions}"
     else
@@ -1192,14 +668,7 @@ PY
     echo "DRUMSEP_ROCM_MODEL_FILE=${_model_file}"
     echo "DRUMSEP_ROCM_MODEL_YAML=${_model_yaml}"
     echo "DRUMSEP_ROCM_TEMP_DIR=${_tmp_dir}"
-  } | atomic_write_state_file "${_state}"
-}
-
-write_main_unified_rocm_state() {
-  write_drumsep_rocm_state \
-    "unified_main" "${1:-ok}" "main_unified_ready" \
-    "$(main_runtime_python)" "main_unified" "not_checked" "main_unified_ready"
-  log_step "Legacy DrumSep ROCm install skipped: main_unified_ready"
+  } > "${_state}"
 }
 
 write_state() {
@@ -1213,18 +682,6 @@ write_state() {
     {
       echo "STATUS=${STATUS}"
       [ -n "${STATUS_REASON}" ] && echo "STATUS_REASON=${STATUS_REASON}"
-      if [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ]; then
-        case "${MODE}" in
-          drumsep-rocm-runtime)
-            echo "DRUMSEP_ROCM_INSTALL_TXN=begin"
-            echo "DRUMSEP_ROCM_MUTATION_REASON=${DRUMSEP_MUTATION_REASON:-unknown}"
-            ;;
-          drumsep-runtime)
-            echo "DRUMSEP_CPU_INSTALL_TXN=begin"
-            echo "DRUMSEP_CPU_MUTATION_REASON=${DRUMSEP_MUTATION_REASON:-unknown}"
-            ;;
-        esac
-      fi
       [ -n "${STEP_INDEX}" ] && echo "STEP_INDEX=${STEP_INDEX}"
       [ -n "${STEP_TOTAL}" ] && echo "STEP_TOTAL=${STEP_TOTAL}"
       [ -n "${STEP_LABEL}" ] && echo "STEP_LABEL=${STEP_LABEL}"
@@ -1270,23 +727,9 @@ write_state() {
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON=${VENV_PY}"
       [ -n "${VENV_PY}" ] && echo "VENV_PYTHON_PATH=${VENV_PY}"
       [ -n "${FFMPEG}" ] && echo "FFMPEG_PATH=${FFMPEG}"
-      echo "NUMBA_LEGACY_CACHE_DETECTED=${NUMBA_LEGACY_CACHE_DETECTED}"
-      echo "NUMBA_LEGACY_CACHE_REMOVED=${NUMBA_LEGACY_CACHE_REMOVED}"
-      echo "NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS=${NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS}"
-      echo "NUMBA_LEGACY_CACHE_ANOMALIES=${NUMBA_LEGACY_CACHE_ANOMALIES}"
-      echo "NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING=${NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING}"
-      echo "NUMBA_LEGACY_CACHE_NOT_REMOVED=${NUMBA_LEGACY_CACHE_NOT_REMOVED}"
-      echo "NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=${NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED}"
-      echo "NUMBA_LEGACY_CACHE_CLEANUP_STATUS=${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}"
-      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS=${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS}"
-      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}"
-      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST}"
-      echo "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256}"
-      echo "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-      echo "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
       [ -n "${STEMWERK_INSTALLER:-}" ] && echo "INSTALLER=1"
       [ -n "${RUNTIME_BASE}" ] && echo "RUNTIME_BASE=${RUNTIME_BASE}"
-    } | atomic_write_state_file "${STATE_FILE}"
+    } > "${STATE_FILE}"
   fi
 }
 
@@ -1295,440 +738,9 @@ set_status() {
     STATUS="$1"
     STATUS_REASON="$2"
     log "STATUS=${STATUS} REASON=${STATUS_REASON}"
-    if [ "${STAGED_LAYOUT_VALIDATION_ACTIVE:-0}" -eq 1 ]; then
-      if [ -n "${STATE_FILE}" ]; then
-        {
-          echo "STATUS=${STATUS}"
-          echo "STATUS_REASON=${STATUS_REASON}"
-        } > "${STATE_FILE}"
-      fi
-    else
-      write_state
-    fi
+    write_state
   fi
 }
-
-audit_legacy_numba_caches_for_rebuild() {
-  _audit_venv="$1"
-  _audit_manifest="$2"
-  NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS="failed"
-  NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED="0"
-  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST="none"
-  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256="none"
-  NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
-  NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="0"
-
-  _audit_emit() {
-    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS=${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS}"
-    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}"
-    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST}"
-    log "NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256=${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256}"
-    log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-    log "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
-  }
-
-  _audit_manifest_dir=${_audit_manifest%/*}
-  if [ ! -d "${_audit_manifest_dir}" ] && ! mkdir -p "${_audit_manifest_dir}"; then
-    _audit_emit
-    return 1
-  fi
-  _audit_tmp="$(mktemp "${_audit_manifest_dir}/.numba-legacy-cache-pre-rebuild.XXXXXX")" || {
-    _audit_emit
-    return 1
-  }
-  trap '/bin/rm -f -- "${_audit_tmp}"' EXIT HUP INT TERM
-  : > "${_audit_tmp}" || {
-    _audit_emit
-    return 1
-  }
-
-  if [ ! -e "${_audit_venv}" ] && [ ! -L "${_audit_venv}" ]; then
-    :
-  elif [ ! -d "${_audit_venv}" ] || [ -L "${_audit_venv}" ]; then
-    _audit_emit
-    /bin/rm -f -- "${_audit_tmp}"
-    trap - EXIT HUP INT TERM
-    return 1
-  else
-    _audit_venv_real="$(readlink -f -- "${_audit_venv}" 2>/dev/null || true)"
-    [ -n "${_audit_venv_real}" ] || {
-      _audit_emit
-      /bin/rm -f -- "${_audit_tmp}"
-      trap - EXIT HUP INT TERM
-      return 1
-    }
-    for _audit_parent in \
-      "${_audit_venv}"/lib/python*/site-packages/librosa/core/__pycache__ \
-      "${_audit_venv}"/lib/python*/site-packages/librosa/util/__pycache__
-    do
-      [ -e "${_audit_parent}" ] || [ -L "${_audit_parent}" ] || continue
-      _audit_parent_real="$(readlink -f -- "${_audit_parent}" 2>/dev/null || true)"
-      _audit_parent_relative=${_audit_parent#"${_audit_venv}"/}
-      if [ -L "${_audit_parent}" ] || [ ! -d "${_audit_parent}" ] || [ "${_audit_parent_real}" != "${_audit_venv_real}/${_audit_parent_relative}" ]; then
-        _audit_emit
-        /bin/rm -f -- "${_audit_tmp}"
-        trap - EXIT HUP INT TERM
-        return 1
-      fi
-    done
-    _audit_paths="$(find "${_audit_venv}" \( -name '*.nbc' -o -name '*.nbi' \) -print 2>/dev/null)" || {
-      _audit_emit
-      /bin/rm -f -- "${_audit_tmp}"
-      trap - EXIT HUP INT TERM
-      return 1
-    }
-    while IFS= read -r _audit_path; do
-      [ -n "${_audit_path}" ] || continue
-      _audit_relative=${_audit_path#"${_audit_venv}"/}
-      case "${_audit_relative}" in
-        *"
-"*|*"	"*)
-          _audit_emit
-          /bin/rm -f -- "${_audit_tmp}"
-          trap - EXIT HUP INT TERM
-          return 1
-          ;;
-        lib/python*/site-packages/librosa/core/__pycache__/*.nbc|\
-        lib/python*/site-packages/librosa/core/__pycache__/*.nbi|\
-        lib/python*/site-packages/librosa/util/__pycache__/*.nbc|\
-        lib/python*/site-packages/librosa/util/__pycache__/*.nbi)
-          ;;
-        *)
-          _audit_emit
-          /bin/rm -f -- "${_audit_tmp}"
-          trap - EXIT HUP INT TERM
-          return 1
-          ;;
-      esac
-      if [ -L "${_audit_path}" ] || [ ! -f "${_audit_path}" ]; then
-        _audit_emit
-        /bin/rm -f -- "${_audit_tmp}"
-        trap - EXIT HUP INT TERM
-        return 1
-      fi
-      _audit_real="$(readlink -f -- "${_audit_path}" 2>/dev/null || true)"
-      case "${_audit_real}" in
-        "${_audit_venv_real}"/*) ;;
-        *)
-          _audit_emit
-          /bin/rm -f -- "${_audit_tmp}"
-          trap - EXIT HUP INT TERM
-          return 1
-          ;;
-      esac
-      _audit_size="$(wc -c < "${_audit_path}" 2>/dev/null)" || {
-        _audit_emit
-        /bin/rm -f -- "${_audit_tmp}"
-        trap - EXIT HUP INT TERM
-        return 1
-      }
-      _audit_sha="$(sha256sum "${_audit_path}" 2>/dev/null | awk '{print $1}')"
-      [ "${#_audit_sha}" -eq 64 ] || {
-        _audit_emit
-        /bin/rm -f -- "${_audit_tmp}"
-        trap - EXIT HUP INT TERM
-        return 1
-      }
-      printf '%s\tregular\t%s\t%s\n' "${_audit_relative}" "${_audit_size}" "${_audit_sha}" >> "${_audit_tmp}" || {
-        _audit_emit
-        /bin/rm -f -- "${_audit_tmp}"
-        trap - EXIT HUP INT TERM
-        return 1
-      }
-      NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=$((NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED + 1))
-    done <<EOF
-${_audit_paths}
-EOF
-  fi
-
-  LC_ALL=C sort -o "${_audit_tmp}" "${_audit_tmp}" || {
-    _audit_emit
-    /bin/rm -f -- "${_audit_tmp}"
-    trap - EXIT HUP INT TERM
-    return 1
-  }
-  mv -f -- "${_audit_tmp}" "${_audit_manifest}" || {
-    _audit_emit
-    /bin/rm -f -- "${_audit_tmp}"
-    trap - EXIT HUP INT TERM
-    return 1
-  }
-  trap - EXIT HUP INT TERM
-  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST="${_audit_manifest}"
-  NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256="$(sha256sum "${_audit_manifest}" | awk '{print $1}')"
-  NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS="ok"
-  _audit_emit
-  return 0
-}
-
-persist_numba_cache_rebuild_disposition() {
-  _disposition_manifest="$1"
-  _disposition_state="${_disposition_manifest%/*}/numba-legacy-cache-disposition.state"
-  _disposition_tmp="$(mktemp "${_disposition_state}.XXXXXX")" || return 1
-  {
-    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS}"
-    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}"
-    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST}"
-    printf 'NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256=%s\n' "${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256}"
-    printf 'NUMBA_LEGACY_CACHE_DISPOSITION=%s\n' "${NUMBA_LEGACY_CACHE_DISPOSITION}"
-    printf 'NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=%s\n' "${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
-  } > "${_disposition_tmp}" || {
-    /bin/rm -f -- "${_disposition_tmp}"
-    return 1
-  }
-  mv -f -- "${_disposition_tmp}" "${_disposition_state}" || {
-    /bin/rm -f -- "${_disposition_tmp}"
-    return 1
-  }
-}
-
-remove_main_venv_with_numba_audit() {
-  _rebuild_venv="$1"
-  _rebuild_manifest="$2"
-  if ! audit_legacy_numba_caches_for_rebuild "${_rebuild_venv}" "${_rebuild_manifest}"; then
-    NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
-    log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-    return 1
-  fi
-  if [ "${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}" -eq 0 ]; then
-    NUMBA_LEGACY_CACHE_DISPOSITION="none_present"
-  else
-    NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
-  fi
-  log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-  if ! persist_numba_cache_rebuild_disposition "${_rebuild_manifest}"; then
-    NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
-    log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-    return 1
-  fi
-  if [ -e "${_rebuild_venv}" ] || [ -L "${_rebuild_venv}" ]; then
-    if ! rm -rf -- "${_rebuild_venv}" || [ -e "${_rebuild_venv}" ] || [ -L "${_rebuild_venv}" ]; then
-      NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
-      log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-      return 1
-    fi
-  fi
-  if [ "${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED}" -ne 0 ]; then
-    NUMBA_LEGACY_CACHE_DISPOSITION="removed_with_venv_rebuild"
-  fi
-  NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="0"
-  log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-  log "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
-  persist_numba_cache_rebuild_disposition "${_rebuild_manifest}" || return 1
-  return 0
-}
-# END NUMBA LEGACY CACHE REBUILD AUDIT POLICY
-
-cleanup_legacy_numba_caches() {
-  _cleanup_venv="$1"
-  _cleanup_detected=0
-  _cleanup_removed=0
-  _cleanup_unexpected=0
-  _cleanup_anomalies=0
-  _cleanup_remaining=0
-  _cleanup_status="not_required"
-  _cleanup_failed=0
-
-  _cleanup_emit() {
-    _cleanup_not_removed=$((_cleanup_detected - _cleanup_removed))
-    printf "NUMBA_LEGACY_CACHE_DETECTED=%s\n" "${_cleanup_detected}"
-    printf "NUMBA_LEGACY_CACHE_REMOVED=%s\n" "${_cleanup_removed}"
-    printf "NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS=%s\n" "${_cleanup_unexpected}"
-    printf "NUMBA_LEGACY_CACHE_ANOMALIES=%s\n" "${_cleanup_anomalies}"
-    printf "NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING=%s\n" "${_cleanup_remaining}"
-    printf "NUMBA_LEGACY_CACHE_NOT_REMOVED=%s\n" "${_cleanup_not_removed}"
-    printf "NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=no\n"
-    printf "NUMBA_LEGACY_CACHE_CLEANUP_STATUS=%s\n" "${_cleanup_status}"
-  }
-
-  if [ ! -d "${_cleanup_venv}" ]; then
-    _cleanup_emit
-    return 0
-  fi
-
-  _cleanup_newline='
-'
-  _cleanup_carriage_return="$(printf '\r')"
-  case "${_cleanup_venv}" in
-    *"${_cleanup_newline}"*|*"${_cleanup_carriage_return}"*)
-      _cleanup_anomalies=1
-      _cleanup_status="blocked_anomaly"
-      _cleanup_emit
-      return 1
-      ;;
-  esac
-
-  _cleanup_venv_real="$(readlink -f -- "${_cleanup_venv}" 2>/dev/null || true)"
-  if [ -z "${_cleanup_venv_real}" ] || [ ! -d "${_cleanup_venv_real}" ]; then
-    _cleanup_anomalies=1
-    _cleanup_status="blocked_anomaly"
-    _cleanup_emit
-    return 1
-  fi
-
-  _cleanup_candidates="$(mktemp "${TMPDIR:-/tmp}/stemwerk-numba-legacy-candidates.XXXXXX")" || {
-    _cleanup_status="failed"
-    _cleanup_emit
-    return 1
-  }
-  trap '/bin/rm -f -- "${_cleanup_candidates}"' EXIT HUP INT TERM
-
-  for _cleanup_parent in \
-    "${_cleanup_venv}"/lib/python*/site-packages/librosa/core/__pycache__ \
-    "${_cleanup_venv}"/lib/python*/site-packages/librosa/util/__pycache__
-  do
-    if [ ! -e "${_cleanup_parent}" ] && [ ! -L "${_cleanup_parent}" ]; then
-      continue
-    fi
-    _cleanup_parent_real="$(readlink -f -- "${_cleanup_parent}" 2>/dev/null || true)"
-    _cleanup_parent_relative=${_cleanup_parent#"${_cleanup_venv}"/}
-    _cleanup_parent_expected="${_cleanup_venv_real}/${_cleanup_parent_relative}"
-    case "${_cleanup_parent_real}:${_cleanup_parent_expected}" in
-      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/core/__pycache__:"${_cleanup_venv_real}"/lib/python*/site-packages/librosa/core/__pycache__|\
-      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/util/__pycache__:"${_cleanup_venv_real}"/lib/python*/site-packages/librosa/util/__pycache__)
-        ;;
-      *)
-        _cleanup_anomalies=$((_cleanup_anomalies + 1))
-        continue
-        ;;
-    esac
-    if [ ! -d "${_cleanup_parent}" ] || [ -L "${_cleanup_parent}" ]; then
-      _cleanup_anomalies=$((_cleanup_anomalies + 1))
-      continue
-    fi
-
-    for _cleanup_path in \
-      "${_cleanup_parent}"/* \
-      "${_cleanup_parent}"/.[!.]* \
-      "${_cleanup_parent}"/..?*
-    do
-      if [ ! -e "${_cleanup_path}" ] && [ ! -L "${_cleanup_path}" ]; then
-        continue
-      fi
-      _cleanup_name=${_cleanup_path##*/}
-      if [ -L "${_cleanup_path}" ]; then
-        _cleanup_anomalies=$((_cleanup_anomalies + 1))
-        continue
-      fi
-      if [ -f "${_cleanup_path}" ]; then
-        case "${_cleanup_name}" in
-          *.nbc|*.nbi)
-            case "${_cleanup_name}" in
-              *[!A-Za-z0-9._-]*)
-                _cleanup_anomalies=$((_cleanup_anomalies + 1))
-                continue
-                ;;
-            esac
-            _cleanup_path_real="$(readlink -f -- "${_cleanup_path}" 2>/dev/null || true)"
-            case "${_cleanup_path_real}" in
-              "${_cleanup_parent_real}"/*)
-                printf "%s\n" "${_cleanup_path}" >> "${_cleanup_candidates}" || _cleanup_failed=1
-                _cleanup_detected=$((_cleanup_detected + 1))
-                ;;
-              *)
-                _cleanup_anomalies=$((_cleanup_anomalies + 1))
-                ;;
-            esac
-            ;;
-          *.nbc.*|*.nbi.*)
-            _cleanup_anomalies=$((_cleanup_anomalies + 1))
-            ;;
-        esac
-      else
-        _cleanup_anomalies=$((_cleanup_anomalies + 1))
-      fi
-    done
-  done
-
-  if ! _cleanup_all_marks="$(find "${_cleanup_venv}" -type f \( -name '*.nbc' -o -name '*.nbi' \) -printf x 2>/dev/null)"; then
-    _cleanup_failed=1
-  fi
-  _cleanup_all_count=${#_cleanup_all_marks}
-  if [ "${_cleanup_all_count}" -ge "${_cleanup_detected}" ]; then
-    _cleanup_unexpected=$((_cleanup_all_count - _cleanup_detected))
-  else
-    _cleanup_failed=1
-  fi
-
-  if [ "${_cleanup_failed}" -ne 0 ]; then
-    _cleanup_status="failed"
-    _cleanup_remaining=${_cleanup_detected}
-    _cleanup_emit
-    /bin/rm -f -- "${_cleanup_candidates}"
-    trap - EXIT HUP INT TERM
-    return 1
-  fi
-  if [ "${_cleanup_anomalies}" -ne 0 ]; then
-    _cleanup_status="blocked_anomaly"
-    _cleanup_remaining=${_cleanup_detected}
-    _cleanup_emit
-    /bin/rm -f -- "${_cleanup_candidates}"
-    trap - EXIT HUP INT TERM
-    return 1
-  fi
-
-  while IFS= read -r _cleanup_candidate; do
-    [ -n "${_cleanup_candidate}" ] || continue
-    _cleanup_candidate_parent=${_cleanup_candidate%/*}
-    _cleanup_candidate_real="$(readlink -f -- "${_cleanup_candidate}" 2>/dev/null || true)"
-    _cleanup_candidate_parent_real="$(readlink -f -- "${_cleanup_candidate_parent}" 2>/dev/null || true)"
-    case "${_cleanup_candidate_parent_real}" in
-      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/core/__pycache__|\
-      "${_cleanup_venv_real}"/lib/python*/site-packages/librosa/util/__pycache__)
-        ;;
-      *) _cleanup_failed=1 ;;
-    esac
-    case "${_cleanup_candidate_real}" in
-      "${_cleanup_candidate_parent_real}"/*) ;;
-      *) _cleanup_failed=1 ;;
-    esac
-    if [ ! -f "${_cleanup_candidate}" ] || [ -L "${_cleanup_candidate}" ]; then
-      _cleanup_failed=1
-    fi
-    if [ "${_cleanup_failed}" -ne 0 ]; then
-      break
-    fi
-    if rm -f -- "${_cleanup_candidate}" && [ ! -e "${_cleanup_candidate}" ] && [ ! -L "${_cleanup_candidate}" ]; then
-      _cleanup_removed=$((_cleanup_removed + 1))
-    else
-      _cleanup_failed=1
-      break
-    fi
-  done < "${_cleanup_candidates}"
-
-  _cleanup_remaining=0
-  for _cleanup_parent in \
-    "${_cleanup_venv}"/lib/python*/site-packages/librosa/core/__pycache__ \
-    "${_cleanup_venv}"/lib/python*/site-packages/librosa/util/__pycache__
-  do
-    [ -d "${_cleanup_parent}" ] || continue
-    for _cleanup_path in "${_cleanup_parent}"/*.nbc "${_cleanup_parent}"/*.nbi; do
-      if [ -e "${_cleanup_path}" ] || [ -L "${_cleanup_path}" ]; then
-        _cleanup_remaining=$((_cleanup_remaining + 1))
-      fi
-    done
-  done
-
-  if [ "${_cleanup_failed}" -ne 0 ] || [ "${_cleanup_remaining}" -ne 0 ]; then
-    _cleanup_status="failed"
-    _cleanup_emit
-    /bin/rm -f -- "${_cleanup_candidates}"
-    trap - EXIT HUP INT TERM
-    return 1
-  fi
-  if [ "${_cleanup_unexpected}" -ne 0 ]; then
-    _cleanup_status="partial_unexpected"
-  elif [ "${_cleanup_removed}" -ne 0 ]; then
-    _cleanup_status="removed"
-  else
-    _cleanup_status="not_required"
-  fi
-  _cleanup_emit
-  /bin/rm -f -- "${_cleanup_candidates}"
-  trap - EXIT HUP INT TERM
-  return 0
-}
-# END NUMBA LEGACY CACHE CLEANUP POLICY
 
 detect_build_tools_missing_log() {
   _log="$1"
@@ -1909,9 +921,7 @@ classify_venv_failure() {
 }
 
 create_venv_with_selected_python() {
-  if [ -e "${RUNTIME_BASE}/.venv" ] || [ -L "${RUNTIME_BASE}/.venv" ]; then
-    remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest" || return 1
-  fi
+  rm -rf "${RUNTIME_BASE}/.venv"
   _venv_log="${RUNTIME_BASE}/logs/venv_create.log"
   : > "${_venv_log}" || true
   log_step "Creating venv at ${RUNTIME_BASE}/.venv"
@@ -1922,7 +932,7 @@ create_venv_with_selected_python() {
   cat "${_venv_log}" >> "${LOG_FILE}" 2>/dev/null || true
   VENV_CREATE_REASON="$(classify_venv_failure "${_venv_log}")"
   log_step "Venv creation failed with ${PYTHON}: ${VENV_CREATE_REASON}"
-  rm -rf -- "${RUNTIME_BASE}/.venv"
+  rm -rf "${RUNTIME_BASE}/.venv"
   return 1
 }
 
@@ -2023,14 +1033,12 @@ PY
 }
 
 verify_drumsep_runtime() {
-  DRUMSEP_VERIFY_DETAIL=""
   _py="$(drumsep_runtime_python)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
   _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
   if [ ! -x "${_py}" ]; then
-    DRUMSEP_VERIFY_DETAIL="python_missing"
-    [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
+    write_drumsep_state "missing" "missing" "python_missing"
     return 1
   fi
   "${_py}" - <<PY >> "$(drumsep_log_file)" 2>&1
@@ -2092,23 +1100,19 @@ PY
   _rc=$?
   case "${_rc}" in
     0)
-      DRUMSEP_VERIFY_DETAIL="verified_ready"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "ok" "ok" "ok"
+      write_drumsep_state "ok" "ok" "ok"
       return 0
       ;;
     2)
-      DRUMSEP_VERIFY_DETAIL="model_missing"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "model_missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
+      write_drumsep_state "model_missing" "missing" "model_missing"
       return 1
       ;;
     3)
-      DRUMSEP_VERIFY_DETAIL="model_load_failed"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "broken" "load_failed" "${DRUMSEP_VERIFY_DETAIL}"
+      write_drumsep_state "broken" "load_failed" "model_load_failed"
       return 1
       ;;
     *)
-      DRUMSEP_VERIFY_DETAIL="verify_failed"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_state "broken" "missing" "${DRUMSEP_VERIFY_DETAIL}"
+      write_drumsep_state "broken" "missing" "verify_failed"
       return 1
       ;;
   esac
@@ -2141,6 +1145,62 @@ resolve_drumsep_rocm_tmpdir() {
   return 1
 }
 
+validate_explicit_drumsep_rocm_tmpdir() {
+  _requested_tmpdir="$1"
+  DRUMSEP_ROCM_TMPDIR_RESOLVED=""
+  DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL=""
+
+  case "${_requested_tmpdir}" in
+    /*) ;;
+    *)
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="relative_path"
+      return 1
+      ;;
+  esac
+
+  if ! command -v realpath >/dev/null 2>&1; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="realpath_unavailable"
+    return 1
+  fi
+  _resolved_tmpdir="$(realpath -m -- "${_requested_tmpdir}" 2>/dev/null || true)"
+  if [ -z "${_resolved_tmpdir}" ]; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="resolve_failed"
+    return 1
+  fi
+  if [ "${_resolved_tmpdir}" = "/" ]; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="root_path"
+    return 1
+  fi
+
+  _model_dir="$(model_cache_dir)"
+  case "${_resolved_tmpdir}" in
+    "${RUNTIME_BASE}")
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="runtime_root"
+      return 1
+      ;;
+    "${SCRIPT_DIR}"|"${SCRIPT_DIR}"/*)
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="source_path"
+      return 1
+      ;;
+    "${_model_dir}"|"${_model_dir}"/*)
+      DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="model_path"
+      return 1
+      ;;
+  esac
+
+  if ! mkdir -p "${_resolved_tmpdir}" >/dev/null 2>&1; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="create_failed"
+    return 1
+  fi
+  if [ ! -d "${_resolved_tmpdir}" ] || [ ! -w "${_resolved_tmpdir}" ]; then
+    DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL="not_writable"
+    return 1
+  fi
+
+  DRUMSEP_ROCM_TMPDIR_RESOLVED="${_resolved_tmpdir}"
+  return 0
+}
+
 drumsep_rocm_disk_preflight() {
   _required_kb="$((DRUMSEP_ROCM_MIN_FREE_GB * 1024 * 1024))"
   _target_dir="${RUNTIME_BASE}"
@@ -2155,11 +1215,25 @@ drumsep_rocm_disk_preflight() {
     return 1
   fi
 
-  DRUMSEP_ROCM_TMPDIR="$(resolve_drumsep_rocm_tmpdir "${_required_kb}" || true)"
+  if [ -n "${DRUMSEP_ROCM_TMPDIR:-}" ]; then
+    DRUMSEP_ROCM_TMPDIR_SOURCE="explicit"
+    if ! validate_explicit_drumsep_rocm_tmpdir "${DRUMSEP_ROCM_TMPDIR}"; then
+      DRUMSEP_ROCM_PREFLIGHT_DETAIL="explicit_temp_dir_${DRUMSEP_ROCM_TMPDIR_VALIDATION_DETAIL:-invalid}"
+      log_step "DRUMSEP_ROCM_TMPDIR_SOURCE=${DRUMSEP_ROCM_TMPDIR_SOURCE}"
+      log_step "DRUMSEP_ROCM_TMPDIR_RESOLVED="
+      return 1
+    fi
+    DRUMSEP_ROCM_TMPDIR="${DRUMSEP_ROCM_TMPDIR_RESOLVED}"
+  else
+    DRUMSEP_ROCM_TMPDIR_SOURCE="auto"
+    DRUMSEP_ROCM_TMPDIR="$(resolve_drumsep_rocm_tmpdir "${_required_kb}" || true)"
+  fi
   if [ -z "${DRUMSEP_ROCM_TMPDIR}" ]; then
     DRUMSEP_ROCM_PREFLIGHT_DETAIL="temp_dir_free_space_insufficient"
     return 1
   fi
+  log_step "DRUMSEP_ROCM_TMPDIR_SOURCE=${DRUMSEP_ROCM_TMPDIR_SOURCE}"
+  log_step "DRUMSEP_ROCM_TMPDIR_RESOLVED=${DRUMSEP_ROCM_TMPDIR}"
   _tmp_avail_kb="$(free_kb_for_path "${DRUMSEP_ROCM_TMPDIR}")"
   _tmp_avail_gb=$(( _tmp_avail_kb / 1024 / 1024 ))
   log_step "ROCm disk preflight tmp=${DRUMSEP_ROCM_TMPDIR} free_gb=${_tmp_avail_gb} required_gb=${DRUMSEP_ROCM_MIN_FREE_GB}"
@@ -2167,14 +1241,12 @@ drumsep_rocm_disk_preflight() {
 }
 
 verify_drumsep_rocm_runtime() {
-  DRUMSEP_VERIFY_DETAIL=""
   _py="$(drumsep_rocm_runtime_python)"
   _model_dir="$(model_cache_dir)"
   _model_file="${_model_dir}/${DRUMSEP_MODEL_FILE}"
   _model_yaml="${_model_dir}/${DRUMSEP_MODEL_YAML}"
   if [ ! -x "${_py}" ]; then
-    DRUMSEP_VERIFY_DETAIL="python_missing"
-    [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
+    write_drumsep_rocm_state "missing" "missing" "python_missing"
     return 1
   fi
   "${_py}" - <<PY >> "$(drumsep_rocm_log_file)" 2>&1
@@ -2263,29 +1335,25 @@ PY
   _rc=$?
   case "${_rc}" in
     0)
-      DRUMSEP_VERIFY_DETAIL="verified_ready"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "ok" "ok" "ok"
+      write_drumsep_rocm_state "ok" "ok" "ok"
       return 0
       ;;
     2)
-      DRUMSEP_VERIFY_DETAIL="model_missing"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "model_missing" "missing" "${DRUMSEP_VERIFY_DETAIL}"
+      write_drumsep_rocm_state "model_missing" "missing" "model_missing"
       return 1
       ;;
     3)
-      DRUMSEP_VERIFY_DETAIL="model_load_failed"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "broken" "load_failed" "${DRUMSEP_VERIFY_DETAIL}"
+      write_drumsep_rocm_state "broken" "load_failed" "model_load_failed"
       return 1
       ;;
     *)
-      DRUMSEP_VERIFY_DETAIL="verify_failed"
-      [ "${DRUMSEP_INSTALL_TXN:-}" = "begin" ] || write_drumsep_rocm_state "broken" "missing" "${DRUMSEP_VERIFY_DETAIL}"
+      write_drumsep_rocm_state "broken" "missing" "verify_failed"
       return 1
       ;;
   esac
 }
 
-install_drumsep_rocm_runtime_body() {
+install_drumsep_rocm_runtime() {
   _log="$(drumsep_rocm_log_file)"
   _py="$(drumsep_rocm_runtime_python)"
   : > "${_log}" || true
@@ -2293,9 +1361,19 @@ install_drumsep_rocm_runtime_body() {
   log_step "DrumSep ROCm runtime path: ${RUNTIME_BASE}/.venv-drumsep-rocm"
   log_step "DrumSep ROCm install log: ${_log}"
 
+  # Repair path: if runtime already exists and verifies, succeed without reinstall.
+  if [ -x "${_py}" ]; then
+    log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"
+    if verify_drumsep_rocm_runtime; then
+      log_step "Existing DrumSep ROCm runtime verified; skipping reinstall"
+      return 0
+    fi
+    log_step "Existing DrumSep ROCm runtime failed verification; rebuilding"
+  fi
+
   if ! drumsep_rocm_disk_preflight; then
     log_step "ROCm preflight failed: ${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-unknown}"
-    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-disk_space_insufficient}"
+    write_drumsep_rocm_state "disk_space_insufficient" "missing" "${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-disk_space_insufficient}"
     return 1
   fi
   log_step "ROCm temp dir selected: ${DRUMSEP_ROCM_TMPDIR}"
@@ -2306,17 +1384,17 @@ install_drumsep_rocm_runtime_body() {
   set_progress "1" "${STEP_TOTAL}" "Creating DrumSep ROCm runtime"
   rm -rf "${RUNTIME_BASE}/.venv-drumsep-rocm"
   if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep-rocm" >> "${_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="venv_create_failed"
+    write_drumsep_rocm_state "install_failed" "missing" "venv_create_failed"
     return 1
   fi
   if [ ! -x "${_py}" ]; then
-    DRUMSEP_INSTALL_FAILURE_REASON="python_missing_after_create"
+    write_drumsep_rocm_state "install_failed" "missing" "python_missing_after_create"
     return 1
   fi
 
   set_progress "2" "${STEP_TOTAL}" "Upgrading ROCm runtime pip"
   if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --upgrade pip setuptools wheel >> "${_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="pip_upgrade_failed"
+    write_drumsep_rocm_state "install_failed" "missing" "pip_upgrade_failed"
     return 1
   fi
 
@@ -2325,14 +1403,14 @@ install_drumsep_rocm_runtime_body() {
     "torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}" \
     "torchvision==${DRUMSEP_ACTIVE_ROCM_TORCHVISION_VERSION}" \
     "torchaudio==${DRUMSEP_ACTIVE_ROCM_TORCHAUDIO_VERSION}" >> "${_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="rocm_torch_install_failed"
+    write_drumsep_rocm_state "install_failed" "missing" "rocm_torch_install_failed"
     return 1
   fi
 
   set_progress "4" "${STEP_TOTAL}" "Installing DrumSep packages"
   if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir --no-deps \
     "audio-separator==${DRUMSEP_AUDIO_SEPARATOR_VERSION}" >> "${_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="audio_separator_install_failed"
+    write_drumsep_rocm_state "install_failed" "missing" "audio_separator_install_failed"
     return 1
   fi
   if ! pip_install_with_scope drumsep "${_py}" --no-cache-dir \
@@ -2346,36 +1424,27 @@ install_drumsep_rocm_runtime_body() {
     "librosa==0.11.0" "ml_collections==1.1.0" "pydub==0.25.1" "pyyaml==6.0.3" \
     "requests==2.34.2" "resampy==0.4.3" "rotary-embedding-torch==0.6.5" \
     "samplerate==0.1.0" "scipy==1.17.1" "six==1.17.0" "tqdm==4.67.3" >> "${_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="package_install_failed"
+    write_drumsep_rocm_state "install_failed" "missing" "package_install_failed"
     return 1
   fi
   if ! "${_py}" -m pip check >> "${_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="pip_check_failed"
+    write_drumsep_rocm_state "install_failed" "missing" "pip_check_failed"
     return 1
   fi
 
   set_progress "5" "${STEP_TOTAL}" "Verifying DrumSep ROCm runtime"
-  ensure_drumsep_assets "${_py}" "$(model_cache_dir)"
-  _assets_rc=$?
-  if [ "${_assets_rc}" -ne 0 ]; then
-    classify_drumsep_assets_result "${_assets_rc}" || true
-    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ASSETS_REASON:-drumsep_assets_internal_failed}"
+  if ! ensure_drumsep_assets "${_py}" "$(model_cache_dir)"; then
+    write_drumsep_rocm_state "install_failed" "missing" "model_download_failed"
     return 1
   fi
   if ! verify_drumsep_rocm_runtime; then
-    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_VERIFY_DETAIL:-verify_failed}"
     return 1
   fi
   log_step "DrumSep ROCm runtime verification complete"
   return 0
 }
 
-install_drumsep_rocm_runtime() {
-  DRUMSEP_INSTALL_FAILURE_REASON=""
-  run_drumsep_install_transaction "rocm" "${DRUMSEP_MUTATION_REASON:-rebuild_explicit}" install_drumsep_rocm_runtime_body
-}
-
-install_drumsep_runtime_body() {
+install_drumsep_runtime() {
   _drumsep_log="$(drumsep_log_file)"
   _drumsep_py="$(drumsep_runtime_python)"
   _drumsep_step_total="4"
@@ -2383,21 +1452,29 @@ install_drumsep_runtime_body() {
   log_stage "Installing optional DrumSep runtime"
   log_step "DrumSep runtime path: ${RUNTIME_BASE}/.venv-drumsep"
   log_step "DrumSep install log: ${_drumsep_log}"
+  if [ -x "${_drumsep_py}" ]; then
+    log_step "Existing DrumSep runtime detected; running verification before reinstall"
+    if verify_drumsep_runtime; then
+      log_step "Existing DrumSep runtime verified; skipping reinstall"
+      return 0
+    fi
+    log_step "Existing DrumSep runtime failed verification; rebuilding"
+  fi
   clear_drumsep_substep_state
   set_drumsep_substep_progress "1" "${_drumsep_step_total}" "Creating DrumSep runtime"
   rm -rf "${RUNTIME_BASE}/.venv-drumsep"
   if ! "${PYTHON}" -m venv "${RUNTIME_BASE}/.venv-drumsep" >> "${_drumsep_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="venv_create_failed"
+    write_drumsep_state "install_failed" "missing" "venv_create_failed"
     return 1
   fi
   if [ ! -x "${_drumsep_py}" ]; then
-    DRUMSEP_INSTALL_FAILURE_REASON="python_missing_after_create"
+    write_drumsep_state "install_failed" "missing" "python_missing_after_create"
     return 1
   fi
 
   set_drumsep_substep_progress "2" "${_drumsep_step_total}" "Upgrading DrumSep pip"
   if ! pip_install_with_scope drumsep "${_drumsep_py}" --upgrade pip setuptools wheel >> "${_drumsep_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="pip_upgrade_failed"
+    write_drumsep_state "install_failed" "missing" "pip_upgrade_failed"
     return 1
   fi
 
@@ -2412,29 +1489,20 @@ install_drumsep_runtime_body() {
     "torch==${DRUMSEP_TORCH_VERSION}" \
     "torchvision==${DRUMSEP_TORCHVISION_VERSION}" \
     "numba==${DRUMSEP_NUMBA_VERSION}" >> "${_drumsep_log}" 2>&1; then
-    DRUMSEP_INSTALL_FAILURE_REASON="package_install_failed"
+    write_drumsep_state "install_failed" "missing" "package_install_failed"
     return 1
   fi
 
   set_drumsep_substep_progress "4" "${_drumsep_step_total}" "Verifying DrumSep runtime"
-  ensure_drumsep_assets "${_drumsep_py}" "$(model_cache_dir)"
-  _assets_rc=$?
-  if [ "${_assets_rc}" -ne 0 ]; then
-    classify_drumsep_assets_result "${_assets_rc}" || true
-    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ASSETS_REASON:-drumsep_assets_internal_failed}"
+  if ! ensure_drumsep_assets "${_drumsep_py}" "$(model_cache_dir)"; then
+    write_drumsep_state "install_failed" "missing" "model_download_failed"
     return 1
   fi
   if ! verify_drumsep_runtime; then
-    DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_VERIFY_DETAIL:-verify_failed}"
     return 1
   fi
   log_step "DrumSep runtime verification complete"
   return 0
-}
-
-install_drumsep_runtime() {
-  DRUMSEP_INSTALL_FAILURE_REASON=""
-  run_drumsep_install_transaction "cpu" "${DRUMSEP_MUTATION_REASON:-rebuild_explicit}" install_drumsep_runtime_body
 }
 
 resolve_core_target() {
@@ -2471,9 +1539,7 @@ resolve_core_target() {
 venv_torch_requires_rebuild() {
   _venv_py="$1"
   [ -x "${_venv_py}" ] || return 1
-  _probe="$(STEMWERK_BACKEND="${BACKEND}" "${_venv_py}" - <<'PY' 2>/dev/null || true
-import os
-
+  _probe="$("${_venv_py}" - <<'PY' 2>/dev/null || true
 try:
     import torch
     ver = getattr(torch, "__version__", "")
@@ -2481,27 +1547,7 @@ try:
     parts = core.split(".")
     major = int(parts[0])
     minor = int(parts[1])
-    backend = os.environ.get("STEMWERK_BACKEND", "cpu")
-    hip = getattr(getattr(torch, "version", None), "hip", None)
-    cuda_available = bool(torch.cuda.is_available())
-    cuda_count = int(torch.cuda.device_count()) if cuda_available else 0
-    names = []
-    if cuda_available:
-        for index in range(cuda_count):
-            try:
-                names.append(str(torch.cuda.get_device_name(index)))
-            except Exception:
-                pass
-    dev_text = "|".join(names).lower()
-    allow_rocm7_gfx1201 = (
-        backend == "rocm"
-        and (major, minor) == (2, 10)
-        and hip is not None
-        and cuda_available
-        and cuda_count > 0
-        and ("rx 9070" in dev_text or "gfx1201" in dev_text)
-    )
-    if (major > 2 or (major == 2 and minor >= 6)) and not allow_rocm7_gfx1201:
+    if major > 2 or (major == 2 and minor >= 6):
         print("rebuild|" + ver)
     else:
         print("ok|" + ver)
@@ -2511,7 +1557,7 @@ PY
 )"
   case "${_probe}" in
     rebuild\|*)
-      log_step "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} compatibility"
+      log_step "Existing venv has incompatible torch ${_probe#rebuild|}; rebuilding .venv for audio-separator 0.23.0 compatibility"
       return 0
       ;;
     ok\|*)
@@ -2519,72 +1565,6 @@ PY
       ;;
   esac
   return 1
-}
-
-main_runtime_requires_rebuild() {
-  _venv_py="$1"
-  [ -x "${_venv_py}" ] || return 1
-  _probe="$("${_venv_py}" - <<PY 2>/dev/null || true
-from importlib import metadata as md
-
-expected = {
-    "audio-separator": "${PINNED_AUDIO_SEPARATOR_VERSION}",
-    "numpy": "${PINNED_NUMPY_VERSION}",
-    "scipy": "${PINNED_SCIPY_VERSION}",
-    "numba": "${PINNED_NUMBA_VERSION}",
-    "llvmlite": "${PINNED_LLVM_VERSION}",
-    "beartype": "${PINNED_BEARTYPE_VERSION}",
-}
-
-for name, wanted in expected.items():
-    try:
-        installed = md.version(name)
-    except md.PackageNotFoundError:
-        print("rebuild|missing_package:" + name)
-        raise SystemExit(0)
-    if name == "numpy":
-        try:
-            major = int(installed.split(".", 1)[0])
-        except Exception:
-            major = 0
-        if major < 2:
-            print("rebuild|numpy_major_lt_2:" + installed)
-            raise SystemExit(0)
-    if installed != wanted:
-        print("rebuild|" + name + ":" + installed + "!=" + wanted)
-        raise SystemExit(0)
-print("ok")
-PY
-)"
-  case "${_probe}" in
-    rebuild\|*)
-      log_step "Existing venv has incompatible main runtime ${_probe#rebuild|}; rebuilding .venv for audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} / NumPy ${PINNED_NUMPY_VERSION}"
-      return 0
-      ;;
-    ok)
-      log_step "Existing venv main runtime pins are compatible"
-      ;;
-  esac
-  return 1
-}
-
-select_active_torch_policy() {
-  _policy_backend="$1"
-  ACTIVE_TORCH_VERSION="${PINNED_TORCH_VERSION}"
-  ACTIVE_TORCHVISION_VERSION="${PINNED_TORCHVISION_VERSION}"
-  ACTIVE_TORCHAUDIO_VERSION="${PINNED_TORCHAUDIO_VERSION}"
-  TORCH_RUNTIME_POLICY="service_line_default_torch_lt_2_6"
-  if [ "${_policy_backend}" = "rocm" ] && [ "${ROCM_GFX1201}" -eq 1 ]; then
-    ACTIVE_TORCH_VERSION="${ROCM7_GFX1201_TORCH_VERSION}"
-    ACTIVE_TORCHVISION_VERSION="${ROCM7_GFX1201_TORCHVISION_VERSION}"
-    ACTIVE_TORCHAUDIO_VERSION="${ROCM7_GFX1201_TORCHAUDIO_VERSION}"
-    TORCH_RUNTIME_POLICY="rocm_gfx1201_allow_2_10_rocm7"
-  fi
-  log_step "ACTIVE_TORCH_POLICY_BACKEND=${_policy_backend}"
-  log_step "ACTIVE_TORCH_VERSION=${ACTIVE_TORCH_VERSION}"
-  log_step "ACTIVE_TORCHVISION_VERSION=${ACTIVE_TORCHVISION_VERSION}"
-  log_step "ACTIVE_TORCHAUDIO_VERSION=${ACTIVE_TORCHAUDIO_VERSION}"
-  log_step "PIN_ASSERT_POLICY=torch==${ACTIVE_TORCH_VERSION} torchvision==${ACTIVE_TORCHVISION_VERSION} torchaudio==${ACTIVE_TORCHAUDIO_VERSION}"
 }
 
 linux_torch_install_args() {
@@ -2762,12 +1742,10 @@ enforce_runtime_python_pins() {
   if [ -z "${VENV_PY}" ] || [ ! -x "${VENV_PY}" ]; then
     return 1
   fi
-  log_step "Enforcing runtime Python deps: numpy==${PINNED_NUMPY_VERSION} scipy==${PINNED_SCIPY_VERSION} numba==${PINNED_NUMBA_VERSION} llvmlite==${PINNED_LLVM_VERSION} beartype==${PINNED_BEARTYPE_VERSION}"
+  log_step "Enforcing runtime Python deps: numpy==${PINNED_NUMPY_VERSION} numba==${PINNED_NUMBA_VERSION} llvmlite==${PINNED_LLVM_VERSION}"
   pip_install_with_scope main "${VENV_PY}" --upgrade --force-reinstall --no-cache-dir \
     "numpy==${PINNED_NUMPY_VERSION}" \
-    "scipy==${PINNED_SCIPY_VERSION}" \
     "llvmlite==${PINNED_LLVM_VERSION}" \
-    "beartype==${PINNED_BEARTYPE_VERSION}" \
     "numba==${PINNED_NUMBA_VERSION}" >> "${LOG_FILE}" 2>&1
 }
 
@@ -2776,38 +1754,12 @@ if [ -z "${RUNTIME_BASE}" ]; then
   exit 1
 fi
 
-STATUS="ok"
-STATUS_REASON=""
-STAGED_LAYOUT_VALIDATION_ACTIVE=1
-if ! validate_required_reaper_layout; then
-  set_status "deps_failed" "staged_layout_incomplete:${STAGED_LAYOUT_FAILED_PATH}"
-  exit 1
-fi
-
-if [ "${MODE}" = "materialize-drumsep-compat-only" ]; then
-  if materialize_drumsep_compat_yaml; then
-    exit 0
-  fi
-  set_status "deps_failed" "drumsep_compat_materialization_failed"
-  exit 1
-fi
-
-if ! materialize_drumsep_compat_yaml; then
-  set_status "deps_failed" "drumsep_compat_materialization_failed"
-  exit 1
-fi
-STAGED_LAYOUT_VALIDATION_ACTIVE=0
-
 log_stage "Bootstrap started"
 log_step "Requested mode: ${MODE}"
 log_step "Downloaded models are kept at: $(model_cache_dir)"
-mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs" "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
   log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
-  if ! remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest"; then
-    log_step "Pre-rebuild Numba cache audit failed; preserving existing virtual environment"
-    exit 1
-  fi
+  rm -rf "${RUNTIME_BASE}/.venv"
 fi
 log_step "Preparing runtime directories"
 log_step "Clearing GPU override env vars (HIP_VISIBLE_DEVICES/HSA_OVERRIDE_GFX_VERSION/ROCR_VISIBLE_DEVICES/CUDA_VISIBLE_DEVICES)"
@@ -2836,25 +1788,11 @@ PYTHON=""
 FFMPEG=""
 VENV_PY=""
 PYTHON_PATH=""
-NUMBA_LEGACY_CACHE_DETECTED="0"
-NUMBA_LEGACY_CACHE_REMOVED="0"
-NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS="0"
-NUMBA_LEGACY_CACHE_ANOMALIES="0"
-NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING="0"
-NUMBA_LEGACY_CACHE_NOT_REMOVED="0"
-NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED="no"
-NUMBA_LEGACY_CACHE_CLEANUP_STATUS="not_required"
-NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS="${NUMBA_LEGACY_CACHE_PRE_REBUILD_SCAN_STATUS:-not_applicable}"
-NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED="${NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED:-0}"
-NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST="${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST:-none}"
-NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256="${NUMBA_LEGACY_CACHE_PRE_REBUILD_MANIFEST_SHA256:-none}"
-NUMBA_LEGACY_CACHE_DISPOSITION="${NUMBA_LEGACY_CACHE_DISPOSITION:-none_present}"
-NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING:-0}"
 SUPPORTED_PYTHON_FOUND="no"
 DETECTED_PYTHON_VERSION=""
 DETECTED_PYTHON_PATH=""
 # Conservative default on Linux to avoid extra GPU deps unless explicitly needed.
-PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
+PACKAGE="audio-separator==0.23.0"
 ONNX_PACKAGE="onnxruntime"
 CORE_EXTRA=""
 PROFILE="linux-cpu"
@@ -2936,7 +1874,7 @@ if [ "${ROCM_MODE}" -eq 1 ] && [ "${GPU_MODE}" -eq 0 ]; then
   BACKEND="rocm"
 elif [ "${GPU_MODE}" -eq 1 ]; then
   log_step "CUDA-capable NVIDIA detected; enabling GPU packages"
-  PACKAGE="audio-separator[gpu]==${PINNED_AUDIO_SEPARATOR_VERSION}"
+  PACKAGE="audio-separator[gpu]==0.23.0"
   CORE_EXTRA="[gpu]"
   PROFILE="linux-cuda"
   BACKEND="cuda"
@@ -2946,7 +1884,6 @@ elif [ "${ROCM_MODE}" -eq 1 ]; then
   PROFILE="linux-rocm"
   BACKEND="rocm"
 fi
-select_active_torch_policy "${BACKEND}"
 
 if [ "${MODE}" = "ready-to-go-verify" ]; then
   run_ready_to_go_verify_only
@@ -3248,14 +2185,20 @@ if [ -z "${PYTHON}" ]; then
   fi
 else
   if [ "${MODE}" = "drumsep-runtime" ]; then
-    if apply_drumsep_sibling_policy "cpu"; then
+    if install_drumsep_runtime; then
+      STATUS="ok"
+      STATUS_REASON=""
+      write_drumsep_state "ok" "ok" "ok"
       log_stage "DrumSep runtime install finished"
       exit 0
     fi
     log "DrumSep runtime install failed"
     exit 1
   elif [ "${MODE}" = "drumsep-rocm-runtime" ]; then
-    if apply_drumsep_sibling_policy "rocm"; then
+    if install_drumsep_rocm_runtime; then
+      STATUS="ok"
+      STATUS_REASON=""
+      write_drumsep_rocm_state "ok" "ok" "ok"
       log_stage "DrumSep ROCm runtime install finished"
       exit 0
     fi
@@ -3264,38 +2207,19 @@ else
   fi
   log_stage "Creating venv"
   log_step "Creating STEMwerk virtual environment..."
-  EXISTING_MAIN_RUNTIME_HEALTHY="0"
-  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    if venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python" || main_runtime_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
-      log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
-      if ! remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest"; then
-        set_status "deps_failed" "numba_legacy_cache_pre_rebuild_audit_failed"
-      fi
-    elif probe_main_runtime_ready "${RUNTIME_BASE}/.venv/bin/python" "${BACKEND}" >/dev/null; then
-      select_active_torch_policy "${BACKEND}"
-      PRESERVED_RUNTIME_TORCH_VERSION="$("${RUNTIME_BASE}/.venv/bin/python" -c 'import torch; print(getattr(torch, "__version__", "unknown"))' 2>/dev/null || true)"
-      log_step "PRESERVED_RUNTIME_TORCH_VERSION=${PRESERVED_RUNTIME_TORCH_VERSION:-unknown}"
-      EXISTING_MAIN_RUNTIME_HEALTHY="1"
-      log_step "Preserving healthy existing ${BACKEND} runtime; dependency installation is a no-op"
-    else
-      log_step "Existing venv runtime probe failed; rebuilding .venv"
-      log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
-      if ! remove_main_venv_with_numba_audit "${RUNTIME_BASE}/.venv" "${RUNTIME_BASE}/state/numba-legacy-cache-pre-rebuild.manifest"; then
-        set_status "deps_failed" "numba_legacy_cache_pre_rebuild_audit_failed"
-      fi
-    fi
+  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ] && venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"; then
+    log_step "Removing existing virtual environment: ${RUNTIME_BASE}/.venv"
+    rm -rf "${RUNTIME_BASE}/.venv"
   fi
   if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    if [ "${STATUS}" = "ok" ]; then
-      if ! create_venv_with_selected_python; then
-        if ! try_managed_python_after_venv_failure; then
-          if [ "${VENV_CREATE_REASON}" = "venv_create_failed_missing_ensurepip" ]; then
-            msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
-            log_step "${msg}"
-            printf "%s\n" "${msg}" >&2
-          fi
-          set_status "venv_failed" "${VENV_CREATE_REASON:-venv_create_failed}"
+    if ! create_venv_with_selected_python; then
+      if ! try_managed_python_after_venv_failure; then
+        if [ "${VENV_CREATE_REASON}" = "venv_create_failed_missing_ensurepip" ]; then
+          msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
+          log_step "${msg}"
+          printf "%s\n" "${msg}" >&2
         fi
+        set_status "venv_failed" "${VENV_CREATE_REASON:-venv_create_failed}"
       fi
     fi
   fi
@@ -3309,16 +2233,13 @@ else
       msg="Could not create Python virtual environment because Python venv/ensurepip is missing. STEMwerk could not use or install a managed Python runtime. Install python3.12-venv or use the STEMwerk Linux/macOS package with managed runtime, then run Repair/Rebuild."
       log_step "${msg}"
       printf "%s\n" "${msg}" >&2
-      rm -rf -- "${RUNTIME_BASE}/.venv"
+      rm -rf "${RUNTIME_BASE}/.venv"
       set_status "venv_failed" "${VENV_CREATE_REASON}"
     fi
   fi
-  if [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
-  fi
   if [ "${STATUS}" = "ok" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
-    if [ "${EXISTING_MAIN_RUNTIME_HEALTHY}" -ne 1 ]; then
-      set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
+    set_progress "3" "${STEP_TOTAL}" "Installing STEMwerk runtime"
+    VENV_PY="${RUNTIME_BASE}/.venv/bin/python"
     clear_stale_python_backend_reason
     log_step "Upgrading pip/setuptools/wheel"
     pip_install_with_scope main "${VENV_PY}" --upgrade pip setuptools wheel >> "${LOG_FILE}" 2>&1 || set_status "pip_failed" "pip_upgrade_failed"
@@ -3329,7 +2250,7 @@ else
       log_stage "Installing CPU torch"
       install_linux_torch_stack "cpu" || set_status "deps_failed" "torch_cpu_install_failed"
       log_nvidia_packages "CPU torch install"
-      PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
+      PACKAGE="audio-separator==0.23.0"
       CORE_EXTRA=""
     elif [ "${BACKEND}" = "cuda" ]; then
       log_stage "Installing CUDA torch"
@@ -3530,7 +2451,7 @@ EOF
         PROFILE="linux-cpu"
         BACKEND="cpu"
         BACKEND_REASON="${rocm_fail_reason}"
-        PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
+        PACKAGE="audio-separator==0.23.0"
         CORE_EXTRA=""
       fi
     fi
@@ -3546,9 +2467,7 @@ PY
       log_step "Pinned torch version for downstream installs: ${TORCH_VER}"
       {
         echo "numpy==${PINNED_NUMPY_VERSION}"
-        echo "scipy==${PINNED_SCIPY_VERSION}"
         echo "llvmlite==${PINNED_LLVM_VERSION}"
-        echo "beartype==${PINNED_BEARTYPE_VERSION}"
         echo "numba==${PINNED_NUMBA_VERSION}"
         "${VENV_PY}" - <<'PY' 2>/dev/null
 import importlib
@@ -3629,7 +2548,7 @@ PY
     "${VENV_PY}" -c "import audio_separator" >/dev/null 2>&1 || audio_import_rc=$?
     if [ "${audio_import_rc}" -ne 0 ] && [ "${audio_install_rc}" -eq 0 ]; then
       if [ -n "${CONSTRAINTS_FILE}" ]; then
-        log_step "Installing audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} with constraints (torch pinned)"
+        log_step "Installing audio-separator 0.23.0 with constraints (torch pinned)"
         if [ "${managed_diffq_required}" -eq 1 ] && [ "${managed_diffq_ready}" -eq 1 ]; then
           pip_install_with_scope main "${VENV_PY}" -c "${CONSTRAINTS_FILE}" --only-binary=diffq "${PACKAGE}" >> "${audio_install_log}" 2>&1 || audio_install_rc=$?
         else
@@ -3644,12 +2563,12 @@ PY
       fi
       cat "${audio_install_log}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
-    if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}" ]; then
+    if [ "${audio_install_rc}" -ne 0 ] && [ "${PACKAGE}" != "audio-separator==0.23.0" ]; then
       if detect_build_tools_missing_log "${audio_install_log}"; then
         mark_build_tools_missing
       fi
       log_step "GPU audio-separator install failed; falling back to CPU package"
-      PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
+      PACKAGE="audio-separator==0.23.0"
       PROFILE="linux-cpu"
       BACKEND="cpu"
       BACKEND_REASON="${BACKEND_REASON:-backend_install_failed}"
@@ -3666,7 +2585,9 @@ PY
       if detect_build_tools_missing_log "${audio_install_log}"; then
         mark_build_tools_missing
       fi
-      log_step "audio-separator dependency install failed; no --no-deps fallback is allowed for the NumPy 2 runtime"
+      log_step "audio-separator dependency install failed; retrying package install without dependency resolution"
+      audio_install_rc=0
+      pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}" >> "${LOG_FILE}" 2>&1 || audio_install_rc=$?
     elif [ "${audio_install_rc}" -ne 0 ]; then
       log_step "Managed wheel path required for Linux managed Python 3.12; skipping no-deps fallback"
     fi
@@ -3676,7 +2597,7 @@ PY
     if [ "${audio_install_rc}" -ne 0 ]; then
       log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"
       audio_repair_attempted=1
-      PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"
+      PACKAGE="audio-separator==0.23.0"
       audio_repair_rc=0
       : > "${audio_install_log}" || true
       if [ "${managed_diffq_required}" -eq 1 ]; then
@@ -3767,7 +2688,6 @@ PY
     else
       log_step "Skipping torch pin repair and ONNX install after audio-separator dependency failure"
     fi
-    fi
   fi
 fi
 
@@ -3785,52 +2705,6 @@ do
     break
   fi
 done
-
-if [ "${MODE}" = "repair" ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
-  log_stage "Cleaning legacy Numba caches"
-  NUMBA_LEGACY_CACHE_OUTPUT="$(cleanup_legacy_numba_caches "${RUNTIME_BASE}/.venv")"
-  NUMBA_LEGACY_CACHE_RC=$?
-  while IFS= read -r _numba_cache_marker; do
-    [ -n "${_numba_cache_marker}" ] && log "${_numba_cache_marker}"
-  done <<EOF
-${NUMBA_LEGACY_CACHE_OUTPUT}
-EOF
-  NUMBA_LEGACY_CACHE_DETECTED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_DETECTED=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_REMOVED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_REMOVED=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_UNEXPECTED_PATHS=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_ANOMALIES="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_ANOMALIES=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_NOT_REMOVED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_NOT_REMOVED=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_RUNTIME_CACHE_TOUCHED=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_CLEANUP_STATUS="$(printf "%s\n" "${NUMBA_LEGACY_CACHE_OUTPUT}" | sed -n 's/^NUMBA_LEGACY_CACHE_CLEANUP_STATUS=//p' | tail -n 1)"
-  NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING="${NUMBA_LEGACY_CACHE_POSTCHECK_REMAINING}"
-  if [ "${NUMBA_LEGACY_CACHE_DISPOSITION}" != "removed_with_venv_rebuild" ]; then
-    NUMBA_LEGACY_CACHE_PRE_REBUILD_DETECTED="${NUMBA_LEGACY_CACHE_DETECTED}"
-    if [ "${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}" = "removed" ]; then
-      NUMBA_LEGACY_CACHE_DISPOSITION="removed_individually"
-    elif [ "${NUMBA_LEGACY_CACHE_DETECTED}" -eq 0 ]; then
-      NUMBA_LEGACY_CACHE_DISPOSITION="none_present"
-    else
-      NUMBA_LEGACY_CACHE_DISPOSITION="preserved_due_to_failure"
-    fi
-  fi
-  log "NUMBA_LEGACY_CACHE_DISPOSITION=${NUMBA_LEGACY_CACHE_DISPOSITION}"
-  log "NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING=${NUMBA_LEGACY_CACHE_POST_ACTION_REMAINING}"
-  case "${NUMBA_LEGACY_CACHE_CLEANUP_STATUS}" in
-    not_required|removed|partial_unexpected)
-      ;;
-    blocked_anomaly|failed)
-      NUMBA_LEGACY_CACHE_RC=1
-      ;;
-    *)
-      NUMBA_LEGACY_CACHE_CLEANUP_STATUS="failed"
-      NUMBA_LEGACY_CACHE_RC=1
-      ;;
-  esac
-  if [ "${NUMBA_LEGACY_CACHE_RC}" -ne 0 ]; then
-    set_status "deps_failed" "numba_legacy_cache_cleanup_failed"
-  fi
-fi
 
 if [ -z "${FFMPEG}" ]; then
   managed_ffmpeg=""
@@ -3866,8 +2740,8 @@ backend = os.environ.get("STEMWERK_BACKEND", "cpu")
 errors = []
 try:
     import numpy as np
-    if int(str(getattr(np, "__version__", "0")).split(".", 1)[0]) < 2:
-        errors.append("numpy_major_lt_2")
+    if int(str(getattr(np, "__version__", "0")).split(".", 1)[0]) >= 2:
+        errors.append("numpy_major_gte_2")
 except Exception as exc:
     errors.append("numpy_import_failed:" + str(exc))
 try:
@@ -4091,10 +2965,14 @@ fi
 if [ "${STATUS}" = "ok" ] && [ "${FINAL_OK}" -eq 1 ] && [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
   if [ "${BACKEND}" = "rocm" ]; then
     READY_RUNTIME_KIND="rocm"
-    resolve_main_drumsep_runtime_policy "rocm" || true
+    if ! install_drumsep_rocm_runtime; then
+      set_status "deps_failed" "drumsep_ready_runtime_failed"
+    fi
   else
     READY_RUNTIME_KIND="cpu"
-    resolve_main_drumsep_runtime_policy "cpu" || true
+    if ! install_drumsep_runtime; then
+      set_status "deps_failed" "drumsep_ready_runtime_failed"
+    fi
   fi
 fi
 if [ "${READY_RUNTIME_KIND}" = "rocm" ] && [ -f "$(drumsep_rocm_state_file)" ]; then
@@ -4107,14 +2985,8 @@ fi
 if [ -z "${READY_RUNTIME_STATUS}" ]; then READY_RUNTIME_STATUS="missing"; fi
 if [ -z "${READY_DRUMSEP_MODEL_STATUS}" ]; then READY_DRUMSEP_MODEL_STATUS="missing"; fi
 if [ -z "${READY_DETAIL}" ]; then READY_DETAIL="${STATUS_REASON}"; fi
-READY_MAIN_RUNTIME_STATUS="ok"
-if [ "${STATUS}" != "ok" ]; then
-  READY_RUNTIME_STATUS="broken"
-  READY_DETAIL="${STATUS_REASON}"
-  READY_MAIN_RUNTIME_STATUS="broken"
-fi
 READY_STATE_FILE="$(ready_to_go_output_file)"
-write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"
+write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"
 
 if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then
   log_step "ready_to_go_state_persists_in_state_file=1"

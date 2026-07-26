@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT_DIR="$ROOT_DIR/installer/macos/dist"
 SCRIPTS_DIR="$ROOT_DIR/installer/macos/scripts"
 BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"
+PAYLOAD_MANIFEST="$ROOT_DIR/installer/macos/payload-manifest.txt"
+PAYLOAD_AUDITOR="$ROOT_DIR/installer/macos/audit_payload.py"
 
 VERSION="${STEMWERK_VERSION:-}"
 PKG_ID="com.flarkaudio.stemwerk"
@@ -80,27 +82,6 @@ remove_appledouble_sidecars() {
   find "$1" -name '._*' -delete
 }
 
-validate_staged_reaper_layout() {
-  local reaper_root="$STAGE/Users/Shared/STEMwerk-reaper"
-  local required
-  for required in \
-    "$reaper_root/STEMwerk_Bootstrap_macOS.sh" \
-    "$reaper_root/audio_separator_process.py" \
-    "$reaper_root/_internal/stemwerk_samplerate_guard.py"
-  do
-    if [[ ! -f "$required" ]]; then
-      echo "ERROR: required staged macOS runtime script missing: $required" >&2
-      exit 1
-    fi
-  done
-  case "$VARIANT" in
-    bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)
-      [[ -f "$PAYLOAD_DEST/manifest.json" ]] || { echo "ERROR: staged Apple Silicon manifest missing" >&2; exit 1; }
-      [[ -d "$PAYLOAD_DEST/wheels" ]] || { echo "ERROR: staged Apple Silicon wheelhouse missing" >&2; exit 1; }
-      ;;
-  esac
-}
-
 repack_pkg_without_appledouble() {
   PACKAGE_REPACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stemwerk-macos-pkg-repack.XXXXXX")"
   (
@@ -124,25 +105,19 @@ repack_pkg_without_appledouble() {
 rm -rf "$STAGE"
 mkdir -p "$OUT_DIR" "$STAGE/Users/Shared/STEMwerk-reaper"
 
-# Copy only what we need
-rsync -a --delete \
-  --exclude='._*' \
-  --exclude='*.bak' \
-  --exclude='*.bak2' \
-  --exclude='sync_to_reaper.sh' \
-  --exclude='STEMwerk_Enable_Debug.lua' \
-  --exclude='STEMwerk_Disable_Debug.lua' \
-  --exclude='STEMwerk_Set_FFmpegPath.lua' \
-  --exclude='STEMwerk_Set_PythonPath.lua' \
-  --exclude='STEMwerk_separate.lua' \
-  "$ROOT_DIR/scripts/reaper/" \
-  "$ROOT_DIR/i18n" \
-  "$ROOT_DIR/installer/assets/stemwerk.svg" \
-  "$ROOT_DIR/docs" \
-  "$ROOT_DIR/README.md" \
-  "$ROOT_DIR/LICENSE" \
-  "$ROOT_DIR/TODO.md" \
-  "$STAGE/Users/Shared/STEMwerk-reaper/"
+PAYLOAD_ROOT="$STAGE/Users/Shared/STEMwerk-reaper"
+awk -F '\t' '
+  $0 !~ /^#/ && NF >= 2 { if (seen[$2]++) { print "ERROR: duplicate payload destination: " $2 > "/dev/stderr"; exit 1 } }
+' "$PAYLOAD_MANIFEST"
+while IFS=$'\t' read -r source destination; do
+  [[ -n "$source" && "${source:0:1}" != "#" ]] || continue
+  [[ -e "$ROOT_DIR/$source" ]] || {
+    echo "ERROR: manifest source is missing: $source" >&2
+    exit 1
+  }
+  mkdir -p "$(dirname "$PAYLOAD_ROOT/$destination")"
+  cp -p "$ROOT_DIR/$source" "$PAYLOAD_ROOT/$destination"
+done < "$PAYLOAD_MANIFEST"
 
 case "$VARIANT" in
   online)
@@ -150,20 +125,29 @@ case "$VARIANT" in
     ;;
   bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)
     if [[ -d "$BUNDLED_PAYLOAD_ROOT" ]]; then
-      python3 "$ROOT_DIR/tools/build_macos_apple_silicon_payload.py" \
-        --audit-existing "$BUNDLED_PAYLOAD_ROOT"
       mkdir -p "$(dirname "$PAYLOAD_DEST")"
-      rsync -a --delete --exclude='._*' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
+      rsync -a --delete \
+        --exclude='._*' --exclude='*.exe' --exclude='*.dll' \
+        --exclude='*.bat' --exclude='*.cmd' --exclude='*.ps1' \
+        "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"
     else
-      echo "ERROR: bundled Apple Silicon payload is missing: $BUNDLED_PAYLOAD_ROOT" >&2
-      exit 1
+      mkdir -p "$PAYLOAD_DEST"
+      cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF
+variant=$VARIANT
+payload_status=missing
+EOF
     fi
     ;;
 esac
 
-validate_staged_reaper_layout
-
 remove_appledouble_sidecars "$STAGE"
+python3 "$PAYLOAD_AUDITOR" --root "$PAYLOAD_ROOT" \
+  --variant "$VARIANT" --inventory "$ROOT_DIR/installer/macos/build/$VARIANT/payload-inventory.json"
+
+if [[ "${STEMWERK_STAGE_ONLY:-0}" == "1" ]]; then
+  echo "Staged and audited: $PAYLOAD_ROOT"
+  exit 0
+fi
 
 # Ensure pkg scripts are executable
 chmod +x "$SCRIPTS_DIR/postinstall" 2>/dev/null || true

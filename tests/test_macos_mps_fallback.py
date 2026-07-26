@@ -294,8 +294,7 @@ def test_lua_and_i18n_expose_user_facing_apple_mps_labels_without_experimental_c
     assert "MPS/CPU" not in "\n".join(
         line for line in languages.splitlines() if "device_auto_desc" in line
     )
-    assert "local cachedDevicesApplied = false" in main
-    assert "cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)" in main
+    assert 'local cachedDevicesApplied = applyCachedRuntimeDevices(cacheOpts)' in main
     assert 'if not cachedDevicesApplied and not RUNTIME_DEVICES then' in main
     assert 'local mpsAvailable = false' in main
     assert 'if mpsAvailable and cpuReady then' in main

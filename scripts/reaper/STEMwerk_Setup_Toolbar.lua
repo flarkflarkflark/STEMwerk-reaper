@@ -1,6 +1,6 @@
 -- @description STEMwerk - Setup Toolbar Actions
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.5
+-- @version 2.3.0.6
 -- @changelog
 --   Adds/refreshes STEMwerk scripts in the Action List and guides toolbar setup.
 --   Registers the dedicated "Stemwerk: Explode Takes (In Place)" quick action.
@@ -176,7 +176,6 @@ local scriptFiles = {
     "STEMwerk.lua",
     "STEMwerk-SETUP.lua",
     "STEMwerk_Save_Support_Bundle.lua",
-    "STEMwerk_Direct_Kit.lua",
     "STEMwerk_Drum_Kit_Split.lua",
     "STEMwerk_Explode_Takes.lua",
     "STEMwerk_Karaoke.lua",
@@ -223,16 +222,6 @@ local toolbarIcons = {
         targets = {"stemwerk_all_stems.png", "toolbar_6stem.png"},
     },
     {
-        source1x = joinPath(toolbarAssetDir, "strips_90x30", "stemwerk_direct_kit_90x30.png"),
-        source2x = joinPath(toolbarAssetDir, "strips_180x60", "stemwerk_direct_kit_180x60.png"),
-        targets = {"stemwerk_direct_kit.png"},
-    },
-    {
-        source1x = joinPath(toolbarAssetDir, "strips_90x30", "stemwerk_kit_split_90x30.png"),
-        source2x = joinPath(toolbarAssetDir, "strips_180x60", "stemwerk_kit_split_180x60.png"),
-        targets = {"stemwerk_kit_split.png"},
-    },
-    {
         source1x = joinPath(toolbarAssetDir, "strips_90x30", "stemwerk_explode_takes_90x30.png"),
         source2x = joinPath(toolbarAssetDir, "strips_180x60", "stemwerk_explode_takes_180x60.png"),
         targets = {"stemwerk_explode_takes.png"},
@@ -249,9 +238,7 @@ local recommendedToolbarOrder = {
     "7. Bass Only -> STEMwerk_Bass_Only.lua -> stemwerk_bass_only.png",
     "8. Karaoke -> STEMwerk_Karaoke.lua -> stemwerk_karaoke.png",
     "9. separator",
-    "10. Direct Kit -> STEMwerk_Direct_Kit.lua -> stemwerk_direct_kit.png",
-    "11. Kit Split -> STEMwerk_Drum_Kit_Split.lua -> stemwerk_kit_split.png",
-    "12. Explode Takes -> STEMwerk_Explode_Takes.lua -> stemwerk_explode_takes.png",
+    "10. Explode Takes -> STEMwerk_Explode_Takes.lua -> stemwerk_explode_takes.png",
 }
 
 local toolbarEntries = {
@@ -264,8 +251,6 @@ local toolbarEntries = {
     {script = "STEMwerk_Bass_Only.lua", label = "Bass Only", icon = "stemwerk_bass_only.png"},
     {script = "STEMwerk_Karaoke.lua", label = "Karaoke", icon = "stemwerk_karaoke.png"},
     {separator = true},
-    {script = "STEMwerk_Direct_Kit.lua", label = "Direct Kit", icon = "stemwerk_direct_kit.png"},
-    {script = "STEMwerk_Drum_Kit_Split.lua", label = "Kit Split", icon = "stemwerk_kit_split.png"},
     {script = "STEMwerk_Explode_Takes.lua", label = "Explode Takes", icon = "stemwerk_explode_takes.png"},
 }
 

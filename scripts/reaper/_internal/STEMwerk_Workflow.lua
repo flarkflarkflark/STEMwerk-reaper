@@ -231,7 +231,9 @@ local function preflightNormalWorkflowDeviceRoute(runOptions)
     debugLog("normal_workflow_live_gpu_available=" .. (gpuAvailable and "yes" or "no"))
 
     local normalizedRequest = string.lower(tostring(requestedUiDevice or "auto"))
-    if normalizedRequest ~= "" and normalizedRequest ~= "cpu" and not gpuAvailable then
+    -- Only explicit GPU requests are blocked on a CPU-only runtime; "auto" is
+    -- allowed because it resolves to the best available device (GPU or CPU).
+    if normalizedRequest ~= "" and normalizedRequest ~= "cpu" and normalizedRequest ~= "auto" and not gpuAvailable then
         debugLog("normal_workflow_fallback_reason=live_runtime_cpu_only")
         local msg =
             "Normal STEMwerk processing was stopped because the live normal runtime reports CPU-only devices.\n\n"
@@ -495,7 +497,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             local msg =
                 "NumPy compatibility issue.\n\n"
                 .. tostring(numpyErr or "Unknown error") .. "\n\n"
-                .. "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle."
+                .. "Fix (command):\n"
+                .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
             debugLog(msg)
             SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
             local lf = io.open(logFile, "w")

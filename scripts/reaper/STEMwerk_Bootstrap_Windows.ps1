@@ -106,11 +106,6 @@ $drumsepDirectMlSoundFileVersion = "0.14.0"
 $drumsepModelEntryName = "MDX23C Model: DrumSep 6stem | (by aufr33 & jarredou)"
 $drumsepModelFileName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
 $drumsepModelYamlName = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
-$drumsepCompatYamlName = "config_drumsep_mdx23c.yaml"
-$drumsepCompatYamlExpectedSize = 2331
-$drumsepCompatYamlExpectedSha256 = "b7165bb73a0b08df49ac4ed5fe7424e29bf2f707b5878300f729a7e92671257a"
-$drumsepCompatYamlLegacyCrlfSize = 2417
-$drumsepCompatYamlLegacyCrlfSha256 = "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
 $drumsepModelCkptUrl = "https://huggingface.co/KitsuneX07/Music_Source_Sepetration_Models/resolve/8309883c6b3fecc360fff24c932dcc588f8c23c2/multi_stem_models/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt?download=true"
 $drumsepModelYamlUrl = "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
 $drumsepModelCkptMinimumBytes = 104857600
@@ -126,6 +121,8 @@ $audioSeparatorOk = $false
 $stemwerkCoreOk = $false
 $samplerateOk = $false
 $juliusOk = $false
+$torchAudioOk = $false
+$pytorchCpuIndex = "https://download.pytorch.org/whl/cpu"
 $pytorchCudaIndex = "https://download.pytorch.org/whl/cu121"
 $package = "audio-separator==$audioSeparatorVersion"
 $coreExtra = ""
@@ -136,6 +133,7 @@ $python = $null
 $ffmpeg = $null
 $venvPy = Join-NormalizedWindowsPath $RuntimeBase @(".venv", "Scripts", "python.exe")
 $installerMode = ($env:STEMWERK_INSTALLER -eq "1")
+$bundledRuntimeMode = ($env:STEMWERK_BUNDLED_RUNTIME -eq "1")
 $offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bundledRuntimeDir = Join-NormalizedWindowsPath $scriptRoot @("_bundled")
@@ -146,6 +144,9 @@ $ffmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegArchiveFileName"
 $bundledPythonInstaller = Join-NormalizedWindowsPath $bundledRuntimeDir @("python", $pythonInstallerFileName)
 $bundledFfmpegZip = Join-NormalizedWindowsPath $bundledRuntimeDir @("ffmpeg", $ffmpegArchiveFileName)
 $script:FfmpegSource = "missing"
+$script:FfmpegValidated = $false
+$script:FfmpegValidationReason = "ffmpeg_path_missing"
+$script:FfprobePath = ""
 $bundledWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("wheels")
 $bundledDrumsepWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-wheels")
 $bundledDrumsepModelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-models")
@@ -162,10 +163,6 @@ $script:DrumsepOfflinePayloadSource = if ($offlineBundledAllmodelsMode) { "bundl
 $script:DrumsepOfflinePayloadReason = ""
 $script:DrumsepModelSource = ""
 $script:DrumsepRuntimeWheelSource = ""
-$script:DrumsepCompatYamlStatus = "not_checked"
-$script:DrumsepCompatYamlReason = "not_checked"
-$script:DrumsepCompatYamlPreviousSha256 = ""
-$script:DrumsepCompatYamlSha256 = ""
 
 function TestCoreSourceBundle([string]$Root) {
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
@@ -236,11 +233,17 @@ function TestRuntimeWritable([string]$Path) {
 }
 
 function LogExecutionPolicyStatus {
+    $effective = "Unknown"
     try {
         $effective = [string](Get-ExecutionPolicy)
         if ([string]::IsNullOrWhiteSpace($effective)) { $effective = "Unknown" }
         LogProgress ("PowerShell execution policy (effective): " + $effective)
+    } catch {
+        LogLine "Execution policy effective-value probe failed"
+        return $false
+    }
 
+    try {
         $policyList = Get-ExecutionPolicy -List
         if ($policyList) {
             $parts = @()
@@ -253,16 +256,20 @@ function LogExecutionPolicyStatus {
                 LogLine ("Execution policy list: " + ($parts -join "; "))
             }
         }
-
-        if ($effective -eq "Restricted" -or $effective -eq "AllSigned") {
-            LogStatusDetail ("PowerShell policy is restrictive (" + $effective + "). Manual script runs may need CurrentUser RemoteSigned.")
-        }
     } catch {
-        LogLine "Execution policy check failed"
+        LogLine "Execution policy scope-list probe unavailable; effective policy remains authoritative"
+    }
+
+    if ($effective -eq "Restricted" -or $effective -eq "AllSigned") {
+        LogProgress "EXECUTION_POLICY_STATUS=failed"
+        LogStatusDetail ("PowerShell policy is restrictive (" + $effective + "). Manual script runs may need CurrentUser RemoteSigned.")
+        Set-Status "failed" "execution_policy_restricted"
+    } else {
+        LogProgress "EXECUTION_POLICY_STATUS=ok"
     }
 }
 
-function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue, [string]$SamplerateValue, [string]$JuliusValue) {
+function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$BackendValue, [string]$BackendReasonValue, [string]$PythonPathValue, [string]$FfmpegPathValue, [string]$FfprobePathValue, [string]$RuntimeBaseValue, [string]$BootstrapStatusValue, [string]$BootstrapReasonValue, [string]$VerificationValue, [string]$AudioSeparatorValue, [string]$StemwerkCoreValue, [string]$SamplerateValue, [string]$JuliusValue) {
     $lines = @()
     $lines += "CAP_VERSION=1"
     $lines += "PROFILE=$ProfileValue"
@@ -270,6 +277,7 @@ function WriteCapabilities([string]$Path, [string]$ProfileValue, [string]$Backen
     $lines += "BACKEND_REASON=$BackendReasonValue"
     $lines += "PYTHON_PATH=$PythonPathValue"
     $lines += "FFMPEG_PATH=$FfmpegPathValue"
+    $lines += "FFPROBE_PATH=$FfprobePathValue"
     $lines += "RUNTIME_BASE=$RuntimeBaseValue"
     $lines += "BOOTSTRAP_STATUS=$BootstrapStatusValue"
     $lines += "BOOTSTRAP_REASON=$BootstrapReasonValue"
@@ -536,9 +544,123 @@ function InstallPythonDirect {
     return $null
 }
 
+function GetFfprobePathForFfmpeg([string]$FfmpegPath) {
+    if ([string]::IsNullOrWhiteSpace($FfmpegPath)) { return "" }
+    return Join-Path (Split-Path -Parent $FfmpegPath) "ffprobe.exe"
+}
+
+function TestFfmpegPair([string]$FfmpegPath) {
+    if ([string]::IsNullOrWhiteSpace($FfmpegPath)) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffmpeg_path_missing"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    if (-not (Test-Path $FfmpegPath -PathType Leaf)) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffmpeg_executable_missing"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    $ffprobePath = GetFfprobePathForFfmpeg $FfmpegPath
+    if ([string]::IsNullOrWhiteSpace($ffprobePath) -or -not (Test-Path $ffprobePath -PathType Leaf)) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffprobe_executable_missing"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    RunHidden $FfmpegPath @("-version") "Validate FFmpeg executable" | Out-Null
+    $ffmpegExit = $LASTEXITCODE
+    if ($ffmpegExit -ne 0) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffmpeg_validation_failed"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    RunHidden $ffprobePath @("-version") "Validate ffprobe executable" | Out-Null
+    $ffprobeExit = $LASTEXITCODE
+    if ($ffprobeExit -ne 0) {
+        return @{ Status = "missing_ffmpeg"; Reason = "ffprobe_validation_failed"; FfmpegPath = ""; FfprobePath = "" }
+    }
+    return @{ Status = "ok"; Reason = "ffmpeg_pair_valid"; FfmpegPath = $FfmpegPath; FfprobePath = $ffprobePath }
+}
+
+function TestFfmpegArchive([string]$ArchivePath) {
+    if ([string]::IsNullOrWhiteSpace($ArchivePath) -or -not (Test-Path $ArchivePath -PathType Leaf)) { return $false }
+    try {
+        if ((Get-Item $ArchivePath).Length -lt 1MB) { return $false }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+        try {
+            $names = @($archive.Entries | ForEach-Object { $_.FullName.ToLowerInvariant().Replace("\", "/") })
+            $hasFfmpeg = @($names | Where-Object { $_ -like "*/bin/ffmpeg.exe" }).Count -gt 0
+            $hasFfprobe = @($names | Where-Object { $_ -like "*/bin/ffprobe.exe" }).Count -gt 0
+            return ($hasFfmpeg -and $hasFfprobe)
+        } finally {
+            $archive.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
+function GetFfmpegDownloadFailure([System.Exception]$Exception) {
+    $failureClass = "unknown"
+    $httpStatus = 0
+    if ($Exception -is [System.Net.WebException]) {
+        switch ([string]$Exception.Status) {
+            "NameResolutionFailure" { $failureClass = "dns" }
+            "ProxyNameResolutionFailure" { $failureClass = "proxy" }
+            "TrustFailure" { $failureClass = "tls" }
+            "SecureChannelFailure" { $failureClass = "tls" }
+            "Timeout" { $failureClass = "timeout" }
+            "ConnectionClosed" { $failureClass = "connection_reset" }
+            "ReceiveFailure" { $failureClass = "connection_reset" }
+            "SendFailure" { $failureClass = "connection_reset" }
+            "ProtocolError" { $failureClass = "http_status" }
+        }
+        if ($Exception.Response -and $Exception.Response.StatusCode) {
+            $httpStatus = [int]$Exception.Response.StatusCode
+        }
+    } elseif ($Exception.GetType().FullName -like "*HttpRequestException*") {
+        $failureClass = "connection_reset"
+        if ($Exception.StatusCode) { $httpStatus = [int]$Exception.StatusCode }
+    }
+    $retryable = $failureClass -in @("dns", "timeout", "connection_reset", "partial_download", "unknown")
+    if ($failureClass -eq "http_status" -and ($httpStatus -eq 408 -or $httpStatus -eq 429 -or $httpStatus -ge 500)) {
+        $retryable = $true
+    }
+    return @{ Class = $failureClass; HttpStatus = $httpStatus; Retryable = $retryable; ErrorType = $Exception.GetType().FullName; HResult = $Exception.HResult }
+}
+
+function DownloadFfmpegArchive([string]$Url, [string]$TargetPath) {
+    $maxAttempts = 3
+    $partialPath = $TargetPath + ".partial"
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        Remove-Item -Path $partialPath -Force -ErrorAction SilentlyContinue
+        LogProgress ("FFMPEG_DOWNLOAD_ATTEMPT=" + $attempt + "/" + $maxAttempts)
+        try {
+            $response = Invoke-WebRequest -Uri $Url -OutFile $partialPath -UseBasicParsing -TimeoutSec 120 -MaximumRedirection 5
+            $httpStatus = if ($response -and $response.StatusCode) { [int]$response.StatusCode } else { 200 }
+            LogProgress ("FFMPEG_DOWNLOAD_HTTP_STATUS=" + $httpStatus)
+            if (-not (Test-Path $partialPath -PathType Leaf) -or (Get-Item $partialPath).Length -lt 1MB) {
+                LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=partial_download"
+                if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds $attempt; continue }
+                return $false
+            }
+            LogProgress ("FFMPEG_DOWNLOAD_BYTES=" + (Get-Item $partialPath).Length)
+            if (-not (TestFfmpegArchive $partialPath)) {
+                LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=archive_invalid"
+                Remove-Item -Path $partialPath -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+            Move-Item -Path $partialPath -Destination $TargetPath -Force
+            LogProgress "FFMPEG_DOWNLOAD_STATUS=ok"
+            return $true
+        } catch {
+            $failure = GetFfmpegDownloadFailure $_.Exception
+            LogProgress ("FFMPEG_DOWNLOAD_FAILURE_CLASS=" + $failure.Class)
+            LogProgress ("FFMPEG_DOWNLOAD_HTTP_STATUS=" + $failure.HttpStatus)
+            LogLine ("FFmpeg download diagnostic: error_type=" + $failure.ErrorType + " hresult=" + $failure.HResult)
+            Remove-Item -Path $partialPath -Force -ErrorAction SilentlyContinue
+            if (-not $failure.Retryable -or $attempt -ge $maxAttempts) { return $false }
+            Start-Sleep -Seconds $attempt
+        }
+    }
+    return $false
+}
+
 function InstallFfmpegDirect {
     $zipPath = Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg", "ffmpeg.zip")
-    if (Test-Path $bundledFfmpegZip) {
+    if ($bundledRuntimeMode -and (Test-Path $bundledFfmpegZip)) {
         $script:FfmpegSource = "bundled"
         try {
             LogStatusDetail "Installing bundled FFmpeg..."
@@ -549,14 +671,21 @@ function InstallFfmpegDirect {
             LogLine "Bundled FFmpeg archive copy failed"
             return $null
         }
+        if (-not (TestFfmpegArchive $zipPath)) {
+            LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=archive_invalid"
+            LogLine "Bundled FFmpeg archive validation failed"
+            return $null
+        }
+    } elseif ($bundledRuntimeMode) {
+        $script:FfmpegSource = "bundled_missing"
+        LogLine "Bundled runtime mode requires the current bundled FFmpeg archive; online fallback is disabled."
+        return $null
     } else {
         $script:FfmpegSource = "download"
-        try {
-            LogStatusDetail "Downloading FFmpeg..."
-            LogProgress "FFMPEG_SOURCE=download"
-            LogProgress ("Downloading FFmpeg (gyan.dev release): " + $ffmpegArchiveUrl)
-            Invoke-WebRequest -Uri $ffmpegArchiveUrl -OutFile $zipPath -UseBasicParsing | Out-Null
-        } catch {
+        LogStatusDetail "Downloading FFmpeg..."
+        LogProgress "FFMPEG_SOURCE=download"
+        LogProgress ("Downloading FFmpeg (gyan.dev release): " + $ffmpegArchiveUrl)
+        if (-not (DownloadFfmpegArchive $ffmpegArchiveUrl $zipPath)) {
             LogLine "FFmpeg download failed"
             return $null
         }
@@ -580,13 +709,33 @@ function InstallFfmpegDirect {
         }
         Expand-Archive -Path $zipPath -DestinationPath (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")) -Force
     } catch {
+        LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=extraction_failed"
         LogLine "FFmpeg extract failed"
         return $null
     }
-    LogProgress "Searching extracted files for ffmpeg.exe"
+    LogProgress "Searching extracted files for ffmpeg.exe and ffprobe.exe"
     $ff = Get-ChildItem -Path (Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")) -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
-    if ($ff) { return $ff.FullName }
-    LogLine "FFmpeg binary not found after extract"
+    if (-not $ff) {
+        $script:FfmpegValidationReason = "ffmpeg_executable_missing"
+        LogProgress "FFMPEG_DOWNLOAD_FAILURE_CLASS=binary_missing"
+        LogLine "FFmpeg binary not found after extract"
+        return $null
+    }
+    $pair = TestFfmpegPair $ff.FullName
+    if ($pair.Status -eq "ok") {
+        $script:FfmpegValidated = $true
+        $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+        $script:FfprobePath = [string]$pair.FfprobePath
+        return [string]$pair.FfmpegPath
+    }
+    $script:FfmpegValidationReason = [string]$pair.Reason
+    $failureClass = if ($pair.Reason -eq "ffmpeg_executable_missing" -or $pair.Reason -eq "ffprobe_executable_missing") {
+        "binary_missing"
+    } else {
+        "binary_execution_failed"
+    }
+    LogProgress ("FFMPEG_DOWNLOAD_FAILURE_CLASS=" + $failureClass)
+    LogLine ("FFmpeg pair validation failed after extract: " + $pair.Reason)
     return $null
 }
 
@@ -607,7 +756,14 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
             if (IsFfmpegShim $p) {
                 LogProgress ("Ignoring shim FFmpeg path: " + $p)
             } else {
-                return $p
+                $pair = TestFfmpegPair $p
+                if ($pair.Status -eq "ok") {
+                    $script:FfmpegValidated = $true
+                    $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+                    $script:FfprobePath = [string]$pair.FfprobePath
+                    return [string]$pair.FfmpegPath
+                }
+                LogProgress ("Ignoring invalid FFmpeg pair: " + $p + " reason=" + $pair.Reason)
             }
         }
     }
@@ -620,7 +776,14 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
                 if (IsFfmpegShim $runtimeFfmpeg.FullName) {
                     LogProgress ("Ignoring shim FFmpeg path: " + $runtimeFfmpeg.FullName)
                 } else {
-                    return $runtimeFfmpeg.FullName
+                    $pair = TestFfmpegPair $runtimeFfmpeg.FullName
+                    if ($pair.Status -eq "ok") {
+                        $script:FfmpegValidated = $true
+                        $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+                        $script:FfprobePath = [string]$pair.FfprobePath
+                        return [string]$pair.FfmpegPath
+                    }
+                    LogProgress ("Ignoring invalid runtime FFmpeg pair: " + $pair.Reason)
                 }
             }
         } catch {
@@ -632,7 +795,14 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
         if (IsFfmpegShim $cmd.Source) {
             LogProgress ("Ignoring shim FFmpeg path: " + $cmd.Source)
         } else {
-            return $cmd.Source
+            $pair = TestFfmpegPair $cmd.Source
+            if ($pair.Status -eq "ok") {
+                $script:FfmpegValidated = $true
+                $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+                $script:FfprobePath = [string]$pair.FfprobePath
+                return [string]$pair.FfmpegPath
+            }
+            LogProgress ("Ignoring invalid PATH FFmpeg pair: " + $pair.Reason)
         }
     }
 
@@ -810,7 +980,7 @@ function SetDrumsepOfflinePayloadState([string]$Status, [string]$Reason, [string
 }
 
 function TestBundledDrumsepModelsAvailable {
-    foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName, $drumsepCompatYamlName)) {
+    foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName)) {
         if (-not (Test-Path (Join-Path $bundledDrumsepModelsDir $name))) {
             return $false
         }
@@ -829,14 +999,6 @@ function CopyBundledDrumsepAssets([string]$ModelDir) {
         foreach ($name in @($drumsepModelFileName, $drumsepModelYamlName)) {
             $src = Join-Path $bundledDrumsepModelsDir $name
             $dest = Join-Path $ModelDir $name
-            if (Test-Path -LiteralPath $dest) {
-                $sourceSize = (Get-Item -LiteralPath $src).Length
-                $destinationSize = (Get-Item -LiteralPath $dest).Length
-                if ($sourceSize -eq $destinationSize -and (GetSha256Lower $src) -eq (GetSha256Lower $dest)) {
-                    LogProgress ("Bundled DrumSep asset already matches: " + $dest)
-                    continue
-                }
-            }
             Copy-Item -Path $src -Destination $dest -Force
         }
         SetDrumsepOfflinePayloadState "ok" "bundled" "bundled" $script:DrumsepRuntimeWheelSource
@@ -845,108 +1007,6 @@ function CopyBundledDrumsepAssets([string]$ModelDir) {
         SetDrumsepOfflinePayloadState "missing" "bundled_model_copy_failed"
         LogLine ("Bundled DrumSep model copy failed: " + $_.Exception.Message)
         return $false
-    }
-}
-
-function GetSha256Lower([string]$Path) {
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
-}
-
-function SetDrumsepCompatYamlResult([string]$Status, [string]$Reason, [string]$PreviousSha256 = "", [string]$Sha256 = "") {
-    $script:DrumsepCompatYamlStatus = $Status
-    $script:DrumsepCompatYamlReason = $Reason
-    $script:DrumsepCompatYamlPreviousSha256 = $PreviousSha256
-    $script:DrumsepCompatYamlSha256 = $Sha256
-    foreach ($line in @(
-        "DRUMSEP_COMPAT_YAML_STATUS=$Status",
-        "DRUMSEP_COMPAT_YAML_REASON=$Reason",
-        "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=$PreviousSha256",
-        "DRUMSEP_COMPAT_YAML_SHA256=$Sha256"
-    )) {
-        LogLine $line
-    }
-}
-
-function MaterializeDrumsepCompatYaml([string]$SourcePath, [string]$DestinationPath) {
-    if ([string]::IsNullOrWhiteSpace($SourcePath) -or -not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
-        SetDrumsepCompatYamlResult "error" "payload_source_missing"
-        LogLine "Bundled DrumSep compatibility config is missing; reinstall from an official payload."
-        return $false
-    }
-    try {
-        $sourceSize = (Get-Item -LiteralPath $SourcePath).Length
-        $sourceSha = GetSha256Lower $SourcePath
-    } catch {
-        SetDrumsepCompatYamlResult "error" "payload_source_unreadable"
-        return $false
-    }
-    if ($sourceSize -ne $drumsepCompatYamlExpectedSize -or $sourceSha -ne $drumsepCompatYamlExpectedSha256) {
-        SetDrumsepCompatYamlResult "error" "payload_source_checksum_mismatch" "" $sourceSha
-        LogLine "Bundled DrumSep compatibility config failed its size/checksum contract; reinstall from an official payload."
-        return $false
-    }
-
-    $previousSha = ""
-    $status = "created"
-    $reason = "created_from_bundled_payload"
-    if (Test-Path -LiteralPath $DestinationPath) {
-        try {
-            $previousSize = (Get-Item -LiteralPath $DestinationPath).Length
-            $previousSha = GetSha256Lower $DestinationPath
-        } catch {
-            SetDrumsepCompatYamlResult "error" "existing_config_unreadable"
-            return $false
-        }
-        if ($previousSize -eq $drumsepCompatYamlExpectedSize -and $previousSha -eq $drumsepCompatYamlExpectedSha256) {
-            SetDrumsepCompatYamlResult "exists_valid" "canonical_checksum_match" $previousSha $previousSha
-            return $true
-        }
-        if ($previousSize -ne $drumsepCompatYamlLegacyCrlfSize -or $previousSha -ne $drumsepCompatYamlLegacyCrlfSha256) {
-            SetDrumsepCompatYamlResult "error" "existing_checksum_mismatch" $previousSha $previousSha
-            return $false
-        }
-        $status = "migrated_legacy_crlf"
-        $reason = "migrated_known_legacy_crlf"
-    }
-
-    $destinationDir = Split-Path -Parent $DestinationPath
-    $tempPath = Join-Path $destinationDir ("." + [IO.Path]::GetFileName($DestinationPath) + ".tmp-" + [Guid]::NewGuid().ToString("N"))
-    $backupPath = Join-Path $destinationDir ("." + [IO.Path]::GetFileName($DestinationPath) + ".bak-" + [Guid]::NewGuid().ToString("N"))
-    try {
-        New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
-        [IO.File]::Copy($SourcePath, $tempPath, $false)
-        $tempSize = (Get-Item -LiteralPath $tempPath).Length
-        $tempSha = GetSha256Lower $tempPath
-        if ($tempSize -ne $drumsepCompatYamlExpectedSize -or $tempSha -ne $drumsepCompatYamlExpectedSha256) {
-            SetDrumsepCompatYamlResult "error" "temporary_checksum_mismatch" $previousSha $tempSha
-            return $false
-        }
-        if (Test-Path -LiteralPath $DestinationPath) {
-            [IO.File]::Replace($tempPath, $DestinationPath, $backupPath)
-        } else {
-            [IO.File]::Move($tempPath, $DestinationPath)
-        }
-        $finalSize = (Get-Item -LiteralPath $DestinationPath).Length
-        $finalSha = GetSha256Lower $DestinationPath
-        if ($finalSize -ne $drumsepCompatYamlExpectedSize -or $finalSha -ne $drumsepCompatYamlExpectedSha256) {
-            SetDrumsepCompatYamlResult "error" "final_checksum_mismatch" $previousSha $finalSha
-            return $false
-        }
-        SetDrumsepCompatYamlResult $status $reason $previousSha $finalSha
-        return $true
-    } catch {
-        SetDrumsepCompatYamlResult "error" "atomic_materialization_failed" $previousSha
-        LogLine ("DrumSep compatibility config materialization failed: " + $_.Exception.Message)
-        return $false
-    } finally {
-        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-        if (Test-Path -LiteralPath $backupPath) {
-            if (-not (Test-Path -LiteralPath $DestinationPath)) {
-                Move-Item -LiteralPath $backupPath -Destination $DestinationPath -Force -ErrorAction SilentlyContinue
-            } else {
-                Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
-            }
-        }
     }
 }
 
@@ -968,6 +1028,7 @@ function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
         LogProgress "Installing PyTorch CUDA runtime"
         $torchCudaReq = "torch==$torchVersion$torchCudaSuffix"
         $torchVisionCudaReq = "torchvision==$torchVisionVersion$torchCudaSuffix"
+        $torchAudioCudaReq = "torchaudio==$torchAudioVersion$torchCudaSuffix"
         $installArgs = @(
             "--upgrade","--force-reinstall",
             "--index-url",$pytorchCudaIndex,
@@ -975,7 +1036,8 @@ function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
             "-c",$cudaConstraints,
             "numpy<2",
             $torchCudaReq,
-            $torchVisionCudaReq
+            $torchVisionCudaReq,
+            $torchAudioCudaReq
         )
         # Offline bundle mode cannot satisfy CUDA index installs unless explicit wheels are bundled.
         if (HasBundledWheels) {
@@ -985,7 +1047,8 @@ function InstallBackendRuntime([string]$PythonPath, [string]$BackendName) {
                 "-c",$cudaConstraints,
                 "numpy<2",
                 $torchCudaReq,
-                $torchVisionCudaReq
+                $torchVisionCudaReq,
+                $torchAudioCudaReq
             )
         }
         InstallWithPip $PythonPath $installArgs "Install PyTorch CUDA runtime"
@@ -1075,6 +1138,123 @@ function GetAudioRuntimeDependencyList([string]$BackendName) {
     return $deps
 }
 
+function GetMatchedTorchaudioContract([string]$BackendName) {
+    if ($BackendName -eq "cuda") {
+        return @{
+            Requirement = "torchaudio==$torchAudioVersion$torchCudaSuffix"
+            Index = $pytorchCudaIndex
+            Backend = "cuda"
+        }
+    }
+    return @{
+        Requirement = "torchaudio==$torchAudioVersion+cpu"
+        Index = $pytorchCpuIndex
+        Backend = if ($BackendName -eq "directml") { "directml" } else { "cpu" }
+    }
+}
+
+function TestMainTorchAudioRuntime([string]$PythonPath, [string]$BackendName) {
+    if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) {
+        return @{ Status = "repair_required"; Reason = "python_missing" }
+    }
+    $contract = GetMatchedTorchaudioContract $BackendName
+    $probeResultPath = Join-Path $RuntimeBase "state\torch_audio_probe.txt"
+    Remove-Item -Path $probeResultPath -Force -ErrorAction SilentlyContinue
+    $probeCode = @'
+import os
+from pathlib import Path
+
+result_path = Path(os.environ["STEMWERK_TORCHAUDIO_RESULT"])
+backend = os.environ.get("STEMWERK_TORCHAUDIO_BACKEND", "cpu")
+expected = os.environ.get("STEMWERK_TORCHAUDIO_VERSION", "2.4.1")
+errors = []
+try:
+    import torch
+except Exception:
+    errors.append("torch_import_failed")
+    torch = None
+try:
+    import torchaudio
+except Exception:
+    errors.append("torchaudio_missing")
+    torchaudio = None
+
+def split_version(value):
+    text = str(value or "")
+    core, sep, build = text.partition("+")
+    return core, (build.lower() if sep else "")
+
+if torch is not None and torchaudio is not None:
+    torch_core, torch_build = split_version(getattr(torch, "__version__", ""))
+    audio_core, audio_build = split_version(getattr(torchaudio, "__version__", ""))
+    if torch_core != expected:
+        errors.append("torch_version_unsupported")
+    elif audio_core != expected or torch_core != audio_core:
+        errors.append("torchaudio_version_mismatch")
+    if backend == "cuda":
+        if torch_build != "cu121" or audio_build != "cu121":
+            errors.append("torchaudio_backend_mismatch")
+    else:
+        allowed_torch_builds = ("", "cpu") if backend == "directml" else ("cpu",)
+        if torch_build not in allowed_torch_builds or audio_build != "cpu":
+            errors.append("torchaudio_backend_mismatch")
+
+if errors:
+    result_path.write_text("repair_required|" + errors[0], encoding="utf-8")
+else:
+    result_path.write_text("ok|torch_torchaudio_compatible", encoding="utf-8")
+'@
+    $previousResult = $env:STEMWERK_TORCHAUDIO_RESULT
+    $previousBackend = $env:STEMWERK_TORCHAUDIO_BACKEND
+    $previousVersion = $env:STEMWERK_TORCHAUDIO_VERSION
+    try {
+        $env:STEMWERK_TORCHAUDIO_RESULT = $probeResultPath
+        $env:STEMWERK_TORCHAUDIO_BACKEND = [string]$contract.Backend
+        $env:STEMWERK_TORCHAUDIO_VERSION = $torchAudioVersion
+        RunHidden $PythonPath @("-c", $probeCode) "Verify matched Torch/torchaudio runtime" | Out-Null
+    } finally {
+        $env:STEMWERK_TORCHAUDIO_RESULT = $previousResult
+        $env:STEMWERK_TORCHAUDIO_BACKEND = $previousBackend
+        $env:STEMWERK_TORCHAUDIO_VERSION = $previousVersion
+    }
+    $probeText = ""
+    if (Test-Path $probeResultPath) {
+        $probeText = ([string](Get-Content $probeResultPath -ErrorAction SilentlyContinue | Select-Object -First 1)).Trim()
+    }
+    $parts = $probeText.Split('|', 2)
+    if ($LASTEXITCODE -eq 0 -and $parts.Count -eq 2 -and $parts[0] -eq "ok") {
+        return @{ Status = "ok"; Reason = $parts[1] }
+    }
+    $reason = if ($parts.Count -eq 2 -and $parts[1]) { $parts[1] } else { "torchaudio_probe_failed" }
+    return @{ Status = "repair_required"; Reason = $reason }
+}
+
+function EnsureMatchedTorchaudioRuntime([string]$PythonPath, [string]$BackendName) {
+    $probe = TestMainTorchAudioRuntime $PythonPath $BackendName
+    if ($probe.Status -eq "ok") {
+        $script:torchAudioOk = $true
+        return $true
+    }
+    if ($probe.Reason -eq "torch_import_failed" -or $probe.Reason -eq "torch_version_unsupported" -or $probe.Reason -eq "python_missing") {
+        LogLine ("Cannot repair torchaudio without a healthy supported Torch runtime: " + $probe.Reason)
+        return $false
+    }
+    $contract = GetMatchedTorchaudioContract $BackendName
+    LogProgress ("Repairing matched torchaudio runtime: " + $contract.Requirement)
+    InstallWithPip $PythonPath @(
+        "--upgrade", "--force-reinstall", "--no-deps",
+        "--index-url", $contract.Index,
+        $contract.Requirement
+    ) "Install matched torchaudio runtime"
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $probe = TestMainTorchAudioRuntime $PythonPath $BackendName
+    $script:torchAudioOk = ($probe.Status -eq "ok")
+    if (-not $script:torchAudioOk) {
+        LogLine ("Matched torchaudio verification failed: " + $probe.Reason)
+    }
+    return $script:torchAudioOk
+}
+
 function GetReadyToGoStatePath {
     return Join-Path $RuntimeBase "state\\ready_to_go.env"
 }
@@ -1161,6 +1341,11 @@ print("STEMWERK_CORE_MODEL_PREFETCH ok")
 
 function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [string]$DrumsepModelStatus, [hashtable]$CoreStatus, [string]$Detail, [string]$MainRuntimeStatus = "") {
     $readyPath = GetReadyToGoStatePath
+    if (-not $script:FfmpegValidated) {
+        Remove-Item -Path $readyPath -Force -ErrorAction SilentlyContinue
+        LogProgress ("ready_to_go_state_written=0 reason=" + $script:FfmpegValidationReason)
+        return
+    }
     $modelDir = if ($CoreStatus -and $CoreStatus.Contains("model_dir")) { [string]$CoreStatus["model_dir"] } else { Join-Path $RuntimeBase "models" }
     $fastStatus = if ($CoreStatus -and $CoreStatus.Contains("fast")) { [string]$CoreStatus["fast"] } else { "missing" }
     $qualityStatus = if ($CoreStatus -and $CoreStatus.Contains("quality")) { [string]$CoreStatus["quality"] } else { "missing" }
@@ -1179,6 +1364,9 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
     } elseif ($runtimeStatusValue -ne "ok" -and $runtimeStatusValue -ne "skipped") {
         $readyStatus = "missing"
     }
+    if ($mainRuntimeStatus -ne "ok") {
+        $readyStatus = "repair_required"
+    }
     $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     @(
         "READY_TO_GO_STATUS=$readyStatus",
@@ -1193,6 +1381,7 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
         "DRUMSEP_READY_RUNTIME_STATUS=$runtimeStatusValue",
         "DRUMSEP_READY_MODEL_STATUS=$drumsepModelValue"
     ) | Out-File -FilePath $readyPath -Encoding ascii
+    return $true
 }
 
 function GetReadyToGoRuntimeState([string]$BackendName) {
@@ -1266,6 +1455,10 @@ function ProbeMainRuntimeReady([string]$PythonPath, [string]$BackendName) {
     if ([string]::IsNullOrWhiteSpace($PythonPath) -or -not (Test-Path $PythonPath)) {
         return @{ Status = "missing"; Detail = "python_missing" }
     }
+    $torchAudioProbe = TestMainTorchAudioRuntime $PythonPath $BackendName
+    if ($torchAudioProbe.Status -ne "ok") {
+        return @{ Status = "repair_required"; Detail = [string]$torchAudioProbe.Reason }
+    }
     $probeBackend = if ([string]::IsNullOrWhiteSpace($BackendName)) { "cpu" } else { $BackendName }
     $probeResultPath = Join-Path $RuntimeBase "state\\main_runtime_ready_probe.txt"
     if (Test-Path $probeResultPath) {
@@ -1290,6 +1483,14 @@ try:
             errors.append("cuda_runtime_probe_failed")
 except Exception as exc:
     errors.append("torch_import_failed:" + str(exc))
+try:
+    import torchaudio
+    torch_core = str(torch.__version__).split("+", 1)[0]
+    audio_core = str(torchaudio.__version__).split("+", 1)[0]
+    if torch_core != audio_core:
+        errors.append("torchaudio_version_mismatch")
+except Exception:
+    errors.append("torchaudio_missing")
 if errors:
     result_path.write_text("broken|" + ";".join(errors), encoding="utf-8")
 else:
@@ -1405,6 +1606,8 @@ function RunReadyToGoVerifyOnly {
         LogProgress "ffmpeg_download_skipped=existing_ok"
     } else {
         LogProgress "ffmpeg_existing_ok=missing"
+        $mainReadyStatus = "missing_ffmpeg"
+        $mainReadyDetail = $script:FfmpegValidationReason
     }
 
     $readyRuntimeState = VerifyExistingReadyRuntime $readyBackend
@@ -1424,15 +1627,15 @@ function RunReadyToGoVerifyOnly {
         $status = "ok"
         $statusReason = ""
     } else {
-        $status = "deps_failed"
-        $statusReason = "ready_to_go_verify_only"
+        $status = "repair_required"
+        $statusReason = $mainReadyDetail
     }
-    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainReadyStatus
+    $readyMarkerWritten = WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainReadyStatus
     $readyStatePath = GetReadyToGoStatePath
     $normalizedReadyStatePath = [System.IO.Path]::GetFullPath($readyStatePath)
     $normalizedStateFile = if ([string]::IsNullOrWhiteSpace($StateFile)) { "" } else { [System.IO.Path]::GetFullPath($StateFile) }
     LogProgress ("ready_to_go_state_file=" + $readyStatePath)
-    LogProgress "ready_to_go_state_written=1"
+    LogProgress ("ready_to_go_state_written=" + $(if ($readyMarkerWritten) { "1" } else { "0" }))
     $readyState = ReadEnvMap $readyStatePath
     LogProgress ("ready_to_go_status=" + [string]$readyState["READY_TO_GO_STATUS"])
     if ($normalizedStateFile -and ($normalizedStateFile -ieq $normalizedReadyStatePath)) {
@@ -1571,6 +1774,10 @@ function InstallAndVerifyAudioSeparator([string]$PythonPath, [string]$BackendNam
 
     if (-not (InstallAudioRuntimeDependencies $PythonPath $BackendName)) {
         return "audio_runtime_deps_install_failed"
+    }
+
+    if (-not (EnsureMatchedTorchaudioRuntime $PythonPath $BackendName)) {
+        return "torchaudio_runtime_repair_failed"
     }
 
     if (-not (EnsureJuliusRuntime $PythonPath)) {
@@ -1743,10 +1950,6 @@ function WriteDrumsepDirectmlState([string]$State, [string]$ModelStatus, [string
         "DRUMSEP_DIRECTML_MODEL_STATUS=$ModelStatus",
         "DRUMSEP_DIRECTML_MODEL_FILE=$modelFile",
         "DRUMSEP_DIRECTML_MODEL_YAML=$modelYaml",
-        "DRUMSEP_COMPAT_YAML_STATUS=$script:DrumsepCompatYamlStatus",
-        "DRUMSEP_COMPAT_YAML_REASON=$script:DrumsepCompatYamlReason",
-        "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=$script:DrumsepCompatYamlPreviousSha256",
-        "DRUMSEP_COMPAT_YAML_SHA256=$script:DrumsepCompatYamlSha256",
         "DRUMSEP_OFFLINE_PAYLOAD_STATUS=$script:DrumsepOfflinePayloadStatus",
         "DRUMSEP_OFFLINE_PAYLOAD_SOURCE=$script:DrumsepOfflinePayloadSource",
         "DRUMSEP_OFFLINE_PAYLOAD_REASON=$script:DrumsepOfflinePayloadReason",
@@ -2052,11 +2255,6 @@ function DownloadFileWithRetry([string]$Url, [string]$TargetPath, [string]$Label
 
 function EnsureDrumsepAssets([string]$ModelDir) {
     if ([string]::IsNullOrWhiteSpace($ModelDir)) { return $false }
-    $compatSource = Join-Path $bundledDrumsepModelsDir $drumsepCompatYamlName
-    $compatDestination = Join-Path $ModelDir $drumsepCompatYamlName
-    if (-not (MaterializeDrumsepCompatYaml $compatSource $compatDestination)) {
-        return $false
-    }
     if ($offlineBundledAllmodelsMode) {
         LogProgress "Installing bundled Drum Kit model assets..."
         return (CopyBundledDrumsepAssets $ModelDir)
@@ -2863,6 +3061,7 @@ if ($ffmpeg -and (Test-Path $ffmpeg)) {
 
 if ($ffmpeg) {
     LogProgress ("FFmpeg ready: " + $ffmpeg)
+    LogProgress ("ffprobe ready: " + $script:FfprobePath)
 } else {
     Set-Status "missing_ffmpeg" "ffmpeg_install_failed"
 }
@@ -3005,24 +3204,24 @@ if (Test-Path $venvPy) {
         $readyDetail = $statusReason
     }
     $mainRuntimeStatus = if ($status -eq "ok") { "ok" } else { "broken" }
-    WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainRuntimeStatus
+    [void](WriteReadyToGoState $readyRuntime $readyRuntimeStatus $readyDrumsepModelStatus $readyCoreStatus $readyDetail $mainRuntimeStatus)
 } else {
     LogProgress "Skipping core install (Python venv unavailable)"
-    WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable" "missing"
+    [void](WriteReadyToGoState $backend "missing" "missing" (VerifyCoreModelCache (GetDrumsepModelDir)) "python_unavailable" "missing")
 }
 
 if ($RuntimeBase) {
     $capPath = Join-Path $RuntimeBase "state\\capabilities.env"
     $bootstrapStatusValue = $status
     $bootstrapReasonValue = $statusReason
-    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk -and $samplerateOk) { "ok" } else { "failed" }
+    $verificationValue = if (($status -eq "ok") -and $audioSeparatorOk -and $stemwerkCoreOk -and $samplerateOk -and $torchAudioOk) { "ok" } else { "failed" }
     $audioSeparatorValue = if ($audioSeparatorOk) { "ok" } else { "missing" }
     $stemwerkCoreValue = if ($stemwerkCoreOk) { "ok" } else { "missing" }
     $samplerateValue = if ($samplerateOk) { "ok" } else { "not_checked" }
     $juliusValue = if ($juliusOk) { "ok" } else { "not_checked" }
     $pythonValue = if ($python) { $python } else { "" }
     $ffmpegValue = if ($ffmpeg) { $ffmpeg } else { "" }
-    $wroteCapabilities = WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue $samplerateValue $juliusValue
+    $wroteCapabilities = WriteCapabilities $capPath $profile $backend $backendReason $pythonValue $ffmpegValue $script:FfprobePath $RuntimeBase $bootstrapStatusValue $bootstrapReasonValue $verificationValue $audioSeparatorValue $stemwerkCoreValue $samplerateValue $juliusValue
     if (-not $wroteCapabilities) {
         Set-Status "deps_failed" "capabilities_write_failed"
     }
@@ -3037,6 +3236,7 @@ if ($backendReason) { $lines += "BACKEND_REASON=$backendReason" }
 if ($python) { $lines += "PYTHON_PATH=$python" }
 if (Test-Path $venvPy) { $lines += "VENV_PYTHON=$venvPy" }
 if ($ffmpeg) { $lines += "FFMPEG_PATH=$ffmpeg" }
+if ($script:FfprobePath) { $lines += "FFPROBE_PATH=$script:FfprobePath" }
 if ($script:FfmpegSource) { $lines += "FFMPEG_SOURCE=$script:FfmpegSource" }
 if ($installerMode) { $lines += "INSTALLER=1" }
 if ($RuntimeBase) { $lines += "RUNTIME_BASE=$RuntimeBase" }

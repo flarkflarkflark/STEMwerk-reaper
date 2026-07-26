@@ -1,6 +1,6 @@
 -- @description STEMwerk: Setup (internal)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.5
+-- @version 2.3.0.6
 -- @changelog
 --   2026-03-15: Added live Linux setup status window and stricter post-bootstrap verification.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk
@@ -682,6 +682,16 @@ local function prettySetupReason(reason)
             part = "Could not upgrade pip/setuptools/wheel"
         elseif lower == "ffmpeg_install_failed" then
             part = "FFmpeg install failed"
+        elseif lower == "ffmpeg_path_missing" then
+            part = "FFmpeg path is missing"
+        elseif lower == "ffmpeg_executable_missing" then
+            part = "ffmpeg.exe is missing"
+        elseif lower == "ffprobe_executable_missing" then
+            part = "ffprobe.exe is missing"
+        elseif lower == "ffmpeg_validation_failed" then
+            part = "FFmpeg executable validation failed"
+        elseif lower == "ffprobe_validation_failed" then
+            part = "ffprobe executable validation failed"
         elseif lower == "ffmpeg_not_found" then
             part = "STEMwerk could not find FFmpeg"
         elseif lower == "ffmpeg_shim_path" then
@@ -694,6 +704,10 @@ local function prettySetupReason(reason)
             part = "stemwerk-core is missing after setup"
         elseif lower == "audio_separator_install_failed" then
             part = "audio-separator install failed"
+        elseif lower == "runtime_policy_mismatch_requires_rebuild" then
+            part = "Existing runtime uses a different dependency policy; use Rebuild venv to replace it"
+        elseif lower == "runtime_broken_requires_rebuild" then
+            part = "Existing runtime is incomplete; use Rebuild venv to replace it"
         elseif lower == "samplerate_reinstall_failed" then
             part = "samplerate repair failed on Apple Silicon"
         elseif lower == "samplerate_arch_mismatch_requires_runtime_rebuild" then
@@ -734,6 +748,8 @@ local function prettySetupReason(reason)
             part = "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "torchaudio_missing_for_demucs" then
             part = "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
+        elseif lower == "torchaudio_version_mismatch" then
+            part = "Incompatible Torch runtime detected: torch and torchaudio versions do not match. Run Repair/Rebuild to restore the supported runtime."
         elseif lower == "backend_runtime_install_failed" then
             part = "GPU backend runtime install failed; CPU fallback used"
         elseif lower == "backend_runtime_verify_failed" then
@@ -788,7 +804,10 @@ local function prettyCheckError(err)
     if lower == "torchaudio_missing_for_demucs" then
         return "Incomplete Torch runtime detected: torchaudio is missing. Run Repair/Rebuild to restore the supported runtime."
     end
-    if lower == "numpy_too_new_for_demucs" then return "NumPy version is too new for bundled Demucs/audio-separator; run Rebuild venv/Repair" end
+    if lower == "torchaudio_version_mismatch" then
+        return "Incompatible Torch runtime detected: torch and torchaudio versions do not match. Run Repair/Rebuild to restore the supported runtime."
+    end
+    if lower == "numpy_numba_runtime_probe_failed" then return "NumPy/Numba runtime compatibility check failed; run Rebuild venv/Repair" end
     if lower == "macos_demucs_runtime_incompatible" then return "macOS Demucs/audio-separator runtime check failed; run Rebuild venv/Repair" end
     return humanizeToken(err)
 end
@@ -883,6 +902,18 @@ local function knownRuntimeFailureState(state)
         or reason == "onnxruntime_install_failed"
         or reason == "torch_pin_assert_failed"
         or reason == "torch_pin_repair_failed"
+        or reason == "runtime_policy_mismatch_requires_rebuild"
+        or reason == "runtime_broken_requires_rebuild"
+end
+
+local function runtimePolicyRequiresRebuild(state)
+    state = state or {}
+    local reason = trim(state.STATUS_REASON or ""):lower()
+    local policyStatus = trim(state.MACOS_RUNTIME_POLICY_STATUS or ""):lower()
+    return reason == "runtime_policy_mismatch_requires_rebuild"
+        or reason == "runtime_broken_requires_rebuild"
+        or policyStatus == "mismatch"
+        or policyStatus == "broken"
 end
 
 local function hasPythonDiagnosticPath(state)
@@ -1012,9 +1043,25 @@ local function canRunPython(path)
     return true
 end
 
-local function canRunFfmpeg(path)
+local function canRunFfmpegPair(path, requirePair)
     path = resolvePath(path)
-    return runCommandWithProbe(path, " -version", "ffmpeg version", 8000)
+    if path == "" then return false, "ffmpeg_path_missing", "" end
+    if not fileExists(path) then return false, "ffmpeg_executable_missing", "" end
+    if not runCommandWithProbe(path, " -version", "ffmpeg version", 8000) then
+        return false, "ffmpeg_validation_failed", ""
+    end
+    if requirePair == false then return true, "ffmpeg_valid", "" end
+    local parent = path:match("^(.*)[/\\][^/\\]+$") or ""
+    local ffprobePath = parent ~= ""
+        and (parent .. PATH_SEP .. (OS == "Windows" and "ffprobe.exe" or "ffprobe"))
+        or ""
+    if ffprobePath == "" or not fileExists(ffprobePath) then
+        return false, "ffprobe_executable_missing", ""
+    end
+    if not runCommandWithProbe(ffprobePath, " -version", "ffprobe version", 8000) then
+        return false, "ffprobe_validation_failed", ""
+    end
+    return true, "ffmpeg_pair_valid", ffprobePath
 end
 
 local function pythonVersionText(path)
@@ -1076,11 +1123,13 @@ except Exception:
     torchaudio_present = "no"
 
 try:
-    import numpy
-    numpy_ver = core(getattr(numpy, "__version__", "0.0.0"))
-    numpy_major = int(numpy_ver.split(".", 1)[0])
+    import numpy, numba
+    @numba.njit
+    def _stemwerk_numba_probe(x):
+        return x + 1
+    numpy_numba_ok = _stemwerk_numba_probe(1) == 2
 except Exception:
-    numpy_major = 0
+    numpy_numba_ok = False
 
 major, minor = parse_major_minor(torch_ver)
 torch_supported = (major, minor) < (2, 6)
@@ -1114,8 +1163,10 @@ if not torch_supported:
     reason = "torch_too_new_for_demucs"
 elif torchaudio_present != "yes":
     reason = "torchaudio_missing_for_demucs"
-elif numpy_major >= 2:
-    reason = "numpy_too_new_for_demucs"
+elif torchaudio_ver != torch_ver:
+    reason = "torchaudio_version_mismatch"
+elif not numpy_numba_ok:
+    reason = "numpy_numba_runtime_probe_failed"
 
 print("TORCH_VERSION=" + str(torch_ver))
 print("TORCHAUDIO_VERSION=" + str(torchaudio_ver))
@@ -1141,10 +1192,12 @@ sys.exit(0 if not reason else 1)
     result.ok = tonumber(rc) == 0 and result.driftDetected == "no"
     if result.driftReason == "torchaudio_missing_for_demucs" then
         result.error = "torchaudio_missing_for_demucs"
+    elseif result.driftReason == "torchaudio_version_mismatch" then
+        result.error = "torchaudio_version_mismatch"
     elseif result.driftReason == "torch_too_new_for_demucs" then
         result.error = "torch_too_new_for_demucs"
-    elseif result.driftReason == "numpy_too_new_for_demucs" then
-        result.error = "numpy_too_new_for_demucs"
+    elseif result.driftReason == "numpy_numba_runtime_probe_failed" then
+        result.error = "numpy_numba_runtime_probe_failed"
     elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then
         result.error = "torch_runtime_probe_failed"
     elseif result.ok then
@@ -1660,7 +1713,7 @@ local function readyStateIndicatesHealthyRuntime(readyState, capState)
         and (drumsepModelStatus == "" or drumsepModelStatus == "ok" or drumsepModelStatus == "skipped")
         and (audioSeparator == "" or audioSeparator == "ok")
         and (stemwerkCore == "" or stemwerkCore == "ok")
-        and (capVerification == "" or capVerification == "ok" or capVerification == "failed")
+        and (capVerification == "" or capVerification == "ok")
 end
 
 local function resolveVerifyOnlyPythonPath(runtime, state, capState)
@@ -1690,13 +1743,8 @@ local function resolveVerifyOnlyFfmpegPath(state, capState)
     }
     for _, candidate in ipairs(candidates) do
         local resolved = resolvePath(candidate)
-        if resolved ~= "" and fileExists(resolved) and canRunFfmpeg(resolved) then
-            return resolved
-        end
-    end
-    for _, candidate in ipairs(candidates) do
-        local resolved = resolvePath(candidate)
-        if resolved ~= "" and fileExists(resolved) then
+        local pairOk = resolved ~= "" and canRunFfmpegPair(resolved)
+        if pairOk then
             return resolved
         end
     end
@@ -2530,8 +2578,9 @@ local function startWindowsSetup(runtime, separatorScript, mode, reuseWindow)
     return true
 end
 
-local function verifyRuntimePaths(state)
+local function verifyRuntimePaths(state, publishExtState)
     state = state or {}
+    if publishExtState == nil then publishExtState = true end
     local pythonCandidate = state.PYTHON_PATH or ""
     if OS == "macOS" then
         local venvCandidate = trim(state.VENV_PYTHON_PATH or state.VENV_PYTHON or "")
@@ -2540,7 +2589,7 @@ local function verifyRuntimePaths(state)
         end
     end
     local resolvedFfmpegPath = resolvePath(state.FFMPEG_PATH or "")
-    if OS ~= "Windows" and (resolvedFfmpegPath == "" or not fileExists(resolvedFfmpegPath) or not canRunFfmpeg(resolvedFfmpegPath)) then
+    if OS ~= "Windows" and (resolvedFfmpegPath == "" or not fileExists(resolvedFfmpegPath) or not canRunFfmpegPair(resolvedFfmpegPath, false)) then
         local autoFfmpegPath = resolveUnixFfmpegFallback()
         if autoFfmpegPath ~= "" then
             resolvedFfmpegPath = resolvePath(autoFfmpegPath)
@@ -2553,6 +2602,7 @@ local function verifyRuntimePaths(state)
     local errors = {}
     local pythonOk = false
     local ffmpegOk = false
+    local ffprobePath = ""
     local audioOk = false
     local torchRuntime = {
         ok = false,
@@ -2583,7 +2633,7 @@ local function verifyRuntimePaths(state)
         if canRunPython(resolved.pythonPath) then
             pythonOk = true
             supportedPythonFound = supportedPythonFound ~= "" and supportedPythonFound or "yes"
-            setExt("pythonPath", resolved.pythonPath)
+            if publishExtState then setExt("pythonPath", resolved.pythonPath) end
         else
             if (OS == "Linux" or OS == "macOS") and detectedPythonVersion ~= "" then
                 errors[#errors + 1] = "python_unsupported"
@@ -2600,11 +2650,13 @@ local function verifyRuntimePaths(state)
     if resolved.ffmpegPath == "" then
         errors[#errors + 1] = "ffmpeg_missing"
     else
-        if canRunFfmpeg(resolved.ffmpegPath) then
+        local pairOk, pairReason, resolvedFfprobe = canRunFfmpegPair(resolved.ffmpegPath)
+        if pairOk then
             ffmpegOk = true
-            setExt("ffmpegPath", resolved.ffmpegPath)
+            ffprobePath = resolvedFfprobe
+            if publishExtState then setExt("ffmpegPath", resolved.ffmpegPath) end
         else
-            errors[#errors + 1] = "ffmpeg_unusable"
+            errors[#errors + 1] = pairReason ~= "" and pairReason or "ffmpeg_unusable"
         end
     end
 
@@ -2628,6 +2680,7 @@ local function verifyRuntimePaths(state)
     return {
         pythonPath = resolved.pythonPath,
         ffmpegPath = resolved.ffmpegPath,
+        ffprobePath = ffprobePath,
         pythonOk = pythonOk,
         ffmpegOk = ffmpegOk,
         audioOk = audioOk,
@@ -2713,9 +2766,34 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         trim(state.STATUS or "") == "ok"
         and hasBootstrapRuntimeVerificationPass()
     )
-    local effectiveBootstrapSuccess = bootstrapSuccess or verifiedRuntimeOk or authoritativeBootstrapVerified
+    local currentBootstrapFailureReason = trim(state.STATUS_REASON or "")
+    local windowsFfmpegVerificationFailed = OS == "Windows"
+        and (trim(state.STATUS or "") == "missing_ffmpeg"
+            or currentBootstrapFailureReason == "ffmpeg_install_failed")
+    local windowsTorchaudioVerificationFailed = false
+    if OS == "Windows" then
+        for _, verificationError in ipairs(errors or {}) do
+            if verificationError == "torchaudio_missing_for_demucs"
+                or verificationError == "torchaudio_version_mismatch" then
+                windowsTorchaudioVerificationFailed = true
+            elseif verificationError == "ffmpeg_missing"
+                or verificationError == "ffmpeg_unusable"
+                or verificationError == "ffmpeg_executable_missing"
+                or verificationError == "ffmpeg_validation_failed"
+                or verificationError == "ffprobe_executable_missing"
+                or verificationError == "ffprobe_validation_failed" then
+                windowsFfmpegVerificationFailed = true
+            end
+        end
+    end
+    local authoritativeRuntimeVerified = authoritativeBootstrapVerified
+        and not windowsTorchaudioVerificationFailed
+        and not windowsFfmpegVerificationFailed
+    local runtimePolicyBlocked = runtimePolicyRequiresRebuild(state)
+    local effectiveBootstrapSuccess = (not runtimePolicyBlocked)
+        and (bootstrapSuccess or verifiedRuntimeOk or authoritativeRuntimeVerified)
 
-    if verifiedRuntimeOk then
+    if verifiedRuntimeOk and not runtimePolicyBlocked then
         if appendLogLine then
             appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
         else
@@ -2729,10 +2807,16 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
     end
-    if authoritativeBootstrapVerified then
+    if authoritativeRuntimeVerified and not runtimePolicyBlocked then
         state.STATUS = "ok"
         state.STATUS_REASON = ""
         state.RUNTIME_VERIFY_DETAIL = "ok"
+    end
+    if windowsFfmpegVerificationFailed then
+        state.STATUS = "missing_ffmpeg"
+        state.STATUS_REASON = currentBootstrapFailureReason ~= ""
+            and currentBootstrapFailureReason or "ffmpeg_validation_failed"
+        state.RUNTIME_VERIFY_DETAIL = state.STATUS_REASON
     end
 
     local finalMessage = {}
@@ -2856,7 +2940,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         audioStatus = hasError("audio_separator_missing") and "missing" or "ok"
         coreStatus = hasError("stemwerk_core_missing") and "missing" or "ok"
     end
-    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
+    local verificationSuccess = ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeRuntimeVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -2894,7 +2978,17 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local verificationStatus = verificationSuccess and "ok" or "failed"
     local runtimeDriftDetected = verification.runtimeDriftDetected
     local runtimeDriftReason = verification.runtimeDriftReason
-    if verificationSuccess or authoritativeBootstrapVerified then
+    local windowsTorchaudioContractFailed = OS == "Windows"
+        and (runtimeDriftReason == "torchaudio_missing_for_demucs"
+            or runtimeDriftReason == "torchaudio_version_mismatch")
+    authoritativeRuntimeVerified = authoritativeRuntimeVerified
+        and not windowsTorchaudioContractFailed
+    if windowsTorchaudioContractFailed then
+        state.STATUS = "repair_required"
+        state.STATUS_REASON = runtimeDriftReason
+        state.RUNTIME_VERIFY_DETAIL = runtimeDriftReason
+    end
+    if verificationSuccess or authoritativeRuntimeVerified then
         runtimeDriftDetected = "no"
         runtimeDriftReason = ""
     end
@@ -2927,15 +3021,15 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local resolvedCudaCount = firstNonEmpty(state.CUDA_COUNT, envJsonValue(envJson, "cuda_count"))
     local resolvedTorchHip = firstNonEmpty(state.TORCH_HIP, envJsonValue(envJson, "torch_hip"))
     local resolvedRuntimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
-    if verificationSuccess or authoritativeBootstrapVerified then
+    if verificationSuccess or authoritativeRuntimeVerified then
         resolvedRuntimeVerifyDetail = "ok"
     elseif resolvedRuntimeVerifyDetail == "" then
         resolvedRuntimeVerifyDetail = trim(state.STATUS_REASON or "")
     end
-    local bootstrapReason = (verificationSuccess or authoritativeBootstrapVerified) and "" or (state.STATUS_REASON or "")
+    local bootstrapReason = (verificationSuccess or authoritativeRuntimeVerified) and "" or (state.STATUS_REASON or "")
     local resolvedTorchSupported = trim(verification.torchSupported or "")
     local resolvedTorchaudioPresent = trim(verification.torchaudioPresent or "")
-    if verificationSuccess or authoritativeBootstrapVerified then
+    if verificationSuccess or authoritativeRuntimeVerified then
         if resolvedTorchSupported == "" or resolvedTorchSupported == "no" then
             resolvedTorchSupported = "yes"
         end
@@ -3000,17 +3094,17 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         torchaudioPresent = resolvedTorchaudioPresent,
         runtimeDriftDetected = runtimeDriftDetected,
         runtimeDriftReason = runtimeDriftReason,
-        runtimeDriftDetail = (verificationSuccess or authoritativeBootstrapVerified) and "" or runtimeDriftReason,
+        runtimeDriftDetail = (verificationSuccess or authoritativeRuntimeVerified) and "" or runtimeDriftReason,
         runtimeVerifyDetail = resolvedRuntimeVerifyDetail,
         pythonPath = verification.pythonPath,
         ffmpegPath = verification.ffmpegPath,
         runtimeBase = runtime.base,
-        status = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or (state.STATUS or ""),
+        status = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or (state.STATUS or ""),
         bootstrapStatus = state.STATUS or "",
         bootstrapReason = bootstrapReason,
-        verification = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or verificationStatus,
-        audioSeparator = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or audioStatus,
-        stemwerkCore = (verificationSuccess or authoritativeBootstrapVerified) and "ok" or coreStatus,
+        verification = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or verificationStatus,
+        audioSeparator = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or audioStatus,
+        stemwerkCore = (verificationSuccess or authoritativeRuntimeVerified) and "ok" or coreStatus,
         deviceNames = deviceNames,
         torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
         cudaAvailable = resolvedCudaAvailable,
@@ -3040,7 +3134,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         BACKEND_NOTE = backendNote or "",
         STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
     }
-    if verificationStatus == "ok" or authoritativeBootstrapVerified then
+    if verificationStatus == "ok" or authoritativeRuntimeVerified then
         syncKv.STATUS = "ok"
         syncKv.STATUS_REASON = ""
         syncKv.RUNTIME_VERIFY_DETAIL = "ok"
@@ -3054,7 +3148,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeBootstrapVerified))
+    if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeRuntimeVerified))
         or (OS == "macOS"
             and MAC_ARCH == "x86_64"
             and profile == "mac-cpu"
@@ -3309,7 +3403,8 @@ local function findWindowsFfmpegFallback(runtime)
     return ""
 end
 local function isValidFfmpegPath(path)
-    return path ~= "" and fileExists(path) and not isWindowsFfmpegShimPath(path)
+    if path == "" or not fileExists(path) or isWindowsFfmpegShimPath(path) then return false end
+    return canRunFfmpegPair(path)
 end
 
 local WINDOWS_VERIFY = nil
@@ -3500,10 +3595,11 @@ local function windowsVerifyTick()
     end
 
     if step == 5 then
-        WINDOWS_VERIFY.statusLines = { "Checking FFmpeg..." }
-        local ffmpegOk = WINDOWS_VERIFY.ffmpegPath ~= "" and fileExists(WINDOWS_VERIFY.ffmpegPath)
-            and canRunFfmpeg(WINDOWS_VERIFY.ffmpegPath)
+        WINDOWS_VERIFY.statusLines = { "Checking FFmpeg and ffprobe..." }
+        local ffmpegOk, ffmpegReason, ffprobePath = canRunFfmpegPair(WINDOWS_VERIFY.ffmpegPath)
         WINDOWS_VERIFY.ffmpegOk = ffmpegOk
+        WINDOWS_VERIFY.ffmpegReason = ffmpegReason
+        WINDOWS_VERIFY.ffprobePath = ffprobePath
         WINDOWS_VERIFY.step = 6
         reaper.defer(windowsVerifyTick)
         return
@@ -3543,11 +3639,13 @@ local function windowsVerifyTick()
             state.STATUS_REASON = ""
             state.PYTHON_PATH = WINDOWS_VERIFY.pythonPath
             state.FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath
+            state.FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath
             updateBootstrapEnv(stateFile, {
                 STATUS = "ok",
                 STATUS_REASON = "",
                 PYTHON_PATH = WINDOWS_VERIFY.pythonPath,
                 FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath,
+                FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath,
             })
             local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript)
             if not metadataComplete then
@@ -3567,6 +3665,16 @@ local function windowsVerifyTick()
             lines[#lines + 1] = ""
             lines[#lines + 1] = "Detected unsupported Windows FFmpeg shim:"
             lines[#lines + 1] = "  " .. tostring(WINDOWS_VERIFY.ffmpegShim)
+        end
+        if not WINDOWS_VERIFY.ffmpegOk and WINDOWS_VERIFY.ffmpegReason and WINDOWS_VERIFY.ffmpegReason ~= "" then
+            state.STATUS = "missing_ffmpeg"
+            state.STATUS_REASON = state.STATUS_REASON ~= "" and state.STATUS_REASON or WINDOWS_VERIFY.ffmpegReason
+            updateBootstrapEnv(stateFile, {
+                STATUS = "missing_ffmpeg",
+                STATUS_REASON = state.STATUS_REASON,
+                FFMPEG_PATH = "",
+                FFPROBE_PATH = "",
+            })
         end
         lines[#lines + 1] = ""
         if not WINDOWS_VERIFY.pythonOk then
@@ -3905,7 +4013,8 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     local pid = readBootstrapPid(pidFile)
     local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy
     local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)
-    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running") and readyHealthy and bootstrapComplete
+    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")
+        and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)
     if staleRunning or staleGuardFailed or staleFailedState then
         status = "ok"
         reason = ""
@@ -5850,21 +5959,14 @@ verifyExistingSetup = function(runtime, separatorScript)
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
     local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
-    ensureDir(runtime.runtimeState)
-    ensureDir(runtime.runtimeLogs)
-    appendSetupLog(runtime, "Verify-only run (" .. setupUiLabel() .. ")", not fileExists(logFile))
-    appendSetupLog(runtime, "Mode: verify-only (file checks, no subprocess, no package import)", false)
-    appendSetupLog(runtime, "Models kept: " .. getModelCacheDir(), false)
-
     local state = parseStateFile(stateFile)
     local capState = parseStateFile(capFile)
     local readyState = readReadyState(runtime)
     local effectiveState = buildVerifyOnlyState(runtime, state, capState, readyState)
     local pythonPath = trim(resolvePath(effectiveState.PYTHON_PATH or effectiveState.VENV_PYTHON or capState.PYTHON_PATH or resolveLinuxPythonPath(effectiveState)))
     local ffmpegPath = trim(resolvePath(effectiveState.FFMPEG_PATH or capState.FFMPEG_PATH or resolveLinuxFfmpegPath(effectiveState)))
-    local verification = verifyRuntimePaths(effectiveState)
-    local verifyErrors = verification.errors or {}
-    local deviceOut, probeRc, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
+    local verification = verifyRuntimePaths(effectiveState, false)
+    local deviceOut, _, probeErr = probeRuntimeDevices(verification.pythonPath, separatorScript)
     local envJson = extractEnvJson(deviceOut or "")
     local deviceNames = collectDeviceNames(deviceOut or "")
     local backend, backendReason = detectBackendFromProbe(deviceOut, envJson)
@@ -5873,7 +5975,6 @@ verifyExistingSetup = function(runtime, separatorScript)
     end
     local profile = profileForBackend(backend)
     local checkProbe = reconcileCheckVerification(effectiveState, capState, readyState, verification, envJson, deviceNames, backend, backendReason, logFile)
-    local adjustedErrors = checkProbe.adjustedErrors
     local verifiedRuntimeOk = checkProbe.verifiedRuntimeOk
     if verifiedRuntimeOk then
         state.STATUS = "ok"
@@ -5898,107 +5999,16 @@ verifyExistingSetup = function(runtime, separatorScript)
     }
     local allOk = true
     for _, c in ipairs(checks) do
-        appendSetupLog(runtime, (c.ok and "  OK: " or "FAIL: ") .. c.label .. ": " .. tostring(c.detail), false)
         if not c.ok then allOk = false end
     end
 
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
-    writeCapabilities(capFile, {
-        profile = profile,
-        backend = backend,
-        backendReason = backendReason,
-        backendNote = state.BACKEND_NOTE or "",
-        supportedPythonFound = verification.supportedPythonFound,
-        detectedPythonVersion = verification.detectedPythonVersion,
-        supportedPythonRange = verification.supportedPythonRange,
-        managedPythonEnabled = state.MANAGED_PYTHON_ENABLED or "",
-        managedPythonStatus = state.MANAGED_PYTHON_STATUS or "",
-        managedPythonVersion = state.MANAGED_PYTHON_VERSION or "",
-        managedPythonRelease = state.MANAGED_PYTHON_RELEASE or "",
-        managedPythonPlatform = state.MANAGED_PYTHON_PLATFORM or "",
-        managedPythonArch = state.MANAGED_PYTHON_ARCH or "",
-        managedPythonUrl = state.MANAGED_PYTHON_URL or "",
-        managedPythonSha256Ok = state.MANAGED_PYTHON_SHA256_OK or "",
-        managedPythonPath = state.MANAGED_PYTHON_PATH or "",
-        managedPythonReplaced = state.MANAGED_PYTHON_REPLACED or "",
-        managedPythonRollback = state.MANAGED_PYTHON_ROLLBACK or "",
-        audioSeparatorImport = state.AUDIO_SEPARATOR_IMPORT or (verifiedRuntimeOk and "ok" or ""),
-        audioSeparatorDepsComplete = state.AUDIO_SEPARATOR_DEPS_COMPLETE or (verifiedRuntimeOk and "yes" or ""),
-        backendDepsComplete = state.BACKEND_DEPS_COMPLETE or "",
-        backendDepsReason = state.BACKEND_DEPS_REASON or "",
-        buildToolsMissing = state.BUILD_TOOLS_MISSING or "",
-        systemPythonPath = state.SYSTEM_PYTHON_PATH or "",
-        systemPythonVersion = state.SYSTEM_PYTHON_VERSION or "",
-        systemPythonUsed = state.SYSTEM_PYTHON_USED or "",
-        venvPythonPath = state.VENV_PYTHON_PATH or state.VENV_PYTHON or "",
-        torchVersion = checkProbe.torchVersion,
-        torchaudioVersion = checkProbe.torchaudioVersion,
-        torchvisionVersion = checkProbe.torchvisionVersion,
-        numpyVersion = checkProbe.numpyVersion,
-        numbaVersion = checkProbe.numbaVersion,
-        llvmliteVersion = checkProbe.llvmliteVersion,
-        audioSeparatorVersion = checkProbe.audioSeparatorVersion,
-        onnxruntimeVersion = checkProbe.onnxruntimeVersion,
-        torchSupported = checkProbe.torchSupported,
-        torchaudioPresent = checkProbe.torchaudioPresent,
-        runtimeDriftDetected = checkProbe.runtimeDriftDetected,
-        runtimeDriftReason = checkProbe.runtimeDriftReason,
-        runtimeDriftDetail = verifiedRuntimeOk and "" or checkProbe.runtimeDriftReason,
-        runtimeVerifyDetail = checkProbe.runtimeVerifyDetail,
-        pythonPath = verification.pythonPath,
-        ffmpegPath = verification.ffmpegPath,
-        runtimeBase = runtime.base,
-        status = state.STATUS or "",
-        bootstrapStatus = state.STATUS or "",
-        bootstrapReason = verifiedRuntimeOk and "" or (state.STATUS_REASON or ""),
-        verification = verifiedRuntimeOk and "ok" or "failed",
-        audioSeparator = verifiedRuntimeOk and "ok" or "",
-        stemwerkCore = verifiedRuntimeOk and "ok" or "",
-        deviceNames = deviceNames,
-        torchRuntimePolicy = state.TORCH_RUNTIME_POLICY or "",
-        cudaAvailable = checkProbe.cudaAvailable,
-        cudaCount = checkProbe.cudaCount,
-        torchHip = checkProbe.torchHip,
-        selectedTorchIndex = state.SELECTED_TORCH_INDEX or "",
-        selectedTorchStack = state.SELECTED_TORCH_STACK or "",
-        rocmDetectedDevices = state.ROCM_DETECTED_DEVICES or "",
-        rocmSelectedDevice = state.ROCM_SELECTED_DEVICE or "",
-        rocmFallbackReason = state.ROCM_FALLBACK_REASON or "",
-        drumsepStatus = drumsepStatus,
-        dksSupported = dksSupported,
-        normalStemsSupported = normalStemsSupported,
-        envJson = envJson,
-    }, deviceOut)
-
-    updateBootstrapEnv(stateFile, {
-        STATUS = state.STATUS or "",
-        STATUS_REASON = state.STATUS_REASON or "",
-        PROFILE = profile or "",
-        BACKEND = backend or "",
-        BACKEND_REASON = backendReason or "",
-        RUNTIME_VERIFY_DETAIL = checkProbe.runtimeVerifyDetail,
-        STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
-    })
-
-    if #adjustedErrors > 0 then
-        appendSetupLog(runtime, "Verify runtime errors: " .. table.concat(adjustedErrors, ", "), false)
-    end
     allOk = allOk and verifiedRuntimeOk
-
-    appendSetupLog(runtime, "Result: " .. (allOk and "OK (runtime checks passed)" or "FAIL (needs repair)"), false)
-    appendSetupLog(runtime, "Note: Check refreshed capabilities from current runtime probe.", false)
-
-    if runtime.base and runtime.base ~= "" then
-        updateBootstrapEnv(stateFile, {
-            RUNTIME_BASE = runtime.base,
-            STEMWERK_SETUP_VERSION = SETUP_VERSION or "",
-        })
-    end
 
     local finalMessage = {}
     if allOk then
         finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
-        finalMessage[#finalMessage + 1] = "(Capabilities refreshed from current probe)"
+        finalMessage[#finalMessage + 1] = "No files or settings were changed."
     else
         finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
         finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
@@ -6008,7 +6018,10 @@ verifyExistingSetup = function(runtime, separatorScript)
         finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
     end
     finalMessage[#finalMessage + 1] = ""
-    finalMessage[#finalMessage + 1] = "Log: " .. tostring(logFile)
+    finalMessage[#finalMessage + 1] = "Detected backend: " .. tostring(backend)
+    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus)
+    finalMessage[#finalMessage + 1] = "DKS supported: " .. tostring(dksSupported)
+    finalMessage[#finalMessage + 1] = "Normal Stems supported: " .. tostring(normalStemsSupported)
 
     showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript)
 end
@@ -7075,9 +7088,11 @@ do
     end
 
     local runtime = getRuntimePaths()
-    setExt("runtimeBase", runtime.base)
+    if OS ~= "macOS" then
+        setExt("runtimeBase", runtime.base)
+    end
     local separatorScript = SCRIPT_DIR .. "audio_separator_process.py"
-    if fileExists(separatorScript) then
+    if OS ~= "macOS" and fileExists(separatorScript) then
         setExt("separatorScript", separatorScript)
     end
 

@@ -1,4 +1,0 @@
-pytest
-PyYAML
-soundfile
-numpy

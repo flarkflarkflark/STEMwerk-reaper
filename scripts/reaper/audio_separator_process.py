@@ -1,4 +1,3 @@
-#!/home/flark/STEMwerk/.venv/bin/python -u
 """
 Audio Separator Script for STEMwerk
 Thin wrapper around stemwerk-core for REAPER.
@@ -77,24 +76,6 @@ LOW_VRAM_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
 CUDA_DKS_RUNTIME_GUIDANCE = "CUDA Drum Kit Split failed on this GPU. Try CPU/low-VRAM mode or rebuild/repair runtime."
 DRUMSEP_HELPER_POLL_INTERVAL_SECONDS = 2.0
 DRUMSEP_HELPER_NO_OUTPUT_STALL_SECONDS = 60 * 60
-EXPERIMENTAL_MODELS_ENABLE_ENV = "STEMWERK_ENABLE_EXPERIMENTAL_MODELS"
-EXPERIMENTAL_MODEL_ID_ENV = "STEMWERK_EXPERIMENTAL_MODEL_ID"
-# Dev-only proof guard: hidden experimental primaries are not allowed through the
-# normal CLI model route without the explicit env gate below.
-EXPERIMENTAL_ENV_ONLY_MODEL_IDS = {"bs_roformer_viperx"}
-_RUNTIME_REGISTRY_ALLOWED_FIELDS = {
-    "id",
-    "kind",
-    "hidden",
-    "experimental",
-    "engine",
-    "backend_arg",
-    "architecture",
-    "family",
-    "output_contract",
-    "validation",
-}
-_LAST_OUTPUT_MAPPING_INFO: Dict[str, Any] = {}
 
 
 def _prefer_vendored_stemwerk_core() -> None:
@@ -1074,91 +1055,6 @@ def _resolve_run_model(args: argparse.Namespace) -> str:
     return str(getattr(args, "model", "htdemucs") or "htdemucs")
 
 
-def _runtime_registry_path() -> Path:
-    return Path(__file__).resolve().with_name("models.json")
-
-
-def _load_runtime_registry_entry(model_id: str) -> Dict[str, Any]:
-    registry_path = _runtime_registry_path()
-    payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    models = payload.get("models")
-    if not isinstance(models, list):
-        raise RuntimeError(f"Invalid runtime registry at {registry_path}: models list missing")
-    for entry in models:
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("id") or "").strip() != model_id:
-            continue
-        return {key: entry.get(key) for key in _RUNTIME_REGISTRY_ALLOWED_FIELDS}
-    raise RuntimeError(f"Unknown experimental model id: {model_id}")
-
-
-def _resolve_normal_route_model_selection(args: argparse.Namespace) -> Dict[str, Any]:
-    requested_model_id = str(getattr(args, "model", "htdemucs") or "htdemucs").strip() or "htdemucs"
-    workflow_mode = str(getattr(args, "workflow_mode", "") or "").strip()
-    workflow_source = str(getattr(args, "workflow_source", "") or "").strip()
-    enable_value = str(os.environ.get(EXPERIMENTAL_MODELS_ENABLE_ENV, "") or "").strip()
-    experimental_model_id = str(os.environ.get(EXPERIMENTAL_MODEL_ID_ENV, "") or "").strip()
-    enable_present = enable_value != ""
-    model_present = experimental_model_id != ""
-
-    if not enable_present and not model_present:
-        if requested_model_id in EXPERIMENTAL_ENV_ONLY_MODEL_IDS:
-            raise RuntimeError(
-                "Hidden experimental model ids require the explicit env gate. "
-                f"Set both {EXPERIMENTAL_MODELS_ENABLE_ENV}=1 and {EXPERIMENTAL_MODEL_ID_ENV}=<model-id>."
-            )
-        return {
-            "requested_model_id": requested_model_id,
-            "effective_model_id": requested_model_id,
-            "model_for_separator": requested_model_id,
-            "registry_entry": None,
-            "experimental_override_active": False,
-        }
-
-    if not enable_present or not model_present:
-        print("experimental_env_gate=half_configured", file=sys.stderr)
-        raise RuntimeError(
-            "Half-configured experimental env gate: set both "
-            f"{EXPERIMENTAL_MODELS_ENABLE_ENV} and {EXPERIMENTAL_MODEL_ID_ENV} together."
-        )
-
-    if enable_value != "1":
-        raise RuntimeError(
-            f"{EXPERIMENTAL_MODELS_ENABLE_ENV} must be exactly '1' when {EXPERIMENTAL_MODEL_ID_ENV} is used."
-        )
-
-    if (
-        _is_direct_dks_source(workflow_mode, workflow_source)
-        or _is_extract_dks_source(workflow_mode, workflow_source)
-        or _is_direct_dks_mode(workflow_mode)
-    ):
-        print("experimental_env_gate=invalid_for_drum_kit_workflow", file=sys.stderr)
-        raise RuntimeError(
-            "experimental model override is not valid for drum-kit workflows. "
-            f"Set neither {EXPERIMENTAL_MODELS_ENABLE_ENV} nor {EXPERIMENTAL_MODEL_ID_ENV} for this run. "
-            f"workflow_mode={workflow_mode or '<empty>'} workflow_source={workflow_source or '<empty>'}"
-        )
-
-    registry_entry = _load_runtime_registry_entry(experimental_model_id)
-    if not bool(registry_entry.get("hidden")) or not bool(registry_entry.get("experimental")):
-        raise RuntimeError(
-            f"Experimental env override only allows hidden+experimental models; rejected: {experimental_model_id}"
-        )
-
-    backend_arg = str(registry_entry.get("backend_arg") or "").strip()
-    if not backend_arg:
-        raise RuntimeError(f"Experimental registry model has no backend_arg: {experimental_model_id}")
-
-    return {
-        "requested_model_id": requested_model_id,
-        "effective_model_id": experimental_model_id,
-        "model_for_separator": backend_arg,
-        "registry_entry": registry_entry,
-        "experimental_override_active": True,
-    }
-
-
 def _resolve_requested_stage2_model(args: argparse.Namespace) -> str:
     requested = str(getattr(args, "requested_stage2_model", "") or "").strip()
     if requested:
@@ -2004,63 +1900,6 @@ def _macos_ready_drumsep_main_runtime_candidates(runtime_base: Optional[Path] = 
     return []
 
 
-def _version_at_least(raw_version: Any, minimum: Tuple[int, int, int]) -> bool:
-    text = str(raw_version or "").strip()
-    match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?", text)
-    if not match:
-        return False
-    parts = tuple(int(item or "0") for item in match.groups())
-    return parts >= minimum
-
-
-def _linux_rocm_dks_main_runtime_candidates(runtime_base: Optional[Path] = None) -> Tuple[List[Path], str]:
-    if not sys.platform.startswith("linux"):
-        return [], "platform_not_linux"
-    ready = _ready_to_go_state(runtime_base)
-    ready_status = str(ready.get("READY_TO_GO_STATUS") or "").strip().lower()
-    main_status = str(ready.get("MAIN_RUNTIME_STATUS") or "").strip().lower()
-    model_status = str(ready.get("DRUMSEP_READY_MODEL_STATUS") or "").strip().lower()
-    if ready_status != "ok":
-        return [], f"ready_to_go_status_{ready_status or 'missing'}"
-    if main_status != "ok":
-        return [], f"main_runtime_status_{main_status or 'missing'}"
-    if model_status != "ok":
-        return [], f"dks_model_status_{model_status or 'missing'}"
-    return [_main_runtime_python_path(runtime_base)], "ready_state_ok"
-
-
-def _dks_unified_runtime_capability_detail(payload: Dict[str, Any]) -> str:
-    versions = payload.get("versions") if isinstance(payload.get("versions"), dict) else {}
-    audio_separator_version = str(versions.get("audio-separator") or "").strip()
-    numpy_version = str(versions.get("numpy") or "").strip()
-    if not _version_at_least(audio_separator_version, (0, 44, 3)):
-        return f"audio_separator_lt_0_44_3:{audio_separator_version or 'missing'}"
-    if not _version_at_least(numpy_version, (2, 0, 0)):
-        return f"numpy_lt_2:{numpy_version or 'missing'}"
-    if not str(payload.get("torch_hip") or "").strip():
-        return "rocm_no_hip"
-    if not bool(payload.get("torch_cuda_available")):
-        return "rocm_cuda_unavailable"
-    device_names = payload.get("device_names") or []
-    if not isinstance(device_names, list) or not any(str(item).strip() for item in device_names):
-        return "rocm_no_device_names"
-    return "ok"
-
-
-def _emit_dks_runtime_selection_markers(
-    selection: str,
-    python_path: Optional[Path],
-    reason: str,
-    unified_candidate: bool,
-    legacy_fallback_available: bool,
-) -> None:
-    print(f"dks_runtime_selection={selection}", file=sys.stderr)
-    print(f"dks_runtime_python={python_path or ''}", file=sys.stderr)
-    print(f"dks_runtime_reason={reason}", file=sys.stderr)
-    print(f"dks_unified_candidate={'true' if unified_candidate else 'false'}", file=sys.stderr)
-    print(f"dks_legacy_fallback_available={'true' if legacy_fallback_available else 'false'}", file=sys.stderr)
-
-
 def _drumsep_state_python_candidates(state: Dict[str, str], fallback: Path) -> List[Path]:
     candidates: List[Path] = []
     seen: Set[str] = set()
@@ -2317,7 +2156,6 @@ def _select_drumsep_runtime(
     explicit_cuda = device_norm == "cuda" or bool(re.match(r"^cuda:\d+$", device_norm))
     explicit_rocm = device_norm == "rocm"
     explicit_directml = device_norm == "directml" or device_norm.startswith("directml:")
-    is_windows = sys.platform.startswith("win")
 
     def _normalized_device_request(value: str) -> str:
         if value == "cpu":
@@ -2361,7 +2199,7 @@ def _select_drumsep_runtime(
         reason = "missing" if directml_detail == "missing" else "broken"
         return None, reason, info
 
-    if is_windows and explicit_cuda:
+    if os.name == "nt" and explicit_cuda:
         print("drumsep_runtime_selection_policy=explicit_cuda", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
         selected_cuda_python, cuda_detail, cuda_payload, cuda_attempts = _probe_drumsep_runtime_candidates(
@@ -2386,7 +2224,7 @@ def _select_drumsep_runtime(
         reason = "missing" if cuda_detail == "missing" else "broken"
         return None, reason, info
 
-    if is_windows and normalized_request in {"auto", "gpu"}:
+    if os.name == "nt" and normalized_request in {"auto", "gpu"}:
         selection_policy = "gpu_prefer_cuda" if normalized_request == "gpu" else "auto_prefer_cuda"
         print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
         print(f"timing_utc={_ts()} drumsep_runtime_probe_cuda_start", file=sys.stderr)
@@ -2617,101 +2455,6 @@ def _select_drumsep_runtime(
             "selection_policy": "bench_helper_cuda_failed",
         }
         reason = "missing" if cuda_detail == "missing" else "broken"
-        return None, reason, info
-
-    linux_rocm_selection = sys.platform.startswith("linux") and (
-        explicit_rocm or normalized_request in {"auto", "gpu"}
-    )
-    unified_candidates, unified_state_detail = _linux_rocm_dks_main_runtime_candidates(runtime_base)
-    legacy_rocm_candidate_exists = any(candidate.exists() for candidate in rocm_candidates)
-    if linux_rocm_selection and (explicit_rocm or unified_candidates):
-        selection_policy = "explicit_rocm" if explicit_rocm else ("gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm")
-        print(f"drumsep_runtime_selection_policy={selection_policy}", file=sys.stderr)
-        main_detail = unified_state_detail
-        main_attempts: List[Dict[str, Any]] = []
-        if unified_candidates:
-            print(f"timing_utc={_ts()} dks_runtime_probe_main_unified_start", file=sys.stderr)
-            selected_main_python, main_detail, main_payload, main_attempts = _probe_drumsep_runtime_candidates(
-                unified_candidates,
-                require_gpu=True,
-            )
-            print(f"timing_utc={_ts()} dks_runtime_probe_main_unified_end detail={main_detail}", file=sys.stderr)
-            if selected_main_python is not None:
-                capability_detail = _dks_unified_runtime_capability_detail(main_payload)
-                if capability_detail == "ok":
-                    info = dict(main_payload or {})
-                    info["kind"] = "rocm"
-                    info["detail"] = "main_unified"
-                    info["fallback_reason"] = ""
-                    info["selection_policy"] = selection_policy
-                    info["dks_runtime_selection"] = "main_unified"
-                    info["dks_runtime_reason"] = "main_unified_capable"
-                    info["dks_unified_candidate"] = True
-                    info["dks_legacy_fallback_available"] = legacy_rocm_candidate_exists
-                    info["main_unified_python_attempts"] = main_attempts
-                    _emit_dks_runtime_selection_markers(
-                        "main_unified",
-                        selected_main_python,
-                        "main_unified_capable",
-                        True,
-                        legacy_rocm_candidate_exists,
-                    )
-                    return selected_main_python, "rocm", info
-                main_detail = capability_detail
-
-        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_start", file=sys.stderr)
-        selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)
-        print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_end detail={rocm_detail}", file=sys.stderr)
-        if selected_rocm_python is None and rocm_detail in {"rocm_cuda_unavailable", "rocm_no_device_names"}:
-            time.sleep(1.0)
-            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_start", file=sys.stderr)
-            selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)
-            print(f"timing_utc={_ts()} drumsep_runtime_probe_rocm_retry_end detail={rocm_detail}", file=sys.stderr)
-        if selected_rocm_python is not None:
-            selection = "fallback_legacy" if unified_candidates else "legacy_drumsep_rocm"
-            reason = f"main_unified_skipped:{main_detail}" if unified_candidates else "legacy_rocm_capable"
-            info = dict(rocm_payload or {})
-            info["kind"] = "rocm"
-            info["detail"] = rocm_detail
-            info["fallback_reason"] = reason if unified_candidates else ""
-            info["selection_policy"] = selection_policy
-            info["dks_runtime_selection"] = selection
-            info["dks_runtime_reason"] = reason
-            info["dks_unified_candidate"] = bool(unified_candidates)
-            info["dks_legacy_fallback_available"] = True
-            info["main_unified_python_attempts"] = main_attempts
-            info["rocm_python_attempts"] = rocm_attempts
-            _emit_dks_runtime_selection_markers(
-                selection,
-                selected_rocm_python,
-                reason,
-                bool(unified_candidates),
-                True,
-            )
-            return selected_rocm_python, "rocm", info
-
-        info = {
-            "rocm_detail": rocm_detail,
-            "main_unified_detail": main_detail,
-            "rocm_python": str(rocm_python),
-            "main_unified_python": str(unified_candidates[0]) if unified_candidates else str(_main_runtime_python_path(runtime_base)),
-            "main_unified_python_attempts": main_attempts,
-            "rocm_python_attempts": rocm_attempts,
-            "selection_policy": selection_policy,
-            "normalized_request": normalized_request,
-            "dks_runtime_selection": "unavailable",
-            "dks_runtime_reason": f"main_unified:{main_detail};legacy_rocm:{rocm_detail}",
-            "dks_unified_candidate": bool(unified_candidates),
-            "dks_legacy_fallback_available": False,
-        }
-        _emit_dks_runtime_selection_markers(
-            "unavailable",
-            None,
-            info["dks_runtime_reason"],
-            bool(unified_candidates),
-            False,
-        )
-        reason = "missing" if main_detail.startswith("ready_to_go_status_") and rocm_detail == "missing" else "broken"
         return None, reason, info
 
     selection_policy = "gpu_prefer_rocm" if normalized_request == "gpu" else "auto_prefer_rocm"
@@ -3328,55 +3071,6 @@ def _configure_model_cache_runtime() -> Path:
     return model_dir
 
 
-def _linux_numba_cache_path_is_safe(runtime_base: Path, cache_dir: Path) -> bool:
-    runtime_base = Path(runtime_base).expanduser().resolve(strict=False)
-    cache_dir = Path(cache_dir).expanduser().resolve(strict=False)
-    try:
-        relative = cache_dir.relative_to(runtime_base)
-    except ValueError:
-        return False
-    if not relative.parts:
-        return False
-    first = relative.parts[0].lower()
-    if first == ".venv" or first.startswith(".venv-"):
-        return False
-    return first not in {"models", "config", "configs", "assets", "source", "sources"}
-
-
-def _configure_linux_numba_cache_runtime(runtime_base: Optional[Path] = None) -> Dict[str, str]:
-    if not sys.platform.startswith("linux"):
-        return {}
-
-    candidates = _runtime_base_candidates()
-    effective_base = Path(runtime_base or (candidates[0] if candidates else Path.home() / ".local" / "share" / "STEMwerk"))
-    effective_base = effective_base.expanduser().resolve(strict=False)
-    cache_dir = (effective_base / "cache" / "numba").resolve(strict=False)
-    if not _linux_numba_cache_path_is_safe(effective_base, cache_dir):
-        raise RuntimeError(f"unsafe Linux Numba cache path: {cache_dir}")
-
-    configured_override = str(os.environ.get("NUMBA_CACHE_DIR") or "").strip()
-    override_rejected = bool(
-        configured_override
-        and Path(configured_override).expanduser().resolve(strict=False) != cache_dir
-    )
-    existed = cache_dir.is_dir()
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    if not cache_dir.is_dir() or not os.access(cache_dir, os.W_OK):
-        raise RuntimeError(f"Linux Numba cache is not writable: {cache_dir}")
-
-    os.environ["NUMBA_CACHE_DIR"] = str(cache_dir)
-    status = "rejected_override" if override_rejected else ("exists_valid" if existed else "created")
-    policy = {
-        "numba_cache_dir": str(cache_dir),
-        "numba_cache_source": "runtime_policy",
-        "numba_cache_status": status,
-        "numba_cache_inside_venv": "false",
-    }
-    for key, value in policy.items():
-        print(f"{key}={value}", file=sys.stderr)
-    return policy
-
-
 def emit_progress(percent: float, stage: str = ""):
     """Output progress in machine-readable format for Lua to parse."""
     line = f"PROGRESS:{int(percent)}:{stage}\n"
@@ -3419,73 +3113,6 @@ def _split_list(value: Optional[str]) -> List[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
-def _cuda_device_index(device_id: str) -> Optional[int]:
-    match = re.fullmatch(r"cuda:(\d+)", str(device_id or "").strip().lower())
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except Exception:
-        return None
-
-
-def _find_device_skip(device_id: str) -> Optional[Dict[str, str]]:
-    wanted = str(device_id or "").strip().lower()
-    if not wanted:
-        return None
-    for item in _get_device_skips():
-        if str(item.get("id", "")).strip().lower() == wanted:
-            return item
-    return None
-
-
-def _torch_device_probe_markers(device_name_index: int = 0) -> Dict[str, object]:
-    markers: Dict[str, object] = {
-        "torch_cuda_available": False,
-        "torch_cuda_device_count": 0,
-        "torch_cuda_device_name": "",
-        "torch_hip_version": "",
-    }
-    try:
-        import torch
-
-        markers["torch_hip_version"] = str(getattr(getattr(torch, "version", None), "hip", "") or "")
-        cuda_available = bool(torch.cuda.is_available())
-        markers["torch_cuda_available"] = cuda_available
-        markers["torch_cuda_device_count"] = int(torch.cuda.device_count()) if cuda_available else 0
-        if cuda_available and device_name_index >= 0 and int(markers["torch_cuda_device_count"]) > device_name_index:
-            markers["torch_cuda_device_name"] = str(torch.cuda.get_device_name(device_name_index))
-    except Exception:
-        pass
-    return markers
-
-
-def _emit_device_normalization_markers(
-    normalized_result: object,
-    explicit_gpu_request: bool,
-    probe_markers: Dict[str, object],
-) -> None:
-    print(
-        f"STEMWERK_DIAG normalized_device={getattr(normalized_result, 'normalized_device', '')}",
-        file=sys.stderr,
-    )
-    print(
-        f"STEMWERK_DIAG effective_backend={getattr(normalized_result, 'effective_backend', '')}",
-        file=sys.stderr,
-    )
-    print(
-        "STEMWERK_DIAG device_normalized="
-        f"{str(bool(getattr(normalized_result, 'device_normalized', False))).lower()}",
-        file=sys.stderr,
-    )
-    for key in ("torch_cuda_available", "torch_cuda_device_count", "torch_cuda_device_name", "torch_hip_version"):
-        value = probe_markers.get(key, "")
-        if isinstance(value, bool):
-            value = str(value).lower()
-        print(f"STEMWERK_DIAG {key}={value}", file=sys.stderr)
-    print(f"STEMWERK_DIAG explicit_gpu_request={str(explicit_gpu_request).lower()}", file=sys.stderr)
-
-
 def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, str, List[str]]:
     requested = str(device_preference or "auto")
     resolved = requested
@@ -3493,11 +3120,7 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
     live_device_ids = [str(dev.get("id", "")) for dev in live_devices]
     print(f"STEMWERK_DIAG requested_device={requested}", file=sys.stderr)
 
-    requested_norm = requested.strip().lower()
-    explicit_gpu_request = requested_norm not in ("", "auto", "cpu")
-    normalized_result = None
-
-    if requested_norm == "auto":
+    if requested == "auto":
         preferred = None
         if _is_darwin_arm64():
             preferred = next((dev for dev in live_devices if str(dev.get("id", "")).strip().lower() == "mps"), None)
@@ -3516,42 +3139,6 @@ def _resolve_normal_runtime_device(device_preference: str) -> Tuple[str, str, st
                 resolved = dev_id
             except Exception:
                 resolved = "auto"
-    else:
-        normalizer = getattr(core_devices, "normalize_torch_device", None) if core_devices is not None else None
-        if normalizer is not None:
-            try:
-                normalized_result = normalizer(requested, strict=True)
-                resolved = str(getattr(normalized_result, "normalized_device", resolved) or resolved)
-                device_name_index = _cuda_device_index(resolved)
-                probe_markers = _torch_device_probe_markers(
-                    device_name_index if device_name_index is not None else 0
-                )
-                _emit_device_normalization_markers(normalized_result, explicit_gpu_request, probe_markers)
-                skip = _find_device_skip(resolved)
-                if skip is not None:
-                    reason = str(skip.get("reason", "") or "device_skipped")
-                    print(f"STEMWERK_DIAG device_skip_reason={reason}", file=sys.stderr)
-                    print(
-                        f"STEMWERK_DIAG device_normalization_error_reason=device_skipped:{resolved}",
-                        file=sys.stderr,
-                    )
-                    return requested, resolved, "cpu|CPU", live_device_ids
-            except Exception as exc:
-                error_result = getattr(exc, "result", None)
-                if error_result is not None:
-                    normalized_error_device = str(getattr(error_result, "normalized_device", resolved) or resolved)
-                    device_name_index = _cuda_device_index(normalized_error_device)
-                    probe_markers = _torch_device_probe_markers(
-                        device_name_index if device_name_index is not None else 0
-                    )
-                    _emit_device_normalization_markers(error_result, explicit_gpu_request, probe_markers)
-                    print(
-                        f"STEMWERK_DIAG device_normalization_error_reason={getattr(error_result, 'error_reason', '')}",
-                        file=sys.stderr,
-                    )
-                    resolved = str(getattr(error_result, "normalized_device", resolved) or resolved)
-                    return requested, resolved, "cpu|CPU", live_device_ids
-                print(f"normal_workflow_device_normalization_error={type(exc).__name__}:{exc}", file=sys.stderr)
     preview_device_id = resolved
     preview_device_name = ""
     try:
@@ -3570,90 +3157,7 @@ def _is_unexpected_cpu_downgrade(requested_device: str, preview_device: str) -> 
     return requested not in ("", "auto", "cpu")
 
 
-def _get_last_output_mapping_info() -> Dict[str, Any]:
-    return dict(_LAST_OUTPUT_MAPPING_INFO)
-
-
-def _match_named_stem_label(path: Path, labels: Set[str]) -> Optional[str]:
-    stem_name = path.stem
-    for label in re.findall(r"\(([^()]+)\)", stem_name):
-        normalized = str(label or "").strip().lower()
-        if normalized in labels:
-            return normalized
-    return None
-
-
-def _infer_complement_basename(path: Path) -> str:
-    stem_name = path.stem
-    match = re.match(r"^(?P<prefix>.+?)_\((?:vocals|instrumental|no vocals|no_vocals)\)", stem_name, re.IGNORECASE)
-    if match:
-        return str(match.group("prefix") or "").strip().lower()
-    return ""
-
-
-def _discover_complement_fallback_stems(
-    output_root: Path, known_paths: List[Path]
-) -> Tuple[Dict[str, Path], List[str]]:
-    known_resolved = {str(path.resolve()).lower() for path in known_paths}
-    prefix_hints = {hint for hint in (_infer_complement_basename(path) for path in known_paths) if hint}
-    label_to_target = {"vocals": "vocals", "instrumental": "other", "no vocals": "other", "no_vocals": "other"}
-    candidates: Dict[str, Path] = {}
-    candidate_names: List[str] = []
-    audio_suffixes = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aif", ".aiff"}
-
-    for candidate in sorted(output_root.iterdir(), key=lambda p: p.name.lower()):
-        if not candidate.is_file() or candidate.suffix.lower() not in audio_suffixes:
-            continue
-        resolved_key = str(candidate.resolve()).lower()
-        if resolved_key in known_resolved:
-            continue
-        label = _match_named_stem_label(candidate, set(label_to_target))
-        if label is None:
-            continue
-        prefix = _infer_complement_basename(candidate)
-        if prefix_hints and prefix and prefix not in prefix_hints:
-            continue
-        target_name = label_to_target[label]
-        candidate_names.append(str(candidate))
-        if target_name not in candidates:
-            candidates[target_name] = candidate
-
-    return candidates, candidate_names
-
-
-def _complement_contract_info(registry_entry: Optional[Dict[str, Any]]) -> Tuple[bool, int]:
-    entry = registry_entry if isinstance(registry_entry, dict) else {}
-    contract = entry.get("output_contract") if isinstance(entry.get("output_contract"), dict) else {}
-    semantics = str(contract.get("stem_semantics") or "").strip()
-    stems = contract.get("stems") if isinstance(contract.get("stems"), list) else []
-    normalized_stems = [str(item or "").strip().lower() for item in stems]
-    try:
-        expected_outputs = int(contract.get("expected_outputs") or 0)
-    except Exception:
-        expected_outputs = 0
-    return semantics == "complement" and normalized_stems == ["vocals", "instrumental"], expected_outputs
-
-
-def _emit_registry_model_markers(registry_entry: Optional[Dict[str, Any]], run_model: str) -> None:
-    if not isinstance(registry_entry, dict):
-        return
-    print(f"registry_model_id={registry_entry.get('id', '')}", file=sys.stderr)
-    print(f"registry_family={registry_entry.get('family', '')}", file=sys.stderr)
-    print(f"registry_architecture={registry_entry.get('architecture', '')}", file=sys.stderr)
-    contract = registry_entry.get("output_contract") if isinstance(registry_entry.get("output_contract"), dict) else {}
-    print(f"registry_stem_semantics={contract.get('stem_semantics', '')}", file=sys.stderr)
-    print(f"output_contract_expected={contract.get('expected_outputs', '')}", file=sys.stderr)
-    if (
-        str(registry_entry.get("architecture") or "").strip().lower() == "mdxc"
-        and str(run_model or "").strip().lower().endswith(".ckpt")
-    ):
-        print("onnx_provider_warning_expected_for_ckpt_mdxc=true", file=sys.stderr)
-
-
-def _map_reaper_stems_from_result(
-    result: Any, output_root: Path, registry_entry: Optional[Dict[str, Any]] = None
-) -> Dict[str, str]:
-    global _LAST_OUTPUT_MAPPING_INFO
+def _map_reaper_stems_from_result(result: Any, output_root: Path) -> Dict[str, str]:
     stem_mapping = {
         "vocals": ["vocals", "vocal", "Vocals"],
         "drums": ["drums", "drum", "Drums"],
@@ -3662,60 +3166,18 @@ def _map_reaper_stems_from_result(
         "guitar": ["guitar", "Guitar"],
         "piano": ["piano", "Piano", "keys", "Keys"],
     }
-    complement_contract, complement_expected = _complement_contract_info(registry_entry)
-    mapping_info: Dict[str, Any] = {
-        "raw_output_files": [],
-        "mapped_reaper_stems": {},
-        "instrumental_as_other": False,
-        "fallback_output_scan_used": False,
-        "fallback_output_scan_candidates": [],
-    }
 
-    source_entries: List[Tuple[str, Path]] = []
     reaper_stems: Dict[str, str] = {}
     for stem_name, stem_path in result.stems.items():
         abs_path = _resolve_stem_path(output_root, stem_path)
         if not abs_path.exists():
             raise FileNotFoundError(f"Expected separated stem not found: {abs_path}")
-        source_entries.append((stem_name, abs_path))
 
-    if complement_contract and len(source_entries) < complement_expected:
-        existing_targets = set()
-        for stem_name, abs_path in source_entries:
-            filename = abs_path.stem.lower()
-            if "instrumental" in filename or "no_vocals" in filename:
-                existing_targets.add("other")
-            elif "vocals" in filename:
-                existing_targets.add("vocals")
-            elif str(stem_name or "").strip().lower() in {"vocals", "other"}:
-                existing_targets.add(str(stem_name or "").strip().lower())
-        fallback_stems, fallback_candidates = _discover_complement_fallback_stems(
-            output_root,
-            [path for _, path in source_entries],
-        )
-        mapping_info["fallback_output_scan_candidates"] = fallback_candidates
-        added = False
-        for target_name in ("vocals", "other"):
-            if target_name in existing_targets:
-                continue
-            fallback_path = fallback_stems.get(target_name)
-            if fallback_path is None:
-                continue
-            source_entries.append((target_name, fallback_path))
-            existing_targets.add(target_name)
-            added = True
-        mapping_info["fallback_output_scan_used"] = added
-
-    for stem_name, abs_path in source_entries:
-
-        mapping_info["raw_output_files"].append(str(abs_path))
         filename = abs_path.stem.lower()
         target_name = stem_name
         for map_name, patterns in stem_mapping.items():
             if any(p.lower() in filename for p in patterns):
                 target_name = map_name
-                if map_name == "other" and ("instrumental" in filename or "no_vocals" in filename):
-                    mapping_info["instrumental_as_other"] = True
                 break
 
         new_path = abs_path.parent / f"{target_name}.wav"
@@ -3725,20 +3187,7 @@ def _map_reaper_stems_from_result(
             shutil.move(str(abs_path), str(new_path))
 
         reaper_stems[target_name] = str(new_path)
-        mapping_info["mapped_reaper_stems"][target_name] = str(new_path)
         print(f"  {target_name}:  {new_path}", file=sys.stderr)
-
-    _LAST_OUTPUT_MAPPING_INFO = mapping_info
-
-    if complement_contract:
-        if len(mapping_info["raw_output_files"]) != complement_expected:
-            raise RuntimeError(
-                f"Complement output contract expected {complement_expected} outputs, got {len(mapping_info['raw_output_files'])}"
-            )
-        if set(reaper_stems) != {"vocals", "other"}:
-            raise RuntimeError(
-                f"Complement output contract expected REAPER stems vocals+other, got {sorted(reaper_stems)}"
-            )
 
     return reaper_stems
 
@@ -3945,8 +3394,6 @@ def build_drumsep_subprocess_env(
         "drumsep_cuda_helper_runtime_venv": str(runtime_venv) if backend == "cuda" else "",
         "drumsep_cuda_runtime_lib_dirs": "|".join(_runtime_cuda_library_dirs(runtime_venv)) if backend == "cuda" else "",
         "drumsep_path_starts_with_drumsep_venv": "yes" if sanitized_path and _path_text(sanitized_path[0]) == _path_text(runtime_bin) else "no",
-        "numba_cache_dir": str(env.get("NUMBA_CACHE_DIR", "")),
-        "numba_cache_inherited": "yes" if str(env.get("NUMBA_CACHE_DIR", "")).strip() else "no",
     }
     return env, diagnostics
 
@@ -4043,8 +3490,6 @@ def _emit_drumsep_subprocess_env_diagnostics(diagnostics: Dict[str, str]) -> Non
         "drumsep_cuda_helper_runtime_venv",
         "drumsep_cuda_runtime_lib_dirs",
         "drumsep_path_starts_with_drumsep_venv",
-        "numba_cache_dir",
-        "numba_cache_inherited",
     ):
         print(f"{key}={diagnostics.get(key, '')}", file=sys.stderr)
 
@@ -4719,7 +4164,6 @@ def main():
         parser.print_help()
         return 1
 
-    _configure_linux_numba_cache_runtime()
     _require_core()
     if stemwerk_core_file:
         print(f"STEMWERK_DIAG stemwerk_core_file={stemwerk_core_file}", file=sys.stderr)
@@ -5090,8 +4534,6 @@ def main():
             write_done("DONE")
         return _finish_benchmark_run(benchmark_sampler, 0)
 
-    normal_model_selection = _resolve_normal_route_model_selection(args)
-    run_model = str(normal_model_selection.get("model_for_separator") or run_model)
     requested_device, resolved_device, preview_text, live_device_ids = _resolve_normal_runtime_device(device_preference)
     preview_device_id, _sep, preview_device_name = preview_text.partition("|")
     print(f"normal_workflow_backend_seen_device_request={requested_device}", file=sys.stderr)
@@ -5108,25 +4550,16 @@ def main():
     print(f"workflow_mode={workflow_mode}", file=sys.stderr)
     print(f"route={route}", file=sys.stderr)
     print(f"stage={stage}", file=sys.stderr)
-    print(f"requested_model_id={normal_model_selection.get('requested_model_id', '')}", file=sys.stderr)
-    print(f"effective_model_id={normal_model_selection.get('effective_model_id', '')}", file=sys.stderr)
-    print(f"resolved_model_filename={run_model}", file=sys.stderr)
-    if normal_model_selection.get("experimental_override_active"):
-        print("experimental_override_active=1", file=sys.stderr)
-    registry_entry = normal_model_selection.get("registry_entry")
-    _emit_registry_model_markers(registry_entry, run_model)
     print(f"model_name={run_model}", file=sys.stderr)
     print(f"device={resolved_device}", file=sys.stderr)
     print(f"backend={backend}", file=sys.stderr)
     if _is_unexpected_cpu_downgrade(device_preference, preview_device_id):
         print("normal_workflow_backend_fallback_reason=live_runtime_cpu_only", file=sys.stderr)
-        print("STEMWERK_DIAG cpu_fallback_blocked=true", file=sys.stderr)
         print(
             "Runtime device fallback blocked: the explicitly requested accelerator is unavailable in the live normal STEMwerk runtime.",
             file=sys.stderr,
         )
         return 2
-    print("STEMWERK_DIAG cpu_fallback_blocked=false", file=sys.stderr)
 
     runtime_env: Dict[str, object] = {}
     try:
@@ -5158,28 +4591,7 @@ def main():
         # audio-separator writes model outputs inside sep.separate(); this phase
         # brackets the REAPER-facing output mapping and final stem renames.
         emit_phase("stem_write_start")
-        reaper_stems = _map_reaper_stems_from_result(result, output_root, registry_entry=registry_entry)
-        mapping_info = _get_last_output_mapping_info()
-        print(
-            "raw_output_files=" + json.dumps(mapping_info.get("raw_output_files") or [], ensure_ascii=False),
-            file=sys.stderr,
-        )
-        print(
-            "mapped_reaper_stems="
-            + json.dumps(mapping_info.get("mapped_reaper_stems") or {}, sort_keys=True, ensure_ascii=False),
-            file=sys.stderr,
-        )
-        print(
-            "fallback_output_scan_candidates="
-            + json.dumps(mapping_info.get("fallback_output_scan_candidates") or [], ensure_ascii=False),
-            file=sys.stderr,
-        )
-        print(
-            f"fallback_output_scan_used={'true' if mapping_info.get('fallback_output_scan_used') else 'false'}",
-            file=sys.stderr,
-        )
-        if mapping_info.get("instrumental_as_other"):
-            print("instrumental_as_other=true", file=sys.stderr)
+        reaper_stems = _map_reaper_stems_from_result(result, output_root)
 
         emit_phase("stem_write_end")
 

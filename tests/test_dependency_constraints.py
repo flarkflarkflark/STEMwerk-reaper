@@ -19,21 +19,12 @@ import pytest
 EXPECTED_TORCH = "2.5.1"
 EXPECTED_TORCHVISION = "0.20.1"
 EXPECTED_TORCHAUDIO = "2.5.1"
-EXPECTED_AUDIO_SEPARATOR = "0.44.3"
+EXPECTED_AUDIO_SEPARATOR = "0.23.0"
 
 
 def _load_audio_separator_process_module():
     path = Path("scripts/reaper/audio_separator_process.py")
     spec = importlib.util.spec_from_file_location("audio_separator_process_dependency_test", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_drumsep_helper_module():
-    path = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
-    spec = importlib.util.spec_from_file_location("stemwerk_drumsep_process_dependency_test", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -103,24 +94,6 @@ def _rocm_gfx1201_runtime_status(
     return allow
 
 
-def _active_linux_torch_policy(backend, *, gfx1201=False):
-    if backend == "rocm" and gfx1201:
-        return {
-            "backend": "rocm",
-            "torch": "2.10.0",
-            "torchvision": "0.25.0",
-            "torchaudio": "2.10.0",
-            "policy": "rocm_gfx1201_allow_2_10_rocm7",
-        }
-    return {
-        "backend": backend,
-        "torch": "2.5.1",
-        "torchvision": "0.20.1",
-        "torchaudio": "2.5.1",
-        "policy": "service_line_default_torch_lt_2_6",
-    }
-
-
 def _core_version(ver):
     return ver.split("+", 1)[0]
 
@@ -132,34 +105,7 @@ def _version_or_fail(dist_name):
         pytest.fail(f"{dist_name} is not installed")
 
 
-def _require_host_runtime_packages(*module_names):
-    missing = [name for name in module_names if importlib.util.find_spec(name) is None]
-    if missing:
-        pytest.skip(
-            "host runtime package not installed; static policy covered separately: "
-            + ", ".join(missing)
-        )
-
-
-def _require_managed_target_runtime():
-    if any(
-        importlib.util.find_spec(name) is None
-        for name in ("audio_separator", "stemwerk_core")
-    ):
-        pytest.skip(
-            "managed runtime version checked by bootstrap smoke, not system Python"
-        )
-
-
 def test_dependency_diagnostics():
-    _require_host_runtime_packages(
-        "audio_separator",
-        "onnxruntime",
-        "stemwerk_core",
-        "torch",
-        "torchvision",
-        "torchaudio",
-    )
     import audio_separator
     import onnxruntime
     import stemwerk_core
@@ -195,7 +141,6 @@ def test_runner_is_macos_arm64():
 
 
 def test_torch_pin():
-    _require_managed_target_runtime()
     import torch
 
     assert _core_version(torch.__version__) == EXPECTED_TORCH, (
@@ -204,7 +149,6 @@ def test_torch_pin():
 
 
 def test_torchvision_pin_and_abi_match():
-    _require_managed_target_runtime()
     import torch
     import torchvision
 
@@ -228,7 +172,6 @@ def test_torchvision_pin_and_abi_match():
 
 
 def test_torchaudio_pin_and_abi_match():
-    _require_managed_target_runtime()
     import torch
     import torchaudio
 
@@ -258,7 +201,10 @@ def test_stemwerk_core_imports_from_local_install():
         pytest.skip("stemwerk_core is not installed in this local test environment")
     import stemwerk_core  # noqa: F401
 
-    direct_url = distribution("stemwerk-core").read_text("direct_url.json")
+    try:
+        direct_url = distribution("stemwerk-core").read_text("direct_url.json")
+    except PackageNotFoundError:
+        pytest.skip("stemwerk-core is importable via sys.path but not installed in this environment")
     assert direct_url, "stemwerk-core install is missing direct_url.json metadata"
 
     direct_url_data = json.loads(direct_url)
@@ -273,9 +219,6 @@ def test_onnxruntime_imports():
 
 
 def test_torch_wheel_has_mps_support_built():
-    if platform.system() != "Darwin" or platform.machine() != "arm64":
-        pytest.skip("MPS probe only valid on Apple Silicon runtime")
-    _require_managed_target_runtime()
     import torch
 
     assert torch.backends.mps.is_built() is True, (
@@ -287,7 +230,7 @@ def test_macos_arm_constraints_include_matching_torchvision_pin():
     from pathlib import Path
 
     constraints_lines = Path("scripts/reaper/constraints/macos.txt").read_text().splitlines()
-    assert "numpy==2.4.4" in constraints_lines
+    assert "numpy==1.26.4" in constraints_lines
     assert "torch==2.5.1" in constraints_lines
     assert "torchvision==0.20.1" in constraints_lines
     assert "torchaudio==2.5.1" in constraints_lines
@@ -310,12 +253,7 @@ def test_macos_bootstrap_repairs_after_audio_separator_install():
     audio_install_marker = 'install_with_optional_bundled_wheels "${VENV_PY}" -c "${MACOS_CONSTRAINTS_FILE}" "${PACKAGE}"'
     repair_marker = 'set_status "deps_failed" "torch_pin_repair_failed"'
 
-    assert 'PINNED_NUMPY_VERSION_ARM64="2.4.4"' in script
-    assert 'PINNED_NUMPY_VERSION_INTEL="1.26.4"' in script
-    assert 'PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"' in script
-    assert 'PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"' in script
-    assert 'PINNED_NUMBA_VERSION_ARM64="0.66.0"' in script
-    assert 'PINNED_LLVM_VERSION_ARM64="0.48.0"' in script
+    assert 'PINNED_NUMPY_VERSION="1.26.4"' in script
     assert '"numpy==${PINNED_NUMPY_VERSION}"' in script
     assert 'if core(numpy_ver) != expected_numpy:' in script
     assert 'import numba' in script
@@ -353,124 +291,6 @@ def test_macos_bootstrap_assertion_uses_audio_separator_metadata():
     assert 'audio_separator.__version__' not in script
 
 
-def test_macos_main_runtime_uses_asep_0443_numpy2_without_samplerate_conflict():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
-    constraints = Path("scripts/reaper/constraints/macos.txt").read_text().splitlines()
-    payload = Path("tools/build_macos_apple_silicon_payload.py").read_text()
-
-    assert 'PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"' in script
-    assert 'PINNED_NUMPY_VERSION_ARM64="2.4.4"' in script
-    assert 'expected_audio_separator = "${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
-    assert 'PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
-    assert "numpy==2.4.4" in constraints
-    assert "numpy==1.26.4" not in constraints
-    assert '"audio-separator==0.44.3"' in payload
-    assert '"numpy==2.4.4"' in payload
-    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"' in payload
-    assert 'PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"' in script
-    assert 'if version("audio-separator") == "0.44.3":' in script
-    assert 'dependencies.remove("samplerate")' in script
-
-
-def test_macos_bootstrap_pip_check_blocks_ready_false_positive():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
-
-    pip_check = "if ! check_runtime_dependencies; then"
-    assert pip_check in script
-    assert 'set_status "deps_failed" "pip_check_failed"' in script
-    assert script.index(pip_check) < script.index('write_ready_to_go_state "${READY_RUNTIME_KIND}"')
-
-
-def test_runtime_numpy_numba_guard_uses_live_import_and_jit_probe():
-    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
-    workflow = Path("scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
-
-    assert "import numpy, numba" in main_script
-    assert "@numba.njit" in main_script
-    assert "_stemwerk_numba_probe(1)" in main_script
-    assert "execProcess(cmd, 30000)" in main_script
-    assert "NumPy/Numba runtime probe failed:" in main_script
-    assert "requires < 2.4" not in main_script
-    assert 'pip install \\\"numpy<2.4\\\"' not in main_script
-    assert 'pip install \\\"numpy<2.4\\\"' not in workflow
-    assert "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle." in main_script
-    assert "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle." in workflow
-
-
-def test_macos_ready_assertion_enforces_numpy_numba_llvmlite_bundle():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
-
-    assert 'expected_numpy = "${PINNED_NUMPY_VERSION}"' in script
-    assert 'expected_numba = "${PINNED_NUMBA_VERSION}"' in script
-    assert 'expected_llvmlite = "${PINNED_LLVM_VERSION}"' in script
-    assert 'add_failure("numpy", expected_numpy, numpy_ver or "missing")' in script
-    assert 'add_failure("numba", expected_numba, numba_ver or "missing")' in script
-    assert 'add_failure("llvmlite", expected_llvmlite, llvmlite_ver or "missing")' in script
-    assert "@numba_mod.njit" in script
-    assert "numba JIT probe failed:" in script
-
-
-def test_macos_offline_payload_preflight_precedes_all_runtime_mutation():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
-
-    preflight_call = 'preflight_bundled_apple_silicon_payload "${_payload_probe_python}" "${BUNDLED_WHEELS_DIR}"'
-    rebuild_remove = 'log "Removing requested virtual environment rebuild target: ${RUNTIME_BASE}/.venv"'
-    incompatible_remove = 'remove_incompatible_venv\nfi'
-    first_torch_install_call = "if ! install_pinned_torch_stack; then"
-    first_runtime_install = 'install_with_optional_bundled_wheels "${VENV_PY}" --upgrade pip'
-
-    assert script.index(preflight_call) < script.index(rebuild_remove)
-    assert script.index(preflight_call) < script.index(incompatible_remove)
-    assert script.index(preflight_call) < script.index(first_torch_install_call)
-    assert script.index(preflight_call) < script.index(first_runtime_install)
-    assert "--dry-run --ignore-installed --no-cache-dir --no-index --find-links" in script
-    assert "resolved_with_native_override" in script
-    assert "stemwerk_macos_payload_contract.py" in script
-    assert "MACOS_PAYLOAD_EXCLUDED_UPSTREAM_EDGE" in script
-    assert 'set_status "deps_failed" "payload_preflight_failed"' in script
-    assert 'MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="false"' in script
-
-
-def test_macos_payload_preflight_state_markers_are_persisted():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
-
-    for marker in (
-        "MACOS_PAYLOAD_PREFLIGHT_STATUS",
-        "MACOS_PAYLOAD_PREFLIGHT_REASON",
-        "MACOS_PAYLOAD_PREFLIGHT_WHEELHOUSE",
-        "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED",
-    ):
-        assert f'echo "{marker}=${{{marker}}}"' in script
-
-
-def test_apple_silicon_workflows_follow_asep_0443_numpy2_policy():
-    workflow_paths = [
-        Path(".github/workflows/macos-apple-silicon-backend-smoke.yml"),
-        Path(".github/workflows/macos-apple-silicon-backend-sanity.yml"),
-        Path(".github/workflows/apple-silicon-mps-rd.yml"),
-    ]
-
-    for workflow_path in workflow_paths:
-        workflow = workflow_path.read_text()
-        assert 'audio-separator==0.44.3' in workflow, workflow_path
-        assert 'numpy==2.4.4' in workflow, workflow_path
-        assert 'audio-separator==0.23.0' not in workflow, workflow_path
-        assert 'numpy<2.0' not in workflow, workflow_path
-        assert 'numpy==1.26.4' not in workflow, workflow_path
-        assert 'pip check' in workflow, workflow_path
-
-    sanity = workflow_paths[1].read_text()
-    assert 'payload["samplerate_version"] = version("samplerate")' in sanity
-    assert 'core(payload["samplerate_version"]) == "0.2.4"' in sanity
-
-    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
-    intel_constraints = Path("scripts/reaper/constraints/macos-intel.txt").read_text().splitlines()
-    assert 'PINNED_AUDIO_SEPARATOR_VERSION_ARM64="0.44.3"' in bootstrap
-    assert 'PINNED_NUMPY_VERSION_ARM64="2.4.4"' in bootstrap
-    assert 'PINNED_AUDIO_SEPARATOR_VERSION_INTEL="0.23.0"' in bootstrap
-    assert "numpy==1.26.4" in intel_constraints
-
-
 def test_macos_bootstrap_assertion_does_not_require_mps_availability_on_intel():
     from pathlib import Path
 
@@ -501,8 +321,13 @@ def test_macos_runtime_verification_rejects_torch_26_plus():
 
     assert "torch_too_new_for_demucs" in runtime_setup
     assert "torch_too_new_for_demucs" in setup_internal
-    assert "numpy_too_new_for_demucs" in runtime_setup
-    assert "numpy_too_new_for_demucs" in setup_internal
+    assert "numpy_numba_runtime_probe_failed" in runtime_setup
+    assert "numpy_numba_runtime_probe_failed" in setup_internal
+    for source in (runtime_setup, setup_internal):
+        assert "import numpy, numba" in source
+        assert "@numba.njit" in source
+        assert "_stemwerk_numba_probe(1)" in source
+        assert "numpy_too_new" not in source
 
 
 def test_runtime_setup_binds_trim_before_compat_probe_use():
@@ -823,9 +648,7 @@ def test_linux_cuda_drumsep_path_uses_shared_five_step_setup_and_stays_out_of_ro
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
     launcher = Path("scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh").read_text()
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
-    drumsep_install = bootstrap.split("install_drumsep_runtime_body() {", 1)[1].split(
-        "\n\ninstall_drumsep_runtime() {", 1
-    )[0]
+    drumsep_install = bootstrap.split("install_drumsep_runtime() {", 1)[1].split("\n\nresolve_core_target()", 1)[0]
 
     assert 'STEP_TOTAL="5"' in bootstrap
     assert 'set_status "running" "launcher_started" "1" "5" "Launching bootstrap"' in launcher
@@ -1555,8 +1378,7 @@ def test_device_refresh_has_module_scope_friendly_name_sanitizer():
     assert 'if not name then return "" end' in script
     assert 'raw = tostring(name):gsub("%c", " ")' in script
     assert script.index("local function sanitizeFriendlyName(name)") < script.index("function DEVICE_RUNTIME.refreshRuntimeDevices(force)")
-    assert 'local base = sanitizeFriendlyName(dev.fullName or dev.name or dev.id) or ""' in script
-    assert 'base = sanitizeFriendlyName(dev.name or dev.id) or ""' in script
+    assert 'local short = sanitizeFriendlyName(d.fullName or d.name)' in script
 
 
 def test_early_stem_resolver_uses_safe_drumkit_route_helper_before_progress_init():
@@ -1649,7 +1471,7 @@ def test_tooltip_lang_strings_keep_23_0_2_right_click_hint_compatibility():
         assert 'tooltip_lang = "Sprache wechseln. Rechtsklick: Tooltips ein/aus.",' in text
 
 
-def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
+def test_verify_only_computes_capabilities_without_publishing_current_runtime_probe():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
     assert "function firstNonEmpty(...)" in setup_internal
@@ -1663,14 +1485,17 @@ def test_verify_only_rewrites_capabilities_from_current_runtime_probe():
     assert "removeError(\"torch_runtime_unsupported\")" in setup_internal
     assert "removeError(\"torchaudio_missing_for_demucs\")" in setup_internal
     assert "local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0" in setup_internal
-    assert "writeCapabilities(capFile, {" in setup_internal
-    assert "verification = verifiedRuntimeOk and \"ok\" or \"failed\"" in setup_internal
-    assert "torchVersion = checkProbe.torchVersion" in setup_internal
-    assert "torchaudioVersion = checkProbe.torchaudioVersion" in setup_internal
-    assert "runtimeDriftDetected = checkProbe.runtimeDriftDetected" in setup_internal
+    verify_body = setup_internal.split("verifyExistingSetup = function(runtime, separatorScript)", 1)[1].split(
+        "-- (showExistingRuntimeSetupMenu removed", 1
+    )[0]
+    assert "writeCapabilities(capFile, {" not in verify_body
+    assert "updateBootstrapEnv(stateFile, {" not in verify_body
+    assert "appendSetupLog(" not in verify_body
+    assert "setExt(" not in verify_body
+    assert "local checkProbe = reconcileCheckVerification(" in verify_body
     assert "runtimeDriftDetected = runtimeDriftDetected" in setup_internal
     assert "runtimeDriftReason = runtimeDriftReason" in setup_internal
-    assert "updateBootstrapEnv(stateFile, {" in setup_internal
+    assert "verifyRuntimePaths(effectiveState, false)" in verify_body
 
 
 def test_post_bootstrap_trusts_verified_bootstrap_log_over_stale_probe_failures():
@@ -1754,7 +1579,7 @@ def test_verify_only_prefers_current_macos_ffmpeg_and_python_over_stale_bootstra
     assert 'capState.FFMPEG_PATH or ""' in setup_internal
     assert "resolveUnixFfmpegFallback()" in setup_internal
     assert "local effectiveState = buildVerifyOnlyState(runtime, state, capState, readyState)" in setup_internal
-    assert "local verification = verifyRuntimePaths(effectiveState)" in setup_internal
+    assert "local verification = verifyRuntimePaths(effectiveState, false)" in setup_internal
 
 
 def test_verify_only_uses_ready_to_go_health_to_avoid_stale_macos_runtime_failures():
@@ -2206,22 +2031,16 @@ def test_command_path_noise_is_ignored_for_python_resolution():
 def test_linux_managed_flow_installs_audio_separator_runtime_deps_after_torch():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
-    assert 'PINNED_AUDIO_SEPARATOR_VERSION="0.44.3"' in script
-    assert 'PINNED_NUMPY_VERSION="2.4.4"' in script
-    assert 'PINNED_SCIPY_VERSION="1.18.0"' in script
-    assert 'PINNED_NUMBA_VERSION="0.66.0"' in script
-    assert 'PINNED_LLVM_VERSION="0.48.0"' in script
-    assert 'PINNED_BEARTYPE_VERSION="0.18.5"' in script
+    assert 'PINNED_NUMPY_VERSION="1.26.4"' in script
+    assert 'PINNED_NUMBA_VERSION="0.59.1"' in script
+    assert 'PINNED_LLVM_VERSION="0.42.0"' in script
     assert "enforce_runtime_python_pins" in script
     assert '"numpy==${PINNED_NUMPY_VERSION}"' in script
-    assert '"scipy==${PINNED_SCIPY_VERSION}"' in script
     assert '"llvmlite==${PINNED_LLVM_VERSION}"' in script
-    assert '"beartype==${PINNED_BEARTYPE_VERSION}"' in script
     assert '"numba==${PINNED_NUMBA_VERSION}"' in script
     assert 'log_stage "Checking/installing audio_separator"' in script
-    assert 'Installing audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} with constraints (torch pinned)' in script
-    assert 'pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"' not in script
-    assert "no --no-deps fallback is allowed for the NumPy 2 runtime" in script
+    assert 'Installing audio-separator 0.23.0 with constraints (torch pinned)' in script
+    assert 'pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"' in script
     assert script.index('install_linux_torch_stack "cpu"') < script.index('log_stage "Checking/installing audio_separator"')
     assert script.index('log_stage "Checking/installing audio_separator"') < script.index("Final verification")
 
@@ -2255,107 +2074,6 @@ def test_linux_repair_skips_torch_pin_reapply_after_successful_same_run_install(
     assert script.index('torch_pin_reapply_skipped=already_installed_this_run') < script.index('log_stage "Re-applying pinned torch stack"')
 
 
-def test_linux_main_runtime_rebuilds_old_numpy1_audio_separator_venv():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-
-    assert "main_runtime_requires_rebuild()" in script
-    assert '"audio-separator": "${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
-    assert '"numpy": "${PINNED_NUMPY_VERSION}"' in script
-    assert '"scipy": "${PINNED_SCIPY_VERSION}"' in script
-    assert '"numba": "${PINNED_NUMBA_VERSION}"' in script
-    assert '"llvmlite": "${PINNED_LLVM_VERSION}"' in script
-    assert '"beartype": "${PINNED_BEARTYPE_VERSION}"' in script
-    assert 'print("rebuild|numpy_major_lt_2:" + installed)' in script
-    assert 'print("rebuild|" + name + ":" + installed + "!=" + wanted)' in script
-    assert "rebuilding .venv for audio-separator ${PINNED_AUDIO_SEPARATOR_VERSION} / NumPy ${PINNED_NUMPY_VERSION}" in script
-    assert 'venv_torch_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python" || main_runtime_requires_rebuild "${RUNTIME_BASE}/.venv/bin/python"' in script
-    assert script.index("main_runtime_requires_rebuild()") < script.index('log_stage "Creating venv"')
-
-
-def test_linux_repair_preserves_a_healthy_rocm7_gfx1201_main_runtime():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    gate = script[
-        script.index("venv_torch_requires_rebuild()") :
-        script.index("main_runtime_requires_rebuild()")
-    ]
-
-    assert 'STEMWERK_BACKEND="${BACKEND}"' in gate
-    assert 'hip = getattr(getattr(torch, "version", None), "hip", None)' in gate
-    assert '"rx 9070" in dev_text or "gfx1201" in dev_text' in gate
-    assert "allow_rocm7_gfx1201" in gate
-    assert 'EXISTING_MAIN_RUNTIME_HEALTHY="0"' in script
-    assert 'probe_main_runtime_ready "${RUNTIME_BASE}/.venv/bin/python" "${BACKEND}"' in script
-    assert 'EXISTING_MAIN_RUNTIME_HEALTHY="1"' in script
-    assert 'Preserving healthy existing ${BACKEND} runtime; dependency installation is a no-op' in script
-    assert '[ "${EXISTING_MAIN_RUNTIME_HEALTHY}" -ne 1 ]' in script
-    install_gate = script[script.index('log_stage "Creating venv"') :]
-    assert install_gate.index('EXISTING_MAIN_RUNTIME_HEALTHY="1"') < install_gate.index('log_step "Installing pinned STEMwerk backend packages..."')
-
-
-def test_linux_repair_keeps_corrupt_runtimes_rebuildable_without_cpu_route_for_healthy_rocm():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    rebuild_gate = script[
-        script.index("main_runtime_requires_rebuild()") :
-        script.index("linux_torch_install_args()")
-    ]
-
-    assert 'print("rebuild|missing_package:" + name)' in rebuild_gate
-    assert 'Existing venv runtime probe failed; rebuilding .venv' in script
-    assert 'EXISTING_MAIN_RUNTIME_HEALTHY="1"' in script
-    assert script.index('EXISTING_MAIN_RUNTIME_HEALTHY="1"') < script.index('log_stage "Installing ROCm torch"')
-
-
-def test_linux_active_torch_policy_keeps_cpu_cuda_and_rocm_profiles_separate():
-    assert _active_linux_torch_policy("cpu") == {
-        "backend": "cpu",
-        "torch": "2.5.1",
-        "torchvision": "0.20.1",
-        "torchaudio": "2.5.1",
-        "policy": "service_line_default_torch_lt_2_6",
-    }
-    assert _active_linux_torch_policy("cuda")["backend"] == "cuda"
-    assert _active_linux_torch_policy("cuda")["torch"] == "2.5.1"
-    assert _active_linux_torch_policy("rocm", gfx1201=True)["torch"] == "2.10.0"
-    assert _active_linux_torch_policy("rocm", gfx1201=True)["torchaudio"] == "2.10.0"
-
-
-def test_linux_rocm_preserve_path_selects_policy_before_accepting_noop_runtime():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    preserve = script[script.index('log_stage "Creating venv"') :]
-
-    assert "select_active_torch_policy()" in script
-    assert 'select_active_torch_policy "${BACKEND}"' in preserve
-    assert preserve.index('select_active_torch_policy "${BACKEND}"') < preserve.index('EXISTING_MAIN_RUNTIME_HEALTHY="1"')
-    assert 'PRESERVED_RUNTIME_TORCH_VERSION=' in preserve
-    assert 'ACTIVE_TORCH_POLICY_BACKEND=${_policy_backend}' in script
-    assert 'ACTIVE_TORCH_VERSION=${ACTIVE_TORCH_VERSION}' in script
-    assert 'ACTIVE_TORCHAUDIO_VERSION=${ACTIVE_TORCHAUDIO_VERSION}' in script
-    assert 'PIN_ASSERT_POLICY=torch==${ACTIVE_TORCH_VERSION}' in script
-
-
-def test_linux_rocm_preserve_policy_matches_current_failure_runtime_and_local_suffix():
-    policy = _active_linux_torch_policy("rocm", gfx1201=True)
-    runtime_torch = "2.10.0+rocm7.0"
-    runtime_torchaudio = "2.10.0+rocm7.0"
-
-    assert runtime_torch.split("+", 1)[0] == policy["torch"]
-    assert runtime_torchaudio.split("+", 1)[0] == policy["torchaudio"]
-    assert policy["torch"] != "2.5.1"
-    assert not _rocm_gfx1201_runtime_status("2.11.0", "2.11.0", True, True, 2, "AMD Radeon RX 9070")
-
-
-def test_linux_preserve_policy_does_not_install_delete_or_fallback_and_keeps_hard_assert():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    preserve = script[script.index('elif probe_main_runtime_ready') : script.index('if [ ! -x "${RUNTIME_BASE}/.venv/bin/python" ]')]
-
-    assert "pip_install_with_scope" not in preserve
-    assert "install_linux_torch_stack" not in preserve
-    assert "falling back to CPU" not in preserve
-    assert 'rm -rf "${RUNTIME_BASE}/.venv"' not in preserve.split("else", 1)[0]
-    assert 'if ! assert_pinned_torch_stack "${VENV_PY}"; then' in script
-    assert 'set_status "deps_failed" "torch_pin_assert_failed"' in script
-
-
 def test_linux_torch_stack_verify_helper_checks_backend_and_all_three_packages():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
@@ -2374,9 +2092,7 @@ def test_linux_constraints_use_public_torch_versions_and_runtime_pins():
 
     assert 'str(getattr(m, "__version__", "")).split("+", 1)[0]' in script
     assert 'echo "numpy==${PINNED_NUMPY_VERSION}"' in script
-    assert 'echo "scipy==${PINNED_SCIPY_VERSION}"' in script
     assert 'echo "llvmlite==${PINNED_LLVM_VERSION}"' in script
-    assert 'echo "beartype==${PINNED_BEARTYPE_VERSION}"' in script
     assert 'echo "numba==${PINNED_NUMBA_VERSION}"' in script
     assert 'for name in ("torch","torchvision","torchaudio"):' in script
 
@@ -2428,19 +2144,20 @@ def test_linux_genuine_no_python_case_still_uses_python_missing():
     assert 'errors[#errors + 1] = "python_missing"' in script
 
 
-def test_linux_main_audio_separator_install_has_no_no_deps_fallback():
+def test_linux_no_deps_audio_separator_fallback_requires_runtime_deps():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
 
-    assert 'pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"' not in script
+    assert 'pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"' in script
     assert "verify_audio_separator_runtime_deps || audio_install_rc=1" in script
     assert 'log_step "audio-separator runtime dependencies incomplete; attempting full dependency repair install"' in script
     assert 'audio_repair_attempted=1' in script
-    assert 'PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"' in script
+    assert 'PACKAGE="audio-separator==0.23.0"' in script
     assert 'if [ "${audio_repair_rc}" -eq 0 ]; then' in script
     assert "verify_audio_separator_runtime_deps || audio_repair_rc=1" in script
     assert "AUDIO_SEPARATOR_DEPS_COMPLETE=\"no\"" in script
     assert "BACKEND_DEPS_COMPLETE=\"no\"" in script
     assert "audio_separator_dep_import_failed:" in script
+    assert script.index('pip_install_with_scope main "${VENV_PY}" --no-deps "${PACKAGE}"') < script.index("verify_audio_separator_runtime_deps || audio_install_rc=1")
     assert "Skipping torch pin repair and ONNX install after audio-separator dependency failure" in script
     assert 'if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then' in script
     assert script.index('set_status "deps_failed" "audio_separator_install_failed"') < script.index('if [ "${audio_install_rc}" -eq 0 ] && [ "${STATUS}" = "ok" ]; then')
@@ -2475,8 +2192,6 @@ def test_linux_final_verification_requires_audio_separator_dependency_imports():
     assert 'set_status "deps_failed" "audio_separator_install_failed"' in linux_script
     assert "if ! verify_audio_separator_runtime_deps; then" in mac_script
     assert 'set_status "deps_failed" "audio_separator_install_failed"' in mac_script
-    assert "numpy_major_gte_2" not in linux_script
-    assert 'errors.append("numpy_major_lt_2")' in linux_script
     assert '[ "${AUDIO_SEPARATOR_DEPS_COMPLETE}" = "yes" ]' in linux_script
     assert 'log_step "Venv runtime incomplete; refusing to set PYTHON_PATH"' in linux_script
     assert 'log_step "Venv runtime verified; PYTHON_PATH set to venv"' in linux_script
@@ -2734,139 +2449,6 @@ def test_drumkit_direct_dks_mode_wires_stage2_preflight_markers():
     assert "if not ok:" in script
     assert 'emit_phase("model_setup_start")' in script
     assert '_is_direct_dks_source(getattr(args, "workflow_mode", ""), getattr(args, "workflow_source", ""))' in script
-
-
-def test_drumsep_helper_uses_canonical_checkpoint_without_materializing_alias(tmp_path):
-    helper = _load_drumsep_helper_module()
-    legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
-    legacy_yaml = tmp_path / helper.DRUMSEP_MODEL_YAML
-    legacy_ckpt.write_bytes(b"legacy-model")
-    legacy_yaml.write_text("audio: {}\nmodel: {}\ntraining: {}\n", encoding="utf-8")
-    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text("compat: true\n", encoding="utf-8")
-
-    result = helper._resolve_drumsep_catalog_cache_for_runtime(
-        tmp_path,
-        helper.DRUMSEP_MODEL_FILENAME,
-        expected_legacy_sha256="",
-        expected_config_sha256="",
-    )
-
-    assert result.model_name == helper.DRUMSEP_MODEL_FILENAME
-    assert result.action == "use_canonical"
-    assert result.legacy_model_detected is True
-    assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
-    assert legacy_ckpt.exists()
-    assert legacy_yaml.exists()
-    assert result.markers["dks_catalog_version"] == "asep_0443"
-    assert result.markers["dks_model_migration_action"] == "use_canonical"
-    assert result.markers["dks_resolved_model_file"].endswith(helper.DRUMSEP_MODEL_FILENAME)
-    assert result.markers["dks_resolved_config_file"].endswith(helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME)
-
-
-def test_drumsep_helper_uses_fresh_asep0443_catalog_name_for_empty_cache(tmp_path):
-    helper = _load_drumsep_helper_module()
-
-    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
-        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
-    assert exc_info.value.reason == "drumsep_compat_yaml_missing"
-
-
-def test_drumsep_helper_rejects_canonical_model_when_checksum_differs(tmp_path):
-    helper = _load_drumsep_helper_module()
-    legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
-    legacy_ckpt.write_bytes(b"unexpected-model-content")
-    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text("compat: true\n", encoding="utf-8")
-
-    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
-        helper._resolve_drumsep_catalog_cache_for_runtime(
-            tmp_path,
-            helper.DRUMSEP_MODEL_FILENAME,
-            expected_legacy_sha256="definitely-not-this-model",
-            expected_config_sha256="",
-        )
-
-    assert exc_info.value.reason == "drumsep_canonical_checkpoint_checksum_mismatch"
-    assert not (tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME).exists()
-    assert legacy_ckpt.read_bytes() == b"unexpected-model-content"
-
-
-def test_drumsep_helper_tolerates_byte_identical_existing_alias_but_uses_canonical(tmp_path):
-    helper = _load_drumsep_helper_module()
-    legacy_ckpt = tmp_path / helper.DRUMSEP_MODEL_FILENAME
-    new_ckpt = tmp_path / helper.ASEP_0443_DRUMSEP_MODEL_FILENAME
-    legacy_ckpt.write_bytes(b"legacy-model")
-    new_ckpt.write_bytes(b"legacy-model")
-    (tmp_path / helper.DRUMSEP_MODEL_YAML).write_text("audio: {}\nmodel: {}\ntraining: {}\n", encoding="utf-8")
-    (tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME).write_text(
-        "audio: {}\nmodel: {}\ntraining: {}\n",
-        encoding="utf-8",
-    )
-
-    result = helper._resolve_drumsep_catalog_cache_for_runtime(
-        tmp_path,
-        helper.DRUMSEP_MODEL_ALIAS,
-        expected_legacy_sha256="",
-        expected_config_sha256="",
-    )
-
-    assert result.model_name == helper.DRUMSEP_MODEL_FILENAME
-    assert result.action == "use_canonical_alias_compatible"
-    assert result.legacy_model_detected is True
-    assert legacy_ckpt.read_bytes() == b"legacy-model"
-    assert new_ckpt.read_bytes() == b"legacy-model"
-    assert result.markers["dks_model_migration_action"] == "use_canonical_alias_compatible"
-
-
-@pytest.mark.parametrize("workflow_route", ["direct_kit", "kit_split"])
-def test_drumsep_compat_yaml_runtime_guard_no_network_and_managed_alias_integrity(
-    tmp_path, monkeypatch, workflow_route
-):
-    helper = _load_drumsep_helper_module()
-    canonical = tmp_path / helper.DRUMSEP_MODEL_FILENAME
-    compatibility = tmp_path / helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME
-    canonical.write_bytes(b"managed-checkpoint")
-    shutil.copy2(Path("tools/assets/drumsep/config_drumsep_mdx23c.yaml"), compatibility)
-
-    network_calls = []
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *args, **kwargs: network_calls.append((args, kwargs)) or (_ for _ in ()).throw(AssertionError("network forbidden")),
-    )
-    result = helper._resolve_drumsep_catalog_cache_for_runtime(
-        tmp_path,
-        helper.DRUMSEP_MODEL_ALIAS,
-        expected_legacy_sha256="",
-    )
-    baseline = {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
-    assert workflow_route in {"direct_kit", "kit_split"}
-    assert result.action == "use_canonical"
-    assert result.resolved_model_file == canonical
-    assert helper._sha256_file(compatibility) == helper.ASEP_0443_DRUMSEP_CONFIG_SHA256
-    assert set(baseline) == {
-        helper.DRUMSEP_MODEL_FILENAME,
-        helper.ASEP_0443_DRUMSEP_CONFIG_FILENAME,
-    }
-    assert network_calls == []
-
-    second = helper._resolve_drumsep_catalog_cache_for_runtime(
-        tmp_path,
-        helper.DRUMSEP_MODEL_ALIAS,
-        expected_legacy_sha256="",
-    )
-    assert second.action == "use_canonical"
-    assert baseline == {path.name: helper._sha256_file(path) for path in tmp_path.iterdir() if path.is_file()}
-    crlf_source_variant = compatibility.read_bytes().replace(b"\n", b"\r\n")
-    compatibility.write_bytes(crlf_source_variant)
-    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
-        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
-    assert exc_info.value.reason == "drumsep_compat_yaml_checksum_mismatch"
-    compatibility.write_bytes(b"checksum drift")
-    with pytest.raises(helper.DirectDemixValidationError) as exc_info:
-        helper._resolve_drumsep_catalog_cache_for_runtime(tmp_path, helper.DRUMSEP_MODEL_ALIAS)
-    assert exc_info.value.reason == "drumsep_compat_yaml_checksum_mismatch"
-    print("DRUMSEP_COMPAT_YAML_RUNTIME_GUARD_TEST=PASS")
-    print("MACOS_DRUMSEP_COMPAT_YAML_NO_NETWORK_TEST=PASS")
-    print("MACOS_MANAGED_MODEL_ALIAS_INTEGRITY_TEST=PASS")
 
 
 def test_drumkit_extract_route_runs_normal_stage1_before_drumsep_stage2():
@@ -3989,7 +3571,7 @@ def test_drumsep_runtime_missing_is_detected_before_stage2_model_load(tmp_path, 
     assert "stage2_model_load" not in captured.err
 
 
-def test_drumsep_runtime_broken_reports_import_error(tmp_path, monkeypatch):
+def test_drumsep_runtime_broken_reports_import_error(tmp_path):
     module = _load_audio_separator_process_module()
     runtime_python = module._drumsep_runtime_python_path(tmp_path)
     runtime_python.parent.mkdir(parents=True)
@@ -4001,7 +3583,7 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path, monkeypatch):
         stdout = ""
         stderr = "ImportError: audio_separator missing"
 
-    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Completed())
+    module.subprocess.run = lambda *args, **kwargs: Completed()
 
     ok, detail, _payload = module._verify_drumsep_runtime(runtime_python)
 
@@ -4009,10 +3591,10 @@ def test_drumsep_runtime_broken_reports_import_error(tmp_path, monkeypatch):
     assert "ImportError: audio_separator missing" in detail
 
 
-def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path, monkeypatch):
+def test_drumsep_runtime_selector_prefers_rocm_when_gpu_capable(tmp_path):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    monkeypatch.setattr(module.sys, "platform", "linux")
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4447,10 +4029,10 @@ def test_direct_dks_preflight_reports_yaml_schema_details_on_invalid_yaml(tmp_pa
     assert "expected_schema=audio,model,training" in stderr
 
 
-def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path, monkeypatch):
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    monkeypatch.setattr(module.sys, "platform", "linux")
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4477,10 +4059,10 @@ def test_drumsep_runtime_selector_falls_back_to_cpu_when_rocm_invalid(tmp_path, 
     assert info["selection_policy"] == "fallback_cpu"
 
 
-def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path, monkeypatch):
+def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp_path):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    monkeypatch.setattr(module.sys, "platform", "linux")
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4512,10 +4094,10 @@ def test_drumsep_runtime_selector_respects_explicit_cpu_even_when_rocm_valid(tmp
     assert verify_calls and verify_calls[0][1] is False
 
 
-def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path, monkeypatch):
+def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    monkeypatch.setattr(module.sys, "platform", "linux")
+    module.sys.platform = "linux"
     base = tmp_path
     rocm_python = module._drumsep_rocm_runtime_python_path(base)
     cpu_python = module._drumsep_runtime_python_path(base)
@@ -4541,10 +4123,10 @@ def test_drumsep_runtime_selector_supports_explicit_linux_cuda(tmp_path, monkeyp
     assert info["selection_policy"] == "explicit_cuda"
 
 
-def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path, monkeypatch):
+def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(tmp_path):
     module = _load_audio_separator_process_module()
     module.os = _OsProxy(module.os, name="posix")
-    monkeypatch.setattr(module.sys, "platform", "linux")
+    module.sys.platform = "linux"
     base = tmp_path
     cpu_python = module._drumsep_runtime_python_path(base)
     cpu_python.parent.mkdir(parents=True, exist_ok=True)
@@ -4566,10 +4148,9 @@ def test_drumsep_runtime_selector_prefers_verified_linux_cuda_when_rocm_missing(
     assert info["selection_policy"] == "auto_prefer_cuda"
 
 
-def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_is_missing(tmp_path, monkeypatch):
+def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_is_missing(tmp_path):
     module = _load_audio_separator_process_module()
-    module.os = _OsProxy(module.os, name="nt")
-    monkeypatch.setattr(module.sys, "platform", "win32")
+    module.sys.platform = "win32"
     base = tmp_path
     directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
     directml_python.parent.mkdir(parents=True, exist_ok=True)
@@ -4599,10 +4180,9 @@ def test_drumsep_runtime_selector_prefers_directml_on_windows_when_cuda_runtime_
     assert info["fallback_reason"] == "cuda_skipped:missing"
 
 
-def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path, monkeypatch):
+def test_drumsep_runtime_selector_falls_back_to_cpu_when_windows_directml_probe_fails(tmp_path):
     module = _load_audio_separator_process_module()
-    module.os = _OsProxy(module.os, name="nt")
-    monkeypatch.setattr(module.sys, "platform", "win32")
+    module.sys.platform = "win32"
     base = tmp_path
     directml_python = base / ".venv-drumsep-directml" / "Scripts" / "python.exe"
     cpu_python = base / ".venv-drumsep" / "Scripts" / "python.exe"
@@ -4793,8 +4373,7 @@ def test_linux_drumsep_rocm_runtime_installer_has_disk_preflight_and_rocm_pins()
     assert 'DRUMSEP_ROCM_MIN_FREE_GB="20"' in script
     assert "drumsep_rocm_disk_preflight()" in script
     assert "resolve_drumsep_rocm_tmpdir()" in script
-    assert 'DRUMSEP_INSTALL_FAILURE_REASON="${DRUMSEP_ROCM_PREFLIGHT_DETAIL:-disk_space_insufficient}"' in script
-    assert 'run_drumsep_install_transaction "rocm"' in script
+    assert 'write_drumsep_rocm_state "disk_space_insufficient" "missing"' in script
     assert 'select_drumsep_rocm_torch_stack() {' in script
     assert 'pip_install_with_scope drumsep "${_py}" --no-cache-dir --index-url "${DRUMSEP_ACTIVE_ROCM_TORCH_INDEX_URL}"' in script
     assert '"torch==${DRUMSEP_ACTIVE_ROCM_TORCH_VERSION}"' in script
@@ -4826,61 +4405,6 @@ def test_linux_drumsep_rocm_state_fields_are_written():
         assert field in script
     assert 'printf "%s/state/drumsep_runtime_rocm.env\\n" "${RUNTIME_BASE}"' in script
     assert 'printf "%s/logs/drumsep_rocm_install.log\\n" "${RUNTIME_BASE}"' in script
-
-
-def test_linux_rocm_repair_skips_legacy_runtime_when_main_unified_is_ready():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-
-    assert "probe_main_rocm_dks_ready()" in script
-    assert 'metadata.version("audio-separator")' in script
-    assert 'metadata.version("numpy")' in script
-    resolver = script.split("resolve_main_drumsep_runtime_policy() {", 1)[1].split(
-        "write_drumsep_state() {", 1
-    )[0]
-    assert 'probe_main_rocm_dks_ready "${VENV_PY:-$(main_runtime_python)}"' in resolver
-    assert 'ensure_drumsep_assets "${VENV_PY:-$(main_runtime_python)}"' in resolver
-    assert 'write_main_unified_rocm_state "ok"' in script
-    assert 'log_step "Legacy DrumSep ROCm install skipped: main_unified_ready"' in script
-
-
-def test_linux_rocm_unified_state_records_selection_and_legacy_skip_reason():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-
-    for marker in (
-        'echo "DRUMSEP_ROCM_RUNTIME_STATUS=${_status}"',
-        'echo "DRUMSEP_ROCM_RUNTIME_SELECTION=${_selection}"',
-        'echo "DRUMSEP_ROCM_PYTHON=${_py}"',
-        'echo "DRUMSEP_ROCM_LEGACY_RUNTIME_STATUS=${_legacy_status}"',
-        'echo "DRUMSEP_ROCM_LEGACY_INSTALL_SKIPPED=${_legacy_install_skipped}"',
-        '"unified_main" "${1:-ok}" "main_unified_ready"',
-        '"$(main_runtime_python)" "main_unified" "not_checked" "main_unified_ready"',
-    ):
-        assert marker in script
-    assert 'ok|skipped|unified_main)' in script
-
-
-def test_linux_rocm_repair_preserves_sibling_when_main_is_not_ready():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    automatic_guard = script.split('READY_DETAIL="${STATUS_REASON}"', 1)[1].split(
-        'if [ "${READY_RUNTIME_KIND}" = "rocm" ]', 1
-    )[0]
-
-    assert 'resolve_main_drumsep_runtime_policy "rocm" || true' in automatic_guard
-    assert 'install_drumsep_rocm_runtime' not in automatic_guard
-    assert 'set_status "deps_failed" "drumsep_sibling_rebuild_required"' in script
-    assert 'set_status "deps_failed" "drumsep_sibling_missing"' in script
-    assert 'elif [ "${MODE}" = "drumsep-rocm-runtime" ]; then' in script
-    assert 'if apply_drumsep_sibling_policy "rocm"; then' in script
-
-
-def test_linux_rocm_unified_guard_never_deletes_legacy_runtime():
-    script = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    unified_writer = script.split("write_main_unified_rocm_state()", 1)[1].split("write_state()", 1)[0]
-
-    assert ".venv-drumsep-rocm" not in unified_writer
-    assert "rm -rf" not in unified_writer
-    assert "rmdir" not in unified_writer
-    assert "delete" not in unified_writer.lower()
 
 
 def test_drumsep_helper_payload_and_stem_normalization():
@@ -5296,13 +4820,15 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
 
     assert 'Uninstallable=no' in patch_iss
     assert 'STEMwerk_Offline_Patch.iss' in patch_shell
-    assert "#define MyAppVersion GetEnv('STEMWERK_VERSION')" in patch_iss
-    assert 'OutputBaseFilename=STEMwerk-{#MyAppVersion}-update-patch' in patch_iss
-    assert 'export STEMWERK_VERSION="${STEMWERK_VERSION:-$(tr -d \'\\r\\n\' < "$REPO_DIR/VERSION")}"' in patch_shell
-    assert 'Source: "..\\..\\scripts\\reaper\\*"; DestDir: "{app}"' in patch_iss
-    assert 'Source: "..\\..\\i18n\\*"; DestDir: "{app}\\i18n"' in patch_iss
-    assert '[Run]' not in patch_iss
-    assert 'STEMwerk_Installer_Windows.ps1' not in patch_iss
+    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
+    assert '#define ReleaseAssetVersion MyAppVersion' in patch_iss
+    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
+    assert 'STEMWERK_RELEASE_ASSET_VERSION="${STEMWERK_RELEASE_ASSET_VERSION:-$STEMWERK_VERSION}"' in patch_shell
+    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
+    assert '[Run]' in patch_iss
+    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
+    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
+    assert 'Flags: runhidden waituntilterminated' in patch_iss
 
 
 def test_release_docs_retire_windows_update_patch_for_2304():
@@ -5310,8 +4836,8 @@ def test_release_docs_retire_windows_update_patch_for_2304():
     release_notes = Path("docs/RELEASE_2.3.0.4.md").read_text(encoding="utf-8")
     installer_readme = Path("installer/README.md").read_text(encoding="utf-8")
 
-    assert "Windows users should uninstall older STEMwerk versions first" in readme
-    assert "latest Windows setup/runtime fixes" in readme
+    assert "Existing Windows users should uninstall the old STEMwerk version first" in readme
+    assert "A clean reinstall avoids stale runtime/backend state" in readme
     assert "STEMwerk-2.3.0.4-update-patch.exe" not in readme
     assert "The Windows update-patch asset remains retired and is not published." in release_notes
     assert "supersedes the original `2.3.0.0` Windows full installers" in release_notes
@@ -5330,135 +4856,10 @@ def test_release_workflow_uploads_only_supported_windows_installers():
 
 def test_ci_fast_quick_script_smoke_installs_pyyaml():
     workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
-    requirements = Path("requirements-dev.txt").read_text(encoding="utf-8").lower().splitlines()
 
     assert "Install test dependencies" in workflow
-    assert "python -m pip install -r requirements-dev.txt" in workflow
-    assert "pyyaml" in requirements
+    assert "python -m pip install pytest pyyaml soundfile" in workflow
     assert "python scripts/reaper/audio_separator_process.py --list-models" in workflow
-
-
-def test_ci_fast_runs_curated_pytest_coverage():
-    workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
-
-    assert "Run curated fast pytest coverage" in workflow
-    assert "python -m pytest -q" in workflow
-    assert "tests/test_device_normalization.py" in workflow
-    assert "tests/test_macos_mps_fallback.py" in workflow
-    assert "tests/test_model_registry_schema.py" in workflow
-    assert "tests/test_windows_normal_route_matrix.py" in workflow
-    assert "tests/test_vocals_hq_runtime_proof.py" in workflow
-    assert "python -m pytest -q \\\n            tests" in workflow
-    assert "python -m pip install -r requirements-dev.txt" in workflow
-    assert "python -m pytest -q tests/test_00_test_environment.py" in workflow
-
-
-def test_no_stale_onnxruntime_ci_pins():
-    requirements = Path("requirements-ci.txt").read_text(encoding="utf-8")
-    smoke = Path(".github/workflows/macos-apple-silicon-backend-smoke.yml").read_text(
-        encoding="utf-8"
-    )
-    workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
-
-    assert "onnxruntime>=1.21,<1.22" not in requirements
-    assert "onnxruntime>=1.21,<1.22" not in smoke
-    assert "\nonnxruntime\n" in requirements
-    assert 'pip install "onnxruntime==1.27.0"' in smoke
-    assert "onnxruntime-silicon ||" not in smoke
-    assert "tests/test_dependency_constraints.py::test_no_stale_onnxruntime_ci_pins" in workflow
-
-
-def test_onnxruntime_runtime_pin_policy_is_documented():
-    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text(
-        encoding="utf-8"
-    )
-    linux_wheelhouse = Path("tools/build_linux_wheelhouse.py").read_text(encoding="utf-8")
-    windows_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(
-        encoding="utf-8"
-    )
-    directml_constraints = Path("scripts/reaper/constraints/directml.txt").read_text(
-        encoding="utf-8"
-    )
-    macos_payload = Path("tools/build_macos_apple_silicon_payload.py").read_text(
-        encoding="utf-8"
-    )
-    macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
-    macos_sanity = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8")
-    ci_workflow = Path(".github/workflows/ci-full.yml").read_text(encoding="utf-8")
-
-    # Policy: CI Fast runs Python 3.11, production payloads generally use
-    # Python 3.12, Linux main keeps generic onnxruntime unpinned pending the
-    # ASEP 0.44.3 pin matrix, and DrumSep/DirectML pins remain platform-scoped.
-    assert "python-version: 3.11" in ci_workflow
-    assert 'ONNX_PACKAGE="onnxruntime"' in linux_bootstrap
-    assert 'DRUMSEP_ONNXRUNTIME_VERSION="1.26.0"' in linux_bootstrap
-    assert '"onnxruntime"' in linux_wheelhouse
-    assert '"onnxruntime==1.26.0"' in linux_wheelhouse
-    assert '"onnxruntime-gpu==1.24.4"' in linux_wheelhouse
-    assert "onnxruntime-directml==1.24.4" in directml_constraints
-    assert '$onnxRuntimeDirectMlVersion = "1.24.4"' in windows_bootstrap
-    assert '"onnxruntime==1.27.0"' in macos_payload
-    assert '"onnxruntime-silicon"' not in macos_payload
-    assert 'PINNED_ONNXRUNTIME_VERSION="1.27.0"' in macos_bootstrap
-    assert 'ONNX_PACKAGE="onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"' in macos_bootstrap
-    assert 'ONNX_PACKAGE="onnxruntime-silicon"' not in macos_bootstrap
-    assert 'pip install "onnxruntime==1.27.0"' in macos_sanity
-    assert "onnxruntime-silicon ||" not in macos_sanity
-    assert 'core(payload["onnxruntime_version"]) == "1.27.0"' in macos_sanity
-    assert "tests/test_dependency_constraints.py::test_onnxruntime_runtime_pin_policy_is_documented" in ci_workflow
-    print("MACOS_ONNXRUNTIME_POLICY_TEST=PASS")
-
-
-def test_macos_arm64_constraints_are_policy_reference_not_online_fallback():
-    constraints = Path("scripts/reaper/constraints/macos.txt").read_text(encoding="utf-8")
-    assert "macOS arm64 online/fallback resolution is unsupported" in constraints
-    assert "requires the audited bundled payload" in constraints
-    assert "do not use this file to resolve ASEP online" in constraints
-    for requirement in ("samplerate==0.2.4", "torch==2.5.1", "sympy==1.13.1", "onnxruntime==1.27.0"):
-        assert requirement in constraints
-
-
-def test_apple_silicon_backend_smoke_uses_canonical_samplerate_override_policy():
-    workflow = Path(".github/workflows/macos-apple-silicon-backend-smoke.yml").read_text(encoding="utf-8")
-    canonical = r"audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$"
-
-    assert 'pip install -c scripts/reaper/constraints/macos.txt "audio-separator==0.44.3"' not in workflow
-    assert 'pip install "audio-separator==0.44.3"' in workflow
-    assert 'pip install --force-reinstall --no-deps "samplerate==0.2.4"' in workflow
-    assert 'pip install "onnxruntime==1.27.0"' in workflow
-    assert "onnxruntime-silicon ||" not in workflow
-    assert "stemwerk_samplerate_guard.py --validate-only --repair-version 0.2.4" in workflow
-    assert "pip check 2>&1 | tee /tmp/stemwerk-pip-check.log || true" in workflow
-    assert workflow.count(canonical) == 2
-    assert "grep -Eiq" in workflow and "grep -Eivc" in workflow
-    assert 'import audio_separator' in workflow
-    assert 'import torch' in workflow
-
-
-def test_macos_intel_no_payload_route_remains_available():
-    bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
-    assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in bootstrap
-    assert 'ONNX_PACKAGE="onnxruntime"' in bootstrap
-    assert 'if [ "${MAC_ARCH}" = "arm64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then' in bootstrap
-    assert 'if [ "${MAC_ARCH}" = "x86_64" ] && [ "${MACOS_BUNDLED_PAYLOAD_STATUS}" != "present" ]; then' not in bootstrap
-
-
-def test_macos_pip_check_regex_matches_all_arm64_override_policy_sources():
-    policy_sources = {
-        "bootstrap": Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8"),
-        "sanity": Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text(encoding="utf-8"),
-        "smoke": Path(".github/workflows/macos-apple-silicon-backend-smoke.yml").read_text(encoding="utf-8"),
-    }
-    canonical = r"audio-separator 0\.44\.3 has requirement samplerate==0\.1\.0, but you have samplerate 0\.2\.4\.?$"
-    assert len(policy_sources) == 3
-    for name, source in policy_sources.items():
-        assert source.count(canonical) == 2, name
-        assert "grep -Eiq" in source, name
-        assert "grep -Eiv" in source, name
-
-    bootstrap = policy_sources["bootstrap"]
-    assert "sympy" not in "\n".join(line for line in bootstrap.splitlines() if "pip_check" in line.lower())
-    print("MACOS_PIP_CHECK_REGEX_PARITY_TEST=PASS")
 
 
 def test_setup_internal_luac_compiles_under_reaper_limits():
@@ -5517,9 +4918,7 @@ def test_support_bundle_windows_zip_helper_prefers_python_and_writes_clean_entri
         names = zf.namelist()
         assert all("\\" not in name for name in names)
         assert "STEMwerk-support-bundle-20260707-181043/processing_summary.txt" in names
-        payload = zf.read("STEMwerk-support-bundle-20260707-181043/processing_summary.txt")
-        assert payload in (b"summary ok\n", b"summary ok\r\n")
-        assert payload.decode("utf-8").splitlines() == ["summary ok"]
+        assert zf.read("STEMwerk-support-bundle-20260707-181043/processing_summary.txt").decode("utf-8") == "summary ok\n"
 
 
 def test_windows_main_wheelhouse_builder_keeps_cuda_torch_stack_and_numba_llvm_consistent():
@@ -5568,8 +4967,8 @@ def test_windows_bootstrap_offline_drumsep_mode_uses_local_payload_only():
     installer = Path("installer/windows/STEMwerk_Installer_Windows.ps1").read_text()
 
     assert '$offlineBundledAllmodelsMode = ($env:STEMWERK_OFFLINE_BUNDLED_ALLMODELS -eq "1")' in script
-    assert '$bundledDrumsepWheelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-wheels")' in script
-    assert '$bundledDrumsepModelsDir = Join-NormalizedWindowsPath $bundledRuntimeDir @("drumsep-models")' in script
+    assert '$bundledDrumsepWheelsDir = Join-Path $bundledRuntimeDir "drumsep-wheels"' in script
+    assert '$bundledDrumsepModelsDir = Join-Path $bundledRuntimeDir "drumsep-models"' in script
     assert 'function HasBundledDrumsepWheels' in script
     assert 'function InstallWithPipOfflineSources' in script
     assert 'function InstallBundledDrumsepPackages' in script
@@ -5668,43 +5067,14 @@ def test_linux_wheelhouse_builder_separates_bootstrap_downloads_from_pytorch_ind
     assert '"linux_x86_64"' in script
 
 
-def test_linux_wheelhouse_includes_cython_for_preloaded_diffq_dependency():
-    script = Path("tools/build_linux_wheelhouse.py").read_text()
-    diffq_wheel = Path(
-        "installer/linux/payload/wheels/linux-x86_64-cp312/"
-        "diffq-0.2.4-cp312-cp312-linux_x86_64.whl"
-    )
-
-    with zipfile.ZipFile(diffq_wheel) as archive:
-        metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
-        diffq_metadata = archive.read(metadata_name).decode("utf-8", errors="replace")
-
-    bootstrap_block = script.split("BOOTSTRAP_REQUIREMENTS = (", 1)[1].split(")", 1)[0]
-    assert "Requires-Dist: Cython" in diffq_metadata
-    assert '"Cython"' in bootstrap_block
-    assert "diffq offline dependency completeness" in bootstrap_block
-    assert script.count('"audio-separator==0.44.3"') >= 2
-    assert '"audio-separator[gpu]==0.44.3"' in script
-    assert script.count('"numpy==2.4.4"') >= 3
-    assert '"audio-separator==0.34.1"' in script
-
-
-def test_linux_main_wheelhouse_pins_numpy2_compatible_runtime_stack():
+def test_linux_main_wheelhouse_pins_scipy_below_numpy_2_breakpoint():
     script = Path("tools/build_linux_wheelhouse.py").read_text()
 
     assert '("main", "cpu")' in script
     assert '("main", "cuda")' in script
     assert '("main", "rocm")' in script
-    assert script.count('"audio-separator==0.44.3"') >= 2
-    assert '"audio-separator[gpu]==0.44.3"' in script
-    assert script.count('"numpy==2.4.4"') >= 3
-    assert script.count('"scipy==1.18.0"') >= 3
-    assert script.count('"numba==0.66.0"') >= 3
-    assert script.count('"llvmlite==0.48.0"') >= 3
-    assert script.count('"beartype==0.18.5"') >= 3
-    assert '"numpy==1.26.4"' not in script
-    assert '"numba==0.59.1"' not in script
-    assert '"llvmlite==0.42.0"' not in script
+    assert script.count('"scipy==1.17.1"') >= 3
+    assert '"numpy==1.26.4"' in script
 
 
 def test_linux_rocm_main_wheelhouse_skips_bundled_torch_transitives():
@@ -5764,12 +5134,7 @@ def test_linux_wheelhouse_builder_targets_cp312_manylinux_and_uses_name_preload(
     assert '"pip"' not in main_cpu_block
     assert '"setuptools"' not in main_cpu_block
     assert '"wheel"' not in main_cpu_block
-    assert '"audio-separator==0.44.3"' in main_cpu_block
-    assert '"numpy==2.4.4"' in main_cpu_block
-    assert '"scipy==1.18.0"' in main_cpu_block
-    assert '"numba==0.66.0"' in main_cpu_block
-    assert '"llvmlite==0.48.0"' in main_cpu_block
-    assert '"beartype==0.18.5"' in main_cpu_block
+    assert '"audio-separator==0.23.0"' in main_cpu_block
 
     torch_requirements_block = script.split("TORCH_REQUIREMENTS = (", 1)[1].split(")", 1)[0]
     assert '"torch"' in torch_requirements_block
@@ -5790,37 +5155,6 @@ def test_linux_wheelhouse_builder_targets_cp312_manylinux_and_uses_name_preload(
     assert "cuda-toolkit" not in drumsep_cpu_block
 
     assert '"linux-x86_64-cp312"' in payload_builder
-
-
-def test_linux_rocm_main_runtime_pins_asep_0443_numpy2_and_preserves_drumsep():
-    linux_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text()
-    linux_wheelhouse = Path("tools/build_linux_wheelhouse.py").read_text()
-    main_rocm_block = linux_wheelhouse.split('("main", "rocm"): WheelhouseSpec(', 1)[1].split('("drumsep", "cpu")', 1)[0]
-
-    assert 'PINNED_AUDIO_SEPARATOR_VERSION="0.44.3"' in linux_bootstrap
-    assert 'PINNED_NUMPY_VERSION="2.4.4"' in linux_bootstrap
-    assert 'PINNED_SCIPY_VERSION="1.18.0"' in linux_bootstrap
-    assert 'PINNED_NUMBA_VERSION="0.66.0"' in linux_bootstrap
-    assert 'PINNED_LLVM_VERSION="0.48.0"' in linux_bootstrap
-    assert 'PINNED_BEARTYPE_VERSION="0.18.5"' in linux_bootstrap
-    assert 'ROCM7_GFX1201_TORCH_VERSION="2.10.0"' in linux_bootstrap
-    assert 'ROCM7_GFX1201_TORCHAUDIO_VERSION="2.10.0"' in linux_bootstrap
-    assert 'ROCM7_GFX1201_TORCHVISION_VERSION="0.25.0"' in linux_bootstrap
-    assert 'IDX_LIST="https://download.pytorch.org/whl/rocm7.0 https://download.pytorch.org/whl/rocm7.1 https://download.pytorch.org/whl/rocm7.2"' in linux_bootstrap
-    assert 'DRUMSEP_AUDIO_SEPARATOR_VERSION="0.34.1"' in linux_bootstrap
-    assert 'PACKAGE="audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}"' in linux_bootstrap
-    assert 'PACKAGE="audio-separator[gpu]==${PINNED_AUDIO_SEPARATOR_VERSION}"' in linux_bootstrap
-    assert 'audio-separator==0.23.0' not in linux_bootstrap
-    assert 'numpy==1.26.4' not in linux_bootstrap
-
-    assert '"audio-separator==0.44.3"' in main_rocm_block
-    assert '"numpy==2.4.4"' in main_rocm_block
-    assert '"scipy==1.18.0"' in main_rocm_block
-    assert '"numba==0.66.0"' in main_rocm_block
-    assert '"llvmlite==0.48.0"' in main_rocm_block
-    assert '"beartype==0.18.5"' in main_rocm_block
-    assert '"onnxruntime"' in main_rocm_block
-    assert '"audio-separator==0.34.1"' in linux_wheelhouse
 
 
 def test_macos_build_script_supports_package_variants_without_wiping_dist():
@@ -5852,16 +5186,11 @@ def test_macos_online_variant_excludes_bundled_payload_and_other_variants_stage_
 
     assert 'BUNDLED_PAYLOAD_ROOT="$ROOT_DIR/scripts/reaper/_bundled/macos/apple-silicon"' in script
     assert 'rm -rf "$STAGE/Users/Shared/STEMwerk-reaper/_bundled/macos/apple-silicon"' in script
-    assert 'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
-    assert 'python3 "$ROOT_DIR/tools/build_macos_apple_silicon_payload.py" \\' in script
-    assert '--audit-existing "$BUNDLED_PAYLOAD_ROOT"' in script
-    assert script.index('--audit-existing "$BUNDLED_PAYLOAD_ROOT"') < script.index(
-        'rsync -a --delete --exclude=\'._*\' "$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"'
-    )
-    assert 'bundled-apple-silicon|offline-bundled-apple-silicon-mps-allmodels)' in script
-    assert 'bundled-intel' not in script
-    assert 'ERROR: bundled Apple Silicon payload is missing:' in script
-    assert 'payload_status=missing' not in script
+    assert "rsync -a --delete \\" in script
+    assert "--exclude='._*' --exclude='*.exe' --exclude='*.dll'" in script
+    assert '"$BUNDLED_PAYLOAD_ROOT/" "$PAYLOAD_DEST/"' in script
+    assert 'cat > "$PAYLOAD_DEST/.variant-placeholder" <<EOF' in script
+    assert 'payload_status=missing' in script
 
 
 def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payload():
@@ -5883,13 +5212,14 @@ def test_macos_build_script_excludes_appledouble_sidecars_and_repacks_clean_payl
 def test_macos_payload_builder_declares_expected_layout_and_manifest():
     script = Path("tools/build_macos_apple_silicon_payload.py").read_text()
 
-    assert '"platform": "macos-apple-silicon"' in script
-    assert '"runtime_policy": "mps_preferred_cpu_fallback"' in script
+    assert '"platform": "macos-apple-silicon-arm64"' in script
+    assert '"runtime_policy": "stemwerk-2.3.0.4-coherent-mps"' in script
     assert 'output_dir / "ffmpeg"' in script
     assert 'output_dir / "wheels"' in script
     assert 'output_dir / "models"' in script
     assert 'output_dir / "drumsep"' in script
-    assert 'ensure_wheelhouse_complete(output_dir / "wheels")' in script
+    assert 'inventory = resolved_wheel_inventory(wheels_dir)' in script
+    assert 'verify_offline_resolution(wheels_dir, python_executable)' in script
     assert '(output_dir / "manifest.json").write_text' in script
 
 
@@ -5898,25 +5228,22 @@ def test_macos_payload_builder_uses_native_python312_wheel_downloads():
 
     assert 'Path("/opt/homebrew/bin/python3.12")' in script
     assert 'Path("/usr/local/bin/python3.12")' in script
-    assert 'if version == (3, 12):' in script
-    assert 'raise RuntimeError("Missing native Python 3.12 interpreter for macOS Apple Silicon payload wheel downloads")' in script
-    assert '"audio-separator==0.44.3"' in script
-    assert '"numpy==2.4.4"' in script
-    assert '"numba==0.66.0"' in script
-    assert '"llvmlite==0.48.0"' in script
+    assert 'python_version(str(candidate)) == (3, 12)' in script
+    assert 'raise RuntimeError("Missing native Python 3.12 interpreter for Apple Silicon payload assembly")' in script
+    assert '"audio-separator==0.23.0"' in script
     assert '"torch==2.5.1"' in script
     assert '"torchaudio==2.5.1"' in script
     assert '"onnxruntime==1.27.0"' in script
-    assert 'SAMPLERATE_REQUIREMENT = "samplerate==0.2.4"' in script
+    assert '"samplerate==0.1.0"' in script
     assert '"onnxruntime-silicon"' not in script
     assert '"--only-binary=:all:"' in script
     assert '"--find-links"' in script
     assert '"--platform"' not in script
     assert '"--abi"' not in script
     assert 'subprocess.run(cmd, check=True, env=command_env())' in script
-    assert 'DIFFQ_REQUIREMENT = "diffq==0.2.4"' in script
-    assert 'ensure_diffq_wheel(resolver_dir)' in script
-    assert 'ensure_samplerate_wheel(output_dir / "wheels")' in script
+    assert '"diffq==0.2.4"' in script
+    assert 'build_diffq_wheel(wheels_dir, python_executable)' in script
+    assert 'replace_samplerate_with_native_arm64(wheels_dir)' in script
 
 
 def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
@@ -5930,26 +5257,13 @@ def test_macos_payload_builder_requires_local_ffmpeg_and_model_sources():
     assert '"ffmpeg binary"' in script
     assert '"managed Python runtime payload"' in script
     assert '"core model payload file"' in script
-    assert '"drumsep payload file"' in script
-    assert 'Incomplete wheelhouse for offline Apple Silicon payload' in script
-    assert 'REQUIRED_WHEEL_PREFIXES = (' in script
-    assert 'REQUIRED_WHEEL_PATTERNS = (' in script
-    assert '"samplerate-0.2.4-cp312-cp312-macosx_*_universal2.whl"' in script
-    assert '"stemwerk_core-"' in script
+    assert '"DrumSep payload file"' in script
+    assert 'Incomplete wheelhouse: missing' in script
+    assert 'RUNTIME_REQUIREMENTS = (' in script
+    assert '"samplerate==0.1.0"' in script
+    assert 'build_stemwerk_core_wheel(repo_root, wheels_dir, python_executable)' in script
     assert '"--no-build-isolation"' in script
     assert 'copy_tree(managed_python_dir, output_dir / "python", "managed Python runtime payload")' in script
-    assert 'build_stemwerk_core_wheel(repo_root, output_dir / "wheels", python_executable)' in script
-
-
-def test_macos_pkg_staging_enforces_bootstrap_layout_contract():
-    script = Path("installer/macos/build_pkg.sh").read_text()
-    assert "validate_staged_reaper_layout()" in script
-    assert '"$reaper_root/STEMwerk_Bootstrap_macOS.sh"' in script
-    assert '"$reaper_root/audio_separator_process.py"' in script
-    assert '"$reaper_root/_internal/stemwerk_samplerate_guard.py"' in script
-    assert '[[ -f "$PAYLOAD_DEST/manifest.json" ]]' in script
-    assert '[[ -d "$PAYLOAD_DEST/wheels" ]]' in script
-    assert script.index("validate_staged_reaper_layout\n") < script.index('remove_appledouble_sidecars "$STAGE"')
 
 
 def test_macos_bootstrap_uses_bundled_apple_silicon_payloads_when_present():
@@ -6018,13 +5332,7 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
     assert 'copy_bundled_models_to_cache "${_bundled_models_dir}" "$(model_cache_dir)"' in script
     assert 'MACOS_BUNDLED_MODELS_STATUS="seeded"' in script
     assert '_bundled_drumsep_dir="$(bundled_drumsep_dir || true)"' in script
-    assert 'copy_bundled_drumsep_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
-    materialize = 'materialize_drumsep_compat_yaml "${_bundled_drumsep_dir}" "$(model_cache_dir)" "${VENV_PY}"'
-    assert materialize in script
-    assert script.index(materialize) < script.index('ensure_drumsep_assets "${VENV_PY}" "$(model_cache_dir)"')
-    assert 'DRUMSEP_COMPAT_YAML_LEGACY_CRLF_SHA256="17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"' in script
-    assert 'echo "DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256=${DRUMSEP_COMPAT_YAML_PREVIOUS_SHA256}"' in script
-    assert '_success_reason="migrated_known_legacy_crlf"' in script
+    assert 'copy_bundled_models_to_cache "${_bundled_drumsep_dir}" "$(model_cache_dir)"' in script
     assert 'MACOS_BUNDLED_DRUMSEP_STATUS="seeded"' in script
     assert 'if [ "${MAC_ARCH}" = "x86_64" ]; then' in script
     assert 'READY_RUNTIME_STATUS="skipped"' in script
@@ -6037,7 +5345,7 @@ def test_macos_bootstrap_seeds_bundled_models_and_drumsep_before_ready_checks():
 def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     main_script = Path("scripts/reaper/STEMwerk.lua").read_text()
     langs = Path("scripts/reaper/i18n/languages.lua").read_text()
-    i18n_internal = Path("scripts/reaper/_internal/STEMwerk_I18N.lua").read_text()
+    i18n_internal = Path("scripts/reaper/_internal/STEMwerk_i18n.lua").read_text()
 
     assert 'trSafeValue("drumkit_complete_title", "Direct Kit completed successfully!")' in main_script
     assert 'trPlural(srcCount, "drumkit_result_source_item_one", "drumkit_result_source_item_many"' in main_script
@@ -6049,14 +5357,14 @@ def test_drumkit_completion_copy_has_localized_title_and_source_item_words():
     assert 'drumkit_complete_title = "Direct Kit erfolgreich abgeschlossen!"' in langs
     assert 'drumsep_backend_limited_title = "Drum Kit backend not yet supported."' in langs
     assert 'drumsep_backend_limited_title = "Drum Kit-backend wordt nog niet ondersteund."' in langs
-    assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstützt."' in langs
+    assert 'drumsep_backend_limited_title = "Drum-Kit-Backend wird noch nicht unterstuetzt."' in langs
     assert 'drumsep_backend_limited_body = "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split."' in langs
     assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split unavailable on Intel Mac"' in langs
     assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform."' in langs
     assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split niet beschikbaar op Intel Mac"' in langs
     assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split is in deze release niet ingeschakeld op Intel Mac. Normale CPU-stems zijn beschikbaar. Gebruik voor Drum Kit Split Apple Silicon of een ondersteund GPU/versneld platform."' in langs
-    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfügbar"' in langs
-    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfügbar. Verwende für Drum Kit Split Apple Silicon oder eine unterstützte GPU-/beschleunigte Plattform."' in langs
+    assert 'drumsep_intel_mac_unsupported_title = "Drum Kit Split auf Intel Mac nicht verfuegbar"' in langs
+    assert 'drumsep_intel_mac_unsupported_body = "Drum Kit Split ist in dieser Version auf Intel Macs nicht aktiviert. Normale CPU-Stems sind verfuegbar. Verwende fuer Drum Kit Split Apple Silicon oder eine unterstuetzte GPU-/beschleunigte Plattform."' in langs
     assert 'drumkit_result_track_many = "drum tracks"' in langs
     assert 'drumkit_result_track_many = "drumtracks"' in langs
     assert 'drumkit_result_track_many = "Drum-Tracks"' in langs
@@ -6099,41 +5407,6 @@ def test_drumkit_split_wrapper_selects_integrated_extract_route():
     assert "function M.buildExtractRunOptions()" in workflow
     assert "workflowSource = M.SOURCE_EXTRACT" in workflow
     assert "requestedStage2Model = M.DIRECT_DKS_MODEL" in workflow
-
-
-def test_direct_kit_wrapper_selects_integrated_direct_route():
-    wrapper = Path("scripts/reaper/STEMwerk_Direct_Kit.lua").read_text(encoding="utf-8")
-    assert "-- @description Stemwerk: Direct Kit" in wrapper
-    assert 'reaper.SetExtState(EXT_SECTION, "quick_preset", "dks_direct", false)' in wrapper
-    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_mode", "drumkit", false)' in wrapper
-    assert 'reaper.SetExtState(EXT_SECTION, "active_workflow_source", "dks_direct", false)' in wrapper
-    assert 'dofile(script_path .. "STEMwerk.lua")' in wrapper
-    version_sync = Path("tools/version_sync.py").read_text(encoding="utf-8")
-    assert '"scripts/reaper/STEMwerk_Direct_Kit.lua"' in version_sync
-
-
-def test_drum_kit_toolbar_actions_have_reaper_icon_payloads():
-    setup = Path("scripts/reaper/STEMwerk_Setup_Toolbar.lua").read_text(encoding="utf-8")
-    index = Path("index.xml").read_text(encoding="utf-8")
-    assets = Path("scripts/reaper/assets/toolbar_icons")
-    expected = {
-        "stemwerk_direct_kit": "STEMwerk_Direct_Kit.lua",
-        "stemwerk_kit_split": "STEMwerk_Drum_Kit_Split.lua",
-    }
-    for icon_name, script_name in expected.items():
-        assert script_name in setup
-        assert f'icon = "{icon_name}.png"' in setup
-        for relative in (
-            f"single/{icon_name}_24.png",
-            f"single/{icon_name}_30.png",
-            f"single/{icon_name}_36.png",
-            f"single/{icon_name}_48.png",
-            f"single/{icon_name}_64.png",
-            f"strips_90x30/{icon_name}_90x30.png",
-            f"strips_180x60/{icon_name}_180x60.png",
-        ):
-            assert (assets / relative).is_file(), relative
-            assert f'../assets/toolbar_icons/{relative}' in index
 
 
 def test_main_ui_exposes_direct_and_extract_drumkit_presets():
@@ -6383,8 +5656,8 @@ def test_single_track_footer_uses_shared_runtime_resolution_without_rocm_cuda_re
 
 
 def test_german_visible_strings_and_fallbacks_do_not_use_ascii_transliterations():
-    langs = Path("scripts/reaper/i18n/languages.lua").read_text(encoding="utf-8")
-    helpers = Path("scripts/reaper/_internal/STEMwerk_Helpers.lua").read_text(encoding="utf-8")
+    langs = Path("scripts/reaper/i18n/languages.lua").read_text()
+    helpers = Path("scripts/reaper/_internal/STEMwerk_Helpers.lua").read_text()
     combined = langs + "\n" + helpers
 
     forbidden = [
@@ -6783,8 +6056,7 @@ def test_direct_kit_running_rows_strip_prefixed_stage2_copy_but_extract_keeps_it
     assert 'or flat == "splitting drum kit"' in progress_render
     assert 'return progressUiLabel("progress_stage_preparing_direct_drum_kit", "Creating drum parts…")' in progress_render
     assert 'return progressUiLabel("progress_stage_splitting_drum_kit", "Stage 2/2: Creating drum parts…")' in progress_render
-    assert 'local stageIdx = inferProgressStageIndex(progressState.stage)' in main_script
-    assert 'local stageBadge = stageIdx == 1' in main_script
+    assert 'if isExtractDrumKitWorkflowActive()\n                    and inferProgressStageIndex(job.stage) == 2' in main_script
     assert 'pctText = trSafeValue("progress_stage_label_2_of_2", "Stage 2/2")' not in main_script
 
 
@@ -6873,7 +6145,7 @@ def test_backend_limited_drumsep_message_preempts_model_failure_and_generic_no_s
     assert 'lowerLog:find("error_reason=drumsep_backend_runtime_limited", 1, true)' in main_script
     assert 'lowerLog:find("output_validation_reason=audio_separator_mdxc_runtime_primary_secondary_only", 1, true)' in main_script
     assert 'trSafeValue("drumsep_backend_limited_body", "This DrumSep backend currently returned only Kick and Snare; 6 drum parts are required for Direct Kit / Kit Split.")' in main_script
-    assert main_script.index('trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")') < main_script.index('local msg = "Drum Kit Split separation failed.\\n"')
+    assert main_script.index('trSafeValue("drumsep_backend_limited_title", "Drum Kit backend not yet supported.")') < main_script.index('local msg = "Model download/load failed.\\n"')
     assert 'SW_LOG.readFileSnippet(logPath, 12000)' in main_script
 
 
@@ -7026,10 +6298,9 @@ def test_macos_bootstrap_detects_and_repairs_samplerate_arch_mismatch_on_arm64()
     guard = Path("scripts/reaper/_internal/stemwerk_samplerate_guard.py").read_text()
 
     assert "repair_samplerate_if_arch_mismatch" in script
-    assert 'PINNED_SAMPLERATE_VERSION_ARM64="0.2.4"' in script
-    assert "asep_0443_requires_samplerate_010" not in script
     assert "stemwerk_samplerate_guard.py" in script
-    assert '--repair-version "${PINNED_SAMPLERATE_VERSION}" --validate-only' in script
+    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" 2>&1)"' in script
+    assert '_guard_out="$("${VENV_PY}" "${_guard_script}" --python "${VENV_PY}" --find-links "${BUNDLED_WHEELS_DIR}" 2>&1)"' in script
     assert '_guard_out="$(${VENV_PY} "${_guard_script}" --python "${VENV_PY}" 2>&1)"' not in script
     assert '"${VENV_PY}" -m pip show audio-separator >/dev/null 2>&1' in script
     assert 'if ! repair_samplerate_if_arch_mismatch "post_audio_separator_install"; then' in script
@@ -7138,14 +6409,18 @@ def test_setup_internal_surfaces_samplerate_arch_mismatch_reason_and_capabilitie
     assert "SAMPLERATE_REPAIR_ATTEMPTED" in script
 
 
-def test_macos_apple_silicon_sanity_workflow_validates_native_samplerate_override():
+def test_macos_apple_silicon_sanity_workflow_asserts_samplerate_dylib_architecture():
     workflow = Path(".github/workflows/macos-apple-silicon-backend-sanity.yml").read_text()
 
-    assert "Run samplerate arm64 repair guard (bootstrap parity)" not in workflow
-    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py --validate-only --repair-version 0.2.4" in workflow
-    assert "apple_silicon_samplerate_native_override" not in workflow
-    assert 'payload["samplerate_version"] = version("samplerate")' in workflow
-    assert 'assert core(payload["samplerate_version"]) == "0.2.4"' in workflow
+    assert "Run samplerate arm64 repair guard (bootstrap parity)" in workflow
+    assert "python scripts/reaper/_internal/stemwerk_samplerate_guard.py" in workflow
+    assert "import samplerate" in workflow
+    assert 'samplerate_root.rglob("*.dylib")' in workflow
+    assert 'payload["samplerate_dylib_file_outputs"]' in workflow
+    assert 'assert len(payload["samplerate_dylib_x86_only"]) == 0' in workflow
+    assert 'if payload["samplerate_dylib_candidates"]:' in workflow
+    assert 'assert len(payload["samplerate_dylib_arm_or_universal"]) > 0' in workflow
+    assert workflow.index("Run samplerate arm64 repair guard (bootstrap parity)") < workflow.index("Run Apple Silicon dependency and backend assertions")
 
 
 def test_normal_workflow_device_preflight_blocks_silent_cpu_fallback():
@@ -7215,12 +6490,9 @@ def test_device_column_uses_route_aware_runtime_sources_and_can_add_explicit_mps
     assert 'local cudaPython = resolveRuntimePython(cudaState, defaultRuntimePython(".venv-drumsep-cuda"))' in script
     assert 'local directmlPython = resolveRuntimePython(directmlState, defaultRuntimePython(".venv-drumsep-directml"))' in script
     assert 'local capabilityState = readEnvFile(stateDir .. PATH_SEP .. "capabilities.env") or {}' in script
-    assert 'local cudaStateForUi = cudaState' in script
-    assert 'local cudaPythonForUi = cudaPython' in script
-    assert 'and schedulerRuntimeHasCudaCapability(cpuState, genericCudaPython, capabilityState)' in script
-    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaStateForUi, cudaPythonForUi, capabilityState)' in script
+    assert 'local cudaReady = schedulerRuntimeHasCudaCapability(cudaState, cudaPython, capabilityState)' in script
     assert 'local directmlReady = schedulerRuntimeHasDirectmlCapability(directmlState, directmlPython, capabilityState)' in script
-    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaStateForUi, capabilityState)' in script
+    assert 'local cudaDeviceNames = schedulerRuntimeCudaDeviceNames(cudaState, capabilityState)' in script
     assert 'local directmlDeviceNames = schedulerRuntimeDirectmlDeviceNames(directmlState, capabilityState)' in script
     assert 'rocmReady = rocmReady and rocmPython ~= ""' in script
     assert 'local cpuReady = isOkState(cpuState, "DRUMSEP_RUNTIME_STATUS", "STATUS") and cpuPython ~= ""' in script
@@ -7285,128 +6557,6 @@ def test_drumsep_runtime_selector_reads_state_python_candidates_before_dedicated
     assert 'add(state.get("VENV_PYTHON"))' in script
     assert "selected_cpu_python, cpu_detail, cpu_payload, cpu_attempts = _probe_drumsep_runtime_candidates(cpu_candidates, require_gpu=False)" in script
     assert "selected_rocm_python, rocm_detail, rocm_payload, rocm_attempts = _probe_drumsep_runtime_candidates(rocm_candidates, require_gpu=True)" in script
-
-
-def _write_linux_ready_state(runtime_base, *, ready="ok", main="ok", model="ok"):
-    state_dir = runtime_base / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "ready_to_go.env").write_text(
-        "\n".join(
-            [
-                f"READY_TO_GO_STATUS={ready}",
-                f"MAIN_RUNTIME_STATUS={main}",
-                f"DRUMSEP_READY_MODEL_STATUS={model}",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-def _touch_executable(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n", encoding="utf-8")
-    path.chmod(0o755)
-
-
-def _rocm_probe_payload(*, audio_separator="0.44.3", numpy="2.4.4"):
-    return {
-        "versions": {
-            "audio-separator": audio_separator,
-            "numpy": numpy,
-            "torch": "2.10.0+rocm7.0",
-        },
-        "torch_hip": "7.0.0",
-        "torch_cuda_available": True,
-        "device_names": ["AMD Radeon RX 9070"],
-    }
-
-
-def test_linux_rocm_dks_selector_prefers_main_unified_runtime_when_capable(monkeypatch, tmp_path, capsys):
-    module = _load_audio_separator_process_module()
-    monkeypatch.setattr(module.sys, "platform", "linux")
-    _write_linux_ready_state(tmp_path)
-    main_python = tmp_path / ".venv" / "bin" / "python"
-    legacy_python = tmp_path / ".venv-drumsep-rocm" / "bin" / "python"
-    _touch_executable(main_python)
-    _touch_executable(legacy_python)
-
-    def fake_probe(candidates, **kwargs):
-        assert kwargs.get("require_gpu") is True
-        first = Path(candidates[0])
-        if first == main_python:
-            return main_python, "ok", _rocm_probe_payload(), [{"python": str(main_python), "ok": True}]
-        return None, "should_not_probe_legacy", {}, []
-
-    monkeypatch.setattr(module, "_probe_drumsep_runtime_candidates", fake_probe)
-
-    selected, kind, info = module._select_drumsep_runtime("rocm", tmp_path)
-
-    captured = capsys.readouterr()
-    assert selected == main_python
-    assert kind == "rocm"
-    assert info["dks_runtime_selection"] == "main_unified"
-    assert "dks_runtime_selection=main_unified" in captured.err
-    assert f"dks_runtime_python={main_python}" in captured.err
-    assert "dks_unified_candidate=true" in captured.err
-    assert "dks_legacy_fallback_available=true" in captured.err
-
-
-def test_linux_rocm_dks_selector_falls_back_to_legacy_when_main_not_capable(monkeypatch, tmp_path, capsys):
-    module = _load_audio_separator_process_module()
-    monkeypatch.setattr(module.sys, "platform", "linux")
-    _write_linux_ready_state(tmp_path)
-    main_python = tmp_path / ".venv" / "bin" / "python"
-    legacy_python = tmp_path / ".venv-drumsep-rocm" / "bin" / "python"
-    _touch_executable(main_python)
-    _touch_executable(legacy_python)
-
-    def fake_probe(candidates, **kwargs):
-        assert kwargs.get("require_gpu") is True
-        first = Path(candidates[0])
-        if first == main_python:
-            return main_python, "ok", _rocm_probe_payload(audio_separator="0.23.0", numpy="1.26.4"), [
-                {"python": str(main_python), "ok": True}
-            ]
-        if first == legacy_python:
-            return legacy_python, "ok", _rocm_probe_payload(), [{"python": str(legacy_python), "ok": True}]
-        return None, "missing", {}, []
-
-    monkeypatch.setattr(module, "_probe_drumsep_runtime_candidates", fake_probe)
-
-    selected, kind, info = module._select_drumsep_runtime("rocm", tmp_path)
-
-    captured = capsys.readouterr()
-    assert selected == legacy_python
-    assert kind == "rocm"
-    assert info["dks_runtime_selection"] == "fallback_legacy"
-    assert info["fallback_reason"].startswith("main_unified_skipped:audio_separator_lt_0_44_3")
-    assert "dks_runtime_selection=fallback_legacy" in captured.err
-    assert f"dks_runtime_python={legacy_python}" in captured.err
-    assert "dks_legacy_fallback_available=true" in captured.err
-
-
-def test_linux_rocm_dks_selector_reports_unavailable_without_cpu_fallback(monkeypatch, tmp_path, capsys):
-    module = _load_audio_separator_process_module()
-    monkeypatch.setattr(module.sys, "platform", "linux")
-    _write_linux_ready_state(tmp_path, ready="missing", main="missing", model="missing")
-    probed = []
-
-    def fake_probe(candidates, **kwargs):
-        probed.extend(str(item) for item in candidates)
-        return None, "missing", {}, [{"python": str(candidates[0]), "ok": False}]
-
-    monkeypatch.setattr(module, "_probe_drumsep_runtime_candidates", fake_probe)
-
-    selected, kind, info = module._select_drumsep_runtime("rocm", tmp_path)
-
-    captured = capsys.readouterr()
-    assert selected is None
-    assert kind == "missing"
-    assert info["dks_runtime_selection"] == "unavailable"
-    assert all(".venv-drumsep/bin/python" not in item for item in probed)
-    assert "dks_runtime_selection=unavailable" in captured.err
-    assert "dks_legacy_fallback_available=false" in captured.err
 
 
 def test_cached_capability_devices_ignore_stale_raw_gpu_blocks_when_runtime_is_cpu_only():
@@ -7842,10 +6992,10 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'CORE_MODEL_PREFETCH_STATUS="skipped"' in linux_bootstrap
     assert 'log_step "core_model_prefetch_skipped=${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
     assert 'set_status "deps_failed" "core_model_prefetch_failed"' not in linux_bootstrap
-    assert 'set_status "deps_failed" "drumsep_sibling_rebuild_required"' in linux_bootstrap
+    assert 'set_status "deps_failed" "drumsep_ready_runtime_failed"' in linux_bootstrap
     assert 'echo "MAIN_RUNTIME_STATUS=${_main_runtime_status}"' in linux_bootstrap
     assert 'echo "CORE_MODEL_PREFETCH_STATUS=${_core_prefetch_status}"' in linux_bootstrap
-    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${READY_MAIN_RUNTIME_STATUS}" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
+    assert 'write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "ok" "${CORE_MODEL_PREFETCH_STATUS}" "${CORE_MODEL_PREFETCH_DETAIL}"' in linux_bootstrap
 
     assert "ready_to_go_state_file()" in macos_bootstrap
     assert "ensure_core_model_cache" in macos_bootstrap
@@ -7915,9 +7065,8 @@ def test_linux_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_ru
     assert 'STATE_FILE=""' in linux_bootstrap
     assert 'verify_existing_ready_runtime "${READY_BACKEND}" || true' in linux_bootstrap
     assert 'probe_main_runtime_ready "$(main_runtime_python)" "${BACKEND}"' in linux_bootstrap
-    assert 'log_step "Open DrumSep install transaction dominates cached ready state: ${_txn_kind}"' in linux_bootstrap
-    assert 'log_step "Existing DrumSep runtime detected; running verification before reinstall"' not in linux_bootstrap
-    assert 'log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"' not in linux_bootstrap
+    assert 'log_step "Existing DrumSep runtime detected; running verification before reinstall"' in linux_bootstrap
+    assert 'log_step "Existing DrumSep ROCm runtime detected; running verification before reinstall"' in linux_bootstrap
     assert 'MODE="ready-to-go-verify"' not in linux_bootstrap
     assert 'if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" != "${READY_STATE_FILE}" ]; then' in linux_bootstrap
     assert linux_bootstrap.index('write_ready_to_go_state "${READY_RUNTIME_KIND}" "${READY_RUNTIME_STATUS}" "${READY_DRUMSEP_MODEL_STATUS}" "${READY_DETAIL}" "${MAIN_READY_STATUS}"') < linux_bootstrap.index('if [ -n "${STATE_FILE}" ] && [ "${STATE_FILE}" = "${READY_STATE_FILE}" ]; then')
@@ -8050,8 +7199,7 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.0.4" in text
-    assert "Date: 2026-07-11" in text
+    assert "Version: 2.3.0.6" in text
     assert "Version: 2.2.2" not in text
 
 
@@ -8103,20 +7251,30 @@ def test_windows_update_patch_forces_current_runtime_repair_after_script_update(
     bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
     patch_build_ps1 = Path("installer/windows/build_offline_patch_installer.ps1").read_text(encoding="utf-8")
 
-    assert "WizardForm.WelcomeLabel1.Caption := 'STEMwerk update patch';" in patch_iss
-    assert "'- STEMwerk for REAPER: previous install -> v' + NewVersion" in patch_iss
-    assert "'Patch completed successfully.'" in patch_iss
-    assert "Result := '- STEMwerk for REAPER: v' + Trim(DetectedOldVersion) + ' -> v' + NewVersion;" in patch_iss
-    assert "ShowReleaseNotesCheckbox.Caption := 'Show what changed in v{#MyAppVersion}';" in patch_iss
-    assert 'Source: "..\\..\\scripts\\reaper\\*"; DestDir: "{app}"' in patch_iss
-    assert "#define MyAppVersion GetEnv('STEMWERK_VERSION')" in patch_iss
-    assert 'OutputBaseFilename=STEMwerk-{#MyAppVersion}-update-patch' in patch_iss
-    assert 'STEMwerk_Installer_Windows.ps1' not in patch_iss
-    assert '[Run]' not in patch_iss
-    assert "BuildVersionTransitionText" in patch_iss
-    assert "BuildPatchFinishedSummary" in patch_iss
+    assert "WizardForm.Caption := 'Setup - STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
+    assert "WizardForm.WelcomeLabel1.Caption := 'STEMwerk {#ReleaseAssetVersion} Update Patch';" in patch_iss
+    assert "'Updating STEMwerk {#ReleaseAssetVersion} installation to script/runtime v{#MyAppVersion}." in patch_iss
+    assert "'STEMwerk has been updated. Installed script/runtime version: v{#MyAppVersion}.'" in patch_iss
+    assert "'- Release/update asset: v{#ReleaseAssetVersion}'" in patch_iss
+    assert "ShowReleaseNotesCheckbox.Caption := 'Show what changed in installed payload v{#MyAppVersion}';" in patch_iss
+    assert 'Source: "STEMwerk_Installer_Windows.ps1"; DestDir: "{app}"; Flags: ignoreversion' in patch_iss
+    assert "#define ReleaseAssetVersion GetEnv('STEMWERK_RELEASE_ASSET_VERSION')" in patch_iss
+    assert 'OutputBaseFilename=STEMwerk-{#ReleaseAssetVersion}-update-patch' in patch_iss
+    assert 'Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\\STEMwerk_Installer_Windows.ps1"""' in patch_iss
+    assert 'StatusMsg: "Refreshing STEMwerk runtime and Drum Kit assets..."' in patch_iss
+    assert 'runhidden waituntilterminated' in patch_iss
+    assert 'runtime state, Drum Kit runtime, and offline model readiness' in patch_iss
+    assert "StepLabelS.Caption := '1. Runtime';" in patch_iss
+    assert "StepLabelT.Caption := '2. Python + venv';" in patch_iss
+    assert "StepLabelE.Caption := '3. FFmpeg';" in patch_iss
+    assert "StepLabelM.Caption := '4. Core packages';" in patch_iss
+    assert "StepLabelW.Caption := '5. Drum Kit';" in patch_iss
+    assert "LogMemo := TNewMemo.Create(WizardForm);" in patch_iss
+    assert "LogTimerId := SetTimer(0, 0, 500, LogTimerProc);" in patch_iss
+    assert "StatusDetailLabel.Caption := 'Current task:'" in patch_iss
+    assert "'Do not close this window.'" in patch_iss
     assert '$env:STEMWERK_VERSION = $version' in patch_build_ps1
-    assert 'STEMWERK_RELEASE_ASSET_VERSION' not in patch_build_ps1
+    assert '$env:STEMWERK_RELEASE_ASSET_VERSION = $version' in patch_build_ps1
     assert '$bootstrap = Join-NormalizedWindowsPath $scriptRoot @("STEMwerk_Bootstrap_Windows.ps1")' in installer
     assert '$env:STEMWERK_INSTALLER = "1"' in installer
     assert 'if (Test-Path $stateFile) { Remove-Item $stateFile -Force -ErrorAction SilentlyContinue }' in installer
@@ -8143,11 +7301,4 @@ def test_windows_setup_guides_are_release_clean_and_describe_offline_allmodels_p
         assert "offline-bundled-cpu-allmodels" in text
         assert "offline-bundled-nvidia-gpu-allmodels" in text
         assert "offline-bundled-amd-gpu-allmodels" in text
-        assert (
-            "offline allmodels installers remain on the `2.3.0.0` release line" in text
-            or "grote offline allmodels-installers blijven op de `2.3.0.0`-release" in text
-            or "großen Offline-Allmodels-Installer bleiben auf der `2.3.0.0`-Release-Linie" in text
-            or "volledig offline" in text
-            or "vollstaendig offline" in text
-        )
         assert "Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts." in text or "De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPER-scripts." in text or "Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REAPER-Skripte." in text

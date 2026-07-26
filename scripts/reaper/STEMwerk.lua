@@ -3,7 +3,7 @@ function debugLog(msg) end
 function clearDebugLog() end
 -- @description STEMwerk - AI Stem Separation
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.5
+-- @version 2.3.0.6
 -- @changelog
 --   2026-04-24: Added quick-command path for toolbar explode actions that run without opening Main UI.
 --   2026-04-24: Fixed playback-state transfer for imported stem takes with source-length guard (prevents double-stretch/content mismatch).
@@ -54,7 +54,7 @@ function clearDebugLog() end
 --   MIT License - https://opensource.org/licenses/MIT
 
 -- Keep in sync with repo VERSION via tools/version_sync.py.
-local APP_VERSION = "2.3.0.5"
+local APP_VERSION = "2.3.0.6"
 SCRIPT_NAME = "STEMwerk (v" .. APP_VERSION .. ")"
 WINDOW_ART_GALLERY = "STEMwerk Art Gallery (v" .. APP_VERSION .. ")"
 WINDOW_PROCESSING = "STEMwerk - Processing.. (v" .. APP_VERSION .. ")"
@@ -127,13 +127,6 @@ exec_capture = SYSTEM.exec_capture
 
 dofile(script_path .. "_internal/STEMwerk_Log.lua")
 dofile(script_path .. "_internal/STEMwerk_Timing.lua")
-
--- Model registry (schema v2, metadata-only). Hard-failt bij kapotte/ontbrekende
--- models.json conform registry_policy; runtime-gedrag leest de registry niet.
--- Global (zoals SETTINGS/MODEL_AVAILABILITY): de main chunk zit op de
--- Lua-limiet van 200 locals, een extra local compileert niet.
-MODEL_REGISTRY = dofile(script_path .. "_internal/STEMwerk_Model_Registry.lua")
-MODEL_REGISTRY.validate_preset_stages()
 
 SELF_CHECK_LOGGED = false
 function logSelfCheckOnce()
@@ -690,34 +683,30 @@ function checkNumpyCompat(pythonPath)
     end
     local sep = PATH_SEP or (OS == "Windows" and "\\" or "/")
     local outPath = tempBase .. sep .. "STEMwerk_numpy_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)) .. ".txt"
-    local py = table.concat({
-        "import sys",
-        "try:",
-        " import numpy, numba",
-        " @numba.njit",
-        " def _stemwerk_numba_probe(x): return x + 1",
-        " _jit_result = _stemwerk_numba_probe(1)",
-        " _status = 'ok|numpy=' + numpy.__version__ + '|numba=' + numba.__version__ + '|jit=' + str(_jit_result)",
-        "except Exception as exc:",
-        " _status = 'error|' + type(exc).__name__ + ': ' + str(exc).replace('\\n', ' ')",
-        "with open('" .. escapePythonString(outPath) .. "', 'w') as f: f.write(_status)",
-        "if _status.startswith('error|'): sys.exit(1)",
-    }, "\n")
+    local py = "import numpy,sys; f=open('" .. escapePythonString(outPath) .. "','w'); f.write(numpy.__version__); f.close()"
     local cmd = quoteArg(pythonPath) .. " -c " .. quoteArg(py)
-    local rc, out = execProcess(cmd, 30000)
+    local rc, out = execProcess(cmd, 12000)
     out = out or ""
-    local probe = nil
+    local ver = nil
     local f = io.open(outPath, "r")
     if f then
         local line = f:read("*l") or ""
         f:close()
         os.remove(outPath)
-        if line ~= "" then probe = line end
+        if line ~= "" then ver = line:match("(%d+%.%d+%.%d+)") end
     end
-    if rc ~= 0 or not probe or probe:sub(1, 3) ~= "ok|" then
-        local detail = probe and probe:gsub("^error|", "") or "probe produced no result"
-        if out ~= "" then detail = detail .. "\nOutput:\n" .. tostring(out) end
-        return false, "NumPy/Numba runtime probe failed: " .. tostring(detail)
+    if rc ~= 0 or not ver then
+        if out:lower():find("no module named 'numpy'", 1, true) then
+            return false, "NumPy is not installed."
+        end
+        if rc == 0 and not ver then return true, nil end
+        local extra = out ~= "" and ("\nOutput:\n" .. tostring(out)) or "\nOutput: (none)"
+        return false, "Unable to detect NumPy version." .. extra
+    end
+    local major, minor = ver:match("^(%d+)%.(%d+)")
+    major, minor = tonumber(major), tonumber(minor)
+    if major and minor and (major > 2 or (major == 2 and minor >= 4)) then
+        return false, "NumPy " .. tostring(ver) .. " is not supported by Numba (requires < 2.4)."
     end
     return true, nil
 end
@@ -1337,16 +1326,12 @@ RUNTIME_DEVICE_PROBE = nil
 RUNTIME_DEVICE_UI_SEED_SOURCE = nil
 RUNTIME_DEVICE_UI_REFRESH_REASON = nil
 
--- Available models -- opgebouwd uit de registry (scripts/reaper/models.json).
--- name komt uit ui.fallback_label (identiek aan de vorige literals); het
--- voormalige desc-veld werd nergens gelezen en is vervallen.
-local MODELS = {}
-for _, regModel in ipairs(MODEL_REGISTRY.models()) do
-    MODELS[#MODELS + 1] = {
-        id = regModel.id,
-        name = (regModel.ui and regModel.ui.fallback_label) or regModel.id,
-    }
-end
+-- Available models
+local MODELS = {
+    { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
+    { id = "htdemucs_ft", name = "Quality", desc = "htdemucs_ft - Best quality, slower (4 stems)" },
+    { id = "htdemucs_6s", name = "6-Stem", desc = "htdemucs_6s - Adds Guitar & Piano separation" },
+}
 
 MODEL_AVAILABILITY = {
     bundledLimited = false,
@@ -1354,10 +1339,11 @@ MODEL_AVAILABILITY = {
 }
 
 do
-    local KNOWN_MODEL_IDS = {}
-    for _, regModel in ipairs(MODEL_REGISTRY.models()) do
-        KNOWN_MODEL_IDS[regModel.id] = true
-    end
+    local KNOWN_MODEL_IDS = {
+        htdemucs = true,
+        htdemucs_ft = true,
+        htdemucs_6s = true,
+    }
 
     local function parseModelAllowlist(raw)
         if not raw or raw == "" then return nil end
@@ -2052,6 +2038,35 @@ applyPresetAll = function() GLUE_HELPERS.applyPresetAll(STEMS) end
 
 local dialogWorkflowSource = ""
 
+function intelMacDksPolicyBlocked()
+    return OS == "macOS" and (ARCH == "x86_64" or ARCH == "amd64")
+end
+
+function recordIntelMacDksPolicyBlock(source)
+    local selectedMode = source == DKS_WORKFLOW.SOURCE_EXTRACT and "kit_split" or "direct_kit"
+    local detail = table.concat({
+        "platform=macOS", "architecture=x86_64", "selected_mode=" .. selectedMode,
+        "policy_reason=unsupported_mac_intel", "DKS_SUPPORTED=false",
+        "worker_started=false", "handled=true", "fatal=false",
+    }, " ")
+    debugLog("intel_dks_policy_block " .. detail)
+    if SW_LOG and SW_LOG.logExecResult then
+        SW_LOG.logExecResult("intel_dks_policy_block", 0, detail)
+    end
+end
+
+function showIntelMacDksPolicyBlock(source)
+    recordIntelMacDksPolicyBlock(source)
+    local title = trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
+    local body = trSafeValue(
+        "drumsep_intel_mac_unsupported_body",
+        "Drum Kit Split is not available on Intel Mac in STEMwerk 2.3.0.6. Normal CPU stem separation, including the normal six-stem mode, remains available."
+    )
+    if reaper and type(reaper.ShowMessageBox) == "function" then
+        reaper.ShowMessageBox(tostring(body), tostring(title), 0)
+    end
+end
+
 local function clearDialogWorkflowSelection()
     dialogWorkflowSource = ""
     SETTINGS.workflowMode = ""
@@ -2062,27 +2077,44 @@ local function clearDialogWorkflowSelection()
 end
 
 local function selectDirectDrumKitWorkflow()
+    if intelMacDksPolicyBlocked() then
+        clearDialogWorkflowSelection()
+        showIntelMacDksPolicyBlock(DKS_WORKFLOW.SOURCE_DIRECT)
+        return false
+    end
     dialogWorkflowSource = DKS_WORKFLOW.SOURCE_DIRECT
     SETTINGS.workflowMode = DKS_WORKFLOW.WORKFLOW_DRUMKIT
     SETTINGS.workflowSource = DKS_WORKFLOW.SOURCE_DIRECT
     reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
     reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_DIRECT, false)
     activateWorkflowStemSet(true)
+    return true
 end
 
 local function selectExtractDrumKitWorkflow()
+    if intelMacDksPolicyBlocked() then
+        clearDialogWorkflowSelection()
+        showIntelMacDksPolicyBlock(DKS_WORKFLOW.SOURCE_EXTRACT)
+        return false
+    end
     dialogWorkflowSource = DKS_WORKFLOW.SOURCE_EXTRACT
     SETTINGS.workflowMode = DKS_WORKFLOW.WORKFLOW_DRUMKIT
     SETTINGS.workflowSource = DKS_WORKFLOW.SOURCE_EXTRACT
     reaper.SetExtState(EXT_SECTION, "active_workflow_mode", DKS_WORKFLOW.WORKFLOW_DRUMKIT, false)
     reaper.SetExtState(EXT_SECTION, "active_workflow_source", DKS_WORKFLOW.SOURCE_EXTRACT, false)
     activateWorkflowStemSet(true)
+    return true
 end
 
 restoreDialogWorkflowSelection = function()
     local mode = tostring(SETTINGS.workflowMode or "")
     local source = tostring(SETTINGS.workflowSource or "")
     local drumkit = mode == DKS_WORKFLOW.WORKFLOW_DRUMKIT and DKS_WORKFLOW.isDrumKitSource(source)
+    if drumkit and intelMacDksPolicyBlocked() then
+        clearDialogWorkflowSelection()
+        recordIntelMacDksPolicyBlock(source)
+        return
+    end
     if drumkit and source == DKS_WORKFLOW.SOURCE_EXTRACT then
         selectExtractDrumKitWorkflow()
         return
@@ -9099,7 +9131,9 @@ local function showIntelMacDrumsepUnsupportedMessage()
         "drumsep_intel_mac_unsupported_body",
         "Drum Kit Split is not enabled on Intel Mac in this release. Normal CPU stem separation is available. For Drum Kit Split, use Apple Silicon or a supported GPU/accelerated platform."
     )
-    SW_SETUP.showMessageBox(title, body, 0)
+    if reaper and type(reaper.ShowMessageBox) == "function" then
+        reaper.ShowMessageBox(tostring(body), tostring(title), 0)
+    end
 end
 
 function renderResultTitleArea(ctx)
@@ -12569,21 +12603,23 @@ function renderMainColumns(ctx)
 
     presetY = presetY + presetSectionGap
 
-    if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
-    setTooltipWithShortcut(
-        col1X, presetY, colW, btnH,
-        trSafe("workflow_drumkit_label", "Direct Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "For drum-only tracks or samples. Splits the drum signal directly into kit parts."),
-        "Z", {170, 150, 240}
-    )
-    presetY = presetY + presetStep
+    if not intelMacDksPolicyBlocked() then
+        if drawPresetBtn(presetY, presetLabelDrumKit, {170, 150, 240}, _pa.drumkit) then selectDirectDrumKitWorkflow() end
+        setTooltipWithShortcut(
+            col1X, presetY, colW, btnH,
+            trSafe("workflow_drumkit_label", "Direct Kit") .. "\n" .. trSafe("tooltip_preset_drumkit", "For drum-only tracks or samples. Splits the drum signal directly into kit parts."),
+            "Z", {170, 150, 240}
+        )
+        presetY = presetY + presetStep
 
-    if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
-    setTooltipWithShortcut(
-        col1X, presetY, colW, btnH,
-        trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Quality mode for full mixes. Separates drums first, then splits them into kit parts."),
-        "X", {150, 132, 228}
-    )
-    presetY = presetY + presetSectionGap
+        if drawPresetBtn(presetY, presetLabelEdks, {150, 132, 228}, _pa.edks) then selectExtractDrumKitWorkflow() end
+        setTooltipWithShortcut(
+            col1X, presetY, colW, btnH,
+            trSafe("workflow_edks_label", "Kit Split") .. "\n" .. trSafe("tooltip_preset_edks", "Quality mode for full mixes. Separates drums first, then splits them into kit parts."),
+            "X", {150, 132, 228}
+        )
+        presetY = presetY + presetSectionGap
+    end
 
     if drawPresetBtn(presetY, presetLabelVocals, {255, 100, 100}, _pa.vocals, true) then clearDialogWorkflowSelection(); applyPresetVocalsOnly() end
     setTooltipWithShortcut(col1X, presetY, colW, btnH, T("tooltip_preset_vocals"), "V", {255, 100, 100})
@@ -12684,11 +12720,11 @@ function renderMainColumns(ctx)
     local modelBtnFontSize = _ubfs
 
     local modelY = contentTop + S(20)
-    local modelDescKeys = {}
-    for _, regModel in ipairs(MODEL_REGISTRY.models()) do
-        modelDescKeys[regModel.id] = regModel.ui and regModel.ui.tooltip_key
-    end
-    -- Sneltoetsen blijven bewust lokaal (backlog: ui.shortcut in registry-schema).
+    local modelDescKeys = {
+        htdemucs = "model_fast_desc",
+        htdemucs_ft = "model_quality_desc",
+        htdemucs_6s = "model_6stem_desc",
+    }
     local modelShortcutKeys = {
         htdemucs = "F",
         htdemucs_ft = "Q",
@@ -19037,7 +19073,8 @@ _sep.runSingleTrackSeparation = function(trackList)
         local msg =
             "NumPy compatibility issue.\n\n"
             .. tostring(numpyErr or "Unknown error") .. "\n\n"
-            .. "Run STEMwerk Setup/Repair to restore the supported NumPy/Numba/llvmlite runtime bundle."
+            .. "Fix (command):\n"
+            .. "  " .. tostring(PYTHON_PATH) .. " -m pip install \"numpy<2.4\""
         debugLog(msg)
         SW_LOG.logExecResult("preflight: numpy incompatible", -1, msg)
         if reaper and reaper.ShowMessageBox then
@@ -22620,7 +22657,7 @@ function runSeparationWorkflow()
     end
     if isDrumKitWorkflow and intelMacDrumsepUnsupported() then
         debugLog("Intel Mac DrumSep/DKS policy block: workflow aborted before runtime setup")
-        showIntelMacDrumsepUnsupportedMessage()
+        showIntelMacDksPolicyBlock(workflowSourceState)
         isProcessingActive = false
         return
     end

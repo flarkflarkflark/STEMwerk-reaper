@@ -1,6 +1,6 @@
 audio-separator[cpu]
-./scripts/reaper/vendor/stemwerk-core
-onnxruntime
+stemwerk-core
+onnxruntime>=1.21,<1.22
 onnx>=1.17,<1.18
 soundfile
 pytest

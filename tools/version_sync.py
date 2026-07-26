@@ -127,7 +127,6 @@ def main() -> int:
         "scripts/reaper/STEMwerk_All_Stems.lua",
         "scripts/reaper/STEMwerk_Vocals_Only.lua",
         "scripts/reaper/STEMwerk_Drums_Only.lua",
-        "scripts/reaper/STEMwerk_Direct_Kit.lua",
         "scripts/reaper/STEMwerk_Drum_Kit_Split.lua",
         "scripts/reaper/STEMwerk_Bass_Only.lua",
         "scripts/reaper/STEMwerk_Karaoke.lua",

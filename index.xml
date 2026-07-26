@@ -2,13 +2,13 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.0.5" author="flarkAUDIO" time="1780055621">
+      <version name="2.3.0.6" author="flarkAUDIO" time="1780055621">
         <changelog><![CDATA[
-STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
+STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
 
-- Unifies Linux ROCm normal stems and Drum Kit Separation on the managed main runtime.
-- Updates Linux and Apple Silicon runtime policy to audio-separator 0.44.3 with NumPy 2 where supported.
-- Adds model registry, device normalization, offline wheelhouse, and macOS installer reliability improvements.
+- Fails Apple Silicon Repair safely before runtime cleanup when its bundled recovery payload is unavailable.
+- Verifies NumPy/Numba compatibility with real imports and a compiled JIT probe.
+- Resolves the DrumSep catalog checkpoint to the managed canonical file without processing-time alias copies.
 ]]></changelog>
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
@@ -19,7 +19,6 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../STEMwerk_All_Stems.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_All_Stems.lua</source>
         <source file="../STEMwerk_Vocals_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Vocals_Only.lua</source>
         <source file="../STEMwerk_Drums_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Drums_Only.lua</source>
-        <source file="../STEMwerk_Direct_Kit.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Direct_Kit.lua</source>
         <source file="../STEMwerk_Drum_Kit_Split.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Drum_Kit_Split.lua</source>
         <source file="../STEMwerk_Bass_Only.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bass_Only.lua</source>
         <source file="../STEMwerk_Karaoke.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Karaoke.lua</source>
@@ -29,8 +28,6 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../STEMwerk_Bootstrap_Linux.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux.sh</source>
         <source file="../STEMwerk_Bootstrap_Linux_Launcher.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Bootstrap_Linux_Launcher.sh</source>
         <source file="../audio_separator_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/audio_separator_process.py</source>
-        <source file="../models.json" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/models.json</source>
-        <source file="../assets/drumsep/config_drumsep_mdx23c.yaml" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/tools/assets/drumsep/config_drumsep_mdx23c.yaml</source>
 
         <source file="../_internal/STEMwerk_Devices.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Devices.lua</source>
         <source file="../_internal/STEMwerk_DrumKit_Workflow.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua</source>
@@ -43,7 +40,6 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../_internal/STEMwerk_Managed_Python.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Managed_Python.lua</source>
         <source file="../_internal/STEMwerk_Managed_Python.sh" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Managed_Python.sh</source>
         <source file="../_internal/STEMwerk_Messages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Messages.lua</source>
-        <source file="../_internal/STEMwerk_Model_Registry.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Model_Registry.lua</source>
         <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
         <source file="../_internal/STEMwerk_Platform.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Platform.lua</source>
         <source file="../_internal/STEMwerk_Progress_Render.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Progress_Render.lua</source>
@@ -80,7 +76,6 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../vendor/stemwerk-core/src/stemwerk_core/models.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/models.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
-        <source file="../vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl</source>
 
         <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/stemwerk_language_wrapper.lua</source>
@@ -128,16 +123,6 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_36.png</source>
         <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_48.png</source>
         <source file="../assets/toolbar_icons/single/stemwerk_vocals_only_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_vocals_only_64.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_direct_kit_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_direct_kit_24.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_direct_kit_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_direct_kit_30.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_direct_kit_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_direct_kit_36.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_direct_kit_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_direct_kit_48.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_direct_kit_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_direct_kit_64.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_kit_split_24.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_kit_split_24.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_kit_split_30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_kit_split_30.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_kit_split_36.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_kit_split_36.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_kit_split_48.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_kit_split_48.png</source>
-        <source file="../assets/toolbar_icons/single/stemwerk_kit_split_64.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/single/stemwerk_kit_split_64.png</source>
         <source file="../assets/toolbar_icons/strips_90x30/stemwerk_main_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_main_90x30.png</source>
         <source file="../assets/toolbar_icons/strips_90x30/stemwerk_setup_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_setup_90x30.png</source>
         <source file="../assets/toolbar_icons/strips_90x30/stemwerk_karaoke_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_karaoke_90x30.png</source>
@@ -146,8 +131,6 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../assets/toolbar_icons/strips_90x30/stemwerk_bass_only_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_bass_only_90x30.png</source>
         <source file="../assets/toolbar_icons/strips_90x30/stemwerk_all_stems_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_all_stems_90x30.png</source>
         <source file="../assets/toolbar_icons/strips_90x30/stemwerk_explode_takes_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_explode_takes_90x30.png</source>
-        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_direct_kit_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_direct_kit_90x30.png</source>
-        <source file="../assets/toolbar_icons/strips_90x30/stemwerk_kit_split_90x30.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_90x30/stemwerk_kit_split_90x30.png</source>
         <source file="../assets/toolbar_icons/strips_180x60/stemwerk_main_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_main_180x60.png</source>
         <source file="../assets/toolbar_icons/strips_180x60/stemwerk_setup_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_setup_180x60.png</source>
         <source file="../assets/toolbar_icons/strips_180x60/stemwerk_karaoke_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_karaoke_180x60.png</source>
@@ -156,8 +139,6 @@ STEMwerk 2.3.0.5 - Unified runtimes and platform reliability update
         <source file="../assets/toolbar_icons/strips_180x60/stemwerk_bass_only_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_bass_only_180x60.png</source>
         <source file="../assets/toolbar_icons/strips_180x60/stemwerk_all_stems_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_all_stems_180x60.png</source>
         <source file="../assets/toolbar_icons/strips_180x60/stemwerk_explode_takes_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_explode_takes_180x60.png</source>
-        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_direct_kit_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_direct_kit_180x60.png</source>
-        <source file="../assets/toolbar_icons/strips_180x60/stemwerk_kit_split_180x60.png" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/assets/toolbar_icons/strips_180x60/stemwerk_kit_split_180x60.png</source>
       </version>
     </reapack>
   </category>

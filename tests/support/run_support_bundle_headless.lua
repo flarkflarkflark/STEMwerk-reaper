@@ -451,6 +451,7 @@ local function createPresentScenario(baseRoot)
         "BACKEND=rocm",
         "BOOTSTRAP_STATUS=ok",
         "VENV_PYTHON=" .. fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=ok",
         "",
     }, "\n"))
     writeFile(joinPath(runtimeStateDir, "capabilities.env"), table.concat({
@@ -466,11 +467,17 @@ local function createPresentScenario(baseRoot)
     writeFile(joinPath(runtimeStateDir, "bootstrap.guard"), "STATUS=ok\nREASON=completed\n")
     writeFile(joinPath(runtimeLogsDir, "bootstrap.log"), table.concat({
         "bootstrap ok",
+        "ERROR: Could not find a version that satisfies the requirement onnxruntime-silicon",
+        "ERROR: No matching distribution found for onnxruntime-silicon",
+        "WARN: onnxruntime-silicon install failed; falling back to onnxruntime",
+        "Successfully installed flatbuffers-25.12.19 onnxruntime-1.27.0",
+        "Runtime verification passed.",
         "input=" .. joinPath(tempDir, "input.wav"),
         "source=" .. mediaBase,
         "project=" .. projectPath,
         "",
     }, "\n"))
+    writeFile(joinPath(runtimeLogsDir, "historical-repair.log"), "ERROR: historical retained failure\n")
     writeFile(joinPath(tempDir, "separation_log.txt"), table.concat({
         "separation started",
         joinPath(tempDir, "input.wav"),
@@ -486,6 +493,53 @@ local function createPresentScenario(baseRoot)
     writeFile(joinPath(tempDir, "stderr.txt"), "stderr path " .. mediaBase .. "\n")
     writeFile(joinPath(tempDir, "nested", "debug.log"), "nested log " .. projectPath .. "\n")
     writeFile(joinPath(tempRoot, "STEMwerk_debug.log"), "debug " .. joinPath(tempDir, "other.wav") .. "\n")
+
+    local intelJob = joinPath(env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_intel_six", "single")
+    mkdirP(intelJob)
+    writeFile(joinPath(intelJob, "phase_events.jsonl"),
+        '{"time":1,"model":"htdemucs_6s","device":"cpu","result":"success","output_count":6,"output_names":"bass,drums,guitar,other,piano,vocals","output_validation_reason":"ok"}\n')
+    writeFile(joinPath(intelJob, "timing_events.jsonl"), '{"time":2,"result":"success"}\n')
+    writeFile(joinPath(intelJob, "done.txt"), "done\n")
+    writeFile(joinPath(intelJob, "exit_code.txt"), "0\n")
+
+    local evidenceRoot = joinPath(runtimeBase, "evidence", "current-session")
+    local sessionId = "native-apple-silicon-2306-final"
+    mkdirP(evidenceRoot)
+    writeFile(joinPath(evidenceRoot, "session.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=" .. sessionId,
+        "SESSION_STARTED_UTC=2026-07-24T13:00:00Z",
+        "",
+    }, "\n"))
+    local phases = {
+        { "verify", "online", "ok", "mps", "not_applicable" },
+        { "online_normal", "online", "ok", "mps", "ok" },
+        { "online_drum", "online", "ok", "mps", "ok" },
+        { "bundled_recovery", "bundled", "ok", "mps", "not_applicable" },
+        { "post_bundled_normal", "bundled", "ok", "mps", "ok" },
+        { "post_bundled_drum", "bundled", "ok", "mps", "ok" },
+    }
+    for _, phase in ipairs(phases) do
+        local phaseDir = joinPath(evidenceRoot, phase[1])
+        mkdirP(phaseDir)
+        writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
+            "EVIDENCE_SCHEMA=1",
+            "SESSION_ID=" .. sessionId,
+            "PHASE=" .. phase[1],
+            "DISTRIBUTION=" .. phase[2],
+            "STATUS=" .. phase[3],
+            "TIMESTAMP_UTC=2026-07-24T13:10:00Z",
+            "BACKEND=metal",
+            "DEVICE=" .. phase[4],
+            "RUNTIME_ARCH=arm64",
+            "OUTPUT_VALIDATION_REASON=" .. phase[5],
+            "CURRENT_FATAL_ERROR_COUNT=0",
+            "",
+        }, "\n"))
+        writeFile(joinPath(phaseDir, "phase_events.jsonl"), '{"phase":"' .. phase[1] .. '","status":"ok"}\n')
+        writeFile(joinPath(phaseDir, "timing_events.jsonl"), '{"phase":"' .. phase[1] .. '","seconds":1.0}\n')
+        writeFile(joinPath(phaseDir, "output_validation.txt"), "output_validation_reason=" .. phase[5] .. "\nbackend=metal\ndevice=" .. phase[4] .. "\nruntime_arch=arm64\n")
+    end
 
     writeFile(joinPath(tempDir, "input.wav"), string.rep("a", 128))
     writeFile(joinPath(tempDir, "bass.wav"), string.rep("b", 64))
@@ -627,6 +681,7 @@ local function assertPresentScenario(bundleDir, context)
     assertf(fileExists(joinPath(bundleDir, "runtime_state", "bootstrap.env")), "bootstrap.env not copied")
     assertf(fileExists(joinPath(bundleDir, "runtime_state", "capabilities.env")), "capabilities.env not copied")
     assertf(fileExists(joinPath(bundleDir, "runtime_logs", "bootstrap.log")), "bootstrap.log not copied")
+    assertf(fileExists(joinPath(bundleDir, "support_evidence_manifest.txt")), "support evidence manifest missing")
     assertf(fileExists(joinPath(bundleDir, "temp_logs", "STEMwerk_fake_present", "separation_log.txt")), "temp separation log not copied")
     assertf(fileExists(joinPath(bundleDir, "temp_logs", "STEMwerk_fake_present", "stdout.txt")), "temp stdout log not copied")
 
@@ -635,6 +690,8 @@ local function assertPresentScenario(bundleDir, context)
     local drumsepDiagnostics = readFile(joinPath(bundleDir, "drumsep_runtime_status.txt")) or ""
     local tempInventory = readFile(joinPath(bundleDir, "temp_inventory.txt")) or ""
     local allText = readBundleText(bundleDir)
+    local evidenceManifest = readFile(joinPath(bundleDir, "support_evidence_manifest.txt")) or ""
+    local processingSummary = readFile(joinPath(bundleDir, "processing_summary.txt")) or ""
 
     assertf(diagnostics:find("STEMwerk package version", 1, true) ~= nil, "diagnostics missing version block")
     if IS_WINDOWS then
@@ -660,6 +717,23 @@ local function assertPresentScenario(bundleDir, context)
     assertf(allText:find("[STEMWERK_TEMP_DIR]", 1, true) ~= nil, "temp directory placeholder not present")
     assertf(tempInventory:find("| file |", 1, true) ~= nil, "temp inventory missing file metadata")
     assertf(tempInventory:find("stemwerk%-support%-bundle%-headless%-", 1) == nil, "headless support-bundle fixture leaked into temp inventory")
+    assertf(evidenceManifest:find("manifest_status:%s+complete") ~= nil, "current-session evidence manifest is not complete")
+    assertf(evidenceManifest:find("phases_included:%s+6") ~= nil, "not all current-session phases were included")
+    assertf(evidenceManifest:find("handled_recovery_event:%s+yes") ~= nil, "handled ONNX fallback not classified")
+    assertf(evidenceManifest:find("local_onnxruntime_version:%s+1%.27%.0") ~= nil, "local ONNX fallback version missing")
+    assertf(evidenceManifest:find("current_fatal_errors:%s+none") ~= nil, "recovered ONNX fallback classified as fatal")
+    assertf(evidenceManifest:find("historical_errors_scope:%s+runtime_logs_except_current_bootstrap_and_current_session_evidence") ~= nil,
+        "historical error scope not separated")
+    assertf(fileExists(joinPath(bundleDir, "runtime_logs", "historical-repair.log")), "historical error log was not preserved")
+    assertf(processingSummary:find("found_stems: bass,drums,guitar,other,piano,vocals", 1, true) ~= nil,
+        "six-stem output names were not parsed from actual phase evidence")
+    assertf(processingSummary:find("output_validation_reason: ok", 1, true) ~= nil,
+        "actual output validation reason was not preserved")
+    for _, phase in ipairs({ "verify", "online_normal", "online_drum", "bundled_recovery", "post_bundled_normal", "post_bundled_drum" }) do
+        assertf(fileExists(joinPath(bundleDir, "current_session_evidence", phase, "evidence.env")), "phase evidence missing: " .. phase)
+        assertf(fileExists(joinPath(bundleDir, "current_session_evidence", phase, "phase_events.jsonl")), "phase events missing: " .. phase)
+        assertf(fileExists(joinPath(bundleDir, "current_session_evidence", phase, "timing_events.jsonl")), "timing events missing: " .. phase)
+    end
 
     for _, rawPath in ipairs(context.expectedRawPaths) do
         assertf(allText:find(rawPath, 1, true) == nil, "Raw path leaked into bundle text: " .. rawPath)
@@ -698,6 +772,41 @@ local function assertMissingScenario(bundleDir)
     assertMaxFileSize(bundleDir, 1024 * 1024)
 end
 
+local function createFailedFallbackScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "failed-onnx-fallback"
+    local runtimeBase = context.extState.runtimeBase
+    writeFile(joinPath(runtimeBase, "logs", "bootstrap.log"), table.concat({
+        "ERROR: Could not find a version that satisfies the requirement onnxruntime-silicon",
+        "ERROR: No matching distribution found for onnxruntime-silicon",
+        "WARN: onnxruntime-silicon install failed; falling back to onnxruntime",
+        "ERROR: No matching distribution found for onnxruntime",
+        "Runtime verification failed.",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertFailedFallbackScenario(bundleDir)
+    local manifest = readFile(joinPath(bundleDir, "support_evidence_manifest.txt")) or ""
+    assertf(manifest:find("onnxruntime_silicon_lookup_failed:%s+yes") ~= nil, "failed lookup not recorded")
+    assertf(manifest:find("handled_recovery_event:%s+no") ~= nil, "failed fallback incorrectly handled")
+    assertf(manifest:find("local_onnxruntime_version:%s+none") ~= nil, "failed fallback invented a version")
+    assertf(manifest:find("current_fatal_error_count:%s+1") ~= nil, "failed fallback not counted as fatal")
+end
+
+local function assertZipIntegrity(bundleDir)
+    local zipPath = bundleDir .. ".zip"
+    assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
+    if not IS_WINDOWS then
+        local handle = REAL_IO_POPEN("unzip -t " .. shellQuote(zipPath) .. " 2>&1", "r")
+        assertf(handle ~= nil, "could not launch unzip integrity check")
+        local output = handle:read("*a") or ""
+        local ok = handle:close()
+        assertf(ok == true and output:find("No errors detected", 1, true) ~= nil, "support bundle ZIP integrity failed: " .. output)
+    end
+end
+
 local function runScenario(context, assertionFn)
     ENV_OVERRIDES = context.env
     COMMAND_INTERCEPTOR = makeCommandInterceptor(context)
@@ -726,6 +835,7 @@ local function main()
 
     local present = createPresentScenario(baseRoot)
     local presentBundle = runScenario(present, assertPresentScenario)
+    assertZipIntegrity(presentBundle)
     print("PASS present-runtime -> " .. presentBundle)
 
     waitNextSecond()
@@ -733,6 +843,13 @@ local function main()
     local missing = createMissingScenario(baseRoot)
     local missingBundle = runScenario(missing, assertMissingScenario)
     print("PASS missing-runtime -> " .. missingBundle)
+
+    waitNextSecond()
+
+    local failedFallback = createFailedFallbackScenario(joinPath(baseRoot, "failed-fallback"))
+    local failedFallbackBundle = runScenario(failedFallback, assertFailedFallbackScenario)
+    assertZipIntegrity(failedFallbackBundle)
+    print("PASS failed-onnx-fallback -> " .. failedFallbackBundle)
 
     print("All headless support bundle tests passed.")
 end
