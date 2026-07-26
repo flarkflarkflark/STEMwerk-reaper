@@ -4,21 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to upload assets to (e.g. v2.1.0). Leave empty when running from a tag push."
+        description: "Release tag to upload assets to (e.g. v2.1.0)."
         required: false
         default: ""
       upload_release_assets:
-        description: "Upload built installers to the GitHub release. Ignored on tag pushes."
+        description: "Upload built installers to the GitHub release."
         required: false
         default: "true"
       windows_bundled_asset:
         description: "Also build a bundled Windows installer with Python + FFmpeg included."
         required: false
         default: "false"
-  push:
-    tags:
-      - "v*"
-
 permissions:
   contents: write
 
