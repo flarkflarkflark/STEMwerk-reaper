@@ -201,6 +201,23 @@ def _load_local_demucs_asset(separator: Any, requested_model_name: str, resolved
     separator.model_friendly_name = f"Demucs local asset: {Path(str(requested_model_name or '')).stem}"
 
 
+def _processing_downloads_disabled() -> bool:
+    value = os.environ.get("STEMWERK_PROCESSING_MAY_DOWNLOAD", "")
+    return value.strip().lower() in {"0", "false", "no"}
+
+
+def _disable_separator_downloads(separator: Any) -> None:
+    def blocked_download(model_filename: str):
+        raise RuntimeError(
+            "processing_download_blocked: required model asset is not installed; run STEMwerk Setup Repair"
+        )
+
+    try:
+        separator.download_model_files = blocked_download
+    except Exception:
+        pass
+
+
 @dataclass(frozen=True)
 class SeparationResult:
     """Result of a stem separation run."""
@@ -305,6 +322,8 @@ class StemSeparator:
                 }
 
             separator = Separator(**kwargs)
+            if _processing_downloads_disabled():
+                _disable_separator_downloads(separator)
             if legacy_directml_mode and _has_onnxruntime_directml_provider():
                 try:
                     separator.onnx_execution_provider = ["DmlExecutionProvider"]

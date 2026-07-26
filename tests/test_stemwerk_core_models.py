@@ -9,7 +9,7 @@ if str(CORE_SRC) not in sys.path:
     sys.path.insert(0, str(CORE_SRC))
 
 from stemwerk_core.models import resolve_audio_separator_model_id, resolve_model_name
-from stemwerk_core.separator import _resolve_audio_separator_model_name
+from stemwerk_core.separator import _disable_separator_downloads, _resolve_audio_separator_model_name
 
 
 def test_demucs_model_aliases_stay_as_identifiers():
@@ -51,3 +51,18 @@ def test_demucs_model_loader_uses_local_yaml_when_catalog_only_has_yaml(tmp_path
             return {}
 
     assert _resolve_audio_separator_model_name(FakeSeparator(), "htdemucs") == "htdemucs.yaml"
+
+
+def test_processing_download_hook_blocks_audio_separator_downloads():
+    class FakeSeparator:
+        def download_model_files(self, _model_filename):
+            return "unexpected"
+
+    sep = FakeSeparator()
+    _disable_separator_downloads(sep)
+    try:
+        sep.download_model_files("missing.th")
+    except RuntimeError as exc:
+        assert "processing_download_blocked" in str(exc)
+    else:
+        raise AssertionError("download hook did not block")

@@ -1588,6 +1588,7 @@ def _direct_dks_preflight_check(
     model_cache_dir: Path,
     runtime_info: Optional[Dict[str, Any]] = None,
     allow_direct_demix: bool = False,
+    allow_downloads: bool = True,
 ) -> Tuple[bool, str, str, Optional[str]]:
     # Force an explicit model-catalog lookup before normal workflow setup.
     # This prevents delayed failure in sep.separate()/load_model for known
@@ -1605,23 +1606,30 @@ def _direct_dks_preflight_check(
     for filename, source_url in asset_map.items():
         print(f"drumsep_catalog_asset={filename}|{source_url}", file=sys.stderr)
     asset_map = _normalize_direct_dks_asset_map(asset_map)
-    ok, check_detail = _ensure_runtime_download_checks_has_drumsep(
-        model_cache_dir,
-        DIRECT_DKS_MODEL_ENTRY_NAME,
-        asset_map,
-        source_path,
-    )
-    if not ok:
-        return False, requested_model, resolved_model, check_detail
+    print(f"processing_may_download={'yes' if allow_downloads else 'no'}", file=sys.stderr)
+    if allow_downloads:
+        ok, check_detail = _ensure_runtime_download_checks_has_drumsep(
+            model_cache_dir,
+            DIRECT_DKS_MODEL_ENTRY_NAME,
+            asset_map,
+            source_path,
+        )
+        if not ok:
+            return False, requested_model, resolved_model, check_detail
     print(f"requested_model={requested_model}", file=sys.stderr)
     print(f"resolved_model={resolved_model}", file=sys.stderr)
     print(f"catalog_source={source_path if source_path else 'none'}", file=sys.stderr)
-    dl_ok, dl_detail = _download_direct_dks_assets(model_cache_dir, asset_map)
-    if not dl_ok:
-        return False, requested_model, resolved_model, dl_detail
     ready, missing_targets = _direct_dks_assets_ready(model_cache_dir, asset_map)
     if not ready:
-        return False, requested_model, resolved_model, "asset_ready_check_failed:" + "|".join(missing_targets)
+        detail = "asset_ready_check_failed:" + "|".join(missing_targets)
+        if not allow_downloads:
+            return False, requested_model, resolved_model, "processing_download_blocked:" + detail
+        dl_ok, dl_detail = _download_direct_dks_assets(model_cache_dir, asset_map)
+        if not dl_ok:
+            return False, requested_model, resolved_model, dl_detail
+        ready, missing_targets = _direct_dks_assets_ready(model_cache_dir, asset_map)
+        if not ready:
+            return False, requested_model, resolved_model, "asset_ready_check_failed:" + "|".join(missing_targets)
     yaml_ok, yaml_detail = _validate_direct_dks_yaml(asset_map, model_cache_dir, requested_model or resolved_model)
     if not yaml_ok:
         return False, requested_model, resolved_model, yaml_detail
@@ -4271,6 +4279,7 @@ def main():
             model_cache_dir,
             runtime_info=runtime_info,
             allow_direct_demix=use_direct_demix,
+            allow_downloads=False,
         )
         if not ok:
             known_err_text = str(known_err or "")
@@ -4459,6 +4468,7 @@ def main():
                 model_cache_dir,
                 runtime_info=runtime_info,
                 allow_direct_demix=use_direct_demix,
+                allow_downloads=False,
             )
             if not ok:
                 known_err_text = str(known_err or "")

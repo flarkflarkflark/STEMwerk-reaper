@@ -512,7 +512,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             return false
         end
         if not canRunFfmpeg() then
-            if not C.ensureDependenciesInteractive() then
+            if type(C.verifyDependenciesReadyForProcessing) ~= "function" or not C.verifyDependenciesReadyForProcessing() then
                 return false
             end
         end
@@ -613,6 +613,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 "$jobTag='" .. jobTagEsc .. "';" ..
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
+                "$env:STEMWERK_PROCESSING_MAY_DOWNLOAD='no';" ..
                 "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
                 "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
@@ -733,6 +734,8 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             else
             script:write("IN=" .. C.quoteArg(inputFile) .. "\n")
             script:write("OUT=" .. C.quoteArg(outputDir) .. "\n")
+            script:write("STEMWERK_PROCESSING_MAY_DOWNLOAD=no\n")
+            script:write("export STEMWERK_PROCESSING_MAY_DOWNLOAD\n")
             script:write("unset PYTHONPATH PYTHONHOME\n")
             script:write("MODEL=" .. C.quoteArg(modelArg) .. "\n")
             script:write("DEVICE=" .. C.quoteArg(deviceArg) .. "\n")
@@ -793,7 +796,7 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 extraArgs = extraArgs .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
             end
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
+                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
                 C.quoteArg(PYTHON_PATH),
                 C.quoteArg(SEPARATOR_SCRIPT),
                 C.quoteArg(inputFile),
@@ -1082,6 +1085,14 @@ function WORKFLOW.runSeparationWithProgress(inputFile, outputDir, model, runOpti
         return
     end
 
+    if type(C.verifyProcessingAssetsReady) == "function" and C.verifyProcessingAssetsReady(runOptions) == false then
+        if OS == "Windows" and C.progressState.windowOpen then
+            closeProcessingWindow()
+        end
+        isProcessingActive = false
+        return
+    end
+
     if OS == "Windows" and C.progressState.windowOpen then
         showProcessingPlaceholderWindow(C.T("progress_initializing") or "Initializing...")
     end
@@ -1144,7 +1155,7 @@ function WORKFLOW.runSeparation(inputFile, outputDir, model)
             )
             pythonCmd = pythonCmd:gsub('"', '""')
             -- Prepend set commands for env vars
-            local envPrefix = 'set STEMWERK_LOG_PATH=' .. logPath .. ' && set STEMWERK_JOB_TAG=' .. jobTag .. ' && '
+            local envPrefix = 'set STEMWERK_LOG_PATH=' .. logPath .. ' && set STEMWERK_JOB_TAG=' .. jobTag .. ' && set STEMWERK_PROCESSING_MAY_DOWNLOAD=no && '
             envPrefix = envPrefix:gsub('"', '""')
             vbsFile:write('Set WshShell = CreateObject("WScript.Shell")\n')
             vbsFile:write('WshShell.Run "cmd /c ' .. envPrefix .. pythonCmd .. ' >""' .. stdoutFile .. '"" 2>""' .. logFile .. '""", 0, True\n')

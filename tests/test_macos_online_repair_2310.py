@@ -80,6 +80,28 @@ def test_bootstrap_verify_venv_arch_guard_contract():
     assert onnx_install < guard_call, "arch guard must run after the last pip install"
 
 
+def test_b0_ready_fields_and_processing_no_download_contracts_are_declared():
+    mac = BOOTSTRAP.read_text(encoding="utf-8")
+    linux = (ROOT / "scripts/reaper/STEMwerk_Bootstrap_Linux.sh").read_text(encoding="utf-8")
+    windows = (ROOT / "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1").read_text(encoding="utf-8")
+    for text in (mac, linux, windows):
+        assert "NORMAL_STEMS_MODEL_READY=" in text
+        assert "QUALITY_READY=" in text
+        assert "SIX_STEM_READY=" in text
+        assert "DIRECT_KIT_READY=" in text
+        assert "KIT_SPLIT_READY=" in text
+
+    lua = (ROOT / "scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    workflow = (ROOT / "scripts/reaper/_internal/STEMwerk_Workflow.lua").read_text(encoding="utf-8")
+    process = (ROOT / "scripts/reaper/audio_separator_process.py").read_text(encoding="utf-8")
+    assert "The required model for this workflow is not installed. Open STEMwerk Setup and run Repair" in lua
+    assert "worker_started=no download_started=no catalog_download_started=no" in lua
+    assert "verifyDependenciesReadyForProcessing" in lua
+    assert "STEMWERK_PROCESSING_MAY_DOWNLOAD=no" in lua
+    assert "STEMWERK_PROCESSING_MAY_DOWNLOAD=no" in workflow
+    assert "allow_downloads=False" in process
+
+
 def _postinstall_env(tmp_path, src, home):
     env = dict(os.environ)
     env["STEMWERK_POSTINSTALL_SRC_OVERRIDE"] = str(src)

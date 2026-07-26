@@ -96,6 +96,24 @@ def test_apple_silicon_missing_payload_uses_online_fallback_without_early_exit(t
     assert "STATUS_REASON=managed_python_unavailable" in state_text
 
 
+def test_direct_dks_processing_preflight_blocks_without_download(tmp_path, monkeypatch):
+    module = _load_audio_separator_process_module()
+
+    def fail_download(*_args, **_kwargs):
+        raise AssertionError("processing preflight must not download Direct Kit assets")
+
+    monkeypatch.setattr(module, "_download_direct_dks_assets", fail_download)
+    ok, requested, resolved, detail = module._direct_dks_preflight_check(
+        module.DIRECT_DKS_MODEL_ALIAS,
+        tmp_path,
+        allow_downloads=False,
+    )
+    assert ok is False
+    assert requested == module.DIRECT_DKS_MODEL_ALIAS
+    assert resolved == module.DIRECT_DKS_MODEL_FILENAME
+    assert str(detail).startswith("processing_download_blocked:asset_ready_check_failed:")
+
+
 def test_apple_silicon_corrupt_payload_fails_before_runtime_cleanup(tmp_path):
     if os.name == "nt":
         pytest.skip("POSIX bootstrap fixture")

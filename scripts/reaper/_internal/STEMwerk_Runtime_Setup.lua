@@ -829,6 +829,77 @@ function M.resolveRuntimePythonPath()
     return resolveNonWindowsPythonPath(runtime)
 end
 
+function M.verifyDependenciesReadyForProcessing()
+    local state = getDepState()
+    if state and state.state == "ok" then
+        return true
+    end
+
+    local caps = M.readCapabilities()
+    if caps and caps.kv and caps.kv.VERIFICATION == "ok" and (caps.kv.BOOTSTRAP_STATUS == "" or caps.kv.BOOTSTRAP_STATUS == "ok") then
+        local pyOk = (caps.kv.PYTHON_PATH and caps.kv.PYTHON_PATH ~= "" and fileExists(caps.kv.PYTHON_PATH)) or false
+        local ffOk = (caps.kv.FFMPEG_PATH and caps.kv.FFMPEG_PATH ~= "" and fileExists(caps.kv.FFMPEG_PATH)) or false
+        if pyOk and ffOk then
+            if type(C.setPythonPath) == "function" then
+                C.setPythonPath(caps.kv.PYTHON_PATH)
+            end
+            if type(C.setExtStateValue) == "function" then
+                C.setExtStateValue("ffmpegPath", caps.kv.FFMPEG_PATH)
+            end
+            setDepState("ok")
+            return true
+        end
+    end
+
+    local runtime = M.getRuntimePaths()
+    local pythonPath
+    if (C.OS or "Windows") == "Windows" then
+        pythonPath = resolveWindowsPythonPath(runtime)
+    else
+        pythonPath = resolveNonWindowsPythonPath(runtime)
+    end
+    if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
+        C.setPythonPath(pythonPath)
+    end
+
+    local pythonOk = M.isPythonAvailable(pythonPath)
+    local ffmpegOk = false
+    if type(C.canRunFfmpeg) == "function" then
+        local ffmpegPath = resolveWindowsFfmpegPath(runtime)
+        if ffmpegPath and ffmpegPath ~= "" then
+            ffmpegOk = C.canRunFfmpeg(ffmpegPath)
+        else
+            ffmpegOk = C.canRunFfmpeg()
+        end
+        if not ffmpegOk and ffmpegPath and ffmpegPath ~= "" then
+            ffmpegOk = canRunCommand(ffmpegPath, " -version", "ffmpeg version", 8000)
+        end
+    end
+    local audioOk = false
+    if pythonOk and ffmpegOk then
+        audioOk = M.canImportAudioSeparator(pythonPath)
+    end
+    local runtimeOk = false
+    if pythonOk and ffmpegOk and audioOk then
+        runtimeOk = select(1, M.verifyRuntimeAfterBootstrap())
+    end
+    if pythonOk and ffmpegOk and audioOk and runtimeOk then
+        setDepState("ok")
+        return true
+    end
+
+    setDepState("failed", "processing_runtime_not_ready")
+    if type(C.showMessageBox) == "function" then
+        C.showMessageBox(
+            "The STEMwerk runtime is not installed or is incomplete.\n\nOpen STEMwerk Setup and run Repair before processing.",
+            "STEMwerk Setup",
+            0
+        )
+    end
+    logExec("processing_runtime_repair_blocked", -1, "PROCESSING_MAY_DOWNLOAD=no")
+    return false
+end
+
 function M.ensureDependenciesInteractive()
     local state = getDepState()
     if not state then return false end

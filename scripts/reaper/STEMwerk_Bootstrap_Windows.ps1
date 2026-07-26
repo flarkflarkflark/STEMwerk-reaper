@@ -1367,6 +1367,11 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
     if ($mainRuntimeStatus -ne "ok") {
         $readyStatus = "repair_required"
     }
+    $normalModelReady = if ($mainRuntimeStatus -eq "ok" -and $fastStatus -eq "ok") { "yes" } else { "no" }
+    $qualityReady = if ($mainRuntimeStatus -eq "ok" -and $qualityStatus -eq "ok") { "yes" } else { "no" }
+    $sixStemReady = if ($mainRuntimeStatus -eq "ok" -and $sixStemStatus -eq "ok") { "yes" } else { "no" }
+    $directKitReady = if ($runtimeStatusValue -eq "ok" -and $drumsepModelValue -eq "ok") { "yes" } else { "no" }
+    $kitSplitReady = if ($normalModelReady -eq "yes" -and $directKitReady -eq "yes") { "yes" } else { "no" }
     $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     @(
         "READY_TO_GO_STATUS=$readyStatus",
@@ -1379,7 +1384,12 @@ function WriteReadyToGoState([string]$RuntimeKind, [string]$RuntimeStatus, [stri
         "CORE_MODEL_6STEM_STATUS=$sixStemStatus",
         "DRUMSEP_READY_RUNTIME=$runtimeKindValue",
         "DRUMSEP_READY_RUNTIME_STATUS=$runtimeStatusValue",
-        "DRUMSEP_READY_MODEL_STATUS=$drumsepModelValue"
+        "DRUMSEP_READY_MODEL_STATUS=$drumsepModelValue",
+        "NORMAL_STEMS_MODEL_READY=$normalModelReady",
+        "QUALITY_READY=$qualityReady",
+        "SIX_STEM_READY=$sixStemReady",
+        "DIRECT_KIT_READY=$directKitReady",
+        "KIT_SPLIT_READY=$kitSplitReady"
     ) | Out-File -FilePath $readyPath -Encoding ascii
     return $true
 }

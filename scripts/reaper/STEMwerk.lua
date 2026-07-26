@@ -1046,6 +1046,7 @@ isPythonAvailable = SW_SETUP.isPythonAvailable
 runSetup = SW_SETUP.runSetup
 verifyRuntimeAfterBootstrap = SW_SETUP.verifyRuntimeAfterBootstrap
 ensureDependenciesInteractive = SW_SETUP.ensureDependenciesInteractive
+verifyDependenciesReadyForProcessing = SW_SETUP.verifyDependenciesReadyForProcessing
 persistPythonPath = SW_SETUP.persistPythonPath
 readCapabilities = SW_SETUP.readCapabilities
 
@@ -13747,6 +13748,142 @@ local function fileSizeBytes(p)
     return tonumber(sz) or -1
 end
 
+B0_MODEL_BLOCK_MESSAGE =
+    "The required model for this workflow is not installed. Open STEMwerk Setup and run Repair to install the required models before processing."
+
+function B0_readSimpleEnvFile(path)
+    local out = {}
+    if not path or path == "" then return out end
+    local f = io.open(path, "r")
+    if not f then return out end
+    for line in f:lines() do
+        local k, v = tostring(line or ""):match("^([A-Z0-9_]+)=(.*)$")
+        if k then out[k] = v or "" end
+    end
+    f:close()
+    return out
+end
+
+function B0_getReadyToGoState()
+    local runtime = (type(getRuntimePaths) == "function") and getRuntimePaths() or nil
+    local stateDir = runtime and runtime.runtimeState or ""
+    if stateDir == "" then return {} end
+    return B0_readSimpleEnvFile(stateDir .. PATH_SEP .. "ready_to_go.env")
+end
+
+function B0_getDefaultModelCacheDir()
+    local ready = B0_getReadyToGoState()
+    if ready.CORE_MODEL_CACHE_DIR and ready.CORE_MODEL_CACHE_DIR ~= "" then
+        return ready.CORE_MODEL_CACHE_DIR
+    end
+    local home = (type(getHome) == "function" and getHome()) or os.getenv("HOME") or ""
+    if OS == "Windows" then
+        local localAppData = os.getenv("LOCALAPPDATA") or ""
+        if localAppData ~= "" then
+            return localAppData .. "\\STEMwerk\\models"
+        end
+        local userProfile = os.getenv("USERPROFILE") or home
+        return userProfile .. "\\AppData\\Local\\STEMwerk\\models"
+    end
+    if OS == "macOS" then
+        return home .. "/Library/Application Support/STEMwerk/models"
+    end
+    local xdg = os.getenv("XDG_DATA_HOME") or ""
+    if xdg ~= "" then
+        return xdg .. "/STEMwerk/models"
+    end
+    return home .. "/.local/share/STEMwerk/models"
+end
+
+function B0_joinModelPath(modelDir, filename)
+    local dir = tostring(modelDir or "")
+    if dir == "" then return tostring(filename or "") end
+    local sep = (dir:find("\\") and "\\") or PATH_SEP
+    if dir:sub(-1) == "/" or dir:sub(-1) == "\\" then
+        return dir .. tostring(filename or "")
+    end
+    return dir .. sep .. tostring(filename or "")
+end
+
+function B0_requiredNormalModelAssets(modelId)
+    local id = tostring(modelId or "htdemucs")
+    if id == "htdemucs_ft" then
+        return "Quality", {
+            { name = "htdemucs_ft.yaml", minBytes = 64 },
+            { name = "f7e0c4bc-ba3fe64a.th", minBytes = 1024 },
+            { name = "d12395a8-e57c48e6.th", minBytes = 1024 },
+            { name = "92cfc3b6-ef3bcb9c.th", minBytes = 1024 },
+            { name = "04573f0d-f3cf25b2.th", minBytes = 1024 },
+        }
+    end
+    if id == "htdemucs_6s" then
+        return "6 Stems", {
+            { name = "htdemucs_6s.yaml", minBytes = 64 },
+            { name = "5c90dfd2-34c22ccb.th", minBytes = 1024 },
+        }
+    end
+    return "Normal Stems", {
+        { name = "htdemucs.yaml", minBytes = 64 },
+        { name = "955717e8-8726e21a.th", minBytes = 1024 },
+    }
+end
+
+function B0_directKitAssets()
+    return {
+        { name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt", minBytes = 1048576 },
+        { name = "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml", minBytes = 64 },
+    }
+end
+
+function B0_collectProcessingRequiredAssets(runOptions)
+    local workflowMode = tostring((runOptions and runOptions.workflowMode) or "")
+    local workflowSource = tostring((runOptions and runOptions.workflowSource) or "")
+    local requirements = {}
+    if workflowMode == "drumkit" and workflowSource == "direct" then
+        requirements[#requirements + 1] = { route = "Direct Kit", assets = B0_directKitAssets() }
+        return requirements
+    end
+    if workflowMode == "drumkit" and workflowSource == "extract" then
+        local normalRoute, normalAssets = B0_requiredNormalModelAssets(effectiveRunModel and effectiveRunModel() or SETTINGS.model)
+        requirements[#requirements + 1] = { route = normalRoute, assets = normalAssets }
+        requirements[#requirements + 1] = { route = "Kit Split", assets = B0_directKitAssets() }
+        return requirements
+    end
+    local route, assets = B0_requiredNormalModelAssets(effectiveRunModel and effectiveRunModel() or SETTINGS.model)
+    requirements[#requirements + 1] = { route = route, assets = assets }
+    return requirements
+end
+
+function verifyProcessingAssetsReady(runOptions)
+    local modelDir = B0_getDefaultModelCacheDir()
+    local requirements = B0_collectProcessingRequiredAssets(runOptions)
+    local missing = {}
+    local routes = {}
+    for _, req in ipairs(requirements) do
+        routes[#routes + 1] = tostring(req.route or "")
+        for _, asset in ipairs(req.assets or {}) do
+            local path = B0_joinModelPath(modelDir, asset.name)
+            local size = fileSizeBytes(path)
+            if size < tonumber(asset.minBytes or 1) then
+                missing[#missing + 1] = tostring(req.route or "workflow") .. ":" .. path
+            end
+        end
+    end
+    if #missing == 0 then
+        SW_LOG.logExecResult("b0_preflight_ready routes=" .. table.concat(routes, ","), nil, "PROCESSING_MAY_DOWNLOAD=no")
+        return true
+    end
+    local detail = "missing_assets=" .. table.concat(missing, "|")
+    debugLog("b0_preflight_blocked " .. detail)
+    SW_LOG.logExecResult(
+        "b0_preflight_blocked worker_started=no download_started=no catalog_download_started=no",
+        -1,
+        detail
+    )
+    showMessage("Model Not Installed", B0_MODEL_BLOCK_MESSAGE, "warning", false)
+    return false
+end
+
 local TIMING_UNIX_OFFSET = nil
 local function writeTimingEvent(target, eventName, jobIndex, fields)
     local jobDir = nil
@@ -16562,6 +16699,7 @@ WORKFLOW.configure({
     captureWindowGeometry         = captureWindowGeometry,
     saveSettings                  = saveSettings,
     ensureDependenciesInteractive = ensureDependenciesInteractive,
+    verifyDependenciesReadyForProcessing = verifyDependenciesReadyForProcessing,
     getExtStateValue              = getExtStateValue,
     isAbsolutePath                = isAbsolutePath,
     quoteArg                      = quoteArg,
@@ -16577,6 +16715,7 @@ WORKFLOW.configure({
     refreshRuntimeDevices         = refreshRuntimeDevices,
     recordTimingEvent             = writeTimingEvent,
     effectiveRunDevice            = effectiveRunDevice,
+    verifyProcessingAssetsReady   = verifyProcessingAssetsReady,
     resolveStemSetForPaths        = resolveStemSetForPaths,
 })
 
@@ -19054,7 +19193,7 @@ _sep.runSingleTrackSeparation = function(trackList)
         applyTrustedWindowsRuntimeState(trustedWindowsRuntime)
     end
     if (not trustedWindowsRuntime) and (not canRunFfmpeg()) then
-        if not ensureDependenciesInteractive() then
+        if not verifyDependenciesReadyForProcessing() then
             if reaper and reaper.defer then
                 reaper.defer(function() showStemSelectionDialog() end)
             end
@@ -20077,6 +20216,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
                 "$jobTag='" .. jobTagEsc .. "';" ..
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
+                "$env:STEMWERK_PROCESSING_MAY_DOWNLOAD='no';" ..
                 "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
                 "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
@@ -20113,7 +20253,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground (old behavior)
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                'set STEMWERK_PROCESSING_MAY_DOWNLOAD=no && %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
@@ -20152,7 +20292,8 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
               script:write("OUT=" .. quoteArg(job.trackDir) .. "\n")
               script:write("STEMWERK_LOG_PATH=" .. quoteArg(execLogPath) .. "\n")
               script:write("STEMWERK_JOB_TAG=" .. quoteArg(jobTag) .. "\n")
-              script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG\n")
+              script:write("STEMWERK_PROCESSING_MAY_DOWNLOAD=no\n")
+              script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG STEMWERK_PROCESSING_MAY_DOWNLOAD\n")
               script:write("unset PYTHONPATH PYTHONHOME\n")
               script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
               script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
@@ -20202,7 +20343,7 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground
             local cmd = string.format(
-                '%s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
@@ -22676,11 +22817,17 @@ function runSeparationWorkflow()
     activateWorkflowStemSet(isDrumKitWorkflow)
     setWorkflowContextForRun(runOptions)
 
+    if not verifyProcessingAssetsReady(runOptions) then
+        setWorkflowContextForRun(nil)
+        isProcessingActive = false
+        return
+    end
+
     if OS == "Windows" then
         showProcessingPlaceholderWindow(T("progress_checking_runtime") or "Checking runtime...")
     end
 
-    if (not trustedWindowsRuntime) and (not isDirectDKS) and (not ensureDependenciesInteractive()) then
+    if (not trustedWindowsRuntime) and (not isDirectDKS) and (not verifyDependenciesReadyForProcessing()) then
         if OS == "Windows" and progressState.windowOpen then
             closeProcessingWindow()
         end

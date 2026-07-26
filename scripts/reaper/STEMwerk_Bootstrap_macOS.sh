@@ -307,6 +307,18 @@ write_ready_to_go_state() {
   if [ "${_main_runtime_status}" != "ok" ]; then
     _ready="missing"
   fi
+  _normal_model_ready="no"
+  _quality_ready="no"
+  _six_stem_ready="no"
+  _direct_kit_ready="no"
+  _kit_split_ready="no"
+  [ "${_main_runtime_status}" = "ok" ] && [ "${_fast}" = "ok" ] && _normal_model_ready="yes"
+  [ "${_main_runtime_status}" = "ok" ] && [ "${_quality}" = "ok" ] && _quality_ready="yes"
+  [ "${_main_runtime_status}" = "ok" ] && [ "${_sixstem}" = "ok" ] && _six_stem_ready="yes"
+  if [ "${_runtime_status}" = "ok" ] && [ "${_drumsep_model_status}" = "ok" ]; then
+    _direct_kit_ready="yes"
+    [ "${_normal_model_ready}" = "yes" ] && _kit_split_ready="yes"
+  fi
   {
     echo "READY_TO_GO_STATUS=${_ready}"
     echo "READY_TO_GO_DETAIL=${_detail}"
@@ -322,6 +334,11 @@ write_ready_to_go_state() {
     echo "DRUMSEP_STATUS=${_drumsep_status}"
     echo "DKS_SUPPORTED=${_dks_supported}"
     echo "NORMAL_STEMS_SUPPORTED=${_normal_stems_supported}"
+    echo "NORMAL_STEMS_MODEL_READY=${_normal_model_ready}"
+    echo "QUALITY_READY=${_quality_ready}"
+    echo "SIX_STEM_READY=${_six_stem_ready}"
+    echo "DIRECT_KIT_READY=${_direct_kit_ready}"
+    echo "KIT_SPLIT_READY=${_kit_split_ready}"
   } > "$(ready_to_go_state_file)"
 }
 
