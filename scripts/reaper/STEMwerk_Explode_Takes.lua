@@ -1,6 +1,6 @@
 -- @description Stemwerk: Explode Takes (In Place)
 -- @author flarkAUDIO <flarkaudio@pm.me>
--- @version 2.3.0.6
+-- @version 2.3.0.7
 -- @changelog
 --   Quick action: explode selected multi-take items in place.
 -- @link Repository https://github.com/flarkflarkflark/STEMwerk

@@ -2,8 +2,12 @@
 <index version="1" name="STEMwerk-reaper">
   <category name="STEMwerk-reaper">
     <reapack name="STEMwerk-reaper" type="script" desc="Local stem separation for REAPER with cross-platform setup, GPU/CPU backend detection, toolbar actions, and in-place stem workflows.">
-      <version name="2.3.0.6" author="flarkAUDIO" time="1780055621">
+      <version name="2.3.0.7" author="flarkAUDIO" time="1785067200">
         <changelog><![CDATA[
+STEMwerk 2.3.0.7 - ReaPack distribution hotfix
+
+- Fixes ReaPack installs on Linux (managed Python 3.12) failing Repair with audio_separator_install_failed: the managed diffq wheel was missing from the ReaPack package (hole present since 2.3.0.0). After updating: run STEMwerk Setup → Repair once.
+
 STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
 
 - Fails Apple Silicon Repair safely before runtime cleanup when its bundled recovery payload is unavailable.
@@ -76,6 +80,7 @@ STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
         <source file="../vendor/stemwerk-core/src/stemwerk_core/models.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/models.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/progress.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/progress.py</source>
         <source file="../vendor/stemwerk-core/src/stemwerk_core/separator.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/stemwerk-core/src/stemwerk_core/separator.py</source>
+        <source file="../vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl</source>
 
         <source file="../i18n/languages.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/languages.lua</source>
         <source file="../i18n/stemwerk_language_wrapper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/i18n/stemwerk_language_wrapper.lua</source>
