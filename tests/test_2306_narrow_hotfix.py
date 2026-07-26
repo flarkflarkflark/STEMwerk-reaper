@@ -12,6 +12,15 @@ DRUMSEP_HELPER = Path("scripts/reaper/_internal/stemwerk_drumsep_process.py")
 SETUP_INTERNAL = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua")
 
 
+def _load_audio_separator_process_module():
+    path = Path("scripts/reaper/audio_separator_process.py")
+    spec = importlib.util.spec_from_file_location("audio_separator_process_2306_test", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_drumsep_helper():
     spec = importlib.util.spec_from_file_location("stemwerk_2306_drumsep", DRUMSEP_HELPER)
     module = importlib.util.module_from_spec(spec)
