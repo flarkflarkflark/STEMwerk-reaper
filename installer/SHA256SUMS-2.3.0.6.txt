@@ -1,0 +1,24 @@
+# STEMwerk 2.3.0.6 — definitive release checksums
+# Version: 2.3.0.6
+# Source tip: 63f00a9bc75952ab61b7a31f9d5e650d33571690 (release/2.3.0.6-union)
+# Build date: 2026-07-25/2026-07-26 (round-2 union rebuild, all artifacts from the same tip)
+# Unsigned packages — verify against this list.
+#
+# Verify with: sha256sum -c SHA256SUMS-2.3.0.6.txt
+#
+# size: 1467500 bytes
+f092d0a1a62b90fc487fd31ccf96ec97e2790a5e4955ec2c0cdd1eff42bf73ba  stemwerk_2.3.0.6_amd64.deb
+# size: 1499524 bytes
+0d58fa21a1f6ad6e05b93015bb9ce260b9e2ec47ca7e32595682fae28e1fe132  stemwerk-2.3.0.6-1.noarch.rpm
+# size: 1823936 bytes
+138807d00ce194d496c5ce0f2b01c84cc8b446dc2bbeceaba5c4274e20338213  STEMwerk-2.3.0.6-x86_64.AppImage
+# size: 1938657 bytes
+e22f5d05ac40078fede136ba9b89bddbbd35bb7861d2148a77b90782c1b6b599  stemwerk-2.3.0.6-1-any.pkg.tar.zst
+# size: 3068541 bytes
+22d48ef0551c82fe774cb5bf99dba6886c650a49c9fcf5fea484609d106c9c62  STEMwerk-Setup-2.3.0.6.exe
+# size: 139558482 bytes
+3b5fb90407bcc16d78357cc0d6bcd5df4079954ec0e90227048b8d1f9e3710e9  STEMwerk-Setup-2.3.0.6-bundled.exe
+# size: 1746928 bytes
+d65a65eb9fc56d45db1c0eb5b9b341f3d21fdd1b61874ef3c4dde44fc55d4978  STEMwerk-2.3.0.6.pkg
+# size: 1071861398 bytes
+18b7ab307bcf06fe8060d9516d99d0e280f7bde1fb717d8cc1fd888f747eac71  STEMwerk-2.3.0.6-bundled-apple-silicon.pkg

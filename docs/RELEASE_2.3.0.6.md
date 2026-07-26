@@ -60,7 +60,10 @@ The final bundled Apple Silicon candidate is:
 
 SHA256:
 
-`eedd4d293e4c7e351c2e2a07b641b18db0388d368504379b84636cfac3908856`
+`18b7ab307bcf06fe8060d9516d99d0e280f7bde1fb717d8cc1fd888f747eac71`
+
+Definitive checksums for all 2.3.0.6 release artifacts are published in
+`installer/SHA256SUMS-2.3.0.6.txt`.
 
 ## Final Apple Silicon evidence
 
