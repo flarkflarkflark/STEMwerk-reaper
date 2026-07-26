@@ -712,6 +712,14 @@ local function prettySetupReason(reason)
             part = "samplerate repair failed on Apple Silicon"
         elseif lower == "samplerate_arch_mismatch_requires_runtime_rebuild" then
             part = "samplerate runtime architecture mismatch on Apple Silicon; delete runtime and rebuild venv"
+        elseif lower == "apple_silicon_requires_bundled_payload" then
+            part = "STEMwerk could not repair the runtime because the bundled recovery payload is incomplete or corrupt. Reinstall the full macOS Apple Silicon installer from https://github.com/flarkflarkflark/STEMwerk-reaper/releases/latest, or remove the folder '_bundled' inside the STEMwerk-reaper scripts folder and run Repair again with an internet connection (STEMwerk will then download the required packages automatically)."
+        elseif lower == "install_plan_unresolvable" or lower == "online_fallback_failed" then
+            part = "STEMwerk could not prepare the runtime repair without changing your system, so nothing was modified. Check your internet connection and run Repair again, or download the full macOS Apple Silicon installer from https://github.com/flarkflarkflark/STEMwerk-reaper/releases/latest"
+        elseif lower == "macos_arch_mismatch" then
+            part = "STEMwerk detected a package with the wrong CPU architecture in the runtime. Run Rebuild venv once; if this persists, download the current installer from https://github.com/flarkflarkflark/STEMwerk-reaper/releases/latest"
+        elseif lower == "macos_version_unsupported" then
+            part = "This macOS version is not supported for the STEMwerk runtime on this Mac (macOS 12 or later is required on Apple Silicon, macOS 11 or later on Intel). Upgrade macOS, then run Repair again."
         elseif lower == "managed_diffq_wheel_missing" then
             part = "Managed dependency wheel missing for diffq on Linux Python 3.12. Repair/Rebuild could not complete."
         elseif lower == "missing_diffq_or_build_tools" then
