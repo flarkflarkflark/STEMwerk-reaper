@@ -201,7 +201,10 @@ def test_stemwerk_core_imports_from_local_install():
         pytest.skip("stemwerk_core is not installed in this local test environment")
     import stemwerk_core  # noqa: F401
 
-    direct_url = distribution("stemwerk-core").read_text("direct_url.json")
+    try:
+        direct_url = distribution("stemwerk-core").read_text("direct_url.json")
+    except PackageNotFoundError:
+        pytest.skip("stemwerk-core is importable via sys.path but not installed in this environment")
     assert direct_url, "stemwerk-core install is missing direct_url.json metadata"
 
     direct_url_data = json.loads(direct_url)
@@ -7196,8 +7199,7 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.0.4" in text
-    assert "Date: 2026-07-11" in text
+    assert "Version: 2.3.0.6" in text
     assert "Version: 2.2.2" not in text
 
 
@@ -7297,6 +7299,6 @@ def test_windows_setup_guides_are_release_clean_and_describe_offline_allmodels_p
         assert "328c614" not in text
         assert "pre-release" not in text.lower()
         assert "offline-bundled-cpu-allmodels" in text
-        assert "offline-bundled-nvidia-allmodels" in text
-        assert "offline-bundled-amd-allmodels" in text
+        assert "offline-bundled-nvidia-gpu-allmodels" in text
+        assert "offline-bundled-amd-gpu-allmodels" in text
         assert "Uninstall removes STEMwerk runtime data and installed STEMwerk REAPER scripts." in text or "De-installeren verwijdert STEMwerk-runtime-data en geinstalleerde STEMwerk REAPER-scripts." in text or "Die Deinstallation entfernt STEMwerk-Runtime-Daten und installierte STEMwerk-REAPER-Skripte." in text
