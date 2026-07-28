@@ -75,6 +75,9 @@ def test_bootstrap_verify_venv_arch_guard_contract():
     assert "verify_venv_arch()" in script
     assert ".dist-info" in script and "WHEEL" in script
     assert 'set_status "deps_failed" "macos_arch_mismatch"' in script
+    assert 'broken\\|*samplerate:import_error:*"incompatible architecture"*' in script
+    assert 'MACOS_RUNTIME_POLICY_STATUS="arch_mismatch"' in script
+    assert 'MACOS_ARCH_GUARD_DETAIL="${_runtime_policy_probe}"' in script
     onnx_install = script.index('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
     guard_call = script.index("if ! verify_venv_arch; then")
     assert onnx_install < guard_call, "arch guard must run after the last pip install"

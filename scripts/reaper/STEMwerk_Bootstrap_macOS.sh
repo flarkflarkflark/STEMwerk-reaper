@@ -1476,6 +1476,24 @@ if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
       exit 1
       ;;
     *)
+      case "${_runtime_policy_probe}" in
+        broken\|*samplerate:import_error:*"incompatible architecture"*)
+          MACOS_RUNTIME_POLICY_STATUS="arch_mismatch"
+          MACOS_RUNTIME_POLICY_REASON="macos_arch_mismatch"
+          MACOS_ARCH_GUARD_STATUS="mismatch"
+          MACOS_ARCH_GUARD_DETAIL="${_runtime_policy_probe}"
+          log "Existing managed runtime contains a wrong-architecture samplerate binary"
+          log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
+          log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
+          log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
+          log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+          log "MACOS_ARCH_GUARD_STATUS=${MACOS_ARCH_GUARD_STATUS}"
+          log "MACOS_ARCH_GUARD_DETAIL=${MACOS_ARCH_GUARD_DETAIL}"
+          set_status "deps_failed" "macos_arch_mismatch"
+          write_state
+          exit 1
+          ;;
+      esac
       MACOS_RUNTIME_POLICY_STATUS="broken"
       MACOS_RUNTIME_POLICY_REASON="runtime_broken_requires_rebuild"
       log "Existing managed runtime could not pass the installed dependency policy probe"
