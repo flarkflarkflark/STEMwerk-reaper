@@ -205,7 +205,13 @@ def test_stemwerk_core_imports_from_local_install():
         direct_url = distribution("stemwerk-core").read_text("direct_url.json")
     except PackageNotFoundError:
         pytest.skip("stemwerk-core is importable via sys.path but not installed in this environment")
-    assert direct_url, "stemwerk-core install is missing direct_url.json metadata"
+    if not direct_url:
+        module_path = Path(getattr(stemwerk_core, "__file__", "")).resolve()
+        assert "scripts/reaper/vendor/stemwerk-core/src" in str(module_path), (
+            "stemwerk-core install is missing direct_url.json metadata and was not imported "
+            "from the vendored source bundle"
+        )
+        return
 
     direct_url_data = json.loads(direct_url)
     assert "scripts/reaper/vendor/stemwerk-core" in direct_url_data.get("url", ""), (

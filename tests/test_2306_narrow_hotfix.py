@@ -94,15 +94,51 @@ def test_apple_silicon_missing_payload_uses_online_fallback_without_early_exit(t
     result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
 
     # 2.3.1.0: een afwezige payload is géén vroege apple_silicon_requires_bundled_payload
-    # meer; de run valt door naar het online-pad en faalt pas toen de managed-python
-    # download in deze fixture geblokkeerd is. De bestaande venv blijft ongemoeid.
+    # meer; de run valt door naar het online-pad, maar faalt in de diepe preflight
+    # voordat managed-Python acquisitie of runtime-mutatie mag starten.
     assert result.returncode != 0
     assert sentinel.read_text(encoding="utf-8") == "preserved\n"
     state_text = state.read_text(encoding="utf-8")
     assert "STATUS_REASON=apple_silicon_requires_bundled_payload" not in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=ok" in state_text
-    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=online_fallback" in state_text
-    assert "STATUS_REASON=managed_python_unavailable" in state_text
+    assert "STATUS=deps_failed" in state_text
+    assert "STATUS_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+
+
+def test_apple_silicon_missing_payload_offline_preflight_is_zero_mutation(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+
+    fake_bin = _arm64_fake_bin(tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    before = sorted(str(path.relative_to(runtime)) for path in runtime.rglob("*"))
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HTTP_PROXY"] = "http://127.0.0.1:9"
+    env["HTTPS_PROXY"] = "http://127.0.0.1:9"
+    env["PIP_INDEX_URL"] = "http://127.0.0.1:9/simple"
+    env["NO_PROXY"] = ""
+    env["no_proxy"] = ""
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
+    after = sorted(str(path.relative_to(runtime)) for path in runtime.rglob("*"))
+
+    assert result.returncode != 0
+    assert after == before == []
+    state_text = state.read_text(encoding="utf-8")
+    assert "STATUS=deps_failed" in state_text
+    assert "STATUS_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_STATUS=failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_REASON=online_fallback_failed" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
 
 
 def test_direct_dks_processing_preflight_blocks_without_download(tmp_path, monkeypatch):

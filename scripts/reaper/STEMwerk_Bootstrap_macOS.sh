@@ -1345,8 +1345,6 @@ log "MACOS_BUNDLED_MODELS_STATUS=${MACOS_BUNDLED_MODELS_STATUS}"
 log "MACOS_BUNDLED_DRUMSEP_STATUS=${MACOS_BUNDLED_DRUMSEP_STATUS}"
 log "MACOS_MANAGED_WHEELHOUSE_STATUS=${MACOS_MANAGED_WHEELHOUSE_STATUS}"
 
-mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
-
 STATUS="ok"
 STATUS_REASON=""
 PYTHON=""
@@ -1546,7 +1544,7 @@ numba==${PINNED_NUMBA_VERSION}
 samplerate==${PINNED_SAMPLERATE_VERSION}
 audio-separator==${PINNED_AUDIO_SEPARATOR_VERSION}
 onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"
-  _pf_req="${RUNTIME_BASE}/logs/.preflight-requirements.txt"
+  _pf_req="$(mktemp "${TMPDIR:-/tmp}/stemwerk-macos-preflight-req.XXXXXX")" || return 1
   printf "%s\n" ${_pf_plan} > "${_pf_req}"
   if [ -n "${BUNDLED_WHEELS_DIR:-}" ] && [ -d "${BUNDLED_WHEELS_DIR}" ]; then
     log "Preflight: offline contract check of bundled wheelhouse via ${_pf_py} (pip install --dry-run --no-index)"
@@ -1584,6 +1582,55 @@ onnxruntime==${PINNED_ONNXRUNTIME_VERSION}"
   return ${_pf_rc}
 }
 
+preflight_managed_python_available() {
+  # If a usable Python is already local, the wheel preflight can use it and no online
+  # managed-Python acquisition is needed before mutation.
+  for _mp_c in \
+    "${RUNTIME_BASE}/.venv/bin/python" \
+    "${RUNTIME_BASE}/python/bin/python3.12" \
+    "${BUNDLED_PAYLOAD_DIR}/python/bin/python3.12"
+  do
+    [ -x "${_mp_c}" ] && return 0
+  done
+  if [ -n "$(bundled_managed_python_dir || true)" ]; then
+    return 0
+  fi
+  if ! managed_python_detect_platform; then
+    log "Preflight: managed Python is not available for this platform"
+    return 1
+  fi
+  if [ "${STEMWERK_OFFLINE:-0}" = "1" ]; then
+    log "Preflight: online fallback requires managed Python, but offline mode has no local Python payload"
+    return 1
+  fi
+  _mp_url="${MANAGED_PYTHON_URL}"
+  [ -n "${_mp_url}" ] || return 1
+  if command -v curl >/dev/null 2>&1; then
+    log "Preflight: checking managed Python download availability"
+    curl -L --fail --silent --show-error --head --max-time 20 "${_mp_url}" >> "${LOG_FILE}" 2>&1
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    log "Preflight: checking managed Python download availability"
+    wget --spider -T 20 "${_mp_url}" >> "${LOG_FILE}" 2>&1
+    return $?
+  fi
+  log "Preflight: no downloader available for managed Python availability check"
+  return 1
+}
+
+if ! preflight_managed_python_available; then
+  MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
+  MACOS_PAYLOAD_PREFLIGHT_REASON="online_fallback_failed"
+  log "Online Repair preflight failed before mutation: managed Python is not locally available and could not be reached online"
+  log "MACOS_PAYLOAD_PREFLIGHT_STATUS=${MACOS_PAYLOAD_PREFLIGHT_STATUS}"
+  log "MACOS_PAYLOAD_PREFLIGHT_REASON=${MACOS_PAYLOAD_PREFLIGHT_REASON}"
+  log "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false"
+  set_status "deps_failed" "online_fallback_failed"
+  write_state
+  exit 1
+fi
+
 if ! preflight_install_plan; then
   MACOS_PAYLOAD_PREFLIGHT_STATUS="failed"
   MACOS_PAYLOAD_PREFLIGHT_REASON="install_plan_unresolvable"
@@ -1599,6 +1646,7 @@ fi
 
 MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED="true"
 MACOS_RUNTIME_POLICY_MUTATION_STARTED="true"
+mkdir -p "${RUNTIME_BASE}/state" "${RUNTIME_BASE}/logs"
 mkdir -p "${RUNTIME_BASE}/bin" "${RUNTIME_BASE}/ffmpeg" "${RUNTIME_BASE}/python"
 
 if [ "${MODE}" = "rebuild-venv" ] && [ -d "${RUNTIME_BASE}/.venv" ]; then
