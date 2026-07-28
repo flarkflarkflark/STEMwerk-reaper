@@ -1460,6 +1460,9 @@ if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
       log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
       log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"
       log "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false"
+      set_status "ok" ""
+      write_state
+      exit 0
       ;;
     mismatch\|*)
       MACOS_RUNTIME_POLICY_STATUS="mismatch"

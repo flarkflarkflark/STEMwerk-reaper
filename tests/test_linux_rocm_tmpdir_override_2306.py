@@ -183,7 +183,7 @@ def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
         # 2.3.1.0: macOS online Repair (managed wheelhouse, deep preflight,
         # arch guard, per-arch onnxruntime pins) — hash updated from 2.3.0.7.
         "scripts/reaper/STEMwerk_Bootstrap_macOS.sh": (
-            "cc4e894dbb6f0f094d4849d3d6799a0d521b51d4444bc6b46df44be65805f08c"
+            "5669a827dd04ccf1cab4b962af990c855296db7125d909a62ec7e631bd869839"
         ),
         "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1": (
             "bbc18a5a5ab3d1f1286276e2debc1e6c46552f9014e123386817c340ec553d0f"

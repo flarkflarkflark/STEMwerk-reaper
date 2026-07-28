@@ -309,6 +309,9 @@ def test_runtime_policy_gate_preserves_matching_and_missing_recovery_paths():
     script = MACOS_BOOTSTRAP.read_text(encoding="utf-8")
     policy_gate = script.index('if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then')
     match = script.index('MACOS_RUNTIME_POLICY_STATUS="match"', policy_gate)
+    match_status = script.index('set_status "ok" ""', match)
+    match_write = script.index("write_state", match_status)
+    match_exit = script.index("exit 0", match_write)
     mismatch_branch = script.index('mismatch\\|*)', match)
     mismatch_exit = script.index('set_status "repair_required" "${MACOS_RUNTIME_POLICY_REASON}"', match)
     missing = script.index('MACOS_RUNTIME_POLICY_REASON="missing_runtime_recovery"', mismatch_exit)
@@ -317,8 +320,58 @@ def test_runtime_policy_gate_preserves_matching_and_missing_recovery_paths():
     )
     mutation = script.index('MACOS_RUNTIME_POLICY_MUTATION_STARTED="true"', explicit_rebuild)
     venv_create = script.index('log "Creating STEMwerk virtual environment..."', mutation)
+    assert policy_gate < match < match_status < match_write < match_exit < mismatch_exit
     assert policy_gate < match < mismatch_exit < missing < explicit_rebuild < mutation < venv_create
     assert "exit 1" not in script[match:mismatch_branch]
+
+
+def test_runtime_policy_match_repair_short_circuits_without_mutation(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX bootstrap fixture")
+    script_dir = tmp_path / "reaper"
+    script_dir.mkdir()
+    shutil.copy2(MACOS_BOOTSTRAP, script_dir / MACOS_BOOTSTRAP.name)
+
+    fake_bin = _arm64_fake_bin(tmp_path)
+    runtime = tmp_path / "runtime"
+    python = runtime / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'match|python=3.12;architecture=arm64;"
+        "audio-separator=0.23.0;numpy=1.26.4;numba=0.59.1;llvmlite=0.42.0;"
+        "torch=2.5.1;torchaudio=2.5.1;samplerate=0.1.0'\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    sentinel = runtime / ".venv/STEMWERK_MACOS_MATCH_TEST_SENTINEL"
+    sentinel.write_text("preserved\n", encoding="utf-8")
+    before = {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*") if path.is_file()}
+    state = tmp_path / "state.env"
+    log = tmp_path / "bootstrap.log"
+
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["HTTP_PROXY"] = "http://127.0.0.1:9"
+    env["HTTPS_PROXY"] = "http://127.0.0.1:9"
+    env["PIP_INDEX_URL"] = "http://127.0.0.1:9/simple"
+    env["NO_PROXY"] = ""
+    env["no_proxy"] = ""
+    result = _run_bootstrap(script_dir, runtime, state, log, env, mode="repair")
+
+    assert result.returncode == 0
+    after = {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*") if path.is_file()}
+    assert after == before
+    assert sentinel.read_text(encoding="utf-8") == "preserved\n"
+    state_text = state.read_text(encoding="utf-8")
+    assert "STATUS=ok" in state_text
+    assert "STATUS_REASON=" not in state_text
+    assert "MACOS_RUNTIME_POLICY_STATUS=match" in state_text
+    assert "MACOS_RUNTIME_POLICY_MUTATION_STARTED=false" in state_text
+    assert "MACOS_PAYLOAD_PREFLIGHT_MUTATION_STARTED=false" in state_text
+    log_text = log.read_text(encoding="utf-8")
+    assert "STEP 3/5: Installing STEMwerk runtime" not in log_text
+    assert "127.0.0.1:9" not in log_text
 
 
 def test_explicit_rebuild_remains_after_complete_payload_preflight():
