@@ -440,7 +440,7 @@ function HELPERS.getStemNamingContextForItem(item, fallbackTrackName, fallbackIt
     return trackName, itemName
 end
 
-function HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
+function HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName, stemSet)
     local finalDir = HELPERS.resolveFinalStemOutputDir()
     if not finalDir or finalDir == "" then
         return stems, nil
@@ -449,7 +449,12 @@ function HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
     C.makeDir(finalDir)
     local moved = {}
     local relocated = {}
-    for _, stem in ipairs(STEMS) do
+    -- Iterate the stem set resolved from the validated output map when given,
+    -- not the mutable global STEMS: a mid-run settings reload can swap the
+    -- global set (e.g. drumkit -> standard), which would silently discard
+    -- already validated output paths from the import handoff.
+    local set = (type(stemSet) == "table" and #stemSet > 0) and stemSet or STEMS
+    for _, stem in ipairs(set) do
         local key = stem.name:lower()
         local src = stems[key]
         if src then

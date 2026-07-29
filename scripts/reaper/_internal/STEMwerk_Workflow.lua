@@ -972,6 +972,10 @@ function WORKFLOW.finishSeparationCallback()
         end
         debugLog("lua_result_probe_top_level_count=" .. tostring(topLevelCount))
         append_diag_log("lua_result_probe_top_level_count=" .. tostring(topLevelCount))
+        SW_LOG.logExecResult("dks_probe_stemset first=" .. tostring(STEMS and STEMS[1] and STEMS[1].name or "?")
+            .. " stemset_count=" .. tostring(STEMS and #STEMS or 0)
+            .. " top_level_count=" .. tostring(topLevelCount)
+            .. " workflow_source=" .. tostring(C.progressState.workflowSource or ""), nil, "")
 
         if next(stems) == nil then
             debugLog("lua_result_probe_stdout_json_attempt=yes")
@@ -1003,6 +1007,21 @@ function WORKFLOW.finishSeparationCallback()
             append_diag_log("lua_result_probe_stdout_json_attempt=no")
         end
 
+        if next(stems) and tostring(C.progressState.workflowSource or "") == "dks_extract" then
+            local probeCount = 0
+            for k, v in pairs(stems) do
+                probeCount = probeCount + 1
+                local ev = string.format("dks_import_input_path key=%q path=%q path_len=%d", tostring(k), tostring(v), #tostring(v))
+                debugLog(ev)
+                append_diag_log(ev)
+                SW_LOG.logExecResult(ev, nil, "")
+            end
+            local cntMsg = "dks_validated_output_count=" .. tostring(probeCount)
+            debugLog(cntMsg)
+            append_diag_log(cntMsg)
+            SW_LOG.logExecResult(cntMsg, nil, "")
+        end
+
         if next(stems) then
             debugLog("[LOG] Output detected for job (finishSeparationCallback)")
             persistWithExitCodeRetry(function()
@@ -1014,7 +1033,10 @@ function WORKFLOW.finishSeparationCallback()
                     append_diag_log("lua_dks_extract_import_start")
                     SW_LOG.logExecResult("lua_dks_extract_import_start", nil, "")
                 end
-                processStemsResult(stems)
+                local importOk = processStemsResult(stems)
+                if importOk == false then
+                    SW_LOG.logExecResult("workflow_success=no", nil, "workflow_failure_reason=dks_import_invariant_violation")
+                end
                 if tostring(C.progressState.workflowSource or "") == "dks_extract" then
                     debugLog("lua_dks_extract_import_end")
                     append_diag_log("lua_dks_extract_import_end")
@@ -1022,7 +1044,7 @@ function WORKFLOW.finishSeparationCallback()
                 end
                 debugLog("[LOG] Import end (processStemsResult)")
                 debugLog("[LOG] Finalize start (cleanupTempWorkDir)")
-                C.cleanupTempWorkDir(C.progressState.outputDir, { success = true, keepStemPaths = stems })
+                C.cleanupTempWorkDir(C.progressState.outputDir, { success = (importOk ~= false), keepStemPaths = stems })
                 debugLog("[LOG] Finalize end (cleanupTempWorkDir)")
             end)
         elseif checkCount < 10 then

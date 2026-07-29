@@ -1179,6 +1179,8 @@ end
 
 -- Stem configuration (with selection state)
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
+-- DKS import helpers (pure module, loaded before first delegation use).
+DKS_IMPORT = dofile(script_path .. "_internal/STEMwerk_DKS_Import.lua")
 STEMS = {
     { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav", selected = true, key = "1", sixStemOnly = false },
     { name = "Drums",  color = {100, 200, 255}, file = "drums.wav", selected = true, key = "2", sixStemOnly = false },
@@ -1199,18 +1201,24 @@ local DRUMKIT_STEMS = {
 }
 
 local function activateWorkflowStemSet(isDirectDKS)
+    local beforeName = tostring(STEMS and STEMS[1] and STEMS[1].name or "?")
     STEMS = isDirectDKS and DRUMKIT_STEMS or STANDARD_STEMS
     if SETTINGS_MOD and SETTINGS_MOD.configure then
         SETTINGS_MOD.configure({ STEMS = STEMS })
     end
+    local caller = "?"
+    local info = debug and debug.getinfo and debug.getinfo(2, "Sl")
+    if info then caller = tostring(info.short_src or "?") .. ":" .. tostring(info.currentline or 0) end
+    if SW_LOG and SW_LOG.logExecResult then
+        SW_LOG.logExecResult("dks_stemset_activate isDirectDKS=" .. tostring(isDirectDKS)
+            .. " before_first=" .. beforeName
+            .. " after_first=" .. tostring(STEMS[1] and STEMS[1].name or "?")
+            .. " caller=" .. caller, nil, "")
+    end
 end
 
 function normalizeStemPathKey(name)
-    local key = tostring(name or ""):lower()
-    if key == "hihat" or key == "hh" then
-        return "hi-hat"
-    end
-    return key
+    return DKS_IMPORT.normalizeStemPathKey(name)
 end
 
 function normalizeStemPathMap(stemPaths)
@@ -1222,35 +1230,7 @@ function normalizeStemPathMap(stemPaths)
 end
 
 local function collectStemPathsFromStdoutJson(stdoutFile)
-    if not stdoutFile or stdoutFile == "" then return {} end
-    local f = io.open(stdoutFile, "r")
-    if not f then return {} end
-    local text = f:read("*a") or ""
-    f:close()
-    if text == "" then return {} end
-
-    local lastJsonLine = nil
-    for line in tostring(text):gmatch("[^\r\n]+") do
-        local trimmed = tostring(line or ""):match("^%s*(.-)%s*$") or ""
-        if trimmed:sub(1, 1) == "{" and trimmed:sub(-1) == "}" and trimmed:find('"%s*:%s*"', 1) then
-            lastJsonLine = trimmed
-        end
-    end
-    if not lastJsonLine then return {} end
-
-    local stems = {}
-    for rawKey, rawPath in lastJsonLine:gmatch('"([^"]+)"%s*:%s*"(.-)"') do
-        local key = normalizeStemPathKey(rawKey:gsub("_", "-"))
-        local path = tostring(rawPath or ""):gsub('\\"', '"'):gsub("\\\\", "\\")
-        if key ~= "" and path ~= "" then
-            local probe = io.open(path, "rb")
-            if probe then
-                probe:close()
-                stems[key] = path
-            end
-        end
-    end
-    return stems
+    return DKS_IMPORT.collectStemPathsFromStdoutJson(stdoutFile)
 end
 
 function stemPathMapLooksLikeDrumKit(stemPaths)
@@ -16974,12 +16954,16 @@ function createStemTracks(item, stemPaths, itemPos, itemLen, options)
         stemSet = options.stemSet
         drumKitOutput = stemSet == DRUMKIT_STEMS
     end
+    local isExtractDrumKitImport = drumKitOutput and tostring(progressState.workflowSource or "") == DKS_WORKFLOW.SOURCE_EXTRACT
 
     reaper.Undo_BeginBlock()
 
     local selectedCount = 0
     for _, stem in ipairs(stemSet) do
         if stem.selected and normalizedStemPaths[normalizeStemPathKey(stem.name)] then selectedCount = selectedCount + 1 end
+    end
+    if isExtractDrumKitImport then
+        SW_LOG.logExecResult("lua_dks_extract_import_candidate_count=" .. tostring(selectedCount), nil, "")
     end
 
     local folderKind = drumKitOutput and activeDrumKitFolderSuffix() or "Stems"
@@ -16999,9 +16983,22 @@ function createStemTracks(item, stemPaths, itemPos, itemLen, options)
     end
 
     local importedCount = 0
+    local selectedImportCount = 0
     for _, stem in ipairs(stemSet) do
         if stem.selected then
-            local stemPath = normalizedStemPaths[normalizeStemPathKey(stem.name)]
+            selectedImportCount = selectedImportCount + 1
+            local stemKey = normalizeStemPathKey(stem.name)
+            local stemPath = normalizedStemPaths[stemKey]
+            if isExtractDrumKitImport then
+                SW_LOG.logExecResult(
+                    "import_stem_key=" .. tostring(stemKey)
+                        .. " path_exists=" .. tostring(stemPath ~= nil and stemPath ~= "")
+                        .. " imported=" .. tostring(stemPath ~= nil and stemPath ~= "")
+                        .. " path=" .. string.format("%q", tostring(stemPath or "")),
+                    nil,
+                    ""
+                )
+            end
             if stemPath then
                 reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
                 local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
@@ -17028,6 +17025,10 @@ function createStemTracks(item, stemPaths, itemPos, itemLen, options)
                 importedCount = importedCount + 1
             end
         end
+    end
+    if isExtractDrumKitImport then
+        SW_LOG.logExecResult("lua_dks_extract_import_selected_count=" .. tostring(selectedImportCount), nil, "")
+        SW_LOG.logExecResult("lua_dks_extract_import_created=" .. tostring(importedCount), nil, "")
     end
 
     if folderTrack and importedCount > 0 then
@@ -17839,6 +17840,33 @@ end
 WORKFLOW_TEMP_DIR = nil
 WORKFLOW_TEMP_INPUT = nil
 
+-- DKS import diagnostics: dump stem-map state with escaped representations so
+-- invisible differences (backslashes, CRs, quotes, encoding) become visible.
+-- Defined as globals: the main chunk is at Lua's 200-local limit.
+function dksLogDiag(msg)
+    debugLog(msg)
+    SW_LOG.logExecResult(msg, nil, "")
+end
+
+function dksDumpStemMap(tag, map)
+    local n = 0
+    for k, v in pairs(map or {}) do
+        n = n + 1
+        dksLogDiag(string.format("%s key=%q path=%q path_len=%d", tag, tostring(k), tostring(v), #tostring(v)))
+    end
+    dksLogDiag(string.format("%s count=%d", tag, n))
+end
+
+function dksDescribeStemSet(tag, set)
+    local names = {}
+    local sels = {}
+    for i, s in ipairs(set or {}) do
+        names[#names + 1] = tostring(s.name)
+        sels[#sels + 1] = tostring(s.name) .. "=" .. tostring(s.selected)
+    end
+    dksLogDiag(string.format("%s count=%d names=%q selected={%s}", tag, #(set or {}), table.concat(names, ","), table.concat(sels, ",")))
+end
+
 -- Process stems after separation completes (called from progress UI)
 function processStemsResult(stems)
     SW_LOG.logExecResult("timing:finalize_start single", nil, "")
@@ -17853,8 +17881,35 @@ function processStemsResult(stems)
         sourceTrackName = sourceTrackName or "Selection"
         sourceItemName = sourceItemName or "Selection"
     end
-    stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName)
+    stems = HELPERS.finalizeStemFiles(stems, sourceTrackName, sourceItemName, resolveStemSetForPaths(stems))
+    local dksDiagActive = tostring(progressState.workflowSource or "") == DKS_WORKFLOW.SOURCE_EXTRACT
+    if dksDiagActive then
+        dksLogDiag("dks_import_context workflow_source=" .. tostring(progressState.workflowSource or "")
+            .. " stem_file_destination=" .. tostring(SETTINGS.stemFileDestination or "")
+            .. " custom_stem_dir=" .. string.format("%q", tostring(SETTINGS.customStemDir or ""))
+            .. " source_track_name=" .. string.format("%q", tostring(sourceTrackName))
+            .. " source_item_name=" .. string.format("%q", tostring(sourceItemName)))
+        dksDescribeStemSet("dks_global_STEMS", STEMS)
+        dksDumpStemMap("dks_import_input_post_finalize", stems)
+    end
     local stemSet, drumKitOutput = resolveStemSetForPaths(stems)
+    if dksDiagActive then
+        dksLogDiag("dks_resolved_stemset drumKitOutput=" .. tostring(drumKitOutput))
+        dksDescribeStemSet("dks_resolved_stemset", stemSet)
+    end
+
+    -- Hard success invariant for drum kit routes: the number of validated
+    -- output stems is what the import must deliver. Any mismatch is a
+    -- workflow failure (handled below), never a silent green success.
+    local dksExpectedOutputs = 0
+    if drumKitOutput then
+        for _, stem in ipairs(stemSet) do
+            if stem.selected and stems[normalizeStemPathKey(stem.name)] then
+                dksExpectedOutputs = dksExpectedOutputs + 1
+            end
+        end
+        SW_LOG.logExecResult("dks_expected_output_count=" .. tostring(dksExpectedOutputs), nil, "")
+    end
 
     writeTimingEvent(WORKFLOW_TEMP_DIR, "import_start", "single", {
         mode = SETTINGS.createNewTracks and "new_tracks" or "in_place",
@@ -18158,6 +18213,34 @@ function processStemsResult(stems)
     end
 
     reaper.UpdateArrange()
+
+    -- Hard success invariant for drum kit routes (new-tracks import): the
+    -- imported track count must equal the validated output count. A mismatch
+    -- is a workflow failure: no green completion dialog, outputs preserved.
+    if drumKitOutput and SETTINGS.createNewTracks then
+        local importOk, importReason = DKS_IMPORT.validateImportResult(dksExpectedOutputs, tonumber(count) or 0)
+        SW_LOG.logExecResult("dks_imported_track_count=" .. tostring(count), nil, "")
+        SW_LOG.logExecResult("dks_import_validation_reason=" .. tostring(importReason), nil, "")
+        if not importOk then
+            SW_LOG.logExecResult(
+                "workflow_success=no",
+                nil,
+                "workflow_failure_reason=" .. tostring(importReason)
+                    .. " expected=" .. tostring(dksExpectedOutputs)
+                    .. " actual=" .. tostring(count)
+            )
+            SW_LOG.logExecResult("timing:finalize_end single", nil, "")
+            local failMsg = "Kit Split failed during REAPER import.\n\n"
+                .. "Expected " .. tostring(dksExpectedOutputs) .. " drum tracks, but "
+                .. tostring(count) .. " were created.\n\n"
+                .. "The generated drum WAV files were preserved for recovery.\n"
+                .. "Output folder: " .. tostring(WORKFLOW_TEMP_DIR or "unknown") .. "\n"
+                .. "Diagnostic log: " .. tostring(SW_LOG.getLogPath())
+            showMessage("Kit Split Failed", failMsg, "error", false)
+            return false
+        end
+        SW_LOG.logExecResult("workflow_success=yes", nil, "")
+    end
 
     -- Show custom result window
     writeTimingEvent(WORKFLOW_TEMP_DIR, "import_end", "single", {
@@ -22009,7 +22092,7 @@ _sep.processAllStemsResult = function()
         if next(stems) then
             local namingTrack = job.sourceTrackName or job.trackName or "Track"
             local namingItem = job.sourceItemName or job.sourceItemDisplayName or namingTrack
-            stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem)
+            stems = HELPERS.finalizeStemFiles(stems, namingTrack, namingItem, resolveStemSetForPaths(stems))
             job.importedStemPaths = stems
             importPlan.stems = stems
             importPlan.hasStems = true
