@@ -167,6 +167,18 @@ Approximate model-cache downloads:
 
 Bundled installers include Python + FFmpeg, but not necessarily every backend package and model cache. Large offline/allmodels installers are separate assets for users who need more complete offline model payloads.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+Project roles:
+
+- Committer, reviewer and approver: Ben van Essen (`flarkflarkflark`)
+
+Privacy policy:
+
+STEMwerk processes audio locally. It only connects to network services when requested or required by the user for downloading open-source runtime components, dependencies, models, updates or release files. STEMwerk does not transmit users' audio files or REAPER projects to the maintainer.
+
 ## Installation
 
 ### Recommended
