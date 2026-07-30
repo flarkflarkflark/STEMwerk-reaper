@@ -420,6 +420,14 @@ local function makeCommonEnv(baseRoot, tempRoot)
     return env
 end
 
+local function fixtureCacheLogDir(env)
+    if IS_WINDOWS then
+        return joinPath(env.TEMP or env.TMP or "C:\\Temp", "STEMwerk", "logs")
+    end
+    local cacheBase = env.XDG_CACHE_HOME or joinPath(env.HOME, ".cache")
+    return joinPath(cacheBase, "STEMwerk", "logs")
+end
+
 local function createPresentScenario(baseRoot)
     local resourcePath = joinPath(baseRoot, "resource-present")
     local tempRoot = joinPath(baseRoot, "tmp-present")
@@ -494,13 +502,18 @@ local function createPresentScenario(baseRoot)
     writeFile(joinPath(tempDir, "nested", "debug.log"), "nested log " .. projectPath .. "\n")
     writeFile(joinPath(tempRoot, "STEMwerk_debug.log"), "debug " .. joinPath(tempDir, "other.wav") .. "\n")
 
-    local intelJob = joinPath(env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_intel_six", "single")
+    local cacheLogDir = fixtureCacheLogDir(env)
+    local intelJob = joinPath(cacheLogDir, "runs", "STEMwerk_intel_six", "single")
     mkdirP(intelJob)
     writeFile(joinPath(intelJob, "phase_events.jsonl"),
         '{"time":1,"model":"htdemucs_6s","device":"cpu","result":"success","output_count":6,"output_names":"bass,drums,guitar,other,piano,vocals","output_validation_reason":"ok"}\n')
     writeFile(joinPath(intelJob, "timing_events.jsonl"), '{"time":2,"result":"success"}\n')
     writeFile(joinPath(intelJob, "done.txt"), "done\n")
     writeFile(joinPath(intelJob, "exit_code.txt"), "0\n")
+    if IS_WINDOWS then
+        assertf(normalizePath(cacheLogDir) == normalizePath(joinPath(env.TEMP, "STEMwerk", "logs")),
+            "Windows fixture evidence must use %TEMP%\\STEMwerk\\logs")
+    end
 
     local evidenceRoot = joinPath(runtimeBase, "evidence", "current-session")
     local sessionId = "native-apple-silicon-2306-final"
