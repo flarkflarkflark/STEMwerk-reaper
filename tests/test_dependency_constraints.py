@@ -5725,7 +5725,12 @@ def test_drumkit_workflow_state_persists_and_restores_on_reopen():
     assert 'local workflowSource = C.reaper.GetExtState(C.EXT_SECTION, "workflow_source")' in settings_script
     assert 'C.reaper.SetExtState(C.EXT_SECTION, "workflow_mode", tostring(C.SETTINGS.workflowMode or ""), true)' in settings_script
     assert 'C.reaper.SetExtState(C.EXT_SECTION, "workflow_source", tostring(C.SETTINGS.workflowSource or ""), true)' in settings_script
-    assert "if C.activateWorkflowStemSet then" in settings_script
+    assert 'local runContextActive = (type(isProcessingActive) == "boolean" and isProcessingActive)' in settings_script
+    assert "if C.activateWorkflowStemSet and not runContextActive then" in settings_script
+    assert "dks_settings_load_stemset_skipped reason=run_context_active" in settings_script
+    assert settings_script.index("local runContextActive =") < settings_script.index(
+        "if C.activateWorkflowStemSet and not runContextActive then"
+    )
 
 
 def test_drumkit_expanded_model_stays_route_scoped_and_does_not_force_normal_stems():

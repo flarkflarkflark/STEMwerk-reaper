@@ -115,10 +115,16 @@ local stems = DKS_IMPORT.collectStemPathsFromStdoutJson(f1)
 check("posix paths => 6 imports", countKeys(stems) == 6)
 check("posix hihat key normalized to hi-hat", stems["hi-hat"] ~= nil)
 
--- 2) Windows drive-letter paths with escaped backslashes -> six imports (Windows only)
+-- 2) Windows drive-letter paths with escaped backslashes -> six imports (Windows only).
+--    Off-Windows, kitPaths[k] is already forward-slash separated, so escaping it would be
+--    a no-op and would not exercise the backslash-unescape path at all. Build a genuine
+--    backslash-separated Windows path instead; it never resolves to a real file on this
+--    POSIX machine (the actual fixtures live under workDir with forward slashes), so the
+--    parser's file-existence check correctly rejects it.
 jsonParts = {}
 for _, k in ipairs(kitKeys) do
-    jsonParts[#jsonParts + 1] = '"' .. k .. '": "' .. jsonEscape(kitPaths[k]) .. '"'
+    local winPath = isWindows and kitPaths[k] or ("C:\\Users\\STEMwerkTest\\" .. k .. ".wav")
+    jsonParts[#jsonParts + 1] = '"' .. k .. '": "' .. jsonEscape(winPath) .. '"'
 end
 local f2 = writeStdout("winbackslash_stdout.txt", { "{" .. table.concat(jsonParts, ", ") .. "}" })
 stems = DKS_IMPORT.collectStemPathsFromStdoutJson(f2)
