@@ -257,6 +257,27 @@ local function resolveNonWindowsPythonPath(runtime)
     return ""
 end
 
+-- A verified STEMwerk runtime is authoritative for interpreter selection as
+-- long as it is coherent: Setup/Repair already proved this exact interpreter
+-- healthy (VERIFICATION=="ok" in capabilities.env) and the recorded path
+-- still exists. A transient live-probe failure (e.g. a single flaky
+-- ExecProcess call) must not override that already-proven state -- see
+-- issue #110. Mirrors the trust already used by
+-- M.verifyDependenciesReadyForProcessing() so the live/interactive verifier
+-- and the processing-time resolver agree.
+local function resolveVerifiedCapabilitiesPython()
+    local caps = M.readCapabilities()
+    if not (caps and caps.kv) then return nil end
+    local coherent = caps.kv.VERIFICATION == "ok"
+        and (caps.kv.BOOTSTRAP_STATUS == nil or caps.kv.BOOTSTRAP_STATUS == "" or caps.kv.BOOTSTRAP_STATUS == "ok")
+    if not coherent then return nil end
+    local path = caps.kv.PYTHON_PATH
+    if path and path ~= "" and fileExists(path) then
+        return path
+    end
+    return nil
+end
+
 local function resolveRuntimeFfmpeg(runtime)
     if not runtime or not runtime.base then return "" end
     local PATH_SEP = C.PATH_SEP or "/"
@@ -760,18 +781,25 @@ end
 function M.verifyRuntimeAfterBootstrap()
     local runtime = M.getRuntimePaths()
     local errors = {}
-    local pythonPath
-    if (C.OS or "Windows") == "Windows" then
-        pythonPath = resolveWindowsPythonPath(runtime)
-    else
-        pythonPath = resolveNonWindowsPythonPath(runtime)
+    local pythonPath = resolveVerifiedCapabilitiesPython()
+    local pythonVerifiedByCapabilities = pythonPath ~= nil
+    if not pythonPath then
+        if (C.OS or "Windows") == "Windows" then
+            pythonPath = resolveWindowsPythonPath(runtime)
+        else
+            pythonPath = resolveNonWindowsPythonPath(runtime)
+        end
     end
     if pythonPath and pythonPath ~= "" and type(C.setPythonPath) == "function" then
         C.setPythonPath(pythonPath)
     end
     local canRunFfmpeg = C.canRunFfmpeg
 
-    local pythonOk = M.isPythonAvailable(pythonPath)
+    -- A path resolved from a coherent, already-verified capabilities.env is
+    -- authoritative; re-probing it here would defeat the purpose (the same
+    -- flaky live probe that issue #110 is about). Only fresh, unverified
+    -- resolutions still go through the live isPythonAvailable() probe.
+    local pythonOk = pythonVerifiedByCapabilities or M.isPythonAvailable(pythonPath)
     if not pythonOk then
         errors[#errors + 1] = "python_unavailable"
     end
@@ -822,6 +850,8 @@ function M.verifyRuntimeAfterBootstrap()
 end
 
 function M.resolveRuntimePythonPath()
+    local verified = resolveVerifiedCapabilitiesPython()
+    if verified then return verified end
     local runtime = M.getRuntimePaths()
     if (C.OS or "Windows") == "Windows" then
         return resolveWindowsPythonPath(runtime)

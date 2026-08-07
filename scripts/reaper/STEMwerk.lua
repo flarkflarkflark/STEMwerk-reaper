@@ -447,13 +447,30 @@ local function canRunPython(pythonCmd)
     end
 
     local versionCmd = quoteArg(pythonCmd) .. " -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
-    local versionRc, versionOut = execProcess(versionCmd, 12000)
-    if versionRc ~= 0 or not versionOut or versionOut == "" then
-        local h = io.popen(versionCmd .. " 2>&1")
-        if h then
-            versionOut = h:read("*a") or ""
-            local ok, _, code = h:close()
-            versionRc = (ok == true or code == 0) and 0 or (tonumber(code) or -1)
+
+    -- A single failed/timed-out version probe (e.g. a transient
+    -- reaper.ExecProcess sentinel/timeout such as rc=-999) does not prove
+    -- this interpreter is broken -- canRunPython already proved it launches
+    -- above. Retry once via the same ExecProcess-then-popen sequence before
+    -- concluding the probe genuinely failed: a transient PROBE_FAILURE must
+    -- not be treated as runtime-invalid (issue #110).
+    local versionRc, versionOut
+    for attempt = 1, 2 do
+        versionRc, versionOut = execProcess(versionCmd, 12000)
+        if versionRc ~= 0 or not versionOut or versionOut == "" then
+            local h = io.popen(versionCmd .. " 2>&1")
+            if h then
+                versionOut = h:read("*a") or ""
+                local ok, _, code = h:close()
+                versionRc = (ok == true or code == 0) and 0 or (tonumber(code) or -1)
+            end
+        end
+        if versionRc == 0 and versionOut and versionOut ~= "" then
+            break
+        end
+        if attempt == 1 then
+            debugLog("canRunPython " .. tostring(OS) .. ": version probe attempt 1 failed for "
+                .. tostring(pythonCmd) .. ", retrying (transient probe failure, not runtime-invalid)")
         end
     end
 
