@@ -13826,9 +13826,13 @@ function B0_requiredNormalModelAssets(modelId)
 end
 
 function B0_normalDescriptorReferences(filename)
+    -- weightColumns is the real per-model source count (confirmed by loading
+    -- each installed checkpoint through the vendored demucs.repo.BagOnlyRepo
+    -- and reading BagOfModels.sources), enforced only when a descriptor
+    -- chooses to include an optional weights block at all.
     local references = {
-        ["htdemucs.yaml"] = { hashes = { "955717e8" } },
-        ["htdemucs_6s.yaml"] = { hashes = { "5c90dfd2" } },
+        ["htdemucs.yaml"] = { hashes = { "955717e8" }, weightColumns = 4 },
+        ["htdemucs_6s.yaml"] = { hashes = { "5c90dfd2" }, weightColumns = 6 },
         ["htdemucs_ft.yaml"] = { hashes = { "f7e0c4bc", "d12395a8", "92cfc3b6", "04573f0d" }, weightColumns = 4 },
     }
     return references[tostring(filename or "")]
