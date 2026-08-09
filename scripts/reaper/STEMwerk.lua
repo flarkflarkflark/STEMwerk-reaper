@@ -13806,7 +13806,7 @@ function B0_requiredNormalModelAssets(modelId)
     local id = tostring(modelId or "htdemucs")
     if id == "htdemucs_ft" then
         return "Quality", {
-            { name = "htdemucs_ft.yaml", minBytes = 64 },
+            { name = "htdemucs_ft.yaml", minBytes = 1 },
             { name = "f7e0c4bc-ba3fe64a.th", minBytes = 1024 },
             { name = "d12395a8-e57c48e6.th", minBytes = 1024 },
             { name = "92cfc3b6-ef3bcb9c.th", minBytes = 1024 },
@@ -13815,14 +13815,76 @@ function B0_requiredNormalModelAssets(modelId)
     end
     if id == "htdemucs_6s" then
         return "6 Stems", {
-            { name = "htdemucs_6s.yaml", minBytes = 64 },
+            { name = "htdemucs_6s.yaml", minBytes = 1 },
             { name = "5c90dfd2-34c22ccb.th", minBytes = 1024 },
         }
     end
     return "Normal Stems", {
-        { name = "htdemucs.yaml", minBytes = 64 },
+        { name = "htdemucs.yaml", minBytes = 1 },
         { name = "955717e8-8726e21a.th", minBytes = 1024 },
     }
+end
+
+function B0_normalDescriptorReferences(filename)
+    local references = {
+        ["htdemucs.yaml"] = { "955717e8" },
+        ["htdemucs_6s.yaml"] = { "5c90dfd2" },
+        ["htdemucs_ft.yaml"] = { "f7e0c4bc", "d12395a8", "92cfc3b6", "04573f0d" },
+    }
+    return references[tostring(filename or "")]
+end
+
+function B0_validateNormalDescriptor(path, expectedReferences)
+    local f = io.open(path, "rb")
+    if not f then return false, "descriptor_missing" end
+    local content = f:read("*a") or ""
+    f:close()
+    if content == "" or not content:find("%S") then
+        return false, "descriptor_empty"
+    end
+    if content:find("%z") then
+        return false, "descriptor_malformed"
+    end
+
+    local modelsBody = nil
+    for rawLine in (content .. "\n"):gmatch("([^\r\n]*)[\r\n]") do
+        local line = rawLine:gsub("%s+#.*$", "")
+        local value = line:match("^%s*models%s*:%s*(.-)%s*$")
+        if value then
+            modelsBody = value:match("^%[(.*)%]$")
+            break
+        end
+    end
+    if modelsBody == nil then
+        return false, "descriptor_malformed"
+    end
+
+    local found = {}
+    local modelCount = 0
+    for rawToken in modelsBody:gmatch("[^,]+") do
+        local token = rawToken:match("^%s*(.-)%s*$") or ""
+        local quoted = token:match("^'(.*)'$") or token:match('^"(.*)"$')
+        if quoted ~= nil then token = quoted end
+        if token == "" or not token:match("^[%w_.-]+$") then
+            return false, "descriptor_malformed"
+        end
+        found[token] = true
+        modelCount = modelCount + 1
+    end
+    if modelCount == 0 then
+        return false, "descriptor_malformed"
+    end
+    local expectedCount = 0
+    for _, reference in ipairs(expectedReferences or {}) do
+        expectedCount = expectedCount + 1
+        if not found[tostring(reference)] then
+            return false, "descriptor_missing_reference"
+        end
+    end
+    if modelCount ~= expectedCount then
+        return false, "descriptor_missing_reference"
+    end
+    return true, nil
 end
 
 function B0_directKitAssets()
@@ -13860,9 +13922,21 @@ function verifyProcessingAssetsReady(runOptions)
         routes[#routes + 1] = tostring(req.route or "")
         for _, asset in ipairs(req.assets or {}) do
             local path = B0_joinModelPath(modelDir, asset.name)
-            local size = fileSizeBytes(path)
-            if size < tonumber(asset.minBytes or 1) then
+            local descriptorReferences = B0_normalDescriptorReferences(asset.name)
+            local ready = true
+            local reason = nil
+            if descriptorReferences then
+                ready, reason = B0_validateNormalDescriptor(path, descriptorReferences)
+            else
+                local size = fileSizeBytes(path)
+                if size < tonumber(asset.minBytes or 1) then
+                    ready = false
+                    reason = (size < 0) and "asset_missing" or "asset_too_small"
+                end
+            end
+            if not ready then
                 missing[#missing + 1] = tostring(req.route or "workflow") .. ":" .. path
+                    .. "[" .. tostring(reason or "asset_invalid") .. "]"
             end
         end
     end
