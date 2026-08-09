@@ -13827,18 +13827,39 @@ end
 
 function B0_normalDescriptorReferences(filename)
     local references = {
-        ["htdemucs.yaml"] = { "955717e8" },
-        ["htdemucs_6s.yaml"] = { "5c90dfd2" },
-        ["htdemucs_ft.yaml"] = { "f7e0c4bc", "d12395a8", "92cfc3b6", "04573f0d" },
+        ["htdemucs.yaml"] = { hashes = { "955717e8" } },
+        ["htdemucs_6s.yaml"] = { hashes = { "5c90dfd2" } },
+        ["htdemucs_ft.yaml"] = { hashes = { "f7e0c4bc", "d12395a8", "92cfc3b6", "04573f0d" }, weightColumns = 4 },
     }
     return references[tostring(filename or "")]
 end
 
-function B0_validateNormalDescriptor(path, expectedReferences)
-    local f = io.open(path, "rb")
-    if not f then return false, "descriptor_missing" end
-    local content = f:read("*a") or ""
-    f:close()
+-- Strict parser for the narrow Demucs bag-of-models descriptor grammar
+-- STEMwerk actually ships. The real consumer (vendor/stemwerk-core's
+-- audio-separator dependency, demucs/repo.py BagOnlyRepo.get_model) does
+-- `yaml.safe_load(open(yaml_file))` and expects a mapping with a required
+-- "models" list of signature strings, plus an optional "weights" list of one
+-- row of floats per model (BagOfModels asserts len(weights) == len(models)
+-- and every row the same width). Every currently installed descriptor is
+-- exactly a single flow-style "models: [...]" line, optionally followed by a
+-- "weights: [" block with one bracketed, comma-terminated float row per
+-- model and a closing "]" line, and nothing else. This parser accepts
+-- exactly that shape (CRLF and a trailing "# comment" per line are
+-- tolerated, matching the pre-existing comment handling) and rejects
+-- anything else, including any unrecognized trailing content -- so a valid
+-- "models:" line can no longer mask corrupt or structurally invalid content
+-- after it. It is deliberately not a general YAML parser: block-list/flow-map
+-- spellings of the same data are valid YAML but are not shapes any shipped
+-- descriptor uses, so they are intentionally rejected rather than guessed at.
+function b0StripComment(line)
+    return (line:gsub("%s+#.*$", ""))
+end
+
+function b0Trim(s)
+    return s:match("^%s*(.-)%s*$")
+end
+
+function B0_parseNormalDescriptor(content)
     if content == "" or not content:find("%S") then
         return false, "descriptor_empty"
     end
@@ -13846,44 +13867,130 @@ function B0_validateNormalDescriptor(path, expectedReferences)
         return false, "descriptor_malformed"
     end
 
-    local modelsBody = nil
-    for rawLine in (content .. "\n"):gmatch("([^\r\n]*)[\r\n]") do
-        local line = rawLine:gsub("%s+#.*$", "")
-        local value = line:match("^%s*models%s*:%s*(.-)%s*$")
-        if value then
-            modelsBody = value:match("^%[(.*)%]$")
-            break
-        end
+    local lines = {}
+    for line in (content .. "\n"):gmatch("([^\n]*)\n") do
+        lines[#lines + 1] = (line:gsub("\r$", ""))
     end
+    while #lines > 0 and b0Trim(lines[#lines]) == "" do
+        lines[#lines] = nil
+    end
+    if #lines == 0 then
+        return false, "descriptor_empty"
+    end
+
+    local idx = 1
+    local modelsBody = b0Trim(b0StripComment(lines[idx])):match("^models%s*:%s*%[(.-)%]%s*$")
     if modelsBody == nil then
         return false, "descriptor_malformed"
     end
+    idx = idx + 1
 
-    local found = {}
-    local modelCount = 0
-    for rawToken in modelsBody:gmatch("[^,]+") do
-        local token = rawToken:match("^%s*(.-)%s*$") or ""
-        local quoted = token:match("^'(.*)'$") or token:match('^"(.*)"$')
-        if quoted ~= nil then token = quoted end
-        if token == "" or not token:match("^[%w_.-]+$") then
-            return false, "descriptor_malformed"
+    local models = {}
+    if b0Trim(modelsBody) ~= "" then
+        for rawToken in modelsBody:gmatch("[^,]+") do
+            local token = b0Trim(rawToken)
+            local quoted = token:match("^'(.*)'$") or token:match('^"(.*)"$')
+            if quoted == nil or quoted == "" or not quoted:match("^[%w_.-]+$") then
+                return false, "descriptor_malformed"
+            end
+            models[#models + 1] = quoted
         end
-        found[token] = true
-        modelCount = modelCount + 1
     end
-    if modelCount == 0 then
+    if #models == 0 then
         return false, "descriptor_malformed"
     end
+
+    local weightRows = nil
+    if idx <= #lines then
+        local header = b0Trim(b0StripComment(lines[idx]))
+        if not header:match("^weights%s*:%s*%[%s*$") then
+            return false, "descriptor_malformed"
+        end
+        idx = idx + 1
+        weightRows = {}
+        local closed = false
+        while idx <= #lines do
+            local rowLine = b0Trim(b0StripComment(lines[idx]))
+            idx = idx + 1
+            if rowLine == "]" then
+                closed = true
+                break
+            end
+            local rowBody = rowLine:match("^%[(.-)%],?$")
+            if rowBody == nil then
+                return false, "descriptor_malformed"
+            end
+            local row = {}
+            for rawNum in rowBody:gmatch("[^,]+") do
+                local numToken = b0Trim(rawNum)
+                if not numToken:match("^%-?%d+%.?%d*$") then
+                    return false, "descriptor_malformed"
+                end
+                row[#row + 1] = tonumber(numToken)
+            end
+            if #row == 0 then
+                return false, "descriptor_malformed"
+            end
+            weightRows[#weightRows + 1] = row
+        end
+        if not closed then
+            return false, "descriptor_malformed"
+        end
+    end
+
+    if idx <= #lines then
+        return false, "descriptor_malformed"
+    end
+
+    return true, nil, models, weightRows
+end
+
+function B0_validateNormalDescriptor(path, expectedReference)
+    local f = io.open(path, "rb")
+    if not f then return false, "descriptor_missing" end
+    local content = f:read("*a") or ""
+    f:close()
+
+    local ok, reason, models, weightRows = B0_parseNormalDescriptor(content)
+    if not ok then
+        return false, reason
+    end
+
+    local expectedHashes = (expectedReference and expectedReference.hashes) or {}
+    local found = {}
+    for _, model in ipairs(models) do
+        found[model] = true
+    end
     local expectedCount = 0
-    for _, reference in ipairs(expectedReferences or {}) do
+    for _, reference in ipairs(expectedHashes) do
         expectedCount = expectedCount + 1
         if not found[tostring(reference)] then
             return false, "descriptor_missing_reference"
         end
     end
-    if modelCount ~= expectedCount then
+    if #models ~= expectedCount then
         return false, "descriptor_missing_reference"
     end
+
+    if weightRows then
+        if #weightRows ~= #models then
+            return false, "descriptor_malformed"
+        end
+        local rowWidth = #weightRows[1]
+        if rowWidth == 0 then
+            return false, "descriptor_malformed"
+        end
+        for _, row in ipairs(weightRows) do
+            if #row ~= rowWidth then
+                return false, "descriptor_malformed"
+            end
+        end
+        local expectedColumns = expectedReference and expectedReference.weightColumns
+        if expectedColumns and rowWidth ~= expectedColumns then
+            return false, "descriptor_malformed"
+        end
+    end
+
     return true, nil
 end
 
