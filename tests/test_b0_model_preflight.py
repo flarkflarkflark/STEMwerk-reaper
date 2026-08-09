@@ -19,6 +19,7 @@ MAIN_LUA = ROOT / "scripts" / "reaper" / "STEMwerk.lua"
 LUA = shutil.which("lua") or shutil.which("lua5.4") or shutil.which("luajit")
 
 NORMAL_WEIGHT = "955717e8-8726e21a.th"
+SIX_STEM_WEIGHT = "5c90dfd2-34c22ccb.th"
 QUALITY_WEIGHTS = (
     "f7e0c4bc-ba3fe64a.th",
     "d12395a8-e57c48e6.th",
@@ -321,6 +322,120 @@ def test_block_list_yaml_form_is_intentionally_unsupported(tmp_path):
     _install_normal_weight(tmp_path)
 
     ready, detail = _run_preflight(tmp_path)
+
+    assert not ready
+    assert "descriptor_malformed" in detail
+
+
+def test_fast_descriptor_without_weights_is_ready(tmp_path):
+    # htdemucs is a 1-submodel bag; the real installed descriptor has no
+    # weights block at all, and that remains valid (BagOfModels defaults
+    # weights to all-ones when absent).
+    _write(tmp_path / "htdemucs.yaml", b"models: ['955717e8']\n")
+    _install_normal_weight(tmp_path)
+
+    ready, detail = _run_preflight(tmp_path)
+
+    assert ready, detail
+
+
+def test_fast_descriptor_with_correct_weight_width_is_ready(tmp_path):
+    # Loading the real installed 955717e8 checkpoint via the vendored
+    # demucs.repo.BagOnlyRepo confirms htdemucs.sources has 4 entries
+    # (drums, bass, other, vocals), so a 1x4 weights row is the only
+    # semantically valid optional shape for this descriptor.
+    _write(tmp_path / "htdemucs.yaml", b"models: ['955717e8']\nweights: [\n  [1., 1., 1., 1.],\n]")
+    _install_normal_weight(tmp_path)
+
+    ready, detail = _run_preflight(tmp_path)
+
+    assert ready, detail
+
+
+def test_fast_descriptor_with_wrong_weight_width_blocks(tmp_path):
+    _write(tmp_path / "htdemucs.yaml", b"models: ['955717e8']\nweights: [\n  [1.],\n]")
+    _install_normal_weight(tmp_path)
+
+    ready, detail = _run_preflight(tmp_path)
+
+    assert not ready
+    assert "descriptor_malformed" in detail
+
+
+def test_fast_descriptor_weight_row_count_mismatch_blocks(tmp_path):
+    # 1 model declared but 2 weight rows.
+    _write(
+        tmp_path / "htdemucs.yaml",
+        b"models: ['955717e8']\nweights: [\n  [1., 1., 1., 1.],\n  [1., 1., 1., 1.],\n]",
+    )
+    _install_normal_weight(tmp_path)
+
+    ready, detail = _run_preflight(tmp_path)
+
+    assert not ready
+    assert "descriptor_malformed" in detail
+
+
+def test_six_stem_descriptor_without_weights_is_ready(tmp_path):
+    _write(tmp_path / "htdemucs_6s.yaml", b"models: ['5c90dfd2']\n")
+    _write(tmp_path / SIX_STEM_WEIGHT, b"w" * 1024)
+
+    ready, detail = _run_preflight(tmp_path, model="htdemucs_6s")
+
+    assert ready, detail
+
+
+def test_six_stem_descriptor_with_correct_weight_width_is_ready(tmp_path):
+    # The real installed 5c90dfd2 checkpoint has 6 sources (drums, bass,
+    # other, vocals, guitar, piano), confirmed via demucs.repo.BagOnlyRepo,
+    # so a 1x6 weights row is the only semantically valid optional shape.
+    _write(
+        tmp_path / "htdemucs_6s.yaml",
+        b"models: ['5c90dfd2']\nweights: [\n  [1., 1., 1., 1., 1., 1.],\n]",
+    )
+    _write(tmp_path / SIX_STEM_WEIGHT, b"w" * 1024)
+
+    ready, detail = _run_preflight(tmp_path, model="htdemucs_6s")
+
+    assert ready, detail
+
+
+def test_six_stem_descriptor_with_wrong_weight_width_blocks(tmp_path):
+    _write(tmp_path / "htdemucs_6s.yaml", b"models: ['5c90dfd2']\nweights: [\n  [1.],\n]")
+    _write(tmp_path / SIX_STEM_WEIGHT, b"w" * 1024)
+
+    ready, detail = _run_preflight(tmp_path, model="htdemucs_6s")
+
+    assert not ready
+    assert "descriptor_malformed" in detail
+
+
+def test_six_stem_descriptor_weight_row_count_mismatch_blocks(tmp_path):
+    _write(
+        tmp_path / "htdemucs_6s.yaml",
+        b"models: ['5c90dfd2']\nweights: [\n  [1., 1., 1., 1., 1., 1.],\n  [1., 1., 1., 1., 1., 1.],\n]",
+    )
+    _write(tmp_path / SIX_STEM_WEIGHT, b"w" * 1024)
+
+    ready, detail = _run_preflight(tmp_path, model="htdemucs_6s")
+
+    assert not ready
+    assert "descriptor_malformed" in detail
+
+
+def test_quality_descriptor_with_correct_weight_width_is_ready(tmp_path):
+    # Already covered by test_valid_larger_quality_descriptor_is_ready; this
+    # is an explicit companion asserting the FT-specific wrong-width case
+    # stays enforced after the Fast/6-Stem table extension.
+    descriptor = (
+        b"models: ['f7e0c4bc', 'd12395a8', '92cfc3b6', '04573f0d']\n"
+        b"weights: [\n  [1.],\n  [1.],\n  [1.],\n  [1.],\n]"
+    )
+    _write(tmp_path / "htdemucs_ft.yaml", descriptor)
+    for weight in QUALITY_WEIGHTS:
+        _write(tmp_path / weight, b"w" * 1024)
+
+    ready, detail = _run_preflight(tmp_path, model="htdemucs_ft")
 
     assert not ready
     assert "descriptor_malformed" in detail
