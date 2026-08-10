@@ -43,6 +43,24 @@ def test_required_target_neutral_and_macos_files_are_allowlisted():
     assert {"vendor/stemwerk-core/src/stemwerk_core/models.py", "i18n/languages.lua"} <= destinations
 
 
+def test_manifest_contains_all_statically_detected_internal_dependencies():
+    from tools import release_gate
+
+    deps: set[str] = set()
+    for lua_file in release_gate.iter_lua_files(ROOT):
+        text = release_gate.read_text(lua_file)
+        found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
+        deps.update(found)
+
+    destinations = manifest_destinations()
+    missing = sorted(
+        dep[len("scripts/reaper/"):]
+        for dep in deps
+        if dep[len("scripts/reaper/"):] not in destinations
+    )
+    assert not missing, f"macOS payload manifest missing statically detected runtime deps: {missing}"
+
+
 def test_manifest_destinations_are_unique():
     destinations = [
         line.split("\t", 1)[1]

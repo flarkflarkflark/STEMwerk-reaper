@@ -29,6 +29,7 @@ installer/assets/stemwerk.svg	stemwerk.svg
 README.md	README.md
 LICENSE	LICENSE
 scripts/reaper/_internal/STEMwerk_Devices.lua	_internal/STEMwerk_Devices.lua
+scripts/reaper/_internal/STEMwerk_DKS_Import.lua	_internal/STEMwerk_DKS_Import.lua
 scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua	_internal/STEMwerk_DrumKit_Workflow.lua
 scripts/reaper/_internal/STEMwerk_ExtState.lua	_internal/STEMwerk_ExtState.lua
 scripts/reaper/_internal/STEMwerk_Glue_Helpers.lua	_internal/STEMwerk_Glue_Helpers.lua

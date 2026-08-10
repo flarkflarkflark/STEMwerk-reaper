@@ -72,6 +72,26 @@ def test_windows_payload_preserves_required_shared_and_windows_files() -> None:
     assert required <= sources
 
 
+def test_windows_payload_contains_all_statically_detected_internal_dependencies() -> None:
+    from tools import release_gate
+
+    deps: set[str] = set()
+    for lua_file in release_gate.iter_lua_files(ROOT):
+        text = release_gate.read_text(lua_file)
+        found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
+        deps.update(found)
+
+    sources = set()
+    for source, _ in payload_mappings():
+        posix_source = source.replace("\\", "/")
+        if posix_source.startswith("../../"):
+            posix_source = posix_source[len("../../"):]
+        sources.add(posix_source)
+
+    missing = sorted(dep for dep in deps if dep not in sources)
+    assert not missing, f"Windows payload missing statically detected runtime deps: {missing}"
+
+
 def test_windows_payload_sources_exist_and_are_explicit_files() -> None:
     mappings = payload_mappings()
     assert mappings

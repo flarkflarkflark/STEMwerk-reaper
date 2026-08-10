@@ -26,6 +26,7 @@ Source: "..\..\scripts\reaper\audio_separator_process.py"; DestDir: "{app}"; Fla
 
 ; Shared REAPER internals used on Windows.
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Devices.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\_internal\STEMwerk_DKS_Import.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_DrumKit_Workflow.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_ExtState.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Glue_Helpers.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
