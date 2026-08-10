@@ -13,6 +13,11 @@ STEMwerk 2.3.1.0 - macOS online Repair and no downloads during processing
 - Actionable error messages with a recovery step and download link instead of bare failure reasons.
 - onnxruntime is now pinned per platform (1.27.0 on macOS 14+ Apple Silicon, 1.23.2 on macOS 13 Apple Silicon and on Intel, 1.17.3 on macOS 12 Apple Silicon, 1.19.2 on macOS 11–12 Intel); the onnxruntime-silicon fork is no longer attempted. Minimum macOS: 12 on Apple Silicon, 11 on Intel.
 - The bundled Apple Silicon installer is now runtime-only (~260 MB instead of 1.07 GB): models and DrumSep checkpoints download via the online catalog. The thin online installer now refuses to overwrite a full bundled installation instead of silently removing it.
+- The no-download-during-processing guarantee is now enforced with a preflight check before the separation worker launches, closing gaps on the Direct Kit and Kit Split routes so a missing model asset is caught before any work starts rather than partway through.
+- Fixed a macOS runtime-detection bug (issue #110) where a single timed-out interpreter probe could make an already-working, fully-set-up Python installation look unusable, incorrectly falling back to an unrelated system Python and reporting a false "setup failed" in the UI even though processing itself kept working.
+- Fixed Kit Split (Drum Kit extraction) silently reporting success with 0 tracks imported when a mid-run settings reload reset the internal stem list; REAPER import now always reuses the validated output paths and a real mismatch is reported as a clear failure instead of a false green completion.
+- Additional macOS Repair reliability fixes: a samplerate-library architecture mismatch is now classified as its own diagnostic instead of a generic failure; the offline recovery preflight no longer creates runtime directories before confirming a managed Python is actually available; and Repair now exits immediately once it confirms the existing runtime already matches policy, instead of continuing into install steps that could touch a healthy environment.
+- Fixed a packaging gap where the ReaPack index was missing the Kit Split import module, which would have made STEMwerk fail to load entirely on a fresh install of this version.
 
 STEMwerk 2.3.0.7 - ReaPack distribution hotfix
 
