@@ -44,6 +44,7 @@ STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
         <source file="../audio_separator_process.py" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/audio_separator_process.py</source>
 
         <source file="../_internal/STEMwerk_Devices.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Devices.lua</source>
+        <source file="../_internal/STEMwerk_DKS_Import.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_DKS_Import.lua</source>
         <source file="../_internal/STEMwerk_DrumKit_Workflow.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua</source>
         <source file="../_internal/STEMwerk_ExtState.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_ExtState.lua</source>
         <source file="../_internal/STEMwerk_Glue_Helpers.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Glue_Helpers.lua</source>
