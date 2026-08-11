@@ -4891,6 +4891,164 @@ def test_bundled_installer_invokes_fetch_runtime_assets_via_bash_explicitly():
     assert 'bash "$ROOT_DIR/fetch_runtime_assets.sh"' in bundled_model_shell
 
 
+def test_shipped_readme_identifies_current_2310_release_and_assets():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    # 2.3.1.0 must be identified as the current release, not as something
+    # still forthcoming.
+    assert "STEMwerk `2.3.1.0`, the current release" in readme
+    assert "Upcoming: `2.3.1.0`" not in readme
+    assert "2.3.1.0` (in progress)" not in readme
+    assert "From `2.3.1.0`, models will be installed" not in readme
+
+    # Older versions must not be described with current/latest-release
+    # semantics anymore.
+    stale_current_phrases = [
+        "current release: `STEMwerk 2.3.0.7`",
+        "`2.3.0.7` is the current release",
+        "`2.3.0.6` is the latest release with installer assets",
+        "GitHub release assets for 2.3.0.6",
+        "the latest release with installer packages",
+        "The current stable Windows target is `2.3.0.7`",
+        "assets from `2.3.0.6` remain current",
+        "bundled `2.3.0.6` installer",
+        "From `2.3.1.0`, models will be installed",
+    ]
+    for phrase in stale_current_phrases:
+        assert phrase not in readme, phrase
+
+    # Current install/download guidance must target 2.3.1.0 assets.
+    assert "GitHub release assets for 2.3.1.0" in readme
+    assert "STEMwerk-Setup-2.3.1.0.exe" in readme
+    assert "STEMwerk-Setup-2.3.1.0-bundled.exe" in readme
+    assert "stemwerk_2.3.1.0_amd64.deb" in readme
+    assert "stemwerk-2.3.1.0-1.noarch.rpm" in readme
+    assert "stemwerk-2.3.1.0-1-any.pkg.tar.zst" in readme
+    assert "STEMwerk-2.3.1.0-x86_64.AppImage" in readme
+    assert "bundled `2.3.1.0` installer" in readme
+
+    # Must not falsely claim 2.3.1.0 is already a published/tagged release.
+    assert "has not yet been published as a tagged GitHub Release" in readme
+
+    # Genuinely historical references remain valid and must be preserved.
+    assert "`2.3.0.0` remains the original 2.3 full-release baseline" in readme
+    assert "large offline/full installers deliberately remain on the `2.3.0.0` line" in readme
+    assert "## What's new in 2.3.0.6 / 2.3.0.7" in readme
+
+
+def _run_fetch_runtime_assets_helper(script, payload_dir):
+    helper = "installer/windows/fetch_runtime_assets.sh"
+    shell = (
+        f'STEMWERK_FETCH_RUNTIME_ASSETS_NO_MAIN=1 RootDirOverride="{payload_dir}"; '
+        f'. "{helper}" 2>/dev/null; '
+        f"{script}"
+    )
+    return subprocess.run(
+        ["bash", "-c", shell],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+
+def _make_fixture_file(tmp_path, name, content):
+    path = tmp_path / name
+    path.write_bytes(content)
+    return path
+
+
+def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ffmpeg_source():
+    script = Path("installer/windows/fetch_runtime_assets.sh").read_text(encoding="utf-8")
+    ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
+
+    assert 'PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in script
+    assert 'FFMPEG_SHA256="e6b54767a6065919048f1a098eb27211ca4e12b4348a05d88777a5855d0b6e71"' in script
+    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\"" not in script
+    assert (
+        'FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip"'
+        in script
+    )
+    assert "verify_sha256" in script
+
+    assert '$pythonSha256 = "fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in ps1
+    assert '$ffmpegSha256 = "e6b54767a6065919048f1a098eb27211ca4e12b4348a05d88777a5855d0b6e71"' in ps1
+    assert (
+        '$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip"'
+        in ps1
+    )
+    assert "Verify-Sha256" in ps1
+
+
+def test_windows_fetch_runtime_assets_accepts_bytes_matching_expected_checksum(tmp_path):
+    good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
+    good_sha256 = subprocess.run(
+        ["sha256sum", str(good)], text=True, capture_output=True
+    ).stdout.split()[0]
+    out = tmp_path / "out.bin"
+
+    result = _run_fetch_runtime_assets_helper(
+        f'download_if_missing "file://{good}" "{out}" "{good_sha256}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "DOWNLOAD_OK" in result.stdout
+    assert out.read_bytes() == b"correct bytes"
+
+
+def test_windows_fetch_runtime_assets_rejects_downloaded_bytes_with_wrong_checksum(tmp_path):
+    bad = _make_fixture_file(tmp_path, "bad.bin", b"tampered or corrupted bytes")
+    out = tmp_path / "out.bin"
+    wrong_expected = "0" * 64
+
+    result = _run_fetch_runtime_assets_helper(
+        f'download_if_missing "file://{bad}" "{out}" "{wrong_expected}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "DOWNLOAD_OK" not in result.stdout
+    assert "checksum verification" in (result.stdout + result.stderr)
+    assert not out.exists()
+
+
+def test_windows_fetch_runtime_assets_rejects_and_replaces_corrupted_cache(tmp_path):
+    good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
+    good_sha256 = subprocess.run(
+        ["sha256sum", str(good)], text=True, capture_output=True
+    ).stdout.split()[0]
+    out = _make_fixture_file(tmp_path, "out.bin", b"stale corrupted cache contents")
+
+    result = _run_fetch_runtime_assets_helper(
+        f'download_if_missing "file://{good}" "{out}" "{good_sha256}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "failed checksum verification, re-downloading" in result.stderr
+    assert "DOWNLOAD_OK" in result.stdout
+    assert out.read_bytes() == b"correct bytes"
+
+
+def test_windows_fetch_runtime_assets_accepts_already_verified_cache_without_redownload(tmp_path):
+    good = _make_fixture_file(tmp_path, "good.bin", b"correct bytes")
+    good_sha256 = subprocess.run(
+        ["sha256sum", str(good)], text=True, capture_output=True
+    ).stdout.split()[0]
+    out = _make_fixture_file(tmp_path, "out.bin", b"correct bytes")
+
+    result = _run_fetch_runtime_assets_helper(
+        # An unreachable/invalid URL proves this path never re-downloads:
+        # a cache hit must short-circuit before any network attempt.
+        f'download_if_missing "file:///nonexistent/unused.bin" "{out}" "{good_sha256}" && echo DOWNLOAD_OK',
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "Already present and verified" in result.stdout
+    assert "DOWNLOAD_OK" in result.stdout
+
+
 def test_release_docs_retire_windows_update_patch_for_2304():
     readme = Path("README.md").read_text(encoding="utf-8")
     release_notes = Path("docs/RELEASE_2.3.0.4.md").read_text(encoding="utf-8")

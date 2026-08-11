@@ -23,8 +23,20 @@ $skipWheelhouse = if ($env:STEMWERK_SKIP_WHEELHOUSE) { [int]$env:STEMWERK_SKIP_W
 
 $pythonFile = "python-3.11.8-amd64.exe"
 $pythonUrl = "https://www.python.org/ftp/python/3.11.8/$pythonFile"
+$pythonSha256 = "fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"
+
+# The plain "ffmpeg-release-essentials.zip" alias is a rolling redirect to
+# whatever gyan.dev currently considers the latest release build, so it is
+# not a stable input on its own. Fetch from the exact versioned package URL
+# it currently resolves to (release 9.0) instead, pinned with the SHA256
+# gyan.dev itself publishes for that package
+# (https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip.sha256).
+# The local cache/staged filename stays "ffmpeg-release-essentials.zip" so
+# STEMwerk.iss's payload\ffmpeg\ffmpeg-release-essentials.zip reference does
+# not need to change every time this pin is bumped.
 $ffmpegFile = "ffmpeg-release-essentials.zip"
-$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/$ffmpegFile"
+$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip"
+$ffmpegSha256 = "e6b54767a6065919048f1a098eb27211ca4e12b4348a05d88777a5855d0b6e71"
 
 function Get-PythonCommand {
     $py = Get-Command py -ErrorAction SilentlyContinue
@@ -72,13 +84,32 @@ function Ensure-Packaging {
     }
 }
 
-function Download-IfMissing([string]$Url, [string]$OutPath) {
+function Verify-Sha256([string]$Path, [string]$Expected) {
+    $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $Expected) {
+        Write-Host "ERROR: SHA256 mismatch for $Path" -ForegroundColor Red
+        Write-Host "  expected: $Expected" -ForegroundColor Red
+        Write-Host "  actual:   $actual" -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
+function Download-IfMissing([string]$Url, [string]$OutPath, [string]$ExpectedSha256) {
     if (Test-Path $OutPath) {
-        Write-Host "Already present: $OutPath"
-        return
+        if (Verify-Sha256 $OutPath $ExpectedSha256) {
+            Write-Host "Already present and verified: $OutPath"
+            return
+        }
+        Write-Host "Cached file failed checksum verification, re-downloading: $OutPath"
+        Remove-Item -Force $OutPath
     }
     Write-Host "Downloading $Url"
     Invoke-WebRequest -Uri $Url -OutFile $OutPath -UseBasicParsing
+    if (-not (Verify-Sha256 $OutPath $ExpectedSha256)) {
+        Remove-Item -Force -ErrorAction SilentlyContinue $OutPath
+        throw "Downloaded file failed checksum verification, refusing to use it: $OutPath"
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
@@ -87,8 +118,8 @@ if ($skipWheelhouse -eq 0) {
     New-Item -ItemType Directory -Force -Path $wheelsDir | Out-Null
 }
 
-Download-IfMissing $pythonUrl (Join-Path $pythonDir $pythonFile)
-Download-IfMissing $ffmpegUrl (Join-Path $ffmpegDir $ffmpegFile)
+Download-IfMissing $pythonUrl (Join-Path $pythonDir $pythonFile) $pythonSha256
+Download-IfMissing $ffmpegUrl (Join-Path $ffmpegDir $ffmpegFile) $ffmpegSha256
 
 if ($skipWheelhouse -eq 0) {
     Ensure-Packaging
