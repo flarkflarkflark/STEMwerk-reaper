@@ -26,6 +26,39 @@ BOOTSTRAP_MACOS = "scripts/reaper/STEMwerk_Bootstrap_macOS.sh"
 SAMPLERATE_GUARD_REL = "_internal/stemwerk_samplerate_guard.py"
 SAMPLERATE_GUARD_PAYLOAD_PATH = f"scripts/reaper/{SAMPLERATE_GUARD_REL}"
 
+# Edges reached only through a variable built from directory-resolution +
+# a literal filename, then dofile(var)/pcall(dofile, var) -- e.g.
+# `local x = someDir() .. "Target.lua"; pcall(dofile, x)`. The static scan
+# above only extracts literals that appear directly inside the
+# dofile/loadfile/pcall(dofile, ...) call parentheses, so it cannot see
+# these. Verified by manual trace of every dynamic dofile/pcall(dofile, ...)
+# call site in scripts/reaper as of 2.3.1.0 release prep.
+#
+# Each entry only fires when its source file exists AND its text contains
+# the literal filename substring (the same evidence the static scan above
+# requires, just indirected through a variable) -- so this stays inert
+# against unrelated/synthetic trees instead of unconditionally demanding
+# these targets everywhere. Add a new (source, literal, target) entry here
+# whenever a new dynamic dispatch of this shape is introduced.
+DYNAMIC_PRODUCTION_DEPENDENCIES = (
+    ("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua", "STEMwerk.lua", "scripts/reaper/STEMwerk.lua"),
+    ("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua", "STEMwerk_Save_Support_Bundle.lua", "scripts/reaper/STEMwerk_Save_Support_Bundle.lua"),
+    ("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua", "STEMwerk_Set_FFmpegPath.lua", "scripts/reaper/STEMwerk_Set_FFmpegPath.lua"),
+    ("scripts/reaper/STEMwerk-SETUP.lua", "STEMwerk_Setup_Internal.lua", "scripts/reaper/_internal/STEMwerk_Setup_Internal.lua"),
+    ("scripts/reaper/_internal/STEMwerk_I18N.lua", "stemwerk_language_wrapper.lua", "scripts/reaper/i18n/stemwerk_language_wrapper.lua"),
+)
+
+
+def collect_dynamic_production_dependencies(root: Path) -> set[str]:
+    deps: set[str] = set()
+    for source_rel, literal, target_rel in DYNAMIC_PRODUCTION_DEPENDENCIES:
+        source_path = root / source_rel
+        if not source_path.exists():
+            continue
+        if literal in read_text(source_path):
+            deps.add(target_rel)
+    return deps
+
 
 @dataclass
 class Section:
@@ -246,15 +279,19 @@ def check_runtime_dependencies(root: Path, payload_paths: set[str]) -> Section:
         deps.update(found)
         dynamic_warnings.extend(warns)
 
+    static_dep_count = len(deps)
+    dynamic_deps = collect_dynamic_production_dependencies(root)
+    deps.update(dynamic_deps)
+
     missing_local = sorted([d for d in deps if not (root / d).exists()])
     if missing_local:
-        section.fail("statically detected runtime dependencies missing locally:")
+        section.fail("runtime dependencies missing locally:")
         for d in missing_local:
             section.note(f" - {d}")
 
     missing_in_payload = sorted([d for d in deps if d not in payload_paths])
     if missing_in_payload:
-        section.fail("statically detected runtime dependencies missing from index.xml payload:")
+        section.fail("runtime dependencies missing from index.xml payload:")
         for d in missing_in_payload:
             section.note(f" - {d}")
 
@@ -268,7 +305,11 @@ def check_runtime_dependencies(root: Path, payload_paths: set[str]) -> Section:
     if timing_path not in payload_paths:
         section.fail(f"regression guard: missing index.xml payload entry for {timing_path}")
 
-    section.note(f"statically detected internal runtime deps: {len(deps)}")
+    section.note(
+        f"runtime deps checked: {len(deps)} "
+        f"({static_dep_count} statically detected, "
+        f"{len(dynamic_deps)} dynamic-dispatch)"
+    )
     return section
 
 

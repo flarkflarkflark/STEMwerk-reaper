@@ -51,6 +51,7 @@ def test_manifest_contains_all_statically_detected_internal_dependencies():
         text = release_gate.read_text(lua_file)
         found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
         deps.update(found)
+    deps.update(release_gate.collect_dynamic_production_dependencies(ROOT))
 
     destinations = manifest_destinations()
     missing = sorted(
@@ -58,7 +59,7 @@ def test_manifest_contains_all_statically_detected_internal_dependencies():
         for dep in deps
         if dep[len("scripts/reaper/"):] not in destinations
     )
-    assert not missing, f"macOS payload manifest missing statically detected runtime deps: {missing}"
+    assert not missing, f"macOS payload manifest missing statically detected or declared dynamic-dispatch runtime deps: {missing}"
 
 
 def test_manifest_destinations_are_unique():

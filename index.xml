@@ -32,6 +32,7 @@ STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
         <source file="../STEMwerk.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk.lua</source>
         <source file="../STEMwerk-SETUP.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk-SETUP.lua</source>
         <source file="../STEMwerk_Save_Support_Bundle.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Save_Support_Bundle.lua</source>
+        <source file="../STEMwerk_Set_FFmpegPath.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Set_FFmpegPath.lua</source>
         <source file="../STEMwerk_AI_Separate.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_AI_Separate.lua</source>
         <source file="../STEMwerk_Setup_Toolbar.lua" type="script" main="main">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Setup_Toolbar.lua</source>
         <source file="../STEMwerk_Explode_Takes.lua" type="script">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/STEMwerk_Explode_Takes.lua</source>

@@ -18,7 +18,6 @@ copy_linux_payload() {
     --exclude='sync_to_reaper.sh' \
     --exclude='STEMwerk_Enable_Debug.lua' \
     --exclude='STEMwerk_Disable_Debug.lua' \
-    --exclude='STEMwerk_Set_FFmpegPath.lua' \
     --exclude='STEMwerk_Set_PythonPath.lua' \
     --exclude='STEMwerk_separate.lua' \
     --exclude='themes/' \

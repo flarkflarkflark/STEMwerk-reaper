@@ -15,6 +15,7 @@ scripts/reaper/STEMwerk_Explode_Takes.lua	STEMwerk_Explode_Takes.lua
 scripts/reaper/STEMwerk_Karaoke.lua	STEMwerk_Karaoke.lua
 scripts/reaper/STEMwerk_REAPER_Native.lua	STEMwerk_REAPER_Native.lua
 scripts/reaper/STEMwerk_Save_Support_Bundle.lua	STEMwerk_Save_Support_Bundle.lua
+scripts/reaper/STEMwerk_Set_FFmpegPath.lua	STEMwerk_Set_FFmpegPath.lua
 scripts/reaper/STEMwerk_Setup_Toolbar.lua	STEMwerk_Setup_Toolbar.lua
 scripts/reaper/STEMwerk_Vocals_Only.lua	STEMwerk_Vocals_Only.lua
 scripts/reaper/audio_separator_process.py	audio_separator_process.py

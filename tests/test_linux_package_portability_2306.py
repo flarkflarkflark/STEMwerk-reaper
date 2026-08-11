@@ -78,6 +78,31 @@ def test_linux_staged_payload_has_no_build_checkout_or_user_paths(tmp_path):
     assert offenders == []
 
 
+def test_linux_staged_payload_contains_all_statically_detected_or_dynamic_dependencies(tmp_path):
+    from tools import release_gate
+
+    staged = tmp_path / "payload"
+    command = (
+        f'source "{ROOT / "installer/linux/stage_payload.sh"}"; '
+        f'copy_linux_payload "{ROOT}" "{staged}"'
+    )
+    _run("bash", "-c", command)
+
+    deps: set[str] = set()
+    for lua_file in release_gate.iter_lua_files(ROOT):
+        text = release_gate.read_text(lua_file)
+        found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
+        deps.update(found)
+    deps.update(release_gate.collect_dynamic_production_dependencies(ROOT))
+
+    missing = sorted(
+        dep
+        for dep in deps
+        if not (staged / dep[len("scripts/reaper/"):]).exists()
+    )
+    assert not missing, f"Linux staged payload missing statically detected or declared dynamic-dispatch runtime deps: {missing}"
+
+
 def test_managed_python_invocation_remains_explicit_across_platforms():
     main_lua = (ROOT / "scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
     setup_lua = (ROOT / "scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text(

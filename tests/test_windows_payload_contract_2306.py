@@ -80,16 +80,23 @@ def test_windows_payload_contains_all_statically_detected_internal_dependencies(
         text = release_gate.read_text(lua_file)
         found, _ = release_gate.extract_internal_deps(ROOT, lua_file, text)
         deps.update(found)
+    deps.update(release_gate.collect_dynamic_production_dependencies(ROOT))
 
-    sources = set()
-    for source, _ in payload_mappings():
-        posix_source = source.replace("\\", "/")
-        if posix_source.startswith("../../"):
-            posix_source = posix_source[len("../../"):]
-        sources.add(posix_source)
+    # Compare by install-time destination ({app} maps 1:1 to scripts/reaper/
+    # in repo-relative terms), not by source path: some assets (e.g. i18n/)
+    # are sourced from a different repo-relative mirror than where they end
+    # up installed.
+    installed = set()
+    for source, dest in payload_mappings():
+        filename = source.replace("\\", "/").rsplit("/", 1)[-1]
+        dest_posix = dest.replace("\\", "/")
+        if dest_posix == "{app}":
+            installed.add(f"scripts/reaper/{filename}")
+        elif dest_posix.startswith("{app}/"):
+            installed.add(f"scripts/reaper/{dest_posix[len('{app}/'):]}/{filename}")
 
-    missing = sorted(dep for dep in deps if dep not in sources)
-    assert not missing, f"Windows payload missing statically detected runtime deps: {missing}"
+    missing = sorted(dep for dep in deps if dep not in installed)
+    assert not missing, f"Windows payload missing statically detected or declared dynamic-dispatch runtime deps: {missing}"
 
 
 def test_windows_payload_sources_exist_and_are_explicit_files() -> None:

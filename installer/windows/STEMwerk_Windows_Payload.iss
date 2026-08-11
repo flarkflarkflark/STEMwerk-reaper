@@ -17,6 +17,7 @@ Source: "..\..\scripts\reaper\STEMwerk_Explode_Takes.lua"; DestDir: "{app}"; Fla
 Source: "..\..\scripts\reaper\STEMwerk_Karaoke.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_REAPER_Native.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_Save_Support_Bundle.lua"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\STEMwerk_Set_FFmpegPath.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_Setup_Toolbar.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\STEMwerk_Vocals_Only.lua"; DestDir: "{app}"; Flags: ignoreversion
 
