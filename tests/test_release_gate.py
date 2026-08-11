@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tools import release_gate
 
 
@@ -85,7 +87,7 @@ def test_valid_fixture_passes(tmp_path: Path) -> None:
     _write(
         tmp_path / "tools/production_payload_contract.txt",
         "\n".join(
-            f"common\tscripts/reaper/{rel}"
+            f"required\tcommon\tscripts/reaper/{rel}"
             for rel in (
                 "STEMwerk.lua",
                 "STEMwerk-SETUP.lua",
@@ -141,3 +143,169 @@ def test_samplerate_guard_referenced_by_bootstrap_must_be_in_payload(tmp_path: P
     msgs = "\n".join("\n".join(s.messages) for s in sections)
     assert "bootstrap references helper missing from index.xml payload" in msgs
     assert "scripts/reaper/_internal/stemwerk_samplerate_guard.py" in msgs
+
+
+def _contract_path(tmp_path: Path, text: str) -> Path:
+    p = tmp_path / "contract.txt"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+# --- valid contract lines --------------------------------------------------
+
+
+def test_contract_accepts_required_common(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "required\tcommon\tscripts/reaper/STEMwerk.lua\n")
+    contract = release_gate.parse_production_payload_contract(p)
+    assert contract.required["common"] == {"scripts/reaper/STEMwerk.lua"}
+
+
+def test_contract_accepts_required_platform_specific(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "required\tmacos\tscripts/reaper/STEMwerk_Bootstrap_macOS.sh\n")
+    contract = release_gate.parse_production_payload_contract(p)
+    assert contract.required["macos"] == {"scripts/reaper/STEMwerk_Bootstrap_macOS.sh"}
+    assert contract.required["common"] == set()
+
+
+def test_contract_accepts_optional_platform_specific(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "optional\twindows\tscripts/reaper/foo.png\n")
+    contract = release_gate.parse_production_payload_contract(p)
+    assert contract.optional["windows"] == {"scripts/reaper/foo.png"}
+    assert contract.required["windows"] == set()
+
+
+def test_contract_accepts_whitespace_and_comments(tmp_path: Path) -> None:
+    p = _contract_path(
+        tmp_path,
+        "# a comment\n"
+        "\n"
+        "   \n"
+        "  required\tcommon\tscripts/reaper/STEMwerk.lua  \n"
+        "# trailing comment\n",
+    )
+    contract = release_gate.parse_production_payload_contract(p)
+    assert contract.required["common"] == {"scripts/reaper/STEMwerk.lua"}
+
+
+def test_contract_accepts_crlf(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "required\tcommon\tscripts/reaper/STEMwerk.lua\r\n")
+    contract = release_gate.parse_production_payload_contract(p)
+    assert contract.required["common"] == {"scripts/reaper/STEMwerk.lua"}
+
+
+def test_contract_accepts_same_path_under_two_different_specific_platforms(tmp_path: Path) -> None:
+    p = _contract_path(
+        tmp_path,
+        "required\tmacos\tscripts/reaper/_internal/STEMwerk_Managed_Python.sh\n"
+        "required\tlinux\tscripts/reaper/_internal/STEMwerk_Managed_Python.sh\n",
+    )
+    contract = release_gate.parse_production_payload_contract(p)
+    assert "scripts/reaper/_internal/STEMwerk_Managed_Python.sh" in contract.required["macos"]
+    assert "scripts/reaper/_internal/STEMwerk_Managed_Python.sh" in contract.required["linux"]
+
+
+# --- invalid contract lines: must fail closed -------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "../foo",
+        "a/../../foo",
+        "scripts/../etc/passwd",
+        "a/./b",
+    ],
+)
+def test_contract_rejects_path_traversal(tmp_path: Path, bad_path: str) -> None:
+    p = _contract_path(tmp_path, f"required\tcommon\t{bad_path}\n")
+    with pytest.raises(ValueError, match="traversal|not normalized"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_absolute_path(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "required\tcommon\t/etc/passwd\n")
+    with pytest.raises(ValueError, match="absolute"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_backslash_path(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "required\tcommon\tscripts\\reaper\\STEMwerk.lua\n")
+    with pytest.raises(ValueError, match="backslash"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_empty_path(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "required\tcommon\t\n")
+    with pytest.raises(ValueError, match="empty path|expected"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_unknown_platform(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "required\tfreebsd\tscripts/reaper/STEMwerk.lua\n")
+    with pytest.raises(ValueError, match="unknown platform"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_unknown_requirement_class(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "mandatory\tcommon\tscripts/reaper/STEMwerk.lua\n")
+    with pytest.raises(ValueError, match="unknown requirement class"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_malformed_field_count(tmp_path: Path) -> None:
+    p = _contract_path(tmp_path, "common\tscripts/reaper/STEMwerk.lua\n")
+    with pytest.raises(ValueError, match="expected"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_exact_duplicate_entry(tmp_path: Path) -> None:
+    p = _contract_path(
+        tmp_path,
+        "required\tcommon\tscripts/reaper/STEMwerk.lua\n"
+        "required\tcommon\tscripts/reaper/STEMwerk.lua\n",
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_same_path_different_requirement_class(tmp_path: Path) -> None:
+    p = _contract_path(
+        tmp_path,
+        "required\tcommon\tscripts/reaper/STEMwerk.lua\n"
+        "optional\tcommon\tscripts/reaper/STEMwerk.lua\n",
+    )
+    with pytest.raises(ValueError, match="already declared"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_common_and_specific_platform_conflict(tmp_path: Path) -> None:
+    p = _contract_path(
+        tmp_path,
+        "required\tcommon\tscripts/reaper/STEMwerk_Set_FFmpegPath.lua\n"
+        "required\tlinux\tscripts/reaper/STEMwerk_Set_FFmpegPath.lua\n",
+    )
+    with pytest.raises(ValueError, match="common"):
+        release_gate.parse_production_payload_contract(p)
+
+
+def test_contract_rejects_specific_platform_and_common_conflict_reversed_order(tmp_path: Path) -> None:
+    p = _contract_path(
+        tmp_path,
+        "required\tmacos\tscripts/reaper/foo.lua\n"
+        "required\tcommon\tscripts/reaper/foo.lua\n",
+    )
+    with pytest.raises(ValueError, match="common"):
+        release_gate.parse_production_payload_contract(p)
+
+
+@pytest.mark.parametrize(
+    "colliding_path",
+    [
+        "scripts//reaper/STEMwerk.lua",
+        "scripts/reaper/STEMwerk.lua/",
+    ],
+)
+def test_contract_rejects_normalization_collisions(tmp_path: Path, colliding_path: str) -> None:
+    p = _contract_path(tmp_path, f"required\tcommon\t{colliding_path}\n")
+    with pytest.raises(ValueError, match="empty segment|not normalized"):
+        release_gate.parse_production_payload_contract(p)

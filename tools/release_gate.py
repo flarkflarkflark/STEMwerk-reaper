@@ -16,6 +16,7 @@ INDEX_XML = ROOT / "index.xml"
 VERSION_FILE = ROOT / "VERSION"
 PRODUCTION_PAYLOAD_CONTRACT = ROOT / "tools" / "production_payload_contract.txt"
 CONTRACT_PLATFORMS = ("common", "linux", "macos", "windows")
+CONTRACT_REQUIREMENT_CLASSES = ("required", "optional")
 
 REQUIRED_TOP_LEVEL_SCRIPTS = (
     "scripts/reaper/STEMwerk.lua",
@@ -62,40 +63,109 @@ def collect_dynamic_production_dependencies(root: Path) -> set[str]:
     return deps
 
 
-def parse_production_payload_contract(path: Path) -> dict[str, set[str]]:
-    """Parse tools/production_payload_contract.txt into {platform: {paths}}.
+@dataclass
+class ProductionPayloadContract:
+    required: dict[str, set[str]]
+    optional: dict[str, set[str]]
+
+
+def _validate_contract_path(rel_path: str, path: Path, lineno: int) -> None:
+    if not rel_path:
+        raise ValueError(f"{path}:{lineno}: empty path")
+    if rel_path.startswith("/"):
+        raise ValueError(f"{path}:{lineno}: absolute path not allowed: {rel_path!r}")
+    if "\\" in rel_path:
+        raise ValueError(f"{path}:{lineno}: backslash not allowed, use forward slashes: {rel_path!r}")
+    segments = rel_path.split("/")
+    if any(seg in ("", ".", "..") for seg in segments):
+        raise ValueError(f"{path}:{lineno}: empty segment or path traversal not allowed: {rel_path!r}")
+    normalized = str(PurePosixPath(rel_path))
+    if normalized != rel_path:
+        raise ValueError(f"{path}:{lineno}: path is not normalized: {rel_path!r} (expected {normalized!r})")
+
+
+def parse_production_payload_contract(path: Path) -> ProductionPayloadContract:
+    """Parse tools/production_payload_contract.txt into required/optional
+    {platform: {paths}} maps.
 
     This is the normative production payload definition for 2.3.1.0 --
     independent of, and not derived from, any single distribution route.
     Source-code reachability scanning (extract_internal_deps,
     collect_dynamic_production_dependencies) stays supplemental
     defense-in-depth; it does not define this contract.
+
+    Fails closed on malformed/ambiguous input: unknown requirement class or
+    platform, empty/absolute/backslashed/non-normalized/traversal paths,
+    exact duplicate entries, the same path declared with two different
+    requirement classes, and the same path declared both 'common' and any
+    specific platform (redundant/contradictory, since 'common' already
+    covers every platform). The same path declared under two *different*
+    non-common platforms (e.g. both 'macos' and 'linux') is legitimate and
+    allowed -- that is how a shared-but-not-universal requirement is
+    expressed.
     """
-    contract: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
+    required: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
+    optional: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
+    seen: dict[str, list[tuple[str, str]]] = {}
+
     text = read_text(path)
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         parts = line.split("\t")
-        if len(parts) != 2:
-            raise ValueError(f"{path}:{lineno}: expected '<platform>\\t<path>', got: {raw!r}")
-        platform, rel_path = parts[0].strip(), parts[1].strip()
+        if len(parts) != 3:
+            raise ValueError(
+                f"{path}:{lineno}: expected '<required|optional>\\t<platform>\\t<path>', got: {raw!r}"
+            )
+        requirement, platform, rel_path = (p.strip() for p in parts)
+        if requirement not in CONTRACT_REQUIREMENT_CLASSES:
+            raise ValueError(f"{path}:{lineno}: unknown requirement class {requirement!r}")
         if platform not in CONTRACT_PLATFORMS:
             raise ValueError(f"{path}:{lineno}: unknown platform {platform!r}")
-        contract[platform].add(rel_path)
-    return contract
+        _validate_contract_path(rel_path, path, lineno)
+
+        prior_entries = seen.setdefault(rel_path, [])
+        for prior_requirement, prior_platform in prior_entries:
+            if prior_requirement != requirement:
+                raise ValueError(
+                    f"{path}:{lineno}: {rel_path!r} already declared {prior_requirement!r}, "
+                    f"cannot also declare {requirement!r} for the same path"
+                )
+            if platform == prior_platform:
+                raise ValueError(f"{path}:{lineno}: exact duplicate entry for {rel_path!r} ({platform!r})")
+            if "common" in (platform, prior_platform):
+                raise ValueError(
+                    f"{path}:{lineno}: {rel_path!r} declared both platform {prior_platform!r} and "
+                    f"{platform!r} -- 'common' already covers every platform, remove the "
+                    "redundant/conflicting entry"
+                )
+        prior_entries.append((requirement, platform))
+
+        target = required if requirement == "required" else optional
+        target[platform].add(rel_path)
+
+    return ProductionPayloadContract(required=required, optional=optional)
 
 
-def required_files_for_platform(contract: dict[str, set[str]], platform: str) -> set[str]:
+def required_files_for_platform(contract: ProductionPayloadContract, platform: str) -> set[str]:
     if platform == "reapack":
         # ReaPack serves every platform from one shared catalog: it needs
         # the union of common plus every platform-specific entry.
         result: set[str] = set()
         for plat in CONTRACT_PLATFORMS:
-            result.update(contract[plat])
+            result.update(contract.required[plat])
         return result
-    return contract["common"] | contract.get(platform, set())
+    return contract.required["common"] | contract.required.get(platform, set())
+
+
+def optional_files_for_platform(contract: ProductionPayloadContract, platform: str) -> set[str]:
+    if platform == "reapack":
+        result: set[str] = set()
+        for plat in CONTRACT_PLATFORMS:
+            result.update(contract.optional[plat])
+        return result
+    return contract.optional["common"] | contract.optional.get(platform, set())
 
 
 @dataclass
@@ -485,18 +555,28 @@ def check_production_payload_contract(root: Path, payload_paths: set[str]) -> Se
             section.note(f" - {r}")
 
     # Drift guard: anything the static/dynamic scan finds that the contract
-    # doesn't cover is a signal the contract needs a review pass, not a
-    # release blocker on its own (the scan is non-exhaustive by design).
+    # doesn't cover (as required or optional) is a signal the contract needs
+    # a review pass, not a release blocker on its own (the scan is
+    # non-exhaustive by design).
+    optional = optional_files_for_platform(contract, "reapack")
     scanned: set[str] = set()
     for lua_file in iter_lua_files(root):
         found, _ = extract_internal_deps(root, lua_file, read_text(lua_file))
         scanned.update(found)
     scanned.update(collect_dynamic_production_dependencies(root))
-    uncontracted = sorted(s for s in scanned if s not in required)
+    uncontracted = sorted(s for s in scanned if s not in required and s not in optional)
     if uncontracted:
         section.warn("source-detected dependencies not present in the production payload contract (review the contract):")
         for u in uncontracted:
             section.note(f" - {u}")
+
+    # Optional entries never fail completeness; report presence only.
+    if optional:
+        missing_optional = sorted(o for o in optional if o not in payload_paths)
+        section.note(
+            f"optional entries: {len(optional) - len(missing_optional)}/{len(optional)} present in payload"
+            + (f"; not packaged: {missing_optional}" if missing_optional else "")
+        )
 
     section.note(f"contract requires {len(required)} files for ReaPack (common + linux + macos + windows)")
     return section
