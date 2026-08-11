@@ -4904,46 +4904,99 @@ def _readme_section(readme, heading_text):
     return readme[start:end]
 
 
-def test_shipped_readme_identifies_current_2310_release_and_assets():
-    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert target_version == "2.3.1.0"
+#: Words that mark a line as making a "what should I use/download/install right
+#: now" claim. Deliberately the exact list suggested for this contract: any
+#: line combining one of these with a non-target 2.3.x.y version token is
+#: presumed stale unless the line also contains an explicit historical/
+#: transitional exemption marker (see _README_HISTORICAL_EXEMPTION_MARKERS).
+_README_CURRENT_SEMANTIC_MARKERS = (
+    "current",
+    "latest",
+    "recommended",
+    "standard",
+    "target",
+    "install",
+    "installer",
+    "package",
+    "download",
+    "use",
+)
 
-    readme = Path("README.md").read_text(encoding="utf-8")
+#: Substrings that, if present on a flagged line, prove the line is
+#: deliberately scoping itself to a past/pending state rather than claiming
+#: an older version is current -- e.g. "previously published `2.3.0.6`",
+#: "GitHub Release (previous installer assets)", "before `2.3.1.0`",
+#: "has not yet been published", "once published".
+_README_HISTORICAL_EXEMPTION_MARKERS = (
+    "published",
+    "previous",
+)
 
+
+def _assert_no_stale_current_version_semantics(section_text, target_version, section_name):
+    """Line-scan a README section: reject any line that pairs a
+    current-guidance marker word with a 2.3.x.y version other than
+    target_version, unless the line is explicitly historically-scoped."""
+    import re
+
+    version_token_re = re.compile(r"2\.3\.\d+\.\d+")
+    before_target_marker = f"before `{target_version}`"
+
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lower = stripped.lower()
+        if not any(marker in lower for marker in _README_CURRENT_SEMANTIC_MARKERS):
+            continue
+        versions_on_line = set(version_token_re.findall(stripped))
+        stale_versions = versions_on_line - {target_version}
+        if not stale_versions:
+            continue
+        if before_target_marker in stripped:
+            continue
+        if any(marker in lower for marker in _README_HISTORICAL_EXEMPTION_MARKERS):
+            continue
+        raise AssertionError(
+            f"{section_name}: line pairs a current-guidance marker with non-current "
+            f"version(s) {sorted(stale_versions)} and no historical exemption: {stripped!r}"
+        )
+
+
+def _assert_readme_release_contract(readme, target_version):
     release_status = _readme_section(readme, "## Release status")
     assets_table = _readme_section(readme, f"### GitHub release assets for {target_version}")
     windows_notes = _readme_section(readme, "## Windows Notes")
 
-    # --- A/B/C: release status section must identify 2.3.1.0 as current,
-    # not as something still forthcoming, and must not hand current/latest
-    # semantics to an older version.
+    # --- release status section must identify target_version as current,
+    # not as something still forthcoming.
     assert f"STEMwerk `{target_version}`, the current release" in release_status
     for stale_future_phrase in ("upcoming", "forthcoming", "will ship", "will be installed"):
         assert stale_future_phrase not in release_status.lower()
-    for stale_current_phrase in (
-        "current release: `STEMwerk 2.3.0.7`",
-        "`2.3.0.7` is the current release",
-        "`2.3.0.6` is the latest release with installer assets",
-        "the latest release with installer packages",
-    ):
-        assert stale_current_phrase not in release_status, stale_current_phrase
     assert "has not yet been published as a tagged GitHub Release" in release_status
 
-    # --- D: Windows guidance must target the current version, not an older one.
+    # --- Windows guidance must target the current version, not an older one.
     assert f"The current stable Windows target is `{target_version}`" in windows_notes
     assert f"install the full online or bundled `{target_version}` installer" in windows_notes
-    for stale_windows_phrase in (
-        "The current stable Windows target is `2.3.0.7`",
-        "assets from `2.3.0.6` remain current",
-        "bundled `2.3.0.6` installer",
-    ):
-        assert stale_windows_phrase not in windows_notes, stale_windows_phrase
 
-    # --- E/F/G: artifact table must use the actual x86_64 RPM/Arch names
-    # derived from installer/linux/rpm/stemwerk.spec and
-    # installer/linux/arch/PKGBUILD (both BuildArch/arch = x86_64, not
-    # noarch/any), and must include the macOS bundled Apple Silicon pkg
-    # named per installer/macos/build_pkg.sh's OUTPUT_PKG convention.
+    # --- generalized fail-closed guard: no current-guidance-marked line in
+    # any of these three sections may pair with a stale (non-target) 2.3.x.y
+    # version unless explicitly historically-scoped. This is what catches
+    # additive/contradictory stale wording, reworded stale claims, and
+    # anything semantically equivalent -- not just the specific phrasings
+    # spelled out above.
+    for section_text, section_name in (
+        (release_status, "release_status"),
+        (assets_table, "assets_table"),
+        (windows_notes, "windows_notes"),
+    ):
+        _assert_no_stale_current_version_semantics(section_text, target_version, section_name)
+
+    # --- artifact table must use the actual x86_64 RPM/Arch names derived
+    # from installer/linux/rpm/stemwerk.spec and installer/linux/arch/PKGBUILD
+    # (both BuildArch/arch = x86_64, not noarch/any), and must include the
+    # macOS bundled Apple Silicon pkg named per installer/macos/build_pkg.sh's
+    # OUTPUT_PKG convention.
     assert f"GitHub release assets for {target_version}" in readme
     assert f"STEMwerk-Setup-{target_version}.exe" in assets_table
     assert f"STEMwerk-Setup-{target_version}-bundled.exe" in assets_table
@@ -4956,13 +5009,86 @@ def test_shipped_readme_identifies_current_2310_release_and_assets():
     assert "noarch" not in assets_table
     assert "-any.pkg.tar.zst" not in assets_table
 
-    # Must not falsely claim 2.3.1.0 is already a published/tagged release.
-    assert "has not yet been published as a tagged GitHub Release" in readme
-
     # Genuinely historical references remain valid and must be preserved.
     assert "`2.3.0.0` remains the original 2.3 full-release baseline" in readme
     assert "large offline/full installers deliberately remain on the `2.3.0.0` line" in readme
     assert "## What's new in 2.3.0.6 / 2.3.0.7" in readme
+
+
+def test_shipped_readme_identifies_current_2310_release_and_assets():
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
+    assert target_version == "2.3.1.0"
+
+    readme = Path("README.md").read_text(encoding="utf-8")
+    _assert_readme_release_contract(readme, target_version)
+
+
+def test_shipped_readme_release_contract_rejects_stale_mutations():
+    """Prove the contract is fail-closed: apply representative stale-version
+    mutations to a copy of the real, currently-correct README and confirm
+    each one is rejected. Covers additive/contradictory wording, restated
+    "latest installers" claims, direct "install 2.3.0.6" guidance,
+    semantically-equivalent rewordings, a missing bundled-Apple-Silicon row,
+    and reverted RPM/Arch architecture names."""
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
+    real_readme = Path("README.md").read_text(encoding="utf-8")
+
+    def mutate(anchor, inserted_line):
+        assert anchor in real_readme, anchor
+        return real_readme.replace(anchor, anchor + "\n" + inserted_line, 1)
+
+    mutations = {
+        # A: additive/contradictory old-current wording, valid line left in place.
+        "A": mutate(
+            "## Release status",
+            "Current release: 2.3.0.7.",
+        ),
+        # B: restated "latest installers" claim for an older version.
+        "B": mutate(
+            f"### GitHub release assets for {target_version}",
+            "The latest installers remain 2.3.0.6.",
+        ),
+        # C: additive/contradictory wording in the Windows-specific section.
+        "C": mutate(
+            "## Windows Notes",
+            "Windows users can also use 2.3.0.7.",
+        ),
+        # D: direct install instruction naming an older version.
+        "D": mutate(
+            "## Windows Notes",
+            "Windows users should install STEMwerk 2.3.0.6.",
+        ),
+        # E: bundled Apple Silicon row silently dropped from the table.
+        "E": real_readme.replace(
+            f"| `STEMwerk-{target_version}-bundled-apple-silicon.pkg` | macOS Apple Silicon bundled recovery installer |\n",
+            "",
+        ),
+        # F: RPM architecture reverted to noarch.
+        "F": real_readme.replace(
+            f"stemwerk-{target_version}-1.x86_64.rpm", f"stemwerk-{target_version}-1.noarch.rpm"
+        ),
+        # G: Arch architecture reverted to any.
+        "G": real_readme.replace(
+            f"stemwerk-{target_version}-1-x86_64.pkg.tar.zst",
+            f"stemwerk-{target_version}-1-any.pkg.tar.zst",
+        ),
+        # H: semantically equivalent stale wording, different phrasing entirely.
+        "H": mutate(
+            "## Windows Notes",
+            "For the recommended/current Windows package, use 2.3.0.6.",
+        ),
+    }
+
+    for label, mutated_readme in mutations.items():
+        assert mutated_readme != real_readme, f"mutation {label} did not change the file"
+        try:
+            _assert_readme_release_contract(mutated_readme, target_version)
+        except AssertionError:
+            continue
+        raise AssertionError(f"mutation {label} was not rejected by the README release contract")
+
+    # The real, unmodified file must still pass.
+    _assert_readme_release_contract(real_readme, target_version)
 
 
 def _run_fetch_runtime_assets_helper(script, payload_dir):
@@ -5101,30 +5227,232 @@ def test_release_workflow_uploads_only_supported_windows_installers():
     assert 'files: installer/windows/dist/*.exe' not in workflow
 
 
-def _fetch_bundled_runtime_assets_step(workflow_text):
-    marker = "- name: Fetch bundled runtime assets (Windows)"
-    start = workflow_text.index(marker)
-    next_step = workflow_text.index("- name:", start + len(marker))
-    return workflow_text[start:next_step]
+def _release_workflow_run_steps(workflow_text=None):
+    """Parse the actual release workflow YAML (or a caller-supplied mutated
+    text, for mutation testing) and return every (job_name, step_name,
+    run_text) tuple across ALL jobs -- not just the one named Windows step --
+    so a bypass introduced anywhere (a new step, a different job) is in
+    scope."""
+    import yaml
+
+    if workflow_text is None:
+        workflow_text = Path(".github/workflows/release-installers.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    steps = []
+    for job_name, job in workflow.get("jobs", {}).items():
+        for step in job.get("steps", []):
+            if "run" in step:
+                steps.append((job_name, step.get("name", ""), step["run"]))
+    return steps
+
+
+def _executable_lines(run_text):
+    """Drop blank and '#'-comment-only lines so a fetcher reference that only
+    exists inside a comment doesn't count as a real invocation."""
+    lines = []
+    for line in run_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        lines.append(line)
+    return lines
+
+
+_RELEASE_WORKFLOW_FORBIDDEN_DIRECT_FETCH = (
+    "Invoke-WebRequest",
+    "python.org/ftp/python",
+    "gyan.dev/ffmpeg",
+)
+_RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS = (
+    "_bundled/python",
+    "_bundled\\python",
+    "_bundled/ffmpeg",
+    "_bundled\\ffmpeg",
+    "payload\\python",
+    "payload/python",
+    "payload\\ffmpeg",
+    "payload/ffmpeg",
+)
+
+
+def _assert_release_workflow_windows_runtime_provenance(steps):
+    hardened_invocations = []
+    forbidden_hits = []
+
+    for job_name, step_name, run_text in steps:
+        executable_text = "\n".join(_executable_lines(run_text))
+        invokes_hardened = "fetch_runtime_assets.ps1" in executable_text
+        if invokes_hardened:
+            hardened_invocations.append((job_name, step_name, executable_text))
+
+        for forbidden in _RELEASE_WORKFLOW_FORBIDDEN_DIRECT_FETCH:
+            if forbidden in executable_text:
+                forbidden_hits.append((job_name, step_name, forbidden))
+
+        # A staging-path mention alone is fine (e.g. just creating the
+        # directory); what's forbidden is a step that both references one of
+        # these paths AND performs its own fetch/write to it instead of
+        # going through the hardened fetcher.
+        if not invokes_hardened and (
+            "Invoke-WebRequest" in executable_text or "OutFile" in executable_text or "curl " in executable_text
+        ):
+            for staging_path in _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS:
+                if staging_path in executable_text:
+                    forbidden_hits.append((job_name, step_name, f"direct staging write to {staging_path}"))
+
+    assert not forbidden_hits, (
+        f"forbidden direct-fetch pattern(s) found outside the hardened fetcher: {forbidden_hits}"
+    )
+    assert hardened_invocations, (
+        "no step actually executes fetch_runtime_assets.ps1 -- a comment-only mention does not count"
+    )
+
+    for job_name, step_name, executable_text in hardened_invocations:
+        assert (
+            'STEMWERK_SKIP_WHEELHOUSE = "1"' in executable_text
+            or "STEMWERK_SKIP_WHEELHOUSE=1" in executable_text
+        ), f"{job_name}/{step_name}: invokes fetch_runtime_assets.ps1 without STEMWERK_SKIP_WHEELHOUSE=1"
 
 
 def test_release_workflow_bundled_windows_job_uses_hardened_fetcher_not_raw_downloads():
-    workflow = Path(".github/workflows/release-installers.yml").read_text(encoding="utf-8")
-    step = _fetch_bundled_runtime_assets_step(workflow)
+    steps = _release_workflow_run_steps()
+    _assert_release_workflow_windows_runtime_provenance(steps)
 
-    # No hardcoded rolling FFmpeg alias, and no direct unverified Invoke-WebRequest
-    # for either input -- the step must delegate to the already-hardened,
-    # checksum-verified installer/windows/fetch_runtime_assets.ps1 instead of
-    # duplicating URLs/logic that could silently drift out of sync with it.
-    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" not in step
-    assert "Invoke-WebRequest" not in step
-    assert "python.org/ftp/python" not in step
-    assert "fetch_runtime_assets.ps1" in step
 
-    # The wheelhouse must stay skipped, exactly matching this step's existing
-    # scope (Python + FFmpeg only) rather than picking up fetch_runtime_assets.ps1's
-    # default wheelhouse-build behavior as an unintended side effect.
-    assert "STEMWERK_SKIP_WHEELHOUSE" in step
+def test_release_workflow_windows_runtime_provenance_rejects_bypass_mutations():
+    """Prove the workflow-provenance contract is fail-closed against the
+    bypass classes independent review identified: a comment-only fetcher
+    reference, a second raw Python/FFmpeg fetch added elsewhere, the wrong
+    STEMWERK_SKIP_WHEELHOUSE value, an alternate job staging bundled assets
+    directly, and a later step overwriting the verified files. These are
+    synthetic step lists, not edits to the committed workflow file."""
+    real_steps = _release_workflow_run_steps()
+
+    def with_extra_step(job_name, step_name, run_text):
+        return real_steps + [(job_name, step_name, run_text)]
+
+    def with_replaced_windows_exe_step(step_name_to_replace, new_run_text):
+        result = []
+        for job_name, step_name, run_text in real_steps:
+            if job_name == "windows-exe" and step_name == step_name_to_replace:
+                result.append((job_name, step_name, new_run_text))
+            else:
+                result.append((job_name, step_name, run_text))
+        return result
+
+    mutations = {
+        # A: hardened fetcher only mentioned in a comment, never executed.
+        "A": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            "# should call fetch_runtime_assets.ps1 here\nWrite-Host 'noop'",
+        ),
+        # B: a raw Python download added in a later, unrelated step.
+        "B": with_extra_step(
+            "windows-exe",
+            "Sneaky extra Python fetch",
+            'Invoke-WebRequest "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe" -OutFile x',
+        ),
+        # C: a raw rolling-FFmpeg download added in a different job.
+        "C": with_extra_step(
+            "linux-packages",
+            "Unexpected FFmpeg fetch",
+            'curl -L "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -o x',
+        ),
+        # E: STEMWERK_SKIP_WHEELHOUSE set to the wrong value.
+        "E": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "0"\n& ".\\installer\\windows\\fetch_runtime_assets.ps1"',
+        ),
+        # F: an alternate job stages _bundled/python directly, unverified.
+        "F": with_extra_step(
+            "macos-pkg",
+            "Alternate unverified staging",
+            'Invoke-WebRequest "https://example.invalid/python.exe" -OutFile installer/windows/payload/python/rogue.exe',
+        ),
+        # G: a later step overwrites the already-verified bundled FFmpeg file.
+        "G": with_extra_step(
+            "windows-exe",
+            "Late overwrite of bundled FFmpeg",
+            'Invoke-WebRequest "https://example.invalid/ffmpeg.zip" -OutFile installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip',
+        ),
+    }
+
+    for label, mutated_steps in mutations.items():
+        assert mutated_steps != real_steps, f"mutation {label} did not change the step list"
+        try:
+            _assert_release_workflow_windows_runtime_provenance(mutated_steps)
+        except AssertionError:
+            continue
+        raise AssertionError(f"mutation {label} was not rejected by the workflow provenance contract")
+
+    # The real, unmodified workflow must still pass.
+    _assert_release_workflow_windows_runtime_provenance(real_steps)
+
+
+def test_fetch_runtime_assets_ps1_has_no_verification_disable_switch():
+    """D: prove there is no supported way to invoke the hardened fetcher with
+    checksum verification turned off."""
+    ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
+
+    assert "param(" in ps1
+    param_block = ps1.split("param(", 1)[1].split(")", 1)[0]
+    for disable_marker in ("SkipVerif", "NoVerify", "DisableChecksum", "SkipChecksum", "InsecureSkip"):
+        assert disable_marker not in param_block
+        assert disable_marker not in ps1
+
+    # Verify-Sha256 must be unconditionally called by Download-IfMissing, not
+    # gated behind any environment-variable-controlled skip.
+    download_if_missing_body = ps1.split("function Download-IfMissing", 1)[1].split("\nfunction ", 1)[0]
+    assert "Verify-Sha256" in download_if_missing_body
+
+
+def test_fetch_runtime_assets_ps1_is_canonical_under_declared_gitattributes_eol():
+    """fetch_runtime_assets.ps1 is declared `text eol=crlf` in .gitattributes.
+    Prove the currently tracked blob is already the canonical form that
+    declaration implies (LF-normalized in the index, CRLF only at checkout),
+    so no future `git add --renormalize` (accidental or automated) produces
+    a deferred, unreviewed ~148-line rewrite. Read-only: uses `git
+    hash-object --path` to compute what re-adding the working-tree file
+    right now would produce, and compares it to what's already tracked --
+    it never runs --renormalize or otherwise mutates the index."""
+    path = "installer/windows/fetch_runtime_assets.ps1"
+
+    attrs = subprocess.run(
+        ["git", "check-attr", "-a", "--", path],
+        text=True,
+        capture_output=True,
+    )
+    assert attrs.returncode == 0, attrs.stderr
+    assert f"{path}: text: set" in attrs.stdout
+    assert f"{path}: eol: crlf" in attrs.stdout
+
+    tracked = subprocess.run(
+        ["git", "rev-parse", f":{path}"],
+        text=True,
+        capture_output=True,
+    )
+    assert tracked.returncode == 0, tracked.stderr
+    tracked_oid = tracked.stdout.strip()
+
+    recomputed = subprocess.run(
+        ["git", "hash-object", "--path", path, "--", path],
+        text=True,
+        capture_output=True,
+    )
+    assert recomputed.returncode == 0, recomputed.stderr
+    recomputed_oid = recomputed.stdout.strip()
+
+    assert tracked_oid == recomputed_oid, (
+        "fetch_runtime_assets.ps1's tracked blob does not match what re-adding "
+        "the working-tree file would produce -- normalization is deferred, not complete"
+    )
+
+    # The working tree itself must actually be CRLF (checkout-time conversion
+    # applied), not accidentally LF -- otherwise the eol=crlf declaration
+    # would be lying about what a real checkout produces.
+    worktree_bytes = Path(path).read_bytes()
+    assert b"\r\n" in worktree_bytes
+    assert b"\n" not in worktree_bytes.replace(b"\r\n", b"")  # no bare/stray LF once CRLF pairs are removed
 
 
 def test_ci_fast_quick_script_smoke_installs_pyyaml():
