@@ -131,10 +131,11 @@ Windows installer note: the installer copies the REAPER script payload to `%APPD
 | `STEMwerk-Setup-2.3.1.0.exe` | Windows standard installer |
 | `STEMwerk-Setup-2.3.1.0-bundled.exe` | Windows bundled installer |
 | `STEMwerk-2.3.1.0.pkg` | macOS installer |
+| `STEMwerk-2.3.1.0-bundled-apple-silicon.pkg` | macOS Apple Silicon bundled recovery installer |
 | `STEMwerk-2.3.1.0-x86_64.AppImage` | Linux AppImage |
 | `stemwerk_2.3.1.0_amd64.deb` | Debian/Ubuntu package |
-| `stemwerk-2.3.1.0-1.noarch.rpm` | RPM package |
-| `stemwerk-2.3.1.0-1-any.pkg.tar.zst` | Arch package |
+| `stemwerk-2.3.1.0-1.x86_64.rpm` | RPM package |
+| `stemwerk-2.3.1.0-1-x86_64.pkg.tar.zst` | Arch package |
 | `SHA256SUMS-2.3.1.0.txt` | SHA256 manifest |
 
 Until `2.3.1.0` is published, the `2.3.0.6` installer assets remain the live download:

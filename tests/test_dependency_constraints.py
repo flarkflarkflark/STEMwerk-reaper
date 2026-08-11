@@ -4891,41 +4891,70 @@ def test_bundled_installer_invokes_fetch_runtime_assets_via_bash_explicitly():
     assert 'bash "$ROOT_DIR/fetch_runtime_assets.sh"' in bundled_model_shell
 
 
+def _readme_section(readme, heading_text):
+    """Slice readme from heading_text up to (not including) the next markdown
+    heading of any level, so assertions can be scoped to one section instead
+    of matching anywhere in the whole file."""
+    import re
+
+    start = readme.index(heading_text)
+    body_start = start + len(heading_text)
+    match = re.search(r"\n#{1,6} ", readme[body_start:])
+    end = body_start + match.start() if match else len(readme)
+    return readme[start:end]
+
+
 def test_shipped_readme_identifies_current_2310_release_and_assets():
+    target_version = Path("VERSION").read_text(encoding="utf-8").strip()
+    assert target_version == "2.3.1.0"
+
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    # 2.3.1.0 must be identified as the current release, not as something
-    # still forthcoming.
-    assert "STEMwerk `2.3.1.0`, the current release" in readme
-    assert "Upcoming: `2.3.1.0`" not in readme
-    assert "2.3.1.0` (in progress)" not in readme
-    assert "From `2.3.1.0`, models will be installed" not in readme
+    release_status = _readme_section(readme, "## Release status")
+    assets_table = _readme_section(readme, f"### GitHub release assets for {target_version}")
+    windows_notes = _readme_section(readme, "## Windows Notes")
 
-    # Older versions must not be described with current/latest-release
-    # semantics anymore.
-    stale_current_phrases = [
+    # --- A/B/C: release status section must identify 2.3.1.0 as current,
+    # not as something still forthcoming, and must not hand current/latest
+    # semantics to an older version.
+    assert f"STEMwerk `{target_version}`, the current release" in release_status
+    for stale_future_phrase in ("upcoming", "forthcoming", "will ship", "will be installed"):
+        assert stale_future_phrase not in release_status.lower()
+    for stale_current_phrase in (
         "current release: `STEMwerk 2.3.0.7`",
         "`2.3.0.7` is the current release",
         "`2.3.0.6` is the latest release with installer assets",
-        "GitHub release assets for 2.3.0.6",
         "the latest release with installer packages",
+    ):
+        assert stale_current_phrase not in release_status, stale_current_phrase
+    assert "has not yet been published as a tagged GitHub Release" in release_status
+
+    # --- D: Windows guidance must target the current version, not an older one.
+    assert f"The current stable Windows target is `{target_version}`" in windows_notes
+    assert f"install the full online or bundled `{target_version}` installer" in windows_notes
+    for stale_windows_phrase in (
         "The current stable Windows target is `2.3.0.7`",
         "assets from `2.3.0.6` remain current",
         "bundled `2.3.0.6` installer",
-        "From `2.3.1.0`, models will be installed",
-    ]
-    for phrase in stale_current_phrases:
-        assert phrase not in readme, phrase
+    ):
+        assert stale_windows_phrase not in windows_notes, stale_windows_phrase
 
-    # Current install/download guidance must target 2.3.1.0 assets.
-    assert "GitHub release assets for 2.3.1.0" in readme
-    assert "STEMwerk-Setup-2.3.1.0.exe" in readme
-    assert "STEMwerk-Setup-2.3.1.0-bundled.exe" in readme
-    assert "stemwerk_2.3.1.0_amd64.deb" in readme
-    assert "stemwerk-2.3.1.0-1.noarch.rpm" in readme
-    assert "stemwerk-2.3.1.0-1-any.pkg.tar.zst" in readme
-    assert "STEMwerk-2.3.1.0-x86_64.AppImage" in readme
-    assert "bundled `2.3.1.0` installer" in readme
+    # --- E/F/G: artifact table must use the actual x86_64 RPM/Arch names
+    # derived from installer/linux/rpm/stemwerk.spec and
+    # installer/linux/arch/PKGBUILD (both BuildArch/arch = x86_64, not
+    # noarch/any), and must include the macOS bundled Apple Silicon pkg
+    # named per installer/macos/build_pkg.sh's OUTPUT_PKG convention.
+    assert f"GitHub release assets for {target_version}" in readme
+    assert f"STEMwerk-Setup-{target_version}.exe" in assets_table
+    assert f"STEMwerk-Setup-{target_version}-bundled.exe" in assets_table
+    assert f"STEMwerk-{target_version}.pkg" in assets_table
+    assert f"STEMwerk-{target_version}-bundled-apple-silicon.pkg" in assets_table
+    assert f"stemwerk_{target_version}_amd64.deb" in assets_table
+    assert f"stemwerk-{target_version}-1.x86_64.rpm" in assets_table
+    assert f"stemwerk-{target_version}-1-x86_64.pkg.tar.zst" in assets_table
+    assert f"STEMwerk-{target_version}-x86_64.AppImage" in assets_table
+    assert "noarch" not in assets_table
+    assert "-any.pkg.tar.zst" not in assets_table
 
     # Must not falsely claim 2.3.1.0 is already a published/tagged release.
     assert "has not yet been published as a tagged GitHub Release" in readme
@@ -5070,6 +5099,32 @@ def test_release_workflow_uploads_only_supported_windows_installers():
     assert "installer/windows/dist/STEMwerk-Setup-*.exe" in workflow
     assert "STEMwerk_Offline_Patch.iss" not in workflow
     assert 'files: installer/windows/dist/*.exe' not in workflow
+
+
+def _fetch_bundled_runtime_assets_step(workflow_text):
+    marker = "- name: Fetch bundled runtime assets (Windows)"
+    start = workflow_text.index(marker)
+    next_step = workflow_text.index("- name:", start + len(marker))
+    return workflow_text[start:next_step]
+
+
+def test_release_workflow_bundled_windows_job_uses_hardened_fetcher_not_raw_downloads():
+    workflow = Path(".github/workflows/release-installers.yml").read_text(encoding="utf-8")
+    step = _fetch_bundled_runtime_assets_step(workflow)
+
+    # No hardcoded rolling FFmpeg alias, and no direct unverified Invoke-WebRequest
+    # for either input -- the step must delegate to the already-hardened,
+    # checksum-verified installer/windows/fetch_runtime_assets.ps1 instead of
+    # duplicating URLs/logic that could silently drift out of sync with it.
+    assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" not in step
+    assert "Invoke-WebRequest" not in step
+    assert "python.org/ftp/python" not in step
+    assert "fetch_runtime_assets.ps1" in step
+
+    # The wheelhouse must stay skipped, exactly matching this step's existing
+    # scope (Python + FFmpeg only) rather than picking up fetch_runtime_assets.ps1's
+    # default wheelhouse-build behavior as an unintended side effect.
+    assert "STEMWERK_SKIP_WHEELHOUSE" in step
 
 
 def test_ci_fast_quick_script_smoke_installs_pyyaml():
