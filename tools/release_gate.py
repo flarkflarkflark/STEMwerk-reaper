@@ -69,11 +69,37 @@ class ProductionPayloadContract:
     optional: dict[str, set[str]]
 
 
+_WINDOWS_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+
+
 def _validate_contract_path(rel_path: str, path: Path, lineno: int) -> None:
+    """Validate a raw, unstripped path field. Rejects rather than
+    normalizes: any whitespace character anywhere in the string (ASCII or
+    Unicode -- space, tab, NBSP, and the Unicode line/paragraph separators
+    U+2028/U+2029 alike, not just at the edges), any C0 control character
+    or DEL anywhere in the string, and any Windows-drive-letter form (both
+    'C:/...' and drive-relative 'C:...') are hard failures, not silently
+    cleaned up. A real repo-relative path never legitimately contains
+    whitespace or control characters at any position, so this is a single
+    whole-string scan rather than an edges-only check. Canonical identity
+    must be exact -- see the module-level contract file header for why.
+    """
     if not rel_path:
         raise ValueError(f"{path}:{lineno}: empty path")
+    for ch in rel_path:
+        cp = ord(ch)
+        if cp < 0x20 or cp == 0x7F:
+            raise ValueError(
+                f"{path}:{lineno}: control character U+{cp:04X} not allowed in path: {rel_path!r}"
+            )
+        if ch.isspace():
+            raise ValueError(
+                f"{path}:{lineno}: whitespace character U+{cp:04X} not allowed in path: {rel_path!r}"
+            )
     if rel_path.startswith("/"):
         raise ValueError(f"{path}:{lineno}: absolute path not allowed: {rel_path!r}")
+    if _WINDOWS_DRIVE_PREFIX_RE.match(rel_path):
+        raise ValueError(f"{path}:{lineno}: Windows drive-letter path not allowed: {rel_path!r}")
     if "\\" in rel_path:
         raise ValueError(f"{path}:{lineno}: backslash not allowed, use forward slashes: {rel_path!r}")
     segments = rel_path.split("/")
@@ -103,22 +129,39 @@ def parse_production_payload_contract(path: Path) -> ProductionPayloadContract:
     non-common platforms (e.g. both 'macos' and 'linux') is legitimate and
     allowed -- that is how a shared-but-not-universal requirement is
     expressed.
+
+    Fields are validated on their raw, unstripped text -- not sanitized
+    then validated. Leading/trailing whitespace (ASCII or Unicode, e.g.
+    NBSP) around the requirement/platform/path fields is a hard failure,
+    not silently trimmed: a requirement/platform value with stray
+    whitespace simply fails exact match against the known set (raising
+    "unknown ..."), and the path field is checked explicitly (see
+    _validate_contract_path). Blank-line and '#'-comment-line detection
+    intentionally keeps the old permissive/trimmed check, since those
+    lines carry no semantic identity to corrupt.
+
+    Lines are split on '\\n' only (with a trailing '\\r' stripped per line
+    for CRLF support) -- not via str.splitlines(), whose broader Unicode
+    line-boundary definition (e.g. U+000B, U+000C, U+2028, U+2029) would
+    otherwise silently fragment a path containing one of those characters
+    into a bogus extra "line" instead of surfacing it as the invalid
+    control/separator character it is.
     """
     required: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
     optional: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
     seen: dict[str, list[tuple[str, str]]] = {}
 
     text = read_text(path)
-    for lineno, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+    for lineno, raw_line in enumerate(text.split("\n"), start=1):
+        raw = raw_line[:-1] if raw_line.endswith("\r") else raw_line
+        if raw.strip() == "" or raw.strip().startswith("#"):
             continue
-        parts = line.split("\t")
+        parts = raw.split("\t")
         if len(parts) != 3:
             raise ValueError(
                 f"{path}:{lineno}: expected '<required|optional>\\t<platform>\\t<path>', got: {raw!r}"
             )
-        requirement, platform, rel_path = (p.strip() for p in parts)
+        requirement, platform, rel_path = parts
         if requirement not in CONTRACT_REQUIREMENT_CLASSES:
             raise ValueError(f"{path}:{lineno}: unknown requirement class {requirement!r}")
         if platform not in CONTRACT_PLATFORMS:
