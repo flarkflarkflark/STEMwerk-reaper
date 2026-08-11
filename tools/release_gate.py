@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_XML = ROOT / "index.xml"
 VERSION_FILE = ROOT / "VERSION"
+PRODUCTION_PAYLOAD_CONTRACT = ROOT / "tools" / "production_payload_contract.txt"
+CONTRACT_PLATFORMS = ("common", "linux", "macos", "windows")
 
 REQUIRED_TOP_LEVEL_SCRIPTS = (
     "scripts/reaper/STEMwerk.lua",
@@ -58,6 +60,42 @@ def collect_dynamic_production_dependencies(root: Path) -> set[str]:
         if literal in read_text(source_path):
             deps.add(target_rel)
     return deps
+
+
+def parse_production_payload_contract(path: Path) -> dict[str, set[str]]:
+    """Parse tools/production_payload_contract.txt into {platform: {paths}}.
+
+    This is the normative production payload definition for 2.3.1.0 --
+    independent of, and not derived from, any single distribution route.
+    Source-code reachability scanning (extract_internal_deps,
+    collect_dynamic_production_dependencies) stays supplemental
+    defense-in-depth; it does not define this contract.
+    """
+    contract: dict[str, set[str]] = {p: set() for p in CONTRACT_PLATFORMS}
+    text = read_text(path)
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 2:
+            raise ValueError(f"{path}:{lineno}: expected '<platform>\\t<path>', got: {raw!r}")
+        platform, rel_path = parts[0].strip(), parts[1].strip()
+        if platform not in CONTRACT_PLATFORMS:
+            raise ValueError(f"{path}:{lineno}: unknown platform {platform!r}")
+        contract[platform].add(rel_path)
+    return contract
+
+
+def required_files_for_platform(contract: dict[str, set[str]], platform: str) -> set[str]:
+    if platform == "reapack":
+        # ReaPack serves every platform from one shared catalog: it needs
+        # the union of common plus every platform-specific entry.
+        result: set[str] = set()
+        for plat in CONTRACT_PLATFORMS:
+            result.update(contract[plat])
+        return result
+    return contract["common"] | contract.get(platform, set())
 
 
 @dataclass
@@ -413,6 +451,57 @@ def check_vendor_wheel_index_parity(root: Path, sources: list[SourceEntry], netw
     return section
 
 
+def check_production_payload_contract(root: Path, payload_paths: set[str]) -> Section:
+    """Validate index.xml against tools/production_payload_contract.txt --
+    the normative production payload definition (see that file's header).
+    This is the primary completeness authority for 2.3.1.0; the static
+    scan in check_runtime_dependencies() is supplemental defense-in-depth
+    and does not define this contract.
+    """
+    section = Section("F. Production payload contract completeness")
+    contract_path = root / "tools" / "production_payload_contract.txt"
+    if not contract_path.exists():
+        section.fail(f"production payload contract not found: {contract_path}")
+        return section
+
+    try:
+        contract = parse_production_payload_contract(contract_path)
+    except ValueError as exc:
+        section.fail(f"could not parse production payload contract: {exc}")
+        return section
+
+    required = required_files_for_platform(contract, "reapack")
+
+    missing_local = sorted(r for r in required if not (root / r).exists())
+    if missing_local:
+        section.fail("contract-required files missing locally:")
+        for r in missing_local:
+            section.note(f" - {r}")
+
+    missing_in_payload = sorted(r for r in required if r not in payload_paths)
+    if missing_in_payload:
+        section.fail("contract-required files missing from index.xml payload:")
+        for r in missing_in_payload:
+            section.note(f" - {r}")
+
+    # Drift guard: anything the static/dynamic scan finds that the contract
+    # doesn't cover is a signal the contract needs a review pass, not a
+    # release blocker on its own (the scan is non-exhaustive by design).
+    scanned: set[str] = set()
+    for lua_file in iter_lua_files(root):
+        found, _ = extract_internal_deps(root, lua_file, read_text(lua_file))
+        scanned.update(found)
+    scanned.update(collect_dynamic_production_dependencies(root))
+    uncontracted = sorted(s for s in scanned if s not in required)
+    if uncontracted:
+        section.warn("source-detected dependencies not present in the production payload contract (review the contract):")
+        for u in uncontracted:
+            section.note(f" - {u}")
+
+    section.note(f"contract requires {len(required)} files for ReaPack (common + linux + macos + windows)")
+    return section
+
+
 def run_check(root: Path, network: bool = False) -> tuple[list[Section], int]:
     sections: list[Section] = []
     tree, index_raw, parse_errors = parse_index(root / "index.xml")
@@ -436,6 +525,7 @@ def run_check(root: Path, network: bool = False) -> tuple[list[Section], int]:
     sections.append(runtime_section)
     sections.append(check_bootstrap_guard_payload(root, payload_paths))
     sections.append(check_vendor_wheel_index_parity(root, sources, network=network))
+    sections.append(check_production_payload_contract(root, payload_paths))
 
     fail_count = sum(1 for s in sections if s.status == "FAIL")
     return sections, fail_count

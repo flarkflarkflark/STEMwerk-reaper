@@ -83,6 +83,20 @@ def test_valid_fixture_passes(tmp_path: Path) -> None:
     _write(tmp_path / "scripts/reaper/_internal/STEMwerk_Timing.lua", "-- timing\n")
     _write(tmp_path / "scripts/reaper/_internal/stemwerk_samplerate_guard.py", "# guard\n")
     _write(
+        tmp_path / "tools/production_payload_contract.txt",
+        "\n".join(
+            f"common\tscripts/reaper/{rel}"
+            for rel in (
+                "STEMwerk.lua",
+                "STEMwerk-SETUP.lua",
+                "STEMwerk_Save_Support_Bundle.lua",
+                "_internal/STEMwerk_Timing.lua",
+                "_internal/stemwerk_samplerate_guard.py",
+            )
+        )
+        + "\n",
+    )
+    _write(
         tmp_path / "index.xml",
         _mk_index(
             version,

@@ -78,6 +78,27 @@ def test_linux_staged_payload_has_no_build_checkout_or_user_paths(tmp_path):
     assert offenders == []
 
 
+def test_linux_staged_payload_satisfies_production_payload_contract(tmp_path):
+    from tools import release_gate
+
+    staged = tmp_path / "payload"
+    command = (
+        f'source "{ROOT / "installer/linux/stage_payload.sh"}"; '
+        f'copy_linux_payload "{ROOT}" "{staged}"'
+    )
+    _run("bash", "-c", command)
+
+    contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
+    required = release_gate.required_files_for_platform(contract, "linux")
+
+    missing = sorted(
+        req
+        for req in required
+        if not (staged / req[len("scripts/reaper/"):]).exists()
+    )
+    assert not missing, f"Linux staged payload missing production payload contract entries: {missing}"
+
+
 def test_linux_staged_payload_contains_all_statically_detected_or_dynamic_dependencies(tmp_path):
     from tools import release_gate
 

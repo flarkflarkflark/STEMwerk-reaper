@@ -25,6 +25,24 @@ def destination_path(source: str, destination: str) -> str:
     return (destination.rstrip("\\") + "\\" + source.rsplit("\\", 1)[-1]).lower()
 
 
+def installed_repo_relative_paths() -> set[str]:
+    """Map each payload Source/DestDir pair to its scripts/reaper/-relative
+    installed identity ({app} maps 1:1 to scripts/reaper/). Some assets
+    (e.g. i18n/) are sourced from a different repo-relative mirror than
+    where they end up installed, so this compares by destination, not
+    source path.
+    """
+    installed = set()
+    for source, dest in payload_mappings():
+        filename = source.replace("\\", "/").rsplit("/", 1)[-1]
+        dest_posix = dest.replace("\\", "/")
+        if dest_posix == "{app}":
+            installed.add(f"scripts/reaper/{filename}")
+        elif dest_posix.startswith("{app}/"):
+            installed.add(f"scripts/reaper/{dest_posix[len('{app}/'):]}/{filename}")
+    return installed
+
+
 def test_windows_installer_uses_explicit_payload_include() -> None:
     text = ISS.read_text(encoding="utf-8")
     assert '#include "STEMwerk_Windows_Payload.iss"' in text
@@ -72,6 +90,17 @@ def test_windows_payload_preserves_required_shared_and_windows_files() -> None:
     assert required <= sources
 
 
+def test_windows_payload_satisfies_production_payload_contract() -> None:
+    from tools import release_gate
+
+    contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
+    required = release_gate.required_files_for_platform(contract, "windows")
+
+    installed = installed_repo_relative_paths()
+    missing = sorted(req for req in required if req not in installed)
+    assert not missing, f"Windows payload missing production payload contract entries: {missing}"
+
+
 def test_windows_payload_contains_all_statically_detected_internal_dependencies() -> None:
     from tools import release_gate
 
@@ -82,19 +111,7 @@ def test_windows_payload_contains_all_statically_detected_internal_dependencies(
         deps.update(found)
     deps.update(release_gate.collect_dynamic_production_dependencies(ROOT))
 
-    # Compare by install-time destination ({app} maps 1:1 to scripts/reaper/
-    # in repo-relative terms), not by source path: some assets (e.g. i18n/)
-    # are sourced from a different repo-relative mirror than where they end
-    # up installed.
-    installed = set()
-    for source, dest in payload_mappings():
-        filename = source.replace("\\", "/").rsplit("/", 1)[-1]
-        dest_posix = dest.replace("\\", "/")
-        if dest_posix == "{app}":
-            installed.add(f"scripts/reaper/{filename}")
-        elif dest_posix.startswith("{app}/"):
-            installed.add(f"scripts/reaper/{dest_posix[len('{app}/'):]}/{filename}")
-
+    installed = installed_repo_relative_paths()
     missing = sorted(dep for dep in deps if dep not in installed)
     assert not missing, f"Windows payload missing statically detected or declared dynamic-dispatch runtime deps: {missing}"
 
