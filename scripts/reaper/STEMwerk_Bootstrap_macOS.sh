@@ -1467,7 +1467,7 @@ if [ "${MODE}" = "repair" ] && [ -x "${RUNTIME_BASE}/.venv/bin/python" ]; then
     mismatch\|*)
       MACOS_RUNTIME_POLICY_STATUS="mismatch"
       MACOS_RUNTIME_POLICY_REASON="runtime_policy_mismatch_requires_rebuild"
-      log "Existing managed runtime is operational but does not match the bundled 2.3.0.6 dependency policy"
+      log "Existing managed runtime is operational but does not match the bundled 2.3.1.0 dependency policy"
       log "MACOS_RUNTIME_POLICY_STATUS=${MACOS_RUNTIME_POLICY_STATUS}"
       log "MACOS_RUNTIME_POLICY_REASON=${MACOS_RUNTIME_POLICY_REASON}"
       log "MACOS_RUNTIME_POLICY_OBSERVED=${MACOS_RUNTIME_POLICY_OBSERVED}"

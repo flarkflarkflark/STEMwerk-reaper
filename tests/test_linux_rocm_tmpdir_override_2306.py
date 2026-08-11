@@ -182,8 +182,11 @@ def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
     expected = {
         # 2.3.1.0: macOS online Repair (managed wheelhouse, deep preflight,
         # arch guard, per-arch onnxruntime pins) — hash updated from 2.3.0.7.
+        # Hash re-pinned again for the narrow release-corrective slice that
+        # fixed the stale "bundled 2.3.0.6 dependency policy" log message to
+        # correctly say 2.3.1.0.
         "scripts/reaper/STEMwerk_Bootstrap_macOS.sh": (
-            "5669a827dd04ccf1cab4b962af990c855296db7125d909a62ec7e631bd869839"
+            "fb69e9d75215def4358a513eeede52fc8b767a40263d9cd71c959df48366b08c"
         ),
         "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1": (
             "bbc18a5a5ab3d1f1286276e2debc1e6c46552f9014e123386817c340ec553d0f"

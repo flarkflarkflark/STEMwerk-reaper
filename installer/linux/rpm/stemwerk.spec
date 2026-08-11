@@ -5,7 +5,7 @@ Summary:        STEMwerk REAPER scripts and helpers
 License:        MIT
 URL:            https://github.com/flarkflarkflark/STEMwerk
 Source0:        stemwerk-%{version}.tar.gz
-BuildArch:      noarch
+BuildArch:      x86_64
 
 %description
 Installs the STEMwerk REAPER scripts and helper files.

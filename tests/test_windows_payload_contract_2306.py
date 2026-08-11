@@ -159,22 +159,22 @@ def test_current_windows_release_documents_identify_2306() -> None:
     ]
     for guide in guides:
         first_section = "\n".join(guide.read_text(encoding="utf-8").splitlines()[:5])
-        assert "2.3.0.6" in first_section, guide.name
-        assert "2.3.0.4" not in first_section, guide.name
+        assert "2.3.1.0" in first_section, guide.name
+        assert "2.3.0.6" not in first_section, guide.name
 
     license_text = (WINDOWS_DIR / "STEMwerk_License_Agreement.txt").read_text(
         encoding="utf-8"
     )
-    assert "Version: 2.3.0.6" in license_text
-    assert "Version: 2.3.0.4" not in license_text
+    assert "Version: 2.3.1.0" in license_text
+    assert "Version: 2.3.0.6" not in license_text
 
 
 def test_current_identity_has_no_2304_or_2305_but_history_is_preserved() -> None:
     english = (WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.md").read_text(
         encoding="utf-8"
     )
-    assert "install `2.3.0.6` fresh" in english
-    assert "latest Windows setup/runtime fixes from `2.3.0.4`" in english
+    assert "install `2.3.1.0` fresh" in english
+    assert "latest Windows setup/runtime fixes from `2.3.1.0`" in english
     for path in (
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.md",
         WINDOWS_DIR / "STEMwerk_Windows_Setup_Guide.nl.md",

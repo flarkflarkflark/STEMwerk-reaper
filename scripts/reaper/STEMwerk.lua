@@ -2058,7 +2058,7 @@ function showIntelMacDksPolicyBlock(source)
     local title = trSafeValue("drumsep_intel_mac_unsupported_title", "Drum Kit Split unavailable on Intel Mac")
     local body = trSafeValue(
         "drumsep_intel_mac_unsupported_body",
-        "Drum Kit Split is not available on Intel Mac in STEMwerk 2.3.0.6. Normal CPU stem separation, including the normal six-stem mode, remains available."
+        "Drum Kit Split is not available on Intel Mac in STEMwerk 2.3.1.0. Normal CPU stem separation, including the normal six-stem mode, remains available."
     )
     if reaper and type(reaper.ShowMessageBox) == "function" then
         reaper.ShowMessageBox(tostring(body), tostring(title), 0)

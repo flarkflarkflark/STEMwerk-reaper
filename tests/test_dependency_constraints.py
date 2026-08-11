@@ -4837,6 +4837,60 @@ def test_windows_installers_remove_stemwerk_owned_runtime_and_reaper_scripts_on_
     assert 'Flags: runhidden waituntilterminated' in patch_iss
 
 
+def test_shipped_windows_docs_and_dialogs_do_not_advertise_stale_release_version():
+    setup_guide = Path("installer/windows/STEMwerk_Windows_Setup_Guide.md").read_text(encoding="utf-8")
+    setup_guide_de = Path("installer/windows/STEMwerk_Windows_Setup_Guide.de.md").read_text(encoding="utf-8")
+    setup_guide_nl = Path("installer/windows/STEMwerk_Windows_Setup_Guide.nl.md").read_text(encoding="utf-8")
+    license_agreement = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
+    main_script = Path("scripts/reaper/STEMwerk.lua").read_text(encoding="utf-8")
+    macos_bootstrap = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text(encoding="utf-8")
+
+    assert "STEMwerk 2.3.0.6" not in setup_guide
+    assert "install `2.3.0.6` fresh" not in setup_guide
+    assert "latest Windows setup/runtime fixes from `2.3.0.4`" not in setup_guide
+    assert "This guide is for the Windows installer build of STEMwerk 2.3.1.0." in setup_guide
+
+    assert "STEMwerk 2.3.0.6" not in setup_guide_de
+    assert "STEMwerk 2.3.0.6" not in setup_guide_nl
+
+    assert "Version: 2.3.0.6" not in license_agreement
+    assert "Version: 2.3.1.0" in license_agreement
+
+    assert "in STEMwerk 2.3.0.6." not in main_script
+
+    assert "bundled 2.3.0.6 dependency policy" not in macos_bootstrap
+
+
+def test_rpm_and_arch_packages_declare_x86_64_not_noarch_or_any():
+    # Both packages bundle vendor/wheels/linux-x86_64-cp312/diffq-*.whl, a
+    # compiled extension wheel tagged for linux_x86_64 specifically (indexed
+    # as a real ReaPack <source> in index.xml, not an unused leftover), so
+    # neither package is actually architecture-independent.
+    spec = Path("installer/linux/rpm/stemwerk.spec").read_text(encoding="utf-8")
+    pkgbuild = Path("installer/linux/arch/PKGBUILD").read_text(encoding="utf-8")
+    index_xml = Path("index.xml").read_text(encoding="utf-8")
+
+    assert "vendor/wheels/linux-x86_64-cp312/diffq-0.2.4-cp312-cp312-linux_x86_64.whl" in index_xml
+
+    assert "BuildArch:      noarch" not in spec
+    assert "BuildArch:      x86_64" in spec
+
+    assert "arch=('any')" not in pkgbuild
+    assert "arch=('x86_64')" in pkgbuild
+
+
+def test_bundled_installer_invokes_fetch_runtime_assets_via_bash_explicitly():
+    # fetch_runtime_assets.sh is committed as non-executable (100644); the
+    # scripts that invoke it must not rely on the executable bit, so a clean
+    # checkout builds correctly regardless of local chmod state or how the
+    # tree was checked out.
+    bundled_shell = Path("installer/windows/build_bundled_installer.sh").read_text(encoding="utf-8")
+    bundled_model_shell = Path("installer/windows/build_bundled_model_installers.sh").read_text(encoding="utf-8")
+
+    assert 'bash "$ROOT_DIR/fetch_runtime_assets.sh"' in bundled_shell
+    assert 'bash "$ROOT_DIR/fetch_runtime_assets.sh"' in bundled_model_shell
+
+
 def test_release_docs_retire_windows_update_patch_for_2304():
     readme = Path("README.md").read_text(encoding="utf-8")
     release_notes = Path("docs/RELEASE_2.3.0.4.md").read_text(encoding="utf-8")
@@ -7255,7 +7309,7 @@ def test_windows_capabilities_write_failure_clears_stale_state_and_fails_bootstr
 def test_windows_installer_license_text_matches_23_release():
     text = Path("installer/windows/STEMwerk_License_Agreement.txt").read_text(encoding="utf-8")
 
-    assert "Version: 2.3.0.6" in text
+    assert "Version: 2.3.1.0" in text
     assert "Version: 2.2.2" not in text
 
 
