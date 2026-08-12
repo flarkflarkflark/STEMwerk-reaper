@@ -4908,9 +4908,8 @@ def _readme_section(readme, heading_text):
 #: right now" claim. Any sentence combining one of these with a non-target
 #: 2.3.x.y version token is presumed stale unless the sentence also contains
 #: an explicit historical/transitional exemption marker (see
-#: _README_HISTORICAL_EXEMPTION_MARKERS) -- except for _README_STRONG_CURRENT_
-#: MARKERS, which make an unambiguous "this is the current/recommended thing"
-#: claim and are never eligible for that exemption (see docstring below).
+#: _README_HISTORICAL_EXEMPTION_MARKERS) -- except for explicit present-
+#: selection markers, which are never eligible for that exemption.
 _README_CURRENT_SEMANTIC_MARKERS = (
     "current",
     "latest",
@@ -4930,9 +4929,21 @@ _README_CURRENT_SEMANTIC_MARKERS = (
 #: `2.3.1.0`") cannot excuse pairing one of these with a stale version --
 #: "the previously published 2.3.0.6 installer remains the CURRENT installer"
 #: is still a false current-version claim despite the historical framing.
-_README_STRONG_CURRENT_MARKERS = (
+_README_PRESENT_SELECTION_WORD_MARKERS = (
     "current",
+    "latest",
     "recommended",
+    "standard",
+    "target",
+    "remains",
+    "still",
+)
+_README_PRESENT_SELECTION_PHRASE_MARKERS = (
+    "should install",
+    "should use",
+    "installer to use",
+    "package to use",
+    "download to use",
 )
 
 #: Substrings that, if present in a flagged sentence, prove the sentence is
@@ -4940,7 +4951,7 @@ _README_STRONG_CURRENT_MARKERS = (
 #: an older version is current -- e.g. "previously published `2.3.0.6`",
 #: "GitHub Release (previous installer assets)", "before `2.3.1.0`",
 #: "has not yet been published", "once published". Only applies to the softer
-#: markers above; see _README_STRONG_CURRENT_MARKERS.
+#: markers above; see _README_PRESENT_SELECTION_WORD_MARKERS.
 _README_HISTORICAL_EXEMPTION_MARKERS = (
     "published",
     "previous",
@@ -4958,9 +4969,10 @@ def _assert_no_stale_current_version_semantics(section_text, target_version, sec
     release... the previously published `2.3.0.6` ... remain[s] the live
     download source." -- isn't flagged just because both mentions share a
     line. Marker words are matched on word boundaries so "currently" doesn't
-    count as "current". _README_STRONG_CURRENT_MARKERS ("current",
-    "recommended") make an unambiguous current-version claim and are never
-    excused by a historical marker, even within the same sentence.
+    count as "current". Present-selection words and phrases (for example
+    "latest", "remains", and "should install") make an unambiguous current-
+    version claim and are never excused by a historical marker, even within
+    the same sentence.
     """
     import re
 
@@ -4983,9 +4995,12 @@ def _assert_no_stale_current_version_semantics(section_text, target_version, sec
             stale_versions = versions_on_sentence - {target_version}
             if not stale_versions:
                 continue
-            if any(_has_word(m, lower) for m in _README_STRONG_CURRENT_MARKERS):
+            makes_present_selection_claim = any(
+                _has_word(marker, lower) for marker in _README_PRESENT_SELECTION_WORD_MARKERS
+            ) or any(phrase in lower for phrase in _README_PRESENT_SELECTION_PHRASE_MARKERS)
+            if makes_present_selection_claim:
                 raise AssertionError(
-                    f"{section_name}: sentence makes an unconditional current/recommended "
+                    f"{section_name}: sentence makes an unconditional present-selection "
                     f"claim alongside non-current version(s) {sorted(stale_versions)} -- a "
                     f"historical qualifier cannot excuse this: {sentence.strip()!r}"
                 )
@@ -5134,6 +5149,20 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
             "## Windows Notes",
             "The published 2.3.0.6 package is still the recommended download.",
         ),
+        # L-N: historical wording must not exempt stale present-selection
+        # claims made with latest/standard or an alternate recommended form.
+        "L": mutate(
+            "## Windows Notes",
+            "The previously published 2.3.0.6 installer remains the latest installer.",
+        ),
+        "M": mutate(
+            "## Windows Notes",
+            "The previous 2.3.0.7 package is still the recommended package.",
+        ),
+        "N": mutate(
+            "## Windows Notes",
+            "The published 2.3.0.6 installer remains the standard installer.",
+        ),
     }
 
     for label, mutated_readme in mutations.items():
@@ -5146,6 +5175,14 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
 
     # The real, unmodified file must still pass.
     _assert_readme_release_contract(real_readme, target_version)
+
+    # A factual present-publication statement is not current selection
+    # guidance for the stale version and must remain historically valid.
+    historical_present_fact = mutate(
+        "## Release status",
+        f"ReaPack currently serves 2.3.0.7; it will be updated to {target_version} once published.",
+    )
+    _assert_readme_release_contract(historical_present_fact, target_version)
 
 
 def _run_fetch_runtime_assets_helper(script, payload_dir):
@@ -5334,7 +5371,14 @@ def _invokes_fetcher(run_text):
     merely mentions the filename without ever executing it."""
     import re
 
-    invocation_re = re.compile(r"^&\s*['\"]?[^\n]*fetch_runtime_assets\.ps1", re.IGNORECASE)
+    invocation_re = re.compile(
+        r"^&\s*(?:"
+        r'"[^"\r\n]*fetch_runtime_assets\.ps1"'
+        r"|'[^'\r\n]*fetch_runtime_assets\.ps1'"
+        r"|[^\s'\"]*fetch_runtime_assets\.ps1"
+        r")(?:\s|$)",
+        re.IGNORECASE,
+    )
     return any(invocation_re.match(line.strip()) for line in _executable_lines(run_text))
 
 
@@ -5360,8 +5404,8 @@ _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS = (
 #: fetcher itself, so any workflow step performing one of these writes is
 #: forbidden regardless of whether that step also invokes the fetcher.
 _RELEASE_WORKFLOW_FORBIDDEN_WRITE_COMMANDS = (
-    "Copy-Item",
-    "Move-Item",
+    "copy-item",
+    "move-item",
     "cp ",
     "mv ",
 )
@@ -5395,9 +5439,10 @@ def _assert_release_workflow_windows_runtime_provenance(steps):
         # A local Copy-Item/Move-Item into the staging destinations is a
         # bypass even without any network call, and even in a step that also
         # invokes the hardened fetcher (a later overwrite in the same step).
-        if any(cmd in executable_text for cmd in _RELEASE_WORKFLOW_FORBIDDEN_WRITE_COMMANDS):
+        lower_executable_text = executable_text.lower()
+        if any(cmd in lower_executable_text for cmd in _RELEASE_WORKFLOW_FORBIDDEN_WRITE_COMMANDS):
             for staging_path in _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS:
-                if staging_path in executable_text:
+                if staging_path in lower_executable_text:
                     forbidden_hits.append((job_name, step_name, f"unverified copy/move write to {staging_path}"))
 
     assert not forbidden_hits, (
@@ -5421,14 +5466,12 @@ def test_release_workflow_bundled_windows_job_uses_hardened_fetcher_not_raw_down
 
 def test_release_workflow_windows_runtime_provenance_rejects_bypass_mutations():
     """Prove the workflow-provenance contract is fail-closed against the
-    bypass classes independent review identified: a comment-only fetcher
-    reference, a second raw Python/FFmpeg fetch added elsewhere, the wrong
-    STEMWERK_SKIP_WHEELHOUSE value, an alternate job staging bundled assets
-    directly, a later step overwriting the verified files via a raw fetch, a
-    non-executing (Write-Host) mention of the fetcher, and a later local
-    Copy-Item overwrite of the verified Python/FFmpeg payload with no network
-    call at all. These are synthetic step lists, not edits to the committed
-    workflow file."""
+    bypass classes independent review identified: comment/string-only fetcher
+    references, fake call-operator invocations, second raw Python/FFmpeg
+    fetches, the wrong STEMWERK_SKIP_WHEELHOUSE value, alternate-job staging,
+    later network overwrites, and case-insensitive Copy-Item/Move-Item
+    overwrites of verified Python/FFmpeg payloads. These are synthetic step
+    lists, not edits to the committed workflow file."""
     real_steps = _release_workflow_run_steps()
 
     def with_extra_step(job_name, step_name, run_text):
@@ -5449,42 +5492,46 @@ def test_release_workflow_windows_runtime_provenance_rejects_bypass_mutations():
             "Fetch bundled runtime assets (Windows)",
             "# should call fetch_runtime_assets.ps1 here\nWrite-Host 'noop'",
         ),
-        # B: a raw Python download added in a later, unrelated step.
-        "B": with_extra_step(
+        # B: call operator invokes Write-Host, not the fetcher path.
+        "B": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            '& Write-Host "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        # C: fetcher path assigned to a variable but never executed.
+        "C": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            '$fetcher = "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        # D: a raw Python download added in a later, unrelated step.
+        "D": with_extra_step(
             "windows-exe",
             "Sneaky extra Python fetch",
             'Invoke-WebRequest "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe" -OutFile x',
         ),
-        # C: a raw rolling-FFmpeg download added in a different job.
-        "C": with_extra_step(
+        # E: a raw rolling-FFmpeg download added in a different job.
+        "E": with_extra_step(
             "linux-packages",
             "Unexpected FFmpeg fetch",
             'curl -L "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -o x',
         ),
-        # E: STEMWERK_SKIP_WHEELHOUSE set to the wrong value.
-        "E": with_replaced_windows_exe_step(
+        # F: STEMWERK_SKIP_WHEELHOUSE set to the wrong value.
+        "F": with_replaced_windows_exe_step(
             "Fetch bundled runtime assets (Windows)",
             '$env:STEMWERK_SKIP_WHEELHOUSE = "0"\n& ".\\installer\\windows\\fetch_runtime_assets.ps1"',
         ),
-        # F: an alternate job stages _bundled/python directly, unverified.
-        "F": with_extra_step(
+        # G: an alternate job stages _bundled/python directly, unverified.
+        "G": with_extra_step(
             "macos-pkg",
             "Alternate unverified staging",
             'Invoke-WebRequest "https://example.invalid/python.exe" -OutFile installer/windows/payload/python/rogue.exe',
         ),
-        # G: a later step overwrites the already-verified bundled FFmpeg file.
-        "G": with_extra_step(
+        # H: a later step overwrites the already-verified bundled FFmpeg file.
+        "H": with_extra_step(
             "windows-exe",
             "Late overwrite of bundled FFmpeg",
             'Invoke-WebRequest "https://example.invalid/ffmpeg.zip" -OutFile installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip',
-        ),
-        # H: fetcher only mentioned as a non-executing string (Write-Host),
-        # not a comment -- would satisfy a bare substring check even though
-        # the fetcher is never actually invoked.
-        "H": with_replaced_windows_exe_step(
-            "Fetch bundled runtime assets (Windows)",
-            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
-            'Write-Host "installer/windows/fetch_runtime_assets.ps1"',
         ),
         # I: a later Copy-Item overwrites the verified bundled Python payload
         # without any network call at all.
@@ -5499,6 +5546,45 @@ def test_release_workflow_windows_runtime_provenance_rejects_bypass_mutations():
             "windows-exe",
             "Late Copy-Item overwrite of bundled FFmpeg",
             "Copy-Item unverified-ffmpeg.zip installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip",
+        ),
+        # K-N: PowerShell command names are case-insensitive, so lowercase and
+        # mixed-case copy/move variants must be rejected identically.
+        "K": with_extra_step(
+            "windows-exe",
+            "Lowercase Copy-Item overwrite of bundled Python",
+            "copy-item unverified-python.zip installer\\windows\\payload\\python\\python-embed.zip",
+        ),
+        "L": with_extra_step(
+            "windows-exe",
+            "Lowercase Copy-Item overwrite of bundled FFmpeg",
+            "copy-item unverified-ffmpeg.zip installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip",
+        ),
+        "M": with_extra_step(
+            "windows-exe",
+            "Mixed-case Copy-Item overwrite",
+            "CoPy-ItEm unverified-python.zip installer\\windows\\payload\\python\\python-embed.zip",
+        ),
+        "N": with_extra_step(
+            "windows-exe",
+            "Lowercase Move-Item overwrite",
+            "move-item unverified-ffmpeg.zip installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip",
+        ),
+        # O-Q: additional non-executing string forms must not satisfy the
+        # invocation requirement.
+        "O": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            '& echo "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        "P": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            'Write-Output "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        "Q": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            "$message = 'installer/windows/fetch_runtime_assets.ps1'",
         ),
     }
 
