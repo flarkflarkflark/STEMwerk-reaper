@@ -36,6 +36,8 @@ mkdir -p "$SRC_DIR"
 copy_linux_payload "$ROOT_DIR" "$SRC_DIR"
 
 tar -C "$BUILD_DIR" -czf "$RPMTOP/SOURCES/stemwerk-$VERSION.tar.gz" "stemwerk-$VERSION"
+install -m0644 "$ROOT_DIR/installer/linux/stemwerk-integrate-reaper" \
+  "$RPMTOP/SOURCES/stemwerk-integrate-reaper"
 
 # Spec (use RPM-safe version)
 sed "s/@VERSION@/$RPM_VERSION/g" "$ROOT_DIR/installer/linux/rpm/stemwerk.spec" > "$RPMTOP/SPECS/stemwerk.spec"

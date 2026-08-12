@@ -31,11 +31,14 @@ copy_linux_payload "$ROOT_DIR" "$SRC_DIR"
 
 tar -C "$BUILD_DIR" -czf "$WORK_DIR/stemwerk-$VERSION.tar.gz" "stemwerk-$VERSION"
 SHA256="$(sha256sum "$WORK_DIR/stemwerk-$VERSION.tar.gz" | awk '{print $1}')"
+cp -f "$ROOT_DIR/installer/linux/stemwerk-integrate-reaper" "$WORK_DIR/stemwerk-integrate-reaper"
+HELPER_SHA256="$(sha256sum "$WORK_DIR/stemwerk-integrate-reaper" | awk '{print $1}')"
 
 # Generate PKGBUILD
 sed \
   -e "s/@VERSION@/$VERSION/g" \
   -e "s/@SHA256@/$SHA256/g" \
+  -e "s/@HELPER_SHA256@/$HELPER_SHA256/g" \
   "$ROOT_DIR/installer/linux/arch/PKGBUILD" > "$WORK_DIR/PKGBUILD"
 
 cp -f "$ROOT_DIR/installer/linux/arch/stemwerk.install" "$WORK_DIR/stemwerk.install"

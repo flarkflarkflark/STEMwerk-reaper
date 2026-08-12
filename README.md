@@ -182,6 +182,7 @@ Notes:
 - On Windows, the installer is the preferred first-time setup path.
 - On macOS and Linux, `STEMwerk: Setup` is the normal in-REAPER setup and repair entry point.
 - ReaPack installs scripts and actions; runtime validation still happens through `STEMwerk: Setup`.
+- After installing a native Linux `.deb`, `.rpm`, or Arch package, run `stemwerk-integrate-reaper` as your normal desktop user. Then open `Actions -> Show action list -> ReaScript: Load...`, select `STEMwerk_Setup_Toolbar.lua` from `Scripts/STEMwerk-reaper`, and run `STEMwerk: Setup`.
 
 ### Manual or developer install
 1. Install a supported 64-bit Python 3 version and ensure it is on your `PATH`.

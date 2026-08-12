@@ -4,6 +4,7 @@
 
 # Ensure bash scripts run on Linux/macOS runners
 installer/**/*.sh text eol=lf
+installer/linux/stemwerk-integrate-reaper text eol=lf
 installer/linux/arch/*.install text eol=lf
 .github/workflows/*.yml text eol=lf
 

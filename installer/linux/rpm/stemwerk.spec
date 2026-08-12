@@ -5,7 +5,9 @@ Summary:        STEMwerk REAPER scripts and helpers
 License:        MIT
 URL:            https://github.com/flarkflarkflark/STEMwerk
 Source0:        stemwerk-%{version}.tar.gz
+Source1:        stemwerk-integrate-reaper
 BuildArch:      x86_64
+Requires:       rsync
 
 %description
 Installs the STEMwerk REAPER scripts and helper files.
@@ -28,13 +30,19 @@ fi
 if [ -f %{buildroot}/usr/share/stemwerk-reaper/stemwerk.svg ]; then
 	cp -f %{buildroot}/usr/share/stemwerk-reaper/stemwerk.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/stemwerk.svg
 fi
+install -Dm755 %{SOURCE1} %{buildroot}/usr/bin/stemwerk-integrate-reaper
 
 %post
 echo
 echo "STEMwerk installed to /usr/share/stemwerk-reaper"
-echo "Next step: Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua."
+echo "Run as your normal desktop user:"
+echo "  stemwerk-integrate-reaper"
+echo "Then in REAPER:"
+echo "  Actions -> Show action list -> ReaScript: Load..."
+echo "  Select STEMwerk_Setup_Toolbar.lua from the copied STEMwerk-reaper folder."
+echo "  Run STEMwerk: Setup."
 echo
-PLAIN_MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nNext step:\nOpen REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.')
+PLAIN_MESSAGE=$(printf 'STEMwerk is installed to /usr/share/stemwerk-reaper\n\nRun as your normal desktop user:\n  stemwerk-integrate-reaper\n\nThen in REAPER:\n1. Open Actions -> Show action list -> ReaScript: Load...\n2. Select STEMwerk_Setup_Toolbar.lua from the copied STEMwerk-reaper folder\n3. Run STEMwerk: Setup.')
 if [ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]; then
 	if command -v zenity >/dev/null 2>&1; then
 		RICH_MESSAGE='<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>
@@ -42,7 +50,12 @@ if [ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]; then
 STEMwerk is installed to /usr/share/stemwerk-reaper
 
 <b>Next step</b>
-Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
+Run as your normal desktop user:
+<tt>stemwerk-integrate-reaper</tt>
+
+Then in REAPER, use Actions -&gt; Show action list -&gt; ReaScript: Load...
+and select STEMwerk_Setup_Toolbar.lua from the copied STEMwerk-reaper folder.
+Then run STEMwerk: Setup.'
 		zenity --info --width=520 --title="STEMwerk Installer" --text="$RICH_MESSAGE" >/dev/null 2>&1 || :
 	elif command -v kdialog >/dev/null 2>&1; then
 		RICH_MESSAGE='<span size="x-large"><span foreground="#d83b01"><b>S</b></span><span foreground="#107c10"><b>T</b></span><span foreground="#0078d4"><b>E</b></span><span foreground="#ffb900"><b>M</b></span><b>werk Installer</b></span>
@@ -50,7 +63,12 @@ Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
 STEMwerk is installed to /usr/share/stemwerk-reaper
 
 <b>Next step</b>
-Open REAPER and run STEMwerk-SETUP.lua before using STEMwerk.lua.'
+Run as your normal desktop user:
+<tt>stemwerk-integrate-reaper</tt>
+
+Then in REAPER, use Actions -&gt; Show action list -&gt; ReaScript: Load...
+and select STEMwerk_Setup_Toolbar.lua from the copied STEMwerk-reaper folder.
+Then run STEMwerk: Setup.'
 		kdialog --msgbox "$RICH_MESSAGE" --title "STEMwerk Installer" >/dev/null 2>&1 || :
 	elif command -v notify-send >/dev/null 2>&1; then
 		notify-send -i stemwerk "STEMwerk Installer" "$PLAIN_MESSAGE" >/dev/null 2>&1 || :
@@ -59,6 +77,7 @@ fi
 
 %files
 /usr/share/stemwerk-reaper
+/usr/bin/stemwerk-integrate-reaper
 /usr/share/icons/hicolor/512x512/apps/stemwerk.png
 /usr/share/icons/hicolor/scalable/apps/stemwerk.svg
 

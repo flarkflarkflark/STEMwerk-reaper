@@ -3,11 +3,12 @@ pkgver=@VERSION@
 pkgrel=1
 pkgdesc="STEMwerk REAPER scripts and helpers"
 arch=('x86_64')
+depends=('rsync')
 url="https://github.com/flarkflarkflark/STEMwerk"
 license=('MIT')
 install=stemwerk.install
-source=("stemwerk-${pkgver}.tar.gz")
-sha256sums=('@SHA256@')
+source=("stemwerk-${pkgver}.tar.gz" "stemwerk-integrate-reaper")
+sha256sums=('@SHA256@' '@HELPER_SHA256@')
 
 package() {
   install -dm755 "${pkgdir}/usr/share/stemwerk-reaper"
@@ -23,4 +24,7 @@ package() {
     install -m644 "${pkgdir}/usr/share/stemwerk-reaper/stemwerk.svg" \
       "${pkgdir}/usr/share/icons/hicolor/scalable/apps/stemwerk.svg"
   fi
+
+  install -Dm755 "${srcdir}/stemwerk-integrate-reaper" \
+    "${pkgdir}/usr/bin/stemwerk-integrate-reaper"
 }
