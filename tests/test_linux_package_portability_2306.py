@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PROCESS_SCRIPT = ROOT / "scripts/reaper/audio_separator_process.py"
+ARCH_INSTALL_SCRIPT = ROOT / "installer/linux/arch/stemwerk.install"
 FORBIDDEN_BUILD_HOST_PATHS = (
     "/home/flark",
     "/Users/flark",
@@ -123,6 +124,24 @@ def test_linux_staged_payload_excludes_darwin_wheels_and_dev_scripts(tmp_path):
 
     assert darwin_wheels == []
     assert staged_dev_scripts == []
+
+
+def test_arch_install_hook_is_lf_only_when_staged_and_packaged(tmp_path):
+    staged = tmp_path / "stemwerk.install"
+    shutil.copy2(ARCH_INSTALL_SCRIPT, staged)
+
+    staged_bytes = staged.read_bytes()
+    assert b"\r" not in staged_bytes
+    _run("bash", "-n", str(staged))
+
+    package = tmp_path / "stemwerk-test.pkg.tar"
+    with tarfile.open(package, "w") as archive:
+        archive.add(staged, arcname=".INSTALL")
+    with tarfile.open(package, "r") as archive:
+        packaged_bytes = archive.extractfile(".INSTALL").read()
+
+    assert packaged_bytes == staged_bytes
+    assert b"\r" not in packaged_bytes
 
 
 def test_linux_contract_remains_platform_scoped_while_reapack_keeps_darwin_wheels():
