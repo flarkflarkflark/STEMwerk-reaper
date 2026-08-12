@@ -4904,11 +4904,13 @@ def _readme_section(readme, heading_text):
     return readme[start:end]
 
 
-#: Words that mark a line as making a "what should I use/download/install right
-#: now" claim. Deliberately the exact list suggested for this contract: any
-#: line combining one of these with a non-target 2.3.x.y version token is
-#: presumed stale unless the line also contains an explicit historical/
-#: transitional exemption marker (see _README_HISTORICAL_EXEMPTION_MARKERS).
+#: Words that mark a sentence as making a "what should I use/download/install
+#: right now" claim. Any sentence combining one of these with a non-target
+#: 2.3.x.y version token is presumed stale unless the sentence also contains
+#: an explicit historical/transitional exemption marker (see
+#: _README_HISTORICAL_EXEMPTION_MARKERS) -- except for _README_STRONG_CURRENT_
+#: MARKERS, which make an unambiguous "this is the current/recommended thing"
+#: claim and are never eligible for that exemption (see docstring below).
 _README_CURRENT_SEMANTIC_MARKERS = (
     "current",
     "latest",
@@ -4922,11 +4924,23 @@ _README_CURRENT_SEMANTIC_MARKERS = (
     "use",
 )
 
-#: Substrings that, if present on a flagged line, prove the line is
+#: Marker words that assert something IS presently the thing to use, rather
+#: than merely mentioning install/download/package mechanics. A historical
+#: qualifier elsewhere in the sentence ("previously published", "before
+#: `2.3.1.0`") cannot excuse pairing one of these with a stale version --
+#: "the previously published 2.3.0.6 installer remains the CURRENT installer"
+#: is still a false current-version claim despite the historical framing.
+_README_STRONG_CURRENT_MARKERS = (
+    "current",
+    "recommended",
+)
+
+#: Substrings that, if present in a flagged sentence, prove the sentence is
 #: deliberately scoping itself to a past/pending state rather than claiming
 #: an older version is current -- e.g. "previously published `2.3.0.6`",
 #: "GitHub Release (previous installer assets)", "before `2.3.1.0`",
-#: "has not yet been published", "once published".
+#: "has not yet been published", "once published". Only applies to the softer
+#: markers above; see _README_STRONG_CURRENT_MARKERS.
 _README_HISTORICAL_EXEMPTION_MARKERS = (
     "published",
     "previous",
@@ -4934,33 +4948,55 @@ _README_HISTORICAL_EXEMPTION_MARKERS = (
 
 
 def _assert_no_stale_current_version_semantics(section_text, target_version, section_name):
-    """Line-scan a README section: reject any line that pairs a
+    """Sentence-scan a README section: reject any sentence that pairs a
     current-guidance marker word with a 2.3.x.y version other than
-    target_version, unless the line is explicitly historically-scoped."""
+    target_version, unless the sentence is explicitly historically-scoped.
+
+    Scoped to individual sentences (split on ". "), not whole lines, so a
+    single bullet that legitimately discusses both the target version and an
+    older one in separate sentences -- e.g. "`2.3.1.0` is the current
+    release... the previously published `2.3.0.6` ... remain[s] the live
+    download source." -- isn't flagged just because both mentions share a
+    line. Marker words are matched on word boundaries so "currently" doesn't
+    count as "current". _README_STRONG_CURRENT_MARKERS ("current",
+    "recommended") make an unambiguous current-version claim and are never
+    excused by a historical marker, even within the same sentence.
+    """
     import re
 
     version_token_re = re.compile(r"2\.3\.\d+\.\d+")
     before_target_marker = f"before `{target_version}`"
 
+    def _has_word(word, lower_text):
+        return re.search(rf"\b{re.escape(word)}\b", lower_text) is not None
+
     for line in section_text.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
-        lower = stripped.lower()
-        if not any(marker in lower for marker in _README_CURRENT_SEMANTIC_MARKERS):
-            continue
-        versions_on_line = set(version_token_re.findall(stripped))
-        stale_versions = versions_on_line - {target_version}
-        if not stale_versions:
-            continue
-        if before_target_marker in stripped:
-            continue
-        if any(marker in lower for marker in _README_HISTORICAL_EXEMPTION_MARKERS):
-            continue
-        raise AssertionError(
-            f"{section_name}: line pairs a current-guidance marker with non-current "
-            f"version(s) {sorted(stale_versions)} and no historical exemption: {stripped!r}"
-        )
+        for sentence in re.split(r"(?<=\.)\s+", stripped):
+            lower = sentence.lower()
+            markers_present = [m for m in _README_CURRENT_SEMANTIC_MARKERS if _has_word(m, lower)]
+            if not markers_present:
+                continue
+            versions_on_sentence = set(version_token_re.findall(sentence))
+            stale_versions = versions_on_sentence - {target_version}
+            if not stale_versions:
+                continue
+            if any(_has_word(m, lower) for m in _README_STRONG_CURRENT_MARKERS):
+                raise AssertionError(
+                    f"{section_name}: sentence makes an unconditional current/recommended "
+                    f"claim alongside non-current version(s) {sorted(stale_versions)} -- a "
+                    f"historical qualifier cannot excuse this: {sentence.strip()!r}"
+                )
+            if before_target_marker in lower:
+                continue
+            if any(_has_word(m, lower) for m in _README_HISTORICAL_EXEMPTION_MARKERS):
+                continue
+            raise AssertionError(
+                f"{section_name}: sentence pairs a current-guidance marker with non-current "
+                f"version(s) {sorted(stale_versions)} and no historical exemption: {sentence.strip()!r}"
+            )
 
 
 def _assert_readme_release_contract(readme, target_version):
@@ -5076,6 +5112,27 @@ def test_shipped_readme_release_contract_rejects_stale_mutations():
         "H": mutate(
             "## Windows Notes",
             "For the recommended/current Windows package, use 2.3.0.6.",
+        ),
+        # I: target version described as still forthcoming, contradicting the
+        # "current release" claim (independent probe found this class was
+        # never actually committed as a regression fixture).
+        "I": mutate(
+            "## Release status",
+            f"`{target_version}` is upcoming and not yet ready for general use.",
+        ),
+        # J: historical-exemption abuse #1 -- "previously published" framing
+        # reused to smuggle in an unconditional "current" claim for a stale
+        # version, in the same sentence.
+        "J": mutate(
+            "## Windows Notes",
+            "The previously published 2.3.0.6 installer remains the current installer.",
+        ),
+        # K: historical-exemption abuse #2 -- "previous"/"published" framing
+        # paired with an unconditional "recommended" claim for a stale
+        # version, in the same sentence.
+        "K": mutate(
+            "## Windows Notes",
+            "The published 2.3.0.6 package is still the recommended download.",
         ),
     }
 
@@ -5247,15 +5304,38 @@ def _release_workflow_run_steps(workflow_text=None):
 
 
 def _executable_lines(run_text):
-    """Drop blank and '#'-comment-only lines so a fetcher reference that only
-    exists inside a comment doesn't count as a real invocation."""
+    """Drop blank and '#'-comment-only lines, and the body of any here-string
+    (@"..."@ / @'...'@), so a fetcher reference that only exists inside a
+    comment or a quoted text block doesn't count as a real invocation."""
     lines = []
+    in_here_string = False
     for line in run_text.splitlines():
         stripped = line.strip()
+        if in_here_string:
+            if stripped == '"@' or stripped == "'@" or stripped.startswith('"@') or stripped.startswith("'@"):
+                in_here_string = False
+            continue
         if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.endswith('@"') or stripped.endswith("@'"):
+            in_here_string = True
             continue
         lines.append(line)
     return lines
+
+
+def _invokes_fetcher(run_text):
+    """A real invocation of the hardened fetcher must use the PowerShell call
+    operator (`&`) directly against a path ending in fetch_runtime_assets.ps1
+    -- matching what the release workflow actually does:
+    `& ".\\installer\\windows\\fetch_runtime_assets.ps1"`. A bare substring
+    match on "fetch_runtime_assets.ps1" would also accept a comment, a
+    Write-Host message, a variable/string assignment, or a here-string that
+    merely mentions the filename without ever executing it."""
+    import re
+
+    invocation_re = re.compile(r"^&\s*['\"]?[^\n]*fetch_runtime_assets\.ps1", re.IGNORECASE)
+    return any(invocation_re.match(line.strip()) for line in _executable_lines(run_text))
 
 
 _RELEASE_WORKFLOW_FORBIDDEN_DIRECT_FETCH = (
@@ -5274,6 +5354,18 @@ _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS = (
     "payload/ffmpeg",
 )
 
+#: A later Copy-Item/Move-Item into the bundled staging destinations bypasses
+#: checksum verification just as effectively as a raw network fetch does --
+#: the only thing that may populate those destinations is the hardened
+#: fetcher itself, so any workflow step performing one of these writes is
+#: forbidden regardless of whether that step also invokes the fetcher.
+_RELEASE_WORKFLOW_FORBIDDEN_WRITE_COMMANDS = (
+    "Copy-Item",
+    "Move-Item",
+    "cp ",
+    "mv ",
+)
+
 
 def _assert_release_workflow_windows_runtime_provenance(steps):
     hardened_invocations = []
@@ -5281,7 +5373,7 @@ def _assert_release_workflow_windows_runtime_provenance(steps):
 
     for job_name, step_name, run_text in steps:
         executable_text = "\n".join(_executable_lines(run_text))
-        invokes_hardened = "fetch_runtime_assets.ps1" in executable_text
+        invokes_hardened = _invokes_fetcher(run_text)
         if invokes_hardened:
             hardened_invocations.append((job_name, step_name, executable_text))
 
@@ -5299,6 +5391,14 @@ def _assert_release_workflow_windows_runtime_provenance(steps):
             for staging_path in _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS:
                 if staging_path in executable_text:
                     forbidden_hits.append((job_name, step_name, f"direct staging write to {staging_path}"))
+
+        # A local Copy-Item/Move-Item into the staging destinations is a
+        # bypass even without any network call, and even in a step that also
+        # invokes the hardened fetcher (a later overwrite in the same step).
+        if any(cmd in executable_text for cmd in _RELEASE_WORKFLOW_FORBIDDEN_WRITE_COMMANDS):
+            for staging_path in _RELEASE_WORKFLOW_BUNDLED_STAGING_PATHS:
+                if staging_path in executable_text:
+                    forbidden_hits.append((job_name, step_name, f"unverified copy/move write to {staging_path}"))
 
     assert not forbidden_hits, (
         f"forbidden direct-fetch pattern(s) found outside the hardened fetcher: {forbidden_hits}"
@@ -5324,8 +5424,11 @@ def test_release_workflow_windows_runtime_provenance_rejects_bypass_mutations():
     bypass classes independent review identified: a comment-only fetcher
     reference, a second raw Python/FFmpeg fetch added elsewhere, the wrong
     STEMWERK_SKIP_WHEELHOUSE value, an alternate job staging bundled assets
-    directly, and a later step overwriting the verified files. These are
-    synthetic step lists, not edits to the committed workflow file."""
+    directly, a later step overwriting the verified files via a raw fetch, a
+    non-executing (Write-Host) mention of the fetcher, and a later local
+    Copy-Item overwrite of the verified Python/FFmpeg payload with no network
+    call at all. These are synthetic step lists, not edits to the committed
+    workflow file."""
     real_steps = _release_workflow_run_steps()
 
     def with_extra_step(job_name, step_name, run_text):
@@ -5374,6 +5477,28 @@ def test_release_workflow_windows_runtime_provenance_rejects_bypass_mutations():
             "windows-exe",
             "Late overwrite of bundled FFmpeg",
             'Invoke-WebRequest "https://example.invalid/ffmpeg.zip" -OutFile installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip',
+        ),
+        # H: fetcher only mentioned as a non-executing string (Write-Host),
+        # not a comment -- would satisfy a bare substring check even though
+        # the fetcher is never actually invoked.
+        "H": with_replaced_windows_exe_step(
+            "Fetch bundled runtime assets (Windows)",
+            '$env:STEMWERK_SKIP_WHEELHOUSE = "1"\n'
+            'Write-Host "installer/windows/fetch_runtime_assets.ps1"',
+        ),
+        # I: a later Copy-Item overwrites the verified bundled Python payload
+        # without any network call at all.
+        "I": with_extra_step(
+            "windows-exe",
+            "Late Copy-Item overwrite of bundled Python",
+            "Copy-Item unverified-python-embed.zip installer\\windows\\payload\\python\\python-embed.zip",
+        ),
+        # J: a later Copy-Item overwrites the verified bundled FFmpeg payload
+        # without any network call at all.
+        "J": with_extra_step(
+            "windows-exe",
+            "Late Copy-Item overwrite of bundled FFmpeg",
+            "Copy-Item unverified-ffmpeg.zip installer\\windows\\payload\\ffmpeg\\ffmpeg-release-essentials.zip",
         ),
     }
 
