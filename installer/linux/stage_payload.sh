@@ -20,10 +20,15 @@ copy_linux_payload() {
     --exclude='STEMwerk_Disable_Debug.lua' \
     --exclude='STEMwerk_Set_PythonPath.lua' \
     --exclude='STEMwerk_separate.lua' \
+    --exclude='STEMwerk_Benchmark_Flashy_Idle.lua' \
+    --exclude='STEMwerk_Benchmark_REAPER_Native_Idle.lua' \
+    --exclude='STEMwerk_Dev_Prepare_Benchmark_State.lua' \
+    --exclude='STEMwerk_Dev_Project_State_Snapshot.lua' \
     --exclude='themes/' \
     --exclude='assets/toolbar_icons/stemwerk_*.png' \
     --exclude='vendor/stemwerk-core/build/' \
     --exclude='vendor/stemwerk-core/src/*.egg-info/' \
+    --exclude='vendor/wheels/darwin-*/' \
     "$root_dir/scripts/reaper/" \
     "$root_dir/i18n" \
     "$root_dir/installer/assets/stemwerk.svg" \

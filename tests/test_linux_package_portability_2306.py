@@ -20,6 +20,12 @@ COLLECTED_HOST_PLATFORM = sys.platform
 COLLECTED_SUBPROCESS_RUN = subprocess.run
 COLLECTED_SUBPROCESS_POPEN = subprocess.Popen
 COLLECTED_ENVIRONMENT = dict(os.environ)
+LINUX_EXCLUDED_DEV_SCRIPTS = (
+    "STEMwerk_Benchmark_Flashy_Idle.lua",
+    "STEMwerk_Benchmark_REAPER_Native_Idle.lua",
+    "STEMwerk_Dev_Prepare_Benchmark_State.lua",
+    "STEMwerk_Dev_Project_State_Snapshot.lua",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +103,43 @@ def test_linux_staged_payload_satisfies_production_payload_contract(tmp_path):
         if not (staged / req[len("scripts/reaper/"):]).exists()
     )
     assert not missing, f"Linux staged payload missing production payload contract entries: {missing}"
+
+
+def test_linux_staged_payload_excludes_darwin_wheels_and_dev_scripts(tmp_path):
+    staged = tmp_path / "payload"
+    command = (
+        f'source "{ROOT / "installer/linux/stage_payload.sh"}"; '
+        f'copy_linux_payload "{ROOT}" "{staged}"'
+    )
+    _run("bash", "-c", command)
+
+    darwin_wheels = sorted(
+        path.relative_to(staged)
+        for path in staged.glob("vendor/wheels/darwin-*/*.whl")
+    )
+    staged_dev_scripts = sorted(
+        name for name in LINUX_EXCLUDED_DEV_SCRIPTS if (staged / name).exists()
+    )
+
+    assert darwin_wheels == []
+    assert staged_dev_scripts == []
+
+
+def test_linux_contract_remains_platform_scoped_while_reapack_keeps_darwin_wheels():
+    from tools import release_gate
+
+    contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
+    linux_required = release_gate.required_files_for_platform(contract, "linux")
+    reapack_required = release_gate.required_files_for_platform(contract, "reapack")
+    darwin_wheels = {
+        path for path in contract.required["macos"] if "/vendor/wheels/darwin-" in path
+    }
+    index_xml = (ROOT / "index.xml").read_text(encoding="utf-8")
+
+    assert darwin_wheels
+    assert darwin_wheels.isdisjoint(linux_required)
+    assert darwin_wheels <= reapack_required
+    assert all(path in index_xml for path in darwin_wheels)
 
 
 def test_linux_staged_payload_contains_all_statically_detected_or_dynamic_dependencies(tmp_path):
