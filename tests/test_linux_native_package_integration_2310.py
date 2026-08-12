@@ -1,5 +1,7 @@
 import hashlib
 import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -226,6 +228,27 @@ def test_native_package_routes_install_helper_and_show_exact_command():
     for message_source in (deb, rpm_spec, arch_install):
         assert "Actions -> Show action list -> ReaScript: Load" in message_source
         assert "STEMwerk_Setup_Toolbar.lua" in message_source
+
+
+def test_arch_build_container_provisions_pkgbuild_dependencies_before_makepkg():
+    arch_builder = (ROOT / "installer/linux/build_archpkg.sh").read_text(encoding="utf-8")
+    pkgbuild = (ROOT / "installer/linux/arch/PKGBUILD").read_text(encoding="utf-8")
+
+    depends_match = re.search(r"^depends=\(([^)]*)\)", pkgbuild, re.MULTILINE)
+    assert depends_match is not None
+    package_dependencies = set(shlex.split(depends_match.group(1)))
+
+    bootstrap_match = re.search(
+        r"pacman -Syu --noconfirm --needed ([^;]+);.*?makepkg",
+        arch_builder,
+        re.DOTALL,
+    )
+    assert bootstrap_match is not None
+    provisioned_dependencies = set(shlex.split(bootstrap_match.group(1)))
+
+    assert {"base-devel", "zstd"} <= provisioned_dependencies
+    assert package_dependencies <= provisioned_dependencies
+    assert "rsync" in package_dependencies
 
 
 def test_appimage_keeps_equivalent_user_copy_behavior():
