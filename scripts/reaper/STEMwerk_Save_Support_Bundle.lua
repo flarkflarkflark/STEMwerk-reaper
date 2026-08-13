@@ -1203,9 +1203,15 @@ local function effectiveDeviceRaw(entry)
     -- later field that holds this run's actual effective-execution
     -- evidence (e.g. backend_runtime/runtime_selected reflecting a
     -- fallback that effective_device itself never explicitly recorded).
+    --
+    -- drumsep_helper_device_arg is deliberately EXCLUDED from this chain:
+    -- it is the argument passed TO the helper (a request), not evidence of
+    -- what actually executed. A helper requested with --device mps that
+    -- the runtime then ran on CPU (backend_runtime/runtime_selected=cpu)
+    -- must never be shown as the active/effective device -- that argument
+    -- is provenance only (see requestedDeviceRaw / "Requested device:").
     return presentValue(entry and entry.effective_device)
         or presentValue(entry and entry.drumsep_helper_device)
-        or presentValue(entry and entry.drumsep_helper_device_arg)
         or presentValue(entry and entry.backend_runtime)
         or presentValue(entry and entry.runtime_selected)
         or presentValue(entry and entry.device)
@@ -2436,31 +2442,49 @@ local function classifyOnnxFallback(bootstrapLog, runtimeState, currentHealthyEv
     -- bootstrap.log is append-only across every historical bootstrap run,
     -- so a bare text search for "Runtime verification passed." can find a
     -- sentence left behind by an old, unrelated run. That is historical
-    -- context, not current proof: current health must come only from
-    -- structured current state (bootstrap.env's STATUS + RUNTIME_VERIFY_
-    -- DETAIL, which -- being a state file, not a log -- always reflects the
-    -- latest/current run) or from proven-healthy current-session evidence
-    -- (live probes/workers). The historical sentence is kept only as
-    -- separately-labeled provenance below, never as independent proof.
+    -- context, not current proof.
+    --
+    -- bootstrap.env's STATUS/RUNTIME_VERIFY_DETAIL (structuredHealthy) is
+    -- likewise NOT current proof by itself: bootstrap.env has no
+    -- freshness/session/generation identity of its own in its current
+    -- schema, so "STATUS=ok" recorded there could be from any past
+    -- bootstrap run, not necessarily this one. It is cached/recorded
+    -- readiness provenance, exposed separately below as
+    -- bootstrap_readiness, never merged into the current-health verdict.
+    -- Current health can only come from proven-healthy current-session
+    -- evidence (currentHealthyEvidence -- session-ID-matched, freshly
+    -- timestamped, explicitly-ok acceptance phases / live workers).
     local structuredHealthy = trim(runtimeState.STATUS or ""):lower() == "ok"
         and trim(runtimeState.RUNTIME_VERIFY_DETAIL or ""):lower() == "ok"
     local historicalSentenceSeen = lower:find("runtime verification passed.", 1, true) ~= nil
-    local runtimeHealthy = structuredHealthy or (currentHealthyEvidence == true)
+    local runtimeHealthy = currentHealthyEvidence == true
     local handled = lookupFailed and fallbackAttempted and fallbackVersion ~= "" and runtimeHealthy
     -- A historical lookup failure only counts as a CURRENT fatal error when
     -- there is no other proof the runtime is currently healthy. If current
-    -- workers/phases or structured bootstrap state already prove health,
-    -- the old failure is historical/recovered context, not a current fault.
+    -- workers/phases already prove health, the old failure is
+    -- historical/recovered context, not a current fault. A merely cached
+    -- bootstrap-healthy claim does NOT count as that proof (see above).
     local fatal = lookupFailed and not handled and not runtimeHealthy
     return {
         lookupFailed = lookupFailed,
         fallbackAttempted = fallbackAttempted,
         fallbackVersion = fallbackVersion,
         runtimeHealthy = runtimeHealthy,
+        cachedBootstrapHealthy = structuredHealthy,
         historicalSentenceSeen = historicalSentenceSeen,
         handled = handled,
         fatal = fatal,
     }
+end
+
+-- Strict UTC ISO-8601 shape ("2026-07-24T13:10:00Z") -- the exact format
+-- this codebase's own evidence.env/session.env writers use. A value that
+-- doesn't match this is not a parseable timestamp and must not be treated
+-- as one: a naive string compare (`>=`) between a malformed value and a
+-- real timestamp can accidentally evaluate either way depending on the
+-- malformed text's leading characters, which is not proof of anything.
+local function isValidIsoUtcTimestamp(value)
+    return type(value) == "string" and value:match("^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ$") ~= nil
 end
 
 local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLogDir, bundleDir, copiedFiles, runtimeState)
@@ -2491,10 +2515,23 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
         local phaseTimestampUtc = trim(evidence.TIMESTAMP_UTC or "")
         -- Freshness: a phase file can only influence current health if its
         -- own generation timestamp belongs to the CURRENT session, i.e. it
-        -- is not older than that session's start. Without this, a stale
-        -- phase file left behind under a reused/coincidentally-matching
-        -- session ID could still count as current proof.
-        local phaseIsFresh = sessionStartedUtc == "" or phaseTimestampUtc == "" or phaseTimestampUtc >= sessionStartedUtc
+        -- is present, parses as a real timestamp, and is not older than
+        -- that session's start. A missing or malformed timestamp is not
+        -- "fresh by default" -- it is unverifiable and must be treated the
+        -- same as a provably stale one: it cannot prove current health.
+        -- (If the session's own start time is itself missing/malformed,
+        -- there is no floor to compare against, so freshness falls back to
+        -- "this phase's own timestamp is at least validly formatted".)
+        local phaseIsFresh, freshnessReason
+        if phaseTimestampUtc == "" then
+            phaseIsFresh, freshnessReason = false, "missing_timestamp"
+        elseif not isValidIsoUtcTimestamp(phaseTimestampUtc) then
+            phaseIsFresh, freshnessReason = false, "malformed_timestamp"
+        elseif isValidIsoUtcTimestamp(sessionStartedUtc) and phaseTimestampUtc < sessionStartedUtc then
+            phaseIsFresh, freshnessReason = false, "stale_timestamp_outside_current_session"
+        else
+            phaseIsFresh = true
+        end
         local identityMatches = fileExists(evidencePath)
             and phaseIdentity == phase.id
             and sessionId ~= ""
@@ -2545,14 +2582,26 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
             missing = missing + 1
             appendKey(lines, "selection", "missing")
             local warning
-            if not phaseIsFresh then
-                warning = "stale_timestamp_outside_current_session"
-            elseif fileExists(evidencePath) then
-                warning = "session_or_phase_identity_mismatch"
-            else
+            if not fileExists(evidencePath) then
                 warning = "evidence_not_found"
+            elseif phaseIdentity ~= phase.id or sessionId == "" or phaseSessionId ~= sessionId then
+                warning = "session_or_phase_identity_mismatch"
+            elseif not phaseIsFresh then
+                warning = freshnessReason
+            else
+                warning = "session_or_phase_identity_mismatch"
             end
             appendKey(lines, "warning", warning)
+            -- A phase file that exists but failed only the freshness check
+            -- is not proof either way, but stays visible as stale/
+            -- unverified evidence rather than being silently discarded --
+            -- callers can see this phase existed and why it was not
+            -- trusted. (If the evidence file never existed at all, there
+            -- is nothing real to show.)
+            if fileExists(evidencePath) and not phaseIsFresh then
+                appendKey(lines, "status", trim(evidence.STATUS or ""):lower() ~= "" and trim(evidence.STATUS or ""):lower() or "unknown")
+                appendKey(lines, "timestamp_utc", phaseTimestampUtc ~= "" and phaseTimestampUtc or "missing")
+            end
         end
     end
 
@@ -2579,6 +2628,11 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     appendKey(lines, "handled_recovery_event", onnx.handled and "yes" or "no")
     appendKey(lines, "local_onnxruntime_fallback_recorded", onnx.fallbackVersion ~= "" and "yes" or "no")
     appendKey(lines, "local_onnxruntime_version", onnx.fallbackVersion ~= "" and onnx.fallbackVersion or "none")
+    -- bootstrap.env's cached STATUS/RUNTIME_VERIFY_DETAIL is exposed here as
+    -- provenance only -- it has no freshness/session identity of its own,
+    -- so it can never by itself decide final_runtime_health below (see
+    -- classifyOnnxFallback).
+    appendKey(lines, "bootstrap_readiness", onnx.cachedBootstrapHealthy and "cached_healthy" or "cached_unhealthy_or_unrecorded")
     local finalRuntimeHealthy = onnx.runtimeHealthy and not currentPhaseFailureExists
     appendKey(lines, "final_runtime_health", finalRuntimeHealthy and "ok" or "not_proven")
     appendKey(lines, "current_fatal_error_count", tostring(currentFatalErrors))
@@ -2586,8 +2640,8 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     if onnx.historicalSentenceSeen then
         -- Historical-only provenance: bootstrap.log is append-only, so this
         -- sentence may belong to an old, unrelated run. It is never used to
-        -- decide final_runtime_health above -- only structured current
-        -- state or proven current-session evidence can do that.
+        -- decide final_runtime_health above -- only proven current-session
+        -- evidence can do that (never a merely cached bootstrap claim).
         appendKey(lines, "historical_runtime_verification_sentence_seen", "yes_not_used_as_current_proof")
     end
     if onnx.lookupFailed and onnx.runtimeHealthy then
@@ -4138,6 +4192,26 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
     return lines
 end
 
+-- A folder name matching STEMwerk's own "STEMwerk_<token>" naming
+-- convention is NOT, by itself, proof that STEMwerk actually generated
+-- that folder for a real run -- a human-made review/build folder can use
+-- the exact same naming shape. Real STEMwerk run evidence always logs its
+-- own file paths (e.g. "input=<path>/STEMwerk_<token>/input.wav") into its
+-- known marker files, so a folder's own name appearing inside its own
+-- marker-file content is a cheap, self-consistency signal that the content
+-- actually originated from a run using this folder -- not merely a
+-- same-shaped name with unrelated or fabricated content dropped in.
+local function tempFolderContentReferencesItself(fullPath, name)
+    local markerFiles = { "stdout.txt", "stderr.txt", "separation_log.txt" }
+    for _, fileName in ipairs(markerFiles) do
+        local data = readFile(joinPath(fullPath, fileName), "rb")
+        if data and tostring(data):find(tostring(name), 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 local function collectTempInventory(bundleDir, copiedFiles)
     local tempBase = getTempBase()
     local inventoryLines = {}
@@ -4177,21 +4251,26 @@ local function collectTempInventory(bundleDir, copiedFiles)
                 local stat = getPathStat(full)
                 epoch = tonumber(stat.epoch) or 0
             end
+            -- Explicit identity: matching STEMwerk's own generated
+            -- run/job-folder naming convention ("STEMwerk_<token>", the
+            -- same pattern used to key run-ID association elsewhere in
+            -- this file) is necessary but NOT sufficient -- a human-named
+            -- folder (dev/review/build) can use that exact same shape. The
+            -- folder must also carry actual run identity: its own marker
+            -- files must reference this folder itself (see
+            -- tempFolderContentReferencesItself above). A loose
+            -- case-insensitive "starts with stemwerk" match, an mtime-only
+            -- newest-folder heuristic, or the name pattern alone are never
+            -- proof of currentness on their own; a newer folder lacking
+            -- real run identity must never be able to pass itself off as
+            -- current run evidence.
+            local nameMatchesRunPattern = tostring(name):match("^STEMwerk_[%w_%-]+$") ~= nil
             folders[#folders + 1] = {
                 name = name,
                 path = full,
                 epoch = epoch,
                 mtime = "metadata skipped for speed",
-                -- Explicit identity: only a folder matching STEMwerk's own
-                -- generated run/job-folder naming convention (the same
-                -- "STEMwerk_<token>" pattern used to key run-ID association
-                -- elsewhere in this file) is a folder STEMwerk itself could
-                -- have created for a real run. A loose case-insensitive
-                -- "starts with stemwerk" match also matches unrelated
-                -- human-named folders (dev/review/build folders, etc.) that
-                -- merely share the prefix; a newer one of those must never
-                -- be able to pass itself off as current run evidence.
-                hasRunIdentity = tostring(name):match("^STEMwerk_[%w_%-]+$") ~= nil,
+                hasRunIdentity = nameMatchesRunPattern and tempFolderContentReferencesItself(full, name),
             }
         end
     end

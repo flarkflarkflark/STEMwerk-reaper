@@ -1082,22 +1082,28 @@ end
 local function createHealthyNoAcceptancePhasesScenario(baseRoot)
     local context = createPresentScenario(baseRoot)
     context.name = "healthy-runtime-no-acceptance-phases"
-    -- Bootstrap/capabilities are untouched (still healthy: STATUS=ok,
-    -- RUNTIME_VERIFY_DETAIL=ok), but the optional fixed six-phase
-    -- acceptance-evidence tree was never collected for this session.
+    -- Bootstrap/capabilities are untouched (still cached-healthy:
+    -- STATUS=ok, RUNTIME_VERIFY_DETAIL=ok), but the optional fixed
+    -- six-phase acceptance-evidence tree was never collected for this
+    -- session, so there is no CURRENT evidence at all.
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     return context
 end
 
+-- Section 4 (2.3.1.0 final-prep follow-up): bootstrap.env has no
+-- freshness/session identity of its own -- a cached STATUS=ok there must
+-- not, by itself, prove CURRENT runtime health when no acceptance-phase
+-- fixtures were collected for this session. It is exposed as
+-- bootstrap_readiness=cached_healthy (provenance), not final_runtime_health.
 local function assertHealthyNoAcceptancePhasesScenario(bundleDir)
     local manifest = readManifest(bundleDir)
-    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
-        "healthy runtime with no acceptance-phase fixtures was reported as not_proven:\n" .. manifest)
+    assertf(manifest:find("bootstrap_readiness:%s+cached_healthy") ~= nil,
+        "cached bootstrap-healthy provenance was not exposed:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "a cached bootstrap-healthy claim with no current session evidence at all proved final_runtime_health=ok on its own:\n" .. manifest)
     assertf(manifest:find("acceptance_phases_status:%s+not_collected") ~= nil,
         "0/6 acceptance phases was not labeled not_collected:\n" .. manifest)
     assertf(manifest:find("phases_included:%s+0") ~= nil, "expected 0 phases included:\n" .. manifest)
-    assertf(manifest:find("manifest_status:%s+complete") ~= nil,
-        "missing OPTIONAL acceptance-phase fixtures alone flipped manifest_status to warning:\n" .. manifest)
 end
 
 local function createHistoricalRecoveredFatalScenario(baseRoot)
@@ -2031,6 +2037,281 @@ local function assertNewerUnrelatedTempResidueScenario(bundleDir)
         "a newer unrelated folder with no STEMwerk run/job identity became 'current' evidence merely by being the newest stemwerk-prefixed folder:\n" .. diagnostics)
 end
 
+-- Section 11 (2.3.1.0 final-prep follow-up): the literal
+-- drumsep_helper_device_arg field (the argument passed TO the drumsep
+-- helper subprocess) is a request, not evidence of what actually executed.
+-- It must never surface as the ACTIVE device once backend_runtime/
+-- runtime_selected explicitly recorded CPU execution.
+local function createDrumsepHelperArgCpuEffectiveScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "drumsep-helper-arg-mps-cpu-effective"
+    clearRuns(context)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_drumsep_arg_cpu", "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "model: htdemucs",
+        "requested_device=mps",
+        "drumsep_helper_device_arg=mps",
+        "backend_runtime=cpu",
+        "runtime_selected=cpu",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertDrumsepHelperArgCpuEffectiveScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local block = summary:match("run: STEMwerk_drumsep_arg_cpu.*")
+    assertf(block ~= nil, "STEMwerk_drumsep_arg_cpu block missing:\n" .. summary)
+    assertf(block:find("friendly_device: CPU", 1, true) ~= nil,
+        "drumsep_helper_device_arg=mps + backend_runtime=cpu + runtime_selected=cpu must show CPU as the ACTIVE device:\n" .. block)
+    assertf(block:find("friendly_device: Apple MPS", 1, true) == nil,
+        "a helper-argument-only MPS request was shown as the active device despite CPU backend_runtime/runtime_selected:\n" .. block)
+    assertf(block:find("requested_device: mps", 1, true) ~= nil,
+        "requested (provenance-only) MPS must still be visible as requested_device:\n" .. block)
+end
+
+-- Section 12: matching session ID, but the acceptance-phase evidence file's
+-- own TIMESTAMP_UTC is entirely missing. A missing timestamp is not
+-- "fresh by default" -- it is unverifiable and must not be able to prove
+-- current health, just like a provably-stale one.
+local function createPhaseMissingTimestampScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "phase-missing-timestamp-cannot-prove-health"
+    local runtimeBase = context.extState.runtimeBase
+    -- Bootstrap itself is not proven healthy, so the ONLY thing that could
+    -- prove current health is the acceptance-phase evidence below.
+    writeFile(joinPath(runtimeBase, "state", "bootstrap.env"), table.concat({
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "STATUS=failed",
+        "STATUS_REASON=runtime_verification_failed",
+        "BACKEND=rocm",
+        "BOOTSTRAP_STATUS=failed",
+        "VENV_PYTHON=" .. context.fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=failed",
+        "",
+    }, "\n"))
+    local evidenceRoot = joinPath(runtimeBase, "evidence", "current-session")
+    local sessionId = "native-apple-silicon-2306-final"
+    local phaseDir = joinPath(evidenceRoot, "online_normal")
+    -- Correct session ID and status=ok, but no TIMESTAMP_UTC line at all.
+    writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=" .. sessionId,
+        "PHASE=online_normal",
+        "DISTRIBUTION=online",
+        "STATUS=ok",
+        "BACKEND=metal",
+        "DEVICE=mps",
+        "RUNTIME_ARCH=arm64",
+        "OUTPUT_VALIDATION_REASON=ok",
+        "CURRENT_FATAL_ERROR_COUNT=0",
+        "",
+    }, "\n"))
+    for _, phase in ipairs({ "verify", "online_drum", "bundled_recovery", "post_bundled_normal", "post_bundled_drum" }) do
+        removeTree(joinPath(evidenceRoot, phase))
+    end
+    return context
+end
+
+local function assertPhaseMissingTimestampScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "a phase with no TIMESTAMP_UTC at all was accepted as current proof of health:\n" .. manifest)
+    assertf(manifest:find("phases_included:%s+0") ~= nil,
+        "the missing-timestamp phase was counted as 'included' current evidence:\n" .. manifest)
+    assertf(manifest:find("warning:%s+missing_timestamp") ~= nil,
+        "the missing-timestamp phase was not distinctly labeled missing_timestamp:\n" .. manifest)
+end
+
+-- Section 13: matching session ID, but TIMESTAMP_UTC is not a parseable
+-- timestamp at all. A naive string compare against the session start could
+-- accidentally evaluate as "fresh" depending on the malformed text's
+-- leading characters -- it must be rejected outright, not compared.
+local function createPhaseMalformedTimestampScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "phase-malformed-timestamp-cannot-prove-health"
+    local runtimeBase = context.extState.runtimeBase
+    writeFile(joinPath(runtimeBase, "state", "bootstrap.env"), table.concat({
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "STATUS=failed",
+        "STATUS_REASON=runtime_verification_failed",
+        "BACKEND=rocm",
+        "BOOTSTRAP_STATUS=failed",
+        "VENV_PYTHON=" .. context.fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=failed",
+        "",
+    }, "\n"))
+    local evidenceRoot = joinPath(runtimeBase, "evidence", "current-session")
+    local sessionId = "native-apple-silicon-2306-final"
+    local phaseDir = joinPath(evidenceRoot, "online_normal")
+    writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=" .. sessionId,
+        "PHASE=online_normal",
+        "DISTRIBUTION=online",
+        "STATUS=ok",
+        -- Lexicographically greater than a well-formed "2026-..." timestamp
+        -- (leading "z" sorts after digits), which would incorrectly read
+        -- as "fresh" under a naive string compare with no format check.
+        "TIMESTAMP_UTC=zz-not-a-real-timestamp",
+        "BACKEND=metal",
+        "DEVICE=mps",
+        "RUNTIME_ARCH=arm64",
+        "OUTPUT_VALIDATION_REASON=ok",
+        "CURRENT_FATAL_ERROR_COUNT=0",
+        "",
+    }, "\n"))
+    for _, phase in ipairs({ "verify", "online_drum", "bundled_recovery", "post_bundled_normal", "post_bundled_drum" }) do
+        removeTree(joinPath(evidenceRoot, phase))
+    end
+    return context
+end
+
+local function assertPhaseMalformedTimestampScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "a phase with a malformed TIMESTAMP_UTC was accepted as current proof of health:\n" .. manifest)
+    assertf(manifest:find("phases_included:%s+0") ~= nil,
+        "the malformed-timestamp phase was counted as 'included' current evidence:\n" .. manifest)
+    assertf(manifest:find("warning:%s+malformed_timestamp") ~= nil,
+        "the malformed-timestamp phase was not distinctly labeled malformed_timestamp:\n" .. manifest)
+end
+
+-- Section 14: a newer folder that matches STEMwerk's own exact
+-- "STEMwerk_<token>" run/job naming convention -- not merely a loose
+-- "stemwerk"-prefixed name -- must still not be able to pass itself off as
+-- current run evidence unless its own content actually references it. A
+-- human-made "STEMwerk_review"/"STEMwerk_build" folder can use the exact
+-- same naming shape as a real run folder while carrying no real run
+-- evidence at all.
+local function createTempNameMatchesButNoRunIdentityScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "temp-name-pattern-without-run-identity"
+    local tempRoot = joinPath(baseRoot, "tmp-present")
+    local currentJobDir = joinPath(tempRoot, "STEMwerk_fake_present")
+    -- The genuinely-current run's own folder has no stderr.txt of its own
+    -- here, so "Recent stderr.txt" can only legitimately come from THIS
+    -- run's own evidence -- never from either decoy below.
+    os.remove(joinPath(currentJobDir, "stderr.txt"))
+    waitNextSecond()
+    -- Exactly matches STEMwerk's own naming convention (unlike the
+    -- existing lowercase/hyphenated "stemwerk-review" fixture), but its
+    -- content never references this folder -- a human review folder that
+    -- happens to reuse STEMwerk's own naming shape.
+    local reviewDecoy = joinPath(tempRoot, "STEMwerk_review")
+    mkdirP(reviewDecoy)
+    writeFile(joinPath(reviewDecoy, "stderr.txt"), "notes from manual review, unrelated to any run\n")
+    waitNextSecond()
+    -- Also matches the naming convention and even carries a run-id-shaped
+    -- token of its own, but not one tied to the genuinely current run --
+    -- an unrelated run's leftover residue must not become "current" either.
+    -- (Deliberately does not mention its own folder name anywhere in its
+    -- content, unlike a real run's own logged output paths.)
+    local buildDecoy = joinPath(tempRoot, "STEMwerk_build")
+    mkdirP(buildDecoy)
+    writeFile(joinPath(buildDecoy, "stdout.txt"), "build log for an unrelated job token XYZ99, nothing to do with any current run\n")
+    -- Both decoys carry a stderr.txt of their own (unrelated content, no
+    -- self-reference) so this check catches the regression regardless of
+    -- which decoy sorts as "newest" -- the real folder above has none.
+    writeFile(joinPath(buildDecoy, "stderr.txt"), "build stderr for an unrelated job\n")
+    return context
+end
+
+local function assertTempNameMatchesButNoRunIdentityScenario(bundleDir)
+    local inventory = readFile(joinPath(bundleDir, "temp_inventory.txt")) or ""
+    assertf(inventory:find("STEMwerk_review", 1, true) ~= nil and inventory:find("STEMwerk_build", 1, true) ~= nil,
+        "the decoy folders were not inventoried at all (unexpected):\n" .. inventory)
+    local diagnostics = readFile(joinPath(bundleDir, "diagnostics.txt")) or ""
+    assertf(diagnostics:find("Recent stderr%.txt:%s+missing") ~= nil,
+        "a newer folder that only shares STEMwerk's exact naming pattern (with no real run identity in its content) became 'current' evidence merely by being newest:\n" .. diagnostics)
+end
+
+-- Section 15 (2.3.1.0 final-prep follow-up): bootstrap.log is append-only,
+-- so a bare "Runtime verification passed." sentence can be left behind by
+-- any past run. With no structured cached-healthy bootstrap state and no
+-- current session evidence at all, that historical sentence alone must
+-- never prove current health.
+local function createHistoricalSuccessOnlyScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "historical-success-log-only-not-proven"
+    local runtimeBase = context.extState.runtimeBase
+    writeFile(joinPath(runtimeBase, "state", "bootstrap.env"), table.concat({
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "STATUS=failed",
+        "STATUS_REASON=runtime_verification_failed",
+        "BOOTSTRAP_STATUS=failed",
+        "VENV_PYTHON=" .. context.fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=failed",
+        "",
+    }, "\n"))
+    writeFile(joinPath(runtimeBase, "logs", "bootstrap.log"), table.concat({
+        "bootstrap ok (old run)",
+        "Runtime verification passed.",
+        "",
+    }, "\n"))
+    removeTree(joinPath(runtimeBase, "evidence"))
+    return context
+end
+
+local function assertHistoricalSuccessOnlyScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("bootstrap_readiness:%s+cached_unhealthy_or_unrecorded") ~= nil,
+        "a non-ok bootstrap.env was not exposed as cached_unhealthy_or_unrecorded provenance:\n" .. manifest)
+    assertf(manifest:find("historical_runtime_verification_sentence_seen:%s+yes_not_used_as_current_proof") ~= nil,
+        "the historical 'Runtime verification passed.' sentence was not recorded as historical-only:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "a historical-only 'Runtime verification passed.' log sentence, with no structured or current-session evidence, proved current health:\n" .. manifest)
+end
+
+-- Section 16 (2.3.1.0 final-prep follow-up): fatal-severity classification
+-- must follow the same currentness authority as ordinary failure -- a
+-- cached-healthy bootstrap claim must never suppress a genuinely current
+-- FATAL acceptance phase.
+local function createCachedBootstrapCurrentFatalScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "cached-bootstrap-current-fatal"
+    -- bootstrap.env/capabilities.env stay untouched (STATUS=ok,
+    -- RUNTIME_VERIFY_DETAIL=ok: cached-healthy provenance). One
+    -- current-session acceptance phase (identity/timestamp already fresh)
+    -- now reports STATUS=fatal explicitly.
+    local evidenceRoot = joinPath(context.extState.runtimeBase, "evidence", "current-session")
+    local sessionId = "native-apple-silicon-2306-final"
+    local phaseDir = joinPath(evidenceRoot, "online_normal")
+    writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=" .. sessionId,
+        "PHASE=online_normal",
+        "DISTRIBUTION=online",
+        "STATUS=fatal",
+        "TIMESTAMP_UTC=2026-07-24T13:10:00Z",
+        "BACKEND=metal",
+        "DEVICE=mps",
+        "RUNTIME_ARCH=arm64",
+        "OUTPUT_VALIDATION_REASON=failed",
+        "CURRENT_FATAL_ERROR_COUNT=1",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertCachedBootstrapCurrentFatalScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("bootstrap_readiness:%s+cached_healthy") ~= nil,
+        "cached bootstrap-healthy provenance was not exposed:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "a cached bootstrap-healthy claim suppressed a genuinely current FATAL acceptance phase:\n" .. manifest)
+    assertf(manifest:find("current_fatal_error_count:%s+[1-9]") ~= nil,
+        "a current FATAL acceptance phase was not counted as a current fatal error:\n" .. manifest)
+end
+
 local function assertZipIntegrity(bundleDir)
     local zipPath = bundleDir .. ".zip"
     assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
@@ -2272,6 +2553,42 @@ local function main()
     local newerUnrelatedTemp = createNewerUnrelatedTempResidueScenario(joinPath(baseRoot, "newer-unrelated-temp-residue"))
     local newerUnrelatedTempBundle = runScenario(newerUnrelatedTemp, assertNewerUnrelatedTempResidueScenario)
     print("PASS newer-unrelated-temp-residue-lacks-identity -> " .. newerUnrelatedTempBundle)
+
+    waitNextSecond()
+
+    local drumsepHelperArgCpu = createDrumsepHelperArgCpuEffectiveScenario(joinPath(baseRoot, "drumsep-helper-arg-mps-cpu-effective"))
+    local drumsepHelperArgCpuBundle = runScenario(drumsepHelperArgCpu, assertDrumsepHelperArgCpuEffectiveScenario)
+    print("PASS drumsep-helper-arg-mps-cpu-effective -> " .. drumsepHelperArgCpuBundle)
+
+    waitNextSecond()
+
+    local phaseMissingTimestamp = createPhaseMissingTimestampScenario(joinPath(baseRoot, "phase-missing-timestamp"))
+    local phaseMissingTimestampBundle = runScenario(phaseMissingTimestamp, assertPhaseMissingTimestampScenario)
+    print("PASS phase-missing-timestamp-cannot-prove-health -> " .. phaseMissingTimestampBundle)
+
+    waitNextSecond()
+
+    local phaseMalformedTimestamp = createPhaseMalformedTimestampScenario(joinPath(baseRoot, "phase-malformed-timestamp"))
+    local phaseMalformedTimestampBundle = runScenario(phaseMalformedTimestamp, assertPhaseMalformedTimestampScenario)
+    print("PASS phase-malformed-timestamp-cannot-prove-health -> " .. phaseMalformedTimestampBundle)
+
+    waitNextSecond()
+
+    local tempNamePatternOnly = createTempNameMatchesButNoRunIdentityScenario(joinPath(baseRoot, "temp-name-pattern-without-run-identity"))
+    local tempNamePatternOnlyBundle = runScenario(tempNamePatternOnly, assertTempNameMatchesButNoRunIdentityScenario)
+    print("PASS temp-name-pattern-without-run-identity -> " .. tempNamePatternOnlyBundle)
+
+    waitNextSecond()
+
+    local historicalSuccessOnly = createHistoricalSuccessOnlyScenario(joinPath(baseRoot, "historical-success-log-only"))
+    local historicalSuccessOnlyBundle = runScenario(historicalSuccessOnly, assertHistoricalSuccessOnlyScenario)
+    print("PASS historical-success-log-only-not-proven -> " .. historicalSuccessOnlyBundle)
+
+    waitNextSecond()
+
+    local cachedBootstrapCurrentFatal = createCachedBootstrapCurrentFatalScenario(joinPath(baseRoot, "cached-bootstrap-current-fatal"))
+    local cachedBootstrapCurrentFatalBundle = runScenario(cachedBootstrapCurrentFatal, assertCachedBootstrapCurrentFatalScenario)
+    print("PASS cached-bootstrap-current-fatal -> " .. cachedBootstrapCurrentFatalBundle)
 
     print("All headless support bundle tests passed.")
 end
