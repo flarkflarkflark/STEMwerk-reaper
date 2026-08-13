@@ -1639,6 +1639,398 @@ local function assertAdditionalModelMarkersScenario(bundleDir)
         "drumsep_helper_model= marker was not parsed/attributed:\n" .. summary)
 end
 
+-- ---------------------------------------------------------------------
+-- Third follow-up (release/2.3.1.0-final-prep) fixtures: strict run-ID
+-- association, per-job diagnostic isolation, run-level aggregation of
+-- heterogeneous per-job evidence, Direct Kit generic-model leakage,
+-- effective (not merely requested) backend/device, and current-health
+-- identity/freshness. Each clones the known-good "present" scenario and
+-- mutates only what the fixture needs.
+-- ---------------------------------------------------------------------
+
+-- Section 1: a new tokenless launch block must never inherit the previous
+-- run's identity just because that run's token was the last one seen.
+local function createTokenlessLaunchAfterValidRunScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "tokenless-launch-after-valid-run"
+    clearRuns(context)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_run_a", "single")
+    mkdirP(jobDir)
+    -- No model/device evidence of its own, so any model shown for this run
+    -- can only have come from run_stemwerk.log association.
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+
+    local runtimeLogsDir = joinPath(context.extState.runtimeBase, "logs")
+    writeFile(joinPath(runtimeLogsDir, "run_stemwerk.log"), table.concat({
+        "[2026-07-01 10:00:00] CMD: LAUNCH: STEMwerk_run_a",
+        "RC: 0",
+        -- A brand-new launch begins here with NO run-ID token of its own.
+        -- This starts a new logical launch boundary; its evidence must
+        -- never be attributed to the PRIOR run just because that run's
+        -- token was the last one seen.
+        "[2026-07-01 10:05:00] CMD: LAUNCH: --model htdemucs_ft --device cuda:0",
+        "RC: 0",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertTokenlessLaunchAfterValidRunScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local block = summary:match("run: STEMwerk_run_a.*")
+    assertf(block ~= nil, "STEMwerk_run_a run block missing:\n" .. summary)
+    assertf(block:find("model: htdemucs_ft", 1, true) == nil,
+        "a tokenless launch block starting AFTER STEMwerk_run_a's block leaked its model onto STEMwerk_run_a:\n" .. block)
+    assertf(block:find("device: cuda:0", 1, true) == nil,
+        "a tokenless launch block starting AFTER STEMwerk_run_a's block leaked its device onto STEMwerk_run_a:\n" .. block)
+end
+
+-- Section 2/3: within ONE run, jobs with genuinely different model/backend/
+-- device evidence must never be blended into a fabricated combination; the
+-- run summary must report "mixed" (never first-wins/last-wins).
+local function createHeterogeneousJobsSameRunScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "heterogeneous-jobs-same-run-no-fabricated-combo"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_hetero_run")
+    local jobA = joinPath(runDir, "jobA")
+    mkdirP(jobA)
+    writeFile(joinPath(jobA, "stdout.txt"), table.concat({
+        "model: X-model",
+        "backend_runtime: rocm",
+        "device: cuda:0",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobA, "done.txt"), "done\n")
+    writeFile(joinPath(jobA, "exit_code.txt"), "0\n")
+
+    local jobB = joinPath(runDir, "jobB")
+    mkdirP(jobB)
+    writeFile(joinPath(jobB, "stdout.txt"), table.concat({
+        "model: Y-model",
+        "backend_runtime: cpu",
+        "device: cpu",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobB, "done.txt"), "done\n")
+    writeFile(joinPath(jobB, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertHeterogeneousJobsSameRunScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local block = summary:match("run: STEMwerk_hetero_run.*")
+    assertf(block ~= nil, "STEMwerk_hetero_run block missing:\n" .. summary)
+    assertf(block:find("model: mixed", 1, true) ~= nil, "heterogeneous per-job models were not reported as mixed:\n" .. block)
+    assertf(block:find("backend_runtime: mixed", 1, true) ~= nil, "heterogeneous per-job backend_runtime was not reported as mixed:\n" .. block)
+    assertf(block:find("device: mixed", 1, true) ~= nil, "heterogeneous per-job device was not reported as mixed:\n" .. block)
+    assertf(block:find("model: X-model", 1, true) == nil, "run block shows one job's model instead of the truthful aggregate:\n" .. block)
+    assertf(block:find("model: Y-model", 1, true) == nil, "run block shows one job's model instead of the truthful aggregate:\n" .. block)
+end
+
+-- Section 2/3 confirming fixture: same-run heterogeneous DrumSep fields
+-- (Direct Kit) must also aggregate truthfully rather than picking one job's
+-- value.
+local function createHeterogeneousDrumsepSameRunScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "heterogeneous-drumsep-fields-same-run"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_hetero_drumsep")
+    local jobA = joinPath(runDir, "jobA")
+    mkdirP(jobA)
+    writeFile(joinPath(jobA, "stdout.txt"), table.concat({
+        "workflow_source: dks_direct",
+        "workflow_mode: drumkit",
+        "model_id=DrumSep-model-A",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobA, "done.txt"), "done\n")
+    writeFile(joinPath(jobA, "exit_code.txt"), "0\n")
+
+    local jobB = joinPath(runDir, "jobB")
+    mkdirP(jobB)
+    writeFile(joinPath(jobB, "stdout.txt"), table.concat({
+        "workflow_source: dks_direct",
+        "workflow_mode: drumkit",
+        "model_id=DrumSep-model-B",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobB, "done.txt"), "done\n")
+    writeFile(joinPath(jobB, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertHeterogeneousDrumsepSameRunScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local block = summary:match("run: STEMwerk_hetero_drumsep.*")
+    assertf(block ~= nil, "STEMwerk_hetero_drumsep block missing:\n" .. summary)
+    assertf(block:find("model: mixed", 1, true) ~= nil, "heterogeneous per-job DrumSep model_id was not reported as mixed:\n" .. block)
+    assertf(block:find("semantic_model: mixed", 1, true) ~= nil, "heterogeneous DrumSep semantic model was not reported as mixed:\n" .. block)
+    assertf(block:find("DrumSep-model-A", 1, true) == nil, "run block shows one job's DrumSep model instead of the truthful aggregate:\n" .. block)
+    assertf(block:find("DrumSep-model-B", 1, true) == nil, "run block shows one job's DrumSep model instead of the truthful aggregate:\n" .. block)
+end
+
+-- Section 5: same-run heterogeneous Kit Split stages (two jobs in the SAME
+-- run, not two different runs) must never cross-contaminate.
+local function createHeterogeneousKitSplitSameRunScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "heterogeneous-kit-split-stages-same-run"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_hetero_kitsplit")
+    local jobA = joinPath(runDir, "jobA")
+    mkdirP(jobA)
+    writeFile(joinPath(jobA, "stdout.txt"), table.concat({
+        "workflow_source: dks_extract",
+        "model: htdemucs_6s",
+        "dks_extract_stage1_runtime=mps",
+        "dks_extract_stage1_device=mps",
+        "dks_extract_stage2_runtime=mps",
+        "dks_extract_stage2_device=mps",
+        "model_id=DrumSep-model-A",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobA, "done.txt"), "done\n")
+    writeFile(joinPath(jobA, "exit_code.txt"), "0\n")
+
+    local jobB = joinPath(runDir, "jobB")
+    mkdirP(jobB)
+    writeFile(joinPath(jobB, "stdout.txt"), table.concat({
+        "workflow_source: dks_extract",
+        "model: htdemucs_ft",
+        "dks_extract_stage1_runtime=cpu",
+        "dks_extract_stage1_device=cpu",
+        "dks_extract_stage2_runtime=cpu",
+        "dks_extract_stage2_device=cpu",
+        "model_id=DrumSep-model-B",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobB, "done.txt"), "done\n")
+    writeFile(joinPath(jobB, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertHeterogeneousKitSplitSameRunScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local block = summary:match("run: STEMwerk_hetero_kitsplit.*")
+    assertf(block ~= nil, "STEMwerk_hetero_kitsplit block missing:\n" .. summary)
+    assertf(block:find("stage1_model: mixed", 1, true) ~= nil, "heterogeneous same-run stage1 model was not reported as mixed:\n" .. block)
+    assertf(block:find("stage1_runtime: mixed", 1, true) ~= nil, "heterogeneous same-run stage1 runtime was not reported as mixed:\n" .. block)
+    assertf(block:find("stage1_device: mixed", 1, true) ~= nil, "heterogeneous same-run stage1 device was not reported as mixed:\n" .. block)
+    assertf(block:find("stage2_model: mixed", 1, true) ~= nil, "heterogeneous same-run stage2 (DrumSep) model was not reported as mixed:\n" .. block)
+    assertf(block:find("stage2_runtime: mixed", 1, true) ~= nil, "heterogeneous same-run stage2 runtime was not reported as mixed:\n" .. block)
+    assertf(block:find("stage2_device: mixed", 1, true) ~= nil, "heterogeneous same-run stage2 device was not reported as mixed:\n" .. block)
+    assertf(block:find("htdemucs_6s", 1, true) == nil, "run block leaked one job's stage1 model instead of the truthful aggregate:\n" .. block)
+    assertf(block:find("htdemucs_ft", 1, true) == nil, "run block leaked one job's stage1 model instead of the truthful aggregate:\n" .. block)
+end
+
+-- Section 4: a real (non-obfuscated) decoy Demucs "model:" line alongside a
+-- DrumSep model_id must never surface as the Direct Kit generic model.
+local function createDirectKitGenericModelLeakageScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-generic-model-leakage"
+    clearRuns(context)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_direct_kit_leak", "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "workflow_source: dks_direct",
+        "workflow_mode: drumkit",
+        -- A real Demucs model marker (not an obfuscated decoy): this is
+        -- exactly the generic "model:" text the shared per-run parsing
+        -- would otherwise surface verbatim as the visible model field.
+        "model: htdemucs",
+        "model_id=MDX23C-DrumSep-aufr33-jarredou.ckpt",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertDirectKitGenericModelLeakageScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local block = summary:match("run: STEMwerk_direct_kit_leak.*")
+    assertf(block ~= nil, "STEMwerk_direct_kit_leak block missing:\n" .. summary)
+    assertf(block:find("model: MDX23C-DrumSep-aufr33-jarredou.ckpt", 1, true) ~= nil,
+        "Direct Kit generic 'model:' field did not show the DrumSep semantic model:\n" .. block)
+    assertf(block:find("model: htdemucs\n", 1, true) == nil,
+        "Direct Kit generic 'model:' field leaked the unrelated Demucs model:\n" .. block)
+    assertf(block:find("raw_demucs_model_field", 1, true) ~= nil,
+        "the raw Demucs field was dropped instead of kept as labeled historical provenance:\n" .. block)
+end
+
+-- Section 6: the active backend/device shown must be the EFFECTIVE worker
+-- execution (runtime_selected=cpu fallback), never the merely requested/
+-- earlier-probed capability (mps).
+local function createMpsRequestedCpuEffectiveScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "mps-requested-cpu-effective-fallback"
+    clearRuns(context)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_mps_cpu_fallback", "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "model: htdemucs",
+        "requested_device=mps",
+        "device: mps",
+        "runtime_selected: cpu",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertMpsRequestedCpuEffectiveScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local block = summary:match("run: STEMwerk_mps_cpu_fallback.*")
+    assertf(block ~= nil, "STEMwerk_mps_cpu_fallback block missing:\n" .. summary)
+    assertf(block:find("friendly_device: CPU", 1, true) ~= nil,
+        "requested=mps + earlier probe device=mps + runtime_selected=cpu must show CPU as the ACTIVE device:\n" .. block)
+    assertf(block:find("friendly_device: Apple MPS", 1, true) == nil,
+        "an MPS request that actually fell back to CPU execution was shown as the active device:\n" .. block)
+    assertf(block:find("requested_device: mps", 1, true) ~= nil,
+        "the requested (not active) MPS capability must still be visible as requested_device:\n" .. block)
+end
+
+-- Section 7/9: a stale/generic "healthy" bootstrap claim (no freshness
+-- identity of its own) must not mask a genuinely current failed acceptance
+-- phase -- current failure always outranks older healthy state.
+local function createStaleBootstrapCurrentFailedPhaseScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "stale-healthy-bootstrap-current-failed-phase"
+    -- bootstrap.env/capabilities.env stay untouched (STATUS=ok,
+    -- RUNTIME_VERIFY_DETAIL=ok). One current-session acceptance phase
+    -- (identity/timestamp already verified fresh) now fails.
+    local evidenceRoot = joinPath(context.extState.runtimeBase, "evidence", "current-session")
+    local sessionId = "native-apple-silicon-2306-final"
+    local phaseDir = joinPath(evidenceRoot, "online_normal")
+    writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=" .. sessionId,
+        "PHASE=online_normal",
+        "DISTRIBUTION=online",
+        "STATUS=fail",
+        "TIMESTAMP_UTC=2026-07-24T13:10:00Z",
+        "BACKEND=metal",
+        "DEVICE=mps",
+        "RUNTIME_ARCH=arm64",
+        "OUTPUT_VALIDATION_REASON=failed",
+        "CURRENT_FATAL_ERROR_COUNT=1",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertStaleBootstrapCurrentFailedPhaseScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "a stale/generic 'healthy' bootstrap claim masked a genuinely current failed acceptance phase:\n" .. manifest)
+    assertf(manifest:find("current_fatal_errors:%s+none") == nil,
+        "current failed acceptance phase was not counted as a current fatal error:\n" .. manifest)
+end
+
+-- Section 8: a phase whose SESSION_ID matches but whose own generation
+-- timestamp predates the current session start is stale (e.g. left behind
+-- by session-ID reuse) and must not be able to prove current health.
+local function createStaleTimestampedPhaseScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "stale-timestamped-phase-cannot-prove-health"
+    local runtimeBase = context.extState.runtimeBase
+    -- Bootstrap itself is not proven healthy, so the ONLY thing that could
+    -- prove current health is the acceptance-phase evidence below.
+    writeFile(joinPath(runtimeBase, "state", "bootstrap.env"), table.concat({
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "STATUS=failed",
+        "STATUS_REASON=runtime_verification_failed",
+        "BACKEND=rocm",
+        "BOOTSTRAP_STATUS=failed",
+        "VENV_PYTHON=" .. context.fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=failed",
+        "",
+    }, "\n"))
+    local evidenceRoot = joinPath(runtimeBase, "evidence", "current-session")
+    local sessionId = "native-apple-silicon-2306-final"
+    local phaseDir = joinPath(evidenceRoot, "online_normal")
+    -- Correct session ID (identity alone would appear to match), but a
+    -- TIMESTAMP_UTC well before the session started.
+    writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=" .. sessionId,
+        "PHASE=online_normal",
+        "DISTRIBUTION=online",
+        "STATUS=ok",
+        "TIMESTAMP_UTC=2020-01-01T00:00:00Z",
+        "BACKEND=metal",
+        "DEVICE=mps",
+        "RUNTIME_ARCH=arm64",
+        "OUTPUT_VALIDATION_REASON=ok",
+        "CURRENT_FATAL_ERROR_COUNT=0",
+        "",
+    }, "\n"))
+    -- Remove the other 5 fixed phases so this fixture isolates exactly the
+    -- one stale-timestamped phase.
+    for _, phase in ipairs({ "verify", "online_drum", "bundled_recovery", "post_bundled_normal", "post_bundled_drum" }) do
+        removeTree(joinPath(evidenceRoot, phase))
+    end
+    return context
+end
+
+local function assertStaleTimestampedPhaseScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "a stale-timestamped phase (older than the current session start) was accepted as current proof of health:\n" .. manifest)
+    assertf(manifest:find("phases_included:%s+0") ~= nil,
+        "the stale-timestamped phase was counted as 'included' current evidence:\n" .. manifest)
+end
+
+-- Section 10: a newer folder that merely shares the "stemwerk" name prefix
+-- (not STEMwerk's own generated run/job naming identity) must never be able
+-- to pass itself off as current run evidence merely by being newest.
+local function createNewerUnrelatedTempResidueScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "newer-unrelated-temp-residue-lacks-identity"
+    local tempRoot = joinPath(baseRoot, "tmp-present")
+    local currentJobDir = joinPath(tempRoot, "STEMwerk_fake_present")
+    -- The genuinely-current run's own folder has no stderr.txt of its own
+    -- here, so "Recent stderr.txt" can only legitimately come from THIS
+    -- run's own evidence -- never from the newer unrelated folder below.
+    os.remove(joinPath(currentJobDir, "stderr.txt"))
+    waitNextSecond()
+    -- Created AFTER (mtime-newer than) the current run's own folder;
+    -- matches the loose "stemwerk"-prefix but NOT STEMwerk's own generated
+    -- run/job naming convention (STEMwerk_<token>).
+    local newerUnrelated = joinPath(tempRoot, "stemwerk-review")
+    mkdirP(newerUnrelated)
+    writeFile(joinPath(newerUnrelated, "stderr.txt"), "unrelated newer stderr\n")
+    return context
+end
+
+local function assertNewerUnrelatedTempResidueScenario(bundleDir)
+    local inventory = readFile(joinPath(bundleDir, "temp_inventory.txt")) or ""
+    assertf(inventory:find("stemwerk-review", 1, true) ~= nil,
+        "the newer unrelated folder was not inventoried at all (unexpected):\n" .. inventory)
+    local diagnostics = readFile(joinPath(bundleDir, "diagnostics.txt")) or ""
+    assertf(diagnostics:find("Recent stderr%.txt:%s+missing") ~= nil,
+        "a newer unrelated folder with no STEMwerk run/job identity became 'current' evidence merely by being the newest stemwerk-prefixed folder:\n" .. diagnostics)
+end
+
 local function assertZipIntegrity(bundleDir)
     local zipPath = bundleDir .. ".zip"
     assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
@@ -1826,6 +2218,60 @@ local function main()
     local additionalMarkers = createAdditionalModelMarkersScenario(joinPath(baseRoot, "additional-model-markers"))
     local additionalMarkersBundle = runScenario(additionalMarkers, assertAdditionalModelMarkersScenario)
     print("PASS additional-model-markers-parsed -> " .. additionalMarkersBundle)
+
+    waitNextSecond()
+
+    local tokenlessLaunch = createTokenlessLaunchAfterValidRunScenario(joinPath(baseRoot, "tokenless-launch-after-valid-run"))
+    local tokenlessLaunchBundle = runScenario(tokenlessLaunch, assertTokenlessLaunchAfterValidRunScenario)
+    print("PASS tokenless-launch-after-valid-run -> " .. tokenlessLaunchBundle)
+
+    waitNextSecond()
+
+    local heteroJobs = createHeterogeneousJobsSameRunScenario(joinPath(baseRoot, "heterogeneous-jobs-same-run"))
+    local heteroJobsBundle = runScenario(heteroJobs, assertHeterogeneousJobsSameRunScenario)
+    print("PASS heterogeneous-jobs-same-run-no-fabricated-combo -> " .. heteroJobsBundle)
+
+    waitNextSecond()
+
+    local heteroDrumsep = createHeterogeneousDrumsepSameRunScenario(joinPath(baseRoot, "heterogeneous-drumsep-same-run"))
+    local heteroDrumsepBundle = runScenario(heteroDrumsep, assertHeterogeneousDrumsepSameRunScenario)
+    print("PASS heterogeneous-drumsep-fields-same-run -> " .. heteroDrumsepBundle)
+
+    waitNextSecond()
+
+    local heteroKitSplit = createHeterogeneousKitSplitSameRunScenario(joinPath(baseRoot, "heterogeneous-kit-split-same-run"))
+    local heteroKitSplitBundle = runScenario(heteroKitSplit, assertHeterogeneousKitSplitSameRunScenario)
+    print("PASS heterogeneous-kit-split-stages-same-run -> " .. heteroKitSplitBundle)
+
+    waitNextSecond()
+
+    local directKitLeak = createDirectKitGenericModelLeakageScenario(joinPath(baseRoot, "direct-kit-generic-model-leakage"))
+    local directKitLeakBundle = runScenario(directKitLeak, assertDirectKitGenericModelLeakageScenario)
+    print("PASS direct-kit-generic-model-leakage -> " .. directKitLeakBundle)
+
+    waitNextSecond()
+
+    local mpsCpuFallback = createMpsRequestedCpuEffectiveScenario(joinPath(baseRoot, "mps-requested-cpu-effective"))
+    local mpsCpuFallbackBundle = runScenario(mpsCpuFallback, assertMpsRequestedCpuEffectiveScenario)
+    print("PASS mps-requested-cpu-effective-fallback -> " .. mpsCpuFallbackBundle)
+
+    waitNextSecond()
+
+    local staleBootstrapCurrentFail = createStaleBootstrapCurrentFailedPhaseScenario(joinPath(baseRoot, "stale-bootstrap-current-failed-phase"))
+    local staleBootstrapCurrentFailBundle = runScenario(staleBootstrapCurrentFail, assertStaleBootstrapCurrentFailedPhaseScenario)
+    print("PASS stale-healthy-bootstrap-current-failed-phase -> " .. staleBootstrapCurrentFailBundle)
+
+    waitNextSecond()
+
+    local staleTimestampedPhase = createStaleTimestampedPhaseScenario(joinPath(baseRoot, "stale-timestamped-phase"))
+    local staleTimestampedPhaseBundle = runScenario(staleTimestampedPhase, assertStaleTimestampedPhaseScenario)
+    print("PASS stale-timestamped-phase-cannot-prove-health -> " .. staleTimestampedPhaseBundle)
+
+    waitNextSecond()
+
+    local newerUnrelatedTemp = createNewerUnrelatedTempResidueScenario(joinPath(baseRoot, "newer-unrelated-temp-residue"))
+    local newerUnrelatedTempBundle = runScenario(newerUnrelatedTemp, assertNewerUnrelatedTempResidueScenario)
+    print("PASS newer-unrelated-temp-residue-lacks-identity -> " .. newerUnrelatedTempBundle)
 
     print("All headless support bundle tests passed.")
 end

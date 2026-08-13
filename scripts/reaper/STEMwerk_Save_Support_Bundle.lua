@@ -1174,15 +1174,19 @@ local function statusSummaryLabel(entry)
 end
 
 local function requestedDeviceRaw(entry)
-    return trim((entry and (
-        entry.requested_device
-        or entry.ui_device_selected_before_run
-        or entry.backend_device_arg
-        or entry.drumsep_helper_requested_device
-        or entry.drumsep_helper_device_arg
-        or entry.selected_device
-        or entry.device
-    )) or "")
+    -- Fields default to the literal string "unknown", which is truthy in
+    -- Lua -- a plain `or` chain would stop at the first field that was ever
+    -- initialized, even though it holds no real value. presentValue()
+    -- filters those out so a later field with a real value is not
+    -- suppressed by an earlier field that only ever held the placeholder.
+    return presentValue(entry and entry.requested_device)
+        or presentValue(entry and entry.ui_device_selected_before_run)
+        or presentValue(entry and entry.backend_device_arg)
+        or presentValue(entry and entry.drumsep_helper_requested_device)
+        or presentValue(entry and entry.drumsep_helper_device_arg)
+        or presentValue(entry and entry.selected_device)
+        or presentValue(entry and entry.device)
+        or ""
 end
 
 local function requestedDeviceSummaryLabel(entry, runtimeState)
@@ -1194,14 +1198,18 @@ local function requestedDeviceSummaryLabel(entry, runtimeState)
 end
 
 local function effectiveDeviceRaw(entry)
-    return trim((entry and (
-        entry.effective_device
-        or entry.drumsep_helper_device
-        or entry.drumsep_helper_device_arg
-        or entry.backend_runtime
-        or entry.runtime_selected
-        or entry.device
-    )) or "")
+    -- Same "unknown" truthiness hazard as requestedDeviceRaw above: use
+    -- presentValue() so a placeholder "unknown" field never suppresses a
+    -- later field that holds this run's actual effective-execution
+    -- evidence (e.g. backend_runtime/runtime_selected reflecting a
+    -- fallback that effective_device itself never explicitly recorded).
+    return presentValue(entry and entry.effective_device)
+        or presentValue(entry and entry.drumsep_helper_device)
+        or presentValue(entry and entry.drumsep_helper_device_arg)
+        or presentValue(entry and entry.backend_runtime)
+        or presentValue(entry and entry.runtime_selected)
+        or presentValue(entry and entry.device)
+        or ""
 end
 
 local function effectiveDeviceSummaryLabel(entry, runtimeState)
@@ -2472,16 +2480,26 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     local included = 0
     local missing = 0
     local currentFatalErrors = 0
+    local healthyPhaseCount = 0
+    local sessionStartedUtc = trim(session.SESSION_STARTED_UTC or "")
     for _, phase in ipairs(CURRENT_EVIDENCE_PHASES) do
         local phaseSource = sourceRoot ~= "" and joinPath(sourceRoot, phase.id) or ""
         local evidencePath = phaseSource ~= "" and joinPath(phaseSource, "evidence.env") or ""
         local evidence = evidencePath ~= "" and readEnvFile(evidencePath) or {}
         local phaseSessionId = trim(evidence.SESSION_ID or "")
         local phaseIdentity = trim(evidence.PHASE or "")
+        local phaseTimestampUtc = trim(evidence.TIMESTAMP_UTC or "")
+        -- Freshness: a phase file can only influence current health if its
+        -- own generation timestamp belongs to the CURRENT session, i.e. it
+        -- is not older than that session's start. Without this, a stale
+        -- phase file left behind under a reused/coincidentally-matching
+        -- session ID could still count as current proof.
+        local phaseIsFresh = sessionStartedUtc == "" or phaseTimestampUtc == "" or phaseTimestampUtc >= sessionStartedUtc
         local identityMatches = fileExists(evidencePath)
             and phaseIdentity == phase.id
             and sessionId ~= ""
             and phaseSessionId == sessionId
+            and phaseIsFresh
         appendLine(lines, "")
         appendLine(lines, "[phase " .. phase.id .. "]")
         appendKey(lines, "label", phase.label)
@@ -2491,7 +2509,7 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
             appendKey(lines, "selection", "included")
             local phaseStatus = trim(evidence.STATUS or ""):lower()
             appendKey(lines, "status", phaseStatus ~= "" and phaseStatus or "unknown")
-            appendKey(lines, "timestamp_utc", trim(evidence.TIMESTAMP_UTC or "") ~= "" and evidence.TIMESTAMP_UTC or "unknown")
+            appendKey(lines, "timestamp_utc", phaseTimestampUtc ~= "" and phaseTimestampUtc or "unknown")
             appendKey(lines, "backend", trim(evidence.BACKEND or "") ~= "" and evidence.BACKEND or "unknown")
             appendKey(lines, "device", trim(evidence.DEVICE or "") ~= "" and evidence.DEVICE or "unknown")
             appendKey(lines, "runtime_arch", trim(evidence.RUNTIME_ARCH or "") ~= "" and evidence.RUNTIME_ARCH or "unknown")
@@ -2503,6 +2521,12 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
             end
             currentFatalErrors = currentFatalErrors + math.max(0, phaseFatal)
             appendKey(lines, "current_fatal_error_count", tostring(math.max(0, phaseFatal)))
+            -- Only an explicit, non-unknown "ok" status is proof this phase
+            -- currently is healthy; an unknown/blank status is not evidence
+            -- either way and must not be able to prove current health.
+            if phaseFatal == 0 and phaseStatus == "ok" then
+                healthyPhaseCount = healthyPhaseCount + 1
+            end
             local phaseDestination = joinPath(destinationRoot, phase.id)
             ensureDir(phaseDestination)
             for _, fileName in ipairs(enumerateFiles(phaseSource)) do
@@ -2520,7 +2544,15 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
         else
             missing = missing + 1
             appendKey(lines, "selection", "missing")
-            appendKey(lines, "warning", fileExists(evidencePath) and "session_or_phase_identity_mismatch" or "evidence_not_found")
+            local warning
+            if not phaseIsFresh then
+                warning = "stale_timestamp_outside_current_session"
+            elseif fileExists(evidencePath) then
+                warning = "session_or_phase_identity_mismatch"
+            else
+                warning = "evidence_not_found"
+            end
+            appendKey(lines, "warning", warning)
         end
     end
 
@@ -2528,10 +2560,17 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     -- acceptance evidence, not the only proof of a healthy current runtime.
     -- "0/6 collected" means exactly that -- fixtures weren't collected -- and
     -- must not by itself read as "no current session evidence" or force
-    -- final_runtime_health to not_proven. A phase reporting STATUS=ok is
-    -- still independent proof of a currently-healthy worker, usable to
-    -- reclassify an old/historical failure recorded in bootstrap.log.
-    local anyPhaseHealthy = currentFatalErrors == 0 and included > 0
+    -- final_runtime_health to not_proven. An explicitly-"ok" phase (not
+    -- merely "included"/identity-matched, since an unknown/blank status is
+    -- not proof either way) is independent proof of a currently-healthy
+    -- worker, usable to reclassify an old/historical failure recorded in
+    -- bootstrap.log.
+    local anyPhaseHealthy = currentFatalErrors == 0 and healthyPhaseCount > 0
+    -- Current fatal precedence: a currently-failing acceptance phase (its
+    -- identity/freshness already verified above) must override a stale
+    -- structured "healthy" claim -- CURRENT FAILURE always outranks older
+    -- healthy state, never the other way around.
+    local currentPhaseFailureExists = currentFatalErrors > 0
     local onnx = classifyOnnxFallback(joinPath(runtimeLogDir, "bootstrap.log"), runtimeState or {}, anyPhaseHealthy)
     if onnx.fatal then currentFatalErrors = currentFatalErrors + 1 end
     appendLine(lines, "")
@@ -2540,7 +2579,8 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     appendKey(lines, "handled_recovery_event", onnx.handled and "yes" or "no")
     appendKey(lines, "local_onnxruntime_fallback_recorded", onnx.fallbackVersion ~= "" and "yes" or "no")
     appendKey(lines, "local_onnxruntime_version", onnx.fallbackVersion ~= "" and onnx.fallbackVersion or "none")
-    appendKey(lines, "final_runtime_health", onnx.runtimeHealthy and "ok" or "not_proven")
+    local finalRuntimeHealthy = onnx.runtimeHealthy and not currentPhaseFailureExists
+    appendKey(lines, "final_runtime_health", finalRuntimeHealthy and "ok" or "not_proven")
     appendKey(lines, "current_fatal_error_count", tostring(currentFatalErrors))
     appendKey(lines, "current_fatal_errors", currentFatalErrors == 0 and "none" or tostring(currentFatalErrors))
     if onnx.historicalSentenceSeen then
@@ -3462,7 +3502,18 @@ local function parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeS
         local raw = trim(line)
         local ts = raw:match("^%[([0-9][^%]]+)%]")
         local runId = raw:match("(STEMwerk_[%w_%-]+)")
-        if runId then
+        -- A LAUNCH line always starts a new logical launch/session block. A
+        -- tokenless line may only inherit the previous block's run-ID while
+        -- it is still part of THAT block; once a new LAUNCH boundary is
+        -- crossed (with or without its own token), the previous run's
+        -- identity must not keep leaking into whatever tokenless lines
+        -- follow it -- that would associate a brand-new, unrelated launch
+        -- with the prior run. A non-LAUNCH line carrying its own token also
+        -- (re)anchors the current block, e.g. for a replayed/duplicate ID.
+        local isLaunchLine = raw:find("CMD:", 1, true) ~= nil and raw:find("LAUNCH:", 1, true) ~= nil
+        if isLaunchLine then
+            lastRunId = runId
+        elseif runId then
             lastRunId = runId
         end
 
@@ -3663,6 +3714,15 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             doneOk = 0,
             exitErr = 0,
         }
+        -- Per-job diagnostic state (independent of the shared run-level
+        -- `entry` above): each job gets its own freshly-parsed record so
+        -- one job's model/backend/device evidence can never bleed into
+        -- another job's fields. `entry` above keeps accumulating aggregate
+        -- bookkeeping (result/failure classification, wall-clock, output
+        -- counts) exactly as before; jobEntries below is used only to
+        -- truthfully resolve identity/model/backend/device fields after
+        -- the loop.
+        local jobEntries = {}
 
         for _, jobName in ipairs(jobNames) do
             local jobDir = joinPath(runDir, jobName)
@@ -3733,7 +3793,100 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
                 stat.aggValidationSeen = (stat.aggValidationSeen or 0) + 1
                 if ok then stat.aggValidationOkJobs = (stat.aggValidationOkJobs or 0) + 1 end
             end
+
+            -- This job's own identity/model/backend/device record, parsed
+            -- from only this job's own files into a fresh table (never the
+            -- shared run-level `entry`), so a second job's evidence can
+            -- never overwrite or blend with a different job's fields.
+            local jobEntry = {
+                run_id = runName,
+                job_id = jobName,
+                model = "unknown",
+                device = "unknown",
+                device_name = "unknown",
+                backend = "unknown",
+                backend_runtime = "unknown",
+                runtime_selected = "unknown",
+                requested_device = "unknown",
+                selected_device = "unknown",
+                effective_device = "unknown",
+                ui_device_selected_before_run = "unknown",
+                backend_device_arg = "unknown",
+                drumsep_helper_requested_device = "unknown",
+                drumsep_helper_device_arg = "unknown",
+                drumsep_helper_device = "unknown",
+                drumsep_helper_backend_runtime = "unknown",
+                drumsep_model_id = "unknown",
+                drumsep_requested_model = "unknown",
+                drumsep_helper_model = "unknown",
+                workflow_mode = "unknown",
+                workflow_source = "unknown",
+                mps_experimental = "unknown",
+                mps_segment_size = "unknown",
+                mps_segment_policy = "unknown",
+                mps_fallback_used = "unknown",
+                mps_fallback_reason = "unknown",
+                stage1_runtime = "unknown",
+                stage1_device = "unknown",
+                stage2_runtime = "unknown",
+                stage2_device = "unknown",
+                torch_hip_version = "unknown",
+                hip_version = "unknown",
+                _resultPriority = 0,
+            }
+            local jobStatOnly = { minTime = nil, maxTime = nil, totalAudioDur = 0, doneOk = 0, exitErr = 0 }
+            updateRunFromTimingJson(jobEntry, timingPath, jobStatOnly)
+            updateRunFromTimingJson(jobEntry, phasePath, jobStatOnly)
+            if sepData then parseSupportRunText(jobEntry, sepData) end
+            if stdoutData then parseSupportRunText(jobEntry, stdoutData) end
+            if doneData then parseSupportRunText(jobEntry, doneData) end
+            if exitData then parseSupportRunText(jobEntry, "exit_code: " .. tostring(trim(exitData))) end
+            jobEntries[#jobEntries + 1] = jobEntry
         end
+
+        -- Truthful run-level aggregation of per-job identity/model/backend/
+        -- device evidence: if every job that reported a value agrees, use
+        -- that common value; if jobs disagree, report "mixed" rather than
+        -- letting a first-wins/last-wins mix of unrelated jobs construct a
+        -- combination (e.g. jobA's model with jobB's backend) that no
+        -- actual job used. This overwrites whatever the shared-entry
+        -- parsing above produced for these specific fields, since the
+        -- per-job records are strictly more trustworthy for them.
+        local IDENTITY_AGGREGATE_FIELDS = {
+            "model", "device", "device_name", "backend", "backend_runtime",
+            "runtime_selected", "requested_device", "selected_device", "effective_device",
+            "ui_device_selected_before_run", "backend_device_arg",
+            "drumsep_helper_requested_device", "drumsep_helper_device_arg",
+            "drumsep_helper_device", "drumsep_helper_backend_runtime",
+            "drumsep_model_id", "drumsep_requested_model", "drumsep_helper_model",
+            "workflow_mode", "workflow_source",
+            "mps_experimental", "mps_segment_size", "mps_segment_policy",
+            "mps_fallback_used", "mps_fallback_reason",
+            "stage1_runtime", "stage1_device", "stage2_runtime", "stage2_device",
+            "torch_hip_version", "hip_version",
+        }
+        local function aggregateJobField(fieldName)
+            local seen, order = {}, {}
+            for _, je in ipairs(jobEntries) do
+                local v = presentValue(je[fieldName])
+                if v and not seen[v] then
+                    seen[v] = true
+                    order[#order + 1] = v
+                end
+            end
+            if #order == 0 then return nil end
+            if #order == 1 then return order[1] end
+            return "mixed"
+        end
+        if #jobEntries > 0 then
+            for _, fieldName in ipairs(IDENTITY_AGGREGATE_FIELDS) do
+                local aggregated = aggregateJobField(fieldName)
+                if aggregated then
+                    entry[fieldName] = aggregated
+                end
+            end
+        end
+        entry._jobEntries = jobEntries
 
         -- Do not infer outputs only for the jobs==1 case. For parallel runs,
         -- aggregate each job's own output evidence instead of leaving the
@@ -3876,7 +4029,15 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
                 entry.workflow_mode = "drumkit"
             end
         end
-        entry.friendly_device = friendlyDeviceLabel(entry.device, runtimeState, entry)
+        -- The active/effective backend actually used by the worker (once
+        -- known) must win over a merely requested/probed device: use the
+        -- same effective-device precedence as the "Latest run summary"
+        -- block (effective_device/backend_runtime/runtime_selected before
+        -- raw device evidence, and raw device before requested-only
+        -- evidence) rather than the raw requested/probed `entry.device`
+        -- value alone, so e.g. an MPS request that actually fell back to
+        -- CPU execution is never shown as the active device.
+        entry.friendly_device = summaryDeviceLabel(entry, runtimeState)
     end
 
     local lines = {}
@@ -3898,9 +4059,28 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "run: " .. tostring(entry.run_name or "unknown")
         lines[#lines + 1] = "timestamp: " .. tostring(entry.timestamp or "unknown")
         lines[#lines + 1] = "result: " .. tostring(entry.result or "unknown")
-        lines[#lines + 1] = "model: " .. tostring(entry.model or "unknown")
-        lines[#lines + 1] = "semantic_model: " .. semanticModelLabel(entry)
         local wfSourceForModel = trim(entry.workflow_source or ""):lower()
+        -- Direct Kit only ever runs DrumSep: the generic user-visible
+        -- "model:" line must represent that DrumSep semantic model, never
+        -- an unrelated Demucs string that happened to appear in this run's
+        -- raw logs (e.g. a cached-model-path decoy). The raw Demucs value,
+        -- if any, is kept only as clearly-labeled historical/raw
+        -- provenance, never as the reported Direct Kit model.
+        if wfSourceForModel == "dks_direct" then
+            local drumsepModel = drumsepSemanticModel(entry)
+            local rawModel = tostring(entry.model or "unknown")
+            if drumsepModel ~= "unknown" then
+                lines[#lines + 1] = "model: " .. drumsepModel
+                if rawModel ~= "unknown" and rawModel ~= drumsepModel then
+                    lines[#lines + 1] = "raw_demucs_model_field (historical, not used for Direct Kit): " .. rawModel
+                end
+            else
+                lines[#lines + 1] = "model: " .. rawModel
+            end
+        else
+            lines[#lines + 1] = "model: " .. tostring(entry.model or "unknown")
+        end
+        lines[#lines + 1] = "semantic_model: " .. semanticModelLabel(entry)
         if wfSourceForModel == "dks_direct" then
             lines[#lines + 1] = "drumsep_model_id: " .. drumsepSemanticModel(entry)
         elseif wfSourceForModel == "dks_extract" then
@@ -4002,6 +4182,16 @@ local function collectTempInventory(bundleDir, copiedFiles)
                 path = full,
                 epoch = epoch,
                 mtime = "metadata skipped for speed",
+                -- Explicit identity: only a folder matching STEMwerk's own
+                -- generated run/job-folder naming convention (the same
+                -- "STEMwerk_<token>" pattern used to key run-ID association
+                -- elsewhere in this file) is a folder STEMwerk itself could
+                -- have created for a real run. A loose case-insensitive
+                -- "starts with stemwerk" match also matches unrelated
+                -- human-named folders (dev/review/build folders, etc.) that
+                -- merely share the prefix; a newer one of those must never
+                -- be able to pass itself off as current run evidence.
+                hasRunIdentity = tostring(name):match("^STEMwerk_[%w_%-]+$") ~= nil,
             }
         end
     end
@@ -4012,14 +4202,22 @@ local function collectTempInventory(bundleDir, copiedFiles)
         end
         return tostring(a.name) > tostring(b.name)
     end)
-    -- Only the single newest (by mtime) STEMwerk temp folder may count as
-    -- "current" evidence. Any other name-matching folder is still
+    -- Only the single newest folder that actually carries STEMwerk's own
+    -- run/job identity naming (not merely a "stemwerk"-prefixed name) may
+    -- count as "current" evidence. Any other name-matching folder is still
     -- inventoried below (as historical/contextual listing), but it must
     -- never be able to make the "Recent stdout.txt" / "Recent stderr.txt" /
     -- "Recent separation_log.txt" diagnostics fields look current -- old
-    -- residue with the same well-known filenames is a proven contamination
-    -- source otherwise.
-    local newestFolderPath = folders[1] and folders[1].path or nil
+    -- residue with the same well-known filenames (or an unrelated
+    -- similarly-named folder that merely happens to be newer) is a proven
+    -- contamination source otherwise.
+    local newestFolderPath = nil
+    for _, folder in ipairs(folders) do
+        if folder.hasRunIdentity then
+            newestFolderPath = folder.path
+            break
+        end
+    end
 
     local function sanitizeInventoryDisplayPath(relPath, fileClass)
         local rel = tostring(relPath or ""):gsub("\\", "/")
