@@ -2528,8 +2528,8 @@ local function assertIncompleteOutputNoPhasesScenario(bundleDir)
     assertZeroAcceptancePhases(manifest)
     assertf(manifest:find("current_worker_health:%s+ok") == nil,
         "exit-0/DONE with incomplete outputs was accepted as worker health proof:\n" .. manifest)
-    assertf(manifest:find("current_worker_health_reason:%s+current_run_unproven") ~= nil,
-        "incomplete-output run was not labeled unproven:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "incomplete-output run was not labeled with the missing-stems reason:\n" .. manifest)
     assertf(manifest:find("final_runtime_health:%s+ok") == nil,
         "final_runtime_health=ok despite incomplete current-run outputs:\n" .. manifest)
 end
@@ -2660,6 +2660,351 @@ local function assertCurrentWorkerCurrentFatalPhaseScenario(bundleDir)
         "current worker success masked a current fatal phase -- failure must win:\n" .. manifest)
     assertf(manifest:find("final_runtime_health_source:%s+none") ~= nil,
         "no health source may be credited while a current failure exists:\n" .. manifest)
+end
+
+-- ---------------------------------------------------------------------
+-- Sixth follow-up (release/2.3.1.0-final-prep) fixtures: real-format
+-- flow-specific worker evidence. These fixtures persist runs in the exact
+-- shape real production runs write (verified against actual persisted
+-- runs): DrumSep flows record workflow markers, drumsep_helper_output_dir,
+-- expected_stems=/found_stems= with the final child stems, and
+-- output_validation_reason=ok in separation_log.txt; normal flows record
+-- the final stem->path JSON in stdout.txt and "job_dir" in
+-- timing_events.jsonl. Identity comes only from those explicit markers,
+-- currentness from the full generated run identity, and validation is
+-- required exactly where production emits it.
+-- ---------------------------------------------------------------------
+
+-- Writes one DrumSep (Direct Kit / Kit Split) job in the real production
+-- evidence shape. opts: source ("dks_direct"|"dks_extract"),
+-- found (found_stems= value), validation (output_validation_reason value
+-- or nil to omit), identityMarker (false to omit all identity markers).
+local function writeRealDrumkitJob(context, runName, jobName, opts)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", runName, jobName)
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), tostring(opts.exit or 0) .. "\n")
+    if opts.done ~= false then
+        writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    end
+    local lines = {
+        (opts.source == "dks_extract")
+            and "Drum Kit Split route detected: workflow_mode=drumkit workflow_source=dks_extract"
+            or  "Direct Drum Kit Split route detected: workflow_mode=drumkit workflow_source=dks_direct",
+        "workflow_mode=drumkit",
+        "workflow_source=" .. opts.source,
+        "model_id=MDX23C-DrumSep-aufr33-jarredou.ckpt",
+    }
+    if opts.source == "dks_extract" then
+        lines[#lines + 1] = "dks_extract_stage1_runtime=cuda"
+        lines[#lines + 1] = "dks_extract_stage1_device=cuda:0"
+        lines[#lines + 1] = "dks_extract_stage2_runtime=cpu"
+        lines[#lines + 1] = "dks_extract_stage2_device=cpu"
+    end
+    if opts.identityMarker ~= false then
+        lines[#lines + 1] = "drumsep_helper_output_dir=/tmp/" .. runName
+            .. (opts.source == "dks_extract" and "/stage2_drumsep" or "")
+    end
+    if opts.validation then
+        lines[#lines + 1] = "output_validation_reason=" .. opts.validation
+    end
+    lines[#lines + 1] = "expected_stems=kick,snare,toms,hihat,ride,crash"
+    if opts.found then
+        lines[#lines + 1] = "found_stems=" .. opts.found
+    end
+    lines[#lines + 1] = "timing_utc=2026-08-13T09:00:00 drumsep_helper_returncode=0"
+    writeFile(joinPath(jobDir, "separation_log.txt"), table.concat(lines, "\n") .. "\n")
+    if opts.identityMarker ~= false then
+        writeFile(joinPath(jobDir, "timing_events.jsonl"),
+            '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"' .. jobName
+            .. '","job_dir":"/tmp/' .. runName .. '"}\n')
+    end
+end
+
+local function assertWorkerProvenZeroPhases(manifest, context)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "real-format successful run did not prove current_worker_health=ok:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the proving worker run was not identified by its exact run ID:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "real-format successful run with zero phases did not prove final_runtime_health=ok:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+current_worker_evidence") ~= nil,
+        "final health source was not attributed to current worker evidence:\n" .. manifest)
+end
+
+-- Real-format Direct Kit success, ZERO acceptance phases.
+local function createRealDirectKitZeroPhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "real-format-direct-kit-zero-phases-success"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertRealDirectKitZeroPhasesScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+end
+
+-- Real-format Kit Split success, ZERO acceptance phases. Health must come
+-- from the FINAL (stage 2) DrumSep child stems, never stage 1 alone.
+local function createRealKitSplitZeroPhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "real-format-kit-split-zero-phases-success"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_extract",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertRealKitSplitZeroPhasesScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+end
+
+-- Direct Kit with only 5 of 6 final child stems (crash missing), exit 0,
+-- DONE, validation ok: outputs are incomplete for the flow => not healthy.
+local function createDirectKitFiveOfSixScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-five-of-six-not-healthy"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertDirectKitFiveOfSixScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Direct Kit with 5/6 final child stems proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "5/6 Direct Kit run was not labeled missing_required_stems:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite incomplete Direct Kit child stems:\n" .. manifest)
+end
+
+-- Kit Split with only 5 of 6 final child stems => not healthy.
+local function createKitSplitFiveOfSixScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "kit-split-five-of-six-not-healthy"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_extract",
+        found = "kick,snare,toms,hihat,ride",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertKitSplitFiveOfSixScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Kit Split with 5/6 final child stems proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "5/6 Kit Split run was not labeled missing_required_stems:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite incomplete Kit Split child stems:\n" .. manifest)
+end
+
+-- Direct Kit with all 6 child stems, exit 0, DONE, but NO validation
+-- marker. Production DrumSep flows always emit output_validation_reason,
+-- so its absence must not silently count as successful validation.
+local function createMissingRequiredValidationScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "missing-required-validation-not-healthy"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = nil,
+    })
+    return context
+end
+
+local function assertMissingRequiredValidationScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Direct Kit without its validation marker proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_validation") ~= nil,
+        "validation-less DrumSep run was not labeled missing_required_validation:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite missing required validation:\n" .. manifest)
+end
+
+-- A valid-looking generated run directory whose job text mentions the run
+-- ID only as an arbitrary prose substring (no recognized identity marker):
+-- must NOT establish current run identity even with exit0/DONE/outputs.
+local function createArbitrarySubstringIdentityScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "arbitrary-run-id-substring-does-not-identify-run"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    writeFile(joinPath(jobDir, "phase_events.jsonl"),
+        '{"time":1,"model":"htdemucs","device":"cpu","result":"success","output_count":4,"output_names":"bass,drums,other,vocals","output_validation_reason":"ok"}\n')
+    -- Prose mention of the exact run ID, but no job_dir JSON field and no
+    -- drumsep_helper_output_dir= marker anywhere.
+    writeFile(joinPath(jobDir, "stdout.txt"),
+        "operator note: compared against leftover output from " .. context.workerRunName .. " last week\n")
+    return context
+end
+
+local function assertArbitrarySubstringIdentityScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "an arbitrary prose substring of the run ID established current run identity:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+no_current_run_evidence") ~= nil,
+        "unidentified run evidence was not excluded from current worker evidence:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from evidence with no recognized run identity marker:\n" .. manifest)
+end
+
+-- Positive identity control: a normal-flow run in the real production
+-- shape whose ONLY run-identity marker is the explicit "job_dir" JSON
+-- field in timing_events.jsonl (exactly what real runs write).
+local function createExplicitRunIdMarkerScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "explicit-run-id-marker-identifies-run"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "PROGRESS:92:Writing stems",
+        "PROGRESS:100:Complete",
+        '{"bass": "/tmp/' .. context.workerRunName .. '/bass.wav", "drums": "/tmp/' .. context.workerRunName .. '/drums.wav", "other": "/tmp/' .. context.workerRunName .. '/other.wav", "vocals": "/tmp/' .. context.workerRunName .. '/vocals.wav"}',
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertExplicitRunIdMarkerScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+end
+
+-- A successful identified run ~20 hours before bundle time, with no
+-- current-session correlation and no newer processing evidence: historical
+-- provenance only, never current proof.
+local function createOldSuccessNotCurrentScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "old-success-alone-not-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = "STEMwerk_" .. tostring(os.time() - 72000) .. "_001_1"
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertOldSuccessNotCurrentScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a 20-hour-old success proved CURRENT worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+identified_run_outside_current_window") ~= nil,
+        "the stale identified run was not labeled as outside the current window:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from a 20-hour-old success alone:\n" .. manifest)
+end
+
+-- Same-second ordering: lower ms/counter succeeds, later ms/counter fails
+-- => the later explicit failure wins deterministically.
+local function createSameSecondSuccessThenFailureScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "same-second-success-then-failure"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    local epoch = os.time()
+    context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_002_2"
+    writeRealDrumkitJob(context, "STEMwerk_" .. tostring(epoch) .. "_001_1", "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        exit = 1,
+        done = false,
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertSameSecondSuccessThenFailureScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+failed") ~= nil,
+        "the later same-second failure did not win over the earlier success:\n" .. manifest)
+    assertf(manifest:find("current_fatal_error_count:%s+[1-9]") ~= nil,
+        "the later same-second failure was not counted as current failure evidence:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a later same-second explicit failure:\n" .. manifest)
+end
+
+-- Same-second ordering, reversed: earlier failure, later proven success =>
+-- the newer proven success supersedes the older failure.
+local function createSameSecondFailureThenSuccessScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "same-second-failure-then-success"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    local epoch = os.time()
+    context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_002_2"
+    writeRealDrumkitJob(context, "STEMwerk_" .. tostring(epoch) .. "_001_1", "single", {
+        source = "dks_direct",
+        exit = 1,
+        done = false,
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertSameSecondFailureThenSuccessScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("current_fatal_error_count:%s+0") ~= nil,
+        "the superseded earlier same-second failure was still counted as current:\n" .. manifest)
 end
 
 
@@ -2988,6 +3333,66 @@ local function main()
     local workerVsFatalPhase = createCurrentWorkerCurrentFatalPhaseScenario(joinPath(baseRoot, "current-worker-current-fatal-phase"))
     local workerVsFatalPhaseBundle = runScenario(workerVsFatalPhase, assertCurrentWorkerCurrentFatalPhaseScenario)
     print("PASS current-worker-current-fatal-phase-failure-wins -> " .. workerVsFatalPhaseBundle)
+
+    waitNextSecond()
+
+    local realDirectKit = createRealDirectKitZeroPhasesScenario(joinPath(baseRoot, "real-direct-kit-zero-phases"))
+    local realDirectKitBundle = runScenario(realDirectKit, assertRealDirectKitZeroPhasesScenario)
+    print("PASS real-format-direct-kit-zero-phases-success -> " .. realDirectKitBundle)
+
+    waitNextSecond()
+
+    local realKitSplit = createRealKitSplitZeroPhasesScenario(joinPath(baseRoot, "real-kit-split-zero-phases"))
+    local realKitSplitBundle = runScenario(realKitSplit, assertRealKitSplitZeroPhasesScenario)
+    print("PASS real-format-kit-split-zero-phases-success -> " .. realKitSplitBundle)
+
+    waitNextSecond()
+
+    local directKitFive = createDirectKitFiveOfSixScenario(joinPath(baseRoot, "direct-kit-five-of-six"))
+    local directKitFiveBundle = runScenario(directKitFive, assertDirectKitFiveOfSixScenario)
+    print("PASS direct-kit-five-of-six-not-healthy -> " .. directKitFiveBundle)
+
+    waitNextSecond()
+
+    local kitSplitFive = createKitSplitFiveOfSixScenario(joinPath(baseRoot, "kit-split-five-of-six"))
+    local kitSplitFiveBundle = runScenario(kitSplitFive, assertKitSplitFiveOfSixScenario)
+    print("PASS kit-split-five-of-six-not-healthy -> " .. kitSplitFiveBundle)
+
+    waitNextSecond()
+
+    local missingValidation = createMissingRequiredValidationScenario(joinPath(baseRoot, "missing-required-validation"))
+    local missingValidationBundle = runScenario(missingValidation, assertMissingRequiredValidationScenario)
+    print("PASS missing-required-validation-not-healthy -> " .. missingValidationBundle)
+
+    waitNextSecond()
+
+    local substringIdentity = createArbitrarySubstringIdentityScenario(joinPath(baseRoot, "arbitrary-substring-identity"))
+    local substringIdentityBundle = runScenario(substringIdentity, assertArbitrarySubstringIdentityScenario)
+    print("PASS arbitrary-run-id-substring-does-not-identify-run -> " .. substringIdentityBundle)
+
+    waitNextSecond()
+
+    local explicitMarker = createExplicitRunIdMarkerScenario(joinPath(baseRoot, "explicit-run-id-marker"))
+    local explicitMarkerBundle = runScenario(explicitMarker, assertExplicitRunIdMarkerScenario)
+    print("PASS explicit-run-id-marker-identifies-run -> " .. explicitMarkerBundle)
+
+    waitNextSecond()
+
+    local oldSuccess = createOldSuccessNotCurrentScenario(joinPath(baseRoot, "old-success-not-current"))
+    local oldSuccessBundle = runScenario(oldSuccess, assertOldSuccessNotCurrentScenario)
+    print("PASS old-success-alone-not-current -> " .. oldSuccessBundle)
+
+    waitNextSecond()
+
+    local sameSecondSF = createSameSecondSuccessThenFailureScenario(joinPath(baseRoot, "same-second-success-failure"))
+    local sameSecondSFB = runScenario(sameSecondSF, assertSameSecondSuccessThenFailureScenario)
+    print("PASS same-second-success-then-failure -> " .. sameSecondSFB)
+
+    waitNextSecond()
+
+    local sameSecondFS = createSameSecondFailureThenSuccessScenario(joinPath(baseRoot, "same-second-failure-success"))
+    local sameSecondFSB = runScenario(sameSecondFS, assertSameSecondFailureThenSuccessScenario)
+    print("PASS same-second-failure-then-success -> " .. sameSecondFSB)
 
     print("All headless support bundle tests passed.")
 end

@@ -3760,48 +3760,109 @@ end
 --
 --   identity: the run directory name matches STEMwerk's own generated run
 --     naming (STEMwerk_<epoch>_<ms>_<counter>, the shape written via
---     makeUniqueTempSubdir/persistRunDiagnostics), AND the run's own job
---     evidence references its own run ID (self-consistent content, the
---     same association rule tempFolderContentReferencesItself enforces
---     for temp folders), so the evidence is unambiguously tied to exactly
---     this run.
---   current: the embedded run epoch is not in the future (beyond a small
---     clock tolerance) and not older than
---     CURRENT_WORKER_RUN_MAX_AGE_SECONDS relative to bundle creation, so
---     a historical successful run can never prove CURRENT health.
+--     makeUniqueTempSubdir/persistRunDiagnostics), AND at least one of the
+--     run's own job files carries an explicit identity-bearing marker
+--     actually emitted by production -- the JSON "job_dir" field in
+--     timing/phase events, or the drumsep_helper_output_dir= key in the
+--     separation/stdout logs -- whose path contains this run ID as a
+--     complete path component. An arbitrary substring mention of the run
+--     ID in prose is NOT identity.
+--   current: the newest identified run determines the current processing
+--     context (full epoch/ms/counter ordering). Its embedded epoch must
+--     also be current relative to bundle creation: when a current-session
+--     evidence root exists, the run must have started within that session;
+--     otherwise it must fall inside
+--     CURRENT_WORKER_RUN_MAX_AGE_SECONDS before bundle creation -- a
+--     support bundle diagnoses the installation as it is at save time, so
+--     the proving run must be recent enough to describe that same working
+--     context; an older success is historical provenance only.
 --   success contract (run level, never "any successful job"): the run has
 --     at least one job and EVERY job individually has an explicit exit
 --     code 0, an explicit DONE/success/complete marker, complete output
---     evidence for its flow (when the flow's expected output count is
---     known, found outputs must cover it), an explicitly-ok validation
---     wherever the job reports validation at all, and no failure
---     classification of its own.
+--     evidence for its semantic flow, the validation its flow actually
+--     emits, and no failure classification of its own.
 --
--- Precedence between current runs is time-ordered: the newest explicit
--- current failure wins over older current success, and a newer proven
--- success supersedes an older current failure (historical errors must not
--- defeat a current successful run). Ties resolve to failure. A current
--- run that merely lacks proof (incomplete/missing evidence) is
--- not_proven -- never a false failure, never a false success.
+-- Flow-specific output/validation contract (from production evidence):
+--   Direct Kit (dks_direct) and Kit Split (dks_extract) write
+--     found_stems=/expected_stems= with the final DrumSep child stems
+--     (kick,snare,toms,hihat,ride,crash) plus output_validation_reason=ok
+--     into separation_log.txt. All 6 final child stems AND the explicit
+--     ok validation are required; stage-1-only completion never suffices
+--     for Kit Split because the final child stems only exist after stage 2.
+--   Normal/6-Stem flows emit no validation marker; their production
+--     success contract is the stem-output listing (final stem->path JSON /
+--     output fields) covering the model's expected stem count plus exit 0
+--     and DONE.
+--
+-- Precedence between current runs is time-ordered by the full generated
+-- run identity (epoch, then millisecond component, then counter): the
+-- newest explicit current failure wins over older current success, and a
+-- newer proven success supersedes an older current failure (historical
+-- errors must not defeat a current successful run). Ties resolve to
+-- failure. A current run that merely lacks proof (incomplete/missing
+-- evidence) is not_proven -- never a false failure, never a false success.
 -- ---------------------------------------------------------------------
-local CURRENT_WORKER_RUN_MAX_AGE_SECONDS = 86400
+local CURRENT_WORKER_RUN_MAX_AGE_SECONDS = 3600
 local CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS = 300
+
+-- Canonical final DrumSep child stems, in the exact spelling production
+-- writes to found_stems=/expected_stems= (see EXPECTED_STEMS in
+-- stemwerk_drumsep_process.py).
+local DRUMSEP_FINAL_CHILD_STEMS = { "kick", "snare", "toms", "hihat", "ride", "crash" }
+
+local function normalizeStemName(name)
+    return trim(name):lower():gsub("[%-%_ ]", "")
+end
+
+local function splitStemNameSet(value)
+    local set = nil
+    for token in tostring(value or ""):gmatch("[^,|]+") do
+        local name = normalizeStemName(token)
+        if name ~= "" then
+            set = set or {}
+            set[name] = true
+        end
+    end
+    return set
+end
+
+local function stemSetCovers(foundSet, requiredSet)
+    if not foundSet or not requiredSet then return false end
+    for name in pairs(requiredSet) do
+        if not foundSet[name] then return false end
+    end
+    return true
+end
+
+-- The run ID must appear as a COMPLETE path component of the marker value,
+-- never as an arbitrary substring of surrounding prose.
+local function pathHasExactComponent(path, name)
+    for component in tostring(path or ""):gmatch("[^/\\]+") do
+        if component == name then return true end
+    end
+    return false
+end
 
 -- Parses one job's own persisted files into a fresh probe record (never a
 -- shared run-level table), reusing the same per-job parsing the
--- processing summary uses.
-local function probeWorkerJobEvidence(jobDir)
+-- processing summary uses. Also collects the strict identity markers and
+-- the flow-specific output/validation evidence for this job only.
+local function probeWorkerJobEvidence(jobDir, runName)
     local probe = {
         result = "unknown",
         model = "unknown",
         workflow_source = "unknown",
         workflow_mode = "unknown",
         output_validation_reason = "unknown",
+        found_stems = "unknown",
+        expected_stems = "unknown",
         log_path = "unknown",
         bundle_root = "",
         _resultPriority = 0,
     }
     local stat = { minTime = nil, maxTime = nil, totalAudioDur = 0, doneOk = 0, exitErr = 0 }
+    local timingData = readFile(joinPath(jobDir, "timing_events.jsonl"), "rb")
+    local phaseData = readFile(joinPath(jobDir, "phase_events.jsonl"), "rb")
     updateRunFromTimingJson(probe, joinPath(jobDir, "timing_events.jsonl"), stat)
     updateRunFromTimingJson(probe, joinPath(jobDir, "phase_events.jsonl"), stat)
     local sepData = readFile(joinPath(jobDir, "separation_log.txt"), "rb")
@@ -3813,32 +3874,92 @@ local function probeWorkerJobEvidence(jobDir)
     local exitData = readFile(joinPath(jobDir, "exit_code.txt"), "rb")
     if exitData then parseSupportRunText(probe, "exit_code: " .. tostring(trim(exitData))) end
 
-    local doneState = doneData and trim(doneData):lower() or ""
-    local found, validation = jobOwnOutputEvidence(jobDir)
-    if not found then
+    -- Strict run identity: only explicit structured markers production
+    -- actually writes may associate this job's evidence with runName.
+    local hasIdentity = false
+    for _, data in ipairs({ timingData, phaseData }) do
+        if data and not hasIdentity then
+            for line in tostring(data):gmatch("[^\r\n]+") do
+                local dir = parseJsonStringField(line, "job_dir")
+                if dir and pathHasExactComponent(dir, runName) then
+                    hasIdentity = true
+                    break
+                end
+            end
+        end
+    end
+    for _, data in ipairs({ sepData, stdoutData }) do
+        if data and not hasIdentity then
+            for line in tostring(data):gmatch("[^\r\n]+") do
+                local key, value = parseKeyValueLine(line)
+                if key == "drumsep_helper_output_dir" and pathHasExactComponent(value, runName) then
+                    hasIdentity = true
+                    break
+                end
+            end
+        end
+    end
+
+    -- Flow-specific output evidence: prefer the parsed production fields
+    -- (found_stems=/expected_stems= key-values and the jsonl output
+    -- fields), then the generic stem-name text fallback for normal flows.
+    local foundNames = nil
+    local foundCount = nil
+    for _, data in ipairs({ phaseData, timingData }) do
+        if data then
+            for line in tostring(data):gmatch("[^\r\n]+") do
+                local names = parseJsonStringField(line, "output_names")
+                    or parseJsonStringField(line, "found_stems")
+                if names then
+                    foundNames = splitStemNameSet(names) or foundNames
+                    local n = countDelimitedValues(names)
+                    if n then foundCount = n end
+                end
+                local count = parseJsonNumberField(line, "output_count")
+                if count and not foundCount then foundCount = math.floor(count) end
+            end
+        end
+    end
+    local loggedFound = presentValue(probe.found_stems)
+    if loggedFound then
+        foundNames = splitStemNameSet(loggedFound) or foundNames
+        local n = countDelimitedValues(loggedFound)
+        if n then foundCount = n end
+    end
+    if not foundCount then
         local names = detectStemNamesFromText(stdoutData, UNIVERSAL_STEM_NAMES)
         if #names == 0 then
             names = detectStemNamesFromText(sepData, UNIVERSAL_STEM_NAMES)
         end
-        if #names > 0 then found = #names end
+        if #names > 0 then
+            foundNames = foundNames or splitStemNameSet(table.concat(names, ","))
+            foundCount = #names
+        end
     end
-    if not validation then
-        validation = presentValue(probe.output_validation_reason)
-    end
+    local expectedNames = splitStemNameSet(presentValue(probe.expected_stems) or "")
+
+    local _, jsonlValidation = jobOwnOutputEvidence(jobDir)
+    local validation = jsonlValidation or presentValue(probe.output_validation_reason)
+
+    local doneState = doneData and trim(doneData):lower() or ""
     return {
         probe = probe,
+        hasIdentity = hasIdentity,
         exitCode = exitData and tonumber(trim(exitData)) or nil,
         doneOk = doneState:find("done", 1, true) ~= nil
             or doneState:find("success", 1, true) ~= nil
             or doneState:find("complete", 1, true) ~= nil,
-        found = found,
+        foundNames = foundNames,
+        foundCount = foundCount,
+        expectedNames = expectedNames,
         validation = validation,
     }
 end
 
 -- Classifies one job conservatively: explicit failure outranks the success
 -- contract, and anything that is not fully proven is unproven (never a
--- false success, never an invented failure).
+-- false success, never an invented failure). Returns the verdict plus a
+-- truthful machine-readable reason for unproven/failed jobs.
 local function classifyWorkerJob(job)
     local probe = job.probe
     local result = tostring(probe.result or "unknown"):lower()
@@ -3848,47 +3969,98 @@ local function classifyWorkerJob(job)
         -- flow is treated like a job that reports no validation at all.
         validation = nil
     end
-    local validationFailed = validation ~= nil
-        and (validation:lower():find("fail", 1, true) ~= nil or validation:lower():find("error", 1, true) ~= nil)
+    local validationLower = validation and validation:lower() or nil
+    local validationFailed = validationLower ~= nil
+        and (validationLower:find("fail", 1, true) ~= nil or validationLower:find("error", 1, true) ~= nil)
     local explicitFailure = (job.exitCode ~= nil and job.exitCode ~= 0)
         or tonumber(probe._clearFailures or 0) > 0
         or tonumber(probe._exitNonZero or 0) > 0
         or result == "fail" or result == "partial"
         or validationFailed
     if explicitFailure then
-        return "failed"
+        return "failed", "current_job_explicit_failure"
     end
 
-    local outputsComplete = job.found ~= nil and job.found > 0
-    if outputsComplete then
-        -- When this job's flow has a known expected output count (normal
-        -- stem flows), found outputs must actually cover it: an exit-0/DONE
-        -- job with incomplete outputs is not proof of health.
-        local workflowSource = trim(probe.workflow_source or ""):lower()
-        local workflowMode = trim(probe.workflow_mode or ""):lower()
-        local isStemsFlow = workflowSource ~= "dks_direct" and workflowSource ~= "dks_extract" and workflowMode ~= "drumkit"
-        if isStemsFlow and presentValue(probe.model) then
-            if job.found < #expectedNormalStemNamesForModel(probe.model) then
+    local workflowSource = trim(presentValue(probe.workflow_source) or ""):lower()
+    local workflowMode = trim(presentValue(probe.workflow_mode) or ""):lower()
+    local isDrumkitFlow = workflowSource == "dks_direct" or workflowSource == "dks_extract"
+        or workflowMode == "drumkit"
+
+    -- Flow-specific output completeness.
+    local outputsComplete
+    if isDrumkitFlow then
+        -- Direct Kit / Kit Split: the FINAL DrumSep child stems must all be
+        -- present. For Kit Split these only exist after stage 2, so stage-1
+        -- completion alone can never satisfy this.
+        local required = job.expectedNames or splitStemNameSet(table.concat(DRUMSEP_FINAL_CHILD_STEMS, ","))
+        if job.foundNames then
+            outputsComplete = stemSetCovers(job.foundNames, required)
+        else
+            local requiredCount = 0
+            for _ in pairs(required) do requiredCount = requiredCount + 1 end
+            outputsComplete = job.foundCount ~= nil and job.foundCount >= requiredCount
+        end
+    else
+        outputsComplete = job.foundCount ~= nil and job.foundCount > 0
+        if outputsComplete and presentValue(probe.model) then
+            -- Normal stems flows: found outputs must cover the model's
+            -- expected stem count (4 for htdemucs/htdemucs_ft, 6 for
+            -- htdemucs_6s).
+            if job.foundCount < #expectedNormalStemNamesForModel(probe.model) then
                 outputsComplete = false
             end
         end
     end
-    local validationOk = validation == nil or validation:lower() == "ok"
-    local success = job.exitCode ~= nil and job.exitCode == 0
-        and job.doneOk
-        and outputsComplete
-        and validationOk
-        and result ~= "cancelled"
-    if success then
-        return "success"
+
+    -- Flow-aware validation contract: Direct Kit / Kit Split always emit an
+    -- authoritative output_validation_reason in production, so it must be
+    -- explicitly ok; normal flows emit no validation marker, so absence is
+    -- neutral there (their contract is output completeness + exit 0 +
+    -- DONE), while a reported non-ok value still blocks proof.
+    local validationOk
+    if isDrumkitFlow then
+        validationOk = validationLower == "ok"
+    else
+        validationOk = validation == nil or validationLower == "ok"
     end
-    return "unproven"
+
+    if job.exitCode == nil or job.exitCode ~= 0 or not job.doneOk then
+        return "unproven", "incomplete_job_completion_evidence"
+    end
+    if not outputsComplete then
+        return "unproven", "missing_required_stems"
+    end
+    if isDrumkitFlow and validation == nil then
+        return "unproven", "missing_required_validation"
+    end
+    if not validationOk then
+        return "unproven", "validation_not_ok"
+    end
+    if result == "cancelled" then
+        return "unproven", "job_cancelled"
+    end
+    return "success", "job_success_contract_met"
+end
+
+-- Full generated run identity (epoch, millisecond, counter) for
+-- deterministic ordering -- including same-second runs.
+local function runIdentityParts(runName)
+    local epoch, ms, counter = tostring(runName):match("^STEMwerk_(%d+)_(%d+)_(%d+)$")
+    if not epoch then return nil end
+    return tonumber(epoch), tonumber(ms), tonumber(counter)
+end
+
+-- Returns true when identity a is the same as or NEWER than identity b.
+local function runIdentityNotOlder(a, b)
+    if a.epoch ~= b.epoch then return a.epoch > b.epoch end
+    if a.ms ~= b.ms then return a.ms > b.ms end
+    return a.counter >= b.counter
 end
 
 -- Derives CURRENT worker health from the persisted per-run/per-job records.
 -- Returns { status = "ok"|"not_proven"|"failed", run = <run id or "">,
 -- reason = <machine-readable provenance code> }.
-local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch)
+local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUtc)
     local result = {
         status = "not_proven",
         run = "",
@@ -3899,58 +4071,72 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch)
         return result
     end
     nowEpoch = tonumber(nowEpoch) or os.time()
+    local hasSessionStart = isValidIsoUtcTimestamp(sessionStartedUtc)
     local bestFailed = nil
     local bestProven = nil
+    local sawStaleIdentified = false
     local sawCurrentUnproven = false
+    local unprovenReason = nil
     for _, runName in ipairs(enumerateSubdirs(runsRoot)) do
-        local epoch = tonumber(tostring(runName):match("^STEMwerk_(%d+)_%d+_%d+$"))
-        if epoch and epoch <= nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS
-            and nowEpoch - epoch <= CURRENT_WORKER_RUN_MAX_AGE_SECONDS then
+        local epoch, ms, counter = runIdentityParts(runName)
+        if epoch and epoch <= nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS then
+            -- Currentness: with a current-session evidence root the run
+            -- must belong to that session; without one the run must be
+            -- recent enough to describe the installation as it is at
+            -- bundle-save time -- never merely "any run in the last day".
+            local isCurrent
+            if hasSessionStart then
+                isCurrent = os.date("!%Y-%m-%dT%H:%M:%SZ", epoch) >= sessionStartedUtc
+            else
+                isCurrent = (nowEpoch - epoch) <= CURRENT_WORKER_RUN_MAX_AGE_SECONDS
+            end
             local runDir = joinPath(runsRoot, runName)
             local jobNames = enumerateSubdirs(runDir)
             table.sort(jobNames)
             local jobs = {}
-            local selfReferenced = false
+            local identified = false
             for _, jobName in ipairs(jobNames) do
-                local jobDir = joinPath(runDir, jobName)
-                jobs[#jobs + 1] = probeWorkerJobEvidence(jobDir)
-                if not selfReferenced then
-                    for _, fileName in ipairs({ "timing_events.jsonl", "phase_events.jsonl", "stdout.txt", "stderr.txt", "separation_log.txt" }) do
-                        local data = readFile(joinPath(jobDir, fileName), "rb")
-                        if data and tostring(data):find(runName, 1, true) then
-                            selfReferenced = true
-                            break
+                local job = probeWorkerJobEvidence(joinPath(runDir, jobName), runName)
+                jobs[#jobs + 1] = job
+                if job.hasIdentity then identified = true end
+            end
+            -- Evidence without an explicit identity marker is never
+            -- associated with this run at all.
+            if identified then
+                if not isCurrent then
+                    sawStaleIdentified = true
+                else
+                    local identity = { epoch = epoch, ms = ms, counter = counter, name = runName }
+                    local anyFailed = false
+                    local allSuccess = #jobs > 0
+                    for _, job in ipairs(jobs) do
+                        local verdict, reason = classifyWorkerJob(job)
+                        if verdict == "failed" then
+                            anyFailed = true
+                        elseif verdict ~= "success" then
+                            allSuccess = false
+                            unprovenReason = unprovenReason or reason
                         end
                     end
-                end
-            end
-            -- Unassociated evidence (the run's own files never reference
-            -- this run ID) is not usable current evidence at all.
-            if selfReferenced then
-                local anyFailed = false
-                local allSuccess = #jobs > 0
-                for _, job in ipairs(jobs) do
-                    local verdict = classifyWorkerJob(job)
-                    if verdict == "failed" then anyFailed = true end
-                    if verdict ~= "success" then allSuccess = false end
-                end
-                if anyFailed then
-                    if not bestFailed or epoch >= bestFailed.epoch then
-                        bestFailed = { epoch = epoch, name = runName }
+                    if anyFailed then
+                        if not bestFailed or runIdentityNotOlder(identity, bestFailed) then
+                            bestFailed = identity
+                        end
+                    elseif allSuccess then
+                        if not bestProven or runIdentityNotOlder(identity, bestProven) then
+                            bestProven = identity
+                        end
+                    else
+                        sawCurrentUnproven = true
                     end
-                elseif allSuccess then
-                    if not bestProven or epoch >= bestProven.epoch then
-                        bestProven = { epoch = epoch, name = runName }
-                    end
-                else
-                    sawCurrentUnproven = true
                 end
             end
         end
     end
-    -- Time-ordered precedence between current runs: the newest current
-    -- verdict wins; a tie resolves to failure (fail-safe).
-    if bestFailed and (not bestProven or bestFailed.epoch >= bestProven.epoch) then
+    -- Time-ordered precedence between current runs (full epoch/ms/counter
+    -- identity): the newest current verdict wins; a tie resolves to
+    -- failure (fail-safe).
+    if bestFailed and (not bestProven or runIdentityNotOlder(bestFailed, bestProven)) then
         result.status = "failed"
         result.run = bestFailed.name
         result.reason = "current_run_explicit_failure"
@@ -3959,7 +4145,9 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch)
         result.run = bestProven.name
         result.reason = "current_run_success_contract_met"
     elseif sawCurrentUnproven then
-        result.reason = "current_run_unproven"
+        result.reason = unprovenReason or "current_run_unproven"
+    elseif sawStaleIdentified then
+        result.reason = "identified_run_outside_current_window"
     end
     return result
 end
@@ -5017,7 +5205,13 @@ local function performBundleCollection()
     appendLine(diagnostics, "")
 
     appendLine(diagnostics, "Current Session Evidence")
-    local currentWorkerHealth = deriveCurrentWorkerRunHealth(joinPath(cacheLogDir, "runs"), os.time())
+    local workerEvidenceRoot = findCurrentEvidenceRoot(runtimePaths.base, cacheLogDir)
+    local workerSession = workerEvidenceRoot ~= "" and readEnvFile(joinPath(workerEvidenceRoot, "session.env")) or {}
+    local currentWorkerHealth = deriveCurrentWorkerRunHealth(
+        joinPath(cacheLogDir, "runs"),
+        os.time(),
+        trim(workerSession.SESSION_STARTED_UTC or "")
+    )
     for _, line in ipairs(collectCurrentSessionEvidence(
         runtimePaths.base,
         runtimePaths.runtimeLogs,
