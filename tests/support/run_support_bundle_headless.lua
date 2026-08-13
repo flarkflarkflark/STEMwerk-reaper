@@ -729,6 +729,24 @@ local function assertPresentScenario(bundleDir, context)
         "six-stem output names were not parsed from actual phase evidence")
     assertf(processingSummary:find("output_validation_reason: ok", 1, true) ~= nil,
         "actual output validation reason was not preserved")
+    -- The model (htdemucs_6s) is only known from this job's own late
+    -- phase_events.jsonl evidence, not from anything decided up-front; the
+    -- expected/found stem counts must be recomputed AFTER that resolution,
+    -- not frozen before it. Six raw outputs must report as 6/6, not 4/4.
+    assertf(processingSummary:find("outputs 6/6", 1, true) ~= nil,
+        "late-resolved 6-Stem model did not report 6/6 outputs:\n" .. processingSummary)
+    assertf(processingSummary:find("outputs 4/4", 1, true) == nil,
+        "6-Stem run was frozen to a stale 4/4 expectation")
+    -- Copy-Summary-equivalent provenance: the resolved runtime health,
+    -- resolved backend, and probe/state provenance the verdict is based on
+    -- must all be visible in the collected evidence, not hidden behind a
+    -- bare pass/fail.
+    assertf(evidenceManifest:find("final_runtime_health:%s+ok") ~= nil,
+        "resolved runtime health missing from evidence manifest")
+    assertf(evidenceManifest:find("acceptance_phases_status:%s+complete") ~= nil,
+        "acceptance phase provenance missing from evidence manifest")
+    assertf(evidenceManifest:find("handled_recovery_event:%s+yes") ~= nil,
+        "recovery/provenance reasoning missing from evidence manifest")
     for _, phase in ipairs({ "verify", "online_normal", "online_drum", "bundled_recovery", "post_bundled_normal", "post_bundled_drum" }) do
         assertf(fileExists(joinPath(bundleDir, "current_session_evidence", phase, "evidence.env")), "phase evidence missing: " .. phase)
         assertf(fileExists(joinPath(bundleDir, "current_session_evidence", phase, "phase_events.jsonl")), "phase events missing: " .. phase)
@@ -784,6 +802,26 @@ local function createFailedFallbackScenario(baseRoot)
         "Runtime verification failed.",
         "",
     }, "\n"))
+    -- This scenario represents a bootstrap run that genuinely, currently
+    -- failed: bootstrap.env's structured status must agree with the log
+    -- text (a real failed run would not leave STATUS=ok behind), and there
+    -- must be no other current-session evidence proving health. Without
+    -- this, the fixture would contradict itself -- claiming the runtime is
+    -- both currently broken (via the log) and currently healthy (via
+    -- structured state / acceptance-phase evidence inherited unchanged from
+    -- the present-runtime scenario) at the same time.
+    writeFile(joinPath(runtimeBase, "state", "bootstrap.env"), table.concat({
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "STATUS=failed",
+        "STATUS_REASON=runtime_verification_failed",
+        "BACKEND=rocm",
+        "BOOTSTRAP_STATUS=failed",
+        "VENV_PYTHON=" .. context.fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=failed",
+        "",
+    }, "\n"))
+    removeTree(joinPath(runtimeBase, "evidence"))
     return context
 end
 
@@ -793,6 +831,301 @@ local function assertFailedFallbackScenario(bundleDir)
     assertf(manifest:find("handled_recovery_event:%s+no") ~= nil, "failed fallback incorrectly handled")
     assertf(manifest:find("local_onnxruntime_version:%s+none") ~= nil, "failed fallback invented a version")
     assertf(manifest:find("current_fatal_error_count:%s+1") ~= nil, "failed fallback not counted as fatal")
+end
+
+-- ---------------------------------------------------------------------
+-- Diagnostics-truthfulness regression fixtures (release/2.3.1.0-final-prep).
+-- Each of these clones the known-good "present" scenario and mutates only
+-- what the fixture needs, so the rest of the runtime/state stays realistic.
+-- ---------------------------------------------------------------------
+
+local function readProcessingSummary(bundleDir)
+    return readFile(joinPath(bundleDir, "processing_summary.txt")) or ""
+end
+
+local function readManifest(bundleDir)
+    return readFile(joinPath(bundleDir, "support_evidence_manifest.txt")) or ""
+end
+
+-- Removes the single job the present-runtime fixture wrote under
+-- runtime_runs, so a scenario can lay down its own run/job structure
+-- instead.
+local function clearRuns(context)
+    local cacheRunsRoot = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs")
+    removeTree(cacheRunsRoot)
+end
+
+local function createAmdRocmScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "amd-rocm-device-classification"
+    clearRuns(context)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_amd_rocm", "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "model: htdemucs",
+        "device: cuda:0",
+        "backend_runtime: rocm",
+        "device_name: AMD Radeon RX 9070",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertAmdRocmScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("friendly_device: AMD ROCm", 1, true) ~= nil,
+        "cuda:0 with current-run HIP/ROCm+AMD evidence was not classified as AMD ROCm:\n" .. summary)
+    assertf(summary:find("friendly_device: NVIDIA CUDA", 1, true) == nil,
+        "cuda:0 with AMD ROCm evidence was misclassified as NVIDIA CUDA")
+end
+
+local function createNvidiaCudaScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "nvidia-cuda-device-classification"
+    clearRuns(context)
+    local runtimeBase = context.extState.runtimeBase
+    -- The present-runtime fixture's bootstrap/capabilities record an AMD
+    -- ROCm profile; this scenario is genuinely NVIDIA, so that stale
+    -- inherited BACKEND must not leak in and falsely trip ROCm evidence.
+    writeFile(joinPath(runtimeBase, "state", "bootstrap.env"), table.concat({
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "STATUS=ok",
+        "BACKEND=cuda",
+        "BOOTSTRAP_STATUS=ok",
+        "VENV_PYTHON=" .. context.fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=ok",
+        "",
+    }, "\n"))
+    writeFile(joinPath(runtimeBase, "state", "capabilities.env"), table.concat({
+        "PROFILE=linux-cuda",
+        "BACKEND=cuda",
+        "VERIFICATION=ok",
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "BOOTSTRAP_STATUS=ok",
+        "",
+    }, "\n"))
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_nvidia_cuda", "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "model: htdemucs",
+        "device: cuda:0",
+        "device_name: NVIDIA GeForce RTX 4090",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertNvidiaCudaScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("friendly_device: NVIDIA CUDA", 1, true) ~= nil,
+        "cuda:0 with no HIP/ROCm evidence and an NVIDIA device name was not classified as NVIDIA CUDA:\n" .. summary)
+    assertf(summary:find("friendly_device: AMD ROCm", 1, true) == nil,
+        "genuine NVIDIA cuda:0 run was misclassified as AMD ROCm")
+end
+
+-- Two runs, each identified only by a run-ID token embedded in
+-- run_stemwerk.log, deliberately written so the log's line order is the
+-- reverse of the directory-name sort order buildProcessingSummary uses.
+-- Correct behavior requires exact run-ID (key-based) association; pairing
+-- by array position would cross-attach one run's model to the other.
+local function createShuffledRunAssociationScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "shuffled-run-id-association"
+    clearRuns(context)
+    local runsRoot = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs")
+
+    -- "STEMwerk_run_zzz_last" sorts after "STEMwerk_run_alpha", so
+    -- directory-descending order is [zzz_last, alpha] -- the reverse of the
+    -- order the two runs appear in run_stemwerk.log below.
+    for _, runName in ipairs({ "STEMwerk_run_alpha", "STEMwerk_run_zzz_last" }) do
+        local jobDir = joinPath(runsRoot, runName, "job0")
+        mkdirP(jobDir)
+        -- Deliberately no model/device text in the job's own evidence: the
+        -- model must come from the run-ID-keyed match in run_stemwerk.log,
+        -- not from job-local parsing, so this fixture actually exercises
+        -- the association path under test.
+        writeFile(joinPath(jobDir, "timing_events.jsonl"), '{"time":1,"result":"success"}\n')
+        writeFile(joinPath(jobDir, "done.txt"), "done\n")
+        writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    end
+
+    local runtimeLogsDir = joinPath(context.extState.runtimeBase, "logs")
+    writeFile(joinPath(runtimeLogsDir, "run_stemwerk.log"), table.concat({
+        "[2026-07-01 10:00:00] CMD: LAUNCH: STEMwerk_run_alpha --model htdemucs --device cpu",
+        "RC: 0",
+        "[2026-07-01 10:05:00] CMD: LAUNCH: STEMwerk_run_zzz_last --model htdemucs_6s --device cpu",
+        "RC: 0",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertShuffledRunAssociationScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    local alphaBlock = summary:match("run: STEMwerk_run_alpha.-\n\n") or summary:match("run: STEMwerk_run_alpha.*")
+    local lastBlock = summary:match("run: STEMwerk_run_zzz_last.-\n\n") or summary:match("run: STEMwerk_run_zzz_last.*")
+    assertf(alphaBlock ~= nil, "STEMwerk_run_alpha run block missing from processing summary:\n" .. summary)
+    assertf(lastBlock ~= nil, "STEMwerk_run_zzz_last run block missing from processing summary:\n" .. summary)
+    assertf(alphaBlock:find("model: htdemucs\n", 1, true) ~= nil,
+        "STEMwerk_run_alpha did not get its own key-matched model (htdemucs):\n" .. alphaBlock)
+    assertf(alphaBlock:find("htdemucs_6s", 1, true) == nil,
+        "STEMwerk_run_alpha was cross-contaminated with STEMwerk_run_zzz_last's model")
+    assertf(lastBlock:find("model: htdemucs_6s", 1, true) ~= nil,
+        "STEMwerk_run_zzz_last did not get its own key-matched model (htdemucs_6s):\n" .. lastBlock)
+end
+
+local function createParallelAggregationScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "parallel-output-aggregation"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_parallel_three")
+    for i = 1, 3 do
+        local jobDir = joinPath(runDir, "job" .. tostring(i))
+        mkdirP(jobDir)
+        writeFile(joinPath(jobDir, "phase_events.jsonl"),
+            '{"time":' .. tostring(i) .. ',"model":"htdemucs","device":"cpu","result":"success",'
+            .. '"output_count":4,"output_validation_reason":"ok"}\n')
+        writeFile(joinPath(jobDir, "done.txt"), "done\n")
+        writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    end
+    return context
+end
+
+local function assertParallelAggregationScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("jobs: 3", 1, true) ~= nil, "parallel run did not record 3 jobs:\n" .. summary)
+    assertf(summary:find("outputs 12/12", 1, true) ~= nil,
+        "3 successful parallel jobs (4 outputs each) did not aggregate to 12/12 outputs:\n" .. summary)
+    assertf(summary:find("output_validation_reason: ok", 1, true) ~= nil,
+        "3 successful parallel jobs did not aggregate to a known (ok) validation reason:\n" .. summary)
+    assertf(summary:find("outputs unknown", 1, true) == nil, "parallel aggregation left outputs unknown")
+    assertf(summary:find("validation unknown", 1, true) == nil, "parallel aggregation left validation unknown")
+end
+
+local function createDirectKitScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-semantic-model"
+    clearRuns(context)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_direct_kit", "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "workflow_source: dks_direct",
+        "workflow_mode: drumkit",
+        -- Decoy: an unrelated Demucs model name appears in a path, purely
+        -- to prove the flow-aware semantic model never surfaces it for a
+        -- DrumSep-only Direct Kit run.
+        "model_cache_dir: /models/htdemucs_backup",
+        "model_id=MDX23C-DrumSep-aufr33-jarredou.ckpt",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertDirectKitScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("Direct Kit", 1, true) ~= nil, "Direct Kit workflow label missing:\n" .. summary)
+    assertf(summary:find("semantic_model: MDX23C%-DrumSep%-aufr33%-jarredou%.ckpt") ~= nil,
+        "Direct Kit did not report its DrumSep model as the semantic model:\n" .. summary)
+    assertf(summary:find("semantic_model: htdemucs", 1, true) == nil,
+        "Direct Kit incorrectly attached an unrelated Demucs model as its semantic model")
+end
+
+local function createKitSplitScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "kit-split-two-stage-model"
+    clearRuns(context)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_kit_split", "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "workflow_source: dks_extract",
+        "model: htdemucs_6s",
+        "dks_extract_stage1_runtime=cuda",
+        "dks_extract_stage1_device=cuda:0",
+        "dks_extract_stage2_runtime=cpu",
+        "dks_extract_stage2_device=cpu",
+        "model_id=MDX23C-DrumSep-aufr33-jarredou.ckpt",
+        "result: success",
+        "done",
+        "",
+    }, "\n"))
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return context
+end
+
+local function assertKitSplitScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("Kit Split", 1, true) ~= nil, "Kit Split workflow label missing:\n" .. summary)
+    assertf(summary:find("stage1_model: htdemucs_6s", 1, true) ~= nil,
+        "Kit Split stage1 (Demucs) model missing:\n" .. summary)
+    assertf(summary:find("stage2_model: MDX23C%-DrumSep%-aufr33%-jarredou%.ckpt") ~= nil,
+        "Kit Split stage2 (DrumSep) model missing:\n" .. summary)
+    assertf(summary:find("stage2_device: CPU", 1, true) ~= nil, "Kit Split stage2 device missing:\n" .. summary)
+    assertf(summary:find("semantic_model: stage1:htdemucs_6s %-> stage2:MDX23C%-DrumSep%-aufr33%-jarredou%.ckpt") ~= nil,
+        "Kit Split collapsed its two stages into a single/wrong model:\n" .. summary)
+end
+
+local function createHealthyNoAcceptancePhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "healthy-runtime-no-acceptance-phases"
+    -- Bootstrap/capabilities are untouched (still healthy: STATUS=ok,
+    -- RUNTIME_VERIFY_DETAIL=ok), but the optional fixed six-phase
+    -- acceptance-evidence tree was never collected for this session.
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    return context
+end
+
+local function assertHealthyNoAcceptancePhasesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "healthy runtime with no acceptance-phase fixtures was reported as not_proven:\n" .. manifest)
+    assertf(manifest:find("acceptance_phases_status:%s+not_collected") ~= nil,
+        "0/6 acceptance phases was not labeled not_collected:\n" .. manifest)
+    assertf(manifest:find("phases_included:%s+0") ~= nil, "expected 0 phases included:\n" .. manifest)
+    assertf(manifest:find("manifest_status:%s+complete") ~= nil,
+        "missing OPTIONAL acceptance-phase fixtures alone flipped manifest_status to warning:\n" .. manifest)
+end
+
+local function createHistoricalRecoveredFatalScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "historical-onnx-failure-recovered"
+    -- Bootstrap/capabilities and the current-session acceptance-phase
+    -- evidence stay healthy (proving current, live workers), but
+    -- bootstrap.log itself records an old/unresolved onnxruntime-silicon
+    -- lookup failure with no successful local fallback recorded.
+    local runtimeBase = context.extState.runtimeBase
+    writeFile(joinPath(runtimeBase, "logs", "bootstrap.log"), table.concat({
+        "ERROR: Could not find a version that satisfies the requirement onnxruntime-silicon",
+        "ERROR: No matching distribution found for onnxruntime-silicon",
+        "WARN: onnxruntime-silicon install failed; falling back to onnxruntime",
+        "ERROR: No matching distribution found for onnxruntime",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertHistoricalRecoveredFatalScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("onnxruntime_silicon_lookup_failed:%s+yes") ~= nil,
+        "historical lookup failure was not recorded at all:\n" .. manifest)
+    assertf(manifest:find("current_fatal_error_count:%s+0") ~= nil,
+        "old/historical ONNX failure was counted as a CURRENT fatal error despite proven-healthy current workers:\n" .. manifest)
+    assertf(manifest:find("historical_onnxruntime_silicon_issue:%s+recovered_or_superseded_by_current_health") ~= nil,
+        "historical issue was not separately labeled once superseded by current health:\n" .. manifest)
 end
 
 local function assertZipIntegrity(bundleDir)
@@ -850,6 +1183,54 @@ local function main()
     local failedFallbackBundle = runScenario(failedFallback, assertFailedFallbackScenario)
     assertZipIntegrity(failedFallbackBundle)
     print("PASS failed-onnx-fallback -> " .. failedFallbackBundle)
+
+    waitNextSecond()
+
+    local amdRocm = createAmdRocmScenario(joinPath(baseRoot, "amd-rocm"))
+    local amdRocmBundle = runScenario(amdRocm, assertAmdRocmScenario)
+    print("PASS amd-rocm-device-classification -> " .. amdRocmBundle)
+
+    waitNextSecond()
+
+    local nvidiaCuda = createNvidiaCudaScenario(joinPath(baseRoot, "nvidia-cuda"))
+    local nvidiaCudaBundle = runScenario(nvidiaCuda, assertNvidiaCudaScenario)
+    print("PASS nvidia-cuda-device-classification -> " .. nvidiaCudaBundle)
+
+    waitNextSecond()
+
+    local shuffled = createShuffledRunAssociationScenario(joinPath(baseRoot, "shuffled-run-assoc"))
+    local shuffledBundle = runScenario(shuffled, assertShuffledRunAssociationScenario)
+    print("PASS shuffled-run-id-association -> " .. shuffledBundle)
+
+    waitNextSecond()
+
+    local parallelAgg = createParallelAggregationScenario(joinPath(baseRoot, "parallel-aggregation"))
+    local parallelAggBundle = runScenario(parallelAgg, assertParallelAggregationScenario)
+    print("PASS parallel-output-aggregation -> " .. parallelAggBundle)
+
+    waitNextSecond()
+
+    local directKit = createDirectKitScenario(joinPath(baseRoot, "direct-kit"))
+    local directKitBundle = runScenario(directKit, assertDirectKitScenario)
+    print("PASS direct-kit-semantic-model -> " .. directKitBundle)
+
+    waitNextSecond()
+
+    local kitSplit = createKitSplitScenario(joinPath(baseRoot, "kit-split"))
+    local kitSplitBundle = runScenario(kitSplit, assertKitSplitScenario)
+    print("PASS kit-split-two-stage-model -> " .. kitSplitBundle)
+
+    waitNextSecond()
+
+    local noPhases = createHealthyNoAcceptancePhasesScenario(joinPath(baseRoot, "no-acceptance-phases"))
+    local noPhasesBundle = runScenario(noPhases, assertHealthyNoAcceptancePhasesScenario)
+    print("PASS healthy-runtime-no-acceptance-phases -> " .. noPhasesBundle)
+
+    waitNextSecond()
+
+    local recoveredFatal = createHistoricalRecoveredFatalScenario(joinPath(baseRoot, "historical-recovered-fatal"))
+    local recoveredFatalBundle = runScenario(recoveredFatal, assertHistoricalRecoveredFatalScenario)
+    print("PASS historical-onnx-failure-recovered -> " .. recoveredFatalBundle)
 
     print("All headless support bundle tests passed.")
 end

@@ -390,7 +390,7 @@ if env.get('directml_possible'):
 ]]
 
     local prefix = linuxEnvPrefix()
-    local cmd = prefix .. quoteArg(pythonPath) .. " -c " .. quoteArg(py)
+    local cmd = prefix .. quoteArg(pythonPath) .. " -B -c " .. quoteArg(py)
     local rc, out = execCapture(cmd, 30000)
     out = out or ""
     if out ~= "" then
@@ -990,7 +990,9 @@ end
 
 linuxEnvPrefix = function()
     if OS ~= "Linux" then return "" end
-    return "env -u HIP_VISIBLE_DEVICES -u HSA_OVERRIDE_GFX_VERSION -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES "
+    -- PYTHONDONTWRITEBYTECODE keeps these check-only probes from writing
+    -- __pycache__ into the shipped source tree.
+    return "env -u HIP_VISIBLE_DEVICES -u HSA_OVERRIDE_GFX_VERSION -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES PYTHONDONTWRITEBYTECODE=1 "
 end
 
 local function runCommandWithProbe(path, suffix, expectPattern, timeoutMs)
@@ -1038,7 +1040,7 @@ local function canRunPython(path)
         return false
     end
     if OS == "Linux" or OS == "macOS" then
-        local cmd = quoteArg(path) .. " -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
+        local cmd = quoteArg(path) .. " -B -c " .. quoteArg("import sys; print('{}.{}.{}'.format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))")
         local rc, out = execProcess(cmd, 12000)
         local major, minor = tostring(out or ""):match("(%d+)%.(%d+)")
         if tonumber(rc) ~= 0 or not major or not minor then
@@ -1075,7 +1077,7 @@ end
 local function pythonVersionText(path)
     path = resolvePath(path)
     if path == "" or not fileExists(path) then return "" end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import platform; print(platform.python_version())")
+    local cmd = quoteArg(path) .. " -B -c " .. quoteArg("import platform; print(platform.python_version())")
     local rc, out = execProcess(cmd, 12000)
     if tonumber(rc) ~= 0 then return "" end
     return trim((out or ""):match("([0-9]+%.[0-9]+%.[0-9]+)") or (out or ""):match("([0-9]+%.[0-9]+)") or "")
@@ -1184,7 +1186,7 @@ print("RUNTIME_DRIFT_DETECTED=" + ("yes" if reason else "no"))
 print("RUNTIME_DRIFT_REASON=" + reason)
 sys.exit(0 if not reason else 1)
 ]=]
-    local cmd = quoteArg(path) .. " -c " .. quoteArg(script)
+    local cmd = quoteArg(path) .. " -B -c " .. quoteArg(script)
     local rc, out = execProcess(cmd, 15000)
     local text = tostring(out or "")
     for line in text:gmatch("[^\r\n]+") do
@@ -1237,13 +1239,13 @@ local function canImportAudioSeparator(path)
     path = resolvePath(path)
     if not path or path == "" then return false end
     if not fileExists(path) then return false end
-    local fullCmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
+    local fullCmd = quoteArg(path) .. " -B -c " .. quoteArg("import audio_separator; import onnxruntime; from audio_separator.separator import Separator")
     if OS == "macOS" then
         local rc = select(1, exec(fullCmd, 15000))
         if rc == 0 then
             return true
         end
-        local lightCmd = quoteArg(path) .. " -c " .. quoteArg("import audio_separator; import onnxruntime")
+        local lightCmd = quoteArg(path) .. " -B -c " .. quoteArg("import audio_separator; import onnxruntime")
         local rc2 = select(1, exec(lightCmd, 15000))
         return rc2 == 0
     end
@@ -1253,50 +1255,29 @@ local function canImportAudioSeparator(path)
     end
     local h = io.popen(fullCmd .. " 2>&1")
     if not h then return false end
-    local output = h:read("*a") or ""
+    h:read("*a")
     local ok, _, code = h:close()
-    if ok == true or code == 0 then
-        return true
-    end
-    return (output ~= "")
+    -- Success requires subprocess exit code 0. Stray stderr/stdout text on a
+    -- non-zero exit (e.g. a partial traceback) must NOT be treated as success.
+    return ok == true or code == 0
 end
 
 local function canImportStemwerkCore(path)
     path = resolvePath(path)
     if not path or path == "" then return false end
     if not fileExists(path) then return false end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import stemwerk_core")
+    local cmd = quoteArg(path) .. " -B -c " .. quoteArg("import stemwerk_core")
     if OS ~= "Linux" then
         local rc = select(1, exec(cmd, 15000))
         return rc == 0
     end
     local h = io.popen(cmd .. " 2>&1")
     if not h then return false end
-    local output = h:read("*a") or ""
+    h:read("*a")
     local ok, _, code = h:close()
-    if ok == true or code == 0 then
-        return true
-    end
-    return (output ~= "")
-end
-
-local function canImportStemwerkCore(path)
-    path = resolvePath(path)
-    if not path or path == "" then return false end
-    if not fileExists(path) then return false end
-    local cmd = quoteArg(path) .. " -c " .. quoteArg("import stemwerk_core")
-    if OS ~= "Linux" then
-        local rc = select(1, exec(cmd, 15000))
-        return rc == 0
-    end
-    local h = io.popen(cmd .. " 2>&1")
-    if not h then return false end
-    local output = h:read("*a") or ""
-    local ok, _, code = h:close()
-    if ok == true or code == 0 then
-        return true
-    end
-    return (output ~= "")
+    -- Success requires subprocess exit code 0. Stray stderr/stdout text on a
+    -- non-zero exit must NOT be treated as success.
+    return ok == true or code == 0
 end
 
 local function readTail(path, maxLines)
@@ -1424,13 +1405,13 @@ local function probeRuntimeDevices(pythonPath, separatorScript)
     end
 
     local prefix = linuxEnvPrefix()
-    local cmd1 = prefix .. quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript) .. " --list-devices-machine"
+    local cmd1 = prefix .. quoteArg(pythonPath) .. " -B -u " .. quoteArg(separatorScript) .. " --list-devices-machine"
     local rc1, out1 = execCapture(cmd1, 30000)
     if probeOutputHasUsefulDevices(out1) then
         return out1, rc1, nil
     end
 
-    local cmd2 = prefix .. quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript) .. " --list-devices"
+    local cmd2 = prefix .. quoteArg(pythonPath) .. " -B -u " .. quoteArg(separatorScript) .. " --list-devices"
     local rc2, out2 = execCapture(cmd2, 30000)
     if probeOutputHasUsefulDevices(out2) then
         return out2, rc2, nil
@@ -6514,9 +6495,9 @@ function existingRuntimeSetupMenuTick()
         if cv ~= "" or lv ~= "" then
             local verLabel = setupText("setup_script_label", "Setup script") .. ": v" .. (cv ~= "" and cv or "?")
             if lv ~= "" then
-                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Last run") .. ": v" .. lv
+                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Recorded setup version") .. ": v" .. lv
             else
-                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Last run") .. ": " .. setupText("setup_unknown", "(unknown)")
+                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Recorded setup version") .. ": " .. setupText("setup_unknown", "(unknown)")
             end
             gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
             gfx.x = bodyX

@@ -194,7 +194,11 @@ def test_managed_python_invocation_remains_explicit_across_platforms():
     assert "quoteArg(PYTHON_PATH),\n        quoteArg(SEPARATOR_SCRIPT)," in main_lua
     assert 'set -- "$PY" -u "$SEP"' in main_lua
     assert "Start-Process -FilePath $py -ArgumentList $args" in main_lua
-    assert 'quoteArg(pythonPath) .. " -u " .. quoteArg(separatorScript)' in setup_lua
+    # This is the Setup/Check-only device probe (probeRuntimeDevices), not
+    # the real separation run. It now also passes -B so this diagnostic
+    # probe doesn't write __pycache__ into the shipped source tree; the
+    # invocation is still explicit (still names the interpreter, still -u).
+    assert 'quoteArg(pythonPath) .. " -B -u " .. quoteArg(separatorScript)' in setup_lua
 
 
 def test_macos_and_windows_bootstraps_still_select_python_explicitly():

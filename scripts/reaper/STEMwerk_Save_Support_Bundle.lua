@@ -1021,6 +1021,38 @@ local function maybeInferSingleNormalStemOutputs(entry, jobDir, stdoutData, sepD
     end
 end
 
+-- PyTorch ROCm builds also expose cuda-style device notation (cuda:0, etc),
+-- so "cuda:N" alone is not proof of NVIDIA. Current-run HIP/ROCm evidence
+-- (backend markers, torch.version.hip, or an AMD GPU/device name seen in
+-- this run) must be checked and take priority over that notation.
+local function currentRunHasRocmEvidence(entry, state)
+    local e = entry or {}
+    local s = state or {}
+    local runtimeSelected = trim(e.runtime_selected or e.backend_runtime or ""):lower()
+    if runtimeSelected == "rocm" then return true end
+    if trim(e.drumsep_helper_backend_runtime or ""):lower() == "rocm" then return true end
+    if trim(s.BACKEND or ""):lower() == "rocm" then return true end
+    local hip = trim(e.torch_hip_version or e.hip_version or "")
+    if hip ~= "" and hip:lower() ~= "null" and hip:lower() ~= "none" and hip:lower() ~= "missing" then
+        return true
+    end
+    local nameCandidates = {
+        trim(e.device_name or e.deviceName or ""),
+        trim(s.ROCM_DETECTED_DEVICES or ""),
+        trim(s.DRUMSEP_ROCM_DEVICE_NAMES or ""),
+        trim(s.DRUMSEP_DEVICE_NAMES or ""),
+        trim(s.ROCM_SELECTED_DEVICE or ""),
+    }
+    for _, name in ipairs(nameCandidates) do
+        local lowerName = name:lower()
+        if lowerName:find("amd", 1, true) or lowerName:find("radeon", 1, true) or lowerName:find("rx ", 1, true)
+            or lowerName:find("rx9", 1, true) or lowerName:find("gfx1", 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
     local raw = trim(rawDevice)
     local lower = raw:lower()
@@ -1030,7 +1062,12 @@ local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
     if lower == "cpu" then return "CPU" end
     if lower:find("directml", 1, true) then return "DirectML" end
     if lower == "mps" then return "Apple MPS" end
-    if runtimeSelected == "rocm" or lower == "rocm" then
+    local looksLikeCuda = lower:match("^cuda:%d+") ~= nil or lower == "cuda"
+        or lower:find("nvidia", 1, true) or lower:find("geforce", 1, true)
+        or lower:find("rtx", 1, true) or lower:find("gtx", 1, true)
+    local isRocm = runtimeSelected == "rocm" or lower == "rocm"
+        or (looksLikeCuda and currentRunHasRocmEvidence(entry, state))
+    if isRocm then
         local candidates = {
             trim(state.ROCM_DETECTED_DEVICES or ""),
             trim(state.DRUMSEP_ROCM_DEVICE_NAMES or ""),
@@ -1054,10 +1091,7 @@ local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
         end
         return "AMD ROCm"
     end
-    if lower:match("^cuda:%d+") or lower == "cuda" then
-        return "NVIDIA CUDA"
-    end
-    if lower:find("nvidia", 1, true) or lower:find("geforce", 1, true) or lower:find("rtx", 1, true) or lower:find("gtx", 1, true) then
+    if looksLikeCuda then
         return "NVIDIA CUDA"
     end
     if lower:find("radeon", 1, true) or lower:find("amd", 1, true) or lower:find("hip", 1, true) then
@@ -1076,6 +1110,33 @@ local function workflowSummaryLabel(entry)
     if source == "dks_extract" then return "Kit Split" end
     if mode == "drumkit" then return "Drum Kit" end
     return "Stems"
+end
+
+local function drumsepSemanticModel(entry)
+    local e = entry or {}
+    return trim(e.drumsep_model_id or "") ~= "" and e.drumsep_model_id
+        or (trim(e.drumsep_requested_model or "") ~= "" and e.drumsep_requested_model)
+        or "unknown"
+end
+
+-- Generic entry.model (the last "model=" seen anywhere in a run's logs) is
+-- not flow-aware: Direct Kit only ever runs DrumSep, and Kit Split runs a
+-- Demucs pass (stage 1) followed by DrumSep (stage 2). Reporting entry.model
+-- unqualified for these flows can attach an unrelated Demucs model to a
+-- DrumSep-only run, or collapse a two-stage run into a single wrong model.
+-- This resolves the single human-readable "semantic model" for a run,
+-- matching what actually executed for that flow.
+local function semanticModelLabel(entry)
+    local source = trim((entry and entry.workflow_source) or ""):lower()
+    if source == "dks_direct" then
+        return drumsepSemanticModel(entry)
+    end
+    if source == "dks_extract" then
+        local stage1 = trim((entry and entry.model) or "") ~= "" and entry.model or "unknown"
+        local stage2 = drumsepSemanticModel(entry)
+        return "stage1:" .. tostring(stage1) .. " -> stage2:" .. tostring(stage2) .. " (DrumSep)"
+    end
+    return tostring((entry and entry.model) or "unknown")
 end
 
 local function statusSummaryLabel(entry)
@@ -1173,6 +1234,7 @@ local function appendLatestRunSummary(lines, entry, runtimeState)
     lines[#lines + 1] = "Latest run summary:"
     lines[#lines + 1] = "Status: " .. statusSummaryLabel(entry)
     lines[#lines + 1] = "Workflow: " .. workflowSummaryLabel(entry)
+    lines[#lines + 1] = "Model: " .. semanticModelLabel(entry)
     lines[#lines + 1] = "Device: " .. summaryDeviceLabel(entry, runtimeState)
     lines[#lines + 1] = "Requested device: " .. requestedDeviceSummaryLabel(entry, runtimeState)
     lines[#lines + 1] = "Runtime: " .. tostring(entry.runtime_selected or "unknown")
@@ -2333,7 +2395,7 @@ local function findCurrentEvidenceRoot(runtimeBase, cacheLogDir)
     return ""
 end
 
-local function classifyOnnxFallback(bootstrapLog, runtimeState)
+local function classifyOnnxFallback(bootstrapLog, runtimeState, currentHealthyEvidence)
     local text = tostring(readFile(bootstrapLog, "rb") or "")
     local lower = text:lower()
     local lookupFailed = lower:find("no matching distribution found for onnxruntime%-silicon") ~= nil
@@ -2342,11 +2404,21 @@ local function classifyOnnxFallback(bootstrapLog, runtimeState)
     local fallbackVersion = text:match("Successfully installed[^\r\n]-onnxruntime%-([%d%.]+)")
         or text:match("[\r\n]onnxruntime=([%d%.]+)")
         or ""
-    local runtimeHealthy = lower:find("runtime verification passed.", 1, true) ~= nil
-        and trim(runtimeState.STATUS or ""):lower() == "ok"
+    -- Structured current state (bootstrap STATUS + RUNTIME_VERIFY_DETAIL) is
+    -- the authoritative signal. The literal "Runtime verification passed."
+    -- sentence and proven-healthy current-session workers are additional,
+    -- independent paths to the same conclusion -- a healthy runtime must not
+    -- depend on that one historical log sentence being present verbatim.
+    local structuredHealthy = trim(runtimeState.STATUS or ""):lower() == "ok"
         and trim(runtimeState.RUNTIME_VERIFY_DETAIL or ""):lower() == "ok"
+    local sentenceHealthy = lower:find("runtime verification passed.", 1, true) ~= nil
+    local runtimeHealthy = structuredHealthy or sentenceHealthy or (currentHealthyEvidence == true)
     local handled = lookupFailed and fallbackAttempted and fallbackVersion ~= "" and runtimeHealthy
-    local fatal = lookupFailed and not handled
+    -- A historical lookup failure only counts as a CURRENT fatal error when
+    -- there is no other proof the runtime is currently healthy. If current
+    -- workers/phases or structured bootstrap state already prove health,
+    -- the old failure is historical/recovered context, not a current fault.
+    local fatal = lookupFailed and not handled and not runtimeHealthy
     return {
         lookupFailed = lookupFailed,
         fallbackAttempted = fallbackAttempted,
@@ -2426,7 +2498,15 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
         end
     end
 
-    local onnx = classifyOnnxFallback(joinPath(runtimeLogDir, "bootstrap.log"), runtimeState or {})
+    -- Acceptance-phase fixtures (the 6 fixed phases above) are OPTIONAL
+    -- acceptance evidence, not the only proof of a healthy current runtime.
+    -- "0/6 collected" means exactly that -- fixtures weren't collected -- and
+    -- must not by itself read as "no current session evidence" or force
+    -- final_runtime_health to not_proven. A phase reporting STATUS=ok is
+    -- still independent proof of a currently-healthy worker, usable to
+    -- reclassify an old/historical failure recorded in bootstrap.log.
+    local anyPhaseHealthy = currentFatalErrors == 0 and included > 0
+    local onnx = classifyOnnxFallback(joinPath(runtimeLogDir, "bootstrap.log"), runtimeState or {}, anyPhaseHealthy)
     if onnx.fatal then currentFatalErrors = currentFatalErrors + 1 end
     appendLine(lines, "")
     appendLine(lines, "[error classification]")
@@ -2437,12 +2517,27 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     appendKey(lines, "final_runtime_health", onnx.runtimeHealthy and "ok" or "not_proven")
     appendKey(lines, "current_fatal_error_count", tostring(currentFatalErrors))
     appendKey(lines, "current_fatal_errors", currentFatalErrors == 0 and "none" or tostring(currentFatalErrors))
+    if onnx.lookupFailed and onnx.runtimeHealthy then
+        appendKey(lines, "historical_onnxruntime_silicon_issue", "recovered_or_superseded_by_current_health")
+    end
     appendKey(lines, "historical_errors_scope", "runtime_logs_except_current_bootstrap_and_current_session_evidence")
     appendLine(lines, "")
     appendKey(lines, "phases_expected", tostring(#CURRENT_EVIDENCE_PHASES))
     appendKey(lines, "phases_included", tostring(included))
     appendKey(lines, "phases_missing", tostring(missing))
-    appendKey(lines, "manifest_status", missing == 0 and currentFatalErrors == 0 and "complete" or "warning")
+    local acceptancePhasesStatus
+    if included == 0 then
+        acceptancePhasesStatus = "not_collected"
+    elseif included < #CURRENT_EVIDENCE_PHASES then
+        acceptancePhasesStatus = "partial"
+    else
+        acceptancePhasesStatus = "complete"
+    end
+    appendKey(lines, "acceptance_phases_status", acceptancePhasesStatus)
+    appendKey(lines, "acceptance_phases_note", "Acceptance-phase fixtures are optional evidence; their absence does not by itself affect final_runtime_health.")
+    -- Missing OPTIONAL acceptance-phase fixtures alone must not flip the
+    -- manifest to a warning state; only actual current fatal errors do.
+    appendKey(lines, "manifest_status", currentFatalErrors == 0 and "complete" or "warning")
 
     local manifestPath = joinPath(bundleDir, "support_evidence_manifest.txt")
     writeFile(manifestPath, table.concat(lines, "\n") .. "\n", "wb")
@@ -2660,13 +2755,27 @@ local function formatRealtimeValue(raw)
 end
 
 local function containsKnownModel(line)
+    -- Lua patterns have no regex-style alternation ("|"). The previous
+    -- pattern "(^|[^%w_%-])(model)([^%w_%-]|$)" matched the literal
+    -- characters "^|" / "|$" (which essentially never occur in real log
+    -- text) instead of anchoring at the start/end of the string, so this
+    -- effectively never matched. Word-boundary matching is done explicitly
+    -- below instead.
     local lower = tostring(line or ""):lower()
     for i = 1, #KNOWN_SUMMARY_MODELS do
         local model = KNOWN_SUMMARY_MODELS[i]
-        local pattern = "(^|[^%w_%-])(" .. model .. ")([^%w_%-]|$)"
-        local hit = lower:match(pattern)
-        if hit then
-            return model
+        local searchFrom = 1
+        while true do
+            local s, e = lower:find(model, searchFrom, true)
+            if not s then break end
+            local before = s > 1 and lower:sub(s - 1, s - 1) or ""
+            local after = e < #lower and lower:sub(e + 1, e + 1) or ""
+            local beforeOk = before == "" or before:match("[^%w_%-]") ~= nil
+            local afterOk = after == "" or after:match("[^%w_%-]") ~= nil
+            if beforeOk and afterOk then
+                return model
+            end
+            searchFrom = s + 1
         end
     end
     return nil
@@ -2748,6 +2857,10 @@ local function parseSupportRunText(entry, text)
                 kvAssignLast(entry, "backend_runtime", value)
             elseif key == "drumsep_runtime_selected" or key == "runtime_selected" then
                 kvAssignLast(entry, "runtime_selected", value)
+            elseif key == "device_name" or key == "gpu_name" then
+                kvAssignLast(entry, "device_name", value)
+            elseif key == "torch_hip_version" or key == "hip_version" then
+                kvAssignLast(entry, "torch_hip_version", value)
             elseif key == "profile" then
                 kvAssignIfUnknown(entry, "profile", value)
             elseif key == "output_validation_reason" then
@@ -2972,6 +3085,31 @@ local function parseSupportRunText(entry, text)
         if inlineHelperDeviceArg then
             kvAssignLast(entry, "drumsep_helper_device_arg", inlineHelperDeviceArg)
         end
+
+        -- DrumSep (Direct Kit / Kit Split stage 2) reports its own model
+        -- identity separately from the generic Demucs `model=`/`--model`
+        -- markers above -- it must never be conflated with them.
+        local drumsepModelId = raw:match("model_id=([%w%._%-]+)")
+        if drumsepModelId then
+            kvAssignLast(entry, "drumsep_model_id", drumsepModelId)
+        end
+        local drumsepRequestedModel = raw:match("requested_model=([%w%._%-]+)")
+        if drumsepRequestedModel then
+            kvAssignLast(entry, "drumsep_requested_model", drumsepRequestedModel)
+        end
+
+        -- Kit Split (dks_extract) runs two distinct stages: stage 1 is the
+        -- Demucs pass (htdemucs_6s), stage 2 is DrumSep on the extracted
+        -- drum stem. Each stage's own runtime/device must be kept separate
+        -- rather than collapsed into one pair of fields.
+        local stage1Runtime = raw:match("dks_extract_stage1_runtime=([%w_:%-]+)")
+        if stage1Runtime then kvAssignLast(entry, "stage1_runtime", stage1Runtime) end
+        local stage1Device = raw:match("dks_extract_stage1_device=([%w_:%-]+)")
+        if stage1Device then kvAssignLast(entry, "stage1_device", stage1Device) end
+        local stage2Runtime = raw:match("dks_extract_stage2_runtime=([%w_:%-]+)")
+        if stage2Runtime then kvAssignLast(entry, "stage2_runtime", stage2Runtime) end
+        local stage2Device = raw:match("dks_extract_stage2_device=([%w_:%-]+)")
+        if stage2Device then kvAssignLast(entry, "stage2_device", stage2Device) end
 
         if lower:find("traceback", 1, true) then
             entry._clearFailures = (entry._clearFailures or 0) + 1
@@ -3432,6 +3570,41 @@ local function parseRuntimeStemwerkSessions(bundleDir)
     return newestFirst
 end
 
+local UNIVERSAL_STEM_NAMES = { "vocals", "drums", "bass", "other", "guitar", "piano" }
+
+-- Determines THIS job's own found-output count from its own evidence only
+-- (never from another job's, and never from the shared run-level `entry`
+-- table, which only ever keeps the first job's values once set). Used to
+-- aggregate outputs across parallel jobs instead of only inferring an
+-- output count when jobs==1.
+local function jobOwnOutputEvidence(jobDir)
+    local found = nil
+    local validation = nil
+    for _, fileName in ipairs({ "phase_events.jsonl", "timing_events.jsonl" }) do
+        local data = readFile(joinPath(jobDir, fileName), "rb")
+        if data then
+            for line in tostring(data):gmatch("[^\r\n]+") do
+                local names = parseJsonStringField(line, "output_names")
+                    or parseJsonStringField(line, "found_stems")
+                    or parseJsonStringField(line, "found_files")
+                if names then
+                    local n = countDelimitedValues(names)
+                    if n then found = n end
+                end
+                local count = parseJsonNumberField(line, "output_count")
+                if count and not found then found = math.floor(count) end
+                local reason = parseJsonStringField(line, "output_validation_reason")
+                if reason then validation = reason end
+            end
+        end
+    end
+    if not found then
+        local names = detectStemNamesFromFiles(jobDir, UNIVERSAL_STEM_NAMES)
+        if #names > 0 then found = #names end
+    end
+    return found, validation
+end
+
 local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
     local out = {}
     local runsRoot = joinPath(bundleDir, "runtime_runs")
@@ -3553,6 +3726,53 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             end
 
             maybeInferSingleNormalStemOutputs(entry, jobDir, stdoutData, sepData)
+
+            local ownFound, ownValidation = jobOwnOutputEvidence(jobDir)
+            if ownFound then
+                stat.aggFoundTotal = (stat.aggFoundTotal or 0) + ownFound
+                stat.aggFoundJobs = (stat.aggFoundJobs or 0) + 1
+            end
+            if ownValidation then
+                local ok = trim(ownValidation):lower() == "ok"
+                stat.aggValidationSeen = (stat.aggValidationSeen or 0) + 1
+                if ok then stat.aggValidationOkJobs = (stat.aggValidationOkJobs or 0) + 1 end
+            end
+        end
+
+        -- Do not infer outputs only for the jobs==1 case. For parallel runs,
+        -- aggregate each job's own output evidence instead of leaving the
+        -- run-level outputs/validation as "unknown" (which reads as a
+        -- failure) when every job actually produced and validated output.
+        local jobCount = #jobNames
+        if jobCount > 1 then
+            local wfSource = trim(entry.workflow_source or ""):lower()
+            local wfMode = trim(entry.workflow_mode or ""):lower()
+            local isStemsFlow = wfSource ~= "dks_direct" and wfSource ~= "dks_extract" and wfMode ~= "drumkit"
+            local haveAllJobsFound = (stat.aggFoundJobs or 0) == jobCount
+            if haveAllJobsFound then
+                -- Every job's own evidence was found and summed. This is
+                -- strictly more trustworthy than the single-job value that
+                -- may already have leaked into entry.found_stems (the
+                -- shared per-run kvAssignLast/kvAssignIfUnknown helpers
+                -- only ever keep the FIRST job's own numbers), so replace
+                -- it rather than deferring to a known-partial figure.
+                entry.found_stems = tostring(stat.aggFoundTotal or 0)
+                entry.found_files = "unknown"
+            elseif tostring(entry.found_stems or "unknown") == "unknown" and tostring(entry.found_files or "unknown") == "unknown"
+                and (stat.aggFoundJobs or 0) > 0 then
+                entry.found_stems = tostring(stat.aggFoundTotal or 0)
+            end
+            if isStemsFlow and (stat.aggFoundJobs or 0) > 0
+                and (haveAllJobsFound or tostring(entry.expected_stems or "unknown") == "unknown") then
+                entry.expected_stems = tostring(#expectedNormalStemNamesForModel(entry.model) * jobCount)
+            end
+            if tostring(entry.output_validation_reason or "unknown") == "unknown" then
+                if (stat.aggValidationSeen or 0) > 0 and stat.aggValidationOkJobs == stat.aggValidationSeen then
+                    entry.output_validation_reason = "ok"
+                elseif stat.doneOk == jobCount and stat.exitErr == 0 and (stat.aggFoundJobs or 0) == jobCount then
+                    entry.output_validation_reason = "ok"
+                end
+            end
         end
 
         if stat.minTime and stat.maxTime and stat.maxTime >= stat.minTime then
@@ -3593,7 +3813,16 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             entry.items = entry.jobs
         end
 
-        local session = stemwerkSessions[i]
+        -- stemwerkSessions carries no run/job identity of its own (it is
+        -- reconstructed purely from launch order within run_stemwerk.log),
+        -- so it can only ever be paired by array position. Pairing by
+        -- position is only safe when there is exactly one persisted run and
+        -- exactly one parsed session -- i.e. no shuffling/ambiguity is even
+        -- possible. With more than one of either, positional pairing risks
+        -- attaching one run's model/device to a different run merely
+        -- because their sorted orders happened to line up; skip it instead
+        -- and rely on the key-based stemwerkByRun association above.
+        local session = (#out == 1 and #stemwerkSessions == 1) and stemwerkSessions[1] or nil
         if session then
             if tostring(entry.model or "unknown") == "unknown" and tostring(session.model or "unknown") ~= "unknown" then entry.model = session.model end
             if tostring(entry.device or "unknown") == "unknown" and tostring(session.device or "unknown") ~= "unknown" then entry.device = session.device end
@@ -3668,6 +3897,18 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         lines[#lines + 1] = "timestamp: " .. tostring(entry.timestamp or "unknown")
         lines[#lines + 1] = "result: " .. tostring(entry.result or "unknown")
         lines[#lines + 1] = "model: " .. tostring(entry.model or "unknown")
+        lines[#lines + 1] = "semantic_model: " .. semanticModelLabel(entry)
+        local wfSourceForModel = trim(entry.workflow_source or ""):lower()
+        if wfSourceForModel == "dks_direct" then
+            lines[#lines + 1] = "drumsep_model_id: " .. drumsepSemanticModel(entry)
+        elseif wfSourceForModel == "dks_extract" then
+            lines[#lines + 1] = "stage1_model: " .. tostring((trim(entry.model or "") ~= "" and entry.model) or "unknown")
+            lines[#lines + 1] = "stage1_runtime: " .. tostring(entry.stage1_runtime or "unknown")
+            lines[#lines + 1] = "stage1_device: " .. friendlyDeviceLabel(entry.stage1_device, runtimeState, entry)
+            lines[#lines + 1] = "stage2_model: " .. drumsepSemanticModel(entry)
+            lines[#lines + 1] = "stage2_runtime: " .. tostring(entry.stage2_runtime or "unknown")
+            lines[#lines + 1] = "stage2_device: " .. friendlyDeviceLabel(entry.stage2_device, runtimeState, entry)
+        end
         lines[#lines + 1] = "backend: " .. tostring(entry.backend or "unknown")
         lines[#lines + 1] = "profile: " .. tostring(entry.profile or "unknown")
         lines[#lines + 1] = "device: " .. tostring(entry.device or "unknown")
