@@ -2343,6 +2343,23 @@ local function currentWorkerRunName()
     return "STEMwerk_" .. tostring(os.time()) .. "_001_1"
 end
 
+-- Writes a PROVEN-current session root (session.env with a fresh
+-- SESSION_STARTED_UTC, no acceptance-phase directories), so worker runs
+-- created afterwards are session-linked CURRENT evidence while the
+-- acceptance-phase channel stays explicitly empty (phases_included=0,
+-- not_collected). The start is backdated two seconds so same-second runs
+-- created just after it always fall inside the session.
+local function writeCurrentSessionRoot(context, ageSeconds)
+    local evidenceRoot = joinPath(context.extState.runtimeBase, "evidence", "current-session")
+    mkdirP(evidenceRoot)
+    writeFile(joinPath(evidenceRoot, "session.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=headless-current-worker-session",
+        "SESSION_STARTED_UTC=" .. os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - (tonumber(ageSeconds) or 2)),
+        "",
+    }, "\n"))
+end
+
 -- Writes one persisted run with the given jobs. Each job spec:
 --   { name, exit=<number|nil>, done=<bool>, model=<string|nil>,
 --     outputCount=<number|nil>, outputNames=<string|nil>,
@@ -2414,6 +2431,7 @@ local function createCachedBootstrapCurrentWorkerNoPhasesScenario(baseRoot)
     -- cached-healthy provenance only).
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
     return context
@@ -2479,6 +2497,7 @@ local function createMixedJobFailureNoPhasesScenario(baseRoot)
     context.name = "mixed-job-failure-no-phases"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, {
         successfulWorkerJob("job1"),
@@ -2508,6 +2527,7 @@ local function createIncompleteOutputNoPhasesScenario(baseRoot)
     context.name = "incomplete-output-no-phases"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, {
         {
@@ -2541,6 +2561,7 @@ local function createValidationFailureNoPhasesScenario(baseRoot)
     context.name = "validation-failure-no-phases"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, {
         {
@@ -2630,14 +2651,27 @@ local function createCurrentWorkerCurrentFatalPhaseScenario(baseRoot)
     clearRuns(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
-    local phaseDir = joinPath(context.extState.runtimeBase, "evidence", "current-session", "online_normal")
+    -- The session root and the failing phase must both be fresh for the
+    -- worker run to be session-linked CURRENT evidence under the corrected
+    -- currentness model; the inherited July-dated phases become stale and
+    -- are excluded, leaving this single fresh fatal phase.
+    local freshStart = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 2)
+    local freshPhase = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 1)
+    local evidenceRoot = joinPath(context.extState.runtimeBase, "evidence", "current-session")
+    writeFile(joinPath(evidenceRoot, "session.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=native-apple-silicon-2306-final",
+        "SESSION_STARTED_UTC=" .. freshStart,
+        "",
+    }, "\n"))
+    local phaseDir = joinPath(evidenceRoot, "online_normal")
     writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
         "EVIDENCE_SCHEMA=1",
         "SESSION_ID=native-apple-silicon-2306-final",
         "PHASE=online_normal",
         "DISTRIBUTION=online",
         "STATUS=fatal",
-        "TIMESTAMP_UTC=2026-07-24T13:10:00Z",
+        "TIMESTAMP_UTC=" .. freshPhase,
         "BACKEND=metal",
         "DEVICE=mps",
         "RUNTIME_ARCH=arm64",
@@ -2707,7 +2741,7 @@ local function writeRealDrumkitJob(context, runName, jobName, opts)
     if opts.validation then
         lines[#lines + 1] = "output_validation_reason=" .. opts.validation
     end
-    lines[#lines + 1] = "expected_stems=kick,snare,toms,hihat,ride,crash"
+    lines[#lines + 1] = "expected_stems=" .. (opts.expected or "kick,snare,toms,hihat,ride,crash")
     if opts.found then
         lines[#lines + 1] = "found_stems=" .. opts.found
     end
@@ -2726,6 +2760,8 @@ local function assertWorkerProvenZeroPhases(manifest, context)
         "real-format successful run did not prove current_worker_health=ok:\n" .. manifest)
     assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
         "the proving worker run was not identified by its exact run ID:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_session") ~= nil,
+        "the proving worker run was not classified as current-session evidence:\n" .. manifest)
     assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
         "real-format successful run with zero phases did not prove final_runtime_health=ok:\n" .. manifest)
     assertf(manifest:find("final_runtime_health_source:%s+current_worker_evidence") ~= nil,
@@ -2738,6 +2774,7 @@ local function createRealDirectKitZeroPhasesScenario(baseRoot)
     context.name = "real-format-direct-kit-zero-phases-success"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeRealDrumkitJob(context, context.workerRunName, "single", {
         source = "dks_direct",
@@ -2758,6 +2795,7 @@ local function createRealKitSplitZeroPhasesScenario(baseRoot)
     context.name = "real-format-kit-split-zero-phases-success"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeRealDrumkitJob(context, context.workerRunName, "single", {
         source = "dks_extract",
@@ -2778,6 +2816,7 @@ local function createDirectKitFiveOfSixScenario(baseRoot)
     context.name = "direct-kit-five-of-six-not-healthy"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeRealDrumkitJob(context, context.workerRunName, "single", {
         source = "dks_direct",
@@ -2804,6 +2843,7 @@ local function createKitSplitFiveOfSixScenario(baseRoot)
     context.name = "kit-split-five-of-six-not-healthy"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeRealDrumkitJob(context, context.workerRunName, "single", {
         source = "dks_extract",
@@ -2832,6 +2872,7 @@ local function createMissingRequiredValidationScenario(baseRoot)
     context.name = "missing-required-validation-not-healthy"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeRealDrumkitJob(context, context.workerRunName, "single", {
         source = "dks_direct",
@@ -2893,6 +2934,7 @@ local function createExplicitRunIdMarkerScenario(baseRoot)
     context.name = "explicit-run-id-marker-identifies-run"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
     mkdirP(jobDir)
@@ -2948,6 +2990,7 @@ local function createSameSecondSuccessThenFailureScenario(baseRoot)
     context.name = "same-second-success-then-failure"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     local epoch = os.time()
     context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_002_2"
     writeRealDrumkitJob(context, "STEMwerk_" .. tostring(epoch) .. "_001_1", "single", {
@@ -2983,6 +3026,7 @@ local function createSameSecondFailureThenSuccessScenario(baseRoot)
     context.name = "same-second-failure-then-success"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
+    writeCurrentSessionRoot(context)
     local epoch = os.time()
     context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_002_2"
     writeRealDrumkitJob(context, "STEMwerk_" .. tostring(epoch) .. "_001_1", "single", {
@@ -3005,6 +3049,377 @@ local function assertSameSecondFailureThenSuccessScenario(bundleDir, context)
     local manifest = readManifest(bundleDir)
     assertf(manifest:find("current_fatal_error_count:%s+0") ~= nil,
         "the superseded earlier same-second failure was still counted as current:\n" .. manifest)
+end
+
+-- ---------------------------------------------------------------------
+-- Seventh follow-up (release/2.3.1.0-final-prep) fixtures: canonical
+-- DrumSep six-stem requirement, per-job identity, newest-context-only
+-- evaluation, current vs recent vs historical worker evidence, and
+-- narrow-preset output contracts.
+-- ---------------------------------------------------------------------
+
+-- A reduced/malformed expected_stems must never weaken the fixed canonical
+-- six-stem requirement for DrumSep flows.
+local function createReducedExpectedStemsScenario(baseRoot, source, fixtureName)
+    local context = createPresentScenario(baseRoot)
+    context.name = fixtureName
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = source,
+        found = "kick,snare,toms,hihat,ride",
+        expected = "kick,snare,toms,hihat,ride",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertReducedExpectedStemsScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a reduced expected_stems weakened the canonical six-stem requirement:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "the missing canonical crash stem was not reported:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a missing canonical child stem:\n" .. manifest)
+end
+
+-- Same run directory: job A carries valid explicit identity and full
+-- success evidence; job B carries full success evidence but NO identity
+-- marker. Job B must not inherit job A's identity, so the run cannot be
+-- proven healthy while job B is required.
+local function createPerJobIdentityScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "same-run-job-a-identified-job-b-unidentified"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("jobA") })
+    local jobB = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "jobB")
+    mkdirP(jobB)
+    writeFile(joinPath(jobB, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobB, "done.txt"), "DONE\n")
+    writeFile(joinPath(jobB, "phase_events.jsonl"),
+        '{"time":2,"model":"htdemucs","device":"cpu","result":"success","output_count":4,"output_names":"bass,drums,other,vocals","output_validation_reason":"ok"}\n')
+    return context
+end
+
+local function assertPerJobIdentityScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "an unidentified job inherited another job's run identity:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_unassociated") ~= nil,
+        "the unidentified job was not labeled unassociated:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite an unidentified required job:\n" .. manifest)
+end
+
+-- One job whose explicit identity markers CONFLICT (timing job_dir names
+-- this run; drumsep_helper_output_dir names a different run): ambiguous,
+-- never "any matching marker wins".
+local function createConflictingIdentityScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "same-job-conflicting-identity-markers"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    local otherRun = "STEMwerk_" .. tostring(os.time()) .. "_999_9"
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    writeFile(joinPath(jobDir, "separation_log.txt"), table.concat({
+        "Direct Drum Kit Split route detected: workflow_mode=drumkit workflow_source=dks_direct",
+        "workflow_mode=drumkit",
+        "workflow_source=dks_direct",
+        "drumsep_helper_output_dir=/tmp/" .. otherRun,
+        "output_validation_reason=ok",
+        "expected_stems=kick,snare,toms,hihat,ride,crash",
+        "found_stems=kick,snare,toms,hihat,ride,crash",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertConflictingIdentityScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "conflicting identity markers were accepted via any-match-wins:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_conflicting") ~= nil,
+        "conflicting identity markers were not labeled conflicting:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite conflicting identity markers:\n" .. manifest)
+end
+
+-- Copied evidence: a current-shaped run directory whose only job's
+-- identity markers all name a DIFFERENT run. The evidence must stay with
+-- its own run and cannot identify this directory.
+local function createCopiedJobEvidenceScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "copied-job-evidence-from-another-run"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    local foreignRun = "STEMwerk_" .. tostring(os.time() - 10) .. "_500_1"
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. foreignRun .. '"}\n')
+    writeFile(joinPath(jobDir, "phase_events.jsonl"),
+        '{"time":2,"model":"htdemucs","device":"cpu","result":"success","output_count":4,"output_names":"bass,drums,other,vocals","output_validation_reason":"ok"}\n')
+    return context
+end
+
+local function assertCopiedJobEvidenceScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "copied job evidence from another run identified this run:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+no_current_run_evidence") ~= nil,
+        "foreign-identified evidence was not excluded from this run:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from copied foreign-run evidence:\n" .. manifest)
+end
+
+-- The NEWEST identified current context decides: an older proven success
+-- must not be used when the newest current context is unproven.
+local function createNewerUnprovenSupersedesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "older-success-newer-unproven"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context, 30)
+    local epoch = os.time()
+    writeCurrentWorkerRun(context, "STEMwerk_" .. tostring(epoch - 5) .. "_001_1", { successfulWorkerJob("single") })
+    context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_001_1"
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    -- Identified and complete, but no output evidence at all: unproven.
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(epoch) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    return context
+end
+
+local function assertNewerUnprovenSupersedesScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "an older proven success was used although the newest current context is unproven:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the newest (unproven) context was not the one evaluated:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "the newest unproven context's reason was not reported:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from an older success despite a newer unproven context:\n" .. manifest)
+end
+
+-- Inverse: older explicit failure, newer proven success => the newer
+-- success supersedes (distinct epochs).
+local function createNewerSuccessSupersedesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "older-failure-newer-success"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context, 30)
+    local epoch = os.time()
+    writeRealDrumkitJob(context, "STEMwerk_" .. tostring(epoch - 5) .. "_001_1", "single", {
+        source = "dks_direct",
+        exit = 1,
+        done = false,
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_001_1"
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    return context
+end
+
+local function assertNewerSuccessSupersedesScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("current_fatal_error_count:%s+0") ~= nil,
+        "the superseded older failure was still counted as current:\n" .. manifest)
+end
+
+-- Same-second ordering with an unproven newest context: no fallback to the
+-- same-second older success.
+local function createSameSecondNewerUnprovenScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "same-second-success-then-unproven"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    local epoch = os.time()
+    writeCurrentWorkerRun(context, "STEMwerk_" .. tostring(epoch) .. "_001_1", { successfulWorkerJob("single") })
+    context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_002_2"
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(epoch) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    return context
+end
+
+local function assertSameSecondNewerUnprovenScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "same-second older success was used although the same-second newer context is unproven:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the same-second newer (unproven) context was not the one evaluated:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite the newest same-second context being unproven:\n" .. manifest)
+end
+
+-- A stale session root (started long before bundle time) must not turn an
+-- old run into current evidence, even when the run postdates that stale
+-- session start.
+local function createStaleSessionRootScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "stale-session-root-does-not-admit-old-run"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    local evidenceRoot = joinPath(context.extState.runtimeBase, "evidence", "current-session")
+    mkdirP(evidenceRoot)
+    writeFile(joinPath(evidenceRoot, "session.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=stale-acceptance-session",
+        "SESSION_STARTED_UTC=" .. os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 72000),
+        "",
+    }, "\n"))
+    context.workerRunName = "STEMwerk_" .. tostring(os.time() - 68400) .. "_001_1"
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    return context
+end
+
+local function assertStaleSessionRootScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a stale session root made an old run current:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+historical") ~= nil,
+        "the old run behind a stale session root was not classified historical:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from an old run admitted by a stale session root:\n" .. manifest)
+end
+
+-- A fresh, identified, fully successful run with NO session linkage is
+-- recent-unlinked provenance: reported positively as recent, but never
+-- current health.
+local function createRecentUnlinkedNotCurrentScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "recent-unlinked-success-does-not-prove-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    return context
+end
+
+local function assertRecentUnlinkedNotCurrentScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a recent but unlinked success was claimed as CURRENT worker health:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+recent_unlinked") ~= nil,
+        "the unlinked recent run was not classified recent_unlinked:\n" .. manifest)
+    assertf(manifest:find("recent_worker_health:%s+ok") ~= nil,
+        "the recent successful run was not surfaced as recent provenance:\n" .. manifest)
+    assertf(manifest:find("recent_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the recent run provenance did not name the run:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "recent unlinked success alone proved final_runtime_health=ok:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+none") ~= nil,
+        "a health source was credited for merely recent evidence:\n" .. manifest)
+end
+
+-- Narrow extraction presets (Vocals Only / Drums Only / Bass Only) in
+-- released 2.3.1.0 are import-only selections: the worker always separates
+-- and records the FULL model stem set (no per-run preset marker is
+-- persisted anywhere), so the correct worker-health contract for these
+-- runs is the full normal-flow output set. These fixtures use the exact
+-- real production evidence shape of such runs.
+local function writeRealNormalFlowJob(context, runName, jobName, modelName, stemNames)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", runName, jobName)
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"' .. jobName .. '","job_dir":"/tmp/' .. runName .. '"}\n')
+    writeFile(joinPath(jobDir, "separation_log.txt"), table.concat({
+        "workflow_source=normal",
+        "workflow_mode=stems",
+        "model_name=" .. modelName,
+        "",
+    }, "\n"))
+    local pairs = {}
+    for _, stem in ipairs(stemNames) do
+        pairs[#pairs + 1] = '"' .. stem .. '": "/tmp/' .. runName .. '/' .. stem .. '.wav"'
+    end
+    writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
+        "PROGRESS:92:Writing stems",
+        "PROGRESS:100:Complete",
+        "{" .. table.concat(pairs, ", ") .. "}",
+        "",
+    }, "\n"))
+end
+
+local function createNarrowPresetSuccessScenario(baseRoot, fixtureName, modelName, stemNames)
+    local context = createPresentScenario(baseRoot)
+    context.name = fixtureName
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealNormalFlowJob(context, context.workerRunName, "single", modelName, stemNames)
+    return context
+end
+
+local function assertNarrowPresetSuccessScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+end
+
+-- A narrow-preset run whose recorded outputs are missing a stem the
+-- recorded model must have produced: incomplete, not healthy.
+local function createNarrowPresetIncompleteScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "narrow-preset-incomplete-output-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealNormalFlowJob(context, context.workerRunName, "single", "htdemucs", { "drums", "other", "vocals" })
+    return context
+end
+
+local function assertNarrowPresetIncompleteScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a run missing one of its model's outputs proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "the missing output was not reported as missing_required_stems:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite an incomplete output set:\n" .. manifest)
 end
 
 
@@ -3393,6 +3808,90 @@ local function main()
     local sameSecondFS = createSameSecondFailureThenSuccessScenario(joinPath(baseRoot, "same-second-failure-success"))
     local sameSecondFSB = runScenario(sameSecondFS, assertSameSecondFailureThenSuccessScenario)
     print("PASS same-second-failure-then-success -> " .. sameSecondFSB)
+
+    waitNextSecond()
+
+    local reducedExpectedDk = createReducedExpectedStemsScenario(joinPath(baseRoot, "reduced-expected-direct-kit"), "dks_direct", "direct-kit-reduced-expected-stems-cannot-weaken")
+    local reducedExpectedDkBundle = runScenario(reducedExpectedDk, assertReducedExpectedStemsScenario)
+    print("PASS direct-kit-reduced-expected-stems-cannot-weaken -> " .. reducedExpectedDkBundle)
+
+    waitNextSecond()
+
+    local reducedExpectedKs = createReducedExpectedStemsScenario(joinPath(baseRoot, "reduced-expected-kit-split"), "dks_extract", "kit-split-reduced-expected-stems-cannot-weaken")
+    local reducedExpectedKsBundle = runScenario(reducedExpectedKs, assertReducedExpectedStemsScenario)
+    print("PASS kit-split-reduced-expected-stems-cannot-weaken -> " .. reducedExpectedKsBundle)
+
+    waitNextSecond()
+
+    local perJobIdentity = createPerJobIdentityScenario(joinPath(baseRoot, "per-job-identity"))
+    local perJobIdentityBundle = runScenario(perJobIdentity, assertPerJobIdentityScenario)
+    print("PASS same-run-job-a-identified-job-b-unidentified -> " .. perJobIdentityBundle)
+
+    waitNextSecond()
+
+    local conflictingIdentity = createConflictingIdentityScenario(joinPath(baseRoot, "conflicting-identity"))
+    local conflictingIdentityBundle = runScenario(conflictingIdentity, assertConflictingIdentityScenario)
+    print("PASS same-job-conflicting-identity-markers -> " .. conflictingIdentityBundle)
+
+    waitNextSecond()
+
+    local copiedEvidence = createCopiedJobEvidenceScenario(joinPath(baseRoot, "copied-job-evidence"))
+    local copiedEvidenceBundle = runScenario(copiedEvidence, assertCopiedJobEvidenceScenario)
+    print("PASS copied-job-evidence-from-another-run -> " .. copiedEvidenceBundle)
+
+    waitNextSecond()
+
+    local newerUnproven = createNewerUnprovenSupersedesScenario(joinPath(baseRoot, "newer-unproven-supersedes"))
+    local newerUnprovenBundle = runScenario(newerUnproven, assertNewerUnprovenSupersedesScenario)
+    print("PASS older-success-newer-unproven -> " .. newerUnprovenBundle)
+
+    waitNextSecond()
+
+    local newerSuccess = createNewerSuccessSupersedesScenario(joinPath(baseRoot, "newer-success-supersedes"))
+    local newerSuccessBundle = runScenario(newerSuccess, assertNewerSuccessSupersedesScenario)
+    print("PASS older-failure-newer-success -> " .. newerSuccessBundle)
+
+    waitNextSecond()
+
+    local sameSecondUnproven = createSameSecondNewerUnprovenScenario(joinPath(baseRoot, "same-second-newer-unproven"))
+    local sameSecondUnprovenBundle = runScenario(sameSecondUnproven, assertSameSecondNewerUnprovenScenario)
+    print("PASS same-second-success-then-unproven -> " .. sameSecondUnprovenBundle)
+
+    waitNextSecond()
+
+    local staleSession = createStaleSessionRootScenario(joinPath(baseRoot, "stale-session-root"))
+    local staleSessionBundle = runScenario(staleSession, assertStaleSessionRootScenario)
+    print("PASS stale-session-root-does-not-admit-old-run -> " .. staleSessionBundle)
+
+    waitNextSecond()
+
+    local recentUnlinked = createRecentUnlinkedNotCurrentScenario(joinPath(baseRoot, "recent-unlinked-not-current"))
+    local recentUnlinkedBundle = runScenario(recentUnlinked, assertRecentUnlinkedNotCurrentScenario)
+    print("PASS recent-unlinked-success-does-not-prove-current -> " .. recentUnlinkedBundle)
+
+    waitNextSecond()
+
+    local vocalsOnly = createNarrowPresetSuccessScenario(joinPath(baseRoot, "vocals-only"), "real-format-vocals-only-success", "htdemucs", { "bass", "drums", "other", "vocals" })
+    local vocalsOnlyBundle = runScenario(vocalsOnly, assertNarrowPresetSuccessScenario)
+    print("PASS real-format-vocals-only-success -> " .. vocalsOnlyBundle)
+
+    waitNextSecond()
+
+    local drumsOnly = createNarrowPresetSuccessScenario(joinPath(baseRoot, "drums-only"), "real-format-drums-only-success", "htdemucs", { "bass", "drums", "other", "vocals" })
+    local drumsOnlyBundle = runScenario(drumsOnly, assertNarrowPresetSuccessScenario)
+    print("PASS real-format-drums-only-success -> " .. drumsOnlyBundle)
+
+    waitNextSecond()
+
+    local bassOnly = createNarrowPresetSuccessScenario(joinPath(baseRoot, "bass-only"), "real-format-bass-only-success", "htdemucs", { "bass", "drums", "other", "vocals" })
+    local bassOnlyBundle = runScenario(bassOnly, assertNarrowPresetSuccessScenario)
+    print("PASS real-format-bass-only-success -> " .. bassOnlyBundle)
+
+    waitNextSecond()
+
+    local narrowIncomplete = createNarrowPresetIncompleteScenario(joinPath(baseRoot, "narrow-preset-incomplete"))
+    local narrowIncompleteBundle = runScenario(narrowIncomplete, assertNarrowPresetIncompleteScenario)
+    print("PASS narrow-preset-incomplete-output-rejected -> " .. narrowIncompleteBundle)
 
     print("All headless support bundle tests passed.")
 end

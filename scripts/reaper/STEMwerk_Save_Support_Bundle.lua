@@ -2651,9 +2651,17 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     -- Distinct provenance for each CURRENT health source. Worker evidence
     -- and phase evidence stay separately visible so the verdict below can
     -- always be traced to the source that proved (or failed) it.
+    -- Distinct provenance for each health source. CURRENT worker evidence
+    -- (session-linked only) and phase evidence stay separately visible, and
+    -- recent-but-unlinked worker evidence is surfaced as provenance without
+    -- ever being claimed as current.
     appendKey(lines, "current_worker_health", worker.status)
     appendKey(lines, "current_worker_health_run", worker.run ~= "" and worker.run or "none")
     appendKey(lines, "current_worker_health_reason", tostring(worker.reason or "not_evaluated"))
+    appendKey(lines, "recent_worker_health", tostring(worker.recentStatus or "none"))
+    appendKey(lines, "recent_worker_health_run", tostring(worker.recentRun or "") ~= "" and worker.recentRun or "none")
+    appendKey(lines, "recent_worker_health_reason", tostring(worker.recentReason or "none"))
+    appendKey(lines, "worker_context_identity", tostring(worker.contextIdentity or "none"))
     local currentPhaseHealth
     if currentPhaseFailureExists then
         currentPhaseHealth = "failed"
@@ -3760,22 +3768,26 @@ end
 --
 --   identity: the run directory name matches STEMwerk's own generated run
 --     naming (STEMwerk_<epoch>_<ms>_<counter>, the shape written via
---     makeUniqueTempSubdir/persistRunDiagnostics), AND at least one of the
---     run's own job files carries an explicit identity-bearing marker
+--     makeUniqueTempSubdir/persistRunDiagnostics), AND EVERY job's own
+--     evidence independently carries explicit identity-bearing markers
 --     actually emitted by production -- the JSON "job_dir" field in
 --     timing/phase events, or the drumsep_helper_output_dir= key in the
---     separation/stdout logs -- whose path contains this run ID as a
---     complete path component. An arbitrary substring mention of the run
---     ID in prose is NOT identity.
---   current: the newest identified run determines the current processing
---     context (full epoch/ms/counter ordering). Its embedded epoch must
---     also be current relative to bundle creation: when a current-session
---     evidence root exists, the run must have started within that session;
---     otherwise it must fall inside
---     CURRENT_WORKER_RUN_MAX_AGE_SECONDS before bundle creation -- a
---     support bundle diagnoses the installation as it is at save time, so
---     the proving run must be recent enough to describe that same working
---     context; an older success is historical provenance only.
+--     separation/stdout logs -- naming this run ID as a complete path
+--     component. All markers within one job must agree: zero markers leave
+--     the job unassociated, markers naming only other runs are mismatched
+--     (copied evidence), and markers naming multiple distinct run IDs are
+--     conflicting; only an exact per-job identity lets that job contribute
+--     to a health proof. An arbitrary substring mention of the run ID in
+--     prose is NOT identity.
+--   current: evidence classes are kept distinct -- CURRENT means linked
+--     to a proven-current session (a current-session evidence root whose
+--     own SESSION_STARTED_UTC is itself inside the current context window
+--     before bundle creation, with the run started inside that session).
+--     Identified runs that are merely RECENT (inside the window but not
+--     session-linked) are provenance only (recent_worker_health), and
+--     anything older is historical; neither can prove current health.
+--     The NEWEST run in a class (full epoch/ms/counter ordering) defines
+--     the latest processing context and is the only one evaluated.
 --   success contract (run level, never "any successful job"): the run has
 --     at least one job and EVERY job individually has an explicit exit
 --     code 0, an explicit DONE/success/complete marker, complete output
@@ -3802,7 +3814,7 @@ end
 -- failure. A current run that merely lacks proof (incomplete/missing
 -- evidence) is not_proven -- never a false failure, never a false success.
 -- ---------------------------------------------------------------------
-local CURRENT_WORKER_RUN_MAX_AGE_SECONDS = 3600
+local CURRENT_WORKER_CONTEXT_WINDOW_SECONDS = 3600
 local CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS = 300
 
 -- Canonical final DrumSep child stems, in the exact spelling production
@@ -3874,30 +3886,52 @@ local function probeWorkerJobEvidence(jobDir, runName)
     local exitData = readFile(joinPath(jobDir, "exit_code.txt"), "rb")
     if exitData then parseSupportRunText(probe, "exit_code: " .. tostring(trim(exitData))) end
 
-    -- Strict run identity: only explicit structured markers production
-    -- actually writes may associate this job's evidence with runName.
-    local hasIdentity = false
+    -- Strict PER-JOB run identity: collect EVERY explicit identity-bearing
+    -- marker production actually writes (the JSON "job_dir" field in
+    -- timing/phase events, the drumsep_helper_output_dir= key in the
+    -- separation/stdout logs) and normalize each to the generated run IDs
+    -- it references as complete path components. All markers in this job
+    -- must agree on exactly this run's ID; zero markers leave the job
+    -- unassociated, markers naming only other runs make it mismatched
+    -- (copied evidence), and markers naming more than one distinct run ID
+    -- make it conflicting -- "any matching marker wins" is never applied.
+    local markerRunIds = {}
+    local function collectMarkerRunIds(value)
+        for component in tostring(value or ""):gmatch("[^/\\]+") do
+            if component:match("^STEMwerk_%d+_%d+_%d+$") then
+                markerRunIds[component] = true
+            end
+        end
+    end
     for _, data in ipairs({ timingData, phaseData }) do
-        if data and not hasIdentity then
+        if data then
             for line in tostring(data):gmatch("[^\r\n]+") do
                 local dir = parseJsonStringField(line, "job_dir")
-                if dir and pathHasExactComponent(dir, runName) then
-                    hasIdentity = true
-                    break
-                end
+                if dir then collectMarkerRunIds(dir) end
             end
         end
     end
     for _, data in ipairs({ sepData, stdoutData }) do
-        if data and not hasIdentity then
+        if data then
             for line in tostring(data):gmatch("[^\r\n]+") do
                 local key, value = parseKeyValueLine(line)
-                if key == "drumsep_helper_output_dir" and pathHasExactComponent(value, runName) then
-                    hasIdentity = true
-                    break
+                if key == "drumsep_helper_output_dir" then
+                    collectMarkerRunIds(value)
                 end
             end
         end
+    end
+    local markerCount = 0
+    for _ in pairs(markerRunIds) do markerCount = markerCount + 1 end
+    local identityStatus
+    if markerCount == 0 then
+        identityStatus = "unassociated"
+    elseif markerCount > 1 then
+        identityStatus = "conflicting"
+    elseif markerRunIds[runName] then
+        identityStatus = "exact"
+    else
+        identityStatus = "mismatched"
     end
 
     -- Flow-specific output evidence: prefer the parsed production fields
@@ -3944,7 +3978,7 @@ local function probeWorkerJobEvidence(jobDir, runName)
     local doneState = doneData and trim(doneData):lower() or ""
     return {
         probe = probe,
-        hasIdentity = hasIdentity,
+        identityStatus = identityStatus,
         exitCode = exitData and tonumber(trim(exitData)) or nil,
         doneOk = doneState:find("done", 1, true) ~= nil
             or doneState:find("success", 1, true) ~= nil
@@ -3981,6 +4015,20 @@ local function classifyWorkerJob(job)
         return "failed", "current_job_explicit_failure"
     end
 
+    -- Per-job identity gate: a job can only contribute to a health proof
+    -- for THIS run when its own explicit identity markers unambiguously
+    -- name this run. Unassociated/copied/conflicting identity evidence is
+    -- unproven, never healthy.
+    if job.identityStatus == "unassociated" then
+        return "unproven", "job_identity_unassociated"
+    end
+    if job.identityStatus == "mismatched" then
+        return "unproven", "job_identity_mismatch"
+    end
+    if job.identityStatus == "conflicting" then
+        return "unproven", "job_identity_conflicting"
+    end
+
     local workflowSource = trim(presentValue(probe.workflow_source) or ""):lower()
     local workflowMode = trim(presentValue(probe.workflow_mode) or ""):lower()
     local isDrumkitFlow = workflowSource == "dks_direct" or workflowSource == "dks_extract"
@@ -3991,14 +4039,14 @@ local function classifyWorkerJob(job)
     if isDrumkitFlow then
         -- Direct Kit / Kit Split: the FINAL DrumSep child stems must all be
         -- present. For Kit Split these only exist after stage 2, so stage-1
-        -- completion alone can never satisfy this.
-        local required = job.expectedNames or splitStemNameSet(table.concat(DRUMSEP_FINAL_CHILD_STEMS, ","))
+        -- completion alone can never satisfy this. The required set is the
+        -- FIXED canonical six; a logged expected_stems is corroborating
+        -- provenance only and can never reduce it.
+        local required = splitStemNameSet(table.concat(DRUMSEP_FINAL_CHILD_STEMS, ","))
         if job.foundNames then
             outputsComplete = stemSetCovers(job.foundNames, required)
         else
-            local requiredCount = 0
-            for _ in pairs(required) do requiredCount = requiredCount + 1 end
-            outputsComplete = job.foundCount ~= nil and job.foundCount >= requiredCount
+            outputsComplete = job.foundCount ~= nil and job.foundCount >= #DRUMSEP_FINAL_CHILD_STEMS
         end
     else
         outputsComplete = job.foundCount ~= nil and job.foundCount > 0
@@ -4057,39 +4105,62 @@ local function runIdentityNotOlder(a, b)
     return a.counter >= b.counter
 end
 
--- Derives CURRENT worker health from the persisted per-run/per-job records.
--- Returns { status = "ok"|"not_proven"|"failed", run = <run id or "">,
--- reason = <machine-readable provenance code> }.
+-- Derives worker health from the persisted per-run/per-job records,
+-- separating three evidence classes explicitly:
+--
+--   current_session:  identified runs whose embedded start falls inside a
+--     PROVEN-current session (session.env with a valid SESSION_STARTED_UTC
+--     that is itself no older than CURRENT_WORKER_CONTEXT_WINDOW_SECONDS
+--     before bundle creation, and the run started within that session).
+--     Only these may prove current health.
+--   recent_unlinked:  identified runs fresh relative to bundle creation
+--     but NOT linked to any proven-current session. Recent is not current:
+--     these are reported as provenance (recent_worker_health) but can
+--     never prove final_runtime_health on their own.
+--   historical:       anything older; provenance only.
+--
+-- Within a class, the NEWEST run by full generated identity (epoch, then
+-- millisecond, then counter) defines the latest processing context and is
+-- the only one evaluated: a newer unproven context supersedes an older
+-- proven success (no fallback to older success), a newer explicit failure
+-- overrides an older success, and a newer proven success supersedes an
+-- older failure. Ties resolve to failure (fail-safe).
+--
+-- Returns {
+--   status/run/reason            = current (session-linked) verdict,
+--   recentStatus/recentRun/recentReason = recent-unlinked provenance,
+--   contextIdentity              = current_session|recent_unlinked|historical|none,
+-- }.
 local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUtc)
     local result = {
         status = "not_proven",
         run = "",
         reason = "no_current_run_evidence",
+        recentStatus = "none",
+        recentRun = "",
+        recentReason = "no_recent_run_evidence",
+        contextIdentity = "none",
     }
     if not pathExists(runsRoot) then
         result.reason = "runs_root_missing"
         return result
     end
     nowEpoch = tonumber(nowEpoch) or os.time()
-    local hasSessionStart = isValidIsoUtcTimestamp(sessionStartedUtc)
-    local bestFailed = nil
-    local bestProven = nil
-    local sawStaleIdentified = false
-    local sawCurrentUnproven = false
-    local unprovenReason = nil
+    -- The session root is only proof of a CURRENT session when its own
+    -- start is itself inside the current window; a stale session root is
+    -- cached/historical context and cannot make old runs current.
+    local sessionCurrent = false
+    if isValidIsoUtcTimestamp(sessionStartedUtc) then
+        local windowStartIso = os.date("!%Y-%m-%dT%H:%M:%SZ", nowEpoch - CURRENT_WORKER_CONTEXT_WINDOW_SECONDS)
+        local toleranceIso = os.date("!%Y-%m-%dT%H:%M:%SZ", nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS)
+        sessionCurrent = sessionStartedUtc >= windowStartIso and sessionStartedUtc <= toleranceIso
+    end
+    local newestCurrent = nil
+    local newestRecent = nil
+    local sawHistoricalIdentified = false
     for _, runName in ipairs(enumerateSubdirs(runsRoot)) do
         local epoch, ms, counter = runIdentityParts(runName)
         if epoch and epoch <= nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS then
-            -- Currentness: with a current-session evidence root the run
-            -- must belong to that session; without one the run must be
-            -- recent enough to describe the installation as it is at
-            -- bundle-save time -- never merely "any run in the last day".
-            local isCurrent
-            if hasSessionStart then
-                isCurrent = os.date("!%Y-%m-%dT%H:%M:%SZ", epoch) >= sessionStartedUtc
-            else
-                isCurrent = (nowEpoch - epoch) <= CURRENT_WORKER_RUN_MAX_AGE_SECONDS
-            end
             local runDir = joinPath(runsRoot, runName)
             local jobNames = enumerateSubdirs(runDir)
             table.sort(jobNames)
@@ -4098,56 +4169,93 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
             for _, jobName in ipairs(jobNames) do
                 local job = probeWorkerJobEvidence(joinPath(runDir, jobName), runName)
                 jobs[#jobs + 1] = job
-                if job.hasIdentity then identified = true end
+                -- The run context is identifiable when at least one job's
+                -- own markers name this run (per-job identity for the
+                -- health contract itself is enforced per job in
+                -- classifyWorkerJob).
+                if job.identityStatus == "exact" or job.identityStatus == "conflicting" then
+                    identified = true
+                end
             end
             -- Evidence without an explicit identity marker is never
             -- associated with this run at all.
             if identified then
-                if not isCurrent then
-                    sawStaleIdentified = true
+                local runStartIso = os.date("!%Y-%m-%dT%H:%M:%SZ", epoch)
+                local isCurrent = sessionCurrent and runStartIso >= sessionStartedUtc
+                local isRecent = (not isCurrent)
+                    and (nowEpoch - epoch) <= CURRENT_WORKER_CONTEXT_WINDOW_SECONDS
+                local identity = { epoch = epoch, ms = ms, counter = counter, name = runName }
+                local anyFailed = false
+                local allSuccess = #jobs > 0
+                local unprovenReason = nil
+                for _, job in ipairs(jobs) do
+                    local verdict, reason = classifyWorkerJob(job)
+                    if verdict == "failed" then
+                        anyFailed = true
+                    elseif verdict ~= "success" then
+                        allSuccess = false
+                        unprovenReason = unprovenReason or reason
+                    end
+                end
+                local verdict, reason
+                if anyFailed then
+                    verdict, reason = "failed", "current_run_explicit_failure"
+                elseif allSuccess then
+                    verdict, reason = "ok", "current_run_success_contract_met"
                 else
-                    local identity = { epoch = epoch, ms = ms, counter = counter, name = runName }
-                    local anyFailed = false
-                    local allSuccess = #jobs > 0
-                    for _, job in ipairs(jobs) do
-                        local verdict, reason = classifyWorkerJob(job)
-                        if verdict == "failed" then
-                            anyFailed = true
-                        elseif verdict ~= "success" then
-                            allSuccess = false
-                            unprovenReason = unprovenReason or reason
-                        end
+                    verdict, reason = "unproven", (unprovenReason or "current_run_unproven")
+                end
+                identity.verdict = verdict
+                identity.reason = reason
+                if isCurrent then
+                    if not newestCurrent or runIdentityNotOlder(identity, newestCurrent) then
+                        newestCurrent = identity
                     end
-                    if anyFailed then
-                        if not bestFailed or runIdentityNotOlder(identity, bestFailed) then
-                            bestFailed = identity
-                        end
-                    elseif allSuccess then
-                        if not bestProven or runIdentityNotOlder(identity, bestProven) then
-                            bestProven = identity
-                        end
-                    else
-                        sawCurrentUnproven = true
+                elseif isRecent then
+                    if not newestRecent or runIdentityNotOlder(identity, newestRecent) then
+                        newestRecent = identity
                     end
+                else
+                    sawHistoricalIdentified = true
                 end
             end
         end
     end
-    -- Time-ordered precedence between current runs (full epoch/ms/counter
-    -- identity): the newest current verdict wins; a tie resolves to
-    -- failure (fail-safe).
-    if bestFailed and (not bestProven or runIdentityNotOlder(bestFailed, bestProven)) then
-        result.status = "failed"
-        result.run = bestFailed.name
-        result.reason = "current_run_explicit_failure"
-    elseif bestProven then
-        result.status = "ok"
-        result.run = bestProven.name
-        result.reason = "current_run_success_contract_met"
-    elseif sawCurrentUnproven then
-        result.reason = unprovenReason or "current_run_unproven"
-    elseif sawStaleIdentified then
+    -- The newest current (session-linked) context alone decides current
+    -- worker health; there is no fallback to an older successful run when
+    -- the newest context is unproven.
+    if newestCurrent then
+        result.run = newestCurrent.name
+        result.reason = newestCurrent.reason
+        if newestCurrent.verdict == "ok" then
+            result.status = "ok"
+        elseif newestCurrent.verdict == "failed" then
+            result.status = "failed"
+        else
+            result.status = "not_proven"
+        end
+        result.contextIdentity = "current_session"
+    elseif newestRecent then
+        result.contextIdentity = "recent_unlinked"
+        if result.reason == "no_current_run_evidence" and sawHistoricalIdentified then
+            result.reason = "identified_run_outside_current_window"
+        end
+    elseif sawHistoricalIdentified then
+        result.contextIdentity = "historical"
         result.reason = "identified_run_outside_current_window"
+    end
+    -- Recent-unlinked evidence is provenance only: surfaced truthfully
+    -- (including its success) but never a current-health proof.
+    if newestRecent then
+        result.recentRun = newestRecent.name
+        result.recentReason = newestRecent.reason
+        if newestRecent.verdict == "ok" then
+            result.recentStatus = "ok"
+        elseif newestRecent.verdict == "failed" then
+            result.recentStatus = "failed"
+        else
+            result.recentStatus = "not_proven"
+        end
     end
     return result
 end
