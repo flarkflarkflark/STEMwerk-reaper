@@ -2487,7 +2487,7 @@ local function isValidIsoUtcTimestamp(value)
     return type(value) == "string" and value:match("^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ$") ~= nil
 end
 
-local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLogDir, bundleDir, copiedFiles, runtimeState)
+local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLogDir, bundleDir, copiedFiles, runtimeState, workerHealth)
     local lines = {
         "STEMwerk Support Evidence Manifest",
         "schema=1",
@@ -2505,6 +2505,7 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     local missing = 0
     local currentFatalErrors = 0
     local healthyPhaseCount = 0
+    local sawStalePhase = false
     local sessionStartedUtc = trim(session.SESSION_STARTED_UTC or "")
     for _, phase in ipairs(CURRENT_EVIDENCE_PHASES) do
         local phaseSource = sourceRoot ~= "" and joinPath(sourceRoot, phase.id) or ""
@@ -2599,6 +2600,7 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
             -- trusted. (If the evidence file never existed at all, there
             -- is nothing real to show.)
             if fileExists(evidencePath) and not phaseIsFresh then
+                sawStalePhase = true
                 appendKey(lines, "status", trim(evidence.STATUS or ""):lower() ~= "" and trim(evidence.STATUS or ""):lower() or "unknown")
                 appendKey(lines, "timestamp_utc", phaseTimestampUtc ~= "" and phaseTimestampUtc or "missing")
             end
@@ -2620,8 +2622,21 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     -- structured "healthy" claim -- CURRENT FAILURE always outranks older
     -- healthy state, never the other way around.
     local currentPhaseFailureExists = currentFatalErrors > 0
-    local onnx = classifyOnnxFallback(joinPath(runtimeLogDir, "bootstrap.log"), runtimeState or {}, anyPhaseHealthy)
+    -- Current worker-run evidence (derived from the persisted per-run/
+    -- per-job records by deriveCurrentWorkerRunHealth) is an independent
+    -- CURRENT health proof, kept distinct from acceptance-phase evidence:
+    -- either one may prove current health, and the manifest records which
+    -- source actually proved it.
+    local worker = workerHealth or { status = "not_proven", run = "", reason = "not_evaluated" }
+    local currentWorkerHealthy = worker.status == "ok"
+    local currentHealthyEvidence = anyPhaseHealthy or currentWorkerHealthy
+    local onnx = classifyOnnxFallback(joinPath(runtimeLogDir, "bootstrap.log"), runtimeState or {}, currentHealthyEvidence)
     if onnx.fatal then currentFatalErrors = currentFatalErrors + 1 end
+    -- A current worker run carrying explicit failure evidence is current
+    -- failure evidence: it joins the same failure channel as a failed
+    -- current acceptance phase and can never be overridden by older or
+    -- cached healthy state.
+    if worker.status == "failed" then currentFatalErrors = currentFatalErrors + 1 end
     appendLine(lines, "")
     appendLine(lines, "[error classification]")
     appendKey(lines, "onnxruntime_silicon_lookup_failed", onnx.lookupFailed and "yes" or "no")
@@ -2633,8 +2648,34 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     -- so it can never by itself decide final_runtime_health below (see
     -- classifyOnnxFallback).
     appendKey(lines, "bootstrap_readiness", onnx.cachedBootstrapHealthy and "cached_healthy" or "cached_unhealthy_or_unrecorded")
-    local finalRuntimeHealthy = onnx.runtimeHealthy and not currentPhaseFailureExists
+    -- Distinct provenance for each CURRENT health source. Worker evidence
+    -- and phase evidence stay separately visible so the verdict below can
+    -- always be traced to the source that proved (or failed) it.
+    appendKey(lines, "current_worker_health", worker.status)
+    appendKey(lines, "current_worker_health_run", worker.run ~= "" and worker.run or "none")
+    appendKey(lines, "current_worker_health_reason", tostring(worker.reason or "not_evaluated"))
+    local currentPhaseHealth
+    if currentPhaseFailureExists then
+        currentPhaseHealth = "failed"
+    elseif included == 0 then
+        currentPhaseHealth = sawStalePhase and "stale" or "not_collected"
+    elseif healthyPhaseCount > 0 then
+        currentPhaseHealth = "ok"
+    else
+        currentPhaseHealth = "not_proven"
+    end
+    appendKey(lines, "current_phase_health", currentPhaseHealth)
+    -- Final verdict: proven CURRENT evidence (worker OR phase) AND no
+    -- current failure of any kind (phase fatal, ONNX fatal, or an
+    -- explicitly failed current worker run -- all counted into
+    -- currentFatalErrors above).
+    local finalRuntimeHealthy = onnx.runtimeHealthy and currentFatalErrors == 0
     appendKey(lines, "final_runtime_health", finalRuntimeHealthy and "ok" or "not_proven")
+    local healthSource = "none"
+    if finalRuntimeHealthy then
+        healthSource = currentWorkerHealthy and "current_worker_evidence" or "current_phase_evidence"
+    end
+    appendKey(lines, "final_runtime_health_source", healthSource)
     appendKey(lines, "current_fatal_error_count", tostring(currentFatalErrors))
     appendKey(lines, "current_fatal_errors", currentFatalErrors == 0 and "none" or tostring(currentFatalErrors))
     if onnx.historicalSentenceSeen then
@@ -3706,6 +3747,223 @@ local function jobOwnOutputEvidence(jobDir)
     return found, validation
 end
 
+-- ---------------------------------------------------------------------
+-- CURRENT worker-run health.
+--
+-- Acceptance-phase fixtures are OPTIONAL evidence. A successful CURRENT
+-- persisted worker run is an independent proof of current runtime health,
+-- derived only from the existing per-run/per-job records under
+-- <cacheLogDir>/runs -- never from bootstrap.env, historical bootstrap.log
+-- text, acceptance-phase counts, temp-folder naming, unmatched worker
+-- evidence, or ambiguous run association. A persisted run qualifies as
+-- CURRENT worker evidence only when ALL of the following hold:
+--
+--   identity: the run directory name matches STEMwerk's own generated run
+--     naming (STEMwerk_<epoch>_<ms>_<counter>, the shape written via
+--     makeUniqueTempSubdir/persistRunDiagnostics), AND the run's own job
+--     evidence references its own run ID (self-consistent content, the
+--     same association rule tempFolderContentReferencesItself enforces
+--     for temp folders), so the evidence is unambiguously tied to exactly
+--     this run.
+--   current: the embedded run epoch is not in the future (beyond a small
+--     clock tolerance) and not older than
+--     CURRENT_WORKER_RUN_MAX_AGE_SECONDS relative to bundle creation, so
+--     a historical successful run can never prove CURRENT health.
+--   success contract (run level, never "any successful job"): the run has
+--     at least one job and EVERY job individually has an explicit exit
+--     code 0, an explicit DONE/success/complete marker, complete output
+--     evidence for its flow (when the flow's expected output count is
+--     known, found outputs must cover it), an explicitly-ok validation
+--     wherever the job reports validation at all, and no failure
+--     classification of its own.
+--
+-- Precedence between current runs is time-ordered: the newest explicit
+-- current failure wins over older current success, and a newer proven
+-- success supersedes an older current failure (historical errors must not
+-- defeat a current successful run). Ties resolve to failure. A current
+-- run that merely lacks proof (incomplete/missing evidence) is
+-- not_proven -- never a false failure, never a false success.
+-- ---------------------------------------------------------------------
+local CURRENT_WORKER_RUN_MAX_AGE_SECONDS = 86400
+local CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS = 300
+
+-- Parses one job's own persisted files into a fresh probe record (never a
+-- shared run-level table), reusing the same per-job parsing the
+-- processing summary uses.
+local function probeWorkerJobEvidence(jobDir)
+    local probe = {
+        result = "unknown",
+        model = "unknown",
+        workflow_source = "unknown",
+        workflow_mode = "unknown",
+        output_validation_reason = "unknown",
+        log_path = "unknown",
+        bundle_root = "",
+        _resultPriority = 0,
+    }
+    local stat = { minTime = nil, maxTime = nil, totalAudioDur = 0, doneOk = 0, exitErr = 0 }
+    updateRunFromTimingJson(probe, joinPath(jobDir, "timing_events.jsonl"), stat)
+    updateRunFromTimingJson(probe, joinPath(jobDir, "phase_events.jsonl"), stat)
+    local sepData = readFile(joinPath(jobDir, "separation_log.txt"), "rb")
+    if sepData then parseSupportRunText(probe, sepData) end
+    local stdoutData = readFile(joinPath(jobDir, "stdout.txt"), "rb")
+    if stdoutData then parseSupportRunText(probe, stdoutData) end
+    local doneData = readFile(joinPath(jobDir, "done.txt"), "rb")
+    if doneData then parseSupportRunText(probe, doneData) end
+    local exitData = readFile(joinPath(jobDir, "exit_code.txt"), "rb")
+    if exitData then parseSupportRunText(probe, "exit_code: " .. tostring(trim(exitData))) end
+
+    local doneState = doneData and trim(doneData):lower() or ""
+    local found, validation = jobOwnOutputEvidence(jobDir)
+    if not found then
+        local names = detectStemNamesFromText(stdoutData, UNIVERSAL_STEM_NAMES)
+        if #names == 0 then
+            names = detectStemNamesFromText(sepData, UNIVERSAL_STEM_NAMES)
+        end
+        if #names > 0 then found = #names end
+    end
+    if not validation then
+        validation = presentValue(probe.output_validation_reason)
+    end
+    return {
+        probe = probe,
+        exitCode = exitData and tonumber(trim(exitData)) or nil,
+        doneOk = doneState:find("done", 1, true) ~= nil
+            or doneState:find("success", 1, true) ~= nil
+            or doneState:find("complete", 1, true) ~= nil,
+        found = found,
+        validation = validation,
+    }
+end
+
+-- Classifies one job conservatively: explicit failure outranks the success
+-- contract, and anything that is not fully proven is unproven (never a
+-- false success, never an invented failure).
+local function classifyWorkerJob(job)
+    local probe = job.probe
+    local result = tostring(probe.result or "unknown"):lower()
+    local validation = presentValue(job.validation)
+    if validation and validation:lower() == "not_applicable" then
+        -- A job that explicitly records validation as not applicable to its
+        -- flow is treated like a job that reports no validation at all.
+        validation = nil
+    end
+    local validationFailed = validation ~= nil
+        and (validation:lower():find("fail", 1, true) ~= nil or validation:lower():find("error", 1, true) ~= nil)
+    local explicitFailure = (job.exitCode ~= nil and job.exitCode ~= 0)
+        or tonumber(probe._clearFailures or 0) > 0
+        or tonumber(probe._exitNonZero or 0) > 0
+        or result == "fail" or result == "partial"
+        or validationFailed
+    if explicitFailure then
+        return "failed"
+    end
+
+    local outputsComplete = job.found ~= nil and job.found > 0
+    if outputsComplete then
+        -- When this job's flow has a known expected output count (normal
+        -- stem flows), found outputs must actually cover it: an exit-0/DONE
+        -- job with incomplete outputs is not proof of health.
+        local workflowSource = trim(probe.workflow_source or ""):lower()
+        local workflowMode = trim(probe.workflow_mode or ""):lower()
+        local isStemsFlow = workflowSource ~= "dks_direct" and workflowSource ~= "dks_extract" and workflowMode ~= "drumkit"
+        if isStemsFlow and presentValue(probe.model) then
+            if job.found < #expectedNormalStemNamesForModel(probe.model) then
+                outputsComplete = false
+            end
+        end
+    end
+    local validationOk = validation == nil or validation:lower() == "ok"
+    local success = job.exitCode ~= nil and job.exitCode == 0
+        and job.doneOk
+        and outputsComplete
+        and validationOk
+        and result ~= "cancelled"
+    if success then
+        return "success"
+    end
+    return "unproven"
+end
+
+-- Derives CURRENT worker health from the persisted per-run/per-job records.
+-- Returns { status = "ok"|"not_proven"|"failed", run = <run id or "">,
+-- reason = <machine-readable provenance code> }.
+local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch)
+    local result = {
+        status = "not_proven",
+        run = "",
+        reason = "no_current_run_evidence",
+    }
+    if not pathExists(runsRoot) then
+        result.reason = "runs_root_missing"
+        return result
+    end
+    nowEpoch = tonumber(nowEpoch) or os.time()
+    local bestFailed = nil
+    local bestProven = nil
+    local sawCurrentUnproven = false
+    for _, runName in ipairs(enumerateSubdirs(runsRoot)) do
+        local epoch = tonumber(tostring(runName):match("^STEMwerk_(%d+)_%d+_%d+$"))
+        if epoch and epoch <= nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS
+            and nowEpoch - epoch <= CURRENT_WORKER_RUN_MAX_AGE_SECONDS then
+            local runDir = joinPath(runsRoot, runName)
+            local jobNames = enumerateSubdirs(runDir)
+            table.sort(jobNames)
+            local jobs = {}
+            local selfReferenced = false
+            for _, jobName in ipairs(jobNames) do
+                local jobDir = joinPath(runDir, jobName)
+                jobs[#jobs + 1] = probeWorkerJobEvidence(jobDir)
+                if not selfReferenced then
+                    for _, fileName in ipairs({ "timing_events.jsonl", "phase_events.jsonl", "stdout.txt", "stderr.txt", "separation_log.txt" }) do
+                        local data = readFile(joinPath(jobDir, fileName), "rb")
+                        if data and tostring(data):find(runName, 1, true) then
+                            selfReferenced = true
+                            break
+                        end
+                    end
+                end
+            end
+            -- Unassociated evidence (the run's own files never reference
+            -- this run ID) is not usable current evidence at all.
+            if selfReferenced then
+                local anyFailed = false
+                local allSuccess = #jobs > 0
+                for _, job in ipairs(jobs) do
+                    local verdict = classifyWorkerJob(job)
+                    if verdict == "failed" then anyFailed = true end
+                    if verdict ~= "success" then allSuccess = false end
+                end
+                if anyFailed then
+                    if not bestFailed or epoch >= bestFailed.epoch then
+                        bestFailed = { epoch = epoch, name = runName }
+                    end
+                elseif allSuccess then
+                    if not bestProven or epoch >= bestProven.epoch then
+                        bestProven = { epoch = epoch, name = runName }
+                    end
+                else
+                    sawCurrentUnproven = true
+                end
+            end
+        end
+    end
+    -- Time-ordered precedence between current runs: the newest current
+    -- verdict wins; a tie resolves to failure (fail-safe).
+    if bestFailed and (not bestProven or bestFailed.epoch >= bestProven.epoch) then
+        result.status = "failed"
+        result.run = bestFailed.name
+        result.reason = "current_run_explicit_failure"
+    elseif bestProven then
+        result.status = "ok"
+        result.run = bestProven.name
+        result.reason = "current_run_success_contract_met"
+    elseif sawCurrentUnproven then
+        result.reason = "current_run_unproven"
+    end
+    return result
+end
+
 local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
     local out = {}
     local runsRoot = joinPath(bundleDir, "runtime_runs")
@@ -4759,13 +5017,15 @@ local function performBundleCollection()
     appendLine(diagnostics, "")
 
     appendLine(diagnostics, "Current Session Evidence")
+    local currentWorkerHealth = deriveCurrentWorkerRunHealth(joinPath(cacheLogDir, "runs"), os.time())
     for _, line in ipairs(collectCurrentSessionEvidence(
         runtimePaths.base,
         runtimePaths.runtimeLogs,
         cacheLogDir,
         bundleDir,
         copiedFiles,
-        runtimeState
+        runtimeState,
+        currentWorkerHealth
     )) do
         appendLine(diagnostics, line)
     end

@@ -745,6 +745,18 @@ local function assertPresentScenario(bundleDir, context)
         "resolved runtime health missing from evidence manifest")
     assertf(evidenceManifest:find("acceptance_phases_status:%s+complete") ~= nil,
         "acceptance phase provenance missing from evidence manifest")
+    -- Test-audit correction (fifth diagnostics fix): this fixture's
+    -- final_runtime_health=ok is proven by its six healthy ACCEPTANCE
+    -- PHASES only. Its persisted run (STEMwerk_intel_six) deliberately
+    -- lacks current run identity, so it must NOT count as current worker
+    -- evidence -- earlier reporting credited this fixture as
+    -- worker-health coverage ("cached bootstrap + current success"), which
+    -- was wrong. Worker-only proof with ZERO acceptance phases is covered
+    -- by the dedicated *-no-phases fixtures below instead.
+    assertf(evidenceManifest:find("current_worker_health:%s+not_proven") ~= nil,
+        "present-runtime's non-current-identity run must not prove worker health:\n" .. evidenceManifest)
+    assertf(evidenceManifest:find("final_runtime_health_source:%s+current_phase_evidence") ~= nil,
+        "present-runtime's health must be attributed to acceptance-phase evidence, not workers:\n" .. evidenceManifest)
     assertf(evidenceManifest:find("handled_recovery_event:%s+yes") ~= nil,
         "recovery/provenance reasoning missing from evidence manifest")
     for _, phase in ipairs({ "verify", "online_normal", "online_drum", "bundled_recovery", "post_bundled_normal", "post_bundled_drum" }) do
@@ -2312,6 +2324,345 @@ local function assertCachedBootstrapCurrentFatalScenario(bundleDir)
         "a current FATAL acceptance phase was not counted as a current fatal error:\n" .. manifest)
 end
 
+-- ---------------------------------------------------------------------
+-- Fifth follow-up (release/2.3.1.0-final-prep) fixtures: CURRENT worker-run
+-- health as an independent proof of current runtime health, with ZERO
+-- acceptance-phase fixtures collected. Each fixture explicitly removes the
+-- current-session evidence tree, so acceptance_phases_status is
+-- not_collected and phases_included is 0 -- final_runtime_health can only
+-- reach ok through current worker evidence, never through phases.
+--
+-- Current run identity uses STEMwerk's own generated run naming
+-- (STEMwerk_<epoch>_<ms>_<counter>) plus job evidence that references the
+-- run's own ID, exactly like real persisted runs (see
+-- deriveCurrentWorkerRunHealth in the production script, which is what
+-- these fixtures execute end to end).
+-- ---------------------------------------------------------------------
+
+local function currentWorkerRunName()
+    return "STEMwerk_" .. tostring(os.time()) .. "_001_1"
+end
+
+-- Writes one persisted run with the given jobs. Each job spec:
+--   { name, exit=<number|nil>, done=<bool>, model=<string|nil>,
+--     outputCount=<number|nil>, outputNames=<string|nil>,
+--     validation=<string|nil>, phaseEvidence=<bool> }
+-- phaseEvidence=false writes no phase/timing jsonl at all (a job that
+-- never reported completion evidence of its own).
+local function writeCurrentWorkerRun(context, runName, jobs)
+    local runsRoot = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs")
+    for _, job in ipairs(jobs) do
+        local jobDir = joinPath(runsRoot, runName, job.name)
+        mkdirP(jobDir)
+        if job.exit ~= nil then
+            writeFile(joinPath(jobDir, "exit_code.txt"), tostring(job.exit) .. "\n")
+        end
+        if job.done then
+            writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+        end
+        if job.phaseEvidence ~= false then
+            local fields = {
+                '"time":' .. tostring(os.time()),
+                '"device":"cpu"',
+                '"result":"success"',
+            }
+            if job.model then fields[#fields + 1] = '"model":"' .. job.model .. '"' end
+            if job.outputCount then fields[#fields + 1] = '"output_count":' .. tostring(job.outputCount) end
+            if job.outputNames then fields[#fields + 1] = '"output_names":"' .. job.outputNames .. '"' end
+            if job.validation then fields[#fields + 1] = '"output_validation_reason":"' .. job.validation .. '"' end
+            writeFile(joinPath(jobDir, "phase_events.jsonl"), "{" .. table.concat(fields, ",") .. "}\n")
+            -- The job_dir field references the run's own ID, giving the run
+            -- its unambiguous self-consistent identity (same shape real
+            -- runs write).
+            writeFile(joinPath(jobDir, "timing_events.jsonl"),
+                '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"' .. job.name
+                .. '","job_dir":"/tmp/' .. runName .. '"}\n')
+        end
+    end
+end
+
+local function successfulWorkerJob(name)
+    return {
+        name = name,
+        exit = 0,
+        done = true,
+        model = "htdemucs",
+        outputCount = 4,
+        outputNames = "bass,drums,other,vocals",
+        validation = "ok",
+    }
+end
+
+-- Shared assertions for every zero-phase worker fixture: the acceptance
+-- phase channel must be explicitly EMPTY so it cannot be the hidden reason
+-- for any PASS.
+local function assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("phases_included:%s+0") ~= nil,
+        "expected exactly 0 included acceptance phases:\n" .. manifest)
+    assertf(manifest:find("acceptance_phases_status:%s+not_collected") ~= nil,
+        "expected acceptance_phases_status=not_collected:\n" .. manifest)
+    assertf(manifest:find("current_phase_health:%s+not_collected") ~= nil,
+        "expected current_phase_health=not_collected:\n" .. manifest)
+end
+
+-- Fixture 1: cached-healthy bootstrap + current successful worker run +
+-- ZERO acceptance phases => health proven by worker evidence alone.
+local function createCachedBootstrapCurrentWorkerNoPhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "cached-bootstrap-current-worker-no-phases"
+    -- bootstrap.env stays untouched (STATUS=ok / RUNTIME_VERIFY_DETAIL=ok:
+    -- cached-healthy provenance only).
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    return context
+end
+
+local function assertCachedBootstrapCurrentWorkerNoPhasesScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("bootstrap_readiness:%s+cached_healthy") ~= nil,
+        "cached bootstrap-healthy provenance was not exposed:\n" .. manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "current successful worker run did not prove current_worker_health=ok:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the proving worker run was not identified by its exact run ID:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+current_run_success_contract_met") ~= nil,
+        "worker health provenance reason missing:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "current worker evidence with zero acceptance phases did not prove final_runtime_health=ok:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+current_worker_evidence") ~= nil,
+        "final health source was not attributed to current worker evidence:\n" .. manifest)
+end
+
+-- Fixture 2: NO bootstrap health (explicitly failed bootstrap.env) +
+-- current successful worker run + ZERO acceptance phases => worker evidence
+-- alone still proves health.
+local function createNoBootstrapCurrentWorkerNoPhasesScenario(baseRoot)
+    local context = createCachedBootstrapCurrentWorkerNoPhasesScenario(baseRoot)
+    context.name = "no-bootstrap-current-worker-no-phases"
+    writeFile(joinPath(context.extState.runtimeBase, "state", "bootstrap.env"), table.concat({
+        "PYTHON_PATH=" .. context.fakePythonPath,
+        "FFMPEG_PATH=" .. context.fakeFfmpegPath,
+        "STATUS=failed",
+        "STATUS_REASON=runtime_verification_failed",
+        "BACKEND=rocm",
+        "BOOTSTRAP_STATUS=failed",
+        "VENV_PYTHON=" .. context.fakePythonPath,
+        "RUNTIME_VERIFY_DETAIL=failed",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertNoBootstrapCurrentWorkerNoPhasesScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("bootstrap_readiness:%s+cached_unhealthy_or_unrecorded") ~= nil,
+        "failed bootstrap.env was not exposed as cached_unhealthy_or_unrecorded:\n" .. manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "current successful worker run did not prove current_worker_health=ok:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the proving worker run was not identified by its exact run ID:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "current worker evidence with no bootstrap health and zero phases did not prove final_runtime_health=ok:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+current_worker_evidence") ~= nil,
+        "final health source was not attributed to current worker evidence:\n" .. manifest)
+end
+
+-- Fixture 3: current run where job1 fully succeeds but job2 exits 1, ZERO
+-- acceptance phases => one successful job must never clear another
+-- required job's failure; worker health is FAILED, not ok.
+local function createMixedJobFailureNoPhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "mixed-job-failure-no-phases"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        successfulWorkerJob("job1"),
+        { name = "job2", exit = 1, done = false, phaseEvidence = false },
+    })
+    return context
+end
+
+local function assertMixedJobFailureNoPhasesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+failed") ~= nil,
+        "a current run with a failed required job was not classified as worker health FAILED:\n" .. manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "one successful job cleared another required job's failure in the same current run:\n" .. manifest)
+    assertf(manifest:find("current_fatal_error_count:%s+[1-9]") ~= nil,
+        "an explicitly failed current worker run was not counted as current failure evidence:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite an explicitly failed current worker run:\n" .. manifest)
+end
+
+-- Fixture 4: current run, exit 0/DONE, but outputs incomplete for the
+-- flow's known expectation (2 found vs 4 expected), ZERO phases =>
+-- not healthy (unproven), never a false ok.
+local function createIncompleteOutputNoPhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "incomplete-output-no-phases"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        {
+            name = "single",
+            exit = 0,
+            done = true,
+            model = "htdemucs",
+            outputCount = 2,
+            outputNames = "other,vocals",
+            validation = "ok",
+        },
+    })
+    return context
+end
+
+local function assertIncompleteOutputNoPhasesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "exit-0/DONE with incomplete outputs was accepted as worker health proof:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+current_run_unproven") ~= nil,
+        "incomplete-output run was not labeled unproven:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite incomplete current-run outputs:\n" .. manifest)
+end
+
+-- Fixture 5: current run, exit 0/DONE, complete outputs, but validation
+-- explicitly FAILED, ZERO phases => not healthy.
+local function createValidationFailureNoPhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "validation-failure-no-phases"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        {
+            name = "single",
+            exit = 0,
+            done = true,
+            model = "htdemucs",
+            outputCount = 4,
+            outputNames = "bass,drums,other,vocals",
+            validation = "failed",
+        },
+    })
+    return context
+end
+
+local function assertValidationFailureNoPhasesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "exit-0/DONE with failed validation was accepted as worker health proof:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite failed validation in the current run:\n" .. manifest)
+end
+
+-- Fixture 6: historical "Runtime verification passed." sentence only (no
+-- cached bootstrap health) + current successful worker run + ZERO phases
+-- => worker evidence proves health; the historical sentence stays
+-- provenance only.
+local function createHistoricalLogCurrentWorkerNoPhasesScenario(baseRoot)
+    local context = createNoBootstrapCurrentWorkerNoPhasesScenario(baseRoot)
+    context.name = "historical-log-current-worker-no-phases"
+    writeFile(joinPath(context.extState.runtimeBase, "logs", "bootstrap.log"), table.concat({
+        "bootstrap ok (old run)",
+        "Runtime verification passed.",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertHistoricalLogCurrentWorkerNoPhasesScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("historical_runtime_verification_sentence_seen:%s+yes_not_used_as_current_proof") ~= nil,
+        "historical success sentence was not kept as provenance-only:\n" .. manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "current worker run did not prove health alongside historical-only log evidence:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "current worker evidence did not determine current health over historical provenance:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+current_worker_evidence") ~= nil,
+        "final health source was not attributed to current worker evidence:\n" .. manifest)
+end
+
+-- Fixture 7: cached-healthy bootstrap + ZERO phases + only a HISTORICAL
+-- (non-current-identity) successful run => not_proven. The persisted
+-- STEMwerk_intel_six run inherited from the present-runtime fixture has
+-- full success signals but no current run identity, so it must never
+-- prove CURRENT health.
+local function createCachedBootstrapOnlyNoPhasesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "cached-bootstrap-only-no-phases"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    -- Deliberately keeps the inherited STEMwerk_intel_six successful run.
+    return context
+end
+
+local function assertCachedBootstrapOnlyNoPhasesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("bootstrap_readiness:%s+cached_healthy") ~= nil,
+        "cached bootstrap-healthy provenance was not exposed:\n" .. manifest)
+    assertf(manifest:find("current_worker_health:%s+not_proven") ~= nil,
+        "a historical successful run without current run identity proved current worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+no_current_run_evidence") ~= nil,
+        "absence of current worker evidence was not labeled explicitly:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+not_proven") ~= nil,
+        "cached bootstrap health plus a historical successful run proved final_runtime_health=ok:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+none") ~= nil,
+        "no health source may be credited when health is not proven:\n" .. manifest)
+end
+
+-- Fixture 8 (failure precedence): current healthy worker run + a genuinely
+-- CURRENT failed acceptance phase in the same current context => the
+-- current failure wins; worker success must not mask it.
+local function createCurrentWorkerCurrentFatalPhaseScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "current-worker-current-fatal-phase-failure-wins"
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    local phaseDir = joinPath(context.extState.runtimeBase, "evidence", "current-session", "online_normal")
+    writeFile(joinPath(phaseDir, "evidence.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=native-apple-silicon-2306-final",
+        "PHASE=online_normal",
+        "DISTRIBUTION=online",
+        "STATUS=fatal",
+        "TIMESTAMP_UTC=2026-07-24T13:10:00Z",
+        "BACKEND=metal",
+        "DEVICE=mps",
+        "RUNTIME_ARCH=arm64",
+        "OUTPUT_VALIDATION_REASON=failed",
+        "CURRENT_FATAL_ERROR_COUNT=1",
+        "",
+    }, "\n"))
+    return context
+end
+
+local function assertCurrentWorkerCurrentFatalPhaseScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "the current successful worker run was not recognized:\n" .. manifest)
+    assertf(manifest:find("current_phase_health:%s+failed") ~= nil,
+        "the current fatal phase was not classified as phase health FAILED:\n" .. manifest)
+    assertf(manifest:find("current_fatal_error_count:%s+[1-9]") ~= nil,
+        "the current fatal phase was not counted as current failure evidence:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "current worker success masked a current fatal phase -- failure must win:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+none") ~= nil,
+        "no health source may be credited while a current failure exists:\n" .. manifest)
+end
+
+
 local function assertZipIntegrity(bundleDir)
     local zipPath = bundleDir .. ".zip"
     assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
@@ -2589,6 +2940,54 @@ local function main()
     local cachedBootstrapCurrentFatal = createCachedBootstrapCurrentFatalScenario(joinPath(baseRoot, "cached-bootstrap-current-fatal"))
     local cachedBootstrapCurrentFatalBundle = runScenario(cachedBootstrapCurrentFatal, assertCachedBootstrapCurrentFatalScenario)
     print("PASS cached-bootstrap-current-fatal -> " .. cachedBootstrapCurrentFatalBundle)
+
+    waitNextSecond()
+
+    local cachedBootstrapWorker = createCachedBootstrapCurrentWorkerNoPhasesScenario(joinPath(baseRoot, "cached-bootstrap-current-worker"))
+    local cachedBootstrapWorkerBundle = runScenario(cachedBootstrapWorker, assertCachedBootstrapCurrentWorkerNoPhasesScenario)
+    print("PASS cached-bootstrap-current-worker-no-phases -> " .. cachedBootstrapWorkerBundle)
+
+    waitNextSecond()
+
+    local noBootstrapWorker = createNoBootstrapCurrentWorkerNoPhasesScenario(joinPath(baseRoot, "no-bootstrap-current-worker"))
+    local noBootstrapWorkerBundle = runScenario(noBootstrapWorker, assertNoBootstrapCurrentWorkerNoPhasesScenario)
+    print("PASS no-bootstrap-current-worker-no-phases -> " .. noBootstrapWorkerBundle)
+
+    waitNextSecond()
+
+    local mixedJobFailure = createMixedJobFailureNoPhasesScenario(joinPath(baseRoot, "mixed-job-failure-no-phases"))
+    local mixedJobFailureBundle = runScenario(mixedJobFailure, assertMixedJobFailureNoPhasesScenario)
+    print("PASS mixed-job-failure-no-phases -> " .. mixedJobFailureBundle)
+
+    waitNextSecond()
+
+    local incompleteOutput = createIncompleteOutputNoPhasesScenario(joinPath(baseRoot, "incomplete-output-no-phases"))
+    local incompleteOutputBundle = runScenario(incompleteOutput, assertIncompleteOutputNoPhasesScenario)
+    print("PASS incomplete-output-no-phases -> " .. incompleteOutputBundle)
+
+    waitNextSecond()
+
+    local validationFailure = createValidationFailureNoPhasesScenario(joinPath(baseRoot, "validation-failure-no-phases"))
+    local validationFailureBundle = runScenario(validationFailure, assertValidationFailureNoPhasesScenario)
+    print("PASS validation-failure-no-phases -> " .. validationFailureBundle)
+
+    waitNextSecond()
+
+    local historicalLogWorker = createHistoricalLogCurrentWorkerNoPhasesScenario(joinPath(baseRoot, "historical-log-current-worker"))
+    local historicalLogWorkerBundle = runScenario(historicalLogWorker, assertHistoricalLogCurrentWorkerNoPhasesScenario)
+    print("PASS historical-log-current-worker-no-phases -> " .. historicalLogWorkerBundle)
+
+    waitNextSecond()
+
+    local cachedBootstrapOnly = createCachedBootstrapOnlyNoPhasesScenario(joinPath(baseRoot, "cached-bootstrap-only-no-phases"))
+    local cachedBootstrapOnlyBundle = runScenario(cachedBootstrapOnly, assertCachedBootstrapOnlyNoPhasesScenario)
+    print("PASS cached-bootstrap-only-no-phases -> " .. cachedBootstrapOnlyBundle)
+
+    waitNextSecond()
+
+    local workerVsFatalPhase = createCurrentWorkerCurrentFatalPhaseScenario(joinPath(baseRoot, "current-worker-current-fatal-phase"))
+    local workerVsFatalPhaseBundle = runScenario(workerVsFatalPhase, assertCurrentWorkerCurrentFatalPhaseScenario)
+    print("PASS current-worker-current-fatal-phase-failure-wins -> " .. workerVsFatalPhaseBundle)
 
     print("All headless support bundle tests passed.")
 end
