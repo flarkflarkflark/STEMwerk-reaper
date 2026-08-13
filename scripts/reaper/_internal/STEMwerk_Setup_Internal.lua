@@ -4276,15 +4276,80 @@ local function buildLinuxStatusRows(state, pidAlive, pid, lastLogLine)
     return rows
 end
 
-local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess)
+-- Resolved Check-only verdict, built ONCE after all live probes and
+-- reconciliation (reconcileCheckVerification) are complete. This is the
+-- ONLY source buildLinuxFinalRows (and the verify-only Copy Summary text)
+-- may use for Python/backend/device display and verifiedRuntimeOk once a
+-- Check-only run has produced one: it must never be rebuilt independently
+-- from stale bootstrap.env/capabilities.env state, which can disagree with
+-- the live result (a previous run's python_missing/backend=cpu, etc).
+-- Lower-authority stale evidence is preserved as provenance text only --
+-- it never feeds verifiedRuntimeOk or the displayed values.
+function buildCheckOnlyVerdict(verification, checkProbe, backend, backendReasonLabel, backendNoteLabel, deviceNames, capState, state)
+    verification = verification or {}
+    checkProbe = checkProbe or {}
+    capState = capState or {}
+    state = state or {}
+    local verdict = {
+        isCheckOnly = true,
+        verifiedRuntimeOk = checkProbe.verifiedRuntimeOk == true,
+        pythonPath = trim(verification.pythonPath or ""),
+        pythonOk = verification.pythonOk == true,
+        ffmpegPath = trim(verification.ffmpegPath or ""),
+        ffmpegOk = verification.ffmpegOk == true,
+        backend = trim(backend or ""),
+        backendReason = trim(backendReasonLabel or ""),
+        backendNote = trim(backendNoteLabel or ""),
+        deviceNames = trim(deviceNames or ""),
+        adjustedErrors = checkProbe.adjustedErrors or {},
+        staleProvenance = {},
+    }
+    -- Record (never apply) conflicts between stale recorded state and the
+    -- resolved current verdict, only when the current verdict is healthy --
+    -- a stale failure sitting alongside a genuinely current failure isn't a
+    -- "conflict", it's just more of the same current problem.
+    if verdict.verifiedRuntimeOk then
+        local staleReason = trim(state.STATUS_REASON or "")
+        if staleReason ~= "" and stalePythonBackendReason(staleReason) then
+            verdict.staleProvenance[#verdict.staleProvenance + 1] =
+                "stale bootstrap state reported " .. staleReason .. ", ignored because the current Python probe succeeded"
+        end
+        local staleBackend = trim(capState.BACKEND or state.BACKEND or "")
+        if staleBackend ~= "" and staleBackend:lower() ~= verdict.backend:lower() then
+            verdict.staleProvenance[#verdict.staleProvenance + 1] =
+                "stale capabilities reported backend=" .. staleBackend .. ", ignored because the current probe reported backend=" .. verdict.backend
+        end
+    end
+    return verdict
+end
+
+-- `verdict`, when supplied (the resolved Check-only verdict above), is the
+-- ONLY source for Python/backend/device rows -- capState/state are only
+-- consulted as a fallback for callers (Repair/bootstrap) that have not
+-- produced a resolved verdict of their own.
+function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess, verdict)
     local rows = {}
-    local pythonPath = trim(capState.PYTHON_PATH or state.PYTHON_PATH or resolveLinuxPythonPath(state))
-    local ffmpegPath = trim(capState.FFMPEG_PATH or state.FFMPEG_PATH or resolveLinuxFfmpegPath(state))
-    local profile = trim(capState.PROFILE or state.PROFILE or "")
-    local backend = trim(capState.BACKEND or state.BACKEND or "")
-    local backendReason = prettyBackendReason(capState.BACKEND_REASON or state.BACKEND_REASON or "")
-    local backendNote = prettyBackendNote(capState.BACKEND_NOTE or state.BACKEND_NOTE or "")
-    local deviceNames = trim(capState.DEVICE_NAMES or "")
+    local pythonPath, ffmpegPath, profile, backend, backendReason, backendNote, deviceNames, verifiedRuntimeOk
+
+    if verdict and verdict.isCheckOnly then
+        pythonPath = verdict.pythonPath
+        ffmpegPath = verdict.ffmpegPath
+        profile = trim(capState.PROFILE or state.PROFILE or "")
+        backend = verdict.backend
+        backendReason = prettyBackendReason(verdict.backendReason)
+        backendNote = prettyBackendNote(verdict.backendNote)
+        deviceNames = verdict.deviceNames
+        verifiedRuntimeOk = verdict.verifiedRuntimeOk
+    else
+        pythonPath = trim(capState.PYTHON_PATH or state.PYTHON_PATH or resolveLinuxPythonPath(state))
+        ffmpegPath = trim(capState.FFMPEG_PATH or state.FFMPEG_PATH or resolveLinuxFfmpegPath(state))
+        profile = trim(capState.PROFILE or state.PROFILE or "")
+        backend = trim(capState.BACKEND or state.BACKEND or "")
+        backendReason = prettyBackendReason(capState.BACKEND_REASON or state.BACKEND_REASON or "")
+        backendNote = prettyBackendNote(capState.BACKEND_NOTE or state.BACKEND_NOTE or "")
+        deviceNames = trim(capState.DEVICE_NAMES or "")
+        verifiedRuntimeOk = finalSuccess
+    end
 
     rows[#rows + 1] = { label = "Python", value = pythonPath, kind = "python_path" }
     rows[#rows + 1] = { label = "FFmpeg", value = ffmpegPath, kind = "ffmpeg_path" }
@@ -4294,7 +4359,7 @@ local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSucce
     if backend ~= "" then
         rows[#rows + 1] = { label = "Backend", value = backend, kind = finalSuccess and "status_ok" or "status_fail" }
     end
-    if trim(state.STATUS_REASON or "") ~= "" then
+    if not (verdict and verdict.isCheckOnly) and trim(state.STATUS_REASON or "") ~= "" then
         rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted", maxLines = 2 }
     end
     if backendReason ~= "" then
@@ -4308,6 +4373,9 @@ local function buildLinuxFinalRows(state, capState, runtime, logFile, finalSucce
     end
     rows[#rows + 1] = { label = "Capabilities", value = tostring((runtime and runtime.runtimeState or "") .. PATH_SEP .. "capabilities.env"), kind = "cap_path", maxLines = 1 }
     rows[#rows + 1] = { label = "Log", value = tostring(logFile or ""), kind = "log_path", maxLines = 1 }
+    if verdict and verdict.isCheckOnly and verdict.staleProvenance and #verdict.staleProvenance > 0 then
+        rows[#rows + 1] = { label = "Historical", value = table.concat(verdict.staleProvenance, " | "), kind = "muted", maxLines = 3 }
+    end
     return rows
 end
 
@@ -4809,7 +4877,7 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local minActionH = linuxLineHeight(84)
     local minLogH = math.max(96, linuxLineHeight(92))
     local capState = parseStateFile((LINUX_SETUP and LINUX_SETUP.capFile) or "")
-    local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess)
+    local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess, LINUX_SETUP and LINUX_SETUP.checkVerdict)
     local leftRows, rightRows = splitLinuxInfoRows(infoRows, {
         "Python", "FFmpeg", "Profile", "Backend"
     })
@@ -5736,7 +5804,7 @@ end
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
 -- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
 -- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
-showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript, reuseWindow)
+showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, finalSuccess, separatorScript, reuseWindow, checkVerdict)
     if not gfx then
         msgBox("STEMwerk Setup", table.concat(finalMessage or {}, "\n"), finalSuccess and 0 or 16)
         return
@@ -5764,6 +5832,7 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
         finalMessage    = finalMessage,
         finalSuccess    = finalSuccess == true,
         summaryText     = table.concat(finalMessage or {}, "\n"),
+        checkVerdict    = checkVerdict,
         pidSeen         = false,
         startedAt       = os.time(),
         lastMouseCap    = 0,
@@ -5943,6 +6012,49 @@ function reconcileCheckVerification(state, capState, readyState, verification, e
     return result
 end
 
+-- Builds the verify-only final message (the same text used for both the
+-- final-window display and Copy Summary -- there is only one text, so they
+-- can never disagree). When the run is not fully OK, every reason
+-- contributing to that -- including adjusted/current-evidence failures that
+-- the 5 basic file/dir checks below don't capture on their own (e.g. an
+-- unsupported Torch runtime with every file/path check still [OK]) -- must
+-- be visible here. A bare "one or more checks failed" with only [OK] rows
+-- underneath it is exactly the bug this closes.
+function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStatus, dksSupported, normalStemsSupported)
+    verdict = verdict or {}
+    local finalMessage = {}
+    if allOk then
+        finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
+        finalMessage[#finalMessage + 1] = "No files or settings were changed."
+    else
+        finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
+        finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
+    end
+    finalMessage[#finalMessage + 1] = ""
+    for _, c in ipairs(checks or {}) do
+        finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
+    end
+    if not allOk then
+        local reasonText = formatCheckErrors(verdict.adjustedErrors)
+        if reasonText ~= "none" then
+            finalMessage[#finalMessage + 1] = "[--]  Runtime checks: " .. reasonText
+        end
+    end
+    finalMessage[#finalMessage + 1] = ""
+    finalMessage[#finalMessage + 1] = "Detected backend: " .. tostring(backend)
+    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus)
+    finalMessage[#finalMessage + 1] = "DKS supported: " .. tostring(dksSupported)
+    finalMessage[#finalMessage + 1] = "Normal Stems supported: " .. tostring(normalStemsSupported)
+    if verdict.isCheckOnly and verdict.staleProvenance and #verdict.staleProvenance > 0 then
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = "Historical/stale (not used for the result above):"
+        for _, note in ipairs(verdict.staleProvenance) do
+            finalMessage[#finalMessage + 1] = "  - " .. tostring(note)
+        end
+    end
+    return finalMessage
+end
+
 verifyExistingSetup = function(runtime, separatorScript)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
@@ -5994,25 +6106,17 @@ verifyExistingSetup = function(runtime, separatorScript)
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
     allOk = allOk and verifiedRuntimeOk
 
-    local finalMessage = {}
-    if allOk then
-        finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
-        finalMessage[#finalMessage + 1] = "No files or settings were changed."
-    else
-        finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
-        finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."
-    end
-    finalMessage[#finalMessage + 1] = ""
-    for _, c in ipairs(checks) do
-        finalMessage[#finalMessage + 1] = (c.ok and "[OK]  " or "[--]  ") .. c.label .. ": " .. tostring(c.detail)
-    end
-    finalMessage[#finalMessage + 1] = ""
-    finalMessage[#finalMessage + 1] = "Detected backend: " .. tostring(backend)
-    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus)
-    finalMessage[#finalMessage + 1] = "DKS supported: " .. tostring(dksSupported)
-    finalMessage[#finalMessage + 1] = "Normal Stems supported: " .. tostring(normalStemsSupported)
+    -- Resolved Check-only verdict: built once, after every live probe and
+    -- reconciliation above is complete. Both the final-window rows
+    -- (buildLinuxFinalRows, via LINUX_SETUP.checkVerdict) and the Copy
+    -- Summary text (buildCheckOnlyFinalMessage, right below) are driven from
+    -- this SAME object, so they cannot disagree with each other or with the
+    -- live result.
+    local checkVerdict = buildCheckOnlyVerdict(verification, checkProbe, backend, backendReason, nil, deviceNames, capState, state)
 
-    showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript)
+    local finalMessage = buildCheckOnlyFinalMessage(checks, allOk, checkVerdict, backend, drumsepStatus, dksSupported, normalStemsSupported)
+
+    showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript, nil, checkVerdict)
 end
 
 -- (showExistingRuntimeSetupMenu removed: replaced by non-blocking startExistingRuntimeSetupMenu below)
@@ -7074,6 +7178,16 @@ do
         else
             showDeferredFinalWindow(runtime, stateFile, logFile, result.finalMessage, result.success, separatorScript)
         end
+    end
+
+    -- Test seam: when a headless test harness dofile()s this script to
+    -- reach the pure/global helper functions defined above (e.g. to test
+    -- buildCheckOnlyVerdict/buildLinuxFinalRows directly), it sets this
+    -- global first to skip the real auto-invoking setup flow below. This
+    -- flag is never set during real REAPER usage, so normal behavior is
+    -- unchanged.
+    if STEMWERK_SETUP_HEADLESS_TEST then
+        return
     end
 
     local runtime = getRuntimePaths()

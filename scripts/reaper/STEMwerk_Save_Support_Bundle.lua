@@ -1021,34 +1021,41 @@ local function maybeInferSingleNormalStemOutputs(entry, jobDir, stdoutData, sepD
     end
 end
 
+-- Normalizes an evidence value for `or`-fallback chains: nil, "", and the
+-- literal placeholder "unknown" (a real, commonly-persisted default value in
+-- this codebase, not just an absent value) all become nil/absent. Without
+-- this, `a or b` in Lua returns the truthy literal string "unknown" held in
+-- `a` and never falls through to a real value held in `b`.
+local function presentValue(value)
+    local v = trim(value or "")
+    if v == "" or v:lower() == "unknown" then return nil end
+    return v
+end
+
 -- PyTorch ROCm builds also expose cuda-style device notation (cuda:0, etc),
 -- so "cuda:N" alone is not proof of NVIDIA. Current-run HIP/ROCm evidence
 -- (backend markers, torch.version.hip, or an AMD GPU/device name seen in
 -- this run) must be checked and take priority over that notation.
-local function currentRunHasRocmEvidence(entry, state)
+--
+-- Classification uses ONLY this specific run's own evidence (the `entry`
+-- table). The global/shared runtimeState (bootstrap.env/capabilities.env,
+-- common to every run in the bundle) must never be consulted here: it can
+-- be stale relative to this particular run (a prior ROCm install, a
+-- different run's backend, etc.), and mixing it in risks reclassifying an
+-- unrelated current run by leftover global state.
+local function currentRunHasRocmEvidence(entry)
     local e = entry or {}
-    local s = state or {}
-    local runtimeSelected = trim(e.runtime_selected or e.backend_runtime or ""):lower()
+    local runtimeSelected = trim(presentValue(e.runtime_selected) or presentValue(e.backend_runtime) or ""):lower()
     if runtimeSelected == "rocm" then return true end
-    if trim(e.drumsep_helper_backend_runtime or ""):lower() == "rocm" then return true end
-    if trim(s.BACKEND or ""):lower() == "rocm" then return true end
-    local hip = trim(e.torch_hip_version or e.hip_version or "")
-    if hip ~= "" and hip:lower() ~= "null" and hip:lower() ~= "none" and hip:lower() ~= "missing" then
+    if trim(presentValue(e.drumsep_helper_backend_runtime) or ""):lower() == "rocm" then return true end
+    local hip = trim(presentValue(e.torch_hip_version) or presentValue(e.hip_version) or ""):lower()
+    if hip ~= "" and hip ~= "null" and hip ~= "none" and hip ~= "missing" then
         return true
     end
-    local nameCandidates = {
-        trim(e.device_name or e.deviceName or ""),
-        trim(s.ROCM_DETECTED_DEVICES or ""),
-        trim(s.DRUMSEP_ROCM_DEVICE_NAMES or ""),
-        trim(s.DRUMSEP_DEVICE_NAMES or ""),
-        trim(s.ROCM_SELECTED_DEVICE or ""),
-    }
-    for _, name in ipairs(nameCandidates) do
-        local lowerName = name:lower()
-        if lowerName:find("amd", 1, true) or lowerName:find("radeon", 1, true) or lowerName:find("rx ", 1, true)
-            or lowerName:find("rx9", 1, true) or lowerName:find("gfx1", 1, true) then
-            return true
-        end
+    local name = trim(presentValue(e.device_name) or presentValue(e.deviceName) or ""):lower()
+    if name ~= "" and (name:find("amd", 1, true) or name:find("radeon", 1, true) or name:find("rx ", 1, true)
+        or name:find("rx9", 1, true) or name:find("gfx1", 1, true)) then
+        return true
     end
     return false
 end
@@ -1057,17 +1064,31 @@ local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
     local raw = trim(rawDevice)
     local lower = raw:lower()
     local state = runtimeState or {}
-    local runtimeSelected = trim((entry and (entry.runtime_selected or entry.backend_runtime)) or ""):lower()
+    local runtimeSelected = trim(presentValue(entry and entry.runtime_selected) or presentValue(entry and entry.backend_runtime) or ""):lower()
     if lower == "" then return "unknown" end
     if lower == "cpu" then return "CPU" end
     if lower:find("directml", 1, true) then return "DirectML" end
     if lower == "mps" then return "Apple MPS" end
-    local looksLikeCuda = lower:match("^cuda:%d+") ~= nil or lower == "cuda"
-        or lower:find("nvidia", 1, true) or lower:find("geforce", 1, true)
+    local looksLikeCudaNotation = lower:match("^cuda:%d+") ~= nil or lower == "cuda"
+    local nvidiaVendorText = lower:find("nvidia", 1, true) or lower:find("geforce", 1, true)
         or lower:find("rtx", 1, true) or lower:find("gtx", 1, true)
+    local entryDeviceName = trim(presentValue(entry and entry.device_name) or presentValue(entry and entry.deviceName) or ""):lower()
+    local entryHasNvidiaVendorText = entryDeviceName ~= "" and (entryDeviceName:find("nvidia", 1, true)
+        or entryDeviceName:find("geforce", 1, true) or entryDeviceName:find("rtx", 1, true) or entryDeviceName:find("gtx", 1, true))
+    local looksLikeCuda = looksLikeCudaNotation or nvidiaVendorText
     local isRocm = runtimeSelected == "rocm" or lower == "rocm"
-        or (looksLikeCuda and currentRunHasRocmEvidence(entry, state))
+        or (looksLikeCuda and currentRunHasRocmEvidence(entry))
     if isRocm then
+        -- Prefer this run's own device name; only fall back to the shared
+        -- global runtimeState for a cosmetic display name (classification
+        -- above is already decided from run-scoped evidence only).
+        local entryName = trim((entry and (entry.device_name or entry.deviceName)) or "")
+        if entryName ~= "" then
+            local short = shortRuntimeGpuName(entryName)
+            if short ~= "" then
+                return "AMD ROCm (" .. short .. ")"
+            end
+        end
         local candidates = {
             trim(state.ROCM_DETECTED_DEVICES or ""),
             trim(state.DRUMSEP_ROCM_DEVICE_NAMES or ""),
@@ -1082,17 +1103,16 @@ local function friendlyDeviceLabel(rawDevice, runtimeState, entry)
                 end
             end
         end
-        local entryName = trim((entry and (entry.device_name or entry.deviceName)) or "")
-        if entryName ~= "" then
-            local short = shortRuntimeGpuName(entryName)
-            if short ~= "" then
-                return "AMD ROCm (" .. short .. ")"
-            end
-        end
         return "AMD ROCm"
     end
     if looksLikeCuda then
-        return "NVIDIA CUDA"
+        if nvidiaVendorText or entryHasNvidiaVendorText then
+            return "NVIDIA CUDA"
+        end
+        -- Bare "cuda:N" notation with no ROCm evidence AND no NVIDIA vendor
+        -- evidence (device name, etc.) is genuinely ambiguous -- PyTorch
+        -- ROCm builds can also emit cuda-style notation. Do not guess.
+        return "ambiguous accelerator (cuda notation, no vendor evidence)"
     end
     if lower:find("radeon", 1, true) or lower:find("amd", 1, true) or lower:find("hip", 1, true) then
         return "AMD ROCm"
@@ -1116,6 +1136,7 @@ local function drumsepSemanticModel(entry)
     local e = entry or {}
     return trim(e.drumsep_model_id or "") ~= "" and e.drumsep_model_id
         or (trim(e.drumsep_requested_model or "") ~= "" and e.drumsep_requested_model)
+        or (trim(e.drumsep_helper_model or "") ~= "" and e.drumsep_helper_model)
         or "unknown"
 end
 
@@ -2404,15 +2425,19 @@ local function classifyOnnxFallback(bootstrapLog, runtimeState, currentHealthyEv
     local fallbackVersion = text:match("Successfully installed[^\r\n]-onnxruntime%-([%d%.]+)")
         or text:match("[\r\n]onnxruntime=([%d%.]+)")
         or ""
-    -- Structured current state (bootstrap STATUS + RUNTIME_VERIFY_DETAIL) is
-    -- the authoritative signal. The literal "Runtime verification passed."
-    -- sentence and proven-healthy current-session workers are additional,
-    -- independent paths to the same conclusion -- a healthy runtime must not
-    -- depend on that one historical log sentence being present verbatim.
+    -- bootstrap.log is append-only across every historical bootstrap run,
+    -- so a bare text search for "Runtime verification passed." can find a
+    -- sentence left behind by an old, unrelated run. That is historical
+    -- context, not current proof: current health must come only from
+    -- structured current state (bootstrap.env's STATUS + RUNTIME_VERIFY_
+    -- DETAIL, which -- being a state file, not a log -- always reflects the
+    -- latest/current run) or from proven-healthy current-session evidence
+    -- (live probes/workers). The historical sentence is kept only as
+    -- separately-labeled provenance below, never as independent proof.
     local structuredHealthy = trim(runtimeState.STATUS or ""):lower() == "ok"
         and trim(runtimeState.RUNTIME_VERIFY_DETAIL or ""):lower() == "ok"
-    local sentenceHealthy = lower:find("runtime verification passed.", 1, true) ~= nil
-    local runtimeHealthy = structuredHealthy or sentenceHealthy or (currentHealthyEvidence == true)
+    local historicalSentenceSeen = lower:find("runtime verification passed.", 1, true) ~= nil
+    local runtimeHealthy = structuredHealthy or (currentHealthyEvidence == true)
     local handled = lookupFailed and fallbackAttempted and fallbackVersion ~= "" and runtimeHealthy
     -- A historical lookup failure only counts as a CURRENT fatal error when
     -- there is no other proof the runtime is currently healthy. If current
@@ -2424,6 +2449,7 @@ local function classifyOnnxFallback(bootstrapLog, runtimeState, currentHealthyEv
         fallbackAttempted = fallbackAttempted,
         fallbackVersion = fallbackVersion,
         runtimeHealthy = runtimeHealthy,
+        historicalSentenceSeen = historicalSentenceSeen,
         handled = handled,
         fatal = fatal,
     }
@@ -2517,6 +2543,13 @@ local function collectCurrentSessionEvidence(runtimeBase, runtimeLogDir, cacheLo
     appendKey(lines, "final_runtime_health", onnx.runtimeHealthy and "ok" or "not_proven")
     appendKey(lines, "current_fatal_error_count", tostring(currentFatalErrors))
     appendKey(lines, "current_fatal_errors", currentFatalErrors == 0 and "none" or tostring(currentFatalErrors))
+    if onnx.historicalSentenceSeen then
+        -- Historical-only provenance: bootstrap.log is append-only, so this
+        -- sentence may belong to an old, unrelated run. It is never used to
+        -- decide final_runtime_health above -- only structured current
+        -- state or proven current-session evidence can do that.
+        appendKey(lines, "historical_runtime_verification_sentence_seen", "yes_not_used_as_current_proof")
+    end
     if onnx.lookupFailed and onnx.runtimeHealthy then
         appendKey(lines, "historical_onnxruntime_silicon_issue", "recovered_or_superseded_by_current_health")
     end
@@ -2841,7 +2874,7 @@ local function parseSupportRunText(entry, text)
                 end
             elseif key == "mode" then
                 kvAssignIfUnknown(entry, "mode", value)
-            elseif key == "model" then
+            elseif key == "model" or key == "model_name" then
                 kvAssignIfUnknown(entry, "model", value)
             elseif key == "selected_model" then
                 kvAssignIfUnknown(entry, "model", value)
@@ -3097,6 +3130,10 @@ local function parseSupportRunText(entry, text)
         if drumsepRequestedModel then
             kvAssignLast(entry, "drumsep_requested_model", drumsepRequestedModel)
         end
+        local drumsepHelperModel = raw:match("drumsep_helper_model=([%w%._%-]+)")
+        if drumsepHelperModel then
+            kvAssignLast(entry, "drumsep_helper_model", drumsepHelperModel)
+        end
 
         -- Kit Split (dks_extract) runs two distinct stages: stage 1 is the
         -- Demucs pass (htdemucs_6s), stage 2 is DrumSep on the extracted
@@ -3165,9 +3202,18 @@ local function finalizeRunClassification(entry)
     local hasStemsOutput = tonumber(entry._sawStemsOutput or 0) > 0
     local hasCancel = tonumber(entry._sawUserCancel or 0) > 0
     local hasModelEvidence = tonumber(entry._sawModelFailureEvidence or 0) > 0
+    -- _clearFailures/_exitNonZero accumulate across every job in the run
+    -- (nonzero exit codes, tracebacks, ERROR: lines, model-failure
+    -- evidence, etc.). A run with multiple jobs must not be classified as a
+    -- strong success just because SOME job in it produced positive signals
+    -- -- one successful job must never clear a genuine failure recorded by
+    -- a different job in the same run.
+    local hasAnyClearFailure = tonumber(entry._clearFailures or 0) > 0
+        or tonumber(entry._exitNonZero or 0) > 0
     local strongSuccess = (hasExitZero and hasDoneSuccess)
         or (hasExitZero and hasProgressComplete)
         or (hasDoneSuccess and hasStemsOutput)
+    strongSuccess = strongSuccess and not hasAnyClearFailure
 
     if strongSuccess then
         setRunResult(entry, "success", 100)
@@ -3405,6 +3451,8 @@ local function parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeS
                 _positiveHints = 0,
                 _resultPriority = 0,
                 _exitNonZero = 0,
+                _seenModels = {},
+                _seenDevices = {},
             }
         end
         return byRun[key]
@@ -3425,9 +3473,15 @@ local function parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeS
             parseSupportRunText(targetRun, raw)
 
             local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
-            if model then kvAssignIfUnknown(targetRun, "model", model) end
+            if model then
+                targetRun._seenModels[model] = true
+                kvAssignIfUnknown(targetRun, "model", model)
+            end
             local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
-            if device then kvAssignIfUnknown(targetRun, "device", device) end
+            if device then
+                targetRun._seenDevices[device] = true
+                kvAssignIfUnknown(targetRun, "device", device)
+            end
             local mode = cmd:match("mode=([%w_%-]+)")
             if mode then kvAssignIfUnknown(targetRun, "mode", mode) end
             local jobs = cmd:match("count=(%d+)")
@@ -3448,6 +3502,25 @@ local function parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeS
                     setRunResult(targetRun, "success", 2)
                 end
             end
+        end
+    end
+
+    -- A replayed/reused run-ID token (the same run-ID appearing more than
+    -- once in run_stemwerk.log with genuinely different model/device
+    -- evidence) cannot be told apart from a single run's evidence by key
+    -- alone. Silently keeping whichever value was seen first would present
+    -- a guess as fact; surface the ambiguity instead.
+    local function distinctCount(set)
+        local n = 0
+        for _ in pairs(set or {}) do n = n + 1 end
+        return n
+    end
+    for _, run in pairs(byRun) do
+        if distinctCount(run._seenModels) > 1 then
+            run.model = "ambiguous"
+        end
+        if distinctCount(run._seenDevices) > 1 then
+            run.device = "ambiguous"
         end
     end
     return byRun
@@ -3484,91 +3557,14 @@ local function parseTimingSummaryEntry(bundleDir, capabilityState, runtimeState)
     return entry
 end
 
-local function selectMostFrequentValue(counts)
-    local bestValue = nil
-    local bestCount = -1
-    for value, count in pairs(counts or {}) do
-        local c = tonumber(count) or 0
-        if c > bestCount then
-            bestCount = c
-            bestValue = tostring(value)
-        end
-    end
-    return bestValue
-end
-
-local function parseRuntimeStemwerkSessions(bundleDir)
-    local path = joinPath(bundleDir, "runtime_logs", "run_stemwerk.log")
-    local data = readFile(path, "rb")
-    if not data or trim(data) == "" then
-        return {}
-    end
-
-    local sessions = {}
-    local current = nil
-    local function ensureCurrent(ts)
-        if not current then
-            current = {
-                first_ts = ts or "unknown",
-                last_ts = ts or "unknown",
-                modelCounts = {},
-                deviceCounts = {},
-                launches = 0,
-            }
-        end
-    end
-    local function pushSession(ts, jobs, mode)
-        ensureCurrent(ts)
-        local model = selectMostFrequentValue(current.modelCounts) or "unknown"
-        local device = selectMostFrequentValue(current.deviceCounts) or "unknown"
-        sessions[#sessions + 1] = {
-            timestamp = ts or current.last_ts or current.first_ts or "unknown",
-            model = model,
-            device = device,
-            jobs = jobs or "unknown",
-            items = jobs or "unknown",
-            mode = mode or "unknown",
-            log_path = "runtime_logs/run_stemwerk.log",
-        }
-        current = nil
-    end
-
-    for line in tostring(data):gmatch("[^\r\n]+") do
-        local raw = trim(line)
-        local ts = raw:match("^%[([0-9][^%]]+)%]")
-        local cmd = raw:match("^%[[^%]]+%]%s+CMD:%s*(.+)$")
-        if cmd then
-            local model = cmd:match("%-%-model%s+\"?([%w%._%-]+)\"?")
-            local device = cmd:match("%-%-device%s+\"?([%w%._%-%:]+)\"?")
-            if model or device then
-                ensureCurrent(ts)
-                current.last_ts = ts or current.last_ts
-                current.launches = (current.launches or 0) + 1
-                if model then
-                    current.modelCounts[model] = (current.modelCounts[model] or 0) + 1
-                end
-                if device then
-                    current.deviceCounts[device] = (current.deviceCounts[device] or 0) + 1
-                end
-            end
-            local jobs = cmd:match("timing:workers_launched%s+count=(%d+)")
-            local mode = cmd:match("timing:workers_launched.-%s+mode=([%w_%-]+)")
-            if jobs or mode then
-                pushSession(ts, jobs, mode)
-            end
-        end
-    end
-
-    if current and (current.launches or 0) > 0 then
-        pushSession(current.last_ts, tostring(current.launches), "unknown")
-    end
-
-    local newestFirst = {}
-    for i = #sessions, 1, -1 do
-        newestFirst[#newestFirst + 1] = sessions[i]
-    end
-    return newestFirst
-end
+-- NOTE: a previous "reconstructed session" positional-association helper
+-- (parseRuntimeStemwerkSessions) lived here. It inferred sessions purely
+-- from launch order within run_stemwerk.log with no run-ID token of its
+-- own, so it could only ever be paired with a persisted run by array
+-- position -- never by a verifiable identity. That is exactly the guessed
+-- positional association exact-key matching is meant to prevent, so it was
+-- removed rather than kept as an unused fallback; run/log association is
+-- exact run-ID-key-only via parseRuntimeStemwerkLogByRun below.
 
 local UNIVERSAL_STEM_NAMES = { "vocals", "drums", "bass", "other", "guitar", "piano" }
 
@@ -3758,20 +3754,40 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
                 -- it rather than deferring to a known-partial figure.
                 entry.found_stems = tostring(stat.aggFoundTotal or 0)
                 entry.found_files = "unknown"
-            elseif tostring(entry.found_stems or "unknown") == "unknown" and tostring(entry.found_files or "unknown") == "unknown"
-                and (stat.aggFoundJobs or 0) > 0 then
-                entry.found_stems = tostring(stat.aggFoundTotal or 0)
+            elseif (stat.aggFoundJobs or 0) > 0 then
+                -- Some, but not all, jobs reported their own output
+                -- evidence. Reporting the partial sum as if it were the
+                -- final/complete count would misrepresent an incomplete
+                -- run as truthfully counted; label the incompleteness
+                -- explicitly instead.
+                entry.found_stems = string.format(
+                    "%d (partial: %d/%d jobs reported)",
+                    stat.aggFoundTotal or 0, stat.aggFoundJobs or 0, jobCount
+                )
+                entry.found_files = "unknown"
             end
             if isStemsFlow and (stat.aggFoundJobs or 0) > 0
                 and (haveAllJobsFound or tostring(entry.expected_stems or "unknown") == "unknown") then
                 entry.expected_stems = tostring(#expectedNormalStemNamesForModel(entry.model) * jobCount)
             end
-            if tostring(entry.output_validation_reason or "unknown") == "unknown" then
-                if (stat.aggValidationSeen or 0) > 0 and stat.aggValidationOkJobs == stat.aggValidationSeen then
-                    entry.output_validation_reason = "ok"
-                elseif stat.doneOk == jobCount and stat.exitErr == 0 and (stat.aggFoundJobs or 0) == jobCount then
-                    entry.output_validation_reason = "ok"
-                end
+            -- Recomputed purely from per-job aggregate evidence: a single
+            -- job's own output_validation_reason (which may already have
+            -- leaked into entry.output_validation_reason via the shared
+            -- per-run kvAssignLast path above) must never be reported as
+            -- the WHOLE run's aggregate validation when other jobs in the
+            -- same run never confirmed validation themselves.
+            if (stat.aggValidationSeen or 0) > 0 and (stat.aggValidationSeen or 0) == jobCount
+                and stat.aggValidationOkJobs == stat.aggValidationSeen then
+                entry.output_validation_reason = "ok"
+            elseif stat.doneOk == jobCount and stat.exitErr == 0 and (stat.aggFoundJobs or 0) == jobCount then
+                entry.output_validation_reason = "ok"
+            elseif (stat.aggValidationSeen or 0) > 0 or (stat.aggFoundJobs or 0) > 0 then
+                entry.output_validation_reason = "partial"
+            elseif tostring(entry.output_validation_reason or "unknown") ~= "unknown" then
+                -- No job-level aggregate evidence at all backs the value
+                -- that leaked in from a single job; do not present it as
+                -- the run's aggregate.
+                entry.output_validation_reason = "unknown"
             end
         end
 
@@ -3793,8 +3809,14 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
 
     local timingSummaryEntry = parseTimingSummaryEntry(bundleDir, capabilityState, runtimeState)
     local stemwerkByRun = parseRuntimeStemwerkLogByRun(bundleDir, capabilityState, runtimeState)
-    local stemwerkSessions = parseRuntimeStemwerkSessions(bundleDir)
 
+    -- Association with run_stemwerk.log evidence is exact-run-ID-only. A
+    -- reconstructed "session" (launch order within the log, with no run-ID
+    -- token of its own) is not a usable identity, so it is never paired by
+    -- array position -- not even for exactly one run and one session, since
+    -- that positional pairing has no identity to actually verify. If a run
+    -- has no key-matched log evidence, its model/device/etc. are left
+    -- unavailable rather than guessed.
     for i = 1, #out do
         local entry = out[i]
         local stemLog = stemwerkByRun[tostring(entry.run_name or "")]
@@ -3811,26 +3833,6 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         end
         if tostring(entry.items or "unknown") == "unknown" and tostring(entry.jobs or "unknown") ~= "unknown" then
             entry.items = entry.jobs
-        end
-
-        -- stemwerkSessions carries no run/job identity of its own (it is
-        -- reconstructed purely from launch order within run_stemwerk.log),
-        -- so it can only ever be paired by array position. Pairing by
-        -- position is only safe when there is exactly one persisted run and
-        -- exactly one parsed session -- i.e. no shuffling/ambiguity is even
-        -- possible. With more than one of either, positional pairing risks
-        -- attaching one run's model/device to a different run merely
-        -- because their sorted orders happened to line up; skip it instead
-        -- and rely on the key-based stemwerkByRun association above.
-        local session = (#out == 1 and #stemwerkSessions == 1) and stemwerkSessions[1] or nil
-        if session then
-            if tostring(entry.model or "unknown") == "unknown" and tostring(session.model or "unknown") ~= "unknown" then entry.model = session.model end
-            if tostring(entry.device or "unknown") == "unknown" and tostring(session.device or "unknown") ~= "unknown" then entry.device = session.device end
-            if tostring(entry.mode or "unknown") == "unknown" and tostring(session.mode or "unknown") ~= "unknown" then entry.mode = session.mode end
-            if tostring(entry.jobs or "unknown") == "unknown" and tostring(session.jobs or "unknown") ~= "unknown" then entry.jobs = session.jobs end
-            if tostring(entry.items or "unknown") == "unknown" and tostring(session.items or "unknown") ~= "unknown" then entry.items = session.items end
-            if tostring(entry.timestamp or "unknown") == "unknown" and tostring(session.timestamp or "unknown") ~= "unknown" then entry.timestamp = session.timestamp end
-            if tostring(entry.log_path or "unknown") == "unknown" then entry.log_path = session.log_path end
         end
     end
 
@@ -3987,18 +3989,37 @@ local function collectTempInventory(bundleDir, copiedFiles)
         local skipDir = shouldSkipSupportDirByName(name)
         if startsWith(lower, "stemwerk") and not shouldIgnoreTempFolder(name) and not skipDir then
             local full = joinPath(tempBase, name)
+            local epoch = 0
+            -- Only stat the (typically small) set of stemwerk*-prefixed
+            -- temp folders, not everything under the OS temp dir, so this
+            -- stays cheap while still giving a real recency signal.
+            if OS ~= "Windows" then
+                local stat = getPathStat(full)
+                epoch = tonumber(stat.epoch) or 0
+            end
             folders[#folders + 1] = {
                 name = name,
                 path = full,
-                epoch = 0,
+                epoch = epoch,
                 mtime = "metadata skipped for speed",
             }
         end
     end
 
     table.sort(folders, function(a, b)
+        if (a.epoch or 0) ~= (b.epoch or 0) then
+            return (a.epoch or 0) > (b.epoch or 0)
+        end
         return tostring(a.name) > tostring(b.name)
     end)
+    -- Only the single newest (by mtime) STEMwerk temp folder may count as
+    -- "current" evidence. Any other name-matching folder is still
+    -- inventoried below (as historical/contextual listing), but it must
+    -- never be able to make the "Recent stdout.txt" / "Recent stderr.txt" /
+    -- "Recent separation_log.txt" diagnostics fields look current -- old
+    -- residue with the same well-known filenames is a proven contamination
+    -- source otherwise.
+    local newestFolderPath = folders[1] and folders[1].path or nil
 
     local function sanitizeInventoryDisplayPath(relPath, fileClass)
         local rel = tostring(relPath or ""):gsub("\\", "/")
@@ -4069,9 +4090,11 @@ local function collectTempInventory(bundleDir, copiedFiles)
             local relPath = relDir == "" and fileName or joinPath(relDir, fileName)
             local fullPath = joinPath(rootDir, relPath)
             local lowerName = tostring(fileName):lower()
-            if lowerName == "stdout.txt" then summary.stdout = true end
-            if lowerName == "stderr.txt" then summary.stderr = true end
-            if lowerName == "separation_log.txt" then summary.separation = true end
+            if rootDir == newestFolderPath then
+                if lowerName == "stdout.txt" then summary.stdout = true end
+                if lowerName == "stderr.txt" then summary.stderr = true end
+                if lowerName == "separation_log.txt" then summary.separation = true end
+            end
 
             local skipByExt, ext = shouldSkipSupportFileByExt(fileName)
             if skipByExt then
