@@ -462,4 +462,4 @@ def test_contract_windows_drive_path_does_not_silently_become_valid(tmp_path: Pa
 def test_real_production_payload_contract_still_parses(tmp_path: Path) -> None:
     contract = release_gate.parse_production_payload_contract(release_gate.PRODUCTION_PAYLOAD_CONTRACT)
     required = release_gate.required_files_for_platform(contract, "reapack")
-    assert len(required) == 84
+    assert len(required) == 85

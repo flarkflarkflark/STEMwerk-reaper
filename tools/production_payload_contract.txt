@@ -88,6 +88,7 @@ required	common	scripts/reaper/_internal/STEMwerk_Log.lua
 required	common	scripts/reaper/_internal/STEMwerk_Messages.lua
 required	common	scripts/reaper/_internal/STEMwerk_Path_Helper.lua
 required	common	scripts/reaper/_internal/STEMwerk_Progress_Render.lua
+required	common	scripts/reaper/_internal/STEMwerk_Project_Context.lua
 required	common	scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua
 required	common	scripts/reaper/_internal/STEMwerk_Settings.lua
 required	common	scripts/reaper/_internal/STEMwerk_Setup_Internal.lua

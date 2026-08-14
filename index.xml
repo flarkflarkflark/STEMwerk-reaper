@@ -64,6 +64,7 @@ STEMwerk 2.3.0.6 - Narrow corrective runtime hotfix
         <source file="../_internal/STEMwerk_Path_Helper.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Path_Helper.lua</source>
         <source file="../_internal/STEMwerk_Platform.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Platform.lua</source>
         <source file="../_internal/STEMwerk_Progress_Render.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Progress_Render.lua</source>
+        <source file="../_internal/STEMwerk_Project_Context.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Project_Context.lua</source>
         <source file="../_internal/STEMwerk_Runtime_Setup.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua</source>
         <source file="../_internal/STEMwerk_Settings.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Settings.lua</source>
         <source file="../_internal/STEMwerk_Setup_Internal.lua" type="file">https://raw.githubusercontent.com/flarkflarkflark/STEMwerk-reaper/main/scripts/reaper/_internal/STEMwerk_Setup_Internal.lua</source>
