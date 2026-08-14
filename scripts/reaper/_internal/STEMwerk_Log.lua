@@ -48,6 +48,77 @@ function SW_LOG.getRunsLogDir()
     return SW_LOG.getLogDir() .. sep .. "runs"
 end
 
+-- Directory holding one current-processing state record per run_id (see
+-- SW_LOG.writeCurrentProcessingState). Keyed by run_id rather than a single
+-- shared pointer file so that two concurrent STEMwerk script instances
+-- (independent Lua interpreters, e.g. two toolbar actions run back to back
+-- on different projects) each own their own record and never clobber each
+-- other's identity; support-bundle diagnostics reads the whole directory
+-- rather than trusting a single "latest" file.
+function SW_LOG.getCurrentProcessingDir()
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    return SW_LOG.getLogDir() .. sep .. "current_processing"
+end
+
+local function sw_jsonStringField(value)
+    local text = tostring(value or ""):gsub("\\", "\\\\"):gsub('"', '\\"')
+    return '"' .. text .. '"'
+end
+
+-- Writes/updates this run's current-processing state record (schema,
+-- run_id, run_dir_name, started_utc, status), one file per run_id under
+-- SW_LOG.getCurrentProcessingDir(). run_id is exact structured identity,
+-- never inferred from run_dir_name/timestamps.
+--
+-- Concurrency: each run_id's file is written only by the one script
+-- instance that owns that run_id, so there is never contention between
+-- different runs. Within that single owner, status transitions
+-- (running -> completed/failed/cancelled) are sequential, not concurrent
+-- with themselves. Writes go to a "<run_id>.json.tmp" file first, then
+-- os.rename() into place. On POSIX this rename is atomic. On Windows,
+-- os.rename() (mapped to C rename(), which behaves like MoveFileEx without
+-- MOVEFILE_REPLACE_EXISTING) fails when the destination already exists --
+-- i.e. on every transition after the initial "running" write -- so this
+-- falls back to os.remove() then os.rename(). That fallback has a narrow
+-- non-atomic window, but since no other process ever writes this run_id's
+-- file, nothing can observe a torn read there except this run's own next
+-- status write, which is the known, documented limitation of this design.
+function SW_LOG.writeCurrentProcessingState(runContext, status)
+    if not runContext or not runContext.run_id or runContext.run_id == "" then
+        return nil
+    end
+    local dir = SW_LOG.getCurrentProcessingDir()
+    SW_LOG.ensureDir(dir)
+    local sep = SW_LOG.isWindows() and "\\" or "/"
+    local path = dir .. sep .. tostring(runContext.run_id) .. ".json"
+    local tmpPath = path .. ".tmp"
+    local payload = "{\n"
+        .. '  "schema": 1,\n'
+        .. '  "run_id": ' .. sw_jsonStringField(runContext.run_id) .. ',\n'
+        .. '  "run_dir_name": ' .. sw_jsonStringField(runContext.run_dir_name) .. ',\n'
+        .. '  "started_utc": ' .. sw_jsonStringField(runContext.started_utc) .. ',\n'
+        .. '  "status": ' .. sw_jsonStringField(status) .. ',\n'
+        .. '  "updated_utc": ' .. sw_jsonStringField(os.date("!%Y-%m-%dT%H:%M:%SZ")) .. '\n'
+        .. "}\n"
+    local f = io.open(tmpPath, "w")
+    if not f then return nil end
+    f:write(payload)
+    f:close()
+    local ok = os.rename(tmpPath, path)
+    if not ok then
+        os.remove(path)
+        ok = os.rename(tmpPath, path)
+    end
+    if not ok then
+        -- Last resort: write in place rather than silently losing the
+        -- status update (still correct, just not atomic in this branch).
+        local direct = io.open(path, "w")
+        if direct then direct:write(payload); direct:close() end
+        os.remove(tmpPath)
+    end
+    return path
+end
+
 function SW_LOG.logExecResult(cmd, rc, out)
     local logDir = SW_LOG.getLogDir()
     SW_LOG.ensureDir(logDir)
@@ -214,6 +285,7 @@ function SW_LOG.persistRunDiagnostics(outputDir, opts)
         "benchmark_resource_samples.jsonl",
         "benchmark_resource_summary.json",
         "benchmark_resource_summary.txt",
+        "worker_context.json",
     }
     for _, name in ipairs(allowed) do
         local src = outputDir .. sep .. name

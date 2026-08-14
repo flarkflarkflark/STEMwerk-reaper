@@ -1767,6 +1767,35 @@ def _setup_reaper_io(output_dir: Optional[str]):
     return None
 
 
+def _write_worker_context(output_dir: Optional[str]) -> None:
+    """Persist the run/job identity this process was launched with, so
+    support-bundle diagnostics can read exact structured identity instead of
+    inferring it from directory names/timestamps. Purely additive evidence:
+    never read back by this process, never affects processing/output.
+    """
+    if not output_dir:
+        return
+    run_id = os.environ.get("STEMWERK_RUN_ID", "")
+    job_id = os.environ.get("STEMWERK_JOB_ID", "")
+    if not run_id and not job_id:
+        return
+    payload = {
+        "schema": 1,
+        "run_id": run_id,
+        "job_id": job_id,
+        "run_dir_name": os.environ.get("STEMWERK_RUN_DIR_NAME", ""),
+        "started_utc": os.environ.get("STEMWERK_RUN_STARTED_UTC", ""),
+    }
+    try:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "worker_context.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 def _read_simple_env_file(path: Path) -> Dict[str, str]:
     values: Dict[str, str] = {}
     try:
@@ -4126,6 +4155,7 @@ def main():
         print(f"STEMWERK_DIAG runtime_base_prefix={getattr(sys, 'base_prefix', '')}", file=sys.stderr)
 
     write_done = _setup_reaper_io(args.output_dir if args.output_dir else None)
+    _write_worker_context(args.output_dir if args.output_dir else None)
     emit_phase("python_start")
     ffmpeg_path, ffmpeg_wrapper, ffmpeg_path_prefix = _configure_ffmpeg_runtime()
     model_cache_dir = _configure_model_cache_runtime()

@@ -2410,6 +2410,7 @@ local function successfulWorkerJob(name)
     }
 end
 
+
 -- Shared assertions for every zero-phase worker fixture: the acceptance
 -- phase channel must be explicitly EMPTY so it cannot be the hidden reason
 -- for any PASS.
@@ -3809,6 +3810,223 @@ function EIGHTHFU.assertSessionIdMismatchScenario(bundleDir)
 end
 
 
+-- ---------------------------------------------------------------------
+-- RunContext / structured-identity fixtures (2.3.1.0 explicit run/job
+-- identity plumbing). Mirrors the exact evidence shape the real Lua/Python
+-- writers now produce: worker_context.json in each job's own directory,
+-- and one current_processing/<run_id>.json state record per run_id.
+-- ---------------------------------------------------------------------
+
+function EIGHTHFU.writeWorkerContextFile(context, runName, jobName, runId, jobId)
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", runName, jobName)
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. tostring(runId) .. '",',
+        '  "job_id": "' .. tostring(jobId) .. '",',
+        '  "run_dir_name": "' .. tostring(runName) .. '",',
+        '  "started_utc": "2026-07-24T13:00:00Z"',
+        "}",
+        "",
+    }, "\n"))
+end
+
+function EIGHTHFU.writeCurrentProcessingRecord(context, runId, status, runDirName)
+    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    mkdirP(dir)
+    writeFile(joinPath(dir, tostring(runId) .. ".json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. tostring(runId) .. '",',
+        '  "run_dir_name": "' .. tostring(runDirName or runId) .. '",',
+        '  "started_utc": "2026-07-24T13:00:00Z",',
+        '  "status": "' .. tostring(status) .. '"',
+        "}",
+        "",
+    }, "\n"))
+end
+
+-- ---------------------------------------------------------------------
+-- RunContext structured-identity scenarios (2.3.1.0 explicit run/job
+-- identity plumbing). These exercise deriveCurrentWorkerRunHealth's new
+-- structured-identity channel (worker_context.json + current_processing
+-- records) independently of, and in combination with, the pre-existing
+-- session-timestamp channel.
+-- ---------------------------------------------------------------------
+
+-- 16.1: current_processing.run_id=RUN_A + a successful persisted run whose
+-- own worker_context.json names RUN_A -- proves current health via
+-- structured identity ALONE (deliberately no session.env / acceptance
+-- evidence at all).
+function EIGHTHFU.createStructuredIdentityCurrentScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "structured-identity-proves-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    local runId = "guid-run-a-" .. tostring(os.time())
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, runId, "completed", context.workerRunName)
+    return context
+end
+
+function EIGHTHFU.assertStructuredIdentityCurrentScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "structured run_id identity (no session.env at all) did not prove current worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "current worker health did not point at the structurally-identified run:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_processing") ~= nil,
+        "structured-identity current run was not classified current_processing:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "final_runtime_health did not become ok from structured-identity worker evidence:\n" .. manifest)
+end
+
+-- 16.2 / test I: structured identity beats BOTH directions of timestamp
+-- ordering. RUN_A is the OLDER directory but its own worker_context.json
+-- matches current_processing -- it must become current despite being
+-- older. RUN_B is a NEWER directory that ALSO satisfies the legacy
+-- session-timestamp window (would win under timestamp-only logic), but
+-- its own worker_context.json names a run_id current_processing does NOT
+-- know about (e.g. a directory copied/renamed to look newer) -- it must
+-- be rejected from current status even though it is newer and
+-- session-linked, and surfaces only as recent-unlinked provenance.
+function EIGHTHFU.createStructuredIdentityBeatsTimestampScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "structured-identity-beats-timestamp-ordering"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context, 2)
+    local runIdA = "guid-run-a-older-" .. tostring(os.time())
+    context.runNameA = "STEMwerk_" .. tostring(os.time() - 500) .. "_001_1"
+    writeCurrentWorkerRun(context, context.runNameA, { successfulWorkerJob("single") })
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameA, "single", runIdA, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, runIdA, "completed", context.runNameA)
+
+    waitNextSecond()
+    context.runNameB = "STEMwerk_" .. tostring(os.time()) .. "_002_1"
+    writeCurrentWorkerRun(context, context.runNameB, { successfulWorkerJob("single") })
+    -- Names a run_id current_processing has never heard of: a copied /
+    -- renamed directory pretending to be newer, not the genuine RUN_A.
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameB, "single", "guid-run-b-unrelated", "single")
+    return context
+end
+
+function EIGHTHFU.assertStructuredIdentityBeatsTimestampScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "the OLDER structurally-identified run did not prove current worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.runNameA) ~= nil,
+        "current worker health pointed at the newer, structurally-unrelated directory instead of the genuine structurally-identified run:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_processing") ~= nil,
+        "the structurally-identified run was not classified current_processing:\n" .. manifest)
+    assertf(manifest:find(context.runNameB, 1, true) == nil or manifest:find("current_worker_health_run:%s+" .. context.runNameB) == nil,
+        "a newer directory with a structured run_id current_processing does not know about became current merely by being newest/session-linked:\n" .. manifest)
+end
+
+-- Test G: two jobs in the SAME run directory. Job A's worker_context.json
+-- matches current_processing; job B's worker_context.json names a
+-- DIFFERENT run_id current_processing does not know about. Even though
+-- the run is also session-linked under the legacy path, the mismatched
+-- sibling job must veto current status for the run as a whole.
+function EIGHTHFU.createMismatchedJobRunIdScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "mismatched-job-run-id-cannot-prove-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    local runId = "guid-run-shared-" .. tostring(os.time())
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        successfulWorkerJob("jobA"),
+        successfulWorkerJob("jobB"),
+    })
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "jobA", runId, "jobA")
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "jobB", "guid-run-different-" .. tostring(os.time()), "jobB")
+    EIGHTHFU.writeCurrentProcessingRecord(context, runId, "running", context.workerRunName)
+    return context
+end
+
+function EIGHTHFU.assertMismatchedJobRunIdScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a run with one job's structured run_id mismatched against current_processing still proved current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a mismatched sibling job's structured run_id:\n" .. manifest)
+end
+
+-- Test F: job A carries valid structured identity matching
+-- current_processing and full success evidence; job B (same run) has NO
+-- identity evidence of any kind and no output evidence. The run is
+-- identifiable (via job A), but missing job identity/evidence on a
+-- sibling must still block proving current worker health.
+function EIGHTHFU.createMissingJobIdentityScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "missing-job-identity-cannot-prove-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    local runId = "guid-run-missing-sibling-" .. tostring(os.time())
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("jobA") })
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "jobA", runId, "jobA")
+    EIGHTHFU.writeCurrentProcessingRecord(context, runId, "running", context.workerRunName)
+    -- jobB: no worker_context.json, no timing/phase evidence, no exit
+    -- code, no done marker -- a job that never reported anything at all.
+    local jobBDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "jobB")
+    mkdirP(jobBDir)
+    return context
+end
+
+function EIGHTHFU.assertMissingJobIdentityScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a run with one evidence-less sibling job still proved current worker health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a required job with no identity/output evidence at all:\n" .. manifest)
+end
+
+-- Test H: two DIFFERENT run directories both carry a job whose structured
+-- worker_context.json claims the SAME run_id, and that run_id matches the
+-- single current_processing record. This is a replayed/duplicated
+-- identity file (or a run directory copied wholesale, worker_context.json
+-- included) -- genuinely ambiguous, and must never be resolved by quietly
+-- picking whichever directory happens to sort newest.
+function EIGHTHFU.createReplayedContextScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "replayed-structured-context-cannot-prove-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    local sharedRunId = "guid-run-replayed-" .. tostring(os.time())
+    context.runNameA = "STEMwerk_" .. tostring(os.time() - 50) .. "_001_1"
+    writeCurrentWorkerRun(context, context.runNameA, { successfulWorkerJob("single") })
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameA, "single", sharedRunId, "single")
+
+    waitNextSecond()
+    context.runNameB = "STEMwerk_" .. tostring(os.time()) .. "_002_1"
+    writeCurrentWorkerRun(context, context.runNameB, { successfulWorkerJob("single") })
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameB, "single", sharedRunId, "single")
+
+    EIGHTHFU.writeCurrentProcessingRecord(context, sharedRunId, "completed", context.runNameB)
+    return context
+end
+
+function EIGHTHFU.assertReplayedContextScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "the same run_id claimed by two distinct run directories still proved current worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+replayed_run_id_conflict") ~= nil,
+        "a replayed/duplicated structured run_id across two directories was not labeled replayed_run_id_conflict:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a replayed structured run_id across two run directories:\n" .. manifest)
+end
+
 local function assertZipIntegrity(bundleDir)
     local zipPath = bundleDir .. ".zip"
     assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
@@ -4359,6 +4577,41 @@ local function main()
     do
         local ctx = EIGHTHFU.createSessionIdMismatchScenario(joinPath(baseRoot, "mismatched-session-id"))
         print("PASS mismatched-session-id-remains-unlinked -> " .. runScenario(ctx, EIGHTHFU.assertSessionIdMismatchScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createStructuredIdentityCurrentScenario(joinPath(baseRoot, "structured-identity-current"))
+        print("PASS structured-identity-proves-current -> " .. runScenario(ctx, EIGHTHFU.assertStructuredIdentityCurrentScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createStructuredIdentityBeatsTimestampScenario(joinPath(baseRoot, "structured-identity-beats-timestamp"))
+        print("PASS structured-identity-beats-timestamp-ordering -> " .. runScenario(ctx, EIGHTHFU.assertStructuredIdentityBeatsTimestampScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createMismatchedJobRunIdScenario(joinPath(baseRoot, "mismatched-job-run-id"))
+        print("PASS mismatched-job-run-id-cannot-prove-current -> " .. runScenario(ctx, EIGHTHFU.assertMismatchedJobRunIdScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createMissingJobIdentityScenario(joinPath(baseRoot, "missing-job-identity"))
+        print("PASS missing-job-identity-cannot-prove-current -> " .. runScenario(ctx, EIGHTHFU.assertMissingJobIdentityScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createReplayedContextScenario(joinPath(baseRoot, "replayed-structured-context"))
+        print("PASS replayed-structured-context-cannot-prove-current -> " .. runScenario(ctx, EIGHTHFU.assertReplayedContextScenario))
     end
 
     print("All headless support bundle tests passed.")

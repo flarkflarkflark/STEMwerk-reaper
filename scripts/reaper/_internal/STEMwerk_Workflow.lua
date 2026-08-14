@@ -427,6 +427,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
     C.progressState.execLogPath = SW_LOG.getLogPath()
     local execLogPath = C.progressState.execLogPath or SW_LOG.getLogPath()
     local jobTag = "single"
+    local runCtx = C.progressState.runContext
+    local runIdArg = (runCtx and runCtx.run_id) or ""
+    local jobIdArg = "single"
+    local runDirNameArg = (runCtx and runCtx.run_dir_name) or ""
+    local runStartedUtcArg = (runCtx and runCtx.started_utc) or ""
 
     -- Preflight checks so failures show up clearly in logs/UI.
     local function fileExistsLocal(p)
@@ -600,6 +605,10 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             local exitF = escPS(exitCodeFile)
             local logPath = escPS(execLogPath)
             local jobTagEsc = escPS(jobTag)
+            local runIdEsc = escPS(runIdArg)
+            local jobIdEsc = escPS(jobIdArg)
+            local runDirNameEsc = escPS(runDirNameArg)
+            local runStartedUtcEsc = escPS(runStartedUtcArg)
 
             -- Build the PowerShell command that Start-Process the Python worker and writes PID
             local psInner =
@@ -614,6 +623,10 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
                 "$env:STEMWERK_PROCESSING_MAY_DOWNLOAD='no';" ..
+                "$env:STEMWERK_RUN_ID='" .. runIdEsc .. "';" ..
+                "$env:STEMWERK_JOB_ID='" .. jobIdEsc .. "';" ..
+                "$env:STEMWERK_RUN_DIR_NAME='" .. runDirNameEsc .. "';" ..
+                "$env:STEMWERK_RUN_STARTED_UTC='" .. runStartedUtcEsc .. "';" ..
                 "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
                 "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
@@ -735,7 +748,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
             script:write("IN=" .. C.quoteArg(inputFile) .. "\n")
             script:write("OUT=" .. C.quoteArg(outputDir) .. "\n")
             script:write("STEMWERK_PROCESSING_MAY_DOWNLOAD=no\n")
-            script:write("export STEMWERK_PROCESSING_MAY_DOWNLOAD\n")
+            script:write("STEMWERK_RUN_ID=" .. C.quoteArg(runIdArg) .. "\n")
+            script:write("STEMWERK_JOB_ID=" .. C.quoteArg(jobIdArg) .. "\n")
+            script:write("STEMWERK_RUN_DIR_NAME=" .. C.quoteArg(runDirNameArg) .. "\n")
+            script:write("STEMWERK_RUN_STARTED_UTC=" .. C.quoteArg(runStartedUtcArg) .. "\n")
+            script:write("export STEMWERK_PROCESSING_MAY_DOWNLOAD STEMWERK_RUN_ID STEMWERK_JOB_ID STEMWERK_RUN_DIR_NAME STEMWERK_RUN_STARTED_UTC\n")
             script:write("unset PYTHONPATH PYTHONHOME\n")
             script:write("MODEL=" .. C.quoteArg(modelArg) .. "\n")
             script:write("DEVICE=" .. C.quoteArg(deviceArg) .. "\n")
@@ -796,7 +813,11 @@ function WORKFLOW.startSeparationProcess(inputFile, outputDir, model, runOptions
                 extraArgs = extraArgs .. " --requested-stage2-model " .. C.quoteArg(requestedStage2ModelArg)
             end
             local cmd = string.format(
-                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
+                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE > %s',
+                C.quoteArg(runIdArg),
+                C.quoteArg(jobIdArg),
+                C.quoteArg(runDirNameArg),
+                C.quoteArg(runStartedUtcArg),
                 C.quoteArg(PYTHON_PATH),
                 C.quoteArg(SEPARATOR_SCRIPT),
                 C.quoteArg(inputFile),
@@ -860,6 +881,9 @@ function WORKFLOW.progressLoop()
             SW_LOG.preserveDiagnosticsForRun(C.progressState.outputDir, { reason = "user_cancel" })
         end
         if SW_TIMING then SW_TIMING.endJob("single", "user_cancel"); SW_TIMING.endRun("user_cancel") end
+        if C.progressState.runContext then
+            SW_LOG.writeCurrentProcessingState(C.progressState.runContext, "cancelled")
+        end
 
         -- Best-effort kill of running worker (otherwise cancel leaves a hidden Python process running)
         HELPERS.killProcessFromPidFile(C.progressState.pidFile)

@@ -18454,6 +18454,9 @@ function processStemsResult(stems)
         SW_TIMING.endRun("success")
     end
     SW_LOG.logExecResult("timing:finalize_end single", nil, "")
+    if progressState.runContext then
+        SW_LOG.writeCurrentProcessingState(progressState.runContext, "completed")
+    end
     showResultWindow(selectedStemData, resultData or resultMsg)
 end
 
@@ -19517,6 +19520,20 @@ _sep.runSingleTrackSeparation = function(trackList)
     local baseTempDir = makeUniqueTempSubdir("STEMwerk")
     makeDir(baseTempDir)
 
+    -- Reuse the RunContext created by runSeparationWorkflow() (same
+    -- run_id); only the physical run_dir_name changes to this actually-used
+    -- base temp dir. Defensive fallback creates one if this entry point was
+    -- reached without going through runSeparationWorkflow() first.
+    if not progressState.runContext then
+        progressState.runContext = {
+            schema = 1,
+            run_id = (reaper and reaper.genGuid and reaper.genGuid()) or ("norunid_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))),
+            started_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+            project = { ref = nil, anchor_refs = nil, display_name = nil, display_path = nil },
+        }
+    end
+    progressState.runContext.run_dir_name = baseTempDir:match("([^/\\]+)$") or baseTempDir
+
     -- Check if we have a time selection
     local hasTimeSel = (timeSelectionMode and timeSelectionStart and timeSelectionEnd and timeSelectionEnd > timeSelectionStart)
 
@@ -19749,6 +19766,7 @@ _sep.runSingleTrackSeparation = function(trackList)
                     trackName = displayTrackName,
                     uiColor = getJobUIColor(track, jobIndex),
                     trackDir = itemDir,
+                    jobId = "item_" .. jobIndex,
                     inputFile = inputFile,
                     sourceItem = item,
                     sourceItems = {item},
@@ -19841,6 +19859,7 @@ _sep.runSingleTrackSeparation = function(trackList)
                     trackName = trackName,
                     uiColor = getJobUIColor(track, jobIndex),
                     trackDir = trackDir,
+                    jobId = "track_" .. jobIndex,
                     inputFile = inputFile,
                     sourceItem = sourceItem,
                     sourceItems = allSourceItems or {sourceItem},  -- All items for mute/delete
@@ -19880,6 +19899,7 @@ _sep.runSingleTrackSeparation = function(trackList)
     multiTrackQueue.totalTracks = #trackJobs
     multiTrackQueue.completedCount = 0
     multiTrackQueue.baseTempDir = baseTempDir
+    multiTrackQueue.runContext = progressState.runContext
     multiTrackQueue.workflowMode = workflowModeArg
     multiTrackQueue.workflowSource = workflowSourceArg
     multiTrackQueue.requestedStage2Model = requestedStage2ModelArg
@@ -20338,6 +20358,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
     job.execLogPath = SW_LOG.getLogPath()
     local execLogPath = job.execLogPath or SW_LOG.getLogPath()
     local jobTag = "item_" .. tostring(job.index or 0)
+    local runCtx = multiTrackQueue.runContext or progressState.runContext
+    local runIdArg = (runCtx and runCtx.run_id) or ""
+    local jobIdArg = job.jobId or jobTag
+    local runDirNameArg = (runCtx and runCtx.run_dir_name) or ""
+    local runStartedUtcArg = (runCtx and runCtx.started_utc) or ""
     job.rawPercent = 0
     job.percent = 0
     job.stage = isDrumKitWorkflowActive()
@@ -20489,6 +20514,10 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
             local exitF = escPS(exitCodeFile)
             local logPath = escPS(execLogPath)
             local jobTagEsc = escPS(jobTag)
+            local runIdEsc = escPS(runIdArg)
+            local jobIdEsc = escPS(jobIdArg)
+            local runDirNameEsc = escPS(runDirNameArg)
+            local runStartedUtcEsc = escPS(runStartedUtcArg)
 
             local psInner =
                 "$py='" .. python .. "';" ..
@@ -20502,6 +20531,10 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
                 "$env:STEMWERK_LOG_PATH=$logPath;" ..
                 "$env:STEMWERK_JOB_TAG=$jobTag;" ..
                 "$env:STEMWERK_PROCESSING_MAY_DOWNLOAD='no';" ..
+                "$env:STEMWERK_RUN_ID='" .. runIdEsc .. "';" ..
+                "$env:STEMWERK_JOB_ID='" .. jobIdEsc .. "';" ..
+                "$env:STEMWERK_RUN_DIR_NAME='" .. runDirNameEsc .. "';" ..
+                "$env:STEMWERK_RUN_STARTED_UTC='" .. runStartedUtcEsc .. "';" ..
                 "Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue;" ..
                 "Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue;" ..
                 "$dq=[char]34;" ..
@@ -20538,7 +20571,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground (old behavior)
             local cmd = string.format(
-                'set STEMWERK_PROCESSING_MAY_DOWNLOAD=no && %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                'set STEMWERK_PROCESSING_MAY_DOWNLOAD=no && set STEMWERK_RUN_ID=%s && set STEMWERK_JOB_ID=%s && set STEMWERK_RUN_DIR_NAME=%s && set STEMWERK_RUN_STARTED_UTC=%s && %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                runIdArg,
+                jobIdArg,
+                runDirNameArg,
+                runStartedUtcArg,
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
@@ -20578,7 +20615,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
               script:write("STEMWERK_LOG_PATH=" .. quoteArg(execLogPath) .. "\n")
               script:write("STEMWERK_JOB_TAG=" .. quoteArg(jobTag) .. "\n")
               script:write("STEMWERK_PROCESSING_MAY_DOWNLOAD=no\n")
-              script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG STEMWERK_PROCESSING_MAY_DOWNLOAD\n")
+              script:write("STEMWERK_RUN_ID=" .. quoteArg(runIdArg) .. "\n")
+              script:write("STEMWERK_JOB_ID=" .. quoteArg(jobIdArg) .. "\n")
+              script:write("STEMWERK_RUN_DIR_NAME=" .. quoteArg(runDirNameArg) .. "\n")
+              script:write("STEMWERK_RUN_STARTED_UTC=" .. quoteArg(runStartedUtcArg) .. "\n")
+              script:write("export STEMWERK_LOG_PATH STEMWERK_JOB_TAG STEMWERK_PROCESSING_MAY_DOWNLOAD STEMWERK_RUN_ID STEMWERK_JOB_ID STEMWERK_RUN_DIR_NAME STEMWERK_RUN_STARTED_UTC\n")
               script:write("unset PYTHONPATH PYTHONHOME\n")
               script:write("MODEL=" .. quoteArg(modelArg) .. "\n")
               script:write("DEVICE=" .. quoteArg(deviceArg) .. "\n")
@@ -20628,7 +20669,11 @@ _sep.startSeparationProcessForJob = function(job, segmentSize)
         else
             -- Fallback: run in foreground
             local cmd = string.format(
-                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                'STEMWERK_PROCESSING_MAY_DOWNLOAD=no STEMWERK_RUN_ID=%s STEMWERK_JOB_ID=%s STEMWERK_RUN_DIR_NAME=%s STEMWERK_RUN_STARTED_UTC=%s %s -u %s %s %s --model %s --device %s%s >%s 2>%s && echo DONE >%s',
+                quoteArg(runIdArg),
+                quoteArg(jobIdArg),
+                quoteArg(runDirNameArg),
+                quoteArg(runStartedUtcArg),
                 quoteArg(PYTHON_PATH),
                 quoteArg(SEPARATOR_SCRIPT),
                 quoteArg(job.inputFile),
@@ -22034,6 +22079,9 @@ function multiTrackProgressLoop()
         gfx.quit()
         multiTrackQueue.active = false
         isProcessingActive = false  -- Reset guard so workflow can be restarted
+        if multiTrackQueue.runContext then
+            SW_LOG.writeCurrentProcessingState(multiTrackQueue.runContext, "cancelled")
+        end
 
         -- Preserve best-effort diagnostics before stopping workers; files may be partial on cancel.
         if multiTrackQueue.jobs then
@@ -23048,6 +23096,12 @@ _sep.processAllStemsResult = function()
 
     SW_TIMING.endRun((multiTrackQueue.dksResultStatus == "partial") and "partial" or "success", { total_audio = totalAudioDur, rtf = realtimeFactor })
     SW_LOG.logExecResult("timing:finalize_end multi", nil, "")
+    if multiTrackQueue.runContext then
+        SW_LOG.writeCurrentProcessingState(
+            multiTrackQueue.runContext,
+            (multiTrackQueue.dksResultStatus == "partial") and "failed" or "completed"
+        )
+    end
     showResultWindow(selectedStemData, resultData)
 end
 
@@ -23416,6 +23470,22 @@ function runSeparationWorkflow()
     WORKFLOW_TEMP_INPUT = WORKFLOW_TEMP_DIR .. PATH_SEP .. "input.wav"
     debugLog("Temp dir: " .. WORKFLOW_TEMP_DIR)
     debugLog("Temp input: " .. WORKFLOW_TEMP_INPUT)
+
+    -- One authoritative RunContext per accepted processing action (Process
+    -- click / quick preset), created once here before any job is created or
+    -- launched. run_id is the authoritative logical identity (a GUID);
+    -- run_dir_name stays the physical temp-dir locator only. If the queue
+    -- later switches to the multi-track path, _sep.runSingleTrackSeparation
+    -- reuses this SAME run_id and only updates run_dir_name to the actual
+    -- base temp dir it creates.
+    progressState.runContext = {
+        schema = 1,
+        run_id = (reaper and reaper.genGuid and reaper.genGuid()) or ("norunid_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))),
+        run_dir_name = WORKFLOW_TEMP_DIR:match("([^/\\]+)$") or WORKFLOW_TEMP_DIR,
+        started_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        project = { ref = nil, anchor_refs = nil, display_name = nil, display_path = nil },
+    }
+    SW_LOG.writeCurrentProcessingState(progressState.runContext, "running")
 
     SW_TIMING.beginRun({ mode = "single", model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
     SW_TIMING.beginJob("single", { model = SETTINGS and SETTINGS.model or "", device = SETTINGS and SETTINGS.device or "" })
