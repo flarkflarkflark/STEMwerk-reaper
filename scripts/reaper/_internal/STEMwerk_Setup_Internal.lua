@@ -1678,6 +1678,61 @@ function readReadyState(runtime)
     return parseStateFile(runtime.runtimeState .. PATH_SEP .. "ready_to_go.env")
 end
 
+-- Ready-state currentness classifier ----------------------------------------
+-- ready_to_go.env is written by the platform bootstrap scripts (not by this
+-- reader) as a snapshot of whatever readiness/preflight run happened to run
+-- last. READY_TO_GO_LAST_CHECK_UTC records WHEN that snapshot was produced,
+-- but nothing in the file today proves it was produced BY the Setup
+-- invocation currently reading it -- there is no invocation/generation id.
+-- Age is therefore not identity: a five-second-old ready_to_go.env is
+-- exactly as unlinked to "this Check" as a five-month-old one. Every ordinary
+-- Setup/Check/Repair read of ready_to_go.env must go through this single
+-- classifier so there is exactly one freshness/currentness policy, and it
+-- must never report "current_for_this_invocation" -- that value is reserved
+-- for a future round that adds real invocation-linkage to the bootstrap
+-- writers (out of scope here; writers are not touched by this fix). The
+-- possible currentness values are the plain strings "cached", "historical",
+-- "invalid" and (reserved, never produced here) "current_for_this_invocation"
+-- -- not named locals, to stay within this file's top-level local budget.
+function classifyReadyState(readyState)
+    readyState = readyState or {}
+    local status = trim(readyState.READY_TO_GO_STATUS or "")
+    local detail = trim(readyState.READY_TO_GO_DETAIL or "")
+    local lastCheckUtc = trim(readyState.READY_TO_GO_LAST_CHECK_UTC or "")
+    if status == "" then
+        return {
+            currentness = "invalid",
+            status = "",
+            detail = detail,
+            lastCheckUtc = lastCheckUtc,
+        }
+    end
+    return {
+        -- A timestamp is provenance/display information only (see module
+        -- comment above) -- its presence upgrades "historical" (status with
+        -- no dating at all) to "cached" (status we can at least date), never
+        -- to "current_for_this_invocation".
+        currentness = (lastCheckUtc ~= "") and "cached" or "historical",
+        status = status,
+        detail = detail,
+        lastCheckUtc = lastCheckUtc,
+    }
+end
+
+-- Formats a classifyReadyState() result as a single human-readable line for
+-- Copy Summary / support-bundle text, always labelled as cached/historical
+-- provenance -- never phrased as a current fact.
+function formatCachedReadyStateLine(classified)
+    classified = classified or {}
+    if classified.currentness == "invalid" then
+        return "Previous readiness check: none recorded"
+    end
+    local label = (classified.currentness == "cached") and "cached" or "historical, no timestamp"
+    local when = (classified.lastCheckUtc ~= "") and (" at " .. classified.lastCheckUtc) or ""
+    local detail = (classified.detail ~= "") and (" (" .. classified.detail .. ")") or ""
+    return "Previous readiness check (" .. label .. when .. "): " .. classified.status .. detail
+end
+
 local function copyStateTable(input)
     local out = {}
     for k, v in pairs(input or {}) do
@@ -3951,7 +4006,12 @@ local function setupResolveWindowsPython(runtime, state, capState)
     return extPython ~= "" and extPython or statePython, "unresolved"
 end
 
-local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
+-- Declared as a plain global function (not `local function`), matching
+-- buildCheckOnlyVerdict/buildLinuxFinalRows/buildCheckOnlyFinalMessage
+-- above: this makes it reachable by the headless behavioral test harness
+-- (tests/support/run_setup_final_rows_headless.lua), which dofile()s this
+-- script and can only see globals afterward. No functional change.
+function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"
@@ -4017,7 +4077,12 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
     if verification ~= "" and verification ~= "ok" then needsRepair = true end
     if trim(capState.AUDIO_SEPARATOR or "") == "missing" then needsRepair = true end
     if trim(capState.STEMWERK_CORE or "") == "missing" then needsRepair = true end
-    if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end
+    -- ready_to_go.env is always a CACHED snapshot here (this overview does no
+    -- live probe of its own -- see classifyReadyState). A stale/old
+    -- READY_TO_GO_STATUS of anything other than "ok" (e.g. a broken reading
+    -- from months ago) must not, by itself, force needsRepair when every
+    -- other current-ish signal above (status/verification/deps/paths) is
+    -- healthy -- that was exactly the false-positive "needs Repair" bug.
     if python == "" or (not isAbsolutePath(python)) or (not fileExists(python)) then needsRepair = true end
     if ffmpeg == "" or (not fileExists(ffmpeg)) then needsRepair = true end
 
@@ -4045,6 +4110,13 @@ local function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion
         verification = verification ~= "" and verification or "not checked",
         readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown",
         readyToGoDetail = trim(readyState.READY_TO_GO_DETAIL or ""),
+        -- Explicit provenance for readyToGoStatus/readyToGoDetail above: this
+        -- overview never performs a live readiness probe, so ready_to_go.env
+        -- can only ever be "cached"/"historical"/"invalid" here, never
+        -- current. Callers must use readyToGoCurrentness to decide whether
+        -- readyToGoStatus may be shown as a current fact (it may not).
+        readyToGoCurrentness = classifyReadyState(readyState).currentness,
+        readyToGoCachedAt = trim(readyState.READY_TO_GO_LAST_CHECK_UTC or ""),
         deps = deps,
         updateDetected = lastSetupVersion ~= "" and setupVersion ~= "" and lastSetupVersion ~= setupVersion,
         needsRepair = needsRepair,
@@ -4319,6 +4391,10 @@ function buildCheckOnlyVerdict(verification, checkProbe, backend, backendReasonL
             verdict.staleProvenance[#verdict.staleProvenance + 1] =
                 "stale capabilities reported backend=" .. staleBackend .. ", ignored because the current probe reported backend=" .. verdict.backend
         end
+        if checkProbe.usedCachedReadyStateFallback then
+            verdict.staleProvenance[#verdict.staleProvenance + 1] =
+                "macOS cached ready_to_go/capabilities state was used to accept an inconclusive current Torch probe result"
+        end
     end
     return verdict
 end
@@ -4361,6 +4437,16 @@ function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess, ve
     end
     if not (verdict and verdict.isCheckOnly) and trim(state.STATUS_REASON or "") ~= "" then
         rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted", maxLines = 2 }
+    end
+    -- A Check-only current failure must be visible here too, not only in
+    -- Copy Summary (buildCheckOnlyFinalMessage) -- otherwise the visible
+    -- window can show all-[not colored red]-looking rows while the concrete
+    -- current reason only exists in the copyable text.
+    if verdict and verdict.isCheckOnly and not verifiedRuntimeOk then
+        local reasonText = formatCheckErrors(verdict.adjustedErrors)
+        if reasonText ~= "" and reasonText ~= "none" then
+            rows[#rows + 1] = { label = "Reason", value = reasonText, kind = "status_fail", maxLines = 3 }
+        end
     end
     if backendReason ~= "" then
         rows[#rows + 1] = { label = "Backend reason", value = backendReason, kind = "muted", maxLines = 2 }
@@ -5979,6 +6065,12 @@ function reconcileCheckVerification(state, capState, readyState, verification, e
         verifiedRuntimeOk = verifiedRuntimeOk,
         runtimeDriftDetected = verifiedRuntimeOk and "no" or verification.runtimeDriftDetected,
         runtimeDriftReason = verifiedRuntimeOk and "" or verification.runtimeDriftReason,
+        -- Disclosure only (does not change the accept/reject decision above,
+        -- which predates this fix): when the cached ready_to_go/capabilities
+        -- fallback is what let a current torch probe error be waived, that
+        -- must be visible as cached provenance rather than silently folded
+        -- into an ordinary "current probe succeeded" verdict.
+        usedCachedReadyStateFallback = canAcceptMacReadyHealthyState == true,
     }
     result.torchVersion = firstNonEmpty(torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
     result.torchaudioVersion = firstNonEmpty(torchaudioVersion, envJsonValue(envJson, "torchaudio_version"))
@@ -6020,7 +6112,7 @@ end
 -- unsupported Torch runtime with every file/path check still [OK]) -- must
 -- be visible here. A bare "one or more checks failed" with only [OK] rows
 -- underneath it is exactly the bug this closes.
-function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStatus, dksSupported, normalStemsSupported)
+function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStatus, dksSupported, normalStemsSupported, readyClassification)
     verdict = verdict or {}
     local finalMessage = {}
     if allOk then
@@ -6042,7 +6134,13 @@ function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStat
     end
     finalMessage[#finalMessage + 1] = ""
     finalMessage[#finalMessage + 1] = "Detected backend: " .. tostring(backend)
-    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus)
+    -- drumsepStatus/dksSupported/normalStemsSupported come from
+    -- resolveDrumsepPolicyState, which (in this Check-only flow) has no live
+    -- DrumSep/model probe of its own and falls back to the cached
+    -- ready_to_go.env snapshot. The gating VALUES are unchanged (Repair/menu
+    -- behavior is out of scope for this fix); only the label below is new,
+    -- so a Check never reads as if it just re-verified DrumSep/models.
+    finalMessage[#finalMessage + 1] = "DrumSep: " .. tostring(drumsepStatus) .. " (from cached readiness state, not re-verified by this Check)"
     finalMessage[#finalMessage + 1] = "DKS supported: " .. tostring(dksSupported)
     finalMessage[#finalMessage + 1] = "Normal Stems supported: " .. tostring(normalStemsSupported)
     if verdict.isCheckOnly and verdict.staleProvenance and #verdict.staleProvenance > 0 then
@@ -6051,6 +6149,11 @@ function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStat
         for _, note in ipairs(verdict.staleProvenance) do
             finalMessage[#finalMessage + 1] = "  - " .. tostring(note)
         end
+    end
+    if readyClassification and readyClassification.currentness ~= "invalid" then
+        finalMessage[#finalMessage + 1] = ""
+        finalMessage[#finalMessage + 1] = formatCachedReadyStateLine(readyClassification)
+        finalMessage[#finalMessage + 1] = "(cached/historical readiness above is not current -- it is not used to decide the Runtime result above)"
     end
     return finalMessage
 end
@@ -6114,7 +6217,8 @@ verifyExistingSetup = function(runtime, separatorScript)
     -- live result.
     local checkVerdict = buildCheckOnlyVerdict(verification, checkProbe, backend, backendReason, nil, deviceNames, capState, state)
 
-    local finalMessage = buildCheckOnlyFinalMessage(checks, allOk, checkVerdict, backend, drumsepStatus, dksSupported, normalStemsSupported)
+    local readyClassification = classifyReadyState(readyState)
+    local finalMessage = buildCheckOnlyFinalMessage(checks, allOk, checkVerdict, backend, drumsepStatus, dksSupported, normalStemsSupported, readyClassification)
 
     showDeferredFinalWindow(runtime, stateFile, logFile, finalMessage, allOk, separatorScript, nil, checkVerdict)
 end

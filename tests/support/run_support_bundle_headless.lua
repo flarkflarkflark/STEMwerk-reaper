@@ -468,6 +468,21 @@ local function createPresentScenario(baseRoot)
         "BOOTSTRAP_STATUS=ok",
         "",
     }, "\n"))
+    -- Deliberately stale/historical ready_to_go.env: a July readiness check
+    -- recorded broken/insufficient-disk DrumSep readiness, while everything
+    -- else in this fixture (bootstrap.env/capabilities.env above) represents
+    -- a currently-healthy runtime. This is the AMD-Linux live counterexample
+    -- this fix targets: the stale cached readiness must be labelled cached,
+    -- not presented as a current fact.
+    writeFile(joinPath(runtimeStateDir, "ready_to_go.env"), table.concat({
+        "READY_TO_GO_STATUS=broken",
+        "READY_TO_GO_DETAIL=target_free_space_insufficient",
+        "READY_TO_GO_LAST_CHECK_UTC=2026-07-26T10:00:00Z",
+        "MAIN_RUNTIME_STATUS=ok",
+        "DRUMSEP_READY_RUNTIME_STATUS=disk_space_insufficient",
+        "DRUMSEP_READY_MODEL_STATUS=missing",
+        "",
+    }, "\n"))
     writeFile(joinPath(runtimeStateDir, "bootstrap.pid"), "12345\n")
     writeFile(joinPath(runtimeStateDir, "bootstrap.guard"), "STATUS=ok\nREASON=completed\n")
     writeFile(joinPath(runtimeLogsDir, "bootstrap.log"), table.concat({
@@ -712,6 +727,39 @@ local function assertPresentScenario(bundleDir, context)
     assertf(drumsepDiagnostics:find("DrumSep Runtime Diagnostics", 1, true) ~= nil, "drumsep runtime diagnostics missing header")
     assertf(drumsepDiagnostics:find("[CPU fallback runtime]", 1, true) ~= nil, "drumsep runtime diagnostics missing CPU section")
     assertf(drumsepDiagnostics:find("[ROCm runtime]", 1, true) ~= nil, "drumsep runtime diagnostics missing ROCm section")
+
+    -- Fixture G (task spec section 15/11): current vs. cached Setup
+    -- readiness provenance. This fixture's ready_to_go.env is a stale July
+    -- "broken" snapshot (see createPresentScenario); the raw
+    -- ready_to_go_status line above may still show "broken" for forensic
+    -- history, but every current_* field must read as not_proven (no live
+    -- Setup probe runs during support-bundle collection) and the cached
+    -- fields must carry the July status/timestamp/detail explicitly labelled
+    -- as cached -- never presented as a current fact.
+    assertf(drumsepDiagnostics:find("ready_to_go_status:%s+broken") ~= nil,
+        "raw historical ready_to_go_status must remain visible for forensic history:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("current_full_readiness:%s+not_proven") ~= nil,
+        "current_full_readiness must be not_proven (no live Setup probe runs during bundle collection):\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("current_runtime_readiness:%s+not_proven") ~= nil,
+        "current_runtime_readiness must be not_proven, not inferred from cached state:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("current_disk_readiness:%s+not_proven") ~= nil,
+        "current_disk_readiness must be not_proven -- there is no live disk probe anywhere in this codebase:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("current_drumsep_readiness:%s+not_proven") ~= nil,
+        "current_drumsep_readiness must be not_proven:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("current_model_readiness:%s+not_proven") ~= nil,
+        "current_model_readiness must be not_proven:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("ready_to_go_cached_status:%s+broken") ~= nil,
+        "ready_to_go_cached_status must carry the July status explicitly labelled as cached:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("ready_to_go_cached_at:%s+2026%-07%-26T10:00:00Z") ~= nil,
+        "ready_to_go_cached_at must carry the July timestamp:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("ready_to_go_cached_detail:%s+target_free_space_insufficient") ~= nil,
+        "ready_to_go_cached_detail must carry the July detail:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("ready_to_go_currentness:%s+cached") ~= nil,
+        "a dated historical ready_to_go.env must classify as cached, never current:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("cached_drumsep_runtime:%s+disk_space_insufficient") ~= nil,
+        "cached_drumsep_runtime must carry the stale component status, explicitly labelled cached:\n" .. drumsepDiagnostics)
+    assertf(drumsepDiagnostics:find("cached_model_readiness:%s+missing") ~= nil,
+        "cached_model_readiness must carry the stale component status, explicitly labelled cached:\n" .. drumsepDiagnostics)
     if IS_WINDOWS then
         assertf(pythonDiagnostics:find("Python diagnostics skipped for speed.", 1, true) ~= nil,
             "Windows python diagnostics missing skip payload")

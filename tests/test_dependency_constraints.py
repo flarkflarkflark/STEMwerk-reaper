@@ -7888,8 +7888,14 @@ def test_ready_to_go_state_is_wired_across_bootstraps_setup_and_support_bundle()
     assert 'echo "NORMAL_STEMS_SUPPORTED=${_normal_stems_supported}"' in macos_bootstrap
 
     assert 'local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"' in setup_internal
-    assert 'if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end' in setup_internal
     assert 'readyToGoStatus = trim(readyState.READY_TO_GO_STATUS or "") ~= "" and trim(readyState.READY_TO_GO_STATUS or "") or "unknown"' in setup_internal
+    # 2.3.1.0 Setup readiness truthfulness fix: buildWindowsSetupOverview no
+    # longer lets a stale/cached ready_to_go.env alone force needsRepair --
+    # this overview does no live probe of its own, so ready_to_go.env is
+    # always cached/historical (never current) here; see classifyReadyState.
+    assert 'if trim(readyState.READY_TO_GO_STATUS or "") ~= "ok" then needsRepair = true end' not in setup_internal
+    assert "function classifyReadyState(readyState)" in setup_internal
+    assert "readyToGoCurrentness = classifyReadyState(readyState).currentness" in setup_internal
 
     assert 'local readyStatePath = joinPath(runtimeStateDir, "ready_to_go.env")' in support_script
     assert 'appendKey(lines, "ready_to_go_status"' in support_script

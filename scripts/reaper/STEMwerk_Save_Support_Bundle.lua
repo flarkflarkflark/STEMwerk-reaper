@@ -415,6 +415,30 @@ local function readEnvFile(path)
     return data
 end
 
+-- Ready-state currentness classifier ----------------------------------------
+-- Mirrors classifyReadyState() in STEMwerk_Setup_Internal.lua (this script
+-- has no shared module with Setup and is loaded standalone, so the policy is
+-- duplicated rather than introducing a new shared file -- see that file's
+-- comment for the full rationale). ready_to_go.env carries no invocation
+-- identity today, so a support-bundle read of it can only ever be "cached"
+-- (has a status + a last-check timestamp), "historical" (status, no usable
+-- timestamp) or "invalid" (no status at all) -- never a current fact.
+local function classifyReadyState(readyState)
+    readyState = readyState or {}
+    local status = trim(readyState.READY_TO_GO_STATUS or "")
+    local detail = trim(readyState.READY_TO_GO_DETAIL or "")
+    local lastCheckUtc = trim(readyState.READY_TO_GO_LAST_CHECK_UTC or "")
+    if status == "" then
+        return { currentness = "invalid", status = "", detail = detail, lastCheckUtc = lastCheckUtc }
+    end
+    return {
+        currentness = (lastCheckUtc ~= "") and "cached" or "historical",
+        status = status,
+        detail = detail,
+        lastCheckUtc = lastCheckUtc,
+    }
+end
+
 local function parseKeyValueText(text)
     local data = {}
     for line in tostring(text or ""):gmatch("[^\r\n]+") do
@@ -2073,6 +2097,30 @@ local function buildDrumsepRuntimeDiagnostics(runtimeBase, runtimeStateDir, runt
     appendKey(lines, "normal_stems_supported", trim(readyState.NORMAL_STEMS_SUPPORTED or "") ~= "" and trim(readyState.NORMAL_STEMS_SUPPORTED or "") or "unknown")
     appendKey(lines, "collect_drumsep_runtime_source", "cached")
     appendKey(lines, "collect_drumsep_runtime_live_probe", "skipped")
+    appendLine(lines, "")
+
+    -- Explicit current-vs-cached Setup readiness provenance. This function
+    -- never runs a live Setup probe of its own (see
+    -- collect_drumsep_runtime_live_probe=skipped above), so every readiness
+    -- component it can report on is "not_proven" as CURRENT evidence --
+    -- the raw ready_to_go_status/drumsep_ready_*/model status fields above
+    -- remain visible for forensic history, but must not be read as current
+    -- facts by anyone downstream. This is a separate Setup-readiness concept
+    -- from the worker/acceptance-phase health verdict computed elsewhere in
+    -- this script, which this block leaves entirely unchanged.
+    local readyClassified = classifyReadyState(readyState)
+    appendLine(lines, "[Setup readiness: current vs. cached]")
+    appendKey(lines, "current_full_readiness", "not_proven")
+    appendKey(lines, "current_runtime_readiness", "not_proven")
+    appendKey(lines, "current_disk_readiness", "not_proven")
+    appendKey(lines, "current_drumsep_readiness", "not_proven")
+    appendKey(lines, "current_model_readiness", "not_proven")
+    appendKey(lines, "ready_to_go_cached_status", readyClassified.status ~= "" and readyClassified.status or "unknown")
+    appendKey(lines, "ready_to_go_cached_at", readyClassified.lastCheckUtc ~= "" and readyClassified.lastCheckUtc or "unknown")
+    appendKey(lines, "ready_to_go_cached_detail", readyClassified.detail ~= "" and readyClassified.detail or "none")
+    appendKey(lines, "ready_to_go_currentness", readyClassified.currentness)
+    appendKey(lines, "cached_drumsep_runtime", trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "") ~= "" and trim(readyState.DRUMSEP_READY_RUNTIME_STATUS or "") or "unknown")
+    appendKey(lines, "cached_model_readiness", trim(readyState.DRUMSEP_READY_MODEL_STATUS or "") ~= "" and trim(readyState.DRUMSEP_READY_MODEL_STATUS or "") or "unknown")
     appendLine(lines, "")
 
     appendDrumsepRuntimeBlock(lines, "[CPU fallback runtime]", cpuPy, cpuState, cpuProbe, modelFile, modelYaml)
