@@ -105,7 +105,13 @@ def test_false_success_is_impossible_on_import_mismatch():
 
 def test_finish_separation_preserves_outputs_on_import_failure():
     src = _read(WORKFLOW_LUA)
-    assert "local importOk = processStemsResult(stems)" in src
+    # 2.3.1.0 (issue #91): the direct processStemsResult(stems) call is now
+    # routed through importStemsRespectingOriginProject(stems), which
+    # validates the origin project before scoping the same import call to
+    # it. importOk is still processStemsResult's own return value (or
+    # `false` if the origin project could not be proven live / the import
+    # raised), so the cleanup gate below is unchanged.
+    assert "local importOk, originReason = importStemsRespectingOriginProject(stems)" in src
     assert "success = (importOk ~= false)" in src, (
         "temp outputs must be preserved (no success cleanup) when import validation fails"
     )

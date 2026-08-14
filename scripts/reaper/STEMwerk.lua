@@ -1198,6 +1198,8 @@ end
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
 -- DKS import helpers (pure module, loaded before first delegation use).
 DKS_IMPORT = dofile(script_path .. "_internal/STEMwerk_DKS_Import.lua")
+-- Origin-project capture/validation for import targeting (issue #91).
+PROJECT_CONTEXT = dofile(script_path .. "_internal/STEMwerk_Project_Context.lua")
 STEMS = {
     { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav", selected = true, key = "1", sixStemOnly = false },
     { name = "Drums",  color = {100, 200, 255}, file = "drums.wav", selected = true, key = "2", sixStemOnly = false },
@@ -19535,7 +19537,7 @@ _sep.runSingleTrackSeparation = function(trackList)
             schema = 1,
             run_id = (reaper and reaper.genGuid and reaper.genGuid()) or ("norunid_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))),
             started_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-            project = { ref = nil, anchor_refs = nil, display_name = nil, display_path = nil },
+            project = PROJECT_CONTEXT.capture(reaper, selectedItem, nil),
         }
     end
     progressState.runContext.run_dir_name = baseTempDir:match("([^/\\]+)$") or baseTempDir
@@ -22123,7 +22125,7 @@ function multiTrackProgressLoop()
 
         gfx.quit()
         -- Process all results
-        _sep.processAllStemsResult()
+        _sep.importAllStemsRespectingOriginProject()
         return
     end
 
@@ -22153,6 +22155,61 @@ end
 
 -- isProcessingActive is declared near the top of the file to avoid accidentally
 -- creating separate global/local variables in different parts of the script.
+
+-- Issue #91: import destination for a completed multi-track/parallel run
+-- must be the REAPER project that requested it, never whatever project is
+-- active when all jobs finish. Wraps the existing _sep.processAllStemsResult
+-- entry point (the sole call site below); does not change what that
+-- function does once it is safe to run. See
+-- scripts/reaper/_internal/STEMwerk_Project_Context.lua.
+_sep.importAllStemsRespectingOriginProject = function()
+    local runCtx = multiTrackQueue.runContext
+    if not PROJECT_CONTEXT then
+        -- Defensive: the project-context module failed to load. Fail closed
+        -- rather than import into an unvalidated/active project.
+        isProcessingActive = false
+        multiTrackQueue.active = false
+        showMessage(
+            "Original Project Unavailable",
+            "Processing completed, but stems could not be imported (project-context module unavailable).\n\n"
+                .. "Outputs remain available at:\n" .. tostring(multiTrackQueue.baseTempDir or "unknown"),
+            "warning", false
+        )
+        return
+    end
+    local originOk, originReason = PROJECT_CONTEXT.validateOriginProjectContext(reaper, runCtx)
+    if not originOk then
+        debugLog("multiTrackProgressLoop: import blocked, origin project unavailable (" .. tostring(originReason) .. ")")
+        SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=origin_project_unavailable reason=" .. tostring(originReason))
+        isProcessingActive = false  -- Reset guard so workflow can be restarted
+        multiTrackQueue.active = false
+        if runCtx then
+            SW_LOG.writeCurrentProcessingState(runCtx, "completed")
+        end
+        showMessage(
+            "Original Project Unavailable",
+            "Processing completed successfully, but the REAPER project that requested it is no longer available.\n\n"
+                .. "Stems were not imported.\n\nOutputs remain available at:\n" .. tostring(multiTrackQueue.baseTempDir or "unknown"),
+            "warning", false
+        )
+        return
+    end
+    local pcallOk, err = PROJECT_CONTEXT.withProjectInstance(reaper, runCtx.project.ref, function()
+        _sep.processAllStemsResult()
+    end)
+    if not pcallOk then
+        debugLog("ERROR: multi-track import raised inside origin project scope: " .. tostring(err))
+        SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=import_exception")
+        isProcessingActive = false
+        multiTrackQueue.active = false
+        showMessage(
+            "Import Error",
+            "Processing completed successfully, but an error occurred while importing stems into the original "
+                .. "project.\n\nOutputs remain available at:\n" .. tostring(multiTrackQueue.baseTempDir or "unknown"),
+            "error", false
+        )
+    end
+end
 
 -- Process all stems after parallel jobs complete
 _sep.processAllStemsResult = function()
@@ -23513,12 +23570,23 @@ function runSeparationWorkflow()
     -- later switches to the multi-track path, _sep.runSingleTrackSeparation
     -- reuses this SAME run_id and only updates run_dir_name to the actual
     -- base temp dir it creates.
+    --
+    -- project captures the REAPER project requesting this run (issue #91):
+    -- a live ReaProject* plus best-effort validation anchors, captured once
+    -- here -- before any async work is launched -- so completed stems import
+    -- back into this same project even if the user switches project tabs
+    -- while it runs. This is a separate concern from the run_id/job_id
+    -- diagnostics identity above; see STEMwerk_Project_Context.lua.
+    local requestingProjectAnchorTracks = {}
+    for anchorTrackIdx = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
+        requestingProjectAnchorTracks[#requestingProjectAnchorTracks + 1] = reaper.GetSelectedTrack(0, anchorTrackIdx)
+    end
     progressState.runContext = {
         schema = 1,
         run_id = (reaper and reaper.genGuid and reaper.genGuid()) or ("norunid_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))),
         run_dir_name = WORKFLOW_TEMP_DIR:match("([^/\\]+)$") or WORKFLOW_TEMP_DIR,
         started_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-        project = { ref = nil, anchor_refs = nil, display_name = nil, display_path = nil },
+        project = PROJECT_CONTEXT.capture(reaper, selectedItem, requestingProjectAnchorTracks),
     }
     SW_LOG.writeCurrentProcessingState(progressState.runContext, "running")
 

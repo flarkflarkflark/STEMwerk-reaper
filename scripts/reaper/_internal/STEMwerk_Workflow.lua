@@ -947,6 +947,41 @@ function WORKFLOW.progressLoop()
     reaper.defer(WORKFLOW.progressLoop)
 end
 
+-- Issue #91: import completed stems into the REAPER project that requested
+-- this run, never into whatever project happens to be active when
+-- processing finishes. Wraps the existing processStemsResult(stems) import
+-- call; does not change what processStemsResult itself does once it is safe
+-- to run. See scripts/reaper/_internal/STEMwerk_Project_Context.lua.
+--
+-- Returns importResult, originReason:
+--   originReason == "ok"  -> import ran (scoped to the origin project);
+--                            importResult is processStemsResult's own
+--                            return value, unchanged.
+--   originReason ~= "ok"  -> import did NOT run; origin project could not
+--                            be proven live (or the import itself raised,
+--                            originReason == "import_exception").
+--                            importResult is always false.
+local function importStemsRespectingOriginProject(stems)
+    if not PROJECT_CONTEXT then
+        -- Defensive: the project-context module failed to load. Fail closed
+        -- rather than import into an unvalidated/active project.
+        return false, "project_context_unavailable"
+    end
+    local runCtx = C.progressState and C.progressState.runContext
+    local originOk, originReason = PROJECT_CONTEXT.validateOriginProjectContext(reaper, runCtx)
+    if not originOk then
+        return false, originReason
+    end
+    local pcallOk, result = PROJECT_CONTEXT.withProjectInstance(reaper, runCtx.project.ref, function()
+        return processStemsResult(stems)
+    end)
+    if not pcallOk then
+        debugLog("ERROR: import raised inside origin project scope: " .. tostring(result))
+        return false, "import_exception"
+    end
+    return result, "ok"
+end
+
 -- Finish separation after progress completes
 function WORKFLOW.finishSeparationCallback()
     -- Small delay to ensure files are written
@@ -1057,8 +1092,31 @@ function WORKFLOW.finishSeparationCallback()
                     append_diag_log("lua_dks_extract_import_start")
                     SW_LOG.logExecResult("lua_dks_extract_import_start", nil, "")
                 end
-                local importOk = processStemsResult(stems)
-                if importOk == false then
+                local importOk, originReason = importStemsRespectingOriginProject(stems)
+                if originReason == "import_exception" then
+                    debugLog("[LOG] Import raised while targeting origin project")
+                    SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=import_exception")
+                    C.showMessage(
+                        "Import Error",
+                        "Processing completed successfully, but an error occurred while importing stems into "
+                            .. "the original project.\n\nOutputs remain available at:\n"
+                            .. tostring(C.progressState.outputDir or "unknown"),
+                        "error", false
+                    )
+                elseif originReason ~= "ok" then
+                    debugLog("[LOG] Import blocked: origin project unavailable (" .. tostring(originReason) .. ")")
+                    SW_LOG.logExecResult("workflow_success=yes", nil, "import_result=origin_project_unavailable reason=" .. tostring(originReason))
+                    if C.progressState.runContext then
+                        SW_LOG.writeCurrentProcessingState(C.progressState.runContext, "completed")
+                    end
+                    C.showMessage(
+                        "Original Project Unavailable",
+                        "Processing completed successfully, but the REAPER project that requested it is no longer "
+                            .. "available.\n\nStems were not imported.\n\nOutputs remain available at:\n"
+                            .. tostring(C.progressState.outputDir or "unknown"),
+                        "warning", false
+                    )
+                elseif importOk == false then
                     SW_LOG.logExecResult("workflow_success=no", nil, "workflow_failure_reason=dks_import_invariant_violation")
                 end
                 if tostring(C.progressState.workflowSource or "") == "dks_extract" then

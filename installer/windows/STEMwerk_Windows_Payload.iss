@@ -38,6 +38,7 @@ Source: "..\..\scripts\reaper\_internal\STEMwerk_Managed_Python.lua"; DestDir: "
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Messages.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Path_Helper.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Platform.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
+Source: "..\..\scripts\reaper\_internal\STEMwerk_Project_Context.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Progress_Render.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Runtime_Setup.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion
 Source: "..\..\scripts\reaper\_internal\STEMwerk_Settings.lua"; DestDir: "{app}\_internal"; Flags: ignoreversion

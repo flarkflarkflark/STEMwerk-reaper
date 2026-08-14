@@ -382,23 +382,11 @@ class TestSupportBundleReadsCurrentProcessingRegistry:
             "just never wired into isCurrent itself"
         )
 
-
-class TestProjectTargetingUntouched:
-    """Explicit out-of-scope guard: this commit must not touch commit-2
-    (GitHub issue #91) project-targeting code."""
-
-    def test_no_project_targeting_functions_touched(self):
-        text = _read(STEMWERK_LUA)
-        # These functions/concepts are commit 2's territory; this test
-        # only asserts they are UNCHANGED in shape by grepping for the
-        # RunContext.project subtable being read-only/unused for import,
-        # never wired into any of these.
-        for forbidden_usage in (
-            "runContext.project.ref)",
-            "runContext.project.anchor_refs)",
-        ):
-            assert forbidden_usage not in text, (
-                f"RunContext.project must stay unused/Lua-only in this "
-                f"commit; found a read of {forbidden_usage!r} which would "
-                f"mean project-targeting was implemented early"
-            )
+# NOTE: a `TestProjectTargetingUntouched` guard previously lived here,
+# asserting that commit-2 (GitHub issue #91 project-targeting) had not yet
+# been implemented. That phase boundary has now been reached intentionally
+# (release/2.3.1.0-final-prep implements project-targeting import in
+# STEMwerk.lua/STEMwerk_Workflow.lua/STEMwerk_Project_Context.lua), so the
+# guard's premise no longer holds and it has been removed. See
+# tests/lua/test_project_context.lua and
+# tests/test_project_context_targeting.py for project-targeting coverage.

@@ -42,6 +42,7 @@ scripts/reaper/_internal/STEMwerk_Managed_Python.sh	_internal/STEMwerk_Managed_P
 scripts/reaper/_internal/STEMwerk_Messages.lua	_internal/STEMwerk_Messages.lua
 scripts/reaper/_internal/STEMwerk_Path_Helper.lua	_internal/STEMwerk_Path_Helper.lua
 scripts/reaper/_internal/STEMwerk_Platform.lua	_internal/STEMwerk_Platform.lua
+scripts/reaper/_internal/STEMwerk_Project_Context.lua	_internal/STEMwerk_Project_Context.lua
 scripts/reaper/_internal/STEMwerk_Progress_Render.lua	_internal/STEMwerk_Progress_Render.lua
 scripts/reaper/_internal/STEMwerk_Runtime_Setup.lua	_internal/STEMwerk_Runtime_Setup.lua
 scripts/reaper/_internal/STEMwerk_Settings.lua	_internal/STEMwerk_Settings.lua
