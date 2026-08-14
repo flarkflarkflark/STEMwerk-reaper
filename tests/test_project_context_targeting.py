@@ -36,6 +36,7 @@ WORKFLOW_LUA = REAPER_DIR / "_internal" / "STEMwerk_Workflow.lua"
 PROJECT_CONTEXT_LUA = REAPER_DIR / "_internal" / "STEMwerk_Project_Context.lua"
 SEPARATOR_PY = REAPER_DIR / "audio_separator_process.py"
 LUA_TEST = ROOT / "tests" / "lua" / "test_project_context.lua"
+CAPTURE_TIMING_LUA_TEST = ROOT / "tests" / "lua" / "test_origin_capture_timing.lua"
 
 LUA_CANDIDATES = [
     shutil.which("lua"),
@@ -85,14 +86,49 @@ def test_project_context_lua_regression_suite():
     assert "RESULT: all tests passed" in output
 
 
+def test_origin_capture_timing_lua_regression_suite():
+    # Sections 7-10 of the issue #91 follow-up spec: normal Process,
+    # quick preset, retry/re-defer, and concurrent-run pre-defer
+    # project-tab-switch scenarios, plus a negative control confirming the
+    # harness actually reproduces the pre-fix bug. See
+    # tests/lua/test_origin_capture_timing.lua's header comment for exactly
+    # what this simulates vs. what it cannot (STEMwerk.lua's real
+    # finalizeDialogLoop/runSeparationWorkflow cannot be loaded headlessly).
+    lua = _lua_interpreter()
+    if not lua:
+        pytest.skip("no Lua interpreter available")
+    proc = subprocess.run(
+        [lua, str(CAPTURE_TIMING_LUA_TEST)],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        timeout=120,
+    )
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0, f"Lua regression suite failed:\n{output}"
+    assert "RESULT: all tests passed" in output
+
+
 class TestOriginCaptureOnce:
     """Section 3/4: the requesting project is captured exactly once per
     accepted processing action, before any async work is launched -- never
     re-captured in a progress loop, completion callback, or import
     function."""
 
-    def test_run_context_captures_project_before_multi_track_dispatch(self):
+    def test_run_context_uses_pre_captured_project_before_multi_track_dispatch(self):
+        # Timing fix (issue #91 follow-up): the origin project is now
+        # captured synchronously at acceptance time (Process click / quick
+        # preset), BEFORE reaper.defer() -- see captureOriginProjectContext()
+        # and its two call sites above finalizeDialogLoop / in main(). By the
+        # time runSeparationWorkflow() runs (already inside the deferred
+        # callback), it must consume that pre-captured value -- via its
+        # originProjectContext parameter -- rather than re-deriving one from
+        # whatever project happens to be active at that later moment.
         src = _read(STEMWERK_LUA)
+        assert "function runSeparationWorkflow(originProjectContext)" in src, (
+            "runSeparationWorkflow must accept the pre-captured origin "
+            "project as an explicit parameter"
+        )
         create_pos = src.find("progressState.runContext = {\n        schema = 1,")
         assert create_pos != -1, "RunContext creation site in runSeparationWorkflow not found"
         dispatch_pos = src.find("_sep.runSingleTrackSeparation(trackList)", create_pos)
@@ -102,23 +138,73 @@ class TestOriginCaptureOnce:
             "the multi-track dispatch, so the SAME captured project is used "
             "whether the run stays single-track or switches to multi-track"
         )
-        window = src[create_pos:create_pos + 800]
-        assert "PROJECT_CONTEXT.capture(reaper, selectedItem, requestingProjectAnchorTracks)" in window
+        window = src[max(0, create_pos - 500):create_pos + 400]
+        assert "local requestingOriginProjectContext = originProjectContext" in window, (
+            "RunContext creation must resolve from the parameter first, not "
+            "call PROJECT_CONTEXT.capture unconditionally"
+        )
+        assert "project = requestingOriginProjectContext," in window
+
+    def test_synchronous_capture_precedes_defer_at_both_accept_points(self):
+        # Section 1/2 of the follow-up spec: capture must happen BEFORE
+        # reaper.defer(), not inside the deferred closure, for both the
+        # normal Process path and quick presets.
+        src = _read(STEMWERK_LUA)
+        assert "function captureOriginProjectContext(anchorItem)" in src
+
+        process_accept = src.find("elseif GUI.result then")
+        assert process_accept != -1
+        process_defer = src.find("reaper.defer(function()", process_accept)
+        process_capture = src.find(
+            "local originProjectContext = captureOriginProjectContext(", process_accept
+        )
+        assert process_capture != -1 and process_defer != -1
+        assert process_capture < process_defer, (
+            "normal Process path must capture the origin project BEFORE "
+            "reaper.defer(), not inside the deferred callback"
+        )
+
+        quick_accept = src.find("if checkQuickPreset() then")
+        assert quick_accept != -1
+        quick_defer = src.find("reaper.defer(function()", quick_accept)
+        quick_capture = src.find(
+            "local originProjectContext = captureOriginProjectContext(", quick_accept
+        )
+        assert quick_capture != -1 and quick_defer != -1
+        assert quick_capture < quick_defer, (
+            "quick preset path must capture the origin project BEFORE "
+            "reaper.defer(), not inside the deferred callback"
+        )
+
+    def test_retry_redefer_reuses_the_same_captured_context(self):
+        # Section 3/9: a retry/re-defer of the SAME processing action must
+        # thread the same originProjectContext through, never recapture.
+        src = _read(STEMWERK_LUA)
+        assert "reaper.defer(function() runSeparationWorkflow(originProjectContext) end)" in src, (
+            "the retry/re-defer path (recovered selection from the "
+            "Process-click snapshot) must re-invoke runSeparationWorkflow "
+            "with the SAME originProjectContext upvalue, not a fresh capture"
+        )
 
     def test_project_is_not_recaptured_in_progress_loop_or_import_functions(self):
-        # PROJECT_CONTEXT.capture must only be called at RunContext creation
-        # sites (runSeparationWorkflow's primary creation, and
-        # _sep.runSingleTrackSeparation's defensive same-call-stack fallback
-        # for entry without going through runSeparationWorkflow first) --
-        # never inside the progress loop, completion callback, or import
-        # functions themselves.
+        # PROJECT_CONTEXT.capture must only be called at the two synchronous
+        # pre-defer acceptance points (via the shared captureOriginProjectContext
+        # helper) plus the two pre-existing defensive same-call-stack
+        # fallbacks (runSeparationWorkflow's own fallback for internal
+        # callers that omit the parameter, and
+        # _sep.runSingleTrackSeparation's fallback for entry without going
+        # through runSeparationWorkflow first) -- never inside the progress
+        # loop, completion callback, or import functions themselves, and
+        # never a second time for the same accepted action.
         stemwerk_src = _read(STEMWERK_LUA)
         workflow_src = _read(WORKFLOW_LUA)
         capture_call_count = stemwerk_src.count("PROJECT_CONTEXT.capture(")
-        assert capture_call_count == 2, (
-            f"expected exactly 2 PROJECT_CONTEXT.capture(...) call sites "
-            f"(runSeparationWorkflow + _sep.runSingleTrackSeparation "
-            f"defensive fallback), found {capture_call_count}"
+        assert capture_call_count == 3, (
+            f"expected exactly 3 PROJECT_CONTEXT.capture(...) call sites "
+            f"(captureOriginProjectContext's single call, "
+            f"runSeparationWorkflow's defensive fallback, and "
+            f"_sep.runSingleTrackSeparation's defensive fallback), "
+            f"found {capture_call_count}"
         )
         assert "PROJECT_CONTEXT.capture(" not in workflow_src, (
             "the progress loop / completion callback module must never "

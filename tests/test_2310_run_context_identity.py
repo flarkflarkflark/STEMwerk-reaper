@@ -48,7 +48,7 @@ class TestAuthoritativeRunIdGeneration:
         # is defined LATER in the file than the multi-track queue entry
         # point's own defensive fallback, so scope the search to this
         # function's own body rather than the first textual occurrence.
-        start = text.index("function runSeparationWorkflow()")
+        start = text.index("function runSeparationWorkflow(originProjectContext)")
         body = text[start:start + 20000]
         assert "progressState.runContext = {" in body, (
             "RunContext creation must live inside runSeparationWorkflow(), "
@@ -65,7 +65,7 @@ class TestAuthoritativeRunIdGeneration:
 
     def test_run_id_is_not_derived_from_run_dir_name(self):
         text = _read(STEMWERK_LUA)
-        start = text.index("function runSeparationWorkflow()")
+        start = text.index("function runSeparationWorkflow(originProjectContext)")
         window = text[start:start + 20000]
         ctx_start = window.index("progressState.runContext = {")
         block = window[ctx_start:ctx_start + 500]

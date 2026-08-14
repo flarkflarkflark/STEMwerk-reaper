@@ -6911,7 +6911,7 @@ def test_selected_items_take_precedence_over_unrelated_time_selection_for_no_aud
     assert "local useTimeSel = hasTimeSelection() and selTrackCount == 0 and selItemCount == 0" in script
     assert "HELPERS.hasExplicitOverlapSelection(currentTimeStart, currentTimeEnd)" not in footer
 
-    run_workflow = script.split("function runSeparationWorkflow()", 1)[1].split("-- Check for quick preset mode", 1)[0]
+    run_workflow = script.split("function runSeparationWorkflow(originProjectContext)", 1)[1].split("-- Check for quick preset mode", 1)[0]
     assert "local useTimeSel = hasTimeSel and selTrackCount == 0 and selItemCount == 0" in run_workflow
     assert "HELPERS.hasExplicitOverlapSelection(ts0, ts1)" not in run_workflow
 

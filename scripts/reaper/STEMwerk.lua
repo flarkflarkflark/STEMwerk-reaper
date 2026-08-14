@@ -13403,6 +13403,24 @@ function renderFlarkLogo(ctx)
     gfx.drawstr(audioPart)
 end
 
+-- Issue #91 timing fix: capture the REAPER project requesting this
+-- processing action synchronously, at the moment of acceptance (Process
+-- click / quick preset) -- before any reaper.defer() call. If capture were
+-- left until inside the deferred callback (as runSeparationWorkflow used to
+-- do), a project-tab switch during the defer window would capture the
+-- wrong (now-active) project instead of the one the user actually accepted
+-- processing in. Callers must pass the returned context straight into
+-- runSeparationWorkflow() and never call PROJECT_CONTEXT.capture again for
+-- the same processing action (including retries/re-defers of it). See
+-- scripts/reaper/_internal/STEMwerk_Project_Context.lua.
+function captureOriginProjectContext(anchorItem)
+    local anchorTracks = {}
+    for anchorTrackIdx = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
+        anchorTracks[#anchorTracks + 1] = reaper.GetSelectedTrack(0, anchorTrackIdx)
+    end
+    return PROJECT_CONTEXT.capture(reaper, anchorItem, anchorTracks)
+end
+
 function finalizeDialogLoop(ctx)
     local char = (ctx and ctx.char) or -1
     if GUI.result == nil and char ~= -1 then
@@ -13445,8 +13463,13 @@ function finalizeDialogLoop(ctx)
         helpState.openedFrom = "dialog"
         reaper.defer(function() showArtGallery() end)
     elseif GUI.result then
+        -- Capture the origin project now, synchronously, before defer --
+        -- see captureOriginProjectContext() above.
+        local originProjectContext = captureOriginProjectContext(reaper.GetSelectedMediaItem(0, 0))
         reaper.defer(function()
-            local ok, err = xpcall(runSeparationWorkflow, function(e)
+            local ok, err = xpcall(function()
+                runSeparationWorkflow(originProjectContext)
+            end, function(e)
                 return tostring(e) .. "\n" .. debug.traceback("", 2)
             end)
             if not ok then
@@ -23198,7 +23221,17 @@ _sep.processAllStemsResult = function()
 end
 
 -- Separation workflow
-function runSeparationWorkflow()
+-- originProjectContext: the requesting REAPER project, pre-captured
+-- synchronously at acceptance time by the caller (see
+-- captureOriginProjectContext() above finalizeDialogLoop) -- normal
+-- Process, quick presets, and retry/re-defer of the same processing action
+-- must all pass the SAME context through here rather than letting this
+-- function capture from whatever project happens to be active when the
+-- deferred callback actually runs. Falls back to a fresh capture only when
+-- omitted (defensive path for internal callers that bypass the released
+-- entry points above); no released deferred entry point relies on that
+-- fallback.
+function runSeparationWorkflow(originProjectContext)
     -- Prevent multiple concurrent runs
     if isProcessingActive then
         debugLog("=== runSeparationWorkflow BLOCKED - already processing ===")
@@ -23529,7 +23562,7 @@ function runSeparationWorkflow()
                     closeProcessingWindow()
                 end
                 isProcessingActive = false
-                reaper.defer(function() runSeparationWorkflow() end)
+                reaper.defer(function() runSeparationWorkflow(originProjectContext) end)
                 return
             end
         end
@@ -23572,21 +23605,26 @@ function runSeparationWorkflow()
     -- base temp dir it creates.
     --
     -- project captures the REAPER project requesting this run (issue #91):
-    -- a live ReaProject* plus best-effort validation anchors, captured once
-    -- here -- before any async work is launched -- so completed stems import
-    -- back into this same project even if the user switches project tabs
-    -- while it runs. This is a separate concern from the run_id/job_id
-    -- diagnostics identity above; see STEMwerk_Project_Context.lua.
-    local requestingProjectAnchorTracks = {}
-    for anchorTrackIdx = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
-        requestingProjectAnchorTracks[#requestingProjectAnchorTracks + 1] = reaper.GetSelectedTrack(0, anchorTrackIdx)
+    -- a live ReaProject* plus best-effort validation anchors. originProjectContext
+    -- is pre-captured by the caller at acceptance time -- before any async
+    -- work was launched -- so completed stems import back into that same
+    -- project even if the user switches project tabs while it runs. This is
+    -- a separate concern from the run_id/job_id diagnostics identity above;
+    -- see STEMwerk_Project_Context.lua.
+    local requestingOriginProjectContext = originProjectContext
+    if not requestingOriginProjectContext then
+        local requestingProjectAnchorTracks = {}
+        for anchorTrackIdx = 0, (reaper.CountSelectedTracks(0) or 0) - 1 do
+            requestingProjectAnchorTracks[#requestingProjectAnchorTracks + 1] = reaper.GetSelectedTrack(0, anchorTrackIdx)
+        end
+        requestingOriginProjectContext = PROJECT_CONTEXT.capture(reaper, selectedItem, requestingProjectAnchorTracks)
     end
     progressState.runContext = {
         schema = 1,
         run_id = (reaper and reaper.genGuid and reaper.genGuid()) or ("norunid_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))),
         run_dir_name = WORKFLOW_TEMP_DIR:match("([^/\\]+)$") or WORKFLOW_TEMP_DIR,
         started_utc = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-        project = PROJECT_CONTEXT.capture(reaper, selectedItem, requestingProjectAnchorTracks),
+        project = requestingOriginProjectContext,
     }
     SW_LOG.writeCurrentProcessingState(progressState.runContext, "running")
 
@@ -24032,8 +24070,14 @@ main = function()
     if checkQuickPreset() then
         -- Quick mode: run immediately without dialog
         saveSettings()
+        -- Capture the origin project now, synchronously, before defer --
+        -- same rule as the normal Process path (see
+        -- captureOriginProjectContext() above finalizeDialogLoop).
+        local originProjectContext = captureOriginProjectContext(selectedItem)
         reaper.defer(function()
-            local ok, err = xpcall(runSeparationWorkflow, function(e)
+            local ok, err = xpcall(function()
+                runSeparationWorkflow(originProjectContext)
+            end, function(e)
                 return tostring(e) .. "\n" .. debug.traceback("", 2)
             end)
             if not ok then
