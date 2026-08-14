@@ -328,6 +328,13 @@ function SW_LOG.persistRunDiagnostics(outputDir, opts)
         "benchmark_resource_summary.json",
         "benchmark_resource_summary.txt",
         "worker_context.json",
+        -- Direct Kit's DrumSep helper writes its result at the job's own
+        -- top level (<job-root>/drumsep_result.json, no stage2_drumsep
+        -- subdirectory -- see probeWorkerJobEvidence's comment in
+        -- STEMwerk_Save_Support_Bundle.lua on the real per-flow helper
+        -- result path). Kit Split's copy remains nested under
+        -- stage2_drumsep, handled separately below.
+        "drumsep_result.json",
     }
     for _, name in ipairs(allowed) do
         local src = outputDir .. sep .. name

@@ -243,6 +243,11 @@ if not TEST_DIR:match("^%a:[/\\]") and TEST_DIR:sub(1, 1) ~= "/" then
 end
 local REPO_ROOT = TEST_DIR:gsub("[/\\]tests[/\\]support[/\\]?$", "")
 local ACTION_SCRIPT = joinPath(REPO_ROOT, "scripts", "reaper", "STEMwerk_Save_Support_Bundle.lua")
+-- Loaded once so end-to-end fixtures can call the REAL SW_LOG.persistRunDiagnostics
+-- production copy path (not manual fixture injection into the persisted
+-- location) -- see the Direct Kit persisted-helper-conflict/match fixtures
+-- below.
+dofile(joinPath(REPO_ROOT, "scripts", "reaper", "_internal", "STEMwerk_Log.lua"))
 
 local function currentTempBase()
     if IS_WINDOWS then
@@ -5193,6 +5198,181 @@ function TENTHFU.assertKitSplitRealNestedHelperConflictScenario(bundleDir, conte
         "final_runtime_health=ok despite a conflicting Kit Split nested helper job_id:\n" .. manifest)
 end
 
+-- ---------------------------------------------------------------------
+-- release/2.3.1.0-final-prep follow-up: closes the two concrete blockers
+-- raised by the latest adversarial review of the RunContext authority
+-- hardening above.
+--
+-- Blocker 1: the selected current-processing record's run_dir_name must
+-- bind to exactly ONE physical persisted run directory -- matching
+-- run_id alone (the old check) let a wholly separate, unselected, but
+-- otherwise fully healthy run directory become "current".
+--
+-- Blocker 2: SW_LOG.persistRunDiagnostics did not copy Direct Kit's real
+-- top-level <job-root>/drumsep_result.json into persisted diagnostics, so
+-- a genuine helper/worker_context identity conflict present during a live
+-- run could silently disappear before support-bundle evaluation ever saw
+-- it. Exercised here through the actual production persistence path
+-- (SW_LOG.persistRunDiagnostics), not by hand-placing the file in the
+-- already-persisted fixture location.
+-- ---------------------------------------------------------------------
+
+-- Test J: directory A is the run the selected current-processing record is
+-- actually bound to (run_dir_name=A), but A itself carries no worker
+-- evidence at all. Directory B is a wholly separate, fully successful,
+-- self-consistent run directory (its own worker_context.json correctly
+-- names ITSELF as run_dir_name) whose run_id happens to be the SAME as the
+-- selected record's run_id -- everything the old run_id-only selection
+-- check required. B's run_dir_name is B, not A, so it must never become
+-- current no matter how healthy its own evidence is.
+function TENTHFU.createPhysicalRunDirBindingScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "physical-run-dir-binding-b-cannot-become-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    local sharedRunId = "guid-physical-bind-" .. tostring(os.time())
+    context.runNameA = "STEMwerk_" .. tostring(os.time() - 5) .. "_001_1"
+    -- Directory A physically exists (it is what the selected state is
+    -- bound to) but carries no worker evidence of its own at all.
+    mkdirP(joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.runNameA))
+    EIGHTHFU.writeCurrentProcessingRecord(context, sharedRunId, "completed", context.runNameA)
+
+    waitNextSecond()
+    context.runNameB = "STEMwerk_" .. tostring(os.time()) .. "_002_1"
+    writeCurrentWorkerRun(context, context.runNameB, { successfulWorkerJob("single") })
+    -- B's own worker_context.json is fully self-consistent (its
+    -- run_dir_name correctly names ITSELF, B) and its run_id matches the
+    -- selected record's run_id. The one thing it does not satisfy is being
+    -- the physical directory the selected state actually points at (A).
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameB, "single", sharedRunId, "single")
+    return context
+end
+
+function TENTHFU.assertPhysicalRunDirBindingScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "an unselected physical run directory (B) with a matching run_id but the wrong run_dir_name still proved current_worker_health=ok:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.runNameB) == nil,
+        "the unselected directory B was reported as the current worker health run:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite current health being proved only by the wrong (unselected) physical run directory:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health_source:%s+current_worker_evidence") == nil,
+        "final_runtime_health_source was attributed to current_worker_evidence despite the only healthy evidence coming from the non-selected physical directory B:\n" .. manifest)
+    -- B remains visible as non-selected provenance -- it is not silently
+    -- dropped, it simply cannot prove CURRENT health.
+    assertf(manifest:find("recent_worker_health_run:%s+" .. context.runNameB) ~= nil,
+        "the non-selected directory B was not surfaced as recent/provenance evidence at all:\n" .. manifest)
+end
+
+-- Real DrumSep Direct Kit LIVE job content (pre-persistence), written to a
+-- staging directory OUTSIDE the persisted logs/runs tree and then moved
+-- into place by the actual SW_LOG.persistRunDiagnostics production copy
+-- path -- mirrors the shape audio_separator_process.py's dks_direct branch
+-- and worker_context writer really produce during a live run.
+function TENTHFU.persistLiveDirectKitJob(baseRoot, context, runName, jobName, workerRunId, workerJobId, helperRunId, helperJobId)
+    local liveJobDir = joinPath(baseRoot, "live-direct-kit-processing", runName, jobName)
+    mkdirP(liveJobDir)
+    writeFile(joinPath(liveJobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(liveJobDir, "done.txt"), "DONE\n")
+    writeFile(joinPath(liveJobDir, "separation_log.txt"), table.concat({
+        "Direct Drum Kit Split route detected: workflow_mode=drumkit workflow_source=dks_direct",
+        "workflow_mode=drumkit",
+        "workflow_source=dks_direct",
+        "model_id=MDX23C-DrumSep-aufr33-jarredou.ckpt",
+        "drumsep_helper_output_dir=/tmp/" .. runName,
+        "output_validation_reason=ok",
+        "expected_stems=kick,snare,toms,hihat,ride,crash",
+        "found_stems=kick,snare,toms,hihat,ride,crash",
+        "timing_utc=2026-08-13T09:00:00 drumsep_helper_returncode=0",
+        "",
+    }, "\n"))
+    writeFile(joinPath(liveJobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"' .. jobName
+        .. '","job_dir":"/tmp/' .. runName .. '"}\n')
+    writeFile(joinPath(liveJobDir, "worker_context.json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. tostring(workerRunId) .. '",',
+        '  "job_id": "' .. tostring(workerJobId) .. '",',
+        '  "run_dir_name": "' .. tostring(runName) .. '",',
+        '  "started_utc": "2026-07-24T13:00:00Z"',
+        "}",
+        "",
+    }, "\n"))
+    -- Direct Kit's real top-level result path: <job-root>/drumsep_result.json,
+    -- no stage2_drumsep subdirectory (see audio_separator_process.py's
+    -- _is_direct_dks_source branch, which runs the helper directly against
+    -- output_root).
+    writeFile(joinPath(liveJobDir, "drumsep_result.json"),
+        realDrumsepResultJson(helperRunId, helperJobId, liveJobDir))
+
+    ENV_OVERRIDES = context.env
+    SW_LOG.persistRunDiagnostics(liveJobDir)
+    ENV_OVERRIDES = nil
+end
+
+-- Test K: a valid worker_context.json (run_id=R, job_id=J) plus a top-level
+-- drumsep_result.json with a CONFLICTING run_id, both written to a LIVE
+-- staging directory and moved into persisted diagnostics only by the real
+-- SW_LOG.persistRunDiagnostics call. Before Blocker 2's fix, this real
+-- top-level file was silently never copied, so the genuine conflict could
+-- never be seen by support-bundle evaluation at all.
+function TENTHFU.createDirectKitPersistedHelperConflictScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-persisted-helper-conflict-via-real-persistence"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    context.runId = "guid-direct-kit-persisted-conflict-" .. tostring(os.time())
+    TENTHFU.persistLiveDirectKitJob(baseRoot, context, context.workerRunName, "single",
+        context.runId, "single",
+        "guid-direct-kit-persisted-conflict-DIFFERENT-" .. tostring(os.time()), "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertDirectKitPersistedHelperConflictScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    local persistedResultPath = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs",
+        context.workerRunName, "single", "drumsep_result.json")
+    assertf(fileExists(persistedResultPath),
+        "SW_LOG.persistRunDiagnostics did not copy Direct Kit's top-level drumsep_result.json into persisted diagnostics:\n" .. persistedResultPath)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a Direct Kit top-level helper/worker_context identity conflict, surfaced only through real persistRunDiagnostics copying, still proved current health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_conflicting") ~= nil,
+        "the persisted Direct Kit top-level helper conflict was not labeled job_identity_conflicting:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a Direct Kit top-level helper/worker_context conflict surfaced through real persistence:\n" .. manifest)
+end
+
+-- Test L: success counterpart -- matching Direct Kit helper identity
+-- (same run_id/job_id as worker_context.json), also written to a LIVE
+-- staging directory and moved into place only by the real
+-- SW_LOG.persistRunDiagnostics call, must still prove current health.
+function TENTHFU.createDirectKitPersistedHelperMatchScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-persisted-helper-match-via-real-persistence"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    context.runId = "guid-direct-kit-persisted-match-" .. tostring(os.time())
+    TENTHFU.persistLiveDirectKitJob(baseRoot, context, context.workerRunName, "single",
+        context.runId, "single",
+        context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertDirectKitPersistedHelperMatchScenario(bundleDir, context)
+    local persistedResultPath = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs",
+        context.workerRunName, "single", "drumsep_result.json")
+    assertf(fileExists(persistedResultPath),
+        "SW_LOG.persistRunDiagnostics did not copy Direct Kit's top-level drumsep_result.json into persisted diagnostics:\n" .. persistedResultPath)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+end
+
 local function assertZipIntegrity(bundleDir)
     local zipPath = bundleDir .. ".zip"
     assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
@@ -5911,6 +6091,21 @@ local function main()
     do
         local ctx = TENTHFU.createKitSplitRealNestedHelperConflictScenario(joinPath(baseRoot, "kit-split-real-nested-helper-conflict"))
         print("PASS kit-split-real-nested-helper-conflict -> " .. runScenario(ctx, TENTHFU.assertKitSplitRealNestedHelperConflictScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createPhysicalRunDirBindingScenario(joinPath(baseRoot, "physical-run-dir-binding"))
+        print("PASS physical-run-dir-binding-b-cannot-become-current -> " .. runScenario(ctx, TENTHFU.assertPhysicalRunDirBindingScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createDirectKitPersistedHelperConflictScenario(joinPath(baseRoot, "direct-kit-persisted-helper-conflict"))
+        print("PASS direct-kit-persisted-helper-conflict-via-real-persistence -> " .. runScenario(ctx, TENTHFU.assertDirectKitPersistedHelperConflictScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createDirectKitPersistedHelperMatchScenario(joinPath(baseRoot, "direct-kit-persisted-helper-match"))
+        print("PASS direct-kit-persisted-helper-match-via-real-persistence -> " .. runScenario(ctx, TENTHFU.assertDirectKitPersistedHelperMatchScenario))
     end
 
     print("All headless support bundle tests passed.")

@@ -348,24 +348,33 @@ class TestSupportBundleReadsCurrentProcessingRegistry:
         # present -- was exactly the authority bypass this hardening
         # closes. It is not merely vetoed on conflict any more; it can
         # never independently set isCurrent at all. deriveCurrentWorkerRunHealth
-        # now computes isCurrent as strictly structuredMatch (the pre-
-        # existing session-timestamp/marker evidence -- sessionCurrent,
-        # runStartIso, sessionIdConflict -- feeds ONLY the
-        # legacy_unlinked/recent_unlinked provenance split below, never
-        # currentness itself). Full behavioral coverage (every one of the
-        # ~88 pre-existing headless scenarios that predate structured
-        # identity, migrated onto genuine structured evidence where their
-        # expectations relied on the old authority path, plus new fixtures
-        # for the closed gap) lives in
+        # now computes isCurrent as structuredMatch narrowed by
+        # physicalDirBound (the later release/2.3.1.0-final-prep delta
+        # closing the physical run-directory binding gap: matching the
+        # selected record's run_id is necessary but no longer sufficient,
+        # the run directory's own name must also equal the selected
+        # record's run_dir_name) -- the pre-existing session-timestamp/
+        # marker evidence -- sessionCurrent, runStartIso, sessionIdConflict
+        # -- feeds ONLY the legacy_unlinked/recent_unlinked provenance
+        # split below, never currentness itself). Full behavioral coverage
+        # (every one of the ~88 pre-existing headless scenarios that
+        # predate structured identity, migrated onto genuine structured
+        # evidence where their expectations relied on the old authority
+        # path, plus new fixtures for the closed gap) lives in
         # tests/support/run_support_bundle_headless.lua.
         text = _read(SUPPORT_BUNDLE_LUA)
         start = text.index("local function deriveCurrentWorkerRunHealth(")
         end = text.index("\nend", text.index("return result", start))
         body = text[start:end]
-        assert "local isCurrent = structuredMatch\n" in body, (
-            "isCurrent must be assigned structuredMatch alone -- no `or "
-            "(sessionCurrent and ...)` fallback may reintroduce the "
-            "legacy authority bypass this hardening closes"
+        assert "local isCurrent = structuredMatch and physicalDirBound\n" in body, (
+            "isCurrent must be assigned structuredMatch narrowed only by "
+            "physicalDirBound -- no `or (sessionCurrent and ...)` fallback "
+            "may reintroduce the legacy authority bypass this hardening "
+            "closes"
+        )
+        assert " or (sessionCurrent" not in body, (
+            "isCurrent must never be widened by an `or` fallback onto the "
+            "legacy session-timestamp signal"
         )
         assert "sessionCurrent and runStartIso >= sessionStartedUtc" in body, (
             "the legacy session-timestamp signal must still be computed "

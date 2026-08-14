@@ -4950,7 +4950,24 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
                     end
                     structuredMatch = sawAttempt and allAttemptsMatch
                 end
-                local isCurrent = structuredMatch
+                -- Physical run-directory binding: matching the selected
+                -- record's run_id is necessary but not sufficient. The
+                -- selected current-processing record authenticates exactly
+                -- ONE physical persisted run directory -- its own
+                -- run_dir_name -- so a run directory whose own name
+                -- differs from selectedRecord.run_dir_name can never
+                -- itself become the current-processing context, no matter
+                -- how healthy its own worker evidence is (a sibling
+                -- directory can structurally "attempt" the selected
+                -- run_id -- e.g. a stray/replayed worker_context.json --
+                -- without being the one directory the selected state
+                -- actually points at). It still counts toward
+                -- structuredMatchCount below, since more than one
+                -- directory attempting the same run_id is exactly the
+                -- replayed/duplicated-identity ambiguity that check exists
+                -- to catch.
+                local physicalDirBound = selectedRecord ~= nil and runName == selectedRecord.run_dir_name
+                local isCurrent = structuredMatch and physicalDirBound
                 local viaLegacySession = (not isCurrent)
                     and sessionCurrent and runStartIso >= sessionStartedUtc
                     and not sessionIdConflict and not anyStructuredConflict
@@ -5017,8 +5034,10 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
                 end
                 identity.verdict = verdict
                 identity.reason = reason
-                if isCurrent then
+                if structuredMatch then
                     structuredMatchCount = structuredMatchCount + 1
+                end
+                if isCurrent then
                     if not newestCurrent or runIdentityNotOlder(identity, newestCurrent) then
                         newestCurrent = identity
                     end
