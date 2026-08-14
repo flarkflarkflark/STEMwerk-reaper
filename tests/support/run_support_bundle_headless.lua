@@ -2748,9 +2748,16 @@ local function writeRealDrumkitJob(context, runName, jobName, opts)
     lines[#lines + 1] = "timing_utc=2026-08-13T09:00:00 drumsep_helper_returncode=0"
     writeFile(joinPath(jobDir, "separation_log.txt"), table.concat(lines, "\n") .. "\n")
     if opts.identityMarker ~= false then
-        writeFile(joinPath(jobDir, "timing_events.jsonl"),
-            '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"' .. jobName
-            .. '","job_dir":"/tmp/' .. runName .. '"}\n')
+        local timingFields = '"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"' .. jobName
+            .. '","job_dir":"/tmp/' .. runName .. '"'
+        -- opts.outputCount simulates a job that only ever reported a bare
+        -- output COUNT (e.g. output_count=6) with no parsed stem names --
+        -- the count-only evidence class that must never substitute for the
+        -- canonical named stem set.
+        if opts.outputCount then
+            timingFields = timingFields .. ',"output_count":' .. tostring(opts.outputCount)
+        end
+        writeFile(joinPath(jobDir, "timing_events.jsonl"), "{" .. timingFields .. "}\n")
     end
 end
 
@@ -2864,6 +2871,119 @@ local function assertKitSplitFiveOfSixScenario(bundleDir)
         "final_runtime_health=ok despite incomplete Kit Split child stems:\n" .. manifest)
 end
 
+-- Eighth follow-up: a bare output_count=6 (no found_stems, no parsed stem
+-- names at all) must never substitute for the canonical named DrumSep
+-- child-stem set, even though the count matches exactly.
+local EIGHTHFU = {}
+
+function EIGHTHFU.createDirectKitCountOnlySixScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-count-only-six-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        outputCount = 6,
+        validation = "ok",
+    })
+    return context
+end
+
+function EIGHTHFU.assertDirectKitCountOnlySixScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Direct Kit output_count=6 with no named stem evidence proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_canonical_stem_names") ~= nil,
+        "count-only Direct Kit run was not labeled missing_canonical_stem_names:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from Direct Kit count-only evidence:\n" .. manifest)
+end
+
+-- Kit Split equivalent of the count-only rejection above.
+function EIGHTHFU.createKitSplitCountOnlySixScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "kit-split-count-only-six-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_extract",
+        outputCount = 6,
+        validation = "ok",
+    })
+    return context
+end
+
+function EIGHTHFU.assertKitSplitCountOnlySixScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Kit Split output_count=6 with no named stem evidence proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_canonical_stem_names") ~= nil,
+        "count-only Kit Split run was not labeled missing_canonical_stem_names:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from Kit Split count-only evidence:\n" .. manifest)
+end
+
+-- Six ARBITRARY names (not the canonical DrumSep child stems) must never
+-- prove health just because the count happens to be 6.
+function EIGHTHFU.createDirectKitSixArbitraryNamesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-six-arbitrary-names-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "alpha,bravo,charlie,delta,echo,foxtrot",
+        validation = "ok",
+    })
+    return context
+end
+
+function EIGHTHFU.assertDirectKitSixArbitraryNamesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Direct Kit with 6 arbitrary names proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "arbitrary-name Direct Kit run was not labeled missing_required_stems:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from Direct Kit arbitrary stem names:\n" .. manifest)
+end
+
+-- Kit Split equivalent of the six-arbitrary-names rejection above.
+function EIGHTHFU.createKitSplitSixArbitraryNamesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "kit-split-six-arbitrary-names-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_extract",
+        found = "alpha,bravo,charlie,delta,echo,foxtrot",
+        validation = "ok",
+    })
+    return context
+end
+
+function EIGHTHFU.assertKitSplitSixArbitraryNamesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Kit Split with 6 arbitrary names proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "arbitrary-name Kit Split run was not labeled missing_required_stems:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from Kit Split arbitrary stem names:\n" .. manifest)
+end
+
 -- Direct Kit with all 6 child stems, exit 0, DONE, but NO validation
 -- marker. Production DrumSep flows always emit output_validation_reason,
 -- so its absence must not silently count as successful validation.
@@ -2942,6 +3062,13 @@ local function createExplicitRunIdMarkerScenario(baseRoot)
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
     writeFile(joinPath(jobDir, "timing_events.jsonl"),
         '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    -- Real normal-flow runs unconditionally print "model_name=<model>" to
+    -- stderr (separation_log.txt) before separation starts (see
+    -- audio_separator_process.py's normal-workflow success path); a
+    -- positive identity control claiming "the real production shape" must
+    -- include it so the model-recognition contract has genuine evidence to
+    -- resolve against.
+    writeFile(joinPath(jobDir, "separation_log.txt"), "model_name=htdemucs\n")
     writeFile(joinPath(jobDir, "stdout.txt"), table.concat({
         "PROGRESS:92:Writing stems",
         "PROGRESS:100:Complete",
@@ -3221,7 +3348,7 @@ local function assertNewerUnprovenSupersedesScenario(bundleDir, context)
         "an older proven success was used although the newest current context is unproven:\n" .. manifest)
     assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
         "the newest (unproven) context was not the one evaluated:\n" .. manifest)
-    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+    assertf(manifest:find("current_worker_health_reason:%s+unrecognized_model_contract") ~= nil,
         "the newest unproven context's reason was not reported:\n" .. manifest)
     assertf(manifest:find("final_runtime_health:%s+ok") == nil,
         "final_runtime_health=ok from an older success despite a newer unproven context:\n" .. manifest)
@@ -3420,6 +3547,265 @@ local function assertNarrowPresetIncompleteScenario(bundleDir)
         "the missing output was not reported as missing_required_stems:\n" .. manifest)
     assertf(manifest:find("final_runtime_health:%s+ok") == nil,
         "final_runtime_health=ok despite an incomplete output set:\n" .. manifest)
+end
+
+-- ---------------------------------------------------------------------
+-- Eighth follow-up (release/2.3.1.0-final-prep) fixtures: Normal/6-Stem
+-- worker health must require a RECOGNIZED released model AND canonical
+-- output stem NAME membership -- never output count alone, and never any
+-- inference at all when the model is missing/unrecognized.
+-- ---------------------------------------------------------------------
+
+-- Model missing entirely (no model marker anywhere), exit0, DONE, ONE
+-- output: must never be inferred healthy just because something is there.
+function EIGHTHFU.createNormalMissingModelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "normal-missing-model-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        {
+            name = "single",
+            exit = 0,
+            done = true,
+            outputCount = 1,
+            outputNames = "vocals",
+            validation = "ok",
+        },
+    })
+    return context
+end
+
+function EIGHTHFU.assertNormalMissingModelScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a run with no model marker proved worker health from one output:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+unrecognized_model_contract") ~= nil,
+        "a missing model was not labeled unrecognized_model_contract:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a missing model marker:\n" .. manifest)
+end
+
+-- Unrecognized model string, exit0, DONE, six outputs: must never be
+-- inferred healthy just because the count happens to look like 6-Stem.
+function EIGHTHFU.createNormalUnknownModelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "normal-unknown-model-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        {
+            name = "single",
+            exit = 0,
+            done = true,
+            model = "future_experimental_model",
+            outputCount = 6,
+            outputNames = "vocals,drums,bass,other,guitar,piano",
+            validation = "ok",
+        },
+    })
+    return context
+end
+
+function EIGHTHFU.assertNormalUnknownModelScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a run with an unrecognized model proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+unrecognized_model_contract") ~= nil,
+        "an unrecognized model was not labeled unrecognized_model_contract:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite an unrecognized model:\n" .. manifest)
+end
+
+-- Recognized 4-stem model (htdemucs) but four ARBITRARY output names:
+-- matching count must never substitute for the canonical stem name set.
+function EIGHTHFU.createNormalFourArbitraryNamesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "normal-four-arbitrary-names-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        {
+            name = "single",
+            exit = 0,
+            done = true,
+            model = "htdemucs",
+            outputCount = 4,
+            outputNames = "alpha,bravo,charlie,delta",
+            validation = "ok",
+        },
+    })
+    return context
+end
+
+function EIGHTHFU.assertNormalFourArbitraryNamesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "htdemucs with four arbitrary names proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "arbitrary Normal output names were not labeled missing_required_stems:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from Normal-flow arbitrary output names:\n" .. manifest)
+end
+
+-- Recognized 4-stem model (htdemucs) WITH the canonical four output names:
+-- must still prove health (no false negative from the new name-set gate).
+function EIGHTHFU.createNormalCanonicalFourNamesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "normal-canonical-four-names-accepted"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    return context
+end
+
+function EIGHTHFU.assertNormalCanonicalFourNamesScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "htdemucs with the canonical four output names did not prove worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the proving worker run was not identified by its exact run ID:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "canonical Normal-flow output names did not prove final_runtime_health=ok:\n" .. manifest)
+end
+
+-- Recognized 6-Stem model (htdemucs_6s) but six ARBITRARY output names:
+-- matching count must never substitute for the canonical stem name set.
+function EIGHTHFU.createSixStemArbitraryNamesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "six-stem-six-arbitrary-names-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        {
+            name = "single",
+            exit = 0,
+            done = true,
+            model = "htdemucs_6s",
+            outputCount = 6,
+            outputNames = "alpha,bravo,charlie,delta,echo,foxtrot",
+            validation = "ok",
+        },
+    })
+    return context
+end
+
+function EIGHTHFU.assertSixStemArbitraryNamesScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "htdemucs_6s with six arbitrary names proved worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+missing_required_stems") ~= nil,
+        "arbitrary 6-Stem output names were not labeled missing_required_stems:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from 6-Stem arbitrary output names:\n" .. manifest)
+end
+
+-- Recognized 6-Stem model (htdemucs_6s) WITH the canonical six output
+-- names: must still prove health (no false negative from the new gate).
+function EIGHTHFU.createSixStemCanonicalNamesScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "six-stem-canonical-six-names-accepted"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    writeCurrentSessionRoot(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        {
+            name = "single",
+            exit = 0,
+            done = true,
+            model = "htdemucs_6s",
+            outputCount = 6,
+            outputNames = "vocals,drums,bass,other,guitar,piano",
+            validation = "ok",
+        },
+    })
+    return context
+end
+
+function EIGHTHFU.assertSixStemCanonicalNamesScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "htdemucs_6s with the canonical six output names did not prove worker health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the proving worker run was not identified by its exact run ID:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "canonical 6-Stem output names did not prove final_runtime_health=ok:\n" .. manifest)
+end
+
+-- ---------------------------------------------------------------------
+-- Eighth follow-up: worker/session currentness must require an EXPLICIT
+-- shared session identity, not merely a timestamp inside the session
+-- window. SHARED_SESSION_ID_CURRENTLY_PERSISTED=no was found by searching
+-- every production evidence writer (timing_events.jsonl/phase_events.jsonl/
+-- separation_log.txt/stdout.txt across STEMwerk.lua, STEMwerk_Workflow.lua
+-- and audio_separator_process.py): none of them ever emit a SESSION_ID (or
+-- equivalent) into per-run job evidence, so there is no genuine positive
+-- "matching shared session ID" fixture to add (see MATCHING_SESSION_ID
+-- note below). What CAN be closed truthfully: if a job's own evidence
+-- ever DOES carry an explicit session identity marker that conflicts with
+-- session.env's SESSION_ID, that conflict must be honored over the
+-- timestamp window.
+-- ---------------------------------------------------------------------
+function EIGHTHFU.createSessionIdMismatchScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "mismatched-session-id-remains-unlinked"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    local evidenceRoot = joinPath(context.extState.runtimeBase, "evidence", "current-session")
+    mkdirP(evidenceRoot)
+    writeFile(joinPath(evidenceRoot, "session.env"), table.concat({
+        "EVIDENCE_SCHEMA=1",
+        "SESSION_ID=SESSION_A",
+        "SESSION_STARTED_UTC=" .. os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 2),
+        "",
+    }, "\n"))
+    context.workerRunName = currentWorkerRunName()
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    -- The run's own evidence names a DIFFERENT session id than session.env
+    -- -- a genuine identity conflict, never a value to invent.
+    writeFile(joinPath(jobDir, "phase_events.jsonl"),
+        '{"time":' .. tostring(os.time())
+        .. ',"model":"htdemucs","device":"cpu","result":"success","output_count":4,'
+        .. '"output_names":"bass,drums,other,vocals","output_validation_reason":"ok","session_id":"SESSION_B"}\n')
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/'
+        .. context.workerRunName .. '"}\n')
+    return context
+end
+
+function EIGHTHFU.assertSessionIdMismatchScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a run whose own session_id conflicts with session.env's SESSION_ID proved CURRENT worker health:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_session") == nil,
+        "a session_id-mismatched run was classified current_session:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+recent_unlinked") ~= nil,
+        "a session_id-mismatched run was not classified recent_unlinked:\n" .. manifest)
+    assertf(manifest:find("recent_worker_health:%s+ok") ~= nil,
+        "the mismatched run's success was not still surfaced as recent provenance:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from a session_id-mismatched run:\n" .. manifest)
 end
 
 
@@ -3892,6 +4278,88 @@ local function main()
     local narrowIncomplete = createNarrowPresetIncompleteScenario(joinPath(baseRoot, "narrow-preset-incomplete"))
     local narrowIncompleteBundle = runScenario(narrowIncomplete, assertNarrowPresetIncompleteScenario)
     print("PASS narrow-preset-incomplete-output-rejected -> " .. narrowIncompleteBundle)
+
+    waitNextSecond()
+
+    -- Each remaining eighth-follow-up scenario is wrapped in its own do/end
+    -- block so its locals go out of scope immediately: main() is already
+    -- near Lua's 200-local-per-function limit, and named locals per
+    -- scenario (as used throughout the rest of this file) would overflow
+    -- it once this many new fixtures are added in one run.
+    do
+        local ctx = EIGHTHFU.createDirectKitCountOnlySixScenario(joinPath(baseRoot, "direct-kit-count-only-six"))
+        print("PASS direct-kit-count-only-six-rejected -> " .. runScenario(ctx, EIGHTHFU.assertDirectKitCountOnlySixScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createKitSplitCountOnlySixScenario(joinPath(baseRoot, "kit-split-count-only-six"))
+        print("PASS kit-split-count-only-six-rejected -> " .. runScenario(ctx, EIGHTHFU.assertKitSplitCountOnlySixScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createDirectKitSixArbitraryNamesScenario(joinPath(baseRoot, "direct-kit-six-arbitrary-names"))
+        print("PASS direct-kit-six-arbitrary-names-rejected -> " .. runScenario(ctx, EIGHTHFU.assertDirectKitSixArbitraryNamesScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createKitSplitSixArbitraryNamesScenario(joinPath(baseRoot, "kit-split-six-arbitrary-names"))
+        print("PASS kit-split-six-arbitrary-names-rejected -> " .. runScenario(ctx, EIGHTHFU.assertKitSplitSixArbitraryNamesScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createNormalMissingModelScenario(joinPath(baseRoot, "normal-missing-model"))
+        print("PASS normal-missing-model-rejected -> " .. runScenario(ctx, EIGHTHFU.assertNormalMissingModelScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createNormalUnknownModelScenario(joinPath(baseRoot, "normal-unknown-model"))
+        print("PASS normal-unknown-model-rejected -> " .. runScenario(ctx, EIGHTHFU.assertNormalUnknownModelScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createNormalFourArbitraryNamesScenario(joinPath(baseRoot, "normal-four-arbitrary-names"))
+        print("PASS normal-four-arbitrary-names-rejected -> " .. runScenario(ctx, EIGHTHFU.assertNormalFourArbitraryNamesScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createNormalCanonicalFourNamesScenario(joinPath(baseRoot, "normal-canonical-four-names"))
+        print("PASS normal-canonical-four-names-accepted -> " .. runScenario(ctx, EIGHTHFU.assertNormalCanonicalFourNamesScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createSixStemArbitraryNamesScenario(joinPath(baseRoot, "six-stem-six-arbitrary-names"))
+        print("PASS six-stem-six-arbitrary-names-rejected -> " .. runScenario(ctx, EIGHTHFU.assertSixStemArbitraryNamesScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createSixStemCanonicalNamesScenario(joinPath(baseRoot, "six-stem-canonical-six-names"))
+        print("PASS six-stem-canonical-six-names-accepted -> " .. runScenario(ctx, EIGHTHFU.assertSixStemCanonicalNamesScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = EIGHTHFU.createSessionIdMismatchScenario(joinPath(baseRoot, "mismatched-session-id"))
+        print("PASS mismatched-session-id-remains-unlinked -> " .. runScenario(ctx, EIGHTHFU.assertSessionIdMismatchScenario))
+    end
 
     print("All headless support bundle tests passed.")
 end

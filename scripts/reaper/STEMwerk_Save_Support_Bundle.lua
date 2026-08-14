@@ -3903,11 +3903,20 @@ local function probeWorkerJobEvidence(jobDir, runName)
             end
         end
     end
+    -- Explicit shared session identity (see SHARED_SESSION_ID note below):
+    -- no known production writer emits this today, but if a job's own
+    -- evidence ever does carry one, it must be read here so a mismatch
+    -- against session.env's SESSION_ID can be detected rather than falling
+    -- back to timestamp-only correlation.
+    local jobSessionId = nil
     for _, data in ipairs({ timingData, phaseData }) do
         if data then
             for line in tostring(data):gmatch("[^\r\n]+") do
                 local dir = parseJsonStringField(line, "job_dir")
                 if dir then collectMarkerRunIds(dir) end
+                if not jobSessionId then
+                    jobSessionId = parseJsonStringField(line, "session_id")
+                end
             end
         end
     end
@@ -3917,6 +3926,8 @@ local function probeWorkerJobEvidence(jobDir, runName)
                 local key, value = parseKeyValueLine(line)
                 if key == "drumsep_helper_output_dir" then
                     collectMarkerRunIds(value)
+                elseif key == "session_id" and not jobSessionId then
+                    jobSessionId = value
                 end
             end
         end
@@ -3956,9 +3967,20 @@ local function probeWorkerJobEvidence(jobDir, runName)
     end
     local loggedFound = presentValue(probe.found_stems)
     if loggedFound then
-        foundNames = splitStemNameSet(loggedFound) or foundNames
-        local n = countDelimitedValues(loggedFound)
-        if n then foundCount = n end
+        if loggedFound:match("^%d+$") then
+            -- A bare numeric string here is not a stem name list: it is
+            -- updateRunFromTimingJson's own display-only fallback (it
+            -- stores output_count into found_stems as text when no real
+            -- stem names were ever reported). That is COUNT corroboration
+            -- only and must never be read back as named stem evidence --
+            -- otherwise a plain output_count=6 would silently satisfy the
+            -- canonical named-stem-set requirement below.
+            if not foundCount then foundCount = tonumber(loggedFound) end
+        else
+            foundNames = splitStemNameSet(loggedFound) or foundNames
+            local n = countDelimitedValues(loggedFound)
+            if n then foundCount = n end
+        end
     end
     if not foundCount then
         local names = detectStemNamesFromText(stdoutData, UNIVERSAL_STEM_NAMES)
@@ -3986,8 +4008,24 @@ local function probeWorkerJobEvidence(jobDir, runName)
         foundNames = foundNames,
         foundCount = foundCount,
         expectedNames = expectedNames,
+        sessionId = presentValue(jobSessionId),
         validation = validation,
     }
+end
+
+-- A Normal/6-Stem job's model can only anchor a worker-health proof when it
+-- is one of the released 2.3.1.0 model IDs (KNOWN_SUMMARY_MODELS above,
+-- also the exact set the REAPER model picker in STEMwerk.lua exposes).
+-- Anything missing/unrecognized has no known output contract to check
+-- output names against, so it must never be treated as a health proof.
+local function isRecognizedWorkerModel(model)
+    local lower = presentValue(model)
+    if not lower then return false end
+    lower = lower:lower()
+    for i = 1, #KNOWN_SUMMARY_MODELS do
+        if KNOWN_SUMMARY_MODELS[i] == lower then return true end
+    end
+    return false
 end
 
 -- Classifies one job conservatively: explicit failure outranks the success
@@ -4034,28 +4072,48 @@ local function classifyWorkerJob(job)
     local isDrumkitFlow = workflowSource == "dks_direct" or workflowSource == "dks_extract"
         or workflowMode == "drumkit"
 
-    -- Flow-specific output completeness.
+    -- Flow-specific output completeness. In both branches below, a bare
+    -- output COUNT (with no parsed stem names at all) can never substitute
+    -- for named evidence of the canonical stem set -- production always
+    -- logs the actual stem names for a genuinely complete run, so the
+    -- absence of any names is itself proof of nothing.
     local outputsComplete
+    local outputsReason = "missing_required_stems"
     if isDrumkitFlow then
         -- Direct Kit / Kit Split: the FINAL DrumSep child stems must all be
-        -- present. For Kit Split these only exist after stage 2, so stage-1
-        -- completion alone can never satisfy this. The required set is the
-        -- FIXED canonical six; a logged expected_stems is corroborating
-        -- provenance only and can never reduce it.
+        -- present BY NAME. For Kit Split these only exist after stage 2, so
+        -- stage-1 completion alone can never satisfy this. The required set
+        -- is the FIXED canonical six; a logged expected_stems is
+        -- corroborating provenance only and can never reduce it, and a bare
+        -- output_count (even output_count=6) is corroborating provenance
+        -- only and can never substitute for the named set.
         local required = splitStemNameSet(table.concat(DRUMSEP_FINAL_CHILD_STEMS, ","))
         if job.foundNames then
             outputsComplete = stemSetCovers(job.foundNames, required)
         else
-            outputsComplete = job.foundCount ~= nil and job.foundCount >= #DRUMSEP_FINAL_CHILD_STEMS
+            outputsComplete = false
+            outputsReason = "missing_canonical_stem_names"
         end
     else
-        outputsComplete = job.foundCount ~= nil and job.foundCount > 0
-        if outputsComplete and presentValue(probe.model) then
-            -- Normal stems flows: found outputs must cover the model's
-            -- expected stem count (4 for htdemucs/htdemucs_ft, 6 for
-            -- htdemucs_6s).
-            if job.foundCount < #expectedNormalStemNamesForModel(probe.model) then
+        -- Normal / 6-Stem flows: the model must first resolve to a released,
+        -- recognized worker-output contract (see isRecognizedWorkerModel);
+        -- a missing/unrecognized model has no known contract to check
+        -- against, so it can never be inferred healthy regardless of output
+        -- count or names. Once the model is recognized, found outputs must
+        -- cover that model's canonical stem NAME set (4 for
+        -- htdemucs/htdemucs_ft, 6 for htdemucs_6s) -- matching output COUNT
+        -- alone is not sufficient, since arbitrary names of the right count
+        -- prove nothing about which stems were actually produced.
+        if not isRecognizedWorkerModel(probe.model) then
+            outputsComplete = false
+            outputsReason = "unrecognized_model_contract"
+        else
+            local required = splitStemNameSet(table.concat(expectedNormalStemNamesForModel(probe.model), ","))
+            if job.foundNames then
+                outputsComplete = stemSetCovers(job.foundNames, required)
+            else
                 outputsComplete = false
+                outputsReason = "missing_canonical_stem_names"
             end
         end
     end
@@ -4076,7 +4134,7 @@ local function classifyWorkerJob(job)
         return "unproven", "incomplete_job_completion_evidence"
     end
     if not outputsComplete then
-        return "unproven", "missing_required_stems"
+        return "unproven", outputsReason
     end
     if isDrumkitFlow and validation == nil then
         return "unproven", "missing_required_validation"
@@ -4131,7 +4189,21 @@ end
 --   recentStatus/recentRun/recentReason = recent-unlinked provenance,
 --   contextIdentity              = current_session|recent_unlinked|historical|none,
 -- }.
-local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUtc)
+--
+-- sessionId (session.env's SESSION_ID) is secondary corroboration on top of
+-- the timestamp window, not yet its own independent gate: no production
+-- evidence writer in this codebase currently persists a matching identity
+-- marker into per-run job evidence (verified against every writer of
+-- timing_events.jsonl/phase_events.jsonl/separation_log.txt/stdout.txt), so
+-- requiring one unconditionally would make current_session permanently
+-- unreachable and silently turn every genuinely-healthy current run into a
+-- false not_proven -- a truthfulness regression in the other direction. If
+-- a job's OWN evidence ever does carry an explicit session identity marker
+-- (see probeWorkerJobEvidence), a value that conflicts with session.env's
+-- SESSION_ID is honored: that run can never be treated as session-current
+-- no matter how well its timestamp lines up.
+local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUtc, sessionId)
+    sessionId = presentValue(sessionId)
     local result = {
         status = "not_proven",
         run = "",
@@ -4181,7 +4253,19 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
             -- associated with this run at all.
             if identified then
                 local runStartIso = os.date("!%Y-%m-%dT%H:%M:%SZ", epoch)
-                local isCurrent = sessionCurrent and runStartIso >= sessionStartedUtc
+                -- An explicit session-identity marker on any job that
+                -- conflicts with session.env's SESSION_ID proves this run
+                -- does NOT belong to the current session, overriding the
+                -- timestamp window outright.
+                local sessionIdConflict = false
+                if sessionId then
+                    for _, job in ipairs(jobs) do
+                        if job.sessionId and job.sessionId ~= sessionId then
+                            sessionIdConflict = true
+                        end
+                    end
+                end
+                local isCurrent = sessionCurrent and runStartIso >= sessionStartedUtc and not sessionIdConflict
                 local isRecent = (not isCurrent)
                     and (nowEpoch - epoch) <= CURRENT_WORKER_CONTEXT_WINDOW_SECONDS
                 local identity = { epoch = epoch, ms = ms, counter = counter, name = runName }
@@ -5318,7 +5402,8 @@ local function performBundleCollection()
     local currentWorkerHealth = deriveCurrentWorkerRunHealth(
         joinPath(cacheLogDir, "runs"),
         os.time(),
-        trim(workerSession.SESSION_STARTED_UTC or "")
+        trim(workerSession.SESSION_STARTED_UTC or ""),
+        trim(workerSession.SESSION_ID or "")
     )
     for _, line in ipairs(collectCurrentSessionEvidence(
         runtimePaths.base,
