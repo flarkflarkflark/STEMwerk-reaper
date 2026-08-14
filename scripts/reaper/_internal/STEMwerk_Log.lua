@@ -91,6 +91,13 @@ end
 -- mistake it for a real, if incomplete, record). Instead it fails safe --
 -- the old file (already removed) simply stays absent, and no half-written
 -- destination is ever produced.
+-- Injectable seam for the temp-file open/write/close step below, so tests
+-- can simulate an OS-level write/close failure (disk full, permission
+-- error, ...) without needing to actually break the filesystem. Production
+-- never sets this; it defaults to plain io.open and is exercised exactly
+-- like the real path otherwise (same tmpPath, same payload).
+SW_LOG._openForWrite = SW_LOG._openForWrite or io.open
+
 function SW_LOG.writeCurrentProcessingState(runContext, status)
     if not runContext or not runContext.run_id or runContext.run_id == "" then
         return nil
@@ -108,10 +115,29 @@ function SW_LOG.writeCurrentProcessingState(runContext, status)
         .. '  "status": ' .. sw_jsonStringField(status) .. ',\n'
         .. '  "updated_utc": ' .. sw_jsonStringField(os.date("!%Y-%m-%dT%H:%M:%SZ")) .. '\n'
         .. "}\n"
-    local f = io.open(tmpPath, "w")
+    local f = SW_LOG._openForWrite(tmpPath, "w")
     if not f then return nil end
-    f:write(payload)
-    f:close()
+    -- The temp write/close sequence must fully succeed before the rename
+    -- below is ever attempted: file:write()/file:close() both return a
+    -- truthy value on success and nil (+ an error message) on failure --
+    -- e.g. a disk-full or permission error surfacing only at close() time,
+    -- since writes can be buffered. Ignoring those return values (as
+    -- before) risked promoting a short/partial .tmp file via rename.
+    local writeOk = f:write(payload)
+    local closeOk = f:close()
+    if not writeOk or not closeOk then
+        os.remove(tmpPath)
+        return nil
+    end
+    -- Belt-and-braces existence check: the temp file must actually be
+    -- present on disk (readable) before it is ever promoted -- guards
+    -- against the exotic case of a write/close that reported success but
+    -- left no file behind.
+    local verify = io.open(tmpPath, "rb")
+    if not verify then
+        return nil
+    end
+    verify:close()
     local ok = os.rename(tmpPath, path)
     if not ok then
         os.remove(path)

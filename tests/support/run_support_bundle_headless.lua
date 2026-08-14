@@ -4839,6 +4839,360 @@ function NINTHFU.assertSelectedRunAIncompleteRunBScenario(bundleDir, context)
         "final_runtime_health=ok despite RUN_A being incomplete:\n" .. manifest)
 end
 
+-- ---------------------------------------------------------------------
+-- RunContext authority hardening (2.3.1.0 follow-up): closes remaining
+-- structured-identity bypasses left after the previous ten commits on
+-- this branch -- mandatory per-job worker_context, helper-only identity
+-- can never substitute for a missing worker_context, a full (not
+-- flat-only) strict JSON decoder for identity files, and the DrumSep
+-- helper's REAL per-flow result path/shape (Direct Kit: top-level
+-- <job dir>/drumsep_result.json with a nested payload; Kit Split: the
+-- same nested payload under <job dir>/stage2_drumsep/).
+-- ---------------------------------------------------------------------
+local TENTHFU = {}
+
+-- Real DrumSep helper drumsep_result.json success payload, in the ACTUAL
+-- shape write_result() in stemwerk_drumsep_process.py produces: run_id/
+-- job_id are flat top-level strings, but the rest of the document is NOT
+-- flat -- a nested "stems" object and several nested arrays. Used for both
+-- Direct Kit (top-level path) and Kit Split (stage2_drumsep path) fixtures
+-- since both flows share the exact same writer.
+local function realDrumsepResultJson(runId, jobId, outputDir)
+    return table.concat({
+        "{",
+        '  "ok": true,',
+        '  "run_id": "' .. runId .. '",',
+        '  "job_id": "' .. jobId .. '",',
+        '  "stems": {',
+        '    "kick": "' .. outputDir .. '/kick.wav",',
+        '    "snare": "' .. outputDir .. '/snare.wav"',
+        "  },",
+        '  "raw_outputs": ["' .. outputDir .. '/kick.wav", "' .. outputDir .. '/snare.wav"],',
+        '  "expected_drum_outputs": 6,',
+        '  "actual_drum_outputs": 6,',
+        '  "output_count_mismatch": false,',
+        '  "expected_stems": ["kick", "snare", "toms", "hihat", "ride", "crash"],',
+        '  "found_stems": ["kick", "snare", "toms", "hihat", "ride", "crash"],',
+        '  "output_validation_reason": "ok",',
+        '  "separator_onnx_provider": [],',
+        '  "direct_demix_keys": []',
+        "}",
+        "",
+    }, "\n")
+end
+
+-- #1 (section 1): job A carries a valid, matching worker_context.json and
+-- complete legacy success evidence; job B carries EQUALLY complete legacy
+-- success evidence (exit 0, done, real htdemucs 4-stem names, validation
+-- ok) but has NO worker_context.json at all. Before this hardening, job
+-- B's lack of structured identity was invisible to the run-level success
+-- computation (classifyWorkerJob only caught structured evidence that
+-- EXISTED but was broken, never evidence that was simply absent), so job A
+-- alone authenticating the run let job B ride along to "success" on
+-- legacy markers. Now every job contributing to a structurally-current run
+-- must itself carry valid worker_context identity.
+function TENTHFU.createStructuredSiblingPlusLegacyJobScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "structured-job-plus-legacy-sibling-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        successfulWorkerJob("a"),
+        successfulWorkerJob("b"),
+    })
+    context.runId = "guid-structured-plus-legacy-" .. tostring(os.time())
+    -- Only job "a" gets worker_context.json; job "b" is deliberately left
+    -- with legacy evidence only.
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "a", context.runId, "a")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertStructuredSiblingPlusLegacyJobScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a required sibling job with no worker_context.json still let the run prove current health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the run was not evaluated as the structurally-selected current run at all:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_missing") ~= nil,
+        "the missing-worker_context sibling job's reason was not surfaced as job_identity_missing:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a required sibling job missing worker_context.json:\n" .. manifest)
+end
+
+-- #2 (section 2): a job has NO worker_context.json at all, but DOES carry
+-- a strictly valid, matching DrumSep helper identity (drumsep_result.json
+-- with a matching run_id/job_id). Helper evidence may only ever
+-- CORROBORATE an already-valid worker_context -- it can never substitute
+-- for a missing one.
+--
+-- Deliberately: (a) a FLAT (not nested) helper payload, so this fixture's
+-- rejection can only come from refusing to let helper-only identity
+-- substitute for a missing worker_context (section 2/10), never from an
+-- unrelated full-JSON-decoder parse failure (section 3) -- the real nested
+-- payload shape is separately exercised, and required to SUCCEED, by the
+-- Direct Kit / Kit Split real-helper fixtures below; and (b) Kit Split
+-- (dks_extract) as the source, with the helper result placed at
+-- stage2_drumsep/drumsep_result.json -- the one helper-result location
+-- that was ALREADY being read correctly before this hardening (unlike
+-- Direct Kit's top-level path, fixed separately by this same commit), so
+-- this fixture's rejection can only come from the merge-rule fix, never
+-- from an unrelated path-lookup fix.
+function TENTHFU.createHelperOnlyIdentityScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "helper-only-identity-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_extract",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    context.runId = "guid-helper-only-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local stage2Dir = joinPath(jobDir, "stage2_drumsep")
+    mkdirP(stage2Dir)
+    -- Helper identity ONLY -- deliberately no worker_context.json.
+    writeFile(joinPath(stage2Dir, "drumsep_result.json"), table.concat({
+        "{",
+        '  "run_id": "' .. context.runId .. '",',
+        '  "job_id": "single"',
+        "}",
+        "",
+    }, "\n"))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertHelperOnlyIdentityScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "helper-only identity (no worker_context.json) authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok from helper-only identity with no worker_context.json:\n" .. manifest)
+end
+
+-- #3 (section 3): worker_context.json is well-formed EXCEPT the "run_id"
+-- key appears twice with the IDENTICAL value both times. The previous flat
+-- parser only rejected a repeated key when its two values actually
+-- disagreed, silently accepting an exact duplicate -- the strict decoder
+-- must reject ANY duplicate key at any level, regardless of whether the
+-- values agree.
+function TENTHFU.createDuplicateJsonKeyScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "duplicate-identical-json-key-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-duplicate-key-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. context.runId .. '",',
+        '  "run_id": "' .. context.runId .. '",',
+        '  "job_id": "single",',
+        '  "run_dir_name": "' .. context.workerRunName .. '"',
+        "}",
+        "",
+    }, "\n"))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertDuplicateJsonKeyScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a worker_context.json with a duplicate (even identical-value) JSON key authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a duplicate-key worker_context.json:\n" .. manifest)
+end
+
+-- #4 (section 3): worker_context.json contains a raw, unescaped control
+-- character (a literal TAB byte, 0x09) inside the run_id string value.
+-- Must be rejected outright rather than passed through as a literal
+-- character. Only worker_context.json's OWN run_id value carries the raw
+-- control character; the selected current_processing record (filename and
+-- body) uses the clean run_id throughout, so the two can never coincide by
+-- a lenient reader trimming/matching them into agreement -- the only way
+-- this fixture can be rejected is the control-character check itself
+-- rejecting worker_context.json outright (structuredContextInvalid).
+function TENTHFU.createControlCharacterJsonScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "invalid-control-character-json-rejected"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-control-char-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. context.runId .. "\t" .. '",',
+        '  "job_id": "single",',
+        '  "run_dir_name": "' .. context.workerRunName .. '"',
+        "}",
+        "",
+    }, "\n"))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertControlCharacterJsonScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a worker_context.json with a raw unescaped control character authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a worker_context.json with a raw unescaped control character:\n" .. manifest)
+end
+
+-- #5/#6 (sections 8/10): Direct Kit's REAL top-level drumsep_result.json
+-- (no stage2_drumsep subdirectory), with valid worker_context.json,
+-- matching helper identity -- corroborated, must prove current health.
+function TENTHFU.createDirectKitRealHelperSuccessScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-real-top-level-helper-success"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    context.runId = "guid-direct-kit-real-helper-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    -- Direct Kit's real result path: <job dir>/drumsep_result.json, NO
+    -- stage2_drumsep subdirectory (see audio_separator_process.py's
+    -- _is_direct_dks_source branch, which runs the helper directly
+    -- against output_root).
+    writeFile(joinPath(jobDir, "drumsep_result.json"),
+        realDrumsepResultJson(context.runId, "single", jobDir))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertDirectKitRealHelperSuccessScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+end
+
+-- Direct Kit's real top-level drumsep_result.json names a DIFFERENT run_id
+-- than the job's own valid worker_context.json -- a genuine conflict, must
+-- reject current health rather than either source "winning".
+function TENTHFU.createDirectKitRealHelperConflictScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "direct-kit-real-top-level-helper-conflict"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    context.runId = "guid-direct-kit-conflict-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    writeFile(joinPath(jobDir, "drumsep_result.json"),
+        realDrumsepResultJson("guid-different-run-" .. tostring(os.time()), "single", jobDir))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertDirectKitRealHelperConflictScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Direct Kit's top-level drumsep_result.json conflicting with worker_context.json still proved current health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_conflicting") ~= nil,
+        "a conflicting Direct Kit top-level helper identity was not labeled job_identity_conflicting:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a conflicting Direct Kit top-level helper identity:\n" .. manifest)
+end
+
+-- #7/#8 (sections 9/10): Kit Split's REAL nested drumsep_result.json under
+-- stage2_drumsep/, with valid worker_context.json, matching helper
+-- identity -- corroborated, must prove current health. This also serves
+-- as the "nested JSON parses successfully" proof: the full decoder must
+-- accept the real nested "stems" object and array fields, not just flat
+-- documents.
+function TENTHFU.createKitSplitRealNestedHelperSuccessScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "kit-split-real-nested-helper-success"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_extract",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    context.runId = "guid-kit-split-real-helper-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local stage2Dir = joinPath(jobDir, "stage2_drumsep")
+    mkdirP(stage2Dir)
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    -- Kit Split's real result path: <job dir>/stage2_drumsep/drumsep_result.json
+    -- (see audio_separator_process.py's _is_extract_dks_source branch,
+    -- which runs the helper against stage2_root = output_root/"stage2_drumsep").
+    writeFile(joinPath(stage2Dir, "drumsep_result.json"),
+        realDrumsepResultJson(context.runId, "single", stage2Dir))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertKitSplitRealNestedHelperSuccessScenario(bundleDir, context)
+    assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
+end
+
+-- Kit Split's real nested drumsep_result.json names a DIFFERENT job_id
+-- than the job's own valid worker_context.json.
+function TENTHFU.createKitSplitRealNestedHelperConflictScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "kit-split-real-nested-helper-conflict"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_extract",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    context.runId = "guid-kit-split-conflict-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    local stage2Dir = joinPath(jobDir, "stage2_drumsep")
+    mkdirP(stage2Dir)
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    writeFile(joinPath(stage2Dir, "drumsep_result.json"),
+        realDrumsepResultJson(context.runId, "other-job", stage2Dir))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function TENTHFU.assertKitSplitRealNestedHelperConflictScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "Kit Split's nested drumsep_result.json conflicting job_id still proved current health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_conflicting") ~= nil,
+        "a conflicting Kit Split nested helper job_id was not labeled job_identity_conflicting:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a conflicting Kit Split nested helper job_id:\n" .. manifest)
+end
+
 local function assertZipIntegrity(bundleDir)
     local zipPath = bundleDir .. ".zip"
     assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
@@ -5517,6 +5871,46 @@ local function main()
     do
         local ctx = NINTHFU.createSelectedRunAIncompleteRunBScenario(joinPath(baseRoot, "selected-run-a-incomplete-run-b"))
         print("PASS selected-run-a-incomplete-successful-run-b -> " .. runScenario(ctx, NINTHFU.assertSelectedRunAIncompleteRunBScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createStructuredSiblingPlusLegacyJobScenario(joinPath(baseRoot, "structured-sibling-plus-legacy"))
+        print("PASS structured-job-plus-legacy-sibling-rejected -> " .. runScenario(ctx, TENTHFU.assertStructuredSiblingPlusLegacyJobScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createHelperOnlyIdentityScenario(joinPath(baseRoot, "helper-only-identity"))
+        print("PASS helper-only-identity-rejected -> " .. runScenario(ctx, TENTHFU.assertHelperOnlyIdentityScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createDuplicateJsonKeyScenario(joinPath(baseRoot, "duplicate-json-key"))
+        print("PASS duplicate-identical-json-key-rejected -> " .. runScenario(ctx, TENTHFU.assertDuplicateJsonKeyScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createControlCharacterJsonScenario(joinPath(baseRoot, "control-character-json"))
+        print("PASS invalid-control-character-json-rejected -> " .. runScenario(ctx, TENTHFU.assertControlCharacterJsonScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createDirectKitRealHelperSuccessScenario(joinPath(baseRoot, "direct-kit-real-helper-success"))
+        print("PASS direct-kit-real-top-level-helper-success -> " .. runScenario(ctx, TENTHFU.assertDirectKitRealHelperSuccessScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createDirectKitRealHelperConflictScenario(joinPath(baseRoot, "direct-kit-real-helper-conflict"))
+        print("PASS direct-kit-real-top-level-helper-conflict -> " .. runScenario(ctx, TENTHFU.assertDirectKitRealHelperConflictScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createKitSplitRealNestedHelperSuccessScenario(joinPath(baseRoot, "kit-split-real-nested-helper-success"))
+        print("PASS kit-split-real-nested-helper-success -> " .. runScenario(ctx, TENTHFU.assertKitSplitRealNestedHelperSuccessScenario))
+    end
+
+    do
+        local ctx = TENTHFU.createKitSplitRealNestedHelperConflictScenario(joinPath(baseRoot, "kit-split-real-nested-helper-conflict"))
+        print("PASS kit-split-real-nested-helper-conflict -> " .. runScenario(ctx, TENTHFU.assertKitSplitRealNestedHelperConflictScenario))
     end
 
     print("All headless support bundle tests passed.")

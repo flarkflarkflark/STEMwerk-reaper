@@ -1955,6 +1955,7 @@ local function collectLatestDksMarkers(cacheLogDir)
                 addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stdout.txt"))
                 addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stderr.txt"))
                 addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"))
+                addIfExists(joinPath(jobDir, "drumsep_result.json"))
             end
         end
     end
@@ -1984,6 +1985,7 @@ local function collectLatestDksMarkers(cacheLogDir)
                 addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stdout.txt"))
                 addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_helper_stderr.txt"))
                 addIfExists(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"))
+                addIfExists(joinPath(jobDir, "drumsep_result.json"))
             end
         end
     end
@@ -2745,6 +2747,12 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
         ["done.txt"] = true,
         ["run_bg.sh"] = true,
         ["worker_context.json"] = true,
+        -- Direct Kit's real drumsep_result.json lands at the job's own
+        -- top level (no stage2_drumsep subdirectory -- see
+        -- probeWorkerJobEvidence's comment on the real per-flow helper
+        -- result path); Kit Split's copy remains under stage2_drumsep,
+        -- covered by nestedAllowed below.
+        ["drumsep_result.json"] = true,
     }
     local nestedAllowed = {
         joinPath("stage2_drumsep", "drumsep_helper_stdout.txt"),
@@ -3828,13 +3836,27 @@ local CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS = 300
 -- lines and log text, but WRONG for authenticating identity: a truncated
 -- or hand-edited file like '{"run_id": "abc' would still match
 -- `"run_id"%s*:%s*"(.-)"` against a LATER, unrelated quoted string on the
--- same line, or simply never notice the object was never closed. Identity
--- files are small flat JSON objects (string/number fields only, no
--- nesting), so SW_RUNCTX.strictParseFlatJson below is a minimal but
--- complete parser for exactly that grammar: it rejects truncated/malformed
--- input, trailing garbage after the closing brace, and a key repeated with
--- two different values (a conflicting duplicate identity representation)
--- rather than silently taking the first or last match.
+-- same line, or simply never notice the object was never closed.
+--
+-- SW_RUNCTX.strictParseJson below is a full strict recursive-descent JSON
+-- decoder (objects, arrays, strings with escapes including \uXXXX,
+-- numbers, true/false/null) -- NOT a flat-object-only parser. It has to be
+-- full JSON, not just flat, because the real DrumSep helper's
+-- drumsep_result.json (see stemwerk_drumsep_process.py's write_result())
+-- is not flat: alongside its top-level run_id/job_id strings it carries
+-- nested arrays (raw_outputs, expected_stems, found_stems, ...) and a
+-- nested "stems" object. A flat-only parser rejects that entire document
+-- outright, which silently discards the helper's own identity evidence on
+-- every real production run (Direct Kit and Kit Split alike) -- exactly
+-- the authority gap this decoder closes. It rejects truncated/malformed
+-- input, trailing garbage after the top-level value, unescaped control
+-- characters and invalid escape sequences inside strings, invalid number
+-- syntax, and -- unlike the previous flat parser, which only rejected a
+-- repeated key when its two values actually disagreed -- ANY duplicate
+-- key at ANY object nesting level, even when every occurrence carries the
+-- identical value: silently accepting a duplicate key at all (first-wins
+-- or last-wins) is itself an ambiguous document that must never be trusted
+-- for identity.
 --
 -- Everything in this section lives on the single SW_RUNCTX table rather
 -- than as separate top-level locals: STEMwerk_Save_Support_Bundle.lua's
@@ -3845,7 +3867,18 @@ local CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS = 300
 -- ---------------------------------------------------------------------
 local SW_RUNCTX = {}
 
-function SW_RUNCTX.strictParseFlatJson(text)
+-- Distinct sentinel for a parsed JSON `null`, so a null-valued field can be
+-- told apart from a genuinely absent Lua table key (assigning Lua `nil`
+-- into a table key is indistinguishable from never having set it at all).
+-- Every identity field this module reads is required to be a specific
+-- non-null type, so a null value naturally fails those type checks same as
+-- any other wrong type -- this sentinel exists only so the decoder itself
+-- never has to special-case "was this key set to null or not set" while
+-- parsing nested, non-identity parts of a document (e.g. drumsep_result's
+-- own error-path fields).
+SW_RUNCTX.JSON_NULL = {}
+
+function SW_RUNCTX.strictParseJson(text)
     text = tostring(text or "")
     local len = #text
     local pos = 1
@@ -3861,13 +3894,40 @@ function SW_RUNCTX.strictParseFlatJson(text)
         end
     end
 
-    local function parseString()
+    -- Division-based (no bitwise operators) UTF-8 encoder for a single
+    -- Unicode code point, for decoding \uXXXX string escapes. Kept as a
+    -- closure local rather than a new top-level/table-field helper.
+    local function encodeUtf8Codepoint(code)
+        if code < 0x80 then
+            return string.char(code)
+        elseif code < 0x800 then
+            return string.char(
+                0xC0 + math.floor(code / 0x40),
+                0x80 + (code % 0x40))
+        elseif code < 0x10000 then
+            return string.char(
+                0xE0 + math.floor(code / 0x1000),
+                0x80 + (math.floor(code / 0x40) % 0x40),
+                0x80 + (code % 0x40))
+        else
+            return string.char(
+                0xF0 + math.floor(code / 0x40000),
+                0x80 + (math.floor(code / 0x1000) % 0x40),
+                0x80 + (math.floor(code / 0x40) % 0x40),
+                0x80 + (code % 0x40))
+        end
+    end
+
+    local parseValue, parseObject, parseArray, parseString
+
+    parseString = function()
         if text:sub(pos, pos) ~= '"' then return nil, "expected_string" end
         pos = pos + 1
         local out = {}
         while true do
             if pos > len then return nil, "truncated_string" end
             local c = text:sub(pos, pos)
+            local b = c:byte()
             if c == '"' then
                 pos = pos + 1
                 return table.concat(out)
@@ -3878,17 +3938,47 @@ function SW_RUNCTX.strictParseFlatJson(text)
                 if e == '"' then out[#out + 1] = '"'
                 elseif e == "\\" then out[#out + 1] = "\\"
                 elseif e == "/" then out[#out + 1] = "/"
+                elseif e == "b" then out[#out + 1] = "\b"
+                elseif e == "f" then out[#out + 1] = "\f"
                 elseif e == "n" then out[#out + 1] = "\n"
                 elseif e == "t" then out[#out + 1] = "\t"
                 elseif e == "r" then out[#out + 1] = "\r"
-                else return nil, "unsupported_escape" end
+                elseif e == "u" then
+                    if pos + 4 > len then return nil, "truncated_unicode_escape" end
+                    local hex = text:sub(pos + 1, pos + 4)
+                    if not hex:match("^%x%x%x%x$") then return nil, "invalid_unicode_escape" end
+                    local code = tonumber(hex, 16)
+                    pos = pos + 4
+                    if code >= 0xD800 and code <= 0xDBFF then
+                        -- High surrogate: must be immediately followed by a
+                        -- matching low surrogate \uDC00-\uDFFF to form one
+                        -- real (astral) code point. Anything else is an
+                        -- invalid/unpaired surrogate.
+                        if text:sub(pos + 1, pos + 2) == "\\u" then
+                            local hex2 = text:sub(pos + 3, pos + 6)
+                            local low = hex2:match("^%x%x%x%x$") and tonumber(hex2, 16) or nil
+                            if low and low >= 0xDC00 and low <= 0xDFFF then
+                                code = 0x10000 + (code - 0xD800) * 0x400 + (low - 0xDC00)
+                                pos = pos + 6
+                            else
+                                return nil, "invalid_surrogate_pair"
+                            end
+                        else
+                            return nil, "invalid_surrogate_pair"
+                        end
+                    elseif code >= 0xDC00 and code <= 0xDFFF then
+                        return nil, "invalid_surrogate_pair"
+                    end
+                    out[#out + 1] = encodeUtf8Codepoint(code)
+                else
+                    return nil, "unsupported_escape"
+                end
                 pos = pos + 1
-            elseif c == "\n" or c == "\r" then
-                -- A raw newline inside a JSON string is invalid -- most
-                -- often the signature of a truncated/torn write (the file
-                -- was cut off mid-value, and the next line just happens to
-                -- contain another quote).
-                return nil, "unterminated_string"
+            elseif b and b < 0x20 then
+                -- Any raw (unescaped) control character, including a bare
+                -- newline/CR -- most often the signature of a truncated or
+                -- torn write -- is invalid inside a JSON string.
+                return nil, "unescaped_control_character"
             else
                 out[#out + 1] = c
                 pos = pos + 1
@@ -3896,24 +3986,38 @@ function SW_RUNCTX.strictParseFlatJson(text)
         end
     end
 
-    local function parseValue()
+    parseValue = function()
         skipWs()
         local c = text:sub(pos, pos)
         if c == '"' then
             return parseString()
+        elseif c == "{" then
+            return parseObject()
+        elseif c == "[" then
+            return parseArray()
         elseif c == "-" or c:match("%d") then
             local startPos = pos
             if c == "-" then pos = pos + 1 end
-            local sawDigit = false
-            while pos <= len and text:sub(pos, pos):match("%d") do
+            local firstDigit = text:sub(pos, pos)
+            if not firstDigit:match("%d") then return nil, "invalid_number" end
+            if firstDigit == "0" then
                 pos = pos + 1
-                sawDigit = true
+            else
+                while pos <= len and text:sub(pos, pos):match("%d") do pos = pos + 1 end
             end
             if pos <= len and text:sub(pos, pos) == "." then
                 pos = pos + 1
+                local fracStart = pos
                 while pos <= len and text:sub(pos, pos):match("%d") do pos = pos + 1 end
+                if pos == fracStart then return nil, "invalid_number" end
             end
-            if not sawDigit then return nil, "invalid_number" end
+            if pos <= len and (text:sub(pos, pos) == "e" or text:sub(pos, pos) == "E") then
+                pos = pos + 1
+                if pos <= len and (text:sub(pos, pos) == "+" or text:sub(pos, pos) == "-") then pos = pos + 1 end
+                local expStart = pos
+                while pos <= len and text:sub(pos, pos):match("%d") do pos = pos + 1 end
+                if pos == expStart then return nil, "invalid_number" end
+            end
             return tonumber(text:sub(startPos, pos - 1))
         elseif text:sub(pos, pos + 3) == "true" then
             pos = pos + 4
@@ -3921,31 +4025,37 @@ function SW_RUNCTX.strictParseFlatJson(text)
         elseif text:sub(pos, pos + 4) == "false" then
             pos = pos + 5
             return false
+        elseif text:sub(pos, pos + 3) == "null" then
+            pos = pos + 4
+            return SW_RUNCTX.JSON_NULL
         else
             return nil, "invalid_value"
         end
     end
 
-    skipWs()
-    if text:sub(pos, pos) ~= "{" then return nil, "expected_object" end
-    pos = pos + 1
-    local result = {}
-    skipWs()
-    if text:sub(pos, pos) == "}" then
-        pos = pos + 1
-    else
+    parseObject = function()
+        pos = pos + 1 -- consume '{'
+        local result = {}
+        local seenKeys = {}
+        skipWs()
+        if text:sub(pos, pos) == "}" then
+            pos = pos + 1
+            return result
+        end
         while true do
             skipWs()
             local key, keyErr = parseString()
             if not key then return nil, "expected_key:" .. tostring(keyErr) end
+            -- ANY duplicate key at this object level is rejected outright,
+            -- even when every occurrence carries the identical value --
+            -- never silently first-wins/last-wins an identity field.
+            if seenKeys[key] then return nil, "duplicate_key:" .. key end
+            seenKeys[key] = true
             skipWs()
             if text:sub(pos, pos) ~= ":" then return nil, "expected_colon" end
             pos = pos + 1
             local value, valueErr = parseValue()
             if value == nil and valueErr then return nil, "expected_value:" .. tostring(valueErr) end
-            if result[key] ~= nil and result[key] ~= value then
-                return nil, "duplicate_key_conflict:" .. key
-            end
             result[key] = value
             skipWs()
             local c = text:sub(pos, pos)
@@ -3958,12 +4068,45 @@ function SW_RUNCTX.strictParseFlatJson(text)
                 return nil, "expected_comma_or_brace"
             end
         end
+        return result
     end
+
+    parseArray = function()
+        pos = pos + 1 -- consume '['
+        local result = {}
+        local n = 0
+        skipWs()
+        if text:sub(pos, pos) == "]" then
+            pos = pos + 1
+            return result
+        end
+        while true do
+            local value, valueErr = parseValue()
+            if value == nil and valueErr then return nil, valueErr end
+            n = n + 1
+            result[n] = value
+            skipWs()
+            local c = text:sub(pos, pos)
+            if c == "," then
+                pos = pos + 1
+            elseif c == "]" then
+                pos = pos + 1
+                break
+            else
+                return nil, "expected_comma_or_bracket"
+            end
+        end
+        return result
+    end
+
+    skipWs()
+    local value, err = parseValue()
+    if value == nil and err then return nil, err end
     skipWs()
     if pos <= len then
         return nil, "trailing_content"
     end
-    return result
+    return value
 end
 
 -- Required schema for both structured identity file shapes this release
@@ -3982,8 +4125,13 @@ SW_RUNCTX.CURRENT_PROCESSING_SCHEMA = 1
 -- current-health identity.
 function SW_RUNCTX.readWorkerContext(rawText)
     if not rawText then return nil end
-    local obj = SW_RUNCTX.strictParseFlatJson(rawText)
-    if not obj then return nil end
+    local obj = SW_RUNCTX.strictParseJson(rawText)
+    -- The decoder accepts any JSON value at the top level (numbers,
+    -- booleans, arrays, ...), but worker_context.json is only ever
+    -- meaningful as a top-level object; anything else is rejected exactly
+    -- like malformed JSON rather than risking an index-into-non-table
+    -- error below.
+    if type(obj) ~= "table" then return nil end
     if obj.schema ~= SW_RUNCTX.WORKER_CONTEXT_SCHEMA then return nil end
     if type(obj.run_id) ~= "string" or type(obj.job_id) ~= "string" or type(obj.run_dir_name) ~= "string" then
         return nil
@@ -3995,16 +4143,28 @@ function SW_RUNCTX.readWorkerContext(rawText)
     return { run_id = runId, job_id = jobId, run_dir_name = runDirName }
 end
 
--- Reads the DrumSep helper's OWN echoed identity (drumsep_result.json),
--- which only ever carries run_id/job_id (see write_result() in
--- stemwerk_drumsep_process.py) -- no schema/run_dir_name field of its
--- own. This is read independently of worker_context.json (never as a
--- silent fallback substitute for it) so a disagreement between the two
--- can be detected as a genuine identity conflict.
+-- Reads the DrumSep helper's OWN echoed identity out of drumsep_result.json.
+-- write_result() in stemwerk_drumsep_process.py injects run_id/job_id as
+-- flat top-level string fields, but the rest of that document is NOT flat
+-- -- a real successful run's payload also carries nested arrays
+-- (raw_outputs, expected_stems, found_stems, direct_demix_keys,
+-- separator_onnx_provider, ...) and a nested "stems" object, and error
+-- payloads add more of the same. SW_RUNCTX.strictParseJson (a full
+-- decoder, not the old flat-only one) is required here specifically so
+-- those real nested documents parse successfully instead of being
+-- rejected outright -- only the two flat top-level run_id/job_id string
+-- fields are actually read for identity; the rest of the document is
+-- validated (as part of strict parsing) but otherwise ignored. This is
+-- read independently of worker_context.json (never as a silent fallback
+-- substitute for it) so a disagreement between the two can be detected as
+-- a genuine identity conflict; see also probeWorkerJobEvidence's
+-- worker_context/helper merge rule below, where helper-only identity
+-- (no worker_context.json present at all) is corroboration only and can
+-- never substitute for a missing worker_context.
 function SW_RUNCTX.readHelperIdentity(rawText)
     if not rawText then return nil end
-    local obj = SW_RUNCTX.strictParseFlatJson(rawText)
-    if not obj then return nil end
+    local obj = SW_RUNCTX.strictParseJson(rawText)
+    if type(obj) ~= "table" then return nil end
     if type(obj.run_id) ~= "string" or type(obj.job_id) ~= "string" then return nil end
     local runId = presentValue(obj.run_id)
     local jobId = presentValue(obj.job_id)
@@ -4022,8 +4182,8 @@ SW_RUNCTX.VALID_STATUSES = { running = true, completed = true, failed = true, ca
 -- schema, missing run_id/run_dir_name, or an unrecognized status).
 function SW_RUNCTX.readCurrentProcessingRecord(rawText)
     if not rawText then return nil end
-    local obj = SW_RUNCTX.strictParseFlatJson(rawText)
-    if not obj then return nil end
+    local obj = SW_RUNCTX.strictParseJson(rawText)
+    if type(obj) ~= "table" then return nil end
     if obj.schema ~= SW_RUNCTX.CURRENT_PROCESSING_SCHEMA then return nil end
     if type(obj.run_id) ~= "string" or type(obj.run_dir_name) ~= "string" then return nil end
     local runId = presentValue(obj.run_id)
@@ -4182,12 +4342,12 @@ local function probeWorkerJobEvidence(jobDir, runName, jobName)
     -- is written directly by the Python worker from the
     -- STEMWERK_RUN_ID/STEMWERK_JOB_ID/STEMWERK_RUN_DIR_NAME the launcher
     -- passed it -- an exact authoritative identity tuple, never inferred
-    -- from directory names or timestamps. For Direct Kit, the DrumSep
-    -- helper independently echoes run_id/job_id into its own
-    -- drumsep_result.json; that is read as a SEPARATE authoritative source
-    -- (never a silent fallback substitute for worker_context.json), and if
-    -- both are present but disagree the job's identity is CONFLICTING --
-    -- neither one "wins". A job's structured identity is only usable
+    -- from directory names or timestamps. The DrumSep helper independently
+    -- echoes run_id/job_id into its own drumsep_result.json; that is read
+    -- as a SEPARATE, merely CORROBORATING source (never a silent fallback
+    -- substitute for worker_context.json -- see the merge rule below), and
+    -- if both are present but disagree the job's identity is CONFLICTING
+    -- -- neither one "wins". A job's structured identity is only usable
     -- (structuredRunId/structuredJobId set) when it strictly validates
     -- (see SW_RUNCTX.readWorkerContext -- schema/run_id/job_id/run_dir_name
     -- all present, well-formed JSON, no truncation) AND its own run_dir_name
@@ -4197,8 +4357,22 @@ local function probeWorkerJobEvidence(jobDir, runName, jobName)
     -- structured identity and falls back to the marker/session heuristics
     -- above as provenance only -- it can never independently prove current
     -- worker health (see classifyWorkerJob / deriveCurrentWorkerRunHealth).
+    --
+    -- drumsep_result.json's REAL path differs by flow (see
+    -- audio_separator_process.py's _run_direct_dks_drumsep_helper call
+    -- sites): Kit Split (_is_extract_dks_source) runs the helper against
+    -- stage2_root = <job dir>/stage2_drumsep, so its result lands at
+    -- <job dir>/stage2_drumsep/drumsep_result.json; Direct Kit
+    -- (_is_direct_dks_source) runs the helper directly against the job's
+    -- own output_root with NO stage2_drumsep subdirectory at all, so its
+    -- result lands at the job dir's OWN top level,
+    -- <job dir>/drumsep_result.json. A resolver that only ever checked the
+    -- stage2_drumsep path would silently never find Direct Kit's helper
+    -- evidence, so both real locations are checked here; at most one of
+    -- them is ever populated for a given job; whichever exists is read.
     local workerContextRaw = readFile(joinPath(jobDir, "worker_context.json"), "rb")
-    local helperContextRaw = readFile(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"), "rb")
+    local helperContextRaw = readFile(joinPath(jobDir, "drumsep_result.json"), "rb")
+        or readFile(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"), "rb")
     local workerContext = SW_RUNCTX.readWorkerContext(workerContextRaw)
     local helperContext = SW_RUNCTX.readHelperIdentity(helperContextRaw)
     -- A worker_context.json/drumsep_result.json file that EXISTS but fails
@@ -4213,6 +4387,21 @@ local function probeWorkerJobEvidence(jobDir, runName, jobName)
     local structuredRunId = nil
     local structuredJobId = nil
     local structuredConflict = false
+    -- Worker/helper merge rule (worker_context.json is the sole
+    -- AUTHORITATIVE parent; the helper's echoed identity is subordinate,
+    -- corroborating evidence only):
+    --   worker missing/invalid            -> job has no structured identity
+    --                                        at all, regardless of what the
+    --                                        helper claims (see the
+    --                                        deliberately absent
+    --                                        "elseif helperContext then"
+    --                                        branch below -- a job with NO
+    --                                        worker_context.json can never
+    --                                        become structurally identified
+    --                                        from helper evidence alone).
+    --   worker valid, helper absent       -> worker identity stands alone.
+    --   worker valid, helper matches      -> corroborated.
+    --   worker valid, helper conflicts    -> structuredConflict.
     if workerContext and helperContext then
         if workerContext.run_id ~= helperContext.run_id or workerContext.job_id ~= helperContext.job_id then
             structuredConflict = true
@@ -4229,9 +4418,6 @@ local function probeWorkerJobEvidence(jobDir, runName, jobName)
             structuredRunId = workerContext.run_id
             structuredJobId = workerContext.job_id
         end
-    elseif helperContext then
-        structuredRunId = helperContext.run_id
-        structuredJobId = helperContext.job_id
     end
     -- job_id is only authoritative when it names THIS job's own persisted
     -- directory -- a structured context whose job_id points at a sibling
@@ -4779,6 +4965,25 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
                 local unprovenReason = nil
                 for _, job in ipairs(jobs) do
                     local verdict, reason = classifyWorkerJob(job)
+                    -- Section 1 of the RunContext authority hardening:
+                    -- structured worker_context identity is mandatory for
+                    -- EVERY job contributing to the run this cycle is
+                    -- evaluating as current -- one sibling job
+                    -- authenticating via its own valid worker_context.json
+                    -- can never let ANOTHER required sibling job silently
+                    -- prove success via legacy markers alone just because
+                    -- it has no worker_context.json at all.
+                    -- classifyWorkerJob already downgrades a job whose
+                    -- structured evidence EXISTS but is
+                    -- invalid/conflicting/duplicate/wrong job_id; this
+                    -- closes the one case it cannot see on its own: a job
+                    -- with NO structured evidence whatsoever (no
+                    -- worker_context.json, no corroborating helper
+                    -- identity), which legacy-marker classification alone
+                    -- would otherwise still let reach "success".
+                    if isCurrent and verdict == "success" and not job.structuredRunId then
+                        verdict, reason = "unproven", "job_identity_missing"
+                    end
                     if verdict == "failed" then
                         anyFailed = true
                     elseif verdict ~= "success" then
