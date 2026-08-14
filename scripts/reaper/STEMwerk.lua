@@ -18438,6 +18438,12 @@ function processStemsResult(stems)
                 .. "The generated drum WAV files were preserved for recovery.\n"
                 .. "Output folder: " .. tostring(WORKFLOW_TEMP_DIR or "unknown") .. "\n"
                 .. "Diagnostic log: " .. tostring(SW_LOG.getLogPath())
+            -- Diagnostics-state-only: without this, this failure path left
+            -- the run's current-processing state at "running" forever
+            -- (only the success path below ever wrote "completed").
+            if progressState.runContext then
+                SW_LOG.writeCurrentProcessingState(progressState.runContext, "failed")
+            end
             showMessage("Kit Split Failed", failMsg, "error", false)
             return false
         end
@@ -22793,6 +22799,16 @@ _sep.processAllStemsResult = function()
 
         multiTrackQueue.active = false
         isProcessingActive = false
+        -- Diagnostics-state-only: this is a genuine worker failure (zero
+        -- stems created across the whole run), so the run's current-
+        -- processing state must record "failed" here. Without this, the
+        -- state file was left at "running" forever (written once at
+        -- start, never updated on this failure path), which would make a
+        -- dead/crashed run look indistinguishable from one still in
+        -- progress to any later diagnostics read.
+        if multiTrackQueue.runContext then
+            SW_LOG.writeCurrentProcessingState(multiTrackQueue.runContext, "failed")
+        end
         showMessage("Separation Failed", msg, "error", false)
         return
     end
@@ -23097,10 +23113,29 @@ _sep.processAllStemsResult = function()
     SW_TIMING.endRun((multiTrackQueue.dksResultStatus == "partial") and "partial" or "success", { total_audio = totalAudioDur, rtf = realtimeFactor })
     SW_LOG.logExecResult("timing:finalize_end multi", nil, "")
     if multiTrackQueue.runContext then
-        SW_LOG.writeCurrentProcessingState(
-            multiTrackQueue.runContext,
-            (multiTrackQueue.dksResultStatus == "partial") and "failed" or "completed"
-        )
+        -- Diagnostics-state-only (does not affect actual import/processing
+        -- behavior above): a Drum Kit Split run's own dksResultStatus is
+        -- authoritative when present ("partial"/"failed" both mean this
+        -- run's diagnostics state must record a failure, never
+        -- "completed" -- a plain `== "partial"` check silently treated an
+        -- outright multi-job failure the same as success). Non-DKS
+        -- multi-track runs have no dksResultStatus at all, so they fall
+        -- back to whether every job actually imported its stems
+        -- (job.hadImportedStems, the same per-job success signal already
+        -- used above for timing) -- one or more failed jobs must record a
+        -- failed run, not a silently-completed one.
+        local multiRunWriteStatus
+        if multiTrackQueue.isDrumKitWorkflow then
+            multiRunWriteStatus = (multiTrackQueue.dksResultStatus == "partial" or multiTrackQueue.dksResultStatus == "failed")
+                and "failed" or "completed"
+        else
+            local anyJobFailed = false
+            for _, job in ipairs(multiTrackQueue.jobs or {}) do
+                if not job.hadImportedStems then anyJobFailed = true end
+            end
+            multiRunWriteStatus = anyJobFailed and "failed" or "completed"
+        end
+        SW_LOG.writeCurrentProcessingState(multiTrackQueue.runContext, multiRunWriteStatus)
     end
     showResultWindow(selectedStemData, resultData)
 end

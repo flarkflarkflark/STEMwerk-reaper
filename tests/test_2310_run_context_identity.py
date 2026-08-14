@@ -340,15 +340,38 @@ class TestSupportBundleReadsCurrentProcessingRegistry:
         window = text[start:start + 400]
         assert "readCurrentProcessingRecords(cacheLogDir)" in window
 
-    def test_structured_mismatch_vetoes_legacy_session_path(self):
-        # This is the section-13 "remove obsolete identity heuristics"
-        # tradeoff: the pre-existing session-timestamp heuristic is not
-        # ripped out (doing so would require re-fixturing every one of the
-        # ~80 pre-existing headless scenarios that predate structured
-        # identity), but a structured mismatch, once present, now VETOES
-        # it -- see structuredConflict in deriveCurrentWorkerRunHealth.
+    def test_legacy_session_path_can_never_grant_current_status(self):
+        # Follow-up hardening (release/2.3.1.0-final-prep, closing the gap
+        # the prior commit's own author disclosed): the additive tradeoff
+        # this test used to pin -- the legacy session-timestamp heuristic
+        # stays live and is only VETOED when a structured mismatch is also
+        # present -- was exactly the authority bypass this hardening
+        # closes. It is not merely vetoed on conflict any more; it can
+        # never independently set isCurrent at all. deriveCurrentWorkerRunHealth
+        # now computes isCurrent as strictly structuredMatch (the pre-
+        # existing session-timestamp/marker evidence -- sessionCurrent,
+        # runStartIso, sessionIdConflict -- feeds ONLY the
+        # legacy_unlinked/recent_unlinked provenance split below, never
+        # currentness itself). Full behavioral coverage (every one of the
+        # ~88 pre-existing headless scenarios that predate structured
+        # identity, migrated onto genuine structured evidence where their
+        # expectations relied on the old authority path, plus new fixtures
+        # for the closed gap) lives in
+        # tests/support/run_support_bundle_headless.lua.
         text = _read(SUPPORT_BUNDLE_LUA)
-        assert "not structuredConflict" in text
+        start = text.index("local function deriveCurrentWorkerRunHealth(")
+        end = text.index("\nend", text.index("return result", start))
+        body = text[start:end]
+        assert "local isCurrent = structuredMatch\n" in body, (
+            "isCurrent must be assigned structuredMatch alone -- no `or "
+            "(sessionCurrent and ...)` fallback may reintroduce the "
+            "legacy authority bypass this hardening closes"
+        )
+        assert "sessionCurrent and runStartIso >= sessionStartedUtc" in body, (
+            "the legacy session-timestamp signal must still be computed "
+            "and readable as provenance (legacy_unlinked classification), "
+            "just never wired into isCurrent itself"
+        )
 
 
 class TestProjectTargetingUntouched:

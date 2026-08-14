@@ -2423,6 +2423,17 @@ local function assertZeroAcceptancePhases(manifest)
         "expected current_phase_health=not_collected:\n" .. manifest)
 end
 
+-- EIGHTHFU (eighth follow-up) is declared here, ahead of the "no-phases"
+-- fixtures below, so those fixtures can call EIGHTHFU.writeWorkerContextFile
+-- / EIGHTHFU.writeCurrentProcessingRecord (defined further down this file)
+-- to migrate onto the RunContext authority hardening's structured-identity
+-- path. Lua resolves EIGHTHFU.<field> at CALL time (from main(), after the
+-- whole file has loaded and every EIGHTHFU field is populated), so the
+-- declaration only needs to exist before it is first REFERENCED in a
+-- function body that can actually run -- not before every field is filled
+-- in textually.
+local EIGHTHFU = {}
+
 -- Fixture 1: cached-healthy bootstrap + current successful worker run +
 -- ZERO acceptance phases => health proven by worker evidence alone.
 local function createCachedBootstrapCurrentWorkerNoPhasesScenario(baseRoot)
@@ -2435,6 +2446,16 @@ local function createCachedBootstrapCurrentWorkerNoPhasesScenario(baseRoot)
     writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    -- RunContext authority hardening migration: this fixture's whole point
+    -- is "current worker evidence alone proves health, independent of
+    -- acceptance phases" -- that intent only survives the hardening (which
+    -- makes structured identity the SOLE current-health authority) if the
+    -- run also carries genuine structured identity, not just the legacy
+    -- session-timestamp/job_dir-marker evidence writeCurrentWorkerRun
+    -- already writes.
+    context.runId = "guid-cached-bootstrap-no-phases-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2504,6 +2525,16 @@ local function createMixedJobFailureNoPhasesScenario(baseRoot)
         successfulWorkerJob("job1"),
         { name = "job2", exit = 1, done = false, phaseEvidence = false },
     })
+    -- RunContext authority hardening migration: this run must be
+    -- structurally CURRENT (not just legacy-session-linked) for
+    -- current_worker_health to be evaluated as "failed" rather than
+    -- falling back to mere recent-unlinked provenance -- both jobs get
+    -- real structured identity, matching a genuinely current run where
+    -- job2 has already observably failed.
+    context.runId = "guid-mixed-job-failure-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "job1", context.runId, "job1")
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "job2", context.runId, "job2")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "failed", context.workerRunName)
     return context
 end
 
@@ -2541,6 +2572,13 @@ local function createIncompleteOutputNoPhasesScenario(baseRoot)
             validation = "ok",
         },
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated as CURRENT at all (rather than
+    -- falling back to recent-unlinked, which would report a different,
+    -- generic reason instead of this job's own missing-stems reason).
+    context.runId = "guid-incomplete-output-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2652,6 +2690,14 @@ local function createCurrentWorkerCurrentFatalPhaseScenario(baseRoot)
     clearRuns(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this worker run to be evaluated CURRENT at all, so the
+    -- precedence this fixture actually tests (a current fatal phase must
+    -- still win over a current successful worker run) has a genuinely
+    -- current worker run to win against in the first place.
+    context.runId = "guid-worker-vs-fatal-phase-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     -- The session root and the failing phase must both be fresh for the
     -- worker run to be session-linked CURRENT evidence under the corrected
     -- currentness model; the inherited July-dated phases become stale and
@@ -2762,14 +2808,20 @@ local function writeRealDrumkitJob(context, runName, jobName, opts)
     end
 end
 
+-- Migrated for the RunContext authority hardening: this shared assertion
+-- used to accept "current_session" (the legacy session-timestamp path) as
+-- proof of current health. That path can never prove current health any
+-- more -- every caller now also writes genuine structured identity (see
+-- each create*Scenario below), so the correct, still-current-proving
+-- classification is "current_processing".
 local function assertWorkerProvenZeroPhases(manifest, context)
     assertZeroAcceptancePhases(manifest)
     assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
         "real-format successful run did not prove current_worker_health=ok:\n" .. manifest)
     assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
         "the proving worker run was not identified by its exact run ID:\n" .. manifest)
-    assertf(manifest:find("worker_context_identity:%s+current_session") ~= nil,
-        "the proving worker run was not classified as current-session evidence:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_processing") ~= nil,
+        "the proving worker run was not classified as current_processing (structured-identity) evidence:\n" .. manifest)
     assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
         "real-format successful run with zero phases did not prove final_runtime_health=ok:\n" .. manifest)
     assertf(manifest:find("final_runtime_health_source:%s+current_worker_evidence") ~= nil,
@@ -2789,6 +2841,13 @@ local function createRealDirectKitZeroPhasesScenario(baseRoot)
         found = "kick,snare,toms,hihat,ride,crash",
         validation = "ok",
     })
+    -- RunContext authority hardening migration: real production success
+    -- must still prove current health, but only via genuine structured
+    -- identity now -- add it alongside the existing real-format marker
+    -- evidence above.
+    context.runId = "guid-real-direct-kit-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2810,6 +2869,11 @@ local function createRealKitSplitZeroPhasesScenario(baseRoot)
         found = "kick,snare,toms,hihat,ride,crash",
         validation = "ok",
     })
+    -- RunContext authority hardening migration (see the Direct Kit
+    -- twin above): add genuine structured identity.
+    context.runId = "guid-real-kit-split-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2831,6 +2895,12 @@ local function createDirectKitFiveOfSixScenario(baseRoot)
         found = "kick,snare,toms,hihat,ride",
         validation = "ok",
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all, so its own
+    -- missing-stems reason keeps being reported.
+    context.runId = "guid-direct-kit-five-of-six-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2858,6 +2928,10 @@ local function createKitSplitFiveOfSixScenario(baseRoot)
         found = "kick,snare,toms,hihat,ride",
         validation = "ok",
     })
+    -- RunContext authority hardening migration (see Direct Kit twin above).
+    context.runId = "guid-kit-split-five-of-six-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2875,7 +2949,6 @@ end
 -- Eighth follow-up: a bare output_count=6 (no found_stems, no parsed stem
 -- names at all) must never substitute for the canonical named DrumSep
 -- child-stem set, even though the count matches exactly.
-local EIGHTHFU = {}
 
 function EIGHTHFU.createDirectKitCountOnlySixScenario(baseRoot)
     local context = createPresentScenario(baseRoot)
@@ -2889,6 +2962,11 @@ function EIGHTHFU.createDirectKitCountOnlySixScenario(baseRoot)
         outputCount = 6,
         validation = "ok",
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-direct-kit-count-only-six-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2916,6 +2994,10 @@ function EIGHTHFU.createKitSplitCountOnlySixScenario(baseRoot)
         outputCount = 6,
         validation = "ok",
     })
+    -- RunContext authority hardening migration (see Direct Kit twin above).
+    context.runId = "guid-kit-split-count-only-six-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2944,6 +3026,11 @@ function EIGHTHFU.createDirectKitSixArbitraryNamesScenario(baseRoot)
         found = "alpha,bravo,charlie,delta,echo,foxtrot",
         validation = "ok",
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-direct-kit-six-arbitrary-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -2971,6 +3058,10 @@ function EIGHTHFU.createKitSplitSixArbitraryNamesScenario(baseRoot)
         found = "alpha,bravo,charlie,delta,echo,foxtrot",
         validation = "ok",
     })
+    -- RunContext authority hardening migration (see Direct Kit twin above).
+    context.runId = "guid-kit-split-six-arbitrary-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3000,6 +3091,11 @@ local function createMissingRequiredValidationScenario(baseRoot)
         found = "kick,snare,toms,hihat,ride,crash",
         validation = nil,
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-missing-required-validation-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3076,6 +3172,12 @@ local function createExplicitRunIdMarkerScenario(baseRoot)
         '{"bass": "/tmp/' .. context.workerRunName .. '/bass.wav", "drums": "/tmp/' .. context.workerRunName .. '/drums.wav", "other": "/tmp/' .. context.workerRunName .. '/other.wav", "vocals": "/tmp/' .. context.workerRunName .. '/vocals.wav"}',
         "",
     }, "\n"))
+    -- RunContext authority hardening migration: add genuine structured
+    -- identity so this run is evaluated CURRENT via the only authoritative
+    -- path now available.
+    context.runId = "guid-explicit-run-id-marker-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3133,6 +3235,13 @@ local function createSameSecondSuccessThenFailureScenario(baseRoot)
         found = "kick,snare,toms,hihat,ride,crash",
         validation = "ok",
     })
+    -- RunContext authority hardening migration: only the LATER (failing)
+    -- run gets structured identity, so it -- and only it -- is the one
+    -- structurally selected as current; the earlier successful run is
+    -- deliberately left without any, so it cannot interfere.
+    context.runId = "guid-same-second-success-then-failure-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "failed", context.workerRunName)
     return context
 end
 
@@ -3169,6 +3278,13 @@ local function createSameSecondFailureThenSuccessScenario(baseRoot)
         found = "kick,snare,toms,hihat,ride,crash",
         validation = "ok",
     })
+    -- RunContext authority hardening migration: only the LATER
+    -- (succeeding) run gets structured identity, so it is the one
+    -- structurally selected as current; the earlier failing run is
+    -- deliberately left without any.
+    context.runId = "guid-same-second-failure-then-success-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3201,6 +3317,13 @@ local function createReducedExpectedStemsScenario(baseRoot, source, fixtureName)
         expected = "kick,snare,toms,hihat,ride",
         validation = "ok",
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all, so its own
+    -- missing-stems reason (rather than a generic non-current reason)
+    -- keeps being reported.
+    context.runId = "guid-" .. fixtureName .. "-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3233,6 +3356,14 @@ local function createPerJobIdentityScenario(baseRoot)
     writeFile(joinPath(jobB, "done.txt"), "DONE\n")
     writeFile(joinPath(jobB, "phase_events.jsonl"),
         '{"time":2,"model":"htdemucs","device":"cpu","result":"success","output_count":4,"output_names":"bass,drums,other,vocals","output_validation_reason":"ok"}\n')
+    -- RunContext authority hardening migration: jobA gets genuine
+    -- structured identity so the run is structurally selected as current;
+    -- jobB deliberately gets none at all, which is the whole point of
+    -- this fixture (an unidentified required job must still block health,
+    -- not inherit jobA's identity).
+    context.runId = "guid-per-job-identity-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "jobA", context.runId, "jobA")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3247,31 +3378,47 @@ local function assertPerJobIdentityScenario(bundleDir)
         "final_runtime_health=ok despite an unidentified required job:\n" .. manifest)
 end
 
--- One job whose explicit identity markers CONFLICT (timing job_dir names
--- this run; drumsep_helper_output_dir names a different run): ambiguous,
--- never "any matching marker wins".
+-- RunContext authority hardening migration: this fixture originally tested
+-- conflicting legacy job_dir/drumsep_helper_output_dir MARKERS (timing
+-- job_dir names this run; drumsep_helper_output_dir names a different
+-- run). That marker-only conflict concept is now provenance-only -- with
+-- no worker_context.json at all, this run has no way to be structurally
+-- SELECTED as current in the first place, so it can no longer exercise
+-- "job_identity_conflicting" as a current-health reason at all (it simply
+-- falls out of current-health consideration entirely, like any other
+-- legacy-only evidence -- see structured-identity-current family).
+--
+-- Repurposed here to test the actual NEW authoritative conflict this
+-- hardening closes (required fixture #21): a Direct Kit job's
+-- worker_context.json (written by the Python worker) disagrees with the
+-- DrumSep helper's OWN echoed identity (stage2_drumsep/drumsep_result.json,
+-- written independently by the helper subprocess) -- "structured context
+-- wins, ignore the helper conflict" must never be applied.
 local function createConflictingIdentityScenario(baseRoot)
     local context = createPresentScenario(baseRoot)
-    context.name = "same-job-conflicting-identity-markers"
+    context.name = "direct-kit-worker-helper-identity-conflict"
     removeTree(joinPath(context.extState.runtimeBase, "evidence"))
     clearRuns(context)
-    writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
-    local otherRun = "STEMwerk_" .. tostring(os.time()) .. "_999_9"
+    writeRealDrumkitJob(context, context.workerRunName, "single", {
+        source = "dks_direct",
+        found = "kick,snare,toms,hihat,ride,crash",
+        validation = "ok",
+    })
+    context.runId = "guid-direct-kit-conflict-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    -- The DrumSep helper's OWN echoed identity (stage2_drumsep/
+    -- drumsep_result.json) disagrees with worker_context.json's run_id --
+    -- a genuine worker/helper conflict, never resolved by trusting
+    -- whichever one is "structured".
     local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
-    mkdirP(jobDir)
-    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
-    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
-    writeFile(joinPath(jobDir, "timing_events.jsonl"),
-        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
-    writeFile(joinPath(jobDir, "separation_log.txt"), table.concat({
-        "Direct Drum Kit Split route detected: workflow_mode=drumkit workflow_source=dks_direct",
-        "workflow_mode=drumkit",
-        "workflow_source=dks_direct",
-        "drumsep_helper_output_dir=/tmp/" .. otherRun,
-        "output_validation_reason=ok",
-        "expected_stems=kick,snare,toms,hihat,ride,crash",
-        "found_stems=kick,snare,toms,hihat,ride,crash",
+    mkdirP(joinPath(jobDir, "stage2_drumsep"))
+    writeFile(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"), table.concat({
+        "{",
+        '  "run_id": "guid-direct-kit-conflict-helper-mismatch",',
+        '  "job_id": "single"',
+        "}",
         "",
     }, "\n"))
     return context
@@ -3281,11 +3428,11 @@ local function assertConflictingIdentityScenario(bundleDir)
     local manifest = readManifest(bundleDir)
     assertZeroAcceptancePhases(manifest)
     assertf(manifest:find("current_worker_health:%s+ok") == nil,
-        "conflicting identity markers were accepted via any-match-wins:\n" .. manifest)
+        "a Direct Kit worker/helper identity conflict was accepted via structured-context-wins:\n" .. manifest)
     assertf(manifest:find("current_worker_health_reason:%s+job_identity_conflicting") ~= nil,
-        "conflicting identity markers were not labeled conflicting:\n" .. manifest)
+        "the Direct Kit worker/helper identity conflict was not labeled conflicting:\n" .. manifest)
     assertf(manifest:find("final_runtime_health:%s+ok") == nil,
-        "final_runtime_health=ok despite conflicting identity markers:\n" .. manifest)
+        "final_runtime_health=ok despite a Direct Kit worker/helper identity conflict:\n" .. manifest)
 end
 
 -- Copied evidence: a current-shaped run directory whose only job's
@@ -3339,6 +3486,13 @@ local function createNewerUnprovenSupersedesScenario(baseRoot)
     -- Identified and complete, but no output evidence at all: unproven.
     writeFile(joinPath(jobDir, "timing_events.jsonl"),
         '{"time":' .. tostring(epoch) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    -- RunContext authority hardening migration: only the NEWER (unproven)
+    -- run gets structured identity, so it -- not the older successful run
+    -- -- is the one structurally selected as current, matching this
+    -- fixture's actual point (newest current context wins, even unproven).
+    context.runId = "guid-older-success-newer-unproven-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3373,6 +3527,12 @@ local function createNewerSuccessSupersedesScenario(baseRoot)
     })
     context.workerRunName = "STEMwerk_" .. tostring(epoch) .. "_001_1"
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    -- RunContext authority hardening migration: only the NEWER (succeeding)
+    -- run gets structured identity, so it is the one structurally selected
+    -- as current; the older failing run is deliberately left without any.
+    context.runId = "guid-older-failure-newer-success-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3400,6 +3560,12 @@ local function createSameSecondNewerUnprovenScenario(baseRoot)
     writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
     writeFile(joinPath(jobDir, "timing_events.jsonl"),
         '{"time":' .. tostring(epoch) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    -- RunContext authority hardening migration: only the same-second NEWER
+    -- (unproven) run gets structured identity, so it -- not the older
+    -- successful run -- is the one structurally selected as current.
+    context.runId = "guid-same-second-newer-unproven-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3519,6 +3685,13 @@ local function createNarrowPresetSuccessScenario(baseRoot, fixtureName, modelNam
     writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeRealNormalFlowJob(context, context.workerRunName, "single", modelName, stemNames)
+    -- RunContext authority hardening migration: add genuine structured
+    -- identity (guid keyed by fixtureName, since this parameterized
+    -- creator is called back-to-back for vocals/drums/bass-only within
+    -- the same test run and must not collide on run_id).
+    context.runId = "guid-" .. fixtureName .. "-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3536,6 +3709,11 @@ local function createNarrowPresetIncompleteScenario(baseRoot)
     writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeRealNormalFlowJob(context, context.workerRunName, "single", "htdemucs", { "drums", "other", "vocals" })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-narrow-preset-incomplete-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3576,6 +3754,11 @@ function EIGHTHFU.createNormalMissingModelScenario(baseRoot)
             validation = "ok",
         },
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-normal-missing-model-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3610,6 +3793,11 @@ function EIGHTHFU.createNormalUnknownModelScenario(baseRoot)
             validation = "ok",
         },
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-normal-unknown-model-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3644,6 +3832,11 @@ function EIGHTHFU.createNormalFourArbitraryNamesScenario(baseRoot)
             validation = "ok",
         },
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-normal-four-arbitrary-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3668,6 +3861,11 @@ function EIGHTHFU.createNormalCanonicalFourNamesScenario(baseRoot)
     writeCurrentSessionRoot(context)
     context.workerRunName = currentWorkerRunName()
     writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-normal-canonical-four-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3702,6 +3900,11 @@ function EIGHTHFU.createSixStemArbitraryNamesScenario(baseRoot)
             validation = "ok",
         },
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-six-stem-arbitrary-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3736,6 +3939,11 @@ function EIGHTHFU.createSixStemCanonicalNamesScenario(baseRoot)
             validation = "ok",
         },
     })
+    -- RunContext authority hardening migration: structured identity is
+    -- required for this run to be evaluated CURRENT at all.
+    context.runId = "guid-six-stem-canonical-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
     return context
 end
 
@@ -3832,16 +4040,51 @@ function EIGHTHFU.writeWorkerContextFile(context, runName, jobName, runId, jobId
     }, "\n"))
 end
 
+-- started_utc/updated_utc are always "now": the RunContext authority
+-- hardening requires the SELECTED current-processing record to itself be
+-- fresh (section 11 -- a stale record can never anchor current identity,
+-- even if otherwise perfectly well-formed), so every fixture that wants
+-- its structured evidence to actually prove/evaluate as current must get
+-- a fresh timestamp here. Fixtures that specifically want a STALE record
+-- (see EIGHTHFU.writeStaleCurrentProcessingRecord below) use a separate
+-- helper rather than overloading this one's default.
 function EIGHTHFU.writeCurrentProcessingRecord(context, runId, status, runDirName)
     local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
     mkdirP(dir)
+    local nowIso = os.date("!%Y-%m-%dT%H:%M:%SZ")
     writeFile(joinPath(dir, tostring(runId) .. ".json"), table.concat({
         "{",
         '  "schema": 1,',
         '  "run_id": "' .. tostring(runId) .. '",',
         '  "run_dir_name": "' .. tostring(runDirName or runId) .. '",',
-        '  "started_utc": "2026-07-24T13:00:00Z",',
-        '  "status": "' .. tostring(status) .. '"',
+        '  "started_utc": "' .. nowIso .. '",',
+        '  "status": "' .. tostring(status) .. '",',
+        '  "updated_utc": "' .. nowIso .. '"',
+        "}",
+        "",
+    }, "\n"))
+end
+
+-- Writes a current_processing record whose started_utc/updated_utc are
+-- deliberately OLD (outside CURRENT_WORKER_CONTEXT_WINDOW_SECONDS), for
+-- the stale-completed-state fixture: a structurally well-formed, valid,
+-- filename/run_dir-bound, completed record that must still be rejected
+-- from selection purely for being stale (section 11 -- timestamps only
+-- ever reject stale identity, they never grant it, but a record that is
+-- itself too old to anchor current identity must not be selectable at
+-- all).
+function EIGHTHFU.writeStaleCurrentProcessingRecord(context, runId, status, runDirName)
+    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    mkdirP(dir)
+    local staleIso = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() - 7200)
+    writeFile(joinPath(dir, tostring(runId) .. ".json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. tostring(runId) .. '",',
+        '  "run_dir_name": "' .. tostring(runDirName or runId) .. '",',
+        '  "started_utc": "' .. staleIso .. '",',
+        '  "status": "' .. tostring(status) .. '",',
+        '  "updated_utc": "' .. staleIso .. '"',
         "}",
         "",
     }, "\n"))
@@ -4025,6 +4268,575 @@ function EIGHTHFU.assertReplayedContextScenario(bundleDir)
         "a replayed/duplicated structured run_id across two directories was not labeled replayed_run_id_conflict:\n" .. manifest)
     assertf(manifest:find("final_runtime_health:%s+ok") == nil,
         "final_runtime_health=ok despite a replayed structured run_id across two run directories:\n" .. manifest)
+end
+
+-- ---------------------------------------------------------------------
+-- Ninth follow-up (release/2.3.1.0-final-prep): closes the disclosed gap
+-- in the eighth follow-up's RunContext identity plumbing -- structured
+-- identity is now the ONLY path that can prove current worker health.
+-- These fixtures exercise the required behavioral cases from that
+-- hardening's spec section 16 not already covered above: strict JSON
+-- validation (malformed/truncated/wrong-schema), job_id authority
+-- (missing/wrong/duplicate), current_processing strict validation and
+-- filename/run_dir binding, single-selected-context semantics under
+-- concurrency, and full lifecycle status gating (running/failed/
+-- cancelled/stale-completed).
+-- ---------------------------------------------------------------------
+local NINTHFU = {}
+
+-- #2: worker_context.json exists but is not valid JSON at all. Must never
+-- authenticate -- this run has otherwise-complete marker/output evidence
+-- and even a matching current_processing record, so the ONLY thing
+-- standing between it and a false "ok" is strict JSON validation.
+function NINTHFU.createMalformedWorkerContextScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "malformed-worker-context-json"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-malformed-worker-context-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "worker_context.json"), 'this is not { valid json at all\n')
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertMalformedWorkerContextScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a malformed worker_context.json (not valid JSON) authenticated current health:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_processing") == nil,
+        "a malformed worker_context.json was classified current_processing:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a malformed worker_context.json:\n" .. manifest)
+end
+
+-- #3: worker_context.json is TRUNCATED mid-object, but the run_id value it
+-- does contain is the exact string that WOULD match the selected
+-- current_processing record if extracted via a loose substring pattern
+-- (the same shape the loose parseJsonStringField helper elsewhere in this
+-- file would happily accept). A parseable early "run_id" inside broken
+-- JSON must not authenticate -- only the strict parser's rejection of the
+-- whole (unterminated, no closing brace, no job_id/run_dir_name) object
+-- stands between this and a false "ok".
+function NINTHFU.createTruncatedWorkerContextScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "truncated-worker-context-with-run-id"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-truncated-worker-context-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "worker_context.json"),
+        '{\n  "schema": 1,\n  "run_id": "' .. context.runId .. '"')
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertTruncatedWorkerContextScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a truncated worker_context.json with a matching-looking run_id authenticated current health:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_processing") == nil,
+        "a truncated worker_context.json was classified current_processing:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a truncated worker_context.json:\n" .. manifest)
+end
+
+-- #4: worker_context.json is complete, well-formed JSON with every
+-- required field present -- but names an unsupported schema value. Must
+-- be rejected exactly like a missing file, never read leniently.
+function NINTHFU.createWrongSchemaWorkerContextScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "wrong-worker-context-schema"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-wrong-schema-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
+        "{",
+        '  "schema": 2,',
+        '  "run_id": "' .. context.runId .. '",',
+        '  "job_id": "single",',
+        '  "run_dir_name": "' .. context.workerRunName .. '"',
+        "}",
+        "",
+    }, "\n"))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertWrongSchemaWorkerContextScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "an unsupported worker_context.json schema value authenticated current health:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_processing") == nil,
+        "an unsupported worker_context.json schema was classified current_processing:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite an unsupported worker_context.json schema:\n" .. manifest)
+end
+
+-- #5: worker_context.json is otherwise well-formed and complete except
+-- job_id is entirely absent -- must never fall back to treating the job
+-- as anonymously/informally identified.
+function NINTHFU.createMissingJobIdScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "missing-job-id"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-missing-job-id-" .. tostring(os.time())
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "worker_context.json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. context.runId .. '",',
+        '  "run_dir_name": "' .. context.workerRunName .. '"',
+        "}",
+        "",
+    }, "\n"))
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertMissingJobIdScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a worker_context.json missing job_id entirely authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite worker_context.json missing job_id:\n" .. manifest)
+end
+
+-- #6: worker_context.json is complete and its run_id matches the selected
+-- current-processing record, but job_id names a DIFFERENT job than the
+-- one it actually lives in. structuredJobId must be authoritative, not
+-- informational.
+function NINTHFU.createWrongJobIdScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "wrong-job-id"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-wrong-job-id-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "not-single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertWrongJobIdScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a wrong job_id in worker_context.json authenticated current health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_mismatch") ~= nil,
+        "a wrong job_id was not labeled job_identity_mismatch:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a wrong job_id in worker_context.json:\n" .. manifest)
+end
+
+-- #7: two sibling jobs in the same run both carry a worker_context.json
+-- claiming the SAME job_id (one copied onto the other). Even the job whose
+-- own directory name happens to match the shared value can never be
+-- trusted here -- a duplicated job_id is ambiguous for the run as a whole.
+function NINTHFU.createDuplicateJobIdScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "duplicate-job-id"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, {
+        successfulWorkerJob("jobA"),
+        successfulWorkerJob("jobB"),
+    })
+    context.runId = "guid-duplicate-job-id-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "jobA", context.runId, "jobA")
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "jobB", context.runId, "jobA")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertDuplicateJobIdScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a job_id duplicated across sibling jobs authenticated current health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+job_identity_conflicting") ~= nil,
+        "a duplicated job_id was not labeled job_identity_conflicting:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a job_id duplicated across sibling jobs:\n" .. manifest)
+end
+
+-- #12: current_processing/<run_id>.json exists but is not valid JSON.
+-- Must be skipped entirely, never guessed at -- even though the job's own
+-- worker_context.json is perfectly valid and would otherwise prove health.
+function NINTHFU.createMalformedCurrentStateScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "malformed-current-state-json"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-malformed-current-state-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    mkdirP(dir)
+    writeFile(joinPath(dir, context.runId .. ".json"), 'not { valid json\n')
+    return context
+end
+
+function NINTHFU.assertMalformedCurrentStateScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a malformed current_processing state file authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a malformed current_processing state file:\n" .. manifest)
+end
+
+-- #13: current_processing/<run_id>.json is truncated mid-object, but does
+-- contain the correct run_id string -- a reader relying on substring
+-- extraction rather than strict parsing could still accept it.
+function NINTHFU.createTruncatedCurrentStateScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "truncated-current-state-with-run-id"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-truncated-current-state-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    mkdirP(dir)
+    writeFile(joinPath(dir, context.runId .. ".json"),
+        '{\n  "schema": 1,\n  "run_id": "' .. context.runId .. '"')
+    return context
+end
+
+function NINTHFU.assertTruncatedCurrentStateScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a truncated current_processing state file with a real run_id authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a truncated current_processing state file:\n" .. manifest)
+end
+
+-- #14: current_processing/<run_id>.json's FILENAME names one run_id, but
+-- its own JSON run_id field names a different one. The worker_context.json
+-- for the job even claims the run_id inside the JSON body, which would
+-- match if filename binding were not enforced.
+function NINTHFU.createStateFilenameMismatchScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "state-filename-run-id-mismatch"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    local filenameRunId = "guid-filename-run-id-" .. tostring(os.time())
+    local bodyRunId = "guid-body-run-id-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", bodyRunId, "single")
+    local dir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "current_processing")
+    mkdirP(dir)
+    writeFile(joinPath(dir, filenameRunId .. ".json"), table.concat({
+        "{",
+        '  "schema": 1,',
+        '  "run_id": "' .. bodyRunId .. '",',
+        '  "run_dir_name": "' .. context.workerRunName .. '",',
+        '  "status": "completed"',
+        "}",
+        "",
+    }, "\n"))
+    return context
+end
+
+function NINTHFU.assertStateFilenameMismatchScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a current_processing filename/run_id mismatch authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a current_processing filename/run_id mismatch:\n" .. manifest)
+end
+
+-- #15: current_processing/<run_id>.json is otherwise valid and filename-
+-- bound, but its run_dir_name names a directory that was never actually
+-- persisted.
+function NINTHFU.createStateRunDirMismatchScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "state-run-dir-mismatch"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-run-dir-mismatch-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", "STEMwerk_never_persisted_directory")
+    return context
+end
+
+function NINTHFU.assertStateRunDirMismatchScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a current_processing run_dir_name pointing at a non-persisted directory authenticated current health:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a current_processing run_dir_name mismatch:\n" .. manifest)
+end
+
+-- #16: a fully valid, fully successful run whose SELECTED current-
+-- processing record's status is "running". Running can never prove final
+-- (ok) worker health, even with otherwise complete success evidence.
+function NINTHFU.createCurrentStateRunningScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "current-state-running"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-current-state-running-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "running", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertCurrentStateRunningScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a selected current-processing record with status=running proved current_worker_health=ok:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the running run was not the one structurally selected/evaluated:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+current_processing_state_running") ~= nil,
+        "a running current-processing state was not labeled current_processing_state_running:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a running current-processing state:\n" .. manifest)
+end
+
+-- #18: a fully valid run with fully successful job evidence, but the
+-- SELECTED current-processing record's status is "failed". This is
+-- exactly the case the hardening spec calls out explicitly: a failed
+-- processing state plus successful stale job evidence must never read as
+-- OK -- the writer's own explicit failure verdict wins.
+function NINTHFU.createCurrentStateFailedScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "current-state-failed"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-current-state-failed-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "failed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertCurrentStateFailedScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+failed") ~= nil,
+        "a selected current-processing record with status=failed did not force current_worker_health=failed:\n" .. manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "successful stale job evidence overrode an explicit failed current-processing state:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+current_processing_state_failed") ~= nil,
+        "a failed current-processing state was not labeled current_processing_state_failed:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a failed current-processing state:\n" .. manifest)
+end
+
+-- #19: same as #18 but status="cancelled" -- also a current failure, never
+-- a success, regardless of job evidence.
+function NINTHFU.createCurrentStateCancelledScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "current-state-cancelled"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-current-state-cancelled-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "cancelled", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertCurrentStateCancelledScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+failed") ~= nil,
+        "a selected current-processing record with status=cancelled did not force current_worker_health=failed:\n" .. manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "successful stale job evidence overrode an explicit cancelled current-processing state:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+current_processing_state_cancelled") ~= nil,
+        "a cancelled current-processing state was not labeled current_processing_state_cancelled:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a cancelled current-processing state:\n" .. manifest)
+end
+
+-- #20: a structurally valid, filename/run_dir-bound, "completed" current-
+-- processing record whose OWN started/updated timestamps are stale (well
+-- outside CURRENT_WORKER_CONTEXT_WINDOW_SECONDS). A retained completed
+-- state must not authenticate indefinitely -- timestamps only ever reject
+-- stale identity here, they never grant it, but a too-old record must not
+-- even be selectable.
+function NINTHFU.createStaleCompletedStateScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "stale-completed-state"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = currentWorkerRunName()
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-stale-completed-state-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeStaleCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertStaleCompletedStateScenario(bundleDir)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "a stale (2h-old) completed current-processing record authenticated current health:\n" .. manifest)
+    assertf(manifest:find("worker_context_identity:%s+current_processing") == nil,
+        "a stale current-processing record was still classified current_processing:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite a stale completed current-processing record:\n" .. manifest)
+end
+
+-- #9/#22: two independent, fully valid, fully healthy runs (RUN_A, RUN_B),
+-- each with its own worker_context.json and its own current_processing
+-- record. Only the newer one (RUN_A) is selected as current; RUN_B's jobs
+-- must never be merged into it, and RUN_B is surfaced only as recent
+-- provenance, never current.
+function NINTHFU.createTwoConcurrentValidRunsScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "two-concurrent-valid-runs-no-cross-merge"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.runNameB = "STEMwerk_" .. tostring(os.time() - 5) .. "_001_1"
+    writeCurrentWorkerRun(context, context.runNameB, { successfulWorkerJob("single") })
+    local runIdB = "guid-concurrent-run-b-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameB, "single", runIdB, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, runIdB, "completed", context.runNameB)
+
+    waitNextSecond()
+    context.workerRunName = "STEMwerk_" .. tostring(os.time()) .. "_002_1"
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-concurrent-run-a-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+    return context
+end
+
+function NINTHFU.assertTwoConcurrentValidRunsScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "the newer of two independently-valid concurrent runs did not prove current health:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the newer concurrent run was not the one selected as current:\n" .. manifest)
+    assertf(manifest:find(context.runNameB, 1, true) == nil or manifest:find("current_worker_health_run:%s+" .. context.runNameB) == nil,
+        "the older concurrent run's jobs were merged into (or replaced) the current verdict:\n" .. manifest)
+    assertf(manifest:find("recent_worker_health:%s+ok") ~= nil,
+        "the older concurrent run's own success was not surfaced as recent provenance:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "final_runtime_health did not become ok from the correctly-selected newer concurrent run:\n" .. manifest)
+end
+
+-- #10: selected RUN_A is successful; a SEPARATE, independently successful
+-- RUN_B also has a valid current_processing record, but RUN_A's own
+-- (older) record is nonetheless the one selected here because RUN_B's
+-- record is deliberately made the NON-newest. RUN_B must never be used to
+-- prove or supplement RUN_A's health.
+function NINTHFU.createSelectedRunASuccessfulRunBScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "selected-run-a-successful-run-b-cannot-prove-current"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = "STEMwerk_" .. tostring(os.time()) .. "_001_1"
+    writeCurrentWorkerRun(context, context.workerRunName, { successfulWorkerJob("single") })
+    context.runId = "guid-selected-run-a-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+
+    waitNextSecond()
+    context.runNameB = "STEMwerk_" .. tostring(os.time()) .. "_002_1"
+    writeCurrentWorkerRun(context, context.runNameB, { successfulWorkerJob("single") })
+    local runIdB = "guid-not-selected-run-b-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameB, "single", runIdB, "single")
+    -- RUN_B's own state record is deliberately NOT written, so RUN_A (the
+    -- only valid current-processing record) remains the sole selectable
+    -- context even though RUN_B is the newer directory and is itself
+    -- fully successful.
+    return context
+end
+
+function NINTHFU.assertSelectedRunASuccessfulRunBScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") ~= nil,
+        "selected RUN_A did not prove current_worker_health=ok:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "RUN_A was not the run structurally selected/evaluated:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") ~= nil,
+        "final_runtime_health did not become ok from the correctly-selected RUN_A:\n" .. manifest)
+end
+
+-- #11: selected RUN_A has INCOMPLETE job evidence (unproven); a separate
+-- RUN_B is fully healthy and has its own valid current_processing record,
+-- but RUN_A remains selected (its own record is the one this cycle
+-- resolves) -- current health must reflect RUN_A's incompleteness, never
+-- silently fall back to RUN_B's success.
+function NINTHFU.createSelectedRunAIncompleteRunBScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "selected-run-a-incomplete-successful-run-b-no-fallback"
+    removeTree(joinPath(context.extState.runtimeBase, "evidence"))
+    clearRuns(context)
+    context.workerRunName = "STEMwerk_" .. tostring(os.time()) .. "_001_1"
+    local jobDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", context.workerRunName, "single")
+    mkdirP(jobDir)
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    writeFile(joinPath(jobDir, "done.txt"), "DONE\n")
+    -- Identified and complete, but no output evidence at all: unproven.
+    writeFile(joinPath(jobDir, "timing_events.jsonl"),
+        '{"time":' .. tostring(os.time()) .. ',"event":"done_seen","job_index":"single","job_dir":"/tmp/' .. context.workerRunName .. '"}\n')
+    context.runId = "guid-selected-run-a-incomplete-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.workerRunName, "single", context.runId, "single")
+    EIGHTHFU.writeCurrentProcessingRecord(context, context.runId, "completed", context.workerRunName)
+
+    waitNextSecond()
+    context.runNameB = "STEMwerk_" .. tostring(os.time()) .. "_002_1"
+    writeCurrentWorkerRun(context, context.runNameB, { successfulWorkerJob("single") })
+    local runIdB = "guid-run-b-not-selected-" .. tostring(os.time())
+    EIGHTHFU.writeWorkerContextFile(context, context.runNameB, "single", runIdB, "single")
+    -- RUN_B has no current_processing record of its own, so it can never
+    -- be selected in place of RUN_A this cycle.
+    return context
+end
+
+function NINTHFU.assertSelectedRunAIncompleteRunBScenario(bundleDir, context)
+    local manifest = readManifest(bundleDir)
+    assertZeroAcceptancePhases(manifest)
+    assertf(manifest:find("current_worker_health:%s+ok") == nil,
+        "an incomplete selected RUN_A fell back to a separate healthy RUN_B's success:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_run:%s+" .. context.workerRunName) ~= nil,
+        "the incomplete selected RUN_A was not the one evaluated:\n" .. manifest)
+    assertf(manifest:find("current_worker_health_reason:%s+unrecognized_model_contract") ~= nil,
+        "RUN_A's own incompleteness reason was not reported:\n" .. manifest)
+    assertf(manifest:find("final_runtime_health:%s+ok") == nil,
+        "final_runtime_health=ok despite RUN_A being incomplete:\n" .. manifest)
 end
 
 local function assertZipIntegrity(bundleDir)
@@ -4612,6 +5424,99 @@ local function main()
     do
         local ctx = EIGHTHFU.createReplayedContextScenario(joinPath(baseRoot, "replayed-structured-context"))
         print("PASS replayed-structured-context-cannot-prove-current -> " .. runScenario(ctx, EIGHTHFU.assertReplayedContextScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = NINTHFU.createMalformedWorkerContextScenario(joinPath(baseRoot, "malformed-worker-context"))
+        print("PASS malformed-worker-context-json -> " .. runScenario(ctx, NINTHFU.assertMalformedWorkerContextScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createTruncatedWorkerContextScenario(joinPath(baseRoot, "truncated-worker-context"))
+        print("PASS truncated-worker-context-with-run-id -> " .. runScenario(ctx, NINTHFU.assertTruncatedWorkerContextScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createWrongSchemaWorkerContextScenario(joinPath(baseRoot, "wrong-worker-context-schema"))
+        print("PASS wrong-worker-context-schema -> " .. runScenario(ctx, NINTHFU.assertWrongSchemaWorkerContextScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createMissingJobIdScenario(joinPath(baseRoot, "missing-job-id"))
+        print("PASS missing-job-id -> " .. runScenario(ctx, NINTHFU.assertMissingJobIdScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createWrongJobIdScenario(joinPath(baseRoot, "wrong-job-id"))
+        print("PASS wrong-job-id -> " .. runScenario(ctx, NINTHFU.assertWrongJobIdScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createDuplicateJobIdScenario(joinPath(baseRoot, "duplicate-job-id"))
+        print("PASS duplicate-job-id -> " .. runScenario(ctx, NINTHFU.assertDuplicateJobIdScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createMalformedCurrentStateScenario(joinPath(baseRoot, "malformed-current-state"))
+        print("PASS malformed-current-state-json -> " .. runScenario(ctx, NINTHFU.assertMalformedCurrentStateScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createTruncatedCurrentStateScenario(joinPath(baseRoot, "truncated-current-state"))
+        print("PASS truncated-current-state-with-run-id -> " .. runScenario(ctx, NINTHFU.assertTruncatedCurrentStateScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createStateFilenameMismatchScenario(joinPath(baseRoot, "state-filename-mismatch"))
+        print("PASS state-filename-run-id-mismatch -> " .. runScenario(ctx, NINTHFU.assertStateFilenameMismatchScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createStateRunDirMismatchScenario(joinPath(baseRoot, "state-run-dir-mismatch"))
+        print("PASS state-run-dir-mismatch -> " .. runScenario(ctx, NINTHFU.assertStateRunDirMismatchScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createCurrentStateRunningScenario(joinPath(baseRoot, "current-state-running"))
+        print("PASS current-state-running -> " .. runScenario(ctx, NINTHFU.assertCurrentStateRunningScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createCurrentStateFailedScenario(joinPath(baseRoot, "current-state-failed"))
+        print("PASS current-state-failed -> " .. runScenario(ctx, NINTHFU.assertCurrentStateFailedScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createCurrentStateCancelledScenario(joinPath(baseRoot, "current-state-cancelled"))
+        print("PASS current-state-cancelled -> " .. runScenario(ctx, NINTHFU.assertCurrentStateCancelledScenario))
+    end
+
+    do
+        local ctx = NINTHFU.createStaleCompletedStateScenario(joinPath(baseRoot, "stale-completed-state"))
+        print("PASS stale-completed-state -> " .. runScenario(ctx, NINTHFU.assertStaleCompletedStateScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = NINTHFU.createTwoConcurrentValidRunsScenario(joinPath(baseRoot, "two-concurrent-valid-runs"))
+        print("PASS two-concurrent-valid-runs-no-cross-merge -> " .. runScenario(ctx, NINTHFU.assertTwoConcurrentValidRunsScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = NINTHFU.createSelectedRunASuccessfulRunBScenario(joinPath(baseRoot, "selected-run-a-successful-run-b"))
+        print("PASS selected-run-a-successful-run-b -> " .. runScenario(ctx, NINTHFU.assertSelectedRunASuccessfulRunBScenario))
+    end
+
+    waitNextSecond()
+
+    do
+        local ctx = NINTHFU.createSelectedRunAIncompleteRunBScenario(joinPath(baseRoot, "selected-run-a-incomplete-run-b"))
+        print("PASS selected-run-a-incomplete-successful-run-b -> " .. runScenario(ctx, NINTHFU.assertSelectedRunAIncompleteRunBScenario))
     end
 
     print("All headless support bundle tests passed.")

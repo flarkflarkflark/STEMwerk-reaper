@@ -80,9 +80,17 @@ end
 -- MOVEFILE_REPLACE_EXISTING) fails when the destination already exists --
 -- i.e. on every transition after the initial "running" write -- so this
 -- falls back to os.remove() then os.rename(). That fallback has a narrow
--- non-atomic window, but since no other process ever writes this run_id's
--- file, nothing can observe a torn read there except this run's own next
--- status write, which is the known, documented limitation of this design.
+-- non-atomic window where the destination is briefly missing, but since
+-- no other process ever writes this run_id's file, nothing can observe a
+-- torn read there except this run's own next status write -- a known,
+-- documented, accepted limitation (a reader sees "no state" during that
+-- window, never a corrupt one). If the rename still fails after that
+-- retry, this NEVER falls back to writing/truncating the destination
+-- path directly: that would risk leaving a partial/truncated JSON file
+-- behind, which is strictly worse than a missing one (a reader could
+-- mistake it for a real, if incomplete, record). Instead it fails safe --
+-- the old file (already removed) simply stays absent, and no half-written
+-- destination is ever produced.
 function SW_LOG.writeCurrentProcessingState(runContext, status)
     if not runContext or not runContext.run_id or runContext.run_id == "" then
         return nil
@@ -110,11 +118,19 @@ function SW_LOG.writeCurrentProcessingState(runContext, status)
         ok = os.rename(tmpPath, path)
     end
     if not ok then
-        -- Last resort: write in place rather than silently losing the
-        -- status update (still correct, just not atomic in this branch).
-        local direct = io.open(path, "w")
-        if direct then direct:write(payload); direct:close() end
+        -- Never fall back to writing/truncating the destination path
+        -- directly: a direct write can be interrupted mid-write (process
+        -- killed, disk full, REAPER crash) and leave a PARTIAL/truncated
+        -- authoritative JSON file behind, which a reader could mistake
+        -- for a real (if incomplete) record. A missing destination file
+        -- is a safe, unambiguous "no current state" the reader already
+        -- treats as absent; a torn/partial one is not. So on persistent
+        -- rename failure this fails safe instead: the old state file (if
+        -- any) is left exactly as it was, no half-written destination is
+        -- ever produced, and the leftover .tmp file is removed so it
+        -- cannot be mistaken for the real record either.
         os.remove(tmpPath)
+        return nil
     end
     return path
 end

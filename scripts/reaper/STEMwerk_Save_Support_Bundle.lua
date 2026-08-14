@@ -3818,6 +3818,251 @@ end
 local CURRENT_WORKER_CONTEXT_WINDOW_SECONDS = 3600
 local CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS = 300
 
+-- ---------------------------------------------------------------------
+-- Strict JSON reading for structured RunContext identity files
+-- (worker_context.json, current_processing/<run_id>.json, and the
+-- DrumSep helper's echoed run_id/job_id in drumsep_result.json).
+--
+-- parseJsonStringField/parseJsonNumberField above are deliberately loose
+-- substring pattern matches -- fine for scanning free-form jsonl event
+-- lines and log text, but WRONG for authenticating identity: a truncated
+-- or hand-edited file like '{"run_id": "abc' would still match
+-- `"run_id"%s*:%s*"(.-)"` against a LATER, unrelated quoted string on the
+-- same line, or simply never notice the object was never closed. Identity
+-- files are small flat JSON objects (string/number fields only, no
+-- nesting), so SW_RUNCTX.strictParseFlatJson below is a minimal but
+-- complete parser for exactly that grammar: it rejects truncated/malformed
+-- input, trailing garbage after the closing brace, and a key repeated with
+-- two different values (a conflicting duplicate identity representation)
+-- rather than silently taking the first or last match.
+--
+-- Everything in this section lives on the single SW_RUNCTX table rather
+-- than as separate top-level locals: STEMwerk_Save_Support_Bundle.lua's
+-- own chunk is already close to Lua's 200-active-local ceiling (the same
+-- constraint STEMwerk.lua documents at its own top-level locals), so new
+-- module-level identity helpers are added as table fields instead of new
+-- top-level `local`s.
+-- ---------------------------------------------------------------------
+local SW_RUNCTX = {}
+
+function SW_RUNCTX.strictParseFlatJson(text)
+    text = tostring(text or "")
+    local len = #text
+    local pos = 1
+
+    local function skipWs()
+        while pos <= len do
+            local c = text:sub(pos, pos)
+            if c == " " or c == "\t" or c == "\n" or c == "\r" then
+                pos = pos + 1
+            else
+                break
+            end
+        end
+    end
+
+    local function parseString()
+        if text:sub(pos, pos) ~= '"' then return nil, "expected_string" end
+        pos = pos + 1
+        local out = {}
+        while true do
+            if pos > len then return nil, "truncated_string" end
+            local c = text:sub(pos, pos)
+            if c == '"' then
+                pos = pos + 1
+                return table.concat(out)
+            elseif c == "\\" then
+                pos = pos + 1
+                if pos > len then return nil, "truncated_string" end
+                local e = text:sub(pos, pos)
+                if e == '"' then out[#out + 1] = '"'
+                elseif e == "\\" then out[#out + 1] = "\\"
+                elseif e == "/" then out[#out + 1] = "/"
+                elseif e == "n" then out[#out + 1] = "\n"
+                elseif e == "t" then out[#out + 1] = "\t"
+                elseif e == "r" then out[#out + 1] = "\r"
+                else return nil, "unsupported_escape" end
+                pos = pos + 1
+            elseif c == "\n" or c == "\r" then
+                -- A raw newline inside a JSON string is invalid -- most
+                -- often the signature of a truncated/torn write (the file
+                -- was cut off mid-value, and the next line just happens to
+                -- contain another quote).
+                return nil, "unterminated_string"
+            else
+                out[#out + 1] = c
+                pos = pos + 1
+            end
+        end
+    end
+
+    local function parseValue()
+        skipWs()
+        local c = text:sub(pos, pos)
+        if c == '"' then
+            return parseString()
+        elseif c == "-" or c:match("%d") then
+            local startPos = pos
+            if c == "-" then pos = pos + 1 end
+            local sawDigit = false
+            while pos <= len and text:sub(pos, pos):match("%d") do
+                pos = pos + 1
+                sawDigit = true
+            end
+            if pos <= len and text:sub(pos, pos) == "." then
+                pos = pos + 1
+                while pos <= len and text:sub(pos, pos):match("%d") do pos = pos + 1 end
+            end
+            if not sawDigit then return nil, "invalid_number" end
+            return tonumber(text:sub(startPos, pos - 1))
+        elseif text:sub(pos, pos + 3) == "true" then
+            pos = pos + 4
+            return true
+        elseif text:sub(pos, pos + 4) == "false" then
+            pos = pos + 5
+            return false
+        else
+            return nil, "invalid_value"
+        end
+    end
+
+    skipWs()
+    if text:sub(pos, pos) ~= "{" then return nil, "expected_object" end
+    pos = pos + 1
+    local result = {}
+    skipWs()
+    if text:sub(pos, pos) == "}" then
+        pos = pos + 1
+    else
+        while true do
+            skipWs()
+            local key, keyErr = parseString()
+            if not key then return nil, "expected_key:" .. tostring(keyErr) end
+            skipWs()
+            if text:sub(pos, pos) ~= ":" then return nil, "expected_colon" end
+            pos = pos + 1
+            local value, valueErr = parseValue()
+            if value == nil and valueErr then return nil, "expected_value:" .. tostring(valueErr) end
+            if result[key] ~= nil and result[key] ~= value then
+                return nil, "duplicate_key_conflict:" .. key
+            end
+            result[key] = value
+            skipWs()
+            local c = text:sub(pos, pos)
+            if c == "," then
+                pos = pos + 1
+            elseif c == "}" then
+                pos = pos + 1
+                break
+            else
+                return nil, "expected_comma_or_brace"
+            end
+        end
+    end
+    skipWs()
+    if pos <= len then
+        return nil, "trailing_content"
+    end
+    return result
+end
+
+-- Required schema for both structured identity file shapes this release
+-- writes. A file naming any other schema value is rejected outright
+-- rather than read leniently -- an unrecognized schema has no known field
+-- contract to trust.
+SW_RUNCTX.WORKER_CONTEXT_SCHEMA = 1
+SW_RUNCTX.CURRENT_PROCESSING_SCHEMA = 1
+
+-- Reads and fully validates a worker_context.json (or an equivalent
+-- schema=1/run_id/job_id/run_dir_name object). Returns nil on ANY
+-- deviation -- malformed/truncated JSON, wrong/missing schema, or any
+-- missing/empty/non-string required field -- never a partially-trusted
+-- table. A rejected file is treated exactly like an absent one by every
+-- caller: it can contribute to legacy/marker provenance, but never to
+-- current-health identity.
+function SW_RUNCTX.readWorkerContext(rawText)
+    if not rawText then return nil end
+    local obj = SW_RUNCTX.strictParseFlatJson(rawText)
+    if not obj then return nil end
+    if obj.schema ~= SW_RUNCTX.WORKER_CONTEXT_SCHEMA then return nil end
+    if type(obj.run_id) ~= "string" or type(obj.job_id) ~= "string" or type(obj.run_dir_name) ~= "string" then
+        return nil
+    end
+    local runId = presentValue(obj.run_id)
+    local jobId = presentValue(obj.job_id)
+    local runDirName = presentValue(obj.run_dir_name)
+    if not (runId and jobId and runDirName) then return nil end
+    return { run_id = runId, job_id = jobId, run_dir_name = runDirName }
+end
+
+-- Reads the DrumSep helper's OWN echoed identity (drumsep_result.json),
+-- which only ever carries run_id/job_id (see write_result() in
+-- stemwerk_drumsep_process.py) -- no schema/run_dir_name field of its
+-- own. This is read independently of worker_context.json (never as a
+-- silent fallback substitute for it) so a disagreement between the two
+-- can be detected as a genuine identity conflict.
+function SW_RUNCTX.readHelperIdentity(rawText)
+    if not rawText then return nil end
+    local obj = SW_RUNCTX.strictParseFlatJson(rawText)
+    if not obj then return nil end
+    if type(obj.run_id) ~= "string" or type(obj.job_id) ~= "string" then return nil end
+    local runId = presentValue(obj.run_id)
+    local jobId = presentValue(obj.job_id)
+    if not (runId and jobId) then return nil end
+    return { run_id = runId, job_id = jobId }
+end
+
+-- The 4 lifecycle statuses SW_LOG.writeCurrentProcessingState ever writes.
+-- Anything else is an invalid/unsupported record, rejected like malformed
+-- JSON rather than guessed at.
+SW_RUNCTX.VALID_STATUSES = { running = true, completed = true, failed = true, cancelled = true }
+
+-- Reads and fully validates one current_processing/<run_id>.json record.
+-- Returns nil on any deviation (malformed/truncated JSON, wrong/missing
+-- schema, missing run_id/run_dir_name, or an unrecognized status).
+function SW_RUNCTX.readCurrentProcessingRecord(rawText)
+    if not rawText then return nil end
+    local obj = SW_RUNCTX.strictParseFlatJson(rawText)
+    if not obj then return nil end
+    if obj.schema ~= SW_RUNCTX.CURRENT_PROCESSING_SCHEMA then return nil end
+    if type(obj.run_id) ~= "string" or type(obj.run_dir_name) ~= "string" then return nil end
+    local runId = presentValue(obj.run_id)
+    local runDirName = presentValue(obj.run_dir_name)
+    local status = type(obj.status) == "string" and presentValue(obj.status) or nil
+    if not (runId and runDirName and status and SW_RUNCTX.VALID_STATUSES[status]) then
+        return nil
+    end
+    local startedUtc = type(obj.started_utc) == "string" and presentValue(obj.started_utc) or nil
+    local updatedUtc = type(obj.updated_utc) == "string" and presentValue(obj.updated_utc) or nil
+    return {
+        run_id = runId,
+        run_dir_name = runDirName,
+        status = status,
+        started_utc = startedUtc or "",
+        updated_utc = updatedUtc or "",
+    }
+end
+
+-- Converts a validated "YYYY-MM-DDTHH:MM:SSZ" UTC timestamp to a Unix
+-- epoch, independent of the host's local timezone. os.time() always
+-- interprets its table argument as LOCAL time, so the local/UTC offset at
+-- that instant is measured and applied. (DST transitions in the few
+-- hours around the instant itself are the only edge case this can get
+-- slightly wrong -- acceptable for a freshness/staleness check, never
+-- used to grant identity, only to reject stale records.)
+function SW_RUNCTX.isoUtcToEpoch(value)
+    if not isValidIsoUtcTimestamp(value) then return nil end
+    local y, mo, d, h, mi, s = value:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)Z$")
+    local asLocal = os.time({
+        year = tonumber(y), month = tonumber(mo), day = tonumber(d),
+        hour = tonumber(h), min = tonumber(mi), sec = tonumber(s), isdst = false,
+    })
+    if not asLocal then return nil end
+    local reinterpretedAsLocal = os.time(os.date("!*t", asLocal))
+    local offset = asLocal - reinterpretedAsLocal
+    return asLocal + offset
+end
+
 -- Canonical final DrumSep child stems, in the exact spelling production
 -- writes to found_stems=/expected_stems= (see EXPECTED_STEMS in
 -- stemwerk_drumsep_process.py).
@@ -3860,7 +4105,7 @@ end
 -- shared run-level table), reusing the same per-job parsing the
 -- processing summary uses. Also collects the strict identity markers and
 -- the flow-specific output/validation evidence for this job only.
-local function probeWorkerJobEvidence(jobDir, runName)
+local function probeWorkerJobEvidence(jobDir, runName, jobName)
     local probe = {
         result = "unknown",
         model = "unknown",
@@ -3934,26 +4179,76 @@ local function probeWorkerJobEvidence(jobDir, runName)
         end
     end
     -- Explicit structured identity (RunContext/JobContext): worker_context.json
-    -- is written directly by the Python worker (and, for Direct Kit, echoed
-    -- into drumsep_result.json by the DrumSep helper) from the
-    -- STEMWERK_RUN_ID/STEMWERK_JOB_ID the launcher passed it -- an exact
-    -- authoritative identity tuple, never inferred from directory names or
-    -- timestamps. Older/historical evidence predating this file simply has
-    -- none, and falls back to the marker/session heuristics above unchanged.
+    -- is written directly by the Python worker from the
+    -- STEMWERK_RUN_ID/STEMWERK_JOB_ID/STEMWERK_RUN_DIR_NAME the launcher
+    -- passed it -- an exact authoritative identity tuple, never inferred
+    -- from directory names or timestamps. For Direct Kit, the DrumSep
+    -- helper independently echoes run_id/job_id into its own
+    -- drumsep_result.json; that is read as a SEPARATE authoritative source
+    -- (never a silent fallback substitute for worker_context.json), and if
+    -- both are present but disagree the job's identity is CONFLICTING --
+    -- neither one "wins". A job's structured identity is only usable
+    -- (structuredRunId/structuredJobId set) when it strictly validates
+    -- (see SW_RUNCTX.readWorkerContext -- schema/run_id/job_id/run_dir_name
+    -- all present, well-formed JSON, no truncation) AND its own run_dir_name
+    -- names this exact run directory AND (when a helper context is also
+    -- present) the two agree. Older/historical evidence predating this
+    -- file, or evidence that fails any of these checks, simply has no
+    -- structured identity and falls back to the marker/session heuristics
+    -- above as provenance only -- it can never independently prove current
+    -- worker health (see classifyWorkerJob / deriveCurrentWorkerRunHealth).
+    local workerContextRaw = readFile(joinPath(jobDir, "worker_context.json"), "rb")
+    local helperContextRaw = readFile(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"), "rb")
+    local workerContext = SW_RUNCTX.readWorkerContext(workerContextRaw)
+    local helperContext = SW_RUNCTX.readHelperIdentity(helperContextRaw)
+    -- A worker_context.json/drumsep_result.json file that EXISTS but fails
+    -- strict validation (truncated, malformed, wrong schema, a required
+    -- field missing/empty) carries no usable identity -- it must never be
+    -- silently treated the same as a well-formed file, but it must also
+    -- never be conflated with a job that has no such file at all and is
+    -- relying purely on marker/legacy evidence (that case stays eligible
+    -- for legacy provenance below).
+    local structuredContextInvalid = (workerContextRaw ~= nil and workerContext == nil)
+        or (helperContextRaw ~= nil and helperContext == nil)
     local structuredRunId = nil
     local structuredJobId = nil
-    local workerContextData = readFile(joinPath(jobDir, "worker_context.json"), "rb")
-    if workerContextData then
-        structuredRunId = presentValue(parseJsonStringField(workerContextData, "run_id"))
-        structuredJobId = presentValue(parseJsonStringField(workerContextData, "job_id"))
-    end
-    if not structuredRunId then
-        local stage2ResultData = readFile(joinPath(jobDir, "stage2_drumsep", "drumsep_result.json"), "rb")
-        if stage2ResultData then
-            structuredRunId = presentValue(parseJsonStringField(stage2ResultData, "run_id"))
-            structuredJobId = structuredJobId or presentValue(parseJsonStringField(stage2ResultData, "job_id"))
+    local structuredConflict = false
+    if workerContext and helperContext then
+        if workerContext.run_id ~= helperContext.run_id or workerContext.job_id ~= helperContext.job_id then
+            structuredConflict = true
+        elseif workerContext.run_dir_name ~= runName then
+            structuredConflict = true
+        else
+            structuredRunId = workerContext.run_id
+            structuredJobId = workerContext.job_id
         end
+    elseif workerContext then
+        if workerContext.run_dir_name ~= runName then
+            structuredConflict = true
+        else
+            structuredRunId = workerContext.run_id
+            structuredJobId = workerContext.job_id
+        end
+    elseif helperContext then
+        structuredRunId = helperContext.run_id
+        structuredJobId = helperContext.job_id
     end
+    -- job_id is only authoritative when it names THIS job's own persisted
+    -- directory -- a structured context whose job_id points at a sibling
+    -- job (wrong/copied job_id) can never stand in for this job's own
+    -- identity, even though its run_id might be correct.
+    local structuredJobIdWrong = structuredJobId ~= nil and structuredJobId ~= jobName
+    -- attemptedRunId is which run this job's structured evidence appears
+    -- to be ABOUT, even when that evidence turns out to be broken/
+    -- conflicting (structuredRunId above stays nil in that case). It is
+    -- used ONLY to decide which run directory is associated with the
+    -- selected current-processing record for reason-reporting purposes --
+    -- never to grant a health proof. Without it, a run whose ONLY evidence
+    -- is a genuine worker/helper conflict could never be selected as the
+    -- current context at all, and its conflict would silently disappear
+    -- into a generic "no current run evidence" instead of being reported
+    -- as the conflict it actually is.
+    local attemptedRunId = (workerContext and workerContext.run_id) or (helperContext and helperContext.run_id) or nil
 
     local markerCount = 0
     for _ in pairs(markerRunIds) do markerCount = markerCount + 1 end
@@ -4034,6 +4329,10 @@ local function probeWorkerJobEvidence(jobDir, runName)
         sessionId = presentValue(jobSessionId),
         structuredRunId = structuredRunId,
         structuredJobId = structuredJobId,
+        structuredConflict = structuredConflict,
+        structuredContextInvalid = structuredContextInvalid,
+        structuredJobIdWrong = structuredJobIdWrong,
+        attemptedRunId = attemptedRunId,
         validation = validation,
     }
 end
@@ -4078,10 +4377,32 @@ local function classifyWorkerJob(job)
         return "failed", "current_job_explicit_failure"
     end
 
-    -- Per-job identity gate: a job can only contribute to a health proof
-    -- for THIS run when its own explicit identity markers unambiguously
-    -- name this run. Unassociated/copied/conflicting identity evidence is
-    -- unproven, never healthy.
+    -- Per-job identity gate. Structured RunContext/JobContext identity
+    -- (worker_context.json, and for Direct Kit the DrumSep helper's own
+    -- echoed identity) is checked FIRST and is never informational: a
+    -- structured context that exists but fails strict validation, or that
+    -- disagrees with the helper's own echoed identity, or whose job_id
+    -- names a different job, can never be quietly ignored in favor of the
+    -- looser marker-based check below ("structured context wins, ignore
+    -- the conflict" is exactly the authority bypass this closes). Only
+    -- after structured evidence (when present) checks out do the legacy
+    -- job_dir/drumsep_helper_output_dir markers get a say -- and that
+    -- marker-only check remains the sole identity gate for jobs with no
+    -- structured context at all, since it is what recent/historical
+    -- provenance-only classification (never current-authority) still
+    -- relies on.
+    if job.structuredConflict then
+        return "unproven", "job_identity_conflicting"
+    end
+    if job.structuredDuplicate then
+        return "unproven", "job_identity_conflicting"
+    end
+    if job.structuredContextInvalid then
+        return "unproven", "job_identity_unassociated"
+    end
+    if job.structuredJobIdWrong then
+        return "unproven", "job_identity_mismatch"
+    end
     if job.identityStatus == "unassociated" then
         return "unproven", "job_identity_unassociated"
     end
@@ -4194,86 +4515,110 @@ end
 -- run_id rather than a single shared pointer: two concurrent STEMwerk
 -- script instances each own only their own run_id's file, so there is
 -- never a write race to resolve here). Returns a plain array of
--- { run_id, status, run_dir_name, started_utc }; malformed/unreadable
--- files are skipped rather than guessed at.
+-- { run_id, status, run_dir_name, started_utc, updated_utc }.
+--
+-- Every record must pass SW_RUNCTX.readCurrentProcessingRecord's strict
+-- JSON/schema/field validation, AND the filename ("<run_id>.json") must
+-- equal the JSON's own run_id field, AND run_dir_name must name a
+-- directory that actually exists under <cacheLogDir>/runs -- a state file
+-- renamed to a different run_id, or naming a run directory that was never
+-- persisted (or was cleaned up), is rejected outright rather than
+-- trusted. Malformed/unreadable/mismatched files are skipped, never
+-- guessed at.
 local function readCurrentProcessingRecords(cacheLogDir)
     local records = {}
     local dir = joinPath(cacheLogDir, "current_processing")
     if not pathExists(dir) then return records end
+    local runsRoot = joinPath(cacheLogDir, "runs")
     for _, fileName in ipairs(enumerateFiles(dir)) do
-        if fileName:match("%.json$") then
+        local filenameRunId = fileName:match("^(.*)%.json$")
+        if filenameRunId then
             local data = readFile(joinPath(dir, fileName), "rb")
-            if data then
-                local runId = presentValue(parseJsonStringField(data, "run_id"))
-                if runId then
-                    records[#records + 1] = {
-                        run_id = runId,
-                        status = presentValue(parseJsonStringField(data, "status")) or "",
-                        run_dir_name = presentValue(parseJsonStringField(data, "run_dir_name")) or "",
-                        started_utc = presentValue(parseJsonStringField(data, "started_utc")) or "",
-                    }
-                end
+            local record = SW_RUNCTX.readCurrentProcessingRecord(data)
+            if record
+                and record.run_id == filenameRunId
+                and pathExists(joinPath(runsRoot, record.run_dir_name))
+            then
+                records[#records + 1] = record
             end
         end
     end
     return records
 end
 
--- Derives worker health from the persisted per-run/per-job records,
--- separating three evidence classes explicitly:
+-- Deterministically selects exactly ONE current-processing context for the
+-- existing single-slot manifest, among records that already passed strict
+-- validation and filename/run_dir binding. Two independent runs may both
+-- have a valid state file (see section 12/13 of the RunContext authority
+-- hardening); only the newest one (by its own authoritative updated_utc,
+-- falling back to started_utc, then run_id as a final deterministic
+-- tie-break) is ever eligible to prove CURRENT worker health -- jobs from
+-- any other run_id, however healthy, can never be merged into it.
+function SW_RUNCTX.selectCurrentProcessingRecord(records)
+    local selected = nil
+    for _, record in ipairs(records) do
+        if not selected then
+            selected = record
+        else
+            local a = (record.updated_utc ~= "" and record.updated_utc) or record.started_utc
+            local b = (selected.updated_utc ~= "" and selected.updated_utc) or selected.started_utc
+            if a > b or (a == b and record.run_id > selected.run_id) then
+                selected = record
+            end
+        end
+    end
+    return selected
+end
+
+-- Derives worker health from the persisted per-run/per-job records.
+-- Explicit structured RunContext identity (worker_context.json, bound to
+-- exactly ONE selected current_processing/<run_id>.json record) is the
+-- ONLY path that can ever produce CURRENT worker health -- the legacy
+-- job_dir/drumsep_helper_output_dir markers and the session.env
+-- timestamp window remain readable as provenance, but can never
+-- independently promote a run to current, no matter how well its
+-- timestamp lines up. Three evidence classes result:
 --
---   current_session:  identified runs whose embedded start falls inside a
---     PROVEN-current session (session.env with a valid SESSION_STARTED_UTC
---     that is itself no older than CURRENT_WORKER_CONTEXT_WINDOW_SECONDS
---     before bundle creation, and the run started within that session).
---     Only these may prove current health.
+--   current_processing: the run whose EVERY job carries a strictly
+--     valid, mutually-consistent structured identity (schema, run_id,
+--     job_id, run_dir_name -- see probeWorkerJobEvidence) naming exactly
+--     the ONE selected current-processing record (selectCurrentProcessingRecord)
+--     -- and only that run. Its lifecycle status further gates the
+--     verdict: completed may prove ok, running can never prove ok
+--     (unproven at best), failed/cancelled are always a current failure
+--     regardless of job evidence (see the status-gating below).
+--   legacy_unlinked:  identified runs that satisfy the OLD session-
+--     timestamp heuristic (fresh session.env, run started inside it, no
+--     session/structured conflict) but have no valid structured proof.
+--     This is exactly the authority gap this closes: provenance-only now,
+--     never current.
 --   recent_unlinked:  identified runs fresh relative to bundle creation
---     but NOT linked to any proven-current session. Recent is not current:
---     these are reported as provenance (recent_worker_health) but can
---     never prove final_runtime_health on their own.
+--     with no structured proof and no legacy session linkage either.
 --   historical:       anything older; provenance only.
 --
--- Within a class, the NEWEST run by full generated identity (epoch, then
--- millisecond, then counter) defines the latest processing context and is
--- the only one evaluated: a newer unproven context supersedes an older
--- proven success (no fallback to older success), a newer explicit failure
--- overrides an older success, and a newer proven success supersedes an
--- older failure. Ties resolve to failure (fail-safe).
+-- Within the eligible set, the NEWEST run by full generated identity
+-- (epoch, then millisecond, then counter) defines the latest processing
+-- context and is the only one evaluated: a newer unproven context
+-- supersedes an older proven success (no fallback to older success), a
+-- newer explicit failure overrides an older success, and a newer proven
+-- success supersedes an older failure. Ties resolve to failure (fail-safe).
 --
 -- Returns {
 --   status/run/reason            = current verdict,
---   recentStatus/recentRun/recentReason = recent-unlinked provenance,
---   contextIdentity              = current_processing|current_session|recent_unlinked|historical|none,
+--   recentStatus/recentRun/recentReason = recent/legacy-unlinked provenance,
+--   contextIdentity              = current_processing|legacy_unlinked|recent_unlinked|historical|none,
 -- }.
 --
--- sessionId (session.env's SESSION_ID) is secondary corroboration on top of
--- the timestamp window, not yet its own independent gate: no production
--- evidence writer in this codebase currently persists a matching identity
--- marker into per-run job evidence (verified against every writer of
--- timing_events.jsonl/phase_events.jsonl/separation_log.txt/stdout.txt), so
--- requiring one unconditionally would make current_session permanently
--- unreachable and silently turn every genuinely-healthy current run into a
--- false not_proven -- a truthfulness regression in the other direction. If
--- a job's OWN evidence ever does carry an explicit session identity marker
--- (see probeWorkerJobEvidence), a value that conflicts with session.env's
--- SESSION_ID is honored: that run can never be treated as session-current
--- no matter how well its timestamp lines up.
---
 -- currentProcessingRecords (readCurrentProcessingRecords) is the explicit
--- RunContext identity channel: every job's own worker_context.json (or,
--- for Direct Kit, drumsep_result.json) run_id is compared directly against
--- these records' run_id, never against directory names or timestamps. A
--- run where every job's structured run_id matches one of these records is
--- "current_processing" -- the strongest, identity-only signal, checked
--- FIRST -- regardless of how its timestamp lines up. A run where some job's
--- structured run_id names a DIFFERENT run than any current-processing
--- record (e.g. an old run directory copied/renamed to look newer) is
--- vetoed from ever becoming current via the timestamp/session path either:
--- structured identity, once present, is authoritative over both paths for
--- that run. Evidence with no worker_context.json at all (older/historical
--- runs, or evidence from before this identity channel existed) is
--- unaffected and falls through to the pre-existing session-timestamp path
--- exactly as before.
+-- RunContext identity channel. Only records that are themselves fresh
+-- (their own started/updated timestamp within CURRENT_WORKER_CONTEXT_WINDOW_SECONDS
+-- -- timestamps here only ever REJECT stale identity, they never grant it)
+-- are eligible, and exactly ONE is deterministically selected
+-- (selectCurrentProcessingRecord) as the run's single current-processing
+-- slot: jobs belonging to any OTHER run_id -- however healthy -- can
+-- never contribute to this cycle's current-health proof, even if their
+-- own state file is also present and valid (see section 12/13 of the
+-- RunContext authority hardening).
 local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUtc, sessionId, currentProcessingRecords)
     sessionId = presentValue(sessionId)
     currentProcessingRecords = currentProcessingRecords or {}
@@ -4293,23 +4638,41 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
     nowEpoch = tonumber(nowEpoch) or os.time()
     -- The session root is only proof of a CURRENT session when its own
     -- start is itself inside the current window; a stale session root is
-    -- cached/historical context and cannot make old runs current.
+    -- cached/historical context and cannot make old runs current. This
+    -- feeds ONLY the legacy_unlinked/recent_unlinked provenance split
+    -- below -- it can never set isCurrent.
     local sessionCurrent = false
     if isValidIsoUtcTimestamp(sessionStartedUtc) then
         local windowStartIso = os.date("!%Y-%m-%dT%H:%M:%SZ", nowEpoch - CURRENT_WORKER_CONTEXT_WINDOW_SECONDS)
         local toleranceIso = os.date("!%Y-%m-%dT%H:%M:%SZ", nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS)
         sessionCurrent = sessionStartedUtc >= windowStartIso and sessionStartedUtc <= toleranceIso
     end
+    -- Only current-processing records that are themselves fresh are
+    -- eligible for selection; a stale (however well-formed) record can
+    -- never anchor current identity (section 11: identity establishes
+    -- linkage, timestamps only reject stale records).
+    local freshProcessingRecords = {}
+    for _, record in ipairs(currentProcessingRecords) do
+        local tsIso = (record.updated_utc ~= "" and record.updated_utc) or record.started_utc
+        local tsEpoch = SW_RUNCTX.isoUtcToEpoch(tsIso)
+        if tsEpoch
+            and (nowEpoch - tsEpoch) <= CURRENT_WORKER_CONTEXT_WINDOW_SECONDS
+            and tsEpoch <= nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS
+        then
+            freshProcessingRecords[#freshProcessingRecords + 1] = record
+        end
+    end
+    local selectedRecord = SW_RUNCTX.selectCurrentProcessingRecord(freshProcessingRecords)
     local newestCurrent = nil
     local newestRecent = nil
     local sawHistoricalIdentified = false
-    -- Tracks how many DISTINCT run directories structurally claim each
-    -- current-processing run_id. A single run_id claimed by more than one
-    -- directory (a replayed/duplicated worker_context.json, or a run
-    -- directory copied wholesale including its identity file) is ambiguous
-    -- -- it can never be resolved by picking whichever directory happens to
-    -- sort newest, so it must never prove current health.
-    local structuredClaimCounts = {}
+    -- Counts how many DISTINCT run directories structurally match the ONE
+    -- selected current-processing record. More than one (a
+    -- replayed/duplicated worker_context.json, or a run directory copied
+    -- wholesale including its identity file) is ambiguous -- it can never
+    -- be resolved by picking whichever directory happens to sort newest,
+    -- so it must never prove current health.
+    local structuredMatchCount = 0
     for _, runName in ipairs(enumerateSubdirs(runsRoot)) do
         local epoch, ms, counter = runIdentityParts(runName)
         if epoch and epoch <= nowEpoch + CURRENT_WORKER_RUN_CLOCK_TOLERANCE_SECONDS then
@@ -4319,7 +4682,7 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
             local jobs = {}
             local identified = false
             for _, jobName in ipairs(jobNames) do
-                local job = probeWorkerJobEvidence(joinPath(runDir, jobName), runName)
+                local job = probeWorkerJobEvidence(joinPath(runDir, jobName), runName, jobName)
                 jobs[#jobs + 1] = job
                 -- The run context is identifiable when at least one job's
                 -- own markers name this run (per-job identity for the
@@ -4330,61 +4693,86 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
                     identified = true
                 end
             end
+            -- job_id must be unique within this run: two sibling jobs
+            -- structurally claiming the SAME job_id (a copied/duplicated
+            -- worker_context.json) can never both be trusted, even if one
+            -- of them happens to name the job it actually lives in.
+            local jobIdCounts = {}
+            for _, job in ipairs(jobs) do
+                if job.structuredJobId then
+                    jobIdCounts[job.structuredJobId] = (jobIdCounts[job.structuredJobId] or 0) + 1
+                end
+            end
+            for _, job in ipairs(jobs) do
+                if job.structuredJobId and jobIdCounts[job.structuredJobId] > 1 then
+                    job.structuredDuplicate = true
+                end
+            end
             -- Evidence without an explicit identity marker is never
             -- associated with this run at all.
             if identified then
                 local runStartIso = os.date("!%Y-%m-%dT%H:%M:%SZ", epoch)
                 -- An explicit session-identity marker on any job that
-                -- conflicts with session.env's SESSION_ID proves this run
-                -- does NOT belong to the current session, overriding the
-                -- timestamp window outright.
+                -- conflicts with session.env's SESSION_ID, or any job
+                -- whose structured identity is itself broken/conflicting,
+                -- disqualifies this run from the legacy session-linked
+                -- provenance bucket outright.
                 local sessionIdConflict = false
-                if sessionId then
-                    for _, job in ipairs(jobs) do
-                        if job.sessionId and job.sessionId ~= sessionId then
-                            sessionIdConflict = true
-                        end
+                local anyStructuredConflict = false
+                for _, job in ipairs(jobs) do
+                    if sessionId and job.sessionId and job.sessionId ~= sessionId then
+                        sessionIdConflict = true
+                    end
+                    if job.structuredConflict or job.structuredContextInvalid or job.structuredDuplicate then
+                        anyStructuredConflict = true
                     end
                 end
-                -- Structured identity: every job that carries a structured
-                -- run_id must match some current-processing record's
-                -- run_id for the run as a whole to be structurally
-                -- current; a job whose structured run_id names a run NOT
-                -- in currentProcessingRecords vetoes current status for
-                -- this run entirely (copied/replayed evidence).
+                -- Structured identity (the ONLY path to current-health
+                -- authority) decides in two steps:
+                --
+                --  1. SELECTION: is this run directory the one associated
+                --     with the single selected current-processing record
+                --     at all? Based on attemptedRunId -- which run each
+                --     job's structured evidence appears to be ABOUT, even
+                --     when that evidence is broken/conflicting -- so a run
+                --     whose only evidence is a genuine conflict is still
+                --     selected (its conflict must be reported as a
+                --     current-run failure, not silently disappear into
+                --     "no current run evidence"). A job whose evidence
+                --     clearly names a DIFFERENT run_id than the selected
+                --     one vetoes selection entirely (no partial credit).
+                --
+                --  2. PROOF: given a selected run, can it actually reach
+                --     "ok"? That is enforced per job by classifyWorkerJob
+                --     below (exact run_id/job_id match, schema-valid,
+                --     nonconflicting) -- a job that only "attempted" but
+                --     did not cleanly prove its identity can still fail
+                --     the run to "unproven"/"failed" with the true reason
+                --     (job_identity_conflicting/mismatch/unassociated),
+                --     never a silent "ok".
                 local structuredMatch = false
-                local structuredConflict = false
-                local structuredClaimId = nil
-                if #currentProcessingRecords > 0 then
-                    local sawStructured = false
-                    local allMatched = true
+                if selectedRecord and #jobs > 0 then
+                    local sawAttempt = false
+                    local allAttemptsMatch = true
                     for _, job in ipairs(jobs) do
-                        if job.structuredRunId then
-                            sawStructured = true
-                            structuredClaimId = structuredClaimId or job.structuredRunId
-                            local matchesSome = false
-                            for _, rec in ipairs(currentProcessingRecords) do
-                                if rec.run_id == job.structuredRunId then matchesSome = true end
+                        if job.attemptedRunId then
+                            sawAttempt = true
+                            if job.attemptedRunId ~= selectedRecord.run_id then
+                                allAttemptsMatch = false
                             end
-                            if not matchesSome then allMatched = false end
                         end
                     end
-                    if sawStructured then
-                        if allMatched then
-                            structuredMatch = true
-                            structuredClaimCounts[structuredClaimId] = (structuredClaimCounts[structuredClaimId] or 0) + 1
-                        else
-                            structuredConflict = true
-                        end
-                    end
+                    structuredMatch = sawAttempt and allAttemptsMatch
                 end
                 local isCurrent = structuredMatch
-                    or (sessionCurrent and runStartIso >= sessionStartedUtc and not sessionIdConflict and not structuredConflict)
+                local viaLegacySession = (not isCurrent)
+                    and sessionCurrent and runStartIso >= sessionStartedUtc
+                    and not sessionIdConflict and not anyStructuredConflict
                 local isRecent = (not isCurrent)
                     and (nowEpoch - epoch) <= CURRENT_WORKER_CONTEXT_WINDOW_SECONDS
                 local identity = {
                     epoch = epoch, ms = ms, counter = counter, name = runName,
-                    viaStructured = structuredMatch, structuredClaimId = structuredClaimId,
+                    viaLegacySession = viaLegacySession,
                 }
                 local anyFailed = false
                 local allSuccess = #jobs > 0
@@ -4406,9 +4794,26 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
                 else
                     verdict, reason = "unproven", (unprovenReason or "current_run_unproven")
                 end
+                -- Lifecycle status is authoritative diagnostics state on
+                -- top of the per-job success contract: a completed record
+                -- lets the computed verdict stand, a running record can
+                -- never prove final success (job-level failure still
+                -- surfaces, since the worker has already observably
+                -- failed even if the writer has not yet transitioned the
+                -- state file), and a failed/cancelled record is a current
+                -- failure outright -- stale successful job evidence can
+                -- never override an explicit failed/cancelled write.
+                if isCurrent and selectedRecord then
+                    if selectedRecord.status == "failed" or selectedRecord.status == "cancelled" then
+                        verdict, reason = "failed", "current_processing_state_" .. selectedRecord.status
+                    elseif selectedRecord.status == "running" and verdict == "ok" then
+                        verdict, reason = "unproven", "current_processing_state_running"
+                    end
+                end
                 identity.verdict = verdict
                 identity.reason = reason
                 if isCurrent then
+                    structuredMatchCount = structuredMatchCount + 1
                     if not newestCurrent or runIdentityNotOlder(identity, newestCurrent) then
                         newestCurrent = identity
                     end
@@ -4422,9 +4827,9 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
             end
         end
     end
-    -- The newest current (session-linked) context alone decides current
-    -- worker health; there is no fallback to an older successful run when
-    -- the newest context is unproven.
+    -- The newest current (structurally-identified) context alone decides
+    -- current worker health; there is no fallback to an older successful
+    -- run when the newest context is unproven.
     if newestCurrent then
         result.run = newestCurrent.name
         result.reason = newestCurrent.reason
@@ -4435,20 +4840,17 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
         else
             result.status = "not_proven"
         end
-        result.contextIdentity = newestCurrent.viaStructured and "current_processing" or "current_session"
-        -- The same current-processing run_id claimed by more than one
-        -- distinct run directory (replayed/duplicated identity evidence)
-        -- can never prove health, no matter which directory happens to
-        -- sort newest.
-        if newestCurrent.viaStructured
-            and newestCurrent.structuredClaimId
-            and (structuredClaimCounts[newestCurrent.structuredClaimId] or 0) > 1
-        then
+        result.contextIdentity = "current_processing"
+        -- The same selected current-processing run_id structurally
+        -- matched by more than one distinct run directory (replayed/
+        -- duplicated identity evidence) can never prove health, no matter
+        -- which directory happens to sort newest.
+        if structuredMatchCount > 1 then
             result.status = "not_proven"
             result.reason = "replayed_run_id_conflict"
         end
     elseif newestRecent then
-        result.contextIdentity = "recent_unlinked"
+        result.contextIdentity = newestRecent.viaLegacySession and "legacy_unlinked" or "recent_unlinked"
         if result.reason == "no_current_run_evidence" and sawHistoricalIdentified then
             result.reason = "identified_run_outside_current_window"
         end
@@ -4456,8 +4858,8 @@ local function deriveCurrentWorkerRunHealth(runsRoot, nowEpoch, sessionStartedUt
         result.contextIdentity = "historical"
         result.reason = "identified_run_outside_current_window"
     end
-    -- Recent-unlinked evidence is provenance only: surfaced truthfully
-    -- (including its success) but never a current-health proof.
+    -- Recent/legacy-unlinked evidence is provenance only: surfaced
+    -- truthfully (including its success) but never a current-health proof.
     if newestRecent then
         result.recentRun = newestRecent.name
         result.recentReason = newestRecent.reason
