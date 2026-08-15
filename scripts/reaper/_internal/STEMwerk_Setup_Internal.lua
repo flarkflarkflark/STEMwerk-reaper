@@ -4423,6 +4423,51 @@ function buildCheckOnlyVerdict(verification, checkProbe, backend, backendReasonL
     return verdict
 end
 
+-- Small, pure, headlessly-testable three-state presentation mapping. This is
+-- the ONLY place that decides ok/failed/not_proven for a Linux Setup final
+-- result -- both the drawn window (buildLinuxFinalRows/linuxDrawFinal) and
+-- Copy Summary (buildCheckOnlyFinalMessage) render from its output rather
+-- than each re-deriving their own true/false split, so they cannot disagree.
+--
+-- `runtimeState` reflects the Torch runtime probe alone (ok/not_proven/failed
+-- from `verdict`) and is NEVER widened by an unrelated basic-check failure --
+-- a not-proven runtime stays not_proven even when, say, FFmpeg is missing
+-- (see the MIXED-state tests). `overallState`/`state`/`headline` fold in
+-- `allBasicChecksOk` too: a not-proven-only *overall* result additionally
+-- requires every basic file/dir check to have passed, because a genuine
+-- unrelated failure must never be hidden behind "verification was
+-- incomplete". `allBasicChecksOk` may be omitted (nil) by callers that only
+-- care about `runtimeState` and have no basic-checks list of their own --
+-- nil is treated as "no unrelated failure known", never as a false one.
+function deriveLinuxFinalPresentation(finalSuccess, allBasicChecksOk, verdict)
+    verdict = verdict or {}
+    local isCheckOnly = verdict.isCheckOnly == true
+
+    local runtimeState
+    if isCheckOnly then
+        if verdict.verifiedRuntimeOk then
+            runtimeState = "ok"
+        elseif verdict.notProvenOnly == true then
+            runtimeState = "not_proven"
+        else
+            runtimeState = "failed"
+        end
+    else
+        runtimeState = finalSuccess and "ok" or "failed"
+    end
+
+    if finalSuccess then
+        return { state = "ok", headline = "Setup complete.", runtimeState = runtimeState, overallState = "ok" }
+    end
+
+    local notProvenOnly = allBasicChecksOk ~= false and verdict.notProvenOnly == true
+    if notProvenOnly then
+        return { state = "not_proven", headline = "Setup verification was incomplete.", runtimeState = runtimeState, overallState = "not_proven" }
+    end
+
+    return { state = "failed", headline = "Setup was not completely successful.", runtimeState = runtimeState, overallState = "failed" }
+end
+
 -- `verdict`, when supplied (the resolved Check-only verdict above), is the
 -- ONLY source for Python/backend/device rows -- capState/state are only
 -- consulted as a fallback for callers (Repair/bootstrap) that have not
@@ -4451,13 +4496,31 @@ function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess, ve
         verifiedRuntimeOk = finalSuccess
     end
 
+    -- Backend/Reason rows below are Runtime-specific: their color must track
+    -- the Torch runtime's OWN state (deriveLinuxFinalPresentation's
+    -- runtimeState), not the overall finalSuccess flag -- otherwise a
+    -- not-proven-only Check (nothing found broken, verification just
+    -- incomplete) would render with the same red kind as a genuine current
+    -- failure. allBasicChecksOk is intentionally omitted (nil) here: an
+    -- unrelated basic-check failure must not repaint the Runtime rows
+    -- themselves, only the overall headline (see MIXED-state tests).
+    local presentation = deriveLinuxFinalPresentation(finalSuccess, nil, verdict)
+    local runtimeKind
+    if presentation.runtimeState == "ok" then
+        runtimeKind = "status_ok"
+    elseif presentation.runtimeState == "not_proven" then
+        runtimeKind = "note"
+    else
+        runtimeKind = "status_fail"
+    end
+
     rows[#rows + 1] = { label = "Python", value = pythonPath, kind = "python_path" }
     rows[#rows + 1] = { label = "FFmpeg", value = ffmpegPath, kind = "ffmpeg_path" }
     if profile ~= "" then
         rows[#rows + 1] = { label = "Profile", value = profile, kind = "muted" }
     end
     if backend ~= "" then
-        rows[#rows + 1] = { label = "Backend", value = backend, kind = finalSuccess and "status_ok" or "status_fail" }
+        rows[#rows + 1] = { label = "Backend", value = backend, kind = runtimeKind }
     end
     if not (verdict and verdict.isCheckOnly) and trim(state.STATUS_REASON or "") ~= "" then
         rows[#rows + 1] = { label = "Reason", value = prettySetupReason(state.STATUS_REASON), kind = "muted", maxLines = 2 }
@@ -4473,9 +4536,9 @@ function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess, ve
             -- complete, nothing was actually found broken) must not render
             -- with the same red "status_fail" kind as a genuine current
             -- failure -- that would visually claim a failure that was never
-            -- established.
-            local reasonKind = (verdict.notProvenOnly == true) and "note" or "status_fail"
-            rows[#rows + 1] = { label = "Reason", value = reasonText, kind = reasonKind, maxLines = 3 }
+            -- established. Same runtimeKind as the Backend row above, so the
+            -- two never disagree.
+            rows[#rows + 1] = { label = "Reason", value = reasonText, kind = runtimeKind, maxLines = 3 }
         end
     end
     if backendReason ~= "" then
@@ -4993,7 +5056,13 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     local minActionH = linuxLineHeight(84)
     local minLogH = math.max(96, linuxLineHeight(92))
     local capState = parseStateFile((LINUX_SETUP and LINUX_SETUP.capFile) or "")
-    local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess, LINUX_SETUP and LINUX_SETUP.checkVerdict)
+    local checkVerdict = LINUX_SETUP and LINUX_SETUP.checkVerdict
+    -- Single source of truth for how this window presents ok/failed/
+    -- not_proven -- see deriveLinuxFinalPresentation. linuxDrawFinal (gfx-only,
+    -- not headlessly testable) must only ever RENDER this mapping's fields,
+    -- never recompute its own binary success/failure logic.
+    local presentation = deriveLinuxFinalPresentation(finalSuccess, checkVerdict and checkVerdict.allBasicChecksOk, checkVerdict)
+    local infoRows = buildLinuxFinalRows(state or {}, capState, LINUX_SETUP and LINUX_SETUP.runtime, LINUX_SETUP and LINUX_SETUP.logFile, finalSuccess, checkVerdict)
     local leftRows, rightRows = splitLinuxInfoRows(infoRows, {
         "Python", "FFmpeg", "Profile", "Backend"
     })
@@ -5038,17 +5107,18 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.drawstr(setupUiLabel() .. " live setup UI active")
     y = y + linuxLineHeight(26)
     gfx.setfont(1, "Arial Bold", linuxFontSize(20))
-    if finalSuccess then
+    if presentation.overallState == "ok" then
         gfx.set(0.20, 0.92, 0.28, 1)
-        gfx.x = infoX + 14
-        gfx.y = y
-        gfx.drawstr("Setup complete.")
+    elseif presentation.overallState == "not_proven" then
+        -- Existing semantic "note"/warning color (see linuxValueColor's
+        -- "note" kind) -- not a genuine failure claim, but not success either.
+        gfx.set(0.96, 0.76, 0.45, 1)
     else
         gfx.set(1.0, 0.42, 0.12, 1)
-        gfx.x = infoX + 14
-        gfx.y = y
-        gfx.drawstr("Setup was not completely successful.")
     end
+    gfx.x = infoX + 14
+    gfx.y = y
+    gfx.drawstr(presentation.headline)
     y = y + linuxLineHeight(30)
     local rowTopY = y
     drawLinuxInfoRows(infoX + 14, rowTopY, infoColW, leftRows, leftWrap, infoRowGap, finalSuccess)
@@ -5078,13 +5148,17 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
 
     drawLinuxLogPanel(logX, logY, logW, logH, logLines or {}, "")
 
+    -- Repair/Rebuild venv/Set FFmpeg Path are a genuine-failure-only
+    -- recommendation: a not_proven result (nothing found broken, verification
+    -- just incomplete) must not imply anything needs fixing (see "no Repair
+    -- implication" requirement).
     local actionButtons = {}
-    if finalSuccess then
-        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
-    else
+    if presentation.state == "failed" then
         actionButtons[#actionButtons + 1] = { label = "Repair", action = "repair", style = "primary" }
         actionButtons[#actionButtons + 1] = { label = "Rebuild venv", action = "rebuild_venv" }
         actionButtons[#actionButtons + 1] = { label = "Set FFmpeg Path...", action = "set_ffmpeg_path" }
+    else
+        actionButtons[#actionButtons + 1] = { label = "Open STEMwerk", action = "open_stemwerk", style = "primary" }
     end
     actionButtons[#actionButtons + 1] = { label = "Open Log", action = "open_log" }
     actionButtons[#actionButtons + 1] = { label = "Open Capabilities", action = "open_cap" }
@@ -6177,11 +6251,14 @@ function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStat
     -- verification was simply incomplete. Claiming "one or more checks
     -- failed" / recommending Repair for that case is exactly the
     -- false-failure-claim this closes -- see isNotProvenOnlyErrorSet.
-    local notProvenOnly = (not allOk) and allBasicChecksOk and verdict.notProvenOnly == true
-    if allOk then
+    -- deriveLinuxFinalPresentation is the same shared mapping the visible
+    -- final window (buildLinuxFinalRows/linuxDrawFinal) renders from, so
+    -- this text and the drawn UI can never disagree.
+    local presentation = deriveLinuxFinalPresentation(allOk, allBasicChecksOk, verdict)
+    if presentation.state == "ok" then
         finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
         finalMessage[#finalMessage + 1] = "No files or settings were changed."
-    elseif notProvenOnly then
+    elseif presentation.state == "not_proven" then
         finalMessage[#finalMessage + 1] = "Verify only: setup verification was incomplete."
         finalMessage[#finalMessage + 1] = "Torch runtime could not be re-verified during this Check."
     else
@@ -6267,13 +6344,13 @@ verifyExistingSetup = function(runtime, separatorScript)
         { label = "Virtual environment", ok = pathExists(runtime.venvDir),
           detail = pathExists(runtime.venvDir) and runtime.venvDir or ("Not found: " .. tostring(runtime.venvDir)) },
     }
-    local allOk = true
+    local allBasicChecksOk = true
     for _, c in ipairs(checks) do
-        if not c.ok then allOk = false end
+        if not c.ok then allBasicChecksOk = false end
     end
 
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
-    allOk = allOk and verifiedRuntimeOk
+    local allOk = allBasicChecksOk and verifiedRuntimeOk
 
     -- Resolved Check-only verdict: built once, after every live probe and
     -- reconciliation above is complete. Both the final-window rows
@@ -6282,6 +6359,13 @@ verifyExistingSetup = function(runtime, separatorScript)
     -- this SAME object, so they cannot disagree with each other or with the
     -- live result.
     local checkVerdict = buildCheckOnlyVerdict(verification, checkProbe, backend, backendReason, nil, deviceNames, capState, state)
+    -- Stashed so linuxDrawFinal (which only has LINUX_SETUP.checkVerdict, not
+    -- the local `checks` list above) can still gate the not-proven-only
+    -- OVERALL presentation on it via deriveLinuxFinalPresentation -- an
+    -- unrelated basic-check failure (e.g. missing FFmpeg) must still force
+    -- the overall headline/Repair guidance to failed even when the Torch
+    -- probe itself was merely not proven (see the MIXED-state tests).
+    checkVerdict.allBasicChecksOk = allBasicChecksOk
 
     local readyClassification = classifyReadyState(readyState)
     local finalMessage = buildCheckOnlyFinalMessage(checks, allOk, checkVerdict, backend, drumsepStatus, dksSupported, normalStemsSupported, readyClassification)
