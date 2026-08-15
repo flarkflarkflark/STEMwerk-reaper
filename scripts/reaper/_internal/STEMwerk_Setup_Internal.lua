@@ -4015,9 +4015,6 @@ function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local readyFile = runtime.runtimeState .. PATH_SEP .. "ready_to_go.env"
-    local logFile = runtime.runtimeLogs .. PATH_SEP .. "bootstrap.log"
-    local pidFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.pid"
-    local guardPath = PATH_HELPER.getBootstrapGuardPath(runtime.runtimeState, PATH_SEP)
     local state = fileExists(stateFile) and parseStateFile(stateFile) or {}
     local capState = fileExists(capFile) and parseStateFile(capFile) or {}
     local readyState = fileExists(readyFile) and parseStateFile(readyFile) or {}
@@ -4045,29 +4042,15 @@ function buildWindowsSetupOverview(runtime, setupVersion, lastSetupVersion)
         and trim(capState.AUDIO_SEPARATOR or "") == "ok"
         and trim(capState.STEMWERK_CORE or "") == "ok"
     )
-    local bootstrapComplete = false
-    if fileExists(logFile) then
-        local f = io.open(logFile, "r")
-        if f then
-            local text = f:read("*a") or ""
-            f:close()
-            bootstrapComplete = text:find("Bootstrap complete", 1, true) ~= nil
-        end
-    end
-    local guard = (guardPath and guardPath ~= "" and fileExists(guardPath)) and readBootstrapGuard(guardPath) or {}
-    local guardBusy = false
-    if guardPath and guardPath ~= "" then
-        guardBusy = select(1, isBootstrapBusy(guardPath, pidFile))
-    end
-    local pid = readBootstrapPid(pidFile)
-    local staleRunning = (status == "running") and (not pid) and (not guardBusy) and readyHealthy
-    local staleGuardFailed = (trim(guard.STATUS or "") == "failed") and readyHealthy and bootstrapComplete and (not guardBusy)
-    local staleFailedState = (status ~= "" and status ~= "ok" and status ~= "running")
-        and readyHealthy and bootstrapComplete and not runtimePolicyRequiresRebuild(state)
-    if staleRunning or staleGuardFailed or staleFailedState then
-        status = "ok"
-        reason = ""
-    end
+    -- Without same-run identity linking bootstrap.env/ready_to_go.env/
+    -- bootstrap.log to this specific run, neither a cached readyHealthy
+    -- snapshot nor an append-only bootstrap.log's historical "Bootstrap
+    -- complete" line may rewrite the CURRENT bootstrap.env STATUS (running,
+    -- deps_failed, guard_failed, etc) to ok -- that was exactly the
+    -- release-blocking false positive this closes. status/reason above
+    -- (read directly from the current bootstrap.env) are authoritative and
+    -- are no longer overridden here; a running state stays running, a
+    -- failed state stays failed with its exact current reason.
     if verification == "" and readyHealthy then
         verification = "ok"
     end
@@ -6049,27 +6032,23 @@ function reconcileCheckVerification(state, capState, readyState, verification, e
             removeError("torchaudio_missing_for_demucs")
         end
     end
-    if canAcceptMacReadyHealthyState then
-        removeError("torch_runtime_unsupported")
-        removeError("torch_runtime_probe_failed")
-        if torchVersionPinnedCompatible(torchVersion) then
-            removeError("torch_too_new_for_demucs")
-        end
-        if torchaudioVersion ~= "" and torchaudioVersion ~= "missing" then
-            removeError("torchaudio_missing_for_demucs")
-        end
-    end
+    -- canAcceptMacReadyHealthyState is NOT applied to adjustedErrors: without
+    -- same-invocation identity between the cached ready_to_go/capabilities
+    -- snapshot and this current probe, cached "healthy" evidence may never
+    -- remove, suppress, or downgrade a current negative probe result (e.g.
+    -- torch_runtime_probe_failed). It is retained only below as disclosure
+    -- provenance via usedCachedReadyStateFallback.
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #adjustedErrors == 0
     local result = {
         adjustedErrors = adjustedErrors,
         verifiedRuntimeOk = verifiedRuntimeOk,
         runtimeDriftDetected = verifiedRuntimeOk and "no" or verification.runtimeDriftDetected,
         runtimeDriftReason = verifiedRuntimeOk and "" or verification.runtimeDriftReason,
-        -- Disclosure only (does not change the accept/reject decision above,
-        -- which predates this fix): when the cached ready_to_go/capabilities
-        -- fallback is what let a current torch probe error be waived, that
-        -- must be visible as cached provenance rather than silently folded
-        -- into an ordinary "current probe succeeded" verdict.
+        -- Disclosure only -- cached ready_to_go/capabilities looking healthy
+        -- is surfaced as historical/cached provenance here, but (per the
+        -- comment above) it never removes a current negative probe result,
+        -- so this can never silently fold into an ordinary "current probe
+        -- succeeded" verdict.
         usedCachedReadyStateFallback = canAcceptMacReadyHealthyState == true,
     }
     result.torchVersion = firstNonEmpty(torchVersion, envJsonValue(envJson, "torch_version"), envJsonValue(envJson, "torch"))
@@ -6096,9 +6075,10 @@ function reconcileCheckVerification(state, capState, readyState, verification, e
     result.runtimeVerifyDetail = trim(state.RUNTIME_VERIFY_DETAIL or "")
     if verifiedRuntimeOk then
         result.runtimeVerifyDetail = "ok"
-    elseif canAcceptMacReadyHealthyState then
-        result.runtimeVerifyDetail = "not_checked"
     elseif result.runtimeVerifyDetail == "" then
+        -- A current failure's exact reason must survive here too -- cached
+        -- ready-state health (canAcceptMacReadyHealthyState) must never
+        -- replace it with a vague "not_checked".
         result.runtimeVerifyDetail = table.concat(adjustedErrors, ";")
     end
     return result

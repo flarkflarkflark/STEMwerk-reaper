@@ -48,13 +48,20 @@ local function containsSubstring(text, needle)
     return tostring(text or ""):find(needle, 1, true) ~= nil
 end
 
--- Fixture L, part 1: cached RTG/capabilities look fully healthy, current
--- Torch probe reports torch_runtime_probe_failed (e.g. an inconclusive
--- current probe on this machine). The cached fallback is allowed to waive
--- that specific error class (pre-existing behavior, unchanged by this fix),
--- but it must disclose that it did so via usedCachedReadyStateFallback --
--- Copy Summary/staleProvenance must never silently claim this was an
--- ordinary current-probe success.
+-- Fixture L, part 1 (revised for the 2.3.1.0 "keep current failures
+-- authoritative" follow-up): cached RTG/capabilities look fully healthy, but
+-- the CURRENT Torch probe reports torch_runtime_probe_failed. Without any
+-- same-invocation identity linking the cached ready_to_go/capabilities
+-- snapshot to this specific current probe, cached "healthy" evidence may
+-- never remove, suppress, downgrade, or overwrite that current negative
+-- result -- it may only be disclosed as historical/cached provenance
+-- alongside the still-failed verdict.
+--
+-- The previous version of this test asserted the OPPOSITE: that the cached
+-- fallback was allowed to waive torch_runtime_probe_failed as long as the
+-- waiver was "disclosed" via usedCachedReadyStateFallback. That was wrong --
+-- disclosure does not make a false current success truthful. This is the
+-- adversarial-review fixture that closes that bypass.
 local function testMacCachedFallbackDisclosesItsUse()
     local readyState = {
         READY_TO_GO_STATUS = "ok",
@@ -77,8 +84,23 @@ local function testMacCachedFallbackDisclosesItsUse()
         torchaudioVersion = "2.10.0",
     }
     local result = reconcileCheckVerification(state, capState, readyState, verification, "", "", "cpu", "", "/nonexistent/bootstrap.log")
+
+    -- The current negative probe result must survive intact: no success
+    -- headline/current-ready verdict, and the exact current reason preserved.
+    assertf(result.verifiedRuntimeOk == false,
+        "a current torch_runtime_probe_failed must remain a failure even when cached ready_to_go/capabilities look healthy")
+    local hasError = false
+    for _, e in ipairs(result.adjustedErrors) do
+        if e == "torch_runtime_probe_failed" then hasError = true end
+    end
+    assertf(hasError, "torch_runtime_probe_failed must remain in adjustedErrors -- it must not be waived by cached healthy state")
+    assertf(result.runtimeVerifyDetail ~= "ok" and result.runtimeVerifyDetail ~= "not_checked",
+        "runtimeVerifyDetail must preserve the exact current failure reason, not be hidden behind ok/not_checked: got " .. tostring(result.runtimeVerifyDetail))
+
+    -- Cached healthy state may still be disclosed as cached/historical
+    -- provenance -- that disclosure alone must never flip the verdict above.
     assertf(result.usedCachedReadyStateFallback == true,
-        "reconcileCheckVerification must disclose when the cached ready-state fallback is what accepted the current probe")
+        "cached ready_to_go/capabilities healthy state may still be disclosed as provenance")
 
     local checkProbe = {
         verifiedRuntimeOk = result.verifiedRuntimeOk,
@@ -86,10 +108,8 @@ local function testMacCachedFallbackDisclosesItsUse()
         usedCachedReadyStateFallback = result.usedCachedReadyStateFallback,
     }
     local verdict = buildCheckOnlyVerdict(verification, checkProbe, "cpu", "", "", "", capState, state)
-    if verdict.verifiedRuntimeOk then
-        local text = table.concat(verdict.staleProvenance, " | ")
-        assertf(containsSubstring(text, "cached"), "a cached-fallback-accepted verdict must record that fact as stale/cached provenance:\n" .. text)
-    end
+    assertf(verdict.verifiedRuntimeOk == false,
+        "the resolved Check-only verdict must not show a success headline/current-ready verdict for a current torch probe failure")
 end
 
 -- Fixture L, part 2: cached state looks healthy, but the current probe has a

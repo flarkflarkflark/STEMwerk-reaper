@@ -1595,7 +1595,14 @@ def test_verify_only_uses_ready_to_go_health_to_avoid_stale_macos_runtime_failur
     assert 'trim(readyState.READY_TO_GO_STATUS or "") == "ok"' in setup_internal
     assert 'trim(readyState.MAIN_RUNTIME_STATUS or "") == "ok"' in setup_internal
     assert "local canAcceptMacReadyHealthyState = (" in setup_internal
-    assert 'result.runtimeVerifyDetail = "not_checked"' in setup_internal
+    # The 2.3.1.0 "keep current failures authoritative" follow-up removed the
+    # `elseif canAcceptMacReadyHealthyState then result.runtimeVerifyDetail =
+    # "not_checked"` branch: cached ready_to_go/capabilities health may never
+    # replace a CURRENT failure's exact reason with a vague "not_checked" --
+    # see tests/support/run_setup_macos_ready_state_fallback_headless.lua's
+    # mac-cached-fallback-discloses-its-use fixture for the real behavioral
+    # coverage (torch_runtime_probe_failed must remain visible verbatim).
+    assert 'result.runtimeVerifyDetail = "not_checked"' not in setup_internal
 
 
 def test_torch_probe_failures_are_not_labeled_unsupported_without_specific_version_drift():

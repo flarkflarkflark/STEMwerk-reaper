@@ -407,6 +407,79 @@ local function testWindowsStaleHealthyRtgDoesNotHideCurrentFailure()
     assertf(overview.verification == "failed", "current verification=failed must not be hidden by cached RTG=ok")
 end
 
+-- Fixture N (2.3.1.0 follow-up, exact reproduced false positive): current
+-- bootstrap.env STATUS=deps_failed, cached ready_to_go=ok, cached
+-- capabilities=ok, AND an append-only bootstrap.log containing a historical
+-- "Bootstrap complete" line from a previous run. Without same-run identity
+-- linking that old log line to this current run, it must not be treated as
+-- current success authority -- the current STATUS/STATUS_REASON must win.
+local function testWindowsDepsFailedCannotBeOverriddenByOldSuccessLog()
+    local runtime = mkFixtureRuntime("windows-case-deps-failed-old-log")
+    local pyPath = runtime.base .. SEP .. "python3"
+    local ffPath = runtime.base .. SEP .. "ffmpeg"
+    writeFixtureFile(pyPath, "#!/bin/sh\n")
+    writeFixtureFile(ffPath, "#!/bin/sh\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "bootstrap.env",
+        "STATUS=deps_failed\nSTATUS_REASON=audio_separator_install_failed\nPYTHON_PATH=" .. pyPath .. "\nFFMPEG_PATH=" .. ffPath .. "\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "capabilities.env",
+        "AUDIO_SEPARATOR=ok\nSTEMWERK_CORE=ok\nPYTHON_PATH=" .. pyPath .. "\nFFMPEG_PATH=" .. ffPath .. "\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "ready_to_go.env",
+        "READY_TO_GO_STATUS=ok\nREADY_TO_GO_LAST_CHECK_UTC=2026-08-01T10:00:00Z\nMAIN_RUNTIME_STATUS=ok\n")
+    writeFixtureFile(runtime.runtimeLogs .. SEP .. "bootstrap.log", "Bootstrap complete\n")
+
+    local overview = buildWindowsSetupOverview(runtime, "2.3.1.0", "2.3.1.0")
+    assertf(overview.setupStatus ~= "ok", "a current deps_failed STATUS must not be rewritten to ok by cached RTG=ok plus an old 'Bootstrap complete' log line, got " .. tostring(overview.setupStatus))
+    assertf(overview.needsRepair == true, "a current deps_failed STATUS must require Repair despite cached healthy state and an old success log")
+    assertf(containsSubstring(overview.setupReason, "audio_separator_install_failed"),
+        "the current failure reason must survive, not be cleared by the old log, got reason=" .. tostring(overview.setupReason))
+end
+
+-- Fixture O (2.3.1.0 follow-up, Windows second fixture): current bootstrap
+-- state=running, cached RTG=ok, and the same old "Bootstrap complete" log
+-- line. A running state must never be finalized to ok by a historical log
+-- line -- it must stay running/not_proven.
+local function testWindowsRunningCannotBeFinalizedByOldSuccessLog()
+    local runtime = mkFixtureRuntime("windows-case-running-old-log")
+    local pyPath = runtime.base .. SEP .. "python3"
+    local ffPath = runtime.base .. SEP .. "ffmpeg"
+    writeFixtureFile(pyPath, "#!/bin/sh\n")
+    writeFixtureFile(ffPath, "#!/bin/sh\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "bootstrap.env",
+        "STATUS=running\nPYTHON_PATH=" .. pyPath .. "\nFFMPEG_PATH=" .. ffPath .. "\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "capabilities.env",
+        "AUDIO_SEPARATOR=ok\nSTEMWERK_CORE=ok\nPYTHON_PATH=" .. pyPath .. "\nFFMPEG_PATH=" .. ffPath .. "\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "ready_to_go.env",
+        "READY_TO_GO_STATUS=ok\nREADY_TO_GO_LAST_CHECK_UTC=2026-08-01T10:00:00Z\nMAIN_RUNTIME_STATUS=ok\n")
+    writeFixtureFile(runtime.runtimeLogs .. SEP .. "bootstrap.log", "Bootstrap complete\n")
+
+    local overview = buildWindowsSetupOverview(runtime, "2.3.1.0", "2.3.1.0")
+    assertf(overview.setupStatus ~= "ok", "a current running STATUS must not be finalized to ok by cached RTG=ok plus an old 'Bootstrap complete' log line, got " .. tostring(overview.setupStatus))
+    assertf(overview.setupStatus == "running", "a current running STATUS must remain running (not_proven), got " .. tostring(overview.setupStatus))
+end
+
+-- Fixture P (2.3.1.0 follow-up regression): a genuinely CURRENT healthy
+-- structured state (STATUS=ok) plus cached RTG=ok plus an old success log
+-- must still read as healthy -- this fix must not turn every Windows
+-- overview into a false negative.
+local function testWindowsCurrentHealthyStateStaysHealthy()
+    local runtime = mkFixtureRuntime("windows-case-current-healthy")
+    local pyPath = runtime.base .. SEP .. "python3"
+    local ffPath = runtime.base .. SEP .. "ffmpeg"
+    writeFixtureFile(pyPath, "#!/bin/sh\n")
+    writeFixtureFile(ffPath, "#!/bin/sh\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "bootstrap.env",
+        "STATUS=ok\nPYTHON_PATH=" .. pyPath .. "\nFFMPEG_PATH=" .. ffPath .. "\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "capabilities.env",
+        "AUDIO_SEPARATOR=ok\nSTEMWERK_CORE=ok\nVERIFICATION=ok\nPYTHON_PATH=" .. pyPath .. "\nFFMPEG_PATH=" .. ffPath .. "\n")
+    writeFixtureFile(runtime.runtimeState .. SEP .. "ready_to_go.env",
+        "READY_TO_GO_STATUS=ok\nREADY_TO_GO_LAST_CHECK_UTC=2026-08-01T10:00:00Z\nMAIN_RUNTIME_STATUS=ok\n")
+    writeFixtureFile(runtime.runtimeLogs .. SEP .. "bootstrap.log", "Bootstrap complete\n")
+
+    local overview = buildWindowsSetupOverview(runtime, "2.3.1.0", "2.3.1.0")
+    assertf(overview.setupStatus == "ok", "a genuinely current healthy STATUS must still read as ok, got " .. tostring(overview.setupStatus))
+    assertf(overview.needsRepair == false, "a genuinely current healthy STATUS must not require Repair, got needsRepair=" .. tostring(overview.needsRepair))
+end
+
 local tests = {
     { "resolved-verdict-wins-over-stale-state", testResolvedVerdictWinsOverStaleState },
     { "build-linux-final-rows-does-not-reresolve-stale-state", testBuildLinuxFinalRowsDoesNotReresolveStaleState },
@@ -418,6 +491,9 @@ local tests = {
     { "stale-healthy-cannot-override-current-failure", testStaleHealthyCannotOverrideCurrentFailure },
     { "windows-stale-broken-rtg-does-not-force-needs-repair", testWindowsStaleBrokenRtgDoesNotForceNeedsRepair },
     { "windows-stale-healthy-rtg-does-not-hide-current-failure", testWindowsStaleHealthyRtgDoesNotHideCurrentFailure },
+    { "windows-deps-failed-cannot-be-overridden-by-old-success-log", testWindowsDepsFailedCannotBeOverriddenByOldSuccessLog },
+    { "windows-running-cannot-be-finalized-by-old-success-log", testWindowsRunningCannotBeFinalizedByOldSuccessLog },
+    { "windows-current-healthy-state-stays-healthy", testWindowsCurrentHealthyStateStaysHealthy },
 }
 
 for _, t in ipairs(tests) do
