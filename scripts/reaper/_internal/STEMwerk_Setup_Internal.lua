@@ -805,7 +805,8 @@ local function prettyCheckError(err)
     if lower == "runtime_incomplete" then return "Runtime is incomplete (Python path intentionally withheld until verification passes)" end
     if lower == "audio_separator_missing" then return "audio-separator runtime is missing" end
     if lower == "stemwerk_core_missing" then return "stemwerk-core package is missing" end
-    if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this check; current ready-to-go state remains authoritative" end
+    if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this Check; current runtime status is not proven by this invocation." end
+    if lower == "torch_import_failed" then return "Torch failed to import during this Check. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." end
     if lower == "torch_too_new_for_demucs" or lower == "torch_runtime_unsupported" then
         return "Unsupported Torch runtime detected. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime."
     end
@@ -835,6 +836,22 @@ local function formatCheckErrors(errors)
         return "none"
     end
     return table.concat(out, ", ")
+end
+
+-- A Check-only verdict is "not proven" (rather than a genuine current
+-- failure) only when the SOLE unresolved condition is that the Torch
+-- runtime probe itself could not complete this invocation
+-- (torch_runtime_probe_failed as checkPinnedTorchRuntime's seeded DEFAULT,
+-- never overwritten by a parsed RUNTIME_DRIFT_REASON= line -- see there).
+-- Any other adjusted error present alongside it means a real current
+-- failure exists, so the whole verdict must still read (and recommend
+-- Repair) as a genuine failure.
+local function isNotProvenOnlyErrorSet(errors)
+    if not errors or #errors == 0 then return false end
+    for _, e in ipairs(errors) do
+        if e ~= "torch_runtime_probe_failed" then return false end
+    end
+    return true
 end
 
 local function extractLastLogLine(logLines)
@@ -1083,7 +1100,13 @@ local function pythonVersionText(path)
     return trim((out or ""):match("([0-9]+%.[0-9]+%.[0-9]+)") or (out or ""):match("([0-9]+%.[0-9]+)") or "")
 end
 
-local function checkPinnedTorchRuntime(path)
+-- Declared as a plain global function (not `local function`), matching
+-- buildCheckOnlyVerdict/buildLinuxFinalRows/buildCheckOnlyFinalMessage
+-- elsewhere in this file: this makes it reachable by the headless
+-- behavioral test harness (tests/support/run_setup_linux_not_proven_headless.lua),
+-- which dofile()s this script and can only see globals afterward. No
+-- functional change.
+function checkPinnedTorchRuntime(path)
     path = resolvePath(path)
     local result = {
         ok = false,
@@ -1208,7 +1231,18 @@ sys.exit(0 if not reason else 1)
         result.error = "torch_too_new_for_demucs"
     elseif result.driftReason == "numpy_numba_runtime_probe_failed" then
         result.error = "numpy_numba_runtime_probe_failed"
-    elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then
+    elseif result.driftReason == "torch_import_failed" then
+        -- The probe DID complete here -- Python ran and `import torch`
+        -- explicitly raised, which is a genuine current negative result, not
+        -- an incomplete probe. Must not be folded into the
+        -- torch_runtime_probe_failed (not-proven) bucket below.
+        result.error = "torch_import_failed"
+    elseif result.driftReason == "torch_runtime_probe_failed" then
+        -- driftReason is still the seeded DEFAULT from above: the subprocess
+        -- timed out, crashed, or produced output with no parseable
+        -- RUNTIME_DRIFT_REASON= line, so the loop above never overwrote it.
+        -- The probe did not complete -- this is "not proven", not a genuine
+        -- detected failure.
         result.error = "torch_runtime_probe_failed"
     elseif result.ok then
         result.error = nil
@@ -4359,6 +4393,13 @@ function buildCheckOnlyVerdict(verification, checkProbe, backend, backendReasonL
         adjustedErrors = checkProbe.adjustedErrors or {},
         staleProvenance = {},
     }
+    -- notProvenOnly: true only when the current verdict is not verified ok
+    -- AND the sole reason is that the Torch runtime probe itself could not
+    -- complete this invocation (never a genuine detected drift/failure). See
+    -- isNotProvenOnlyErrorSet above. Consumers (buildLinuxFinalRows,
+    -- buildCheckOnlyFinalMessage) use this to avoid presenting an incomplete
+    -- verification as if it were a genuine current failure.
+    verdict.notProvenOnly = (not verdict.verifiedRuntimeOk) and isNotProvenOnlyErrorSet(verdict.adjustedErrors)
     -- Record (never apply) conflicts between stale recorded state and the
     -- resolved current verdict, only when the current verdict is healthy --
     -- a stale failure sitting alongside a genuinely current failure isn't a
@@ -4428,7 +4469,13 @@ function buildLinuxFinalRows(state, capState, runtime, logFile, finalSuccess, ve
     if verdict and verdict.isCheckOnly and not verifiedRuntimeOk then
         local reasonText = formatCheckErrors(verdict.adjustedErrors)
         if reasonText ~= "" and reasonText ~= "none" then
-            rows[#rows + 1] = { label = "Reason", value = reasonText, kind = "status_fail", maxLines = 3 }
+            -- A not-proven-only reason (the Torch probe itself could not
+            -- complete, nothing was actually found broken) must not render
+            -- with the same red "status_fail" kind as a genuine current
+            -- failure -- that would visually claim a failure that was never
+            -- established.
+            local reasonKind = (verdict.notProvenOnly == true) and "note" or "status_fail"
+            rows[#rows + 1] = { label = "Reason", value = reasonText, kind = reasonKind, maxLines = 3 }
         end
     end
     if backendReason ~= "" then
@@ -5111,6 +5158,30 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
     gfx.drawstr(footerText)
 end
 
+-- bootstrap.log is append-only and never truncated/rewritten (see
+-- STEMwerk_Bootstrap_Linux.sh) -- for an ordinary Check (verifyExistingSetup)
+-- no bootstrap process runs at all, so the tail read by linuxSetupTick below
+-- can still be entirely leftover content from a genuinely old repair/rebuild
+-- run (e.g. "Mode: repair", "Successfully installed pip-...") with nothing
+-- distinguishing it from live current-invocation output. isCheckOnly is true
+-- only for the Check-only final window (LINUX_SETUP.checkVerdict is only
+-- ever set by verifyExistingSetup's showDeferredFinalWindow call), where
+-- every line in the tail is therefore historical by construction. This never
+-- deletes/truncates/rewrites the log file itself -- only the in-memory lines
+-- handed to the console renderer gain a leading provenance marker. Declared
+-- as a plain global function for the same headless-testability reason as
+-- buildCheckOnlyVerdict/buildLinuxFinalRows/buildCheckOnlyFinalMessage above.
+function labelHistoricalCheckOnlyLogLines(logLines, isCheckOnly)
+    if not isCheckOnly or not logLines or #logLines == 0 then
+        return logLines or {}
+    end
+    local out = { "--- Previous bootstrap/repair log (historical; not from this Check) ---" }
+    for _, line in ipairs(logLines) do
+        out[#out + 1] = line
+    end
+    return out
+end
+
 function linuxSetupTick()
     if not LINUX_SETUP then return end
     if not gfx then return end
@@ -5127,7 +5198,7 @@ function linuxSetupTick()
     enforceSetupWindowMinimum(LINUX_SETUP)
 
     local state = parseStateFile(LINUX_SETUP.stateFile)
-    local logLines = readTail(LINUX_SETUP.logFile, 400)
+    local logLines = labelHistoricalCheckOnlyLogLines(readTail(LINUX_SETUP.logFile, 400), LINUX_SETUP.checkVerdict ~= nil)
     local pidAlive, pid = linuxPidAlive(LINUX_SETUP.pidFile)
     if pidAlive then
         LINUX_SETUP.pidSeen = true
@@ -6095,9 +6166,24 @@ end
 function buildCheckOnlyFinalMessage(checks, allOk, verdict, backend, drumsepStatus, dksSupported, normalStemsSupported, readyClassification)
     verdict = verdict or {}
     local finalMessage = {}
+    local allBasicChecksOk = true
+    for _, c in ipairs(checks or {}) do
+        if not c.ok then allBasicChecksOk = false end
+    end
+    -- A Check-only run where every basic file/dir check passed and the ONLY
+    -- unresolved condition is that the Torch runtime probe itself could not
+    -- complete (verdict.notProvenOnly) is truthfully different from a
+    -- genuine current failure: nothing was actually found broken,
+    -- verification was simply incomplete. Claiming "one or more checks
+    -- failed" / recommending Repair for that case is exactly the
+    -- false-failure-claim this closes -- see isNotProvenOnlyErrorSet.
+    local notProvenOnly = (not allOk) and allBasicChecksOk and verdict.notProvenOnly == true
     if allOk then
         finalMessage[#finalMessage + 1] = "Verify only: runtime checks passed."
         finalMessage[#finalMessage + 1] = "No files or settings were changed."
+    elseif notProvenOnly then
+        finalMessage[#finalMessage + 1] = "Verify only: setup verification was incomplete."
+        finalMessage[#finalMessage + 1] = "Torch runtime could not be re-verified during this Check."
     else
         finalMessage[#finalMessage + 1] = "Verify only: one or more checks failed."
         finalMessage[#finalMessage + 1] = "Run Repair / rerun setup to fix the installation."

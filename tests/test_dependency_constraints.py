@@ -1608,9 +1608,28 @@ def test_verify_only_uses_ready_to_go_health_to_avoid_stale_macos_runtime_failur
 def test_torch_probe_failures_are_not_labeled_unsupported_without_specific_version_drift():
     setup_internal = Path("scripts/reaper/_internal/STEMwerk_Setup_Internal.lua").read_text()
 
-    assert 'elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then' in setup_internal
+    # 2.3.1.0 "distinguish incomplete checks from failures" follow-up: a
+    # genuinely completed-and-failed probe (torch_import_failed -- Python ran
+    # and `import torch` itself raised) must get its OWN error code, not be
+    # folded into the same bucket as an INCOMPLETE probe (torch_runtime_probe_failed,
+    # checkPinnedTorchRuntime's seeded default, only ever left in place when
+    # the subprocess timed out/crashed/produced unparseable output). See
+    # tests/support/run_setup_linux_not_proven_headless.lua for the real
+    # behavioral (non-mocked subprocess) proof that these two are now handled
+    # distinctly.
+    assert 'elseif result.driftReason == "torch_import_failed" then' in setup_internal
+    assert 'result.error = "torch_import_failed"' in setup_internal
+    assert 'elseif result.driftReason == "torch_runtime_probe_failed" then' in setup_internal
     assert 'result.error = "torch_runtime_probe_failed"' in setup_internal
-    assert 'if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this check; current ready-to-go state remains authoritative" end' in setup_internal
+    assert 'elseif result.driftReason == "torch_import_failed" or result.driftReason == "torch_runtime_probe_failed" then' not in setup_internal, (
+        "the two must no longer be folded into a single conflated branch"
+    )
+    # The stale wording ("...current ready-to-go state remains authoritative")
+    # described an authority fallback that no longer exists in the current
+    # accept-conditions -- replaced with truthful not-proven wording.
+    assert 'if lower == "torch_runtime_probe_failed" then return "Torch runtime was not re-verified during this Check; current runtime status is not proven by this invocation." end' in setup_internal
+    assert "ready-to-go state remains authoritative" not in setup_internal
+    assert 'if lower == "torch_import_failed" then return "Torch failed to import during this Check. STEMwerk requires the pinned Torch stack for Demucs/audio-separator 0.23. Run Repair/Rebuild to restore the supported runtime." end' in setup_internal
 
 
 def test_verify_only_intel_macos_cpu_fallback_does_not_hide_real_missing_torch_failures():
