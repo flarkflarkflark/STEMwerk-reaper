@@ -69,6 +69,7 @@ assertf(type(buildCheckOnlyVerdict) == "function", "buildCheckOnlyVerdict was no
 assertf(type(buildLinuxFinalRows) == "function", "buildLinuxFinalRows was not exposed as a global function")
 assertf(type(buildCheckOnlyFinalMessage) == "function", "buildCheckOnlyFinalMessage was not exposed as a global function")
 assertf(type(labelHistoricalCheckOnlyLogLines) == "function", "labelHistoricalCheckOnlyLogLines was not exposed as a global function")
+assertf(type(linuxLogPanelDefaultScrollToTop) == "function", "linuxLogPanelDefaultScrollToTop was not exposed as a global function")
 
 local function containsSubstring(text, needle)
     return tostring(text or ""):find(needle, 1, true) ~= nil
@@ -339,6 +340,22 @@ local function testFixtureE_HistoricalLogLabelledForCheckOnly()
     for i, line in ipairs(rawLines) do
         assertf(unchanged[i] == line, "a live run's log line " .. i .. " must be byte-identical to the source")
     end
+
+    -- BLOCKER 2: labelling alone is not enough -- the live AMD retest showed
+    -- the historical marker line 1 with NO visible marker on screen, because
+    -- the log panel's default scroll position (logScroll=0) shows the BOTTOM
+    -- (most recent) end of a long buffer, scrolling the marker (prepended at
+    -- the top/oldest position) out of view. linuxLogPanelDefaultScrollToTop is
+    -- the pure decision drawn on to fix this: a Check-only final window
+    -- (checkVerdict ~= nil) must default to showing the TOP of the buffer so
+    -- the marker is visible without the user having to scroll; a live run's
+    -- log panel (checkVerdict == nil, no marker is ever prepended) is
+    -- unaffected and keeps its normal bottom/most-recent default.
+    local sampleVerdict = { isCheckOnly = true, verifiedRuntimeOk = false, notProvenOnly = true }
+    assertf(linuxLogPanelDefaultScrollToTop(sampleVerdict) == true,
+        "a Check-only final window (marker always present) must default its log panel to the top of the buffer")
+    assertf(linuxLogPanelDefaultScrollToTop(nil) == false,
+        "a live (non-Check) run (no marker ever prepended) must keep the log panel's normal bottom/most-recent default")
 end
 
 -- =======================================================================

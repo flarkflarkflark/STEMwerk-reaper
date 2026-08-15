@@ -111,6 +111,15 @@ local function testA_NotProven()
     assertf(reasonRow ~= nil and reasonRow.kind == "note",
         "not_proven Reason row must render with the neutral/warning 'note' kind, got: " .. tostring(reasonRow and reasonRow.kind))
     assertf(reasonRow.kind ~= "status_fail", "not_proven Reason row must not render red (status_fail)")
+
+    -- runtimeKind is the same status_ok/note/status_fail vocabulary as
+    -- linuxValueColor, shared by any other Runtime-specific rendering (e.g.
+    -- the step legend's "1. Runtime" segment -- see the BLOCKER 1 fix in
+    -- drawLinuxStepLegend/linuxDrawFinal). A not_proven runtime must never
+    -- resolve to the failure/red token.
+    assertf(presentation.runtimeKind == "note",
+        "not_proven runtimeKind must be the neutral/warning 'note' token, got: " .. tostring(presentation.runtimeKind))
+    assertf(presentation.runtimeKind ~= "status_fail", "not_proven runtimeKind must never be the failure/red token")
 end
 
 -- =======================================================================
@@ -143,6 +152,9 @@ local function testB_Failed()
     -- Repair guidance must still be present in Copy Summary for a genuine failure.
     local text = table.concat(buildCheckOnlyFinalMessage(ALL_OK_CHECKS, false, verdict, "rocm", "unknown", "unknown", "unknown"), "\n")
     assertf(containsSubstring(text, "Run Repair / rerun setup"), "genuine failure must keep its Repair guidance:\n" .. text)
+
+    assertf(presentation.runtimeKind == "status_fail",
+        "a genuine failure runtimeKind must be the failure/red token, got: " .. tostring(presentation.runtimeKind))
 end
 
 -- =======================================================================
@@ -168,6 +180,9 @@ local function testC_Ok()
     assertf(backendRow ~= nil and backendRow.kind == "status_ok",
         "a healthy Backend row must render as status_ok, got: " .. tostring(backendRow and backendRow.kind))
     assertf(findRow(rows, "Reason") == nil, "no Reason/failure row should appear for a healthy verdict")
+
+    assertf(presentation.runtimeKind == "status_ok",
+        "a healthy runtimeKind must be status_ok, got: " .. tostring(presentation.runtimeKind))
 end
 
 -- =======================================================================
@@ -204,6 +219,10 @@ local function testD_MixedNotProvenPlusGenuineFailure()
     local text = table.concat(buildCheckOnlyFinalMessage(mixedChecks, false, verdict, "rocm", "unknown", "unknown", "unknown"), "\n")
     assertf(containsSubstring(text, "one or more checks failed"), "mixed case must show the failure headline:\n" .. text)
     assertf(containsSubstring(text, "Run Repair / rerun setup"), "mixed case must keep Repair guidance:\n" .. text)
+    -- FFmpeg itself must still read as a current failure in Copy Summary --
+    -- the not_proven Runtime state must not paper over a real unrelated
+    -- current failure.
+    assertf(containsSubstring(text, "[--]  FFmpeg path"), "mixed case must still show FFmpeg as a current failure:\n" .. text)
 
     -- Row-level: the Backend/Reason (Runtime-specific) rows must still use
     -- the not_proven 'note' kind, independent of the unrelated FFmpeg
@@ -213,6 +232,11 @@ local function testD_MixedNotProvenPlusGenuineFailure()
     local backendRow = findRow(rows, "Backend")
     assertf(backendRow ~= nil and backendRow.kind == "note",
         "Runtime-specific Backend row must stay not_proven-colored ('note') in the mixed case, got: " .. tostring(backendRow and backendRow.kind))
+
+    -- Runtime's OWN runtimeKind must also stay 'note' (not folded into the
+    -- overall failed state caused by the unrelated FFmpeg failure).
+    assertf(presentation.runtimeKind == "note",
+        "mixed case runtimeKind must stay 'note' (not_proven), got: " .. tostring(presentation.runtimeKind))
 end
 
 -- =======================================================================

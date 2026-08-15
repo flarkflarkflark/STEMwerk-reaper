@@ -4456,16 +4456,30 @@ function deriveLinuxFinalPresentation(finalSuccess, allBasicChecksOk, verdict)
         runtimeState = finalSuccess and "ok" or "failed"
     end
 
+    -- runtimeKind mirrors runtimeState into the linuxValueColor "kind" vocabulary
+    -- (status_ok/note/status_fail) already used by buildLinuxFinalRows's Backend/
+    -- Reason rows, so any other Runtime-specific rendering (e.g. the step legend's
+    -- "1. Runtime" segment) can share the exact same not_proven-safe color mapping
+    -- instead of re-deriving its own.
+    local runtimeKind
+    if runtimeState == "ok" then
+        runtimeKind = "status_ok"
+    elseif runtimeState == "not_proven" then
+        runtimeKind = "note"
+    else
+        runtimeKind = "status_fail"
+    end
+
     if finalSuccess then
-        return { state = "ok", headline = "Setup complete.", runtimeState = runtimeState, overallState = "ok" }
+        return { state = "ok", headline = "Setup complete.", runtimeState = runtimeState, runtimeKind = runtimeKind, overallState = "ok" }
     end
 
     local notProvenOnly = allBasicChecksOk ~= false and verdict.notProvenOnly == true
     if notProvenOnly then
-        return { state = "not_proven", headline = "Setup verification was incomplete.", runtimeState = runtimeState, overallState = "not_proven" }
+        return { state = "not_proven", headline = "Setup verification was incomplete.", runtimeState = runtimeState, runtimeKind = runtimeKind, overallState = "not_proven" }
     end
 
-    return { state = "failed", headline = "Setup was not completely successful.", runtimeState = runtimeState, overallState = "failed" }
+    return { state = "failed", headline = "Setup was not completely successful.", runtimeState = runtimeState, runtimeKind = runtimeKind, overallState = "failed" }
 end
 
 -- `verdict`, when supplied (the resolved Check-only verdict above), is the
@@ -4892,7 +4906,7 @@ function refreshSetupMenuChoiceLabels(menu)
     end
 end
 
-local function drawLinuxStepLegend(x, y, w, state, logLines)
+local function drawLinuxStepLegend(x, y, w, state, logLines, runtimeColor)
     local labels = {
         "1. Runtime",
         "2. Python + venv",
@@ -4907,6 +4921,16 @@ local function drawLinuxStepLegend(x, y, w, state, logLines)
         { 100, 255, 100 },
         { 255, 196, 80 },
     }
+    -- Step 1 ("Runtime") is the only step with a resolved pass/fail/not_proven
+    -- state once a Check-only final result exists (deriveLinuxFinalPresentation).
+    -- Unlike steps 2-5 (pure setup progress), it must never render the fixed
+    -- palette's failure red for a not_proven runtime. runtimeColor (0-1 floats,
+    -- e.g. from linuxValueColor(presentation.runtimeKind)) is only passed by the
+    -- FINAL window; the in-progress view (linuxDrawStatus) omits it and keeps the
+    -- pure progress palette, since ok/failed/not_proven isn't resolved yet there.
+    if runtimeColor then
+        colors[1] = { runtimeColor[1] * 255, runtimeColor[2] * 255, runtimeColor[3] * 255 }
+    end
     local total = tonumber(trim(state.STEP_TOTAL or ""))
     if not total or total < 1 then
         total = 5
@@ -5133,7 +5157,10 @@ function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)
         finalState.STEP_INDEX = trim(finalState.STEP_TOTAL or "") ~= "" and tostring(finalState.STEP_TOTAL) or "5"
     end
 
-    drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, finalState, logLines or {})
+    -- Runtime step segment must reflect the same runtimeKind used for the
+    -- Backend/Reason rows above (linuxValueColor's status_ok/note/status_fail),
+    -- not the step legend's fixed progress palette -- see drawLinuxStepLegend.
+    drawLinuxStepLegend(infoX + 14, legendY, infoW - 28, finalState, logLines or {}, linuxValueColor(presentation.runtimeKind))
 
     local progressX = infoX + 14
     local progressW = infoW - 28
@@ -6015,6 +6042,21 @@ local function clearTransientSetupState(runtime)
     end
 end
 
+-- Pure decision, headlessly testable for the same reason as
+-- deriveLinuxFinalPresentation: should the final window's log panel open
+-- showing the TOP of the buffer (oldest lines first) instead of the bottom
+-- (most recent, the panel's normal default)? True only for a Check-only final
+-- window (checkVerdict ~= nil), the same condition linuxSetupTick uses to
+-- gate labelHistoricalCheckOnlyLogLines -- that function always prepends its
+-- historical-provenance marker as the very first line, and a panel that opens
+-- at the bottom scrolls that marker out of view (the live AMD retest showed
+-- the historical bootstrap.log tail with no visible marker, looking like
+-- unlabeled current output). A live run's log panel is unaffected and keeps
+-- opening at the bottom.
+function linuxLogPanelDefaultScrollToTop(checkVerdict)
+    return checkVerdict ~= nil
+end
+
 -- Verify-only path: fast file-existence checks only, no subprocess, no package import,
 -- no io.popen. Opens the existing LINUX_SETUP window in pre-finalized mode so REAPER
 -- never blocks. Heavy imports (torch, audio_separator) are intentionally skipped.
@@ -6052,7 +6094,10 @@ showDeferredFinalWindow = function(runtime, stateFile, logFile, finalMessage, fi
         lastMouseCap    = 0,
         lastMouseWheel  = gfx.mouse_wheel or 0,
         fontScale       = getLinuxSetupFontScale(),
-        logScroll       = 0,
+        -- math.huge clamps down to the max scroll offset (top of the buffer)
+        -- on the panel's first draw via syncLinuxLogScroll -- see
+        -- linuxLogPanelDefaultScrollToTop above.
+        logScroll       = linuxLogPanelDefaultScrollToTop(checkVerdict) and math.huge or 0,
         stepFillByIndex = {},
         lastStepIndex   = 4,
         lastProgressPct = 100,
