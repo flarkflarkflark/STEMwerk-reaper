@@ -1,0 +1,159 @@
+"""Regression tests for the 2.3.1.0 Setup-menu "environment details" grouping
+GUI polish in STEMwerk_Setup_Internal.lua.
+
+The pre-action existing-runtime Setup menu (existingRuntimeSetupMenuTick --
+shown when an existing runtime is detected, before the user picks
+Check/Repair/Rebuild) used to render its Runtime/Models/Setup script/Recorded
+setup version rows as three separate floating pieces (one bordered box for
+Runtime, then unbordered free-floating Models and version-line text). This
+groups all four rows into one bordered `drawLinuxPanel` info card so they
+read as a single related unit.
+
+This is presentation-only: no gfx/REAPER environment is available in this
+sandbox to execute the draw path itself (see the module docstring in
+tests/support/run_setup_final_rows_headless.lua for the same limitation --
+that harness's `reaper` stub deliberately does not include `gfx`), so these
+tests prove the structural invariants via source inspection rather than
+pixel output, following the same style already used by
+tests/test_2310_diagnostics_truthfulness.py for this exact file.
+
+Data-source/verdict/color/historical-log/scroll semantics for the *separate*
+post-action finalized result window (linuxDrawFinal /
+deriveLinuxFinalPresentation / buildLinuxFinalRows) are untouched by this
+change and continue to be covered by the existing
+tests/support/run_setup_linux_final_presentation_headless.lua,
+tests/support/run_setup_linux_not_proven_headless.lua and
+tests/support/run_setup_final_rows_headless.lua suites -- this file does not
+duplicate those.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SETUP = ROOT / "scripts" / "reaper" / "_internal" / "STEMwerk_Setup_Internal.lua"
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _function_body(text: str, signature: str) -> str:
+    """Return a Lua function's body, from its `function NAME(...)` line up to
+    the matching column-0 `end` that closes it (mirrors the existing
+    text.index(...)-based slicing convention already used against this same
+    file in tests/test_2310_diagnostics_truthfulness.py)."""
+    start = text.index(signature)
+    end = text.index("\nend", start)
+    return text[start:end]
+
+
+class TestExistingRuntimeMenuInfoGrouping:
+    """existingRuntimeSetupMenuTick is the pre-action "existing runtime
+    found, choose what to do" menu -- confirmed by grep to be the only place
+    in this file where the setup_runtime_label/setup_models_label/
+    setup_script_label/setup_last_run_label rows are rendered at all."""
+
+    def test_four_row_labels_render_exactly_once_each_in_the_menu_function(self):
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+
+        assert body.count('setupText("setup_runtime_label"') == 1
+        assert body.count('setupText("setup_models_label"') == 1
+        assert body.count('setupText("setup_script_label"') == 1
+        # "Recorded setup version" fallback is referenced from both the
+        # known-version and unknown-version branches of the same single row.
+        assert body.count('setupText("setup_last_run_label"') == 2
+
+    def test_row_order_is_runtime_then_models_then_script_then_recorded_version(self):
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+
+        runtime_idx = body.index('setupText("setup_runtime_label"')
+        models_idx = body.index('setupText("setup_models_label"')
+        script_idx = body.index('setupText("setup_script_label"')
+        recorded_idx = body.index('setupText("setup_last_run_label"')
+
+        assert runtime_idx < models_idx < script_idx < recorded_idx
+
+    def test_four_rows_share_a_single_grouped_panel_container(self):
+        """All four rows must be drawn inside ONE drawLinuxPanel(...) card
+        (the grouping), not each floating separately or each getting its own
+        border as before."""
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+
+        card_start = body.index("-- Environment details card")
+        # The next drawLinuxPanel call after the card comment is the grouped
+        # container; the four labels must all be *drawn* after it opens.
+        # (setupText(...) resolution for runtime/models labels happens
+        # earlier, alongside their width/wrap measurements, so this checks
+        # the actual gfx.drawstr(...) call sites -- the real render order --
+        # rather than where each label string gets resolved.)
+        panel_call_idx = body.index("drawLinuxPanel(bodyX, y, leftColW, groupH,", card_start)
+
+        runtime_draw_idx = body.index("gfx.drawstr(runtimeLabel)", card_start)
+        models_draw_idx = body.index("gfx.drawstr(modelLabel)", card_start)
+        version_draw_idx = body.index("gfx.drawstr(verLabel)", card_start)
+
+        assert panel_call_idx < runtime_draw_idx < models_draw_idx < version_draw_idx
+
+        # And there must be exactly one drawLinuxPanel call feeding this
+        # card's four rows (no leftover per-row border from the old layout).
+        # Scope the count to the card region only: from the card comment up
+        # to the row loop that closes it ("y = y + groupH + 10"), so this
+        # does not pick up the unrelated "Modes" summary panel drawn later
+        # in the same function.
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+        assert card_region.count("drawLinuxPanel(") == 1
+
+    def test_data_sources_are_unchanged(self):
+        """The four rows must still read from the exact same fields as
+        before: m.runtime.base, m.modelDir, m.currentVersion,
+        m.lastSetupVersion. No cached copies or duplicate state were
+        introduced for layout purposes."""
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+
+        assert "tostring(m.runtime.base)" in card_region
+        assert "tostring(m.modelDir)" in card_region
+        assert 'm.currentVersion or ""' in card_region
+        assert 'm.lastSetupVersion or ""' in card_region
+
+    def test_grouping_is_scoped_to_this_menu_and_does_not_touch_the_finalized_result_window(self):
+        """linuxDrawFinal is the separate post-action finalized-result
+        window (built from deriveLinuxFinalPresentation/buildLinuxFinalRows)
+        and must not gain (or lose) any of these four rows as a side effect
+        of this change."""
+        text = _read(SETUP)
+        final_body = _function_body(text, "function linuxDrawFinal(finalLines, finalSuccess, state, logLines, pid)")
+
+        assert 'setupText("setup_runtime_label"' not in final_body
+        assert 'setupText("setup_models_label"' not in final_body
+        assert 'setupText("setup_script_label"' not in final_body
+        assert '"-- Environment details card"' not in final_body
+        assert "-- Environment details card" not in final_body
+
+    def test_group_container_reuses_the_existing_drawlinuxpanel_primitive(self):
+        """Section 5 of the grouping requirement: reuse an existing
+        panel/card primitive rather than inventing a new design system."""
+        text = _read(SETUP)
+        assert re.search(r"^local function drawLinuxPanel\(x, y, w, h, bg, border\)", text, re.MULTILINE)
+
+    def test_windows_overview_extra_rows_still_render_after_the_grouped_card(self):
+        """OS == 'Windows' renders its own additional overview rows further
+        down in the same function; confirm that block still exists,
+        unchanged, and still comes after the grouped card rather than being
+        absorbed into it (this function is shared across Windows/macOS/
+        Linux -- only the four common rows are grouped)."""
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        windows_idx = body.index('if OS == "Windows" and m.windowsOverview then')
+        assert windows_idx > card_start
