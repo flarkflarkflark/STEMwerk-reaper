@@ -239,6 +239,25 @@ def test_language_tooltip_includes_right_click_hint_in_all_locales():
                 )
 
 
+def test_german_edks_copy_uses_correct_zuerst_spelling():
+    # Regression guard: the German word "zuerst" (first) was previously
+    # shipped as the invalid spelling "züerst" in the Kit Split / EDKS copy.
+    files = [
+        Path(__file__).parent.parent.parent / "i18n" / "languages.lua",
+        Path(__file__).parent.parent.parent / "scripts" / "reaper" / "i18n" / "languages.lua",
+    ]
+    keys = ("tooltip_preset_edks", "edks_planned_message", "help_step3_detail", "help_6stem_desc")
+
+    for file_path in files:
+        block = extract_language_block(file_path, "de")
+        assert block, f"Missing language block 'de' in {file_path}"
+        assert "züerst" not in block, f"{file_path} de block contains invalid spelling 'züerst'"
+        for key in keys:
+            value = extract_string_value(block, key)
+            assert value, f"{file_path} de.{key} is missing"
+            assert "zuerst" in value, f"{file_path} de.{key} missing correct spelling 'zuerst': {value!r}"
+
+
 def main():
     """Run all i18n tests."""
     print("Testing STEMwerk Language Files\n")

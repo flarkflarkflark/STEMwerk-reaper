@@ -1921,7 +1921,7 @@ en = {
         tooltip_preset_karaoke = "Alles ausser Gesang",
         tooltip_preset_all = "Alle verfügbaren Stems auswählen",
         tooltip_preset_drumkit = "Für reine Drum-Tracks oder Samples. Teilt das Drum-Signal direkt in Kit-Teile.",
-        tooltip_preset_edks = "Qualitätsmodus für komplette Mixes. Separiert züerst Drums und teilt sie dann in Kit-Teile.",
+        tooltip_preset_edks = "Qualitätsmodus für komplette Mixes. Separiert zuerst Drums und teilt sie dann in Kit-Teile.",
         tooltip_preset_vocals = "Nur Gesang Stem auswählen",
         tooltip_preset_drums = "Nur Schlagzeug Stem auswählen",
         tooltip_preset_bass = "Nur Bass Stem auswählen",
@@ -1941,7 +1941,7 @@ en = {
         tooltip_stem_bass = "Bassgitarre, Synthbass",
         tooltip_stem_other = "Synths, Streicher, Keys, Effekte",
         edks_planned_title = "Kit Split",
-        edks_planned_message = "Kit Split isoliert züerst die Drums und teilt diesen Drum-Stem danach in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf.",
+        edks_planned_message = "Kit Split isoliert zuerst die Drums und teilt diesen Drum-Stem danach in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf.",
         tooltip_stem_guitar = "Elektrische und akustische Gitarren",
         tooltip_stem_piano = "Klavier, Keys, Rhodes",
 
@@ -2114,7 +2114,7 @@ en = {
         help_step2_detail = "Bei Direct Kit wählen Fast / Quality / Expanded den Drum-Kit-Modus. Bei Kit Split bestimmen sie die Qualität der Drum-Isolierung in Stufe 1.",
         help_step3_title = "STEMwerk klicken",
         help_step3_desc = "STEMwerk trennt und importiert die Ergebnisse",
-        help_step3_detail = "Direct Kit teilt Audio direkt in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf. Kit Split isoliert züerst die Drums und teilt danach diesen Drum-Stem auf.",
+        help_step3_detail = "Direct Kit teilt Audio direkt in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf. Kit Split isoliert zuerst die Drums und teilt danach diesen Drum-Stem auf.",
         help_pro_tip = "Pro Tipp: Auto verwendet Apple MPS, AMD ROCm oder NVIDIA CUDA, wenn verfügbar. CPU-Fallback wird unterstützt, aber Drum Kit ist auf CPU deutlich langsamer.",
         tips_hints = "Tipps",
         keyboard_shortcuts = "Tastaturkürzel:",
@@ -2134,7 +2134,7 @@ en = {
         help_stem_bass_uses = "Ideal für Bass-Transkription, Low-End Mischen, oder Basslinien lernen",
         help_stem_other_uses = "Erfasst alles andere: Gitarren, Keys, Streicher, Synths, Pads, Effekte",
         help_6stem_title = "Direct Kit / Kit Split",
-        help_6stem_desc = "Direct Kit teilt Audio direkt in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf. Kit Split isoliert züerst die Drums und teilt diesen Drum-Stem danach in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf.",
+        help_6stem_desc = "Direct Kit teilt Audio direkt in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf. Kit Split isoliert zuerst die Drums und teilt diesen Drum-Stem danach in Kick, Snare, Toms, Hi-Hat, Ride und Crash auf.",
 
         -- Reaper files tab
         help_reaper_title = "REAPER-Dateien",
