@@ -239,11 +239,7 @@ def test_healthy_repair_policy_mismatch_preserves_existing_runtime(tmp_path):
     shutil.copy2(MACOS_BOOTSTRAP, bootstrap)
     _complete_payload_fixture(script_dir)
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    uname = fake_bin / "uname"
-    uname.write_text("#!/bin/sh\nprintf 'arm64\\n'\n", encoding="utf-8")
-    uname.chmod(0o755)
+    fake_bin = _arm64_fake_bin(tmp_path)
 
     runtime = tmp_path / "runtime"
     python = runtime / ".venv/bin/python"
