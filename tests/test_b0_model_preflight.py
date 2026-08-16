@@ -41,15 +41,40 @@ def _write(path: Path, content: bytes) -> None:
     path.write_bytes(content)
 
 
-def _run_preflight(
+def _run_preflight_raw(
     tmp_path: Path,
     *,
     model: str = "htdemucs",
     workflow_mode: str = "",
     workflow_source: str = "",
-) -> tuple[bool, str]:
+    use_builder: str | None = None,
+) -> dict:
+    """Run the real B0 preflight source against a constructed runOptions table.
+
+    By default runOptions is built from the raw workflow_mode/workflow_source
+    strings passed in (used to prove legacy/invented literals are rejected).
+    Pass use_builder="direct" or "extract" to instead construct runOptions via
+    the real scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua
+    buildDirectRunOptions()/buildExtractRunOptions() production builders, so
+    the test drives the actual producer contract rather than a hand-fed
+    string. DKS_WORKFLOW is loaded from that same real module (not
+    reimplemented here) so the harness's identity comparisons can never drift
+    from production.
+    """
     if not LUA:
         pytest.skip("no Lua interpreter available")
+
+    if use_builder == "direct":
+        options_expr = "DKS_WORKFLOW.buildDirectRunOptions()"
+    elif use_builder == "extract":
+        options_expr = "DKS_WORKFLOW.buildExtractRunOptions()"
+    elif use_builder is not None:
+        raise ValueError(f"unknown use_builder={use_builder!r}")
+    else:
+        options_expr = (
+            "{ workflowMode = " + json.dumps(workflow_mode)
+            + ", workflowSource = " + json.dumps(workflow_source) + " }"
+        )
 
     harness = f"""
 PATH_SEP = "/"
@@ -58,22 +83,26 @@ SETTINGS = {{ model = {json.dumps(model)} }}
 effectiveRunModel = function() return SETTINGS.model end
 getRuntimePaths = function() return nil end
 getHome = function() return "" end
+local last_message = ""
 local last_detail = ""
 SW_LOG = {{
-    logExecResult = function(_, _, detail)
+    logExecResult = function(msg, _, detail)
+        if msg then last_message = tostring(msg) end
         if detail then last_detail = tostring(detail) end
     end
 }}
 debugLog = function(_) end
 showMessage = function(_, _, _, _) end
+DKS_WORKFLOW = dofile("scripts/reaper/_internal/STEMwerk_DrumKit_Workflow.lua")
 {_b0_source()}
 B0_getDefaultModelCacheDir = function() return {json.dumps(str(tmp_path))} end
-local ready = verifyProcessingAssetsReady({{
-    workflowMode = {json.dumps(workflow_mode)},
-    workflowSource = {json.dumps(workflow_source)},
-}})
+local runOptions = {options_expr}
+local ready = verifyProcessingAssetsReady(runOptions)
 io.write("READY=" .. tostring(ready) .. "\\n")
 io.write("DETAIL=" .. tostring(last_detail) .. "\\n")
+io.write("MESSAGE=" .. tostring(last_message) .. "\\n")
+io.write("SOURCE_IS_DIRECT=" .. tostring(runOptions.workflowSource == DKS_WORKFLOW.SOURCE_DIRECT) .. "\\n")
+io.write("SOURCE_IS_EXTRACT=" .. tostring(runOptions.workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT) .. "\\n")
 """
     harness_path = tmp_path / "b0_harness.lua"
     harness_path.write_text(harness, encoding="utf-8")
@@ -86,12 +115,36 @@ io.write("DETAIL=" .. tostring(last_detail) .. "\\n")
     )
     output = proc.stdout + proc.stderr
     assert proc.returncode == 0, output
-    ready = "READY=true" in output
-    detail = next(
-        (line.removeprefix("DETAIL=") for line in output.splitlines() if line.startswith("DETAIL=")),
-        "",
+
+    def _field(prefix: str) -> str:
+        return next(
+            (line.removeprefix(prefix) for line in output.splitlines() if line.startswith(prefix)),
+            "",
+        )
+
+    return {
+        "ready": "READY=true" in output,
+        "detail": _field("DETAIL="),
+        "message": _field("MESSAGE="),
+        "source_is_direct": _field("SOURCE_IS_DIRECT=") == "true",
+        "source_is_extract": _field("SOURCE_IS_EXTRACT=") == "true",
+    }
+
+
+def _run_preflight(
+    tmp_path: Path,
+    *,
+    model: str = "htdemucs",
+    workflow_mode: str = "",
+    workflow_source: str = "",
+) -> tuple[bool, str]:
+    result = _run_preflight_raw(
+        tmp_path,
+        model=model,
+        workflow_mode=workflow_mode,
+        workflow_source=workflow_source,
     )
-    return ready, detail
+    return result["ready"], result["detail"]
 
 
 def _install_normal_weight(tmp_path: Path) -> None:
@@ -172,6 +225,9 @@ def test_missing_normal_weight_still_blocks(tmp_path):
 
 
 def test_direct_kit_size_guards_are_unchanged(tmp_path):
+    # Driven through the real buildDirectRunOptions() producer, not a
+    # hand-fed "direct" string -- see test_legacy_direct_literal_is_not_the_
+    # production_direct_identity below for why that distinction matters.
     source = MAIN_LUA.read_text(encoding="utf-8", errors="replace")
     direct_start = source.index("function B0_directKitAssets()")
     direct_end = source.index("\nend", direct_start)
@@ -181,16 +237,105 @@ def test_direct_kit_size_guards_are_unchanged(tmp_path):
 
     _write(tmp_path / DIRECT_CKPT, b"c" * 1048576)
     _write(tmp_path / DIRECT_YAML, b"too small")
-    ready, _ = _run_preflight(
-        tmp_path, workflow_mode="drumkit", workflow_source="direct"
-    )
-    assert not ready
+    result = _run_preflight_raw(tmp_path, use_builder="direct")
+    assert not result["ready"]
 
     _write(tmp_path / DIRECT_YAML, b"d" * 64)
-    ready, detail = _run_preflight(
+    result = _run_preflight_raw(tmp_path, use_builder="direct")
+    assert result["ready"], result["detail"]
+
+
+def test_direct_run_options_carry_production_source_identity(tmp_path):
+    # Proves buildDirectRunOptions().workflowSource actually equals
+    # DKS_WORKFLOW.SOURCE_DIRECT (the constant B0 now compares against),
+    # end to end through the same harness B0 itself runs under.
+    _install_direct_assets(tmp_path)
+
+    result = _run_preflight_raw(tmp_path, use_builder="direct")
+
+    assert result["source_is_direct"]
+    assert not result["source_is_extract"]
+
+
+def test_extract_run_options_carry_production_source_identity(tmp_path):
+    _write(tmp_path / "htdemucs.yaml", b"models: ['955717e8']")
+    _install_normal_weight(tmp_path)
+    _install_direct_assets(tmp_path)
+
+    result = _run_preflight_raw(tmp_path, use_builder="extract")
+
+    assert result["source_is_extract"]
+    assert not result["source_is_direct"]
+
+
+def test_direct_kit_real_run_options_select_direct_kit_branch_only(tmp_path):
+    # Regression for the invented-literal bug: real Direct Kit run options
+    # (workflowSource == "dks_direct") must land B0 on the Direct Kit asset
+    # family alone. No normal Demucs descriptor/weight is installed here --
+    # if B0 fell through to the generic Demucs branch (the pre-fix bug),
+    # this would report not-ready demanding htdemucs.yaml/955717e8 instead.
+    _install_direct_assets(tmp_path)
+
+    result = _run_preflight_raw(tmp_path, use_builder="direct")
+
+    assert result["ready"], result["detail"]
+    assert "routes=Direct Kit" in result["message"]
+    assert "Normal Stems" not in result["message"]
+
+
+def test_kit_split_real_run_options_require_both_stage_assets(tmp_path):
+    # Regression for the invented-literal bug: real Kit Split run options
+    # (workflowSource == "dks_extract") must require BOTH the stage-1 Demucs
+    # assets AND the stage-2 DrumSep assets before the worker launches.
+    result = _run_preflight_raw(tmp_path, use_builder="extract")
+    assert not result["ready"], "neither stage's assets are installed yet"
+
+    _write(tmp_path / "htdemucs.yaml", b"models: ['955717e8']")
+    _install_normal_weight(tmp_path)
+    result = _run_preflight_raw(tmp_path, use_builder="extract")
+    assert not result["ready"], "stage-2 DrumSep assets are still missing"
+    assert DIRECT_CKPT in result["detail"]
+
+    _install_direct_assets(tmp_path)
+    result = _run_preflight_raw(tmp_path, use_builder="extract")
+    assert result["ready"], result["detail"]
+    assert "routes=Normal Stems,Kit Split" in result["message"]
+
+
+def test_legacy_direct_literal_is_not_the_production_direct_identity(tmp_path):
+    # The old contract-fake tests fed the invented "direct" string, which
+    # buildDirectRunOptions() never actually produces (it produces
+    # "dks_direct"). After the fix that legacy literal must NOT be accepted
+    # as the Direct Kit identity -- it must fall through to the generic
+    # model preflight branch instead.
+    _install_direct_assets(tmp_path)
+
+    result = _run_preflight_raw(
         tmp_path, workflow_mode="drumkit", workflow_source="direct"
     )
-    assert ready, detail
+
+    assert not result["ready"], (
+        "legacy 'direct' literal was incorrectly accepted as the production "
+        "Direct Kit identity"
+    )
+    assert "Normal Stems" in result["detail"]
+
+
+def test_legacy_extract_literal_is_not_the_production_extract_identity(tmp_path):
+    # Mirror of the above for "extract" vs. the real "dks_extract" value.
+    # If the legacy literal were (wrongly) treated as production identity,
+    # this would fail demanding the DrumSep stage-2 assets even though only
+    # the normal Demucs assets are installed.
+    _write(tmp_path / "htdemucs.yaml", b"models: ['955717e8']")
+    _install_normal_weight(tmp_path)
+
+    result = _run_preflight_raw(
+        tmp_path, workflow_mode="drumkit", workflow_source="extract"
+    )
+
+    assert result["ready"], result["detail"]
+    assert "routes=Normal Stems" in result["message"]
+    assert "Kit Split" not in result["message"]
 
 
 def test_valid_models_line_followed_by_unterminated_weights_block_blocks(tmp_path):
@@ -442,17 +587,17 @@ def test_quality_descriptor_with_correct_weight_width_is_ready(tmp_path):
 
 
 def test_kit_split_still_requires_its_stage_two_assets(tmp_path):
+    # Driven through the real buildExtractRunOptions() producer, not a
+    # hand-fed "extract" string -- see
+    # test_kit_split_real_run_options_require_both_stage_assets for the
+    # fuller regression covering both stages together.
     _write(tmp_path / "htdemucs.yaml", b"models: ['955717e8']")
     _install_normal_weight(tmp_path)
 
-    ready, detail = _run_preflight(
-        tmp_path, workflow_mode="drumkit", workflow_source="extract"
-    )
-    assert not ready
-    assert DIRECT_CKPT in detail
+    result = _run_preflight_raw(tmp_path, use_builder="extract")
+    assert not result["ready"]
+    assert DIRECT_CKPT in result["detail"]
 
     _install_direct_assets(tmp_path)
-    ready, detail = _run_preflight(
-        tmp_path, workflow_mode="drumkit", workflow_source="extract"
-    )
-    assert ready, detail
+    result = _run_preflight_raw(tmp_path, use_builder="extract")
+    assert result["ready"], result["detail"]

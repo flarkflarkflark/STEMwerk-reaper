@@ -14034,11 +14034,11 @@ function B0_collectProcessingRequiredAssets(runOptions)
     local workflowMode = tostring((runOptions and runOptions.workflowMode) or "")
     local workflowSource = tostring((runOptions and runOptions.workflowSource) or "")
     local requirements = {}
-    if workflowMode == "drumkit" and workflowSource == "direct" then
+    if workflowMode == "drumkit" and workflowSource == DKS_WORKFLOW.SOURCE_DIRECT then
         requirements[#requirements + 1] = { route = "Direct Kit", assets = B0_directKitAssets() }
         return requirements
     end
-    if workflowMode == "drumkit" and workflowSource == "extract" then
+    if workflowMode == "drumkit" and workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT then
         local normalRoute, normalAssets = B0_requiredNormalModelAssets(effectiveRunModel and effectiveRunModel() or SETTINGS.model)
         requirements[#requirements + 1] = { route = normalRoute, assets = normalAssets }
         requirements[#requirements + 1] = { route = "Kit Split", assets = B0_directKitAssets() }
