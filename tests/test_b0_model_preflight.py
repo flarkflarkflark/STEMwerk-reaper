@@ -302,6 +302,27 @@ def test_kit_split_real_run_options_require_both_stage_assets(tmp_path):
     assert "routes=Normal Stems,Kit Split" in result["message"]
 
 
+def test_kit_split_real_run_options_block_on_missing_stage1_when_stage2_present(tmp_path):
+    # Asymmetric counterpart to test_kit_split_real_run_options_require_both_
+    # stage_assets above, which only ever installs stage-1 before stage-2 and
+    # so never exercises the reverse order. Here stage-2 DrumSep assets are
+    # installed FIRST while stage-1 Demucs assets (htdemucs.yaml and its
+    # weight) remain entirely absent, proving a fully-ready DrumSep half
+    # cannot mask a missing Demucs stage-1 requirement for real Kit Split
+    # run options (workflowSource == DKS_WORKFLOW.SOURCE_EXTRACT).
+    _install_direct_assets(tmp_path)
+
+    result = _run_preflight_raw(tmp_path, use_builder="extract")
+
+    assert result["source_is_extract"]
+    assert not result["source_is_direct"]
+    assert not result["ready"], "stage-1 Demucs assets are still missing"
+    # descriptor_missing is the existing production reason code for a wholly
+    # absent htdemucs.yaml (see test_invalid_normal_descriptor_blocks_with_
+    # reason's content=None case) -- not a message invented for this test.
+    assert "descriptor_missing" in result["detail"]
+
+
 def test_legacy_direct_literal_is_not_the_production_direct_identity(tmp_path):
     # The old contract-fake tests fed the invented "direct" string, which
     # buildDirectRunOptions() never actually produces (it produces
