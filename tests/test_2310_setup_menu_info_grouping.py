@@ -242,3 +242,42 @@ class TestExistingRuntimeMenuInfoGrouping:
         card_start = body.index("-- Environment details card")
         windows_idx = body.index('if OS == "Windows" and m.windowsOverview then')
         assert windows_idx > card_start
+
+    def _windows_overview_block(self) -> str:
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        start = body.index('if OS == "Windows" and m.windowsOverview then')
+        end = body.index("\n    end", start)
+        return body[start:end]
+
+    def test_windows_overview_detail_rows_use_theme_aware_text_color(self):
+        """Profile/backend, Python, FFmpeg, Verification, audio_separator,
+        stemwerk_core, samplerate and julius are drawn from the shared `rows`
+        list in this block. That draw call used to hard-code a light-gray
+        gfx.set() triplet meant for a dark background only, so on Windows
+        light theme these rows were nearly invisible while the rest of the
+        UI (which reads themeTextSecondary/ACTIVE_THEME like every other row
+        on this same screen) stayed readable. Assert the rows color call is
+        theme-aware instead of a bare literal."""
+        block = self._windows_overview_block()
+        assert "gfx.set(0.78, 0.80, 0.84, 1)" not in block, (
+            "detail rows still use the old hard-coded dark-theme-only color literal"
+        )
+        assert "gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)" in block
+
+    def test_windows_overview_status_line_semantic_color_is_unchanged(self):
+        """Only the detail rows below 'Last setup: ...' were reported as a
+        contrast problem -- the status line itself already reads fine in both
+        themes. Prove its semantic (repair/ok) color assignment is untouched
+        by the detail-row contrast fix."""
+        block = self._windows_overview_block()
+        assert (
+            "gfx.set(o.needsRepair and 0.97 or 0.55, o.needsRepair and 0.80 or 0.57, "
+            "o.needsRepair and 0.15 or 0.62, 1)"
+        ) in block
+
+    def test_theme_text_secondary_token_definition_is_untouched(self):
+        """The fix must reuse the existing textSecondary theme token, not
+        redefine it or change its light/dark palette values."""
+        text = _read(SETUP)
+        assert 'local themeTextSecondary = setupThemeColor("textSecondary", { 0.55, 0.57, 0.62 })' in text

@@ -6975,7 +6975,7 @@ function existingRuntimeSetupMenuTick()
         end
         local rowChars = math.max(18, math.floor((leftColW - 20) / math.max(6, linuxFontSize(11) * 0.56)))
         gfx.setfont(1, "Arial", linuxFontSize(11))
-        gfx.set(0.78, 0.80, 0.84, 1)
+        gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
         for _, line in ipairs(rows) do
             local wrapped = cappedWrap(line, rowChars, 2)
             for _, wl in ipairs(wrapped) do
