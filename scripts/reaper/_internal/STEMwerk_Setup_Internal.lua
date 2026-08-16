@@ -3403,9 +3403,13 @@ end
 local function isWindowsFfmpegShimPath(path)
     if not path or path == "" then return false end
     local p = tostring(path):lower()
-    return p:find("\\microsoft\\winget\\links\\ffmpeg.exe", 1, true)
-        or p:find("\\windowsapps\\ffmpeg", 1, true)
-        or p:find("/microsoft/winget/links/ffmpeg.exe", 1, true)
+    -- WindowsApps App Execution Alias stubs are non-functional without a
+    -- Store install and can prompt the Store when invoked directly, so they
+    -- stay rejected by path alone. WinGet's per-executable "Links" shims are
+    -- ordinary, directly runnable files -- whether one actually works is
+    -- decided by the real `-version` probe in canRunFfmpegPair, not by where
+    -- it lives on disk.
+    return p:find("\\windowsapps\\ffmpeg", 1, true)
         or p:find("/windowsapps/ffmpeg", 1, true)
 end
 
@@ -3611,27 +3615,29 @@ local function windowsVerifyTick()
             ffmpegPath = ""
         end
 
-        -- 2) bootstrap.env FFMPEG_PATH
+        -- 2) explicit/current user override (ExtState) -- a deliberate user
+        -- choice outranks stale persisted bootstrap state.
+        local extPath = resolvePath(getExt("ffmpegPath"))
+        if extPath ~= "" and isWindowsFfmpegShimPath(extPath) then
+            shimFound = extPath
+            extPath = ""
+            setExt("ffmpegPath", "")
+        end
+        if ffmpegPath == "" and isValidFfmpegPath(extPath) then
+            ffmpegPath = extPath
+        end
+
+        -- 3) persisted/bootstrap.env FFMPEG_PATH -- candidate/evidence only,
+        -- still re-validated live above via isValidFfmpegPath.
         local statePath = resolvePath(state.FFMPEG_PATH or "")
         if statePath ~= "" and isWindowsFfmpegShimPath(statePath) then
-            shimFound = statePath
+            if shimFound == "" then shimFound = statePath end
             statePath = ""
             state.FFMPEG_PATH = ""
             updateBootstrapEnv(stateFile, { FFMPEG_PATH = "" })
         end
         if ffmpegPath == "" and isValidFfmpegPath(statePath) then
             ffmpegPath = statePath
-        end
-
-        -- 3) manual override (ExtState)
-        local extPath = resolvePath(getExt("ffmpegPath"))
-        if extPath ~= "" and isWindowsFfmpegShimPath(extPath) then
-            if shimFound == "" then shimFound = extPath end
-            extPath = ""
-            setExt("ffmpegPath", "")
-        end
-        if ffmpegPath == "" and isValidFfmpegPath(extPath) then
-            ffmpegPath = extPath
         end
 
         -- 4) PATH fallback (non-shim only)

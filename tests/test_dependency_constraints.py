@@ -7985,7 +7985,7 @@ def test_windows_ready_to_go_verify_mode_is_non_destructive_and_reuses_existing_
     assert 'function ReadEnvMap' in windows_bootstrap
     assert '"MAIN_RUNTIME_STATUS=$mainRuntimeStatus"' in windows_bootstrap
     assert 'LogProgress ("ready_to_go_state_file=" + $readyStatePath)' in windows_bootstrap
-    assert 'LogProgress "ready_to_go_state_written=1"' in windows_bootstrap
+    assert 'LogProgress ("ready_to_go_state_written=" + $(if ($readyMarkerWritten) { "1" } else { "0" }))' in windows_bootstrap
     assert 'LogProgress ("ready_to_go_status=" + [string]$readyState["READY_TO_GO_STATUS"])' in windows_bootstrap
     assert '$normalizedReadyStatePath = [System.IO.Path]::GetFullPath($readyStatePath)' in windows_bootstrap
     assert '$normalizedStateFile = if ([string]::IsNullOrWhiteSpace($StateFile)) { "" } else { [System.IO.Path]::GetFullPath($StateFile) }' in windows_bootstrap

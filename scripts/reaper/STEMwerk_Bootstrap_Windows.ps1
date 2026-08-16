@@ -771,39 +771,41 @@ function ResolveWindowsFfmpegPath([switch]$AllowInstall) {
     $runtimeFfmpegRoot = Join-NormalizedWindowsPath $RuntimeBase @("ffmpeg")
     if (Test-Path $runtimeFfmpegRoot) {
         try {
-            $runtimeFfmpeg = Get-ChildItem -Path $runtimeFfmpegRoot -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($runtimeFfmpeg -and $runtimeFfmpeg.FullName) {
+            $runtimeFfmpegCandidates = @(Get-ChildItem -Path $runtimeFfmpegRoot -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue)
+            foreach ($runtimeFfmpeg in $runtimeFfmpegCandidates) {
+                if (-not $runtimeFfmpeg -or -not $runtimeFfmpeg.FullName) { continue }
                 if (IsFfmpegShim $runtimeFfmpeg.FullName) {
                     LogProgress ("Ignoring shim FFmpeg path: " + $runtimeFfmpeg.FullName)
-                } else {
-                    $pair = TestFfmpegPair $runtimeFfmpeg.FullName
-                    if ($pair.Status -eq "ok") {
-                        $script:FfmpegValidated = $true
-                        $script:FfmpegValidationReason = "ffmpeg_pair_valid"
-                        $script:FfprobePath = [string]$pair.FfprobePath
-                        return [string]$pair.FfmpegPath
-                    }
-                    LogProgress ("Ignoring invalid runtime FFmpeg pair: " + $pair.Reason)
+                    continue
                 }
+                $pair = TestFfmpegPair $runtimeFfmpeg.FullName
+                if ($pair.Status -eq "ok") {
+                    $script:FfmpegValidated = $true
+                    $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+                    $script:FfprobePath = [string]$pair.FfprobePath
+                    return [string]$pair.FfmpegPath
+                }
+                LogProgress ("Ignoring invalid runtime FFmpeg pair: " + $runtimeFfmpeg.FullName + " reason=" + $pair.Reason)
             }
         } catch {
         }
     }
 
-    $cmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
-    if ($cmd) {
+    $pathFfmpegCandidates = @(Get-Command ffmpeg -All -ErrorAction SilentlyContinue)
+    foreach ($cmd in $pathFfmpegCandidates) {
+        if (-not $cmd -or -not $cmd.Source) { continue }
         if (IsFfmpegShim $cmd.Source) {
             LogProgress ("Ignoring shim FFmpeg path: " + $cmd.Source)
-        } else {
-            $pair = TestFfmpegPair $cmd.Source
-            if ($pair.Status -eq "ok") {
-                $script:FfmpegValidated = $true
-                $script:FfmpegValidationReason = "ffmpeg_pair_valid"
-                $script:FfprobePath = [string]$pair.FfprobePath
-                return [string]$pair.FfmpegPath
-            }
-            LogProgress ("Ignoring invalid PATH FFmpeg pair: " + $pair.Reason)
+            continue
         }
+        $pair = TestFfmpegPair $cmd.Source
+        if ($pair.Status -eq "ok") {
+            $script:FfmpegValidated = $true
+            $script:FfmpegValidationReason = "ffmpeg_pair_valid"
+            $script:FfprobePath = [string]$pair.FfprobePath
+            return [string]$pair.FfmpegPath
+        }
+        LogProgress ("Ignoring invalid PATH FFmpeg pair: " + $cmd.Source + " reason=" + $pair.Reason)
     }
 
     if ($AllowInstall) {
@@ -863,8 +865,13 @@ function InvokeWithResolvedFfmpegEnvironment([string]$FfmpegPath, [scriptblock]$
 function IsFfmpegShim([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     $p = $Path.ToLowerInvariant().Trim().Trim('"').Trim("'").Replace("/", "\")
-    if ($p.Contains("\winget\links\ffmpeg.exe") -or $p.Contains("\windowsapps\ffmpeg")) { return $true }
-    if ($p.Contains("\microsoft\winget\packages\") -and $p.Contains("\ffmpeg")) { return $true }
+    # WindowsApps App Execution Alias stubs are non-functional without a Store
+    # install and can prompt the Store when invoked directly, so they stay
+    # rejected by path alone. The WinGet per-executable "Links" shims and the
+    # underlying "Packages" install directories are ordinary, directly
+    # runnable files -- whether a given one actually works is decided by the
+    # real -version probe in TestFfmpegPair, not by where it lives on disk.
+    if ($p.Contains("\windowsapps\ffmpeg")) { return $true }
     return $false
 }
 
@@ -2357,7 +2364,7 @@ print("DRUMSEP_VERIFY ok")
     return "verify_failed"
 }
 
-function VerifyDrumsepDirectmlRuntime([string]$PythonPath) {
+function VerifyDrumsepDirectmlRuntime([string]$PythonPath, [switch]$AllowInstall) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return "python_missing" }
     if (-not (Test-Path $PythonPath)) { return "python_missing" }
 
@@ -2368,7 +2375,7 @@ function VerifyDrumsepDirectmlRuntime([string]$PythonPath) {
         return "model_missing"
     }
 
-    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall
+    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall:$AllowInstall
     if ([string]::IsNullOrWhiteSpace($resolvedFfmpeg) -or -not (Test-Path $resolvedFfmpeg)) {
         LogLine "DrumSep DirectML verify could not resolve FFmpeg"
         return "ffmpeg_missing"
@@ -2447,7 +2454,7 @@ print("DRUMSEP_DIRECTML_VERIFY ok device=" + str(device) + " provider=DmlExecuti
     return "verify_failed"
 }
 
-function VerifyDrumsepCudaRuntime([string]$PythonPath) {
+function VerifyDrumsepCudaRuntime([string]$PythonPath, [switch]$AllowInstall) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return @{ Status = "python_missing"; Probe = @{}; FfmpegPath = "" } }
     if (-not (Test-Path $PythonPath)) { return @{ Status = "python_missing"; Probe = @{}; FfmpegPath = "" } }
 
@@ -2458,7 +2465,7 @@ function VerifyDrumsepCudaRuntime([string]$PythonPath) {
         return @{ Status = "model_missing"; Probe = @{}; FfmpegPath = "" }
     }
 
-    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall
+    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall:$AllowInstall
     if ([string]::IsNullOrWhiteSpace($resolvedFfmpeg) -or -not (Test-Path $resolvedFfmpeg)) {
         LogLine "DrumSep CUDA verify could not resolve FFmpeg"
         return @{ Status = "ffmpeg_missing"; Probe = @{}; FfmpegPath = "" }
@@ -2636,7 +2643,7 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
         WriteDrumsepDirectmlState "running" "missing" "verify_existing_runtime"
         LogProgress "Verifying existing DrumSep DirectML runtime"
         if (EnsureDrumsepAssets $modelDir) {
-            $existingVerifyResult = VerifyDrumsepDirectmlRuntime $drumsepPython
+            $existingVerifyResult = VerifyDrumsepDirectmlRuntime $drumsepPython -AllowInstall
             if ($existingVerifyResult -eq "ok") {
                 WriteDrumsepDirectmlState "ok" "ok" "ok"
                 LogProgress "Existing DrumSep DirectML runtime verified"
@@ -2702,7 +2709,7 @@ function InstallDrumsepDirectmlRuntime([string]$BasePythonPath) {
     if ($offlineBundledAllmodelsMode) {
         LogProgress "Verifying bundled Drum Kit runtime..."
     }
-    $verifyResult = VerifyDrumsepDirectmlRuntime $drumsepPython
+    $verifyResult = VerifyDrumsepDirectmlRuntime $drumsepPython -AllowInstall
     if ($verifyResult -ne "ok") {
         if ($verifyResult -eq "model_missing") {
             WriteDrumsepDirectmlState "error" "missing" "model_missing"
@@ -2744,7 +2751,7 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
         WriteDrumsepCudaState "running" "missing" "verify_existing_runtime"
         LogProgress "Verifying existing DrumSep CUDA runtime"
         if (EnsureDrumsepAssets $modelDir) {
-            $existingVerify = VerifyDrumsepCudaRuntime $drumsepPython
+            $existingVerify = VerifyDrumsepCudaRuntime $drumsepPython -AllowInstall
             if ($existingVerify.Status -eq "ok") {
                 WriteDrumsepCudaState "ok" "ok" "ok" $existingVerify.Probe $existingVerify.FfmpegPath
                 LogProgress "Existing DrumSep CUDA runtime verified"
@@ -2814,7 +2821,7 @@ function InstallDrumsepCudaRuntime([string]$BasePythonPath) {
     if ($offlineBundledAllmodelsMode) {
         LogProgress "Verifying bundled Drum Kit runtime..."
     }
-    $verifyResult = VerifyDrumsepCudaRuntime $drumsepPython
+    $verifyResult = VerifyDrumsepCudaRuntime $drumsepPython -AllowInstall
     if ($verifyResult.Status -ne "ok") {
         WriteDrumsepCudaState "error" "ok" ("probe_failed:" + $verifyResult.Status) $verifyResult.Probe $verifyResult.FfmpegPath
         return $false

@@ -188,8 +188,15 @@ def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
         "scripts/reaper/STEMwerk_Bootstrap_macOS.sh": (
             "fb69e9d75215def4358a513eeede52fc8b767a40263d9cd71c959df48366b08c"
         ),
+        # Hash re-pinned for the 2.3.1.0 FFmpeg readiness-resolution fix:
+        # WinGet Links/Packages paths are no longer rejected by path text
+        # alone (a real -version probe decides instead), recursive
+        # runtime/PATH candidate discovery no longer stops at the first
+        # invalid candidate, and ready-to-go verification can no longer
+        # reach ResolveWindowsFfmpegPath -AllowInstall indirectly through
+        # CUDA/DirectML runtime verification.
         "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1": (
-            "bbc18a5a5ab3d1f1286276e2debc1e6c46552f9014e123386817c340ec553d0f"
+            "57fc8cf0273d23c71ba660d3a2dc3dfb00a170bea75b0af9e388c81e637b7aa0"
         ),
     }
     for relative, wanted in expected.items():
