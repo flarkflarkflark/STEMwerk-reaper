@@ -53,7 +53,8 @@ jobs:
             tests/test_windows_payload_contract_2306.py \
             tests/test_linux_package_portability_2306.py \
             tests/test_macos_intel_dks_diagnostics_2306.py \
-            tests/test_2306_narrow_hotfix.py
+            tests/test_2306_narrow_hotfix.py \
+            tests/i18n/test_languages.py
 
       - name: Test i18n completeness
         run: |
