@@ -2306,7 +2306,7 @@ function EnsureDrumsepAssets([string]$ModelDir) {
     return (EnsureSharedModelDownloadChecks $ModelDir)
 }
 
-function VerifyDrumsepRuntime([string]$PythonPath) {
+function VerifyDrumsepRuntime([string]$PythonPath, [switch]$AllowInstall) {
     if ([string]::IsNullOrWhiteSpace($PythonPath)) { return "python_missing" }
     if (-not (Test-Path $PythonPath)) { return "python_missing" }
 
@@ -2316,6 +2316,13 @@ function VerifyDrumsepRuntime([string]$PythonPath) {
     if (-not (Test-Path $modelFile) -or -not (Test-Path $modelYaml)) {
         return "model_missing"
     }
+
+    $resolvedFfmpeg = ResolveWindowsFfmpegPath -AllowInstall:$AllowInstall
+    if ([string]::IsNullOrWhiteSpace($resolvedFfmpeg) -or -not (Test-Path $resolvedFfmpeg)) {
+        LogLine "DrumSep verify could not resolve FFmpeg"
+        return "ffmpeg_missing"
+    }
+    LogProgress ("DrumSep verify using FFmpeg: " + $resolvedFfmpeg)
 
     $verifyCode = @"
 import importlib
@@ -2359,8 +2366,11 @@ sep = Separator(model_file_dir=r"$modelDir", output_dir=".", output_format="wav"
 sep.load_model("$drumsepModelFileName")
 print("DRUMSEP_VERIFY ok")
 "@
-    RunHidden $PythonPath @("-c", $verifyCode) "Verify DrumSep runtime" | Out-Null
+    InvokeWithResolvedFfmpegEnvironment $resolvedFfmpeg {
+        RunHidden $PythonPath @("-c", $verifyCode) "Verify DrumSep runtime" | Out-Null
+    } | Out-Null
     if ($LASTEXITCODE -eq 0) { return "ok" }
+    if ($LASTEXITCODE -eq 9009) { return "ffmpeg_missing" }
     return "verify_failed"
 }
 
@@ -2616,7 +2626,7 @@ function InstallDrumsepRuntime([string]$BasePythonPath) {
     if ($offlineBundledAllmodelsMode) {
         LogProgress "Verifying bundled Drum Kit runtime..."
     }
-    $verifyResult = VerifyDrumsepRuntime $drumsepPython
+    $verifyResult = VerifyDrumsepRuntime $drumsepPython -AllowInstall
     if ($verifyResult -ne "ok") {
         if ($verifyResult -eq "model_missing") {
             WriteDrumsepState "install_failed" "missing" "model_missing"
