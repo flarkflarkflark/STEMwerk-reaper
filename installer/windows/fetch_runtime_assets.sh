@@ -18,15 +18,15 @@ PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"
 # The plain "ffmpeg-release-essentials.zip" alias is a rolling redirect to
 # whatever gyan.dev currently considers the latest release build, so it is
 # not a stable input on its own. Fetch from the exact versioned package URL
-# it currently resolves to (release 9.0) instead, pinned with the SHA256
+# it currently resolves to (release 9.0.1) instead, pinned with the SHA256
 # gyan.dev itself publishes for that package
-# (https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip.sha256).
+# (https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip.sha256).
 # The local cache/staged filename stays "ffmpeg-release-essentials.zip" so
 # STEMwerk.iss's payload\ffmpeg\ffmpeg-release-essentials.zip reference does
 # not need to change every time this pin is bumped.
 FFMPEG_FILE="ffmpeg-release-essentials.zip"
-FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip"
-FFMPEG_SHA256="e6b54767a6065919048f1a098eb27211ca4e12b4348a05d88777a5855d0b6e71"
+FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"
+FFMPEG_SHA256="fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"
 
 mkdir -p "$PYTHON_DIR" "$FFMPEG_DIR"
 

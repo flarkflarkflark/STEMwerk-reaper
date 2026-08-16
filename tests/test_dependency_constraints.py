@@ -5237,18 +5237,18 @@ def test_windows_fetch_runtime_assets_declares_pinned_checksums_and_immutable_ff
     ps1 = Path("installer/windows/fetch_runtime_assets.ps1").read_text(encoding="utf-8")
 
     assert 'PYTHON_SHA256="fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in script
-    assert 'FFMPEG_SHA256="e6b54767a6065919048f1a098eb27211ca4e12b4348a05d88777a5855d0b6e71"' in script
+    assert 'FFMPEG_SHA256="fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in script
     assert "gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\"" not in script
     assert (
-        'FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip"'
+        'FFMPEG_URL="https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
         in script
     )
     assert "verify_sha256" in script
 
     assert '$pythonSha256 = "fd3428eb6c80901b877d036ffa2be127ccad9bbe036a43f00fc96a48b724f9c7"' in ps1
-    assert '$ffmpegSha256 = "e6b54767a6065919048f1a098eb27211ca4e12b4348a05d88777a5855d0b6e71"' in ps1
+    assert '$ffmpegSha256 = "fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9"' in ps1
     assert (
-        '$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-essentials_build.zip"'
+        '$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"'
         in ps1
     )
     assert "Verify-Sha256" in ps1
