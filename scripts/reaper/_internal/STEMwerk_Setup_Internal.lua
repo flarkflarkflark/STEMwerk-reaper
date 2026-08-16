@@ -6853,34 +6853,43 @@ function existingRuntimeSetupMenuTick()
         local groupPad = 10
         local rowGap = 8
         local groupInnerW = leftColW - (groupPad * 2)
-
-        local runtimeLabel = setupText("setup_runtime_label", "Runtime:")
-        local runtimeChars = math.max(18, math.floor(groupInnerW / math.max(6, linuxFontSize(12) * 0.58)))
-        local runtimeLines = cappedWrap(tostring(m.runtime.base), runtimeChars, compact and 1 or 3)
-        local runtimeRowH = linuxLineHeight(16) + (#runtimeLines * linuxLineHeight(15))
+        local rowH = linuxLineHeight(16)
 
         gfx.setfont(1, "Arial", linuxFontSize(12))
+        local runtimeLabel = setupText("setup_runtime_label", "Runtime:")
         local modelLabel = setupText("setup_models_label", "Models: ")
-        local modelLabelW = gfx.measurestr(modelLabel)
-        local modelChars = math.max(16, math.floor((groupInnerW - modelLabelW) / math.max(6, linuxFontSize(12) * 0.58)))
-        local modelLines = cappedWrap(tostring(m.modelDir), modelChars, compact and 1 or 2)
-        local modelRowH = math.max(1, #modelLines) * linuxLineHeight(16)
 
         -- Version info block
         local cv = m.currentVersion or ""
         local lv = m.lastSetupVersion or ""
-        local verLabel = nil
-        if cv ~= "" or lv ~= "" then
-            verLabel = setupText("setup_script_label", "Setup script") .. ": v" .. (cv ~= "" and cv or "?")
+        local showVersionRows = (cv ~= "" or lv ~= "")
+        local scriptLabel = setupText("setup_script_label", "Setup script") .. ":"
+        local recordedLabel = setupText("setup_last_run_label", "Recorded setup version") .. ":"
+
+        -- All four rows share one value column so the block reads as an
+        -- aligned table rather than four independently-indented lines.
+        local labelW = math.max(gfx.measurestr(runtimeLabel), gfx.measurestr(modelLabel))
+        if showVersionRows then
+            labelW = math.max(labelW, gfx.measurestr(scriptLabel), gfx.measurestr(recordedLabel))
+        end
+        local valueX = labelW + 8
+        local valueW = math.max(20, groupInnerW - valueX)
+
+        local runtimeValue = ellipsizeToWidth(tostring(m.runtime.base), valueW, "Courier New", linuxFontSize(12), 0)
+        local modelValue = ellipsizeToWidth(tostring(m.modelDir), valueW, "Arial", linuxFontSize(12), 0)
+
+        local scriptValue, recordedValue
+        if showVersionRows then
+            scriptValue = "v" .. (cv ~= "" and cv or "?")
             if lv ~= "" then
-                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Recorded setup version") .. ": v" .. lv
+                recordedValue = "v" .. lv
             else
-                verLabel = verLabel .. "   " .. setupText("setup_last_run_label", "Recorded setup version") .. ": " .. setupText("setup_unknown", "(unknown)")
+                recordedValue = setupText("setup_unknown", "(unknown)")
             end
         end
-        local verRowH = verLabel and linuxLineHeight(16) or 0
 
-        local groupContentH = runtimeRowH + rowGap + modelRowH + (verLabel and (rowGap + verRowH) or 0)
+        local rowCount = showVersionRows and 4 or 2
+        local groupContentH = (rowH * rowCount) + (rowGap * (rowCount - 1))
         local groupH = groupContentH + (groupPad * 2)
 
         if y + groupH <= infoBottom then
@@ -6896,14 +6905,10 @@ function existingRuntimeSetupMenuTick()
             gfx.drawstr(runtimeLabel)
             gfx.setfont(1, "Courier New", linuxFontSize(12))
             gfx.set(themeText[1], themeText[2], themeText[3], 1)
-            local pathY = rowY + linuxLineHeight(16)
-            for _, line in ipairs(runtimeLines) do
-                gfx.x = rowX
-                gfx.y = pathY
-                gfx.drawstr(line)
-                pathY = pathY + linuxLineHeight(15)
-            end
-            rowY = rowY + runtimeRowH + rowGap
+            gfx.x = rowX + valueX
+            gfx.y = rowY
+            gfx.drawstr(runtimeValue)
+            rowY = rowY + rowH + rowGap
 
             gfx.setfont(1, "Arial", linuxFontSize(12))
             gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
@@ -6911,20 +6916,33 @@ function existingRuntimeSetupMenuTick()
             gfx.y = rowY
             gfx.drawstr(modelLabel)
             gfx.set(themeText[1], themeText[2], themeText[3], 1)
-            for i, line in ipairs(modelLines) do
-                gfx.x = rowX + modelLabelW
-                gfx.y = rowY + ((i - 1) * linuxLineHeight(16))
-                gfx.drawstr(line)
-            end
-            rowY = rowY + modelRowH
+            gfx.x = rowX + valueX
+            gfx.y = rowY
+            gfx.drawstr(modelValue)
+            rowY = rowY + rowH
 
-            if verLabel then
+            if showVersionRows then
                 rowY = rowY + rowGap
                 gfx.setfont(1, "Arial", linuxFontSize(12))
                 gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
                 gfx.x = rowX
                 gfx.y = rowY
-                gfx.drawstr(verLabel)
+                gfx.drawstr(scriptLabel)
+                gfx.set(themeText[1], themeText[2], themeText[3], 1)
+                gfx.x = rowX + valueX
+                gfx.y = rowY
+                gfx.drawstr(scriptValue)
+                rowY = rowY + rowH + rowGap
+
+                gfx.setfont(1, "Arial", linuxFontSize(12))
+                gfx.set(themeTextSecondary[1], themeTextSecondary[2], themeTextSecondary[3], 1)
+                gfx.x = rowX
+                gfx.y = rowY
+                gfx.drawstr(recordedLabel)
+                gfx.set(themeText[1], themeText[2], themeText[3], 1)
+                gfx.x = rowX + valueX
+                gfx.y = rowY
+                gfx.drawstr(recordedValue)
             end
 
             y = y + groupH + 10

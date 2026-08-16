@@ -174,7 +174,10 @@ class TestLastRunSemantics:
     def test_setup_internal_fallback_text_matches(self):
         text = _read(SETUP)
         assert 'setupText("setup_last_run_label", "Last run")' not in text
-        assert text.count('setupText("setup_last_run_label", "Recorded setup version")') == 2
+        # The label is resolved once (its own row, aligned with the other
+        # three environment-details rows); only the *value* differs between
+        # the known-version and unknown-version branches.
+        assert text.count('setupText("setup_last_run_label", "Recorded setup version")') == 1
 
     def test_unknown_state_still_does_not_claim_a_known_last_run(self):
         # When lastSetupVersion is empty, the row must render the

@@ -9,6 +9,13 @@ Runtime, then unbordered free-floating Models and version-line text). This
 groups all four rows into one bordered `drawLinuxPanel` info card so they
 read as a single related unit.
 
+A follow-up pass then made the four rows internally consistent: Runtime used
+to split its label onto one line and its (possibly wrapped) value onto the
+line(s) below, Models already rendered label+value on one line, and Setup
+script/Recorded setup version were concatenated onto a single shared line.
+Now all four rows are one row per field, label and value on the same line,
+with a shared value column so the block reads as an aligned table.
+
 This is presentation-only: no gfx/REAPER environment is available in this
 sandbox to execute the draw path itself (see the module docstring in
 tests/support/run_setup_final_rows_headless.lua for the same limitation --
@@ -63,9 +70,9 @@ class TestExistingRuntimeMenuInfoGrouping:
         assert body.count('setupText("setup_runtime_label"') == 1
         assert body.count('setupText("setup_models_label"') == 1
         assert body.count('setupText("setup_script_label"') == 1
-        # "Recorded setup version" fallback is referenced from both the
-        # known-version and unknown-version branches of the same single row.
-        assert body.count('setupText("setup_last_run_label"') == 2
+        # The label is now resolved once (its own row); only the *value*
+        # differs between the known-version and unknown-version branches.
+        assert body.count('setupText("setup_last_run_label"') == 1
 
     def test_row_order_is_runtime_then_models_then_script_then_recorded_version(self):
         text = _read(SETUP)
@@ -96,9 +103,10 @@ class TestExistingRuntimeMenuInfoGrouping:
 
         runtime_draw_idx = body.index("gfx.drawstr(runtimeLabel)", card_start)
         models_draw_idx = body.index("gfx.drawstr(modelLabel)", card_start)
-        version_draw_idx = body.index("gfx.drawstr(verLabel)", card_start)
+        script_draw_idx = body.index("gfx.drawstr(scriptLabel)", card_start)
+        recorded_draw_idx = body.index("gfx.drawstr(recordedLabel)", card_start)
 
-        assert panel_call_idx < runtime_draw_idx < models_draw_idx < version_draw_idx
+        assert panel_call_idx < runtime_draw_idx < models_draw_idx < script_draw_idx < recorded_draw_idx
 
         # And there must be exactly one drawLinuxPanel call feeding this
         # card's four rows (no leftover per-row border from the old layout).
@@ -109,6 +117,83 @@ class TestExistingRuntimeMenuInfoGrouping:
         card_end = body.index("y = y + groupH + 10", card_start)
         card_region = body[card_start:card_end]
         assert card_region.count("drawLinuxPanel(") == 1
+
+    def test_exactly_four_rows_are_drawn_in_order(self):
+        """Runtime, Models, Setup script and Recorded setup version must
+        each get their own row -- no more, no fewer -- drawn in that order."""
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+
+        label_draws = re.findall(
+            r"gfx\.drawstr\((runtimeLabel|modelLabel|scriptLabel|recordedLabel)\)",
+            card_region,
+        )
+        assert label_draws == ["runtimeLabel", "modelLabel", "scriptLabel", "recordedLabel"]
+
+    def _row_pair_is_adjacent(self, card_region: str, label_var: str, value_var: str) -> bool:
+        """True if the label's gfx.drawstr(...) and its value's
+        gfx.drawstr(...) are drawn with no `rowY = rowY + ...` advance in
+        between -- i.e. they share the same row/gfx.y."""
+        label_idx = card_region.index(f"gfx.drawstr({label_var})")
+        value_idx = card_region.index(f"gfx.drawstr({value_var})", label_idx)
+        between = card_region[label_idx:value_idx]
+        return "rowY = rowY" not in between
+
+    def test_runtime_label_and_value_share_the_same_row(self):
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+        assert self._row_pair_is_adjacent(card_region, "runtimeLabel", "runtimeValue")
+
+    def test_models_label_and_value_share_the_same_row(self):
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+        assert self._row_pair_is_adjacent(card_region, "modelLabel", "modelValue")
+
+    def test_setup_script_label_and_value_share_the_same_row(self):
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+        assert self._row_pair_is_adjacent(card_region, "scriptLabel", "scriptValue")
+
+    def test_recorded_version_label_and_value_share_the_same_row(self):
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+        assert self._row_pair_is_adjacent(card_region, "recordedLabel", "recordedValue")
+
+    def test_setup_script_and_recorded_version_no_longer_share_a_row(self):
+        """This was the exact bug being fixed: Setup script and Recorded
+        setup version used to be concatenated onto one shared verLabel
+        line. They must now be two independent rows with a rowY advance
+        between the script row's value and the recorded-version row's
+        label."""
+        text = _read(SETUP)
+        body = _function_body(text, "function existingRuntimeSetupMenuTick()")
+        card_start = body.index("-- Environment details card")
+        card_end = body.index("y = y + groupH + 10", card_start)
+        card_region = body[card_start:card_end]
+
+        script_value_idx = card_region.index("gfx.drawstr(scriptValue)")
+        recorded_label_idx = card_region.index("gfx.drawstr(recordedLabel)", script_value_idx)
+        between = card_region[script_value_idx:recorded_label_idx]
+        assert "rowY = rowY" in between
+
+        # And there must be no single combined "verLabel" concatenation left
+        # anywhere in the card region (the old shared-row implementation).
+        assert "verLabel" not in card_region
 
     def test_data_sources_are_unchanged(self):
         """The four rows must still read from the exact same fields as
