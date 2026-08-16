@@ -1606,6 +1606,48 @@ local function profileForBackend(backend)
     return "linux-" .. backend
 end
 
+-- os.rename() maps to the C runtime rename(), which on Windows (unlike
+-- POSIX) fails whenever the destination already exists -- so a plain
+-- os.rename(tmpPath, path) only ever succeeds on the very first write and
+-- fails silently-but-truthfully-reported on every write after that, once a
+-- destination file exists (e.g. capabilities.env, which is often already
+-- present because an earlier PowerShell/Setup run created it). This helper
+-- makes replacing an existing destination safe on Windows without ever
+-- deleting the last known-good file before the new one is proven in place:
+-- it moves any existing destination aside first, then moves the new file
+-- into place, and restores the original destination if that final move
+-- fails instead of leaving neither file present.
+local function replaceFileWindowsSafe(tmpPath, destPath)
+    local backupPath = destPath .. ".bak"
+    local destExists = fileExists(destPath)
+
+    if destExists then
+        pcall(os.remove, backupPath)
+        local backedUp, backupErr = os.rename(destPath, backupPath)
+        if not backedUp then
+            pcall(os.remove, tmpPath)
+            return false, "backup_failed:" .. tostring(backupErr)
+        end
+    end
+
+    local moved, moveErr = os.rename(tmpPath, destPath)
+    if moved then
+        if destExists then
+            pcall(os.remove, backupPath)
+        end
+        return true
+    end
+
+    pcall(os.remove, tmpPath)
+    if destExists then
+        local restored = os.rename(backupPath, destPath)
+        if not restored then
+            return false, "replace_failed_and_restore_failed:" .. tostring(moveErr)
+        end
+    end
+    return false, "replace_failed:" .. tostring(moveErr)
+end
+
 local function writeCapabilities(path, data, deviceOut)
     local tmpPath = tostring(path) .. ".tmp"
     local f = io.open(tmpPath, "w")
@@ -1695,14 +1737,13 @@ local function writeCapabilities(path, data, deviceOut)
         end
         f:write("DEVICES_OUTPUT_END\n")
     end
-    f:flush()
-    f:close()
-    local ok, renameErr = os.rename(tmpPath, path)
-    if not ok then
+    local flushOk, flushErr = f:flush()
+    local closeOk, closeErr = f:close()
+    if not flushOk or not closeOk then
         pcall(os.remove, tmpPath)
-        return false, renameErr
+        return false, "write_failed:" .. tostring(flushErr or closeErr)
     end
-    return true
+    return replaceFileWindowsSafe(tmpPath, path)
 end
 
 function readReadyState(runtime)
@@ -2775,7 +2816,8 @@ local function verifyRuntimePaths(state, publishExtState)
     }
 end
 
-local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript, publish)
+    if publish == nil then publish = true end
     local state = {}
     if type(bootstrapState) == "table" then
         for k, v in pairs(bootstrapState) do
@@ -3124,7 +3166,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
 
     ensureDir(runtime.runtimeState)
     local capPath = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
-    local wroteCaps = writeCapabilities(capPath, {
+    if publish then
+    local wroteCaps, capsErr = writeCapabilities(capPath, {
         profile = profile,
         backend = backend,
         backendReason = backendReason,
@@ -3201,7 +3244,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     if not wroteCaps then
         local lf = io.open(logFile, "a")
         if lf then
-            lf:write("WARN: failed to write capabilities file: " .. tostring(capPath) .. "\n")
+            lf:write("WARN: failed to write capabilities file: " .. tostring(capPath) .. " reason=" .. tostring(capsErr) .. "\n")
             lf:close()
         end
     end
@@ -3225,6 +3268,7 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
             lf:close()
         end
     end
+    end -- publish
 
     if ((effectiveBootstrapSuccess and (state.STATUS == "ok" or state.STATUS == nil) and (#errors == 0 or authoritativeRuntimeVerified))
         or (OS == "macOS"
@@ -3351,8 +3395,8 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     return { success = false, finalMessage = finalMessage }
 end
 
-safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
-    local ok, result = pcall(performPostBootstrap, runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript)
+safePerformPostBootstrap = function(runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript, publish)
+    local ok, result = pcall(performPostBootstrap, runtime, stateFile, logFile, bootstrapSuccess, bootstrapState, separatorScript, publish)
     if ok and type(result) == "table" then
         return result
     end
@@ -3616,12 +3660,12 @@ local function windowsVerifyTick()
         end
 
         -- 2) explicit/current user override (ExtState) -- a deliberate user
-        -- choice outranks stale persisted bootstrap state.
+        -- choice outranks stale persisted bootstrap state. Check only
+        -- verifies current truth; it never writes ExtState/bootstrap.env.
         local extPath = resolvePath(getExt("ffmpegPath"))
         if extPath ~= "" and isWindowsFfmpegShimPath(extPath) then
             shimFound = extPath
             extPath = ""
-            setExt("ffmpegPath", "")
         end
         if ffmpegPath == "" and isValidFfmpegPath(extPath) then
             ffmpegPath = extPath
@@ -3634,7 +3678,6 @@ local function windowsVerifyTick()
             if shimFound == "" then shimFound = statePath end
             statePath = ""
             state.FFMPEG_PATH = ""
-            updateBootstrapEnv(stateFile, { FFMPEG_PATH = "" })
         end
         if ffmpegPath == "" and isValidFfmpegPath(statePath) then
             ffmpegPath = statePath
@@ -3655,11 +3698,6 @@ local function windowsVerifyTick()
         if ffmpegPath == "" and shimFound ~= "" then
             state.STATUS = "missing_ffmpeg"
             state.STATUS_REASON = "ffmpeg_shim_path"
-            updateBootstrapEnv(stateFile, {
-                STATUS = "missing_ffmpeg",
-                STATUS_REASON = "ffmpeg_shim_path",
-                FFMPEG_PATH = "",
-            })
         end
 
         WINDOWS_VERIFY.ffmpegPath = ffmpegPath
@@ -3724,14 +3762,8 @@ local function windowsVerifyTick()
             state.PYTHON_PATH = WINDOWS_VERIFY.pythonPath
             state.FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath
             state.FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath
-            updateBootstrapEnv(stateFile, {
-                STATUS = "ok",
-                STATUS_REASON = "",
-                PYTHON_PATH = WINDOWS_VERIFY.pythonPath,
-                FFMPEG_PATH = WINDOWS_VERIFY.ffmpegPath,
-                FFPROBE_PATH = WINDOWS_VERIFY.ffprobePath,
-            })
-            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript)
+            -- Check only verifies current truth; it never persists it.
+            local result = safePerformPostBootstrap(runtime, stateFile, logFile, true, state, WINDOWS_VERIFY.separatorScript, false)
             if not metadataComplete then
                 result.finalMessage[#result.finalMessage + 1] = ""
                 result.finalMessage[#result.finalMessage + 1] = "Note: Installer metadata was incomplete, but runtime checks passed."
@@ -3753,12 +3785,6 @@ local function windowsVerifyTick()
         if not WINDOWS_VERIFY.ffmpegOk and WINDOWS_VERIFY.ffmpegReason and WINDOWS_VERIFY.ffmpegReason ~= "" then
             state.STATUS = "missing_ffmpeg"
             state.STATUS_REASON = state.STATUS_REASON ~= "" and state.STATUS_REASON or WINDOWS_VERIFY.ffmpegReason
-            updateBootstrapEnv(stateFile, {
-                STATUS = "missing_ffmpeg",
-                STATUS_REASON = state.STATUS_REASON,
-                FFMPEG_PATH = "",
-                FFPROBE_PATH = "",
-            })
         end
         lines[#lines + 1] = ""
         if not WINDOWS_VERIFY.pythonOk then
