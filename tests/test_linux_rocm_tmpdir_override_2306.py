@@ -185,8 +185,18 @@ def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
         # Hash re-pinned again for the narrow release-corrective slice that
         # fixed the stale "bundled 2.3.0.6 dependency policy" log message to
         # correctly say 2.3.1.0.
+        # Hash re-pinned for the clean offline first-run bootstrap release
+        # blocker fix: the final-verification STATUS-clearing block no
+        # longer re-derives "was this transient failure already superseded"
+        # by enumerating three literal torch/onnxruntime STATUS_REASON
+        # strings -- it clears any stale STATUS once FINAL_RUNTIME_VERIFIED
+        # (the same exhaustive re-check that already covers numba,
+        # samplerate, audio-separator, onnxruntime, stemwerk-core, and the
+        # full pinned torch stack) is genuinely "yes", so a first-run-only
+        # transient sticky failure recorded for any reason no longer
+        # survives a fully successful final verification.
         "scripts/reaper/STEMwerk_Bootstrap_macOS.sh": (
-            "fb69e9d75215def4358a513eeede52fc8b767a40263d9cd71c959df48366b08c"
+            "6a62b67ab71640262de4122bfd825824d3f8f357db6afb6e179fcc0395526543"
         ),
         # Hash re-pinned for the 2.3.1.0 bundled-online DrumSep FFmpeg
         # propagation fix: VerifyDrumsepRuntime (CPU) now resolves FFmpeg and

@@ -7234,22 +7234,28 @@ def test_macos_bootstrap_runs_samplerate_guard_before_final_dependency_verificat
 
 
 def test_macos_bootstrap_clears_stale_torch_pin_assert_failure_after_final_runtime_success():
+    """2.3.1.0 clean offline first-run bootstrap fix: stale-STATUS clearing
+    now keys on FINAL_RUNTIME_VERIFIED truth directly (any superseded
+    first-run-only transient failure, not just the three torch/onnxruntime
+    STATUS_REASON strings previously enumerated) -- see
+    tests/test_2310_macos_offline_first_run_bootstrap.py for the
+    behavioral (real-interpreter) proof of this."""
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     assert 'FINAL_RUNTIME_VERIFIED="yes"' in script
-    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then' in script
-    assert 'torch_install_failed|torch_pin_repair_failed|torch_pin_assert_failed)' in script
+    assert 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then' in script
     assert 'STATUS="ok"' in script
     assert 'STATUS_REASON=""' in script
-    assert 'Cleared stale STATUS from earlier pinned torch failure after final runtime verification success' in script
+    assert 'Cleared stale STATUS=${STATUS}/${STATUS_REASON} after final runtime verification succeeded' in script
 
 
 def test_macos_bootstrap_only_clears_stale_torch_pin_status_after_real_final_checks():
     script = Path("scripts/reaper/STEMwerk_Bootstrap_macOS.sh").read_text()
 
     line_no = lambda needle: next(i for i, line in enumerate(script.splitlines(), 1) if needle in line)
-    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
-    assert line_no('if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then') > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
+    clear_line = 'if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then'
+    assert line_no(clear_line) > line_no('if [ "${_onnx_observed}" != "${PINNED_ONNXRUNTIME_VERSION}" ]; then')
+    assert line_no(clear_line) > line_no('if ! assert_pinned_torch_stack "${VENV_PY}"; then')
 
 
 def test_macos_bootstrap_skips_reinstall_when_pinned_torch_stack_already_ok():

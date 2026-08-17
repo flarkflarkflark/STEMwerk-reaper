@@ -1949,14 +1949,21 @@ if [ -n "${VENV_PY}" ] && [ -x "${VENV_PY}" ]; then
     FINAL_RUNTIME_VERIFIED="no"
     set_status "deps_failed" "torch_pin_assert_failed"
   fi
-  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ]; then
-    case "${STATUS_REASON}" in
-      torch_install_failed|torch_pin_repair_failed|torch_pin_assert_failed)
+  if [ "${FINAL_RUNTIME_VERIFIED}" = "yes" ] && [ "${STATUS}" != "ok" ]; then
+    # This final block just re-verified numba, samplerate, audio-separator,
+    # onnxruntime, stemwerk-core, and the full pinned torch stack from
+    # scratch -- FINAL_RUNTIME_VERIFIED=yes is strictly stronger proof of
+    # current health than any earlier sticky STATUS this run recorded
+    # in the meantime (e.g. a transient onnxruntime-not-installed-yet
+    # assertion before its own remediation step ran). Clearing here keys
+    # on that already-computed truth directly, not on enumerating which
+    # specific STATUS_REASON string happened to be first -- an earlier,
+    # narrower whitelist here left non-torch first-run-only transients
+    # (audio_separator/numba/samplerate ordering, etc.) permanently
+    # stuck despite this same successful re-verification.
+    log "Cleared stale STATUS=${STATUS}/${STATUS_REASON} after final runtime verification succeeded"
     STATUS="ok"
     STATUS_REASON=""
-        log "Cleared stale STATUS from earlier pinned torch failure after final runtime verification success"
-        ;;
-    esac
   fi
 fi
 
