@@ -2775,7 +2775,7 @@ local function collectPersistedRunDiagnostics(cacheLogDir, bundleDir, copiedFile
     local lines = {}
     local runsRoot = joinPath(cacheLogDir, "runs")
     local destRoot = joinPath(bundleDir, "runtime_runs")
-    local maxRunsToInclude = 8
+    local maxRunsToInclude = 20
     ensureDir(destRoot)
 
     if not pathExists(runsRoot) then
@@ -5154,7 +5154,7 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         return tostring(a) > tostring(b)
     end)
 
-    local maxRuns = math.min(5, #runNames)
+    local maxRuns = math.min(16, #runNames)
     for i = 1, maxRuns do
         local runName = runNames[i]
         local runDir = joinPath(runsRoot, runName)
@@ -5628,6 +5628,9 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
         end
         lines[#lines + 1] = "bundle_log_path: " .. tostring(entry.log_path or "unknown")
         lines[#lines + 1] = ""
+    end
+    if #runNames > maxRuns then
+        lines[#lines + 1] = string.format("Showing %d of %d included processing runs (see runtime_runs/ for the rest).", maxRuns, #runNames)
     end
     return lines
 end

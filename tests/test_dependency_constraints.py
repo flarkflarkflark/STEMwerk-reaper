@@ -3559,7 +3559,7 @@ def test_dks_multi_workers_preserve_workflow_args_and_import_drum_json_outputs()
     assert '"lua_dks_extract_stage2_queue_wait_end", "dks_extract_stage2_throttled",' in support_script
     assert 'for i = 1, math.min(8, #runDirs) do' in support_script
     assert 'for i = 1, math.min(8, #tempRuns) do' in support_script
-    assert 'local maxRunsToInclude = 8' in support_script
+    assert 'local maxRunsToInclude = 20' in support_script
     assert 'joinPath("stage2_drumsep", "drumsep_helper_stdout.txt")' in support_script
     assert 'joinPath("stage2_drumsep", "drumsep_helper_stderr.txt")' in support_script
     assert 'joinPath("stage2_drumsep", "drumsep_result.json")' in support_script
