@@ -3805,6 +3805,29 @@ local function jobOwnOutputEvidence(jobDir)
             end
         end
     end
+    -- Fall back to this job's own separation_log.txt authoritative
+    -- key=value evidence (found_stems=/output_validation_reason=) when the
+    -- structured JSON event files above did not supply it. Parallel item_N
+    -- jobs (Direct Kit, Kit Split, and parallel-batch Normal Stems alike)
+    -- write this evidence only to separation_log.txt, never to phase/
+    -- timing JSON events -- relying on JSON alone silently misses evidence
+    -- that fully exists for this specific job. JSON evidence above always
+    -- wins: this is a fallback consulted only for whichever value JSON did
+    -- not supply, never an override of a value JSON already gave.
+    if not found or not validation then
+        local sepData = readFile(joinPath(jobDir, "separation_log.txt"), "rb")
+        if sepData then
+            for line in tostring(sepData):gmatch("[^\r\n]+") do
+                local key, value = parseKeyValueLine(trim(line))
+                if key == "found_stems" and not found then
+                    local n = countDelimitedValues(value)
+                    if n then found = n end
+                elseif key == "output_validation_reason" and not validation then
+                    validation = value
+                end
+            end
+        end
+    end
     if not found then
         local names = detectStemNamesFromFiles(jobDir, UNIVERSAL_STEM_NAMES)
         if #names > 0 then found = #names end
@@ -5423,12 +5446,21 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             -- per-run kvAssignLast path above) must never be reported as
             -- the WHOLE run's aggregate validation when other jobs in the
             -- same run never confirmed validation themselves.
-            if (stat.aggValidationSeen or 0) > 0 and (stat.aggValidationSeen or 0) == jobCount
-                and stat.aggValidationOkJobs == stat.aggValidationSeen then
-                entry.output_validation_reason = "ok"
+            if (stat.aggValidationSeen or 0) > 0 then
+                -- At least one job explicitly reported its own validation
+                -- reason -- that authoritative evidence must never be
+                -- silently overridden by the coarser doneOk/exit-code
+                -- fallback below, whether it disagrees (a job explicitly
+                -- reported a non-ok reason) or is merely incomplete (not
+                -- every job reported one).
+                if (stat.aggValidationSeen or 0) == jobCount and stat.aggValidationOkJobs == stat.aggValidationSeen then
+                    entry.output_validation_reason = "ok"
+                else
+                    entry.output_validation_reason = "partial"
+                end
             elseif stat.doneOk == jobCount and stat.exitErr == 0 and (stat.aggFoundJobs or 0) == jobCount then
                 entry.output_validation_reason = "ok"
-            elseif (stat.aggValidationSeen or 0) > 0 or (stat.aggFoundJobs or 0) > 0 then
+            elseif (stat.aggFoundJobs or 0) > 0 then
                 entry.output_validation_reason = "partial"
             elseif tostring(entry.output_validation_reason or "unknown") ~= "unknown" then
                 -- No job-level aggregate evidence at all backs the value

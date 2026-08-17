@@ -5421,6 +5421,164 @@ function TENTHFU.assertDirectKitPersistedHelperMatchScenario(bundleDir, context)
     assertWorkerProvenZeroPhases(readManifest(bundleDir), context)
 end
 
+-- Eleventh follow-up (2.3.1.0): parallel item_N jobs (Direct Kit, Kit
+-- Split, and parallel-batch Normal Stems alike) write their authoritative
+-- found_stems=/output_validation_reason=/runtime_selected=/backend_runtime=
+-- evidence only to separation_log.txt -- never to phase_events.jsonl or
+-- timing_events.jsonl. jobOwnOutputEvidence() previously only read the
+-- JSON event files, so when a job's ONLY evidence lives in
+-- separation_log.txt, the existing truthful "no per-job aggregate evidence
+-- backs this" safeguard in buildProcessingSummary correctly refused to
+-- report a false value -- but landed on "unknown" instead of the truthful
+-- answer that was actually available. These scenarios pin the fix: real
+-- separation_log.txt evidence (and only that, no JSON files at all) must
+-- feed the SAME existing aggregation/mixed/partial logic.
+function TENTHFU.writeSeparationLog(jobDir, fields)
+    writeFile(joinPath(jobDir, "separation_log.txt"), table.concat(fields, "\n") .. "\n")
+end
+
+function TENTHFU.makeItemJob(runDir, itemName, fields)
+    local jobDir = joinPath(runDir, itemName)
+    mkdirP(jobDir)
+    TENTHFU.writeSeparationLog(jobDir, fields)
+    writeFile(joinPath(jobDir, "done.txt"), "done\n")
+    writeFile(joinPath(jobDir, "exit_code.txt"), "0\n")
+    return jobDir
+end
+
+-- A: healthy parallel agreement -- both items report identical, complete
+-- evidence purely via separation_log.txt.
+function TENTHFU.createHealthySeparationLogParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "separation-log-only-parallel-healthy"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_healthy")
+    for _, item in ipairs({ "item_1", "item_2" }) do
+        TENTHFU.makeItemJob(runDir, item, {
+            "model=htdemucs",
+            "output_validation_reason=ok",
+            "found_stems=4",
+            "expected_stems=4",
+            "runtime_selected=mps",
+            "backend_runtime=metal",
+        })
+    end
+    return context
+end
+
+function TENTHFU.assertHealthySeparationLogParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("outputs 8/8", 1, true) ~= nil,
+        "separation_log-only parallel jobs (4+4 found/expected) did not aggregate outputs:\n" .. summary)
+    assertf(summary:find("output_validation_reason: ok", 1, true) ~= nil,
+        "separation_log-only parallel jobs with both output_validation_reason=ok did not aggregate to ok:\n" .. summary)
+    assertf(summary:find("runtime_selected: mps", 1, true) ~= nil,
+        "separation_log-only parallel jobs with agreeing runtime_selected=mps did not surface it:\n" .. summary)
+    assertf(summary:find("backend_runtime: metal", 1, true) ~= nil,
+        "separation_log-only parallel jobs with agreeing backend_runtime=metal did not surface it:\n" .. summary)
+    assertf(summary:find("outputs unknown", 1, true) == nil, "separation_log evidence left outputs unknown")
+    assertf(summary:find("validation unknown", 1, true) == nil, "separation_log evidence left validation unknown")
+end
+
+-- B: mixed runtime -- items genuinely disagree; must surface as explicit
+-- "mixed", never silently collapse to one side and never "unknown".
+function TENTHFU.createMixedRuntimeSeparationLogParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "separation-log-only-parallel-mixed-runtime"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_mixed_runtime")
+    TENTHFU.makeItemJob(runDir, "item_1", {
+        "model=htdemucs", "output_validation_reason=ok", "found_stems=4", "expected_stems=4",
+        "runtime_selected=mps", "backend_runtime=metal",
+    })
+    TENTHFU.makeItemJob(runDir, "item_2", {
+        "model=htdemucs", "output_validation_reason=ok", "found_stems=4", "expected_stems=4",
+        "runtime_selected=cpu", "backend_runtime=cpu",
+    })
+    return context
+end
+
+function TENTHFU.assertMixedRuntimeSeparationLogParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("runtime_selected: mixed", 1, true) ~= nil,
+        "heterogeneous per-item runtime_selected (mps vs cpu) was not reported as mixed:\n" .. summary)
+    assertf(summary:find("backend_runtime: mixed", 1, true) ~= nil,
+        "heterogeneous per-item backend_runtime (metal vs cpu) was not reported as mixed:\n" .. summary)
+    assertf(summary:find("runtime_selected: unknown", 1, true) == nil,
+        "mixed runtime_selected must not be reported as unknown when complete evidence exists:\n" .. summary)
+end
+
+-- C: validation failure -- one item explicitly reports a non-ok reason.
+-- This authoritative evidence must never be silently overridden by the
+-- doneOk/exit-code fallback heuristic into a false "ok".
+function TENTHFU.createValidationFailureSeparationLogParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "separation-log-only-parallel-validation-failure"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_validation_failure")
+    TENTHFU.makeItemJob(runDir, "item_1", {
+        "model=htdemucs", "output_validation_reason=ok", "found_stems=4", "expected_stems=4",
+        "runtime_selected=mps", "backend_runtime=metal",
+    })
+    TENTHFU.makeItemJob(runDir, "item_2", {
+        "model=htdemucs", "output_validation_reason=missing_output", "found_stems=4", "expected_stems=4",
+        "runtime_selected=mps", "backend_runtime=metal",
+    })
+    return context
+end
+
+function TENTHFU.assertValidationFailureSeparationLogParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("output_validation_reason: ok", 1, true) == nil,
+        "item_2's explicit output_validation_reason=missing_output must not be silently overridden to ok:\n" .. summary)
+end
+
+-- D: partial evidence -- item_2 has complete output evidence but never
+-- reports its own validation reason at all. Must not be inferred as a
+-- false ok via the doneOk/exit-code/found-count fallback.
+function TENTHFU.createPartialValidationSeparationLogParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "separation-log-only-parallel-partial-validation-field"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_seplog_partial_validation")
+    TENTHFU.makeItemJob(runDir, "item_1", {
+        "model=htdemucs", "output_validation_reason=ok", "found_stems=4", "expected_stems=4",
+        "runtime_selected=mps", "backend_runtime=metal",
+    })
+    TENTHFU.makeItemJob(runDir, "item_2", {
+        "model=htdemucs", "found_stems=4", "expected_stems=4",
+        "runtime_selected=mps", "backend_runtime=metal",
+    })
+    return context
+end
+
+function TENTHFU.assertPartialValidationSeparationLogParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("output_validation_reason: ok", 1, true) == nil,
+        "item_2 never reported its own validation reason; the run aggregate must not falsely claim ok:\n" .. summary)
+end
+
+-- Kept in its own function (own local-variable budget) rather than inlined
+-- into main(), which is already at Lua's 200-local-per-function ceiling.
+function TENTHFU.runAll(baseRoot, runScenarioFn)
+    do
+        local ctx = TENTHFU.createHealthySeparationLogParallelScenario(joinPath(baseRoot, "seplog-healthy"))
+        print("PASS separation-log-only-parallel-healthy -> " .. runScenarioFn(ctx, TENTHFU.assertHealthySeparationLogParallelScenario))
+    end
+    do
+        local ctx = TENTHFU.createMixedRuntimeSeparationLogParallelScenario(joinPath(baseRoot, "seplog-mixed-runtime"))
+        print("PASS separation-log-only-parallel-mixed-runtime -> " .. runScenarioFn(ctx, TENTHFU.assertMixedRuntimeSeparationLogParallelScenario))
+    end
+    do
+        local ctx = TENTHFU.createValidationFailureSeparationLogParallelScenario(joinPath(baseRoot, "seplog-validation-failure"))
+        print("PASS separation-log-only-parallel-validation-failure -> " .. runScenarioFn(ctx, TENTHFU.assertValidationFailureSeparationLogParallelScenario))
+    end
+    do
+        local ctx = TENTHFU.createPartialValidationSeparationLogParallelScenario(joinPath(baseRoot, "seplog-partial-validation"))
+        print("PASS separation-log-only-parallel-partial-validation-field -> " .. runScenarioFn(ctx, TENTHFU.assertPartialValidationSeparationLogParallelScenario))
+    end
+end
+
 local function assertZipIntegrity(bundleDir)
     local zipPath = bundleDir .. ".zip"
     assertf(fileExists(zipPath), "support bundle ZIP missing: " .. zipPath)
@@ -6155,6 +6313,8 @@ local function main()
         local ctx = TENTHFU.createDirectKitPersistedHelperMatchScenario(joinPath(baseRoot, "direct-kit-persisted-helper-match"))
         print("PASS direct-kit-persisted-helper-match-via-real-persistence -> " .. runScenario(ctx, TENTHFU.assertDirectKitPersistedHelperMatchScenario))
     end
+
+    TENTHFU.runAll(baseRoot, runScenario)
 
     print("All headless support bundle tests passed.")
 end
