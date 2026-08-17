@@ -4449,7 +4449,7 @@ function buildCheckOnlyVerdict(verification, checkProbe, backend, backendReasonL
         end
         if checkProbe.usedCachedReadyStateFallback then
             verdict.staleProvenance[#verdict.staleProvenance + 1] =
-                "macOS cached ready_to_go/capabilities state was used to accept an inconclusive current Torch probe result"
+                "macOS cached ready_to_go/capabilities state also reported healthy; noted for context only, it was not used to decide the current Runtime result above"
         end
     end
     return verdict
@@ -7483,7 +7483,9 @@ do
         end
         if OS ~= "Windows" then
             choices[#choices + 1] = { id = "drumsep-runtime", accent = { 0.22, 0.62, 0.70 } }
-            choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+            if OS == "Linux" then
+                choices[#choices + 1] = { id = "drumsep-rocm-runtime", accent = { 0.16, 0.56, 0.78 } }
+            end
             choices[#choices + 1] = { id = "delete-models", accent = { 0.88, 0.28, 0.28 } }
             choices[#choices + 1] = { id = "delete-runtime", accent = { 0.82, 0.22, 0.22 } }
         end
