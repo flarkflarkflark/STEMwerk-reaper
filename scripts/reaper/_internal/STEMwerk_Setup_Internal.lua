@@ -540,13 +540,27 @@ local function runtimeLooksPresent(runtime)
     local stateFile = runtime.runtimeState .. PATH_SEP .. "bootstrap.env"
     local capFile = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     local modelDir = getModelCacheDir()
-    return fileExists(runtime.venvPython)
+    if fileExists(runtime.venvPython)
         or pathExists(runtime.venvDir)
         or fileExists(stateFile)
         or fileExists(capFile)
-        or pathExists(modelDir)
-        or getExt("pythonPath") ~= ""
-        or getExt("ffmpegPath") ~= ""
+        or pathExists(modelDir) then
+        return true
+    end
+    -- Cached ExtState is supporting evidence only, never authoritative on
+    -- its own: a stale pythonPath surviving a real uninstall must not
+    -- masquerade as an existing runtime, so it counts only when the
+    -- cached file still actually exists. ffmpegPath is excluded from
+    -- runtime-presence evidence entirely (existing or not): it is
+    -- frequently just a system-wide FFmpeg location found by
+    -- resolveUnixFfmpegFallback(), not a STEMwerk-specific artifact, so
+    -- even a valid cached ffmpegPath proves nothing about whether
+    -- STEMwerk's own runtime was ever installed.
+    local cachedPythonPath = getExt("pythonPath")
+    if cachedPythonPath ~= "" and fileExists(cachedPythonPath) then
+        return true
+    end
+    return false
 end
 
 local function parseStateFile(path)
