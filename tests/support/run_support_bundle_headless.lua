@@ -5558,6 +5558,133 @@ function TENTHFU.assertPartialValidationSeparationLogParallelScenario(bundleDir)
         "item_2 never reported its own validation reason; the run aggregate must not falsely claim ok:\n" .. summary)
 end
 
+-- Twelfth follow-up (2.3.1.0): parallel DKS-family (Kit Split / Direct Kit)
+-- expected-output-count aggregation. found_stems is already summed across
+-- jobs unconditionally for every flow (see the haveAllJobsFound block
+-- above), but expected_stems was only ever multiplied by job count for
+-- isStemsFlow (Normal/6-Stem) runs -- DKS-family runs kept the raw,
+-- un-aggregated per-item stem name set from a single job's own log,
+-- producing misleading "12/6"-shaped output for a 2-item Kit Split run
+-- (2 items x 6 canonical DrumSep child stems = 12 found, but expected
+-- stayed at the un-multiplied 6). These scenarios pin the fix: expected
+-- must use the same aggregation unit as found for DKS-family runs too.
+function TENTHFU.createKitSplitTwoItemParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "dks-kit-split-two-item-parallel"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_two_item")
+    for _, item in ipairs({ "item_1", "item_2" }) do
+        TENTHFU.makeItemJob(runDir, item, {
+            "workflow_source=dks_extract",
+            "workflow_mode=drumkit",
+            "model=htdemucs_ft",
+            "output_validation_reason=ok",
+            "found_stems=kick,snare,toms,hihat,ride,crash",
+            "expected_stems=kick,snare,toms,hihat,ride,crash",
+            "runtime_selected=rocm",
+            "backend_runtime=rocm",
+        })
+    end
+    return context
+end
+
+function TENTHFU.assertKitSplitTwoItemParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("outputs 12/12", 1, true) ~= nil,
+        "2-item Kit Split (6 canonical stems each) must aggregate to 12/12, not the un-multiplied per-item 12/6:\n" .. summary)
+    assertf(summary:find("outputs 12/6", 1, true) == nil,
+        "expected_stems was not aggregated to match the summed found_stems:\n" .. summary)
+    assertf(summary:find("output_validation_reason: ok", 1, true) ~= nil, summary)
+end
+
+function TENTHFU.createKitSplitFourItemParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "dks-kit-split-four-item-parallel"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_four_item")
+    for _, item in ipairs({ "item_1", "item_2", "item_3", "item_4" }) do
+        TENTHFU.makeItemJob(runDir, item, {
+            "workflow_source=dks_extract",
+            "workflow_mode=drumkit",
+            "model=htdemucs",
+            "output_validation_reason=ok",
+            "found_stems=kick,snare,toms,hihat,ride,crash",
+            "expected_stems=kick,snare,toms,hihat,ride,crash",
+            "runtime_selected=rocm",
+            "backend_runtime=rocm",
+        })
+    end
+    return context
+end
+
+function TENTHFU.assertKitSplitFourItemParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("outputs 24/24", 1, true) ~= nil,
+        "4-item Kit Split (6 canonical stems each) must aggregate to 24/24, not the un-multiplied per-item 24/6:\n" .. summary)
+    assertf(summary:find("outputs 24/6", 1, true) == nil, summary)
+end
+
+function TENTHFU.createDirectKitTwoItemParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "dks-direct-kit-two-item-parallel"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_direct_two_item")
+    for _, item in ipairs({ "item_1", "item_2" }) do
+        TENTHFU.makeItemJob(runDir, item, {
+            "workflow_source=dks_direct",
+            "workflow_mode=drumkit",
+            "model=MDX23C-DrumSep-aufr33-jarredou.ckpt",
+            "output_validation_reason=ok",
+            "found_stems=kick,snare,toms,hihat,ride,crash",
+            "expected_stems=kick,snare,toms,hihat,ride,crash",
+            "runtime_selected=rocm",
+            "backend_runtime=rocm",
+        })
+    end
+    return context
+end
+
+function TENTHFU.assertDirectKitTwoItemParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("outputs 12/12", 1, true) ~= nil,
+        "2-item Direct Kit must aggregate expected_stems the same way as found_stems:\n" .. summary)
+end
+
+-- Partial: item_1 reports full evidence, item_2 reports nothing at all
+-- (no found_stems, no validation). Expected must still reflect the TOTAL
+-- expected across both included items (12), even though found stays
+-- partial -- never fake completeness, but never understate the target
+-- either.
+function TENTHFU.createKitSplitPartialTwoItemParallelScenario(baseRoot)
+    local context = createPresentScenario(baseRoot)
+    context.name = "dks-kit-split-partial-two-item-parallel"
+    clearRuns(context)
+    local runDir = joinPath(context.env.HOME, ".cache", "STEMwerk", "logs", "runs", "STEMwerk_dks_partial_two_item")
+    TENTHFU.makeItemJob(runDir, "item_1", {
+        "workflow_source=dks_extract",
+        "workflow_mode=drumkit",
+        "model=htdemucs_ft",
+        "output_validation_reason=ok",
+        "found_stems=kick,snare,toms,hihat,ride,crash",
+        "expected_stems=kick,snare,toms,hihat,ride,crash",
+        "runtime_selected=rocm",
+        "backend_runtime=rocm",
+    })
+    local item2 = joinPath(runDir, "item_2")
+    mkdirP(item2)
+    writeFile(joinPath(item2, "done.txt"), "done\n")
+    writeFile(joinPath(item2, "exit_code.txt"), "0\n")
+    return context
+end
+
+function TENTHFU.assertKitSplitPartialTwoItemParallelScenario(bundleDir)
+    local summary = readProcessingSummary(bundleDir)
+    assertf(summary:find("outputs 6/12", 1, true) ~= nil,
+        "partial 2-item Kit Split (only item_1 reported) must show found=6 against the FULL expected total of 12:\n" .. summary)
+    assertf(summary:find("output_validation_reason: ok", 1, true) == nil,
+        "partial evidence (item_2 silent) must not be reported as a false ok:\n" .. summary)
+end
+
 -- Kept in its own function (own local-variable budget) rather than inlined
 -- into main(), which is already at Lua's 200-local-per-function ceiling.
 function TENTHFU.runAll(baseRoot, runScenarioFn)
@@ -5576,6 +5703,22 @@ function TENTHFU.runAll(baseRoot, runScenarioFn)
     do
         local ctx = TENTHFU.createPartialValidationSeparationLogParallelScenario(joinPath(baseRoot, "seplog-partial-validation"))
         print("PASS separation-log-only-parallel-partial-validation-field -> " .. runScenarioFn(ctx, TENTHFU.assertPartialValidationSeparationLogParallelScenario))
+    end
+    do
+        local ctx = TENTHFU.createKitSplitTwoItemParallelScenario(joinPath(baseRoot, "dks-kit-split-two-item"))
+        print("PASS dks-kit-split-two-item-parallel -> " .. runScenarioFn(ctx, TENTHFU.assertKitSplitTwoItemParallelScenario))
+    end
+    do
+        local ctx = TENTHFU.createKitSplitFourItemParallelScenario(joinPath(baseRoot, "dks-kit-split-four-item"))
+        print("PASS dks-kit-split-four-item-parallel -> " .. runScenarioFn(ctx, TENTHFU.assertKitSplitFourItemParallelScenario))
+    end
+    do
+        local ctx = TENTHFU.createDirectKitTwoItemParallelScenario(joinPath(baseRoot, "dks-direct-kit-two-item"))
+        print("PASS dks-direct-kit-two-item-parallel -> " .. runScenarioFn(ctx, TENTHFU.assertDirectKitTwoItemParallelScenario))
+    end
+    do
+        local ctx = TENTHFU.createKitSplitPartialTwoItemParallelScenario(joinPath(baseRoot, "dks-kit-split-partial-two-item"))
+        print("PASS dks-kit-split-partial-two-item-parallel -> " .. runScenarioFn(ctx, TENTHFU.assertKitSplitPartialTwoItemParallelScenario))
     end
 end
 

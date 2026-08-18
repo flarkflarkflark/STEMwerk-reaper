@@ -5439,6 +5439,22 @@ local function buildProcessingSummary(bundleDir, capabilityState, runtimeState)
             if isStemsFlow and (stat.aggFoundJobs or 0) > 0
                 and (haveAllJobsFound or tostring(entry.expected_stems or "unknown") == "unknown") then
                 entry.expected_stems = tostring(#expectedNormalStemNamesForModel(entry.model) * jobCount)
+            elseif not isStemsFlow and (stat.aggFoundJobs or 0) > 0 then
+                -- DKS-family (Direct Kit / Kit Split) multi-job runs: a
+                -- single job's own expected_stems is the PER-ITEM canonical
+                -- DrumSep child stem set (e.g. "kick,snare,toms,hihat,ride,
+                -- crash"), never multiplied by job count -- while
+                -- found_stems above is already summed across jobs
+                -- unconditionally for every flow. Comparing an aggregated
+                -- found total against an un-aggregated per-item expected
+                -- count produced misleading results like "12/6" for a
+                -- 2-item run. Use the same aggregation unit on both sides,
+                -- using the full job count so a partial run still shows
+                -- the true total expected, not just what was found.
+                local perJobExpectedCount = countDelimitedValues(entry.expected_stems)
+                if perJobExpectedCount then
+                    entry.expected_stems = tostring(perJobExpectedCount * jobCount)
+                end
             end
             -- Recomputed purely from per-job aggregate evidence: a single
             -- job's own output_validation_reason (which may already have
