@@ -2395,6 +2395,7 @@ function VerifyDrumsepDirectmlRuntime([string]$PythonPath, [switch]$AllowInstall
     $verifyCode = @"
 import importlib
 import importlib.metadata as metadata
+import inspect
 import torch
 import torch.nn.functional as F
 
@@ -2448,8 +2449,19 @@ if "DmlExecutionProvider" not in providers:
     print("DRUMSEP_DIRECTML_VERIFY dml_provider_missing providers=" + ",".join(str(x) for x in providers))
     raise SystemExit(5)
 from audio_separator.separator import Separator
-sep = Separator(model_file_dir=r"$modelDir", output_dir=".", output_format="wav")
+sep_kwargs = {"model_file_dir": r"$modelDir", "output_dir": ".", "output_format": "wav"}
+# Configure DirectML at construction where the installed audio-separator build
+# supports it, so this probe does not log a CPU-mode status for a run that is
+# verifying the DirectML runtime. Detected by introspection: older builds
+# without the flag keep their previous behaviour.
+if "use_directml" in inspect.signature(Separator.__init__).parameters:
+    sep_kwargs["use_directml"] = True
+    directml_init_mode = "native"
+else:
+    directml_init_mode = "legacy"
+sep = Separator(**sep_kwargs)
 sep.load_model("$drumsepModelFileName")
+print("DRUMSEP_DIRECTML_VERIFY directml_init_mode=" + directml_init_mode)
 print("DRUMSEP_DIRECTML_VERIFY ok device=" + str(device) + " provider=DmlExecutionProvider")
 "@
     InvokeWithResolvedFfmpegEnvironment $resolvedFfmpeg {

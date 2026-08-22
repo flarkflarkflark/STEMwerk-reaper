@@ -2857,7 +2857,12 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         local venvPython = resolvePath(state.VENV_PYTHON or "")
         if venvPython ~= "" and fileExists(venvPython) and canRunPython(venvPython) then
             state.PYTHON_PATH = venvPython
-            updateBootstrapEnv(stateFile, { PYTHON_PATH = venvPython })
+            -- Check-only (publish=false) verifies current truth without
+            -- persisting it: keep the in-memory resolution for verification
+            -- but never write it back to bootstrap.env.
+            if publish then
+                updateBootstrapEnv(stateFile, { PYTHON_PATH = venvPython })
+            end
         end
     end
     if not state.FFMPEG_PATH or state.FFMPEG_PATH == "" then
@@ -2873,16 +2878,22 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         end
     end
 
-    if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
-        setExt("pythonPath", state.PYTHON_PATH)
-    elseif state.VENV_PYTHON and state.VENV_PYTHON ~= "" then
-        setExt("pythonPath", state.VENV_PYTHON)
-    end
-    if state.FFMPEG_PATH and state.FFMPEG_PATH ~= "" then
-        setExt("ffmpegPath", state.FFMPEG_PATH)
+    -- Check-only (publish=false) must not create, replace, normalize or clear
+    -- runtime-path ExtState. These writes are Setup/install publication only;
+    -- verifyRuntimePaths() below is likewise told not to publish so the
+    -- verify path stays fully non-mutating (see also verifyExistingSetup).
+    if publish then
+        if state.PYTHON_PATH and state.PYTHON_PATH ~= "" then
+            setExt("pythonPath", state.PYTHON_PATH)
+        elseif state.VENV_PYTHON and state.VENV_PYTHON ~= "" then
+            setExt("pythonPath", state.VENV_PYTHON)
+        end
+        if state.FFMPEG_PATH and state.FFMPEG_PATH ~= "" then
+            setExt("ffmpegPath", state.FFMPEG_PATH)
+        end
     end
 
-    local verification = verifyRuntimePaths(state)
+    local verification = verifyRuntimePaths(state, publish)
     local errors = verification.errors
     local verifiedRuntimeOk = verification.pythonOk and verification.ffmpegOk and #errors == 0
     local function hasBootstrapRuntimeVerificationPass()
@@ -2928,12 +2939,18 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
         and (bootstrapSuccess or verifiedRuntimeOk or authoritativeRuntimeVerified)
 
     if verifiedRuntimeOk and not runtimePolicyBlocked then
+        -- Only the publishing (Setup/install) path actually normalizes stored
+        -- bootstrap state. Check-only resolves the same status in memory for
+        -- this report and writes nothing back, so it must not claim otherwise.
+        local normalizationNote = publish
+            and "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok"
+            or "INFO: post-bootstrap verification succeeded; reporting runtime as ok (check-only, stored state left unchanged)"
         if appendLogLine then
-            appendLogLine(logFile, "INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok")
+            appendLogLine(logFile, normalizationNote)
         else
             local lf = io.open(logFile, "a")
             if lf then
-                lf:write("INFO: post-bootstrap verification succeeded; normalizing stale bootstrap state to ok\n")
+                lf:write(normalizationNote .. "\n")
                 lf:close()
             end
         end
@@ -3178,9 +3195,11 @@ local function performPostBootstrap(runtime, stateFile, logFile, bootstrapSucces
     local readyState = readReadyState(runtime)
     local drumsepStatus, dksSupported, normalStemsSupported = resolveDrumsepPolicyState(readyState, profile, backend)
 
-    ensureDir(runtime.runtimeState)
     local capPath = runtime.runtimeState .. PATH_SEP .. "capabilities.env"
     if publish then
+    -- Creating the state directory is publication, not verification: a
+    -- Check-only run must not mkdir it on an otherwise clean machine.
+    ensureDir(runtime.runtimeState)
     local wroteCaps, capsErr = writeCapabilities(capPath, {
         profile = profile,
         backend = backend,

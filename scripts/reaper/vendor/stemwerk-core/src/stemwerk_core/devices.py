@@ -300,3 +300,51 @@ def select_device(requested_device: str = "auto") -> Tuple[str, str]:
 
     warnings.warn(f"Requested device '{requested_device}' not available; using CPU.")
     return "cpu", "CPU"
+
+
+def _torch_cuda_flavor() -> str:
+    """Return "rocm" or "cuda" for torch's CUDA-style device namespace.
+
+    ROCm builds of torch expose AMD GPUs through the same ``cuda:N`` ids, so the
+    id alone cannot distinguish the two runtimes. Mirrors the detection used by
+    get_available_devices() above.
+    """
+    try:
+        import torch
+    except Exception:
+        return "cuda"
+    try:
+        torch_hip = getattr(getattr(torch, "version", None), "hip", None)
+    except Exception:
+        torch_hip = None
+    torch_version = str(getattr(torch, "__version__", ""))
+    if torch_hip or "rocm" in torch_version.lower():
+        return "rocm"
+    return "cuda"
+
+
+def runtime_kind_for_device(device_id: Optional[str]) -> str:
+    """Classify a resolved device id into a STEMwerk runtime kind.
+
+    Returns one of: ``directml``, ``cuda``, ``rocm``, ``mps``, ``cpu`` or
+    ``unknown``. This is evidence, not policy: it never changes device
+    selection, and an unrecognised/unresolved id stays ``unknown`` rather than
+    being guessed into a concrete runtime.
+    """
+    device = str(device_id or "").strip().lower()
+    if device == "":
+        return "unknown"
+    if device == "cpu":
+        return "cpu"
+    if device == "mps":
+        return "mps"
+    if device == "directml" or device.startswith("directml:"):
+        return "directml"
+    if device.startswith("privateuseone"):
+        # torch-directml's own device namespace.
+        return "directml"
+    if device == "rocm" or device.startswith("rocm:"):
+        return "rocm"
+    if device == "cuda" or device.startswith("cuda:"):
+        return _torch_cuda_flavor()
+    return "unknown"

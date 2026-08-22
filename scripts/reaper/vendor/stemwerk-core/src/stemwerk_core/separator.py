@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import yaml
 
-from .devices import select_device
+from .devices import runtime_kind_for_device, select_device
 from .models import resolve_audio_separator_model_id, resolve_model_name
 from .progress import ProgressCallback
 
@@ -80,6 +80,17 @@ MPS_DEMUCS_SEGMENT_SIZE = 2
 
 _SEPARATOR_CACHE: Dict[Tuple[str, str, bool, int, Union[int, str]], Any] = {}
 _SEPARATOR_CACHE_LOCK = threading.Lock()
+# Attribute stamped on the audio-separator instance recording how DirectML was
+# established: "native" (configured at construction), "legacy" (post-construction
+# compatibility override) or "" (not a DirectML run).
+_DIRECTML_MODE_ATTR = "_stemwerk_directml_mode"
+
+
+def _mark_directml_mode(separator: Any, mode: str) -> None:
+    try:
+        setattr(separator, _DIRECTML_MODE_ATTR, mode)
+    except Exception:
+        pass
 DEMUCS_MODEL_ALIASES = {"htdemucs", "htdemucs_ft", "htdemucs_6s", "hdemucs_mmi"}
 
 
@@ -239,6 +250,11 @@ class StemSeparator:
         self.quality = normalized_quality
         self.on_progress: Optional[ProgressCallback] = None
         self.on_phase: Optional[Callable[[str], None]] = None
+        # Authoritative final runtime evidence for the most recent separate()
+        # call, populated once the device is resolved AND the separator has
+        # actually been configured for it. Stays empty until then so callers
+        # can distinguish "not proven yet" from a real classification.
+        self.runtime_evidence: Dict[str, str] = {}
 
     def _emit_progress(self, percent: float, message: str) -> None:
         callback = self.on_progress
@@ -257,6 +273,56 @@ class StemSeparator:
             callback(phase_name)
         except Exception:
             pass
+
+    @staticmethod
+    def _directml_mode(separator: Any) -> str:
+        return str(getattr(separator, _DIRECTML_MODE_ATTR, "") or "")
+
+    @staticmethod
+    def _build_runtime_evidence(
+        requested_device: str,
+        effective_device_id: str,
+        effective_device_name: str,
+        separator: Any,
+        use_directml: bool,
+        directml_mode: str,
+        directml_bound: bool,
+    ) -> Dict[str, str]:
+        """Authoritative final runtime evidence for a configured separator.
+
+        Derived from the device STEMwerk actually resolved and bound, never
+        from third-party log text. A DirectML run that genuinely failed to bind
+        is reported as the CPU run it really is; an unresolved device stays
+        "unknown" rather than being guessed.
+        """
+        runtime = runtime_kind_for_device(effective_device_id)
+        evidence: Dict[str, str] = {
+            "runtime_selected": runtime,
+            "backend_runtime": runtime,
+            "selected_device": str(effective_device_id or "") or "unknown",
+            "selected_device_name": str(effective_device_name or "") or "unknown",
+            "requested_device": str(requested_device or "") or "unknown",
+        }
+        if use_directml and directml_mode:
+            evidence["directml_init_mode"] = directml_mode
+            # A legacy override means audio-separator logged its own CPU status
+            # before STEMwerk moved the run onto DirectML. Mark that the earlier
+            # library line is superseded so no consumer mistakes it for final.
+            if directml_mode == "legacy" and directml_bound:
+                evidence["accelerator_status_supersedes_library_log"] = "1"
+        try:
+            torch_device = getattr(separator, "torch_device", None)
+            if torch_device is not None:
+                evidence["separator_torch_device"] = str(torch_device)
+        except Exception:
+            pass
+        try:
+            providers = getattr(separator, "onnx_execution_provider", None)
+            if providers:
+                evidence["separator_onnx_provider"] = ",".join(str(p) for p in providers)
+        except Exception:
+            pass
+        return evidence
 
     def _get_separator(
         self,
@@ -322,6 +388,21 @@ class StemSeparator:
                 }
 
             separator = Separator(**kwargs)
+            if legacy_directml_mode:
+                # Additive context only -- the library's own construction-time
+                # device status above is never filtered, rewritten or
+                # suppressed, so a genuine CPU route stays fully diagnosable.
+                # This states a PENDING attempt, never an outcome: binding
+                # happens in separate() and may still fail, in which case the
+                # final runtime evidence truthfully reports CPU.
+                print("directml_init_mode=legacy_pending_override", file=sys.stderr, flush=True)
+                print(
+                    "STEMwerk: the separator library's construction-time device status above is "
+                    "preliminary; STEMwerk will now attempt the legacy DirectML device binding. "
+                    "The final runtime evidence below is authoritative.",
+                    file=sys.stderr,
+                    flush=True,
+                )
             if _processing_downloads_disabled():
                 _disable_separator_downloads(separator)
             if legacy_directml_mode and _has_onnxruntime_directml_provider():
@@ -329,6 +410,15 @@ class StemSeparator:
                     separator.onnx_execution_provider = ["DmlExecutionProvider"]
                 except Exception:
                     pass
+            # Record how DirectML was established for this separator so
+            # separate() can tell an authoritative native initialisation from a
+            # post-construction compatibility override. Only the latter makes
+            # the library's own pre-override "CPU mode" line an intermediate
+            # state rather than the final truth.
+            if use_directml:
+                _mark_directml_mode(separator, "legacy" if legacy_directml_mode else "native")
+            else:
+                _mark_directml_mode(separator, "")
             _SEPARATOR_CACHE[cache_key] = separator
             return separator, True, str(separator_device), bool(use_directml)
 
@@ -406,12 +496,15 @@ class StemSeparator:
             effective_device_id = "cpu"
             effective_device_name = "CPU"
 
+        directml_mode = self._directml_mode(separator)
+        directml_bound = False
         if use_directml:
             try:
                 import torch_directml
 
                 separator.torch_device = torch_directml.device(dml_index)
                 separator.torch_device_dml = separator.torch_device
+                directml_bound = True
             except Exception as exc:
                 warnings.warn(f"Failed to force DirectML device: {exc}")
         elif effective_device_id == "cpu":
@@ -419,6 +512,24 @@ class StemSeparator:
                 separator.torch_device = torch.device("cpu")
             except Exception:
                 pass
+
+        if use_directml and not directml_bound and directml_mode != "native":
+            # The legacy compatibility override is the only thing that would
+            # have moved this run onto DirectML, and it failed: the library is
+            # still on the CPU device it reported at construction. Report that
+            # honestly instead of claiming the accelerator.
+            effective_device_id = "cpu"
+            effective_device_name = "CPU"
+
+        self.runtime_evidence = self._build_runtime_evidence(
+            requested_device=str(self.device),
+            effective_device_id=effective_device_id,
+            effective_device_name=effective_device_name,
+            separator=separator,
+            use_directml=use_directml,
+            directml_mode=directml_mode,
+            directml_bound=directml_bound,
+        )
 
         self._emit_progress(1.0, f"Initializing [{effective_device_name}]")
 

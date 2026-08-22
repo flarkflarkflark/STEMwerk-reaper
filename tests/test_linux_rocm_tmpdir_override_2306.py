@@ -205,8 +205,18 @@ def test_macos_and_windows_bootstraps_remain_release_baseline_bytes() -> None:
         # DirectML siblings already used -- fixing a release blocker where
         # bootstrap-time DrumSep verification failed with no-system-FFmpeg
         # even though the bundled FFmpeg had already been resolved.
+        # Hash re-pinned for the 2.3.1.0 diagnostics-truthfulness slice: the
+        # DrumSep DirectML verification probe now passes use_directml=True to
+        # Separator() when the installed audio-separator build exposes that
+        # flag (detected by signature introspection, so older builds keep
+        # their previous behaviour). Without it the probe constructed a
+        # default CPU separator and logged "No hardware acceleration could be
+        # configured, running in CPU mode" while verifying the DirectML
+        # runtime, immediately before printing its own DRUMSEP_DIRECTML_VERIFY
+        # ok/provider evidence. Verification semantics, exit codes and the
+        # final evidence line are unchanged.
         "scripts/reaper/STEMwerk_Bootstrap_Windows.ps1": (
-            "1c4dea5d4cab5b91264e1738a6b5829a07ed3b8f6de5947f3fcee2e5efc379d5"
+            "9b52321c609bf65ef9efe037622588119e88fec5d1105f13e32124db25b31a92"
         ),
     }
     for relative, wanted in expected.items():
